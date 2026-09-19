@@ -67,6 +67,7 @@
 - **正则 / 规则引擎做意图识别或路由** —— 违 R7/P8，语义判断交 LLM
 - **非 serde 的序列化栈** —— 全栈 serde
 - **第二个 VT / 终端模拟器实现**（含移植 herdr 的 `pane/terminal` + `terminal/state`）—— 服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；跑别人 agent 需要的能力（alt-screen / graphics / OSC 进度 / kitty keyboard）一律**扩容它**，不引第二份（2026-09-01 用户裁定；判据 §1「同一事实的两份表述」）
+- **第二个 CDP 客户端实现**（`chromiumoxide` / `headless_chrome` / 在 `src/browser/` 里再手写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
 
 ---
 ## ⚠️ 工程判据 — 形状名索引 (Hard-Won Criteria)
@@ -96,6 +97,7 @@
 16. **孪生子系统 / 第 N 次复发** — 一边修好的判据要**主动搬过去**，别等它在另一边被重新发现（改动一个时问：它的孪生怎么回答同一问题）。⚠️ 一条注释里写着数目（"两个孪生"/"三处"）就是一张会腐烂的名单——把那一问挂到**已经知道集合是什么的那张表**上。
 17. **一份"展示用"的东西，提交前必须能指出渲染它的那一行代码** — 指不出就是 CUT，不是"以后再接"。**错的标签比缺的贵**；不认识的状态词一律读作「我无法担保」；`X::default()` 当占位会替每个字段说出一个具体的谎。
 18. **量具会骗人** — 数字要带着它测的**谓词**和它测于哪个 **commit**；一次扫描只为**它枚举过的那些形状**背书（结论的作用域是**方法**，不是目录）；变异之后**先看红的名单是不是预期的那一份**，再看条数；**别人的仪器你重复测量，自己的仪器你先怀疑它** → [附录 C](docs/reference/FEATURE_LOCATOR.md)
+19. **一次加宽，把每一处「这里只会有一个」同时变成缺陷点** — 一个事实的**键或推导**，比这次变更刚造出来的那个世界更粗。写「现在可以有两个 X 了」的那一笔不会去动任何一处假设只有一个 X 的地方，而那些地方**全都继续编译、继续通过、继续给出一个看起来合法的答案**。任何一次加宽之后都问一遍：**这一笔刚刚把什么变成了复数，而什么还在按单数计数？** 候选是键、路径、目录名、map 的键类型、叫「当前那个」的字段、每一条 `if let Some(x) = the_one_x`。与 §12 的区别是**粒度**（三处缺陷各自都只有一个作者，它们只是都在数「一个」），与 §16 的区别是这里讲的是**第二个实例刚出生**的那一刻 → [附录 D.0.181](docs/reference/FEATURE_LOCATOR.md)
 
 ---
 ## 📍 子系统路由 (Read Before Editing)
@@ -118,7 +120,7 @@
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · FL §3.6 §4.9 | E.9 | — |
 | `src/spend/` `src/providers/metering.rs` | FL §5.22（round-7 的 per-principal 美元上限：`[policies.spend]` → `SpendLedger` → 两条执行臂）· FL §5.25（`install_ledger` / `install_policy` 两个进程级句柄——`MeteringProvider` 有 7 个生产构造点，所以裁决是进程级而非构造参数穿线） | E.0 E.9 | `qa/spend_budget/run.sh`（**需要真 python3**，Windows 主机上是 UNRUN 而不是 PASS——见 [`qa/README.md`](qa/README.md) 该条目） |
 | `src/search/` `src/builtin_tools/search.rs` | FL §3.18 | E.3 E.9 | `qa/web_search/run.sh {reach,order,degrade,empty,fanout,demote}`（SearXNG 是唯一能指向 mock 的后端，其余八个由 `providers/capability_census.rs` 在源码级覆盖）|
-| `src/browser/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh`（阶段清单与 `ALEPH_QA_DRIVER` 轴见 [`qa/README.md`](qa/README.md)——**数目不写在这里**：这张表里没有任何东西能让它变红，它已经因此漂过一次） |
+| `src/browser/` `crates/aleph-cdp/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh` · `qa/browser_dual/run.sh`（两个真引擎）——**两套的阶段清单、`ALEPH_QA_DRIVER` 轴、以及每个阶段在证明什么，全见 [`qa/README.md`](qa/README.md)；数目和阶段名都不写在这里**：这张表里没有任何东西能让它们变红，它已经因此漂过一次 |
 | `src/mcp/` · `src/hub/` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | `qa/plugins/run.sh` |
 | `src/loop_graph/` `src/workflow/` · `src/identity/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) FL §4.12 · [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) FL §5.17 | E.3 E.0 | — |
 | `src/config/` `src/diagnostics/` · `src/sandbox/` | FL §5.8 §5.9 §5.10 §5.24 · [SANDBOX.md](docs/reference/SANDBOX.md) FL §3.8 §3.15 | E.8 E.3 | — |

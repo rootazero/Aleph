@@ -20,6 +20,61 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 `rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
 该诊断仅作防御性提示）。
 
+## 浏览器引擎子进程 (Browser engine children)
+
+Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 obscura），而 `std::process::Child`
+**不在 drop 时 kill**，驱动它的外部 CLI 又从来不是它的父进程。所以「谁负责关掉它」必须写下来：
+
+- **sidecar 记录**：每一个被起起来的引擎在
+  **`~/.aleph/data/browser/chromium/<engine>-<session-key>.json`** 留一条
+  `EngineSidecar{engine, pid, http_url, data_dir, build}`。两处细节都不是笔误：
+  - 目录叶名**冻结**在 `chromium`（`engine/process.rs::SIDECAR_REGISTRY_LEAF`，由
+    `the_sidecar_registry_leaf_is_frozen` 按名钉住）。它现在装着两个引擎的记录，名字却只说一个——
+    刻意的：改名要在**同一个提交**里迁移旧叶下的 `*.json`，否则每台升级的机器每个 profile 永久漏一个
+    浏览器，而且**没有任何后续提交救得回来**，因为改名之后没人知道旧记录存在。一个读者一分钟的困惑
+    vs 一个永久孤儿，选前者。
+  - **引擎在文件名里，而且排在前面**：`<engine>-<key>` 是单射的（`Engine::as_str()` 的值不含 `-`
+    且首字节不同），`<key>-<engine>` 不是（session key 允许 `-`，于是一个叫 `default-obscura`
+    的 profile 会占掉 `default` 的 obscura 记录）。从 `<key>.json` 升级到这个形状是
+    `switch_engine` 逼出来的：它让**同一个 session key 下同时跑着源引擎和目标引擎**，粗粒度的键
+    于是让目标的记录在启动那一刻覆盖掉源的（整个迁移期间那个活 obscura 不可回收），然后源的
+    `stop_launched` 又把同一个文件删掉（目标从此对清扫不可见）。判据 §12：**键必须和它所寻址的
+    世界一样细**。
+  记录放在**一个注册表目录**而不是各自的 profile 目录里——一个 profile 可以把 `user_data_dir` /
+  `storage_dir` 指到任何地方，记录跟着走的话开机清扫就只扫得到「派生出来的那个根」，配过目录的
+  profile（本仓 QA 自己就配）永远扫不到。`engine` 字段带 `#[serde(default)]`（且是一个**具名**的
+  `Engine::chromium_default`，不是 `Default`——产品默认是 obscura、兼容默认是 Chromium，是两个问题），
+  所以 2026-09-05 那一轮写下的、没有这个字段的记录仍读作 Chromium。
+- **孤儿回收**：开机时按记录里的 pid 读 argv 并**整 token 相等**地比对我们自己那个 flag——Chromium 是
+  `--user-data-dir=<path>`，obscura 是 `--storage-dir=<path>`（`Engine::data_dir_flag`）。读的是
+  `sysinfo::Process::cmd()` 那个 **argv 向量**，不是拼好的命令行：拼好的串上只表达得出 `contains`，
+  而 `--user-data-dir=<root>/default` 是活着的 `--user-data-dir=<root>/default-2` 的子串，于是这条
+  检查会杀掉**邻居 profile** 的浏览器。探测结果是三态 `ArgvProbe{Absent, Unreadable, Argv}`，四条臂：
+  匹配 → 杀并删记录；`Argv` 但不匹配（pid 被回收）→ 不杀、删记录；`Absent`（含**僵尸**，已退出等父进程
+  收尸）→ 删记录；**`Unreadable` → 什么都不做、记录留着**（Windows 上读不到 argv 是常态，而「读不出来」
+  不是「不在了」，判据 §8）。清扫**按记录迭代**，所以它的作用域是注册表：一个从没被记下来的浏览器不会被
+  检查，也就永远不是这条守卫的控制组。
+- **退出时杀**：挂在**两个** daemon 退出点——有序停机（`start/mod.rs` 的 `run_until_shutdown` 返回处）与
+  卡死兜底（`start/helpers.rs` 的 `std::process::exit(0)` 之前）。只挂前者的话，负载中的
+  `aleph-server stop` 照样漏浏览器，而 `SHUTDOWN_FAILSAFE = 5 s` 正是为那种停机设的；有序那条路拿到的
+  预算是 `ORDERLY_BROWSER_STOP_BUDGET = SHUTDOWN_FAILSAFE / 2`，取一半是因为停引擎只是有序拆卸的**一
+  步**，后面每一件事还要在同一个 5 s 里跑完。这段代码是在和花掉 failsafe 的那个看门狗**赛跑**——一个早先
+  的版本要了 35.5 s（它所处 failsafe 的七倍），于是进程在等待途中被强制退出，浏览器没停掉，它后面的
+  projector flush / monitor / MCP / 端点清理 / `GatewayStop` 钩子也一起跳过了。**把 failsafe 调大不是
+  出路**：5 s 是外部天花板（`aleph stop` 的 SIGTERM ≤5 s 然后 SIGKILL ≤2 s），越过它落下来的是监管者的
+  SIGKILL 而不是我们自己的 `exit(0)`，连兜底那条路的回收也没了。一条**编译期** `assert!`
+  （`ORDERLY_BROWSER_STOP_BUDGET * 2 <= SHUTDOWN_FAILSAFE`）钉住这个关系：动了其中一个常量而不动另一个，
+  构建直接停。
+- **规则不是预算：SIGKILL + 有界回收，绝不做优雅握手**——不 SIGTERM-然后-等，不发 CDP `Browser.close`，
+  不向一个可能正是停机卡死原因的进程发起往返。`terminate()` 先 `child.kill()`，再在 `grace` 内**轮询**
+  回收（不是 `wait()` 阻塞：kill 可能失败，而 `wait()` 会把这个 worker 挂到进程自己碰巧退出为止）。
+  那个 `grace` 是**回收**的预算，不是给进程的缓刑。
+- **代价，写下来而不是留给人发现**：被 SIGKILL 的 Chromium 一定在 profile 目录里留下 `SingletonLock` /
+  `SingletonSocket` 与一个「did not shut down correctly」标记，下次启动可能弹恢复提示。本仓**没有**做宽限
+  期，也**没有**清理陈旧 singleton 锁。
+
+详见 [FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第七轮 ⑯⑰ 与第八轮 ⑫。
+
 ## 日志轮转 (Log Rotation)
 
 Aleph 有两条独立日志流，轮转策略不同：

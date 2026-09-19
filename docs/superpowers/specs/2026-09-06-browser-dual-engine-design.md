@@ -145,7 +145,7 @@ ProfileManager::get_backend (manager.rs:383)     ← 唯一路由点，保留
 
 ### 3.3 一次 `browser_snapshot` 的路径
 
-Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibility,opacity,cursor], includeDOMRects:true}`（`overflow` 与 `shadow_root` 在计划审查中因零消费者被 CUT）：一次调用跨 frame、几何由引擎自报、**不经页面 JS**（页面无法用改写的 `getBoundingClientRect` 骗它）。obscura 过渡取数器 = `DOM.getDocument{depth:-1,pierce:true}` + 并发 `DOM.getBoxModel`（M11 证实诚实）+ 一次 `Runtime.evaluate` 按文档序取五个样式位（两次遍历用节点数 + 首尾 `backendNodeId` 校验，不一致重取一次，再不一致把 `computed` 置 `None`——**未知不写成可见**）。**上游 PR 合入并被账本钉住后删掉这个取数器**，两引擎共用 `DOMSnapshot` 一条取数路径。之后进同一个 `PageState` 构建器；返回现有 `SnapshotOutput`，`page_url`/`page_title` 一并接上。
+Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibility,opacity,cursor], includeDOMRects:true}`（`overflow` 与 `shadow_root` 在计划审查中因零消费者被 CUT）：一次调用跨 frame、几何由引擎自报、**不经页面 JS**（页面无法用改写的 `getBoundingClientRect` 骗它）。obscura 过渡取数器 = `DOM.getDocument{depth:-1,pierce:true}` + 并发 `DOM.getBoxModel`（M11 证实诚实）+ 一次 `Runtime.evaluate` 按文档序取~~五个~~**四个**样式位（`display` / `visibility` / `opacity` / `cursor`；**由 plan ruling R34 更正**——`overflow_clip` 因零消费者 CUT，本句前半的括号早已记下这次 CUT 而这个数目没跟着改，同一句话里一份事实的两个说法，判据 §1）（两次遍历用节点数 + 首尾 `backendNodeId` 校验，不一致重取一次，再不一致把 `computed` 置 `None`——**未知不写成可见**）。**上游 PR 合入并被账本钉住后删掉这个取数器**，两引擎共用 `DOMSnapshot` 一条取数路径。之后进同一个 `PageState` 构建器；返回现有 `SnapshotOutput`，`page_url`/`page_title` 一并接上。
 
 ### 3.4 三处刻意的结构决定
 
@@ -171,7 +171,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 
 | 层 | 谁产 | 内容 |
 |---|---|---|
-| `RawDom` | 每引擎一个取数器 | `engine`、`viewport{w,h,scroll_x,scroll_y,content_w,content_h,dpr}`、扁平化的各 frame（主 frame 在前，子 frame 带父偏移与 `frame_id/loader_id`）；每节点 `backend_node_id`、`parent`、tag、attrs、文本、`rect: Option<Rect>`（**`None` = 这个引擎没给盒**，计入 `no_box`；它单独**不**判定不可见——Part 5 在 obscura 上量到行内 `<a>`/`<span>` 零四边形而 M11 在 HN 上量到真实盒，两次测量不一致，可见性不能压在它上面，见 §11 U9）、`computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer, overflow_clip}>`、`shadow_root`、`is_clickable_hint: Option<bool>`（Chrome `DOMSnapshot` 给的） |
+| `RawDom` | 每引擎一个取数器 | `engine`、`viewport{w,h,scroll_x,scroll_y,content_w,content_h,dpr}`、扁平化的各 frame（主 frame 在前，子 frame 带父偏移与 `frame_id/loader_id`）；每节点 `backend_node_id`、`parent`、tag、attrs、文本、`rect: Option<Rect>`（**`None` = 这个引擎没给盒**，计入 `no_box`；它单独**不**判定不可见——Part 5 在 obscura 上量到行内 `<a>`/`<span>` 零四边形而 M11 在 HN 上量到真实盒，两次测量不一致，可见性不能压在它上面，见 §11 U9）、~~`computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer, overflow_clip}>`、`shadow_root`~~ ⇒ `computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer}>`（**由 plan ruling R34 更正**：`overflow_clip` 与 `shadow_root` 跨全部 part 零消费者；两个 fetcher 都在**写**它们而没有一个读者——留着一个没有读者的字段，代价不是那几个字节，是下一个人会为它写取数代码，判据 §17：指不出渲染它的那一行就是 CUT，不是「以后再接」。`raw.rs:48-56, 160` 在代码里留了同一条记录，所以想把它加回来的人会先读到理由）、`is_clickable_hint: Option<bool>`（Chrome `DOMSnapshot` 给的） |
 | `PageState` | **唯一**构建器 `PageState::build(raw, &mut RefTable)` | `engine`、`generation`、url、title、viewport、前序节点表：`role`（`role` 属性 → tag 映射表）、`name`（accname-lite：`aria-labelledby` → `aria-label` → `<label for>`/包裹 label/placeholder → `alt`/`title` → 可见后代文本 ≤80 字）、`value`、状态位（disabled/checked/expanded/selected/required/readonly/focused）、`rect`（页面坐标整数）、`interactive`、`visible`、`text`（自身文本）、`ref: Option<RefId>` |
 | 模型面 | 渲染器 `render_text(&PageState)` / `to_json` | 缩进文本树（默认观察）；完整 JSON 经 `browser_snapshot{format:"json"}` 取得，走与文本同一条 `bound_content` → `redact_wrap` → `offload_full_content` 路径（offload 后可由 `ctx_search` 取回）。工具结果今天没有图片之外的附件通道，所以「附件」的诚实实现是这个第二种 `format`，不是一个没有渲染者的字段（判据 §17） |
 
@@ -184,16 +184,18 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 每行一个节点——**行形状** ⇒ 现有 `bound_content`（按行截断，`mod.rs:278-282`）、`redact_wrap`（注入栅栏，`mod.rs:340`）、`offload_full_content`（`mod.rs:414`）全部原样复用，**不需要第二套预算推导**。
 
 ```
-# engine=obscura gen=7 url=https://news.ycombinator.com/ viewport=1280x800 scroll=0,0 doc=1280x1173 no_box=12/703 fetch=142ms
+# engine=obscura gen=7 url="https://news.ycombinator.com/" viewport=1280x800 scroll=0,0 doc=1280x1173 no_box=12/703 unreached_frames=0 fetch=142ms
 - banner
-  - link "Hacker News" [ref=e1] @130,11 83x15 /url: https://news.ycombinator.com/
-  - link "new" [ref=e2] @218,11 24x15 /url: newest
+  - link "Hacker News" [ref=e1] @130,11 83x15 /url: "https://news.ycombinator.com/"
+  - link "new" [ref=e2] @218,11 24x15 /url: "newest"
 - main
   - listitem
-    - link "Show HN: …" [ref=e5] @136,44 359x15 /url: https://…
+    - link "Show HN: …" [ref=e5] @136,44 359x15 /url: "https://…"
     - text: "160 comments"
-  - textbox "Search" [ref=e612] @589,1144 153x21 [placeholder=Search…]
+  - textbox "Search" [ref=e612] @589,1144 153x21 [placeholder="Search…"]
 ```
+
+**每一个来自 DOM 的字符串都经 `render::quote` 打印**（双引号 + 反斜杠转义 `"` `\` 与 C0 控制字符，Task 10 的单一 helper，五个调用点在 `render.rs` 上逐个编号 `Site N of 5`；**由 plan ruling R40 更正**——原例子里的 `url=`、`/url:` 与 `[placeholder=]` 都是裸值）。理由不是好看：Part 3 的行边界 proptest 量到，一个占位符写成 `] [ref=e99]` 就会在同一行上印出**第二个 ref**，把模型的点击导到 `e99` 真正对应的那个节点上——**页面自己往模型的观察面里伪造了一个 token**。由 `a_page_cannot_forge_a_ref_token` 与 proptest 的引号感知解析器钉住。⚠️ 顺带更正的**不是** R40 的一部分：头行还少一个字段。渲染器发的是 `… no_box=N/M unreached_frames=K fetch=Tms`，而这个例子此前把 `unreached_frames=` 整个漏掉了——例子是渲染器格式的第二份表述，只要它还在这里，它就得和那一行 `format!` 逐字对得上（判据 §1）。
 
 几何只印在交互节点上；`visible=false` 的节点不进文本树，但 JSON 里保留并标 `visible:false`。可见性以 `computed` 为准；`computed` 缺失（取数校验失败）时才回落到 `rect.is_some()`；可见但无盒的节点照常进树、有 ref、只是不印 `@x,y wxh`。头行的 `no_box`（无盒节点/总节点）与 `fetch`（这次取数的耗时，毫秒；撞上屏障时它就是那 25 s——取数器分不出屏障与普通延迟，所以标签只说它测到了什么）是给模型的两个运行时事实，不是判断。
 
@@ -202,7 +204,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 - `RefId = "e{n}"`；身份键 `(frame_id, loader_id, backend_node_id)`；**同一文档内跨快照保持同号**（DOM 变动不改号，模型不用重学编号）；主 frame `loader_id` 变（导航）⇒ 整表清空。
 - `RefTable` 住在 `EngineHandle` 的 per-tab 状态里，记每个 ref 的铸造代数；`PageState.generation` 每次捕获 +1。
 - 解析：旧代数、同文档 ⇒ 允许，经 `DOM.resolveNode(backendNodeId)`；失败 ⇒ `StaleRef{ref, reason: NodeGone}`；文档已换 ⇒ `StaleRef{reason: Navigated}`。错误文本带一句「重新 snapshot」（A2：模型看见并自愈）。
-- `snapshot.rs:96` 的 `matches("[ref=")` 字面量删掉，`ref_count` 由 backend 报（`SnapshotOutput` 加 `ref_count: usize`）；ref 只给渲染出来的节点铸造，所以 `ref_count` 恒等于文本树里 `[ref=` 的个数（测试断言）。
+- ~~`snapshot.rs:96` 的 `matches("[ref=")` 字面量删掉，`ref_count` 由 backend 报~~（**由 plan ruling R34 更正**，Task 14 实测）—— 删掉的是**字面量**，不是那次计数。`snapshot.rs` 数的是**它即将发出去的那段文本**里的 ref，而 `SnapshotOutput.ref_count` 是**整页**的总数；快照被预算截断时两个数不相等，而模型能点的只有它看得见的那些。拿整页总数去替换它，就是对**每一次被截断的快照**多报一次（判据 §17：错的标签比缺的贵——缺的读作「还没有值」，错的读作事实）。所以：`SnapshotOutput` 仍加 `ref_count: usize`（整页的数，由 backend 报），`"[ref="` 这个字面量收进**一个共享常量** `crate::browser::types::REF_TOKEN`，渲染器与 `snapshot.rs` 都读它（判据 §1：同一事实一个推导者，而这个字面量此前有两个作者）；工具消息在截断时印 `showing N of M refs`（N ＝发出去的那些，M ＝ `snap.ref_count`），未截断时印 `N refs`。ref 只给渲染出来的节点铸造，所以 `ref_count` 恒等于文本树里 `[ref=` 的个数（测试断言）。
 
 ### 4.4 动作目标
 
@@ -225,7 +227,7 @@ SoM 截图标注（文本树已带几何，YAGNI）；`Accessibility.*` 域一�
 | 事实 | 谁说出口 | 形态 |
 |---|---|---|
 | 屏障等待 | `CdpConnection::call` 超时 | `BrowserError::EngineBusy{engine, method, waited}` → 工具错误文本：「obscura 30 s 内未应答 `DOM.getDocument`；请求仍在队列中会自行完成；`browser_session{switch_engine}` 可换 chromium」。驱动**不重发** |
-| 能力缺席 | `engine/capability.rs` 常量表 | `BrowserError::UnsupportedByEngine{engine, verb}`，fail-closed，报出**具体动词**。同一张表生成 `browser_session` 的 `DESCRIPTION` 里那段能力说明——**一个真源两张脸**（R9 第二把尺：这句话有一个工具拥有它） |
+| 能力缺席 | `engine/capability.rs` 常量表 | `BrowserError::UnsupportedByEngine{engine, verb}`，fail-closed，报出**具体动词**。~~同一张表生成 `browser_session` 的 `DESCRIPTION` 里那段能力说明~~ ⇒ 同一张表经 **`browser_session{action:"capabilities"}`** 作为**工具结果**到达模型（`describe_for_tool()` 的文本 + 一份 JSON，`qa/browser_dual caps` diff 的就是那份 JSON），`DESCRIPTION` 里只留**一句静态指路**（**由 plan ruling R2' 更正**）。R9 第二把尺仍然成立——这句话确实有一个工具拥有它——但「拥有」的兑现方式不是把它渲染进描述字节：`AlephTool::DESCRIPTION` 是 `const`（`src/tools/traits.rs`），`BUILTIN_TOOL_DEFINITIONS` 是 `const` 数组且每一项的 `description` 直接取那个关联常量（`executor/builtin_registry/definitions.rs`），运行时生成的描述在本仓根本不存在；能做的只是「字面量 + 一条比对守卫」，而那要**每次会话都付一遍那些字节**。**全仓零运行时生成的描述文本。** |
 | 引擎死亡 | `EngineHandle` 的断连 watch | `EngineFailure{engine, reason}`；丢弃句柄；**下一次调用重启同一引擎**，不换 |
 
 ### 5.3 切换动词
@@ -248,7 +250,7 @@ Chromium 的 `--user-data-dir` 与 obscura 的 `--storage-dir` 各自持久化�
 
 ### 5.6 能力表是一张名单，所以要能被证伪
 
-`qa/browser_dual/run.sh caps` 对真二进制逐项探测表里的每个声明（JS 对话框事件、拖拽事件、`Input.insertText`、screencast、第二连接、文件选择器…），任何一项与表不符即红。名单只覆盖立法当天的世界（判据 §5），这条守卫就是它的到期检查。表的每一行带「测于哪个版本」。
+`qa/browser_dual/run.sh caps` 对真二进制逐项探测表里的每个声明——~~JS 对话框事件、拖拽事件、`Input.insertText`、screencast、第二连接、文件选择器…~~ ⇒ **恰好五行，每行点名派发它的那个动词**（**由 plan ruling R39 更正**；数目读自 `capability.rs` 的 `CAP_FIELDS`，不是抄自计划）：`js_dialogs`（`browser_dialog`）· `drag`（`browser_drag`）· `file_upload`（`browser_upload`）· `pdf`（`browser_pdf`）· `insert_text`（`browser_type` / `browser_fill`）。~~screencast~~ / ~~第二连接~~ 与 `touch` / `network_interception` **不是行**：没有任何 `browser_*` 动词派发它们的 CDP 方法（`Fetch.*` 拦截由 §7.2 明确推迟），而这张表是**发给模型看的菜单**——列一项没有工具够得着的能力，就是告诉模型 Aleph 会做一件它其实调不到的事（判据 §9：没有客户端的能力不算已交付）。判据 §5 那一半不变：名单只覆盖立法当天的世界，这个阶段就是它的到期检查，表的每一行带「测于哪个版本」（`measured_on`）。**第六行到来时必须自带一个动词**——判据 §6，而且数错的方向永远是少一个。
 
 ### 5.7 刻意不做
 
@@ -274,13 +276,13 @@ pub trait EngineProcess: Send + Sync {
 ```
 
 - `ChromiumChild` 是第一个实现（plan 1 的 argv 含 `--use-mock-keychain` 原样搬入；`DevToolsActivePort` 解析留在它自己文件里）。
-- `ObscuraChild` 的 argv 只有 `serve --port <p> --storage-dir <profile>/obscura [--stealth] [--allow-private-network] [--proxy <url>]`——`--allow-private-network` 只在该 profile 的 `network_policy` 允许私网时才给（obscura 自带的 SSRF 地板不比我们的松）；`--allow-file-access` **永不给**。stdio 全 null、secret env 剥离，与 `ChromiumChild::spawn` 同纪律。
+- `ObscuraChild` 的 argv 只有 `serve --port <p> --storage-dir <profile>/obscura [--stealth] [--allow-private-network] [--proxy <url>]`——`--allow-private-network` 只在该 profile 的 `network_policy` 允许私网时才给（obscura 自带的 SSRF 地板不比我们的松）；`--allow-file-access` **永不给**。~~stdio 全 null~~ ⇒ **stdin null；stdout + stderr 重定向到 `<storage_dir>/serve.log`**（`OBSCURA_LOG`；不开管道、不起排水任务）、secret env 剥离，与 `ChromiumChild::spawn` 同纪律（**由 plan ruling R21 更正**）。理由是 R14 把启动横幅判为不可信之后留下的那个洞：横幅不能读，那么 `Address already in use` 这类**只在 stderr 上说得出口的失败**就没有了任何落点，`LaunchFailed{stage:"obscura-exit"}` 会只带一个退出码。写进文件而不是管道，是因为管道要有人排水——一个没人读的管道满了就把子进程堵死（判据 §8：「读不出来」不许写成「没出错」）。
 - 共用机件（§3.5 上提）：`EngineSidecar{engine, pid, endpoint?, data_dir, build}`、先盖意图戳再等端点、四结果孤儿清扫、`LaunchPolicy`、两处 daemon 退出点的 `shutdown_browsers_global`（现有 census 测试扩到两引擎）；`sweep_orphaned_chromium` 改名 `sweep_orphaned_engines`，`cfg(test)` 孪生保留。
 - `LaunchFailed{stage}` 的 stage 字符串加 `"obscura-exit"`、`"cdp-endpoint"`。
 
 **就绪 ≠ 健康**（plan 1 的教训）：两引擎统一的就绪门 = `/json/version` 通 **且** `Page.navigate about:blank` + `evaluate("1")` 在 5 s 内回来；只查前者的哨兵一律不算。
 
-**端口归属**（§11 待实测）：obscura `--port 0` 是否支持、是否在 stdout 宣告。两个备选按序落：① 支持且宣告 ⇒ 读 stdout 的 `CDP server: ws://…` 行；② 不支持 ⇒ Aleph 从临时端口段取一个、传入、启动后用 `/json/version` **加 pid 持有该监听 socket** 双重确认（browser-use 的 `verifyCdpOwnership` 思路）——不确认就可能接到别人的 obscura。
+**端口归属**（~~§11 待实测~~，**已实测，由 plan ruling R14 更正**）：~~obscura `--port 0` 是否支持、是否在 stdout 宣告。两个备选按序落：① 支持且宣告 ⇒ 读 stdout 的 `CDP server: ws://…` 行；②~~ —— **备选 ① 不存在**，而且失效的方式比「不支持」更难看：`obscura serve --port=0` **绑了一个临时端口，却在两个宣告面上都原样报回请求的那个 0**（stdout 横幅与 `/json/version` 的 `webSocketDebuggerUrl` 都是 `ws://127.0.0.1:0/devtools/browser`，而 `lsof` 上是 `127.0.0.1:50455`）——真端口只存在于那个监听 socket 里，所以「把端点读回来」这条路写不出来。横幅本身也不能当就绪信号：**它在 bind 之前就打了**，端口被别人占着时横幅照出、随后 stderr 一句 `Address already in use`、退出 1，于是「等到横幅」是一个服务器根本没起来时也为真的谓词（判据 §2）。**只剩一条路**：Aleph 从临时端口段取一个、传入、启动后用 `/json/version` 答话**加子进程仍活着**判定就绪，再用 pid 持有该监听 socket 做 OS 级确认（browser-use 的 `verifyCdpOwnership` 思路）——探测工具自己跑不起来时那是**缺了仪器**、不是一次反证，照常启动并告警（判据 §8、§18）。逐字的测量记录在 `src/browser/engine/obscura.rs` 的模块 doc 里，**并注明是在本任务的 BASE 上对真 `v0.2.2` 重测的**，不是从 spike 搬过来的。
 
 ### 6.3 配置（`src/config/`）
 
@@ -348,7 +350,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 ### 7.3 测试（最小可信验证集六条命令 + 变异纪律）
 
 - `crates/aleph-cdp`：进程内假 CDP 服务端（tokio-tungstenite server）钉住请求关联、session 路由、超时、断连使全部挂起请求失败、事件扇出滞后计数。变异：去掉关联 id ⇒ 必红。
-- `page_state`：真引擎捕获的 `RawDom` 夹具入库（HN 各引擎一份，`page_state/fixtures/`）；accname 顺序、role 映射、多信号可交互、`rect=None ⇒ hidden`、ref 跨快照同号、导航清表、渲染 golden 文件；proptest：渲染永远行形状（无节点输出换行）、任意行边界截断的前缀可解析。
+- `page_state`：~~真引擎捕获的 `RawDom` 夹具入库（HN 各引擎一份，`page_state/fixtures/`）~~ ⇒ **`hn.rawdom.json` / `render-hn.golden.txt` 均 CUT**，golden 测试改用一份**手写的 13 节点夹具**（`fixtures/thirteen-node.{rawdom.json,golden.txt}`；**由 plan ruling R35 / R38 更正**：一份夹具只存在于**有一条具名测试 `include_str!` 它**的地方，且**永不写进两个目录**——没有读者的夹具是判据 §17 那种「指不出渲染它的那一行」，而两份拷贝需要一条字节相等守卫来防漂移，那条守卫本身又是第二个真源）；accname 顺序、role 映射、多信号可交互、~~`rect=None ⇒ hidden`~~ ⇒ **`visible` 由 `computed` 决定，缺盒本身永不判定不可见**（**由 plan ruling R12 更正**：`visibility_of` 是 `computed.map(|c| !display_none && !visibility_hidden && !opacity_zero).unwrap_or(rect.is_some())`，落在 `page_state/build.rs`。Part 5 在 obscura 上量到行内 `<a>`/`<span>` 零四边形，而 M11 在 HN 上量到真实盒——两次测量不一致且**没人知道哪一次能推广**，所以规则不能压在它上面：按缺盒隐藏会在某些页面上删掉每一个行内链接、在另一些页面上一个都不删，而模型分不出自己在哪个世界里。缺盒节点照常进树、有 ref、计入 `no_box`、只是不印 `@x,y wxh`；`rect` 只当**在场**的证据花掉，绝不当缺席的证据，判据 §8。T0 探针 **U9** 是这条不一致的裁决点）、ref 跨快照同号、导航清表、渲染 golden 文件；proptest：渲染永远行形状（无节点输出换行）、任意行边界截断的前缀可解析。
 - **一条推导的守卫**：census 测试断言 `PageState::build` 在生产代码里只有一个调用点，两个取数器都只产 `RawDom`（判据 §9 的机械化）。
 - `testkit.rs` 加 `FakeEngineProcess`；现有「两处 daemon 退出点都调用 shutdown」的 census 扩到两引擎；配置测试：旧 driver 值隐含 chromium、非法组合拒绝、缺段走默认。
 - 能力表证伪：`qa/browser_dual/run.sh caps`。
@@ -392,7 +394,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 | R3 | 新增依赖 **零**（tokio-tungstenite、serde_json 已在树）；不链接 obscura crate、不引 chromiumoxide（生成类型数万行，只用 ~30 个方法）；「为什么不能是 Skill/MCP」：驱动浏览器是 R3 例外条款里「跑别人 agent 的运行时」的同一类——一个 CDP 客户端 ~1k 行，比 obscura 自带的 37 个 MCP 工具轻，且后者无几何 |
 | R7 / R10 第 5 不 | 引擎选择、渲染异常、验证码全部是模型的判断；harness 只报事实（§5.2） |
 | R8 | 引擎切换、profile 默认引擎、运行时安装都是工具（`browser_session` / `browser_profile` / `runtime_manage`） |
-| R9 | 能力说明进 `browser_session` 的 `DESCRIPTION`，不进 system prompt；由能力表常量派生（一个真源） |
+| R9 | ~~能力说明进 `browser_session` 的 `DESCRIPTION`~~ ⇒ 能力说明经 **`browser_session{action:"capabilities"}`** 作为**工具结果**到达模型，`DESCRIPTION` 里只留一句静态指路（**由 plan ruling R2' 更正**，同 §5.2）；两者都不进 system prompt；由能力表常量派生（一个真源） |
 | R10 | `src/harness/` 零改动；棘轮不受影响（改动前后各量一次 `budget.rs::CEILING` 实测值，写进 plan 的验收） |
 | 禁用清单 | 不引第二个 async runtime、不引向量库、不引平台 crate、不用正则解析自然语言（accname 只处理 DOM 属性）；**提议**新增「第二个 CDP 客户端实现——唯一真源 `crates/aleph-cdp`」 |
 | 判据 §1 | 能力表 → `DESCRIPTION` 单向派生；§3.12 ㉑ 只改成谎言的名字 |

@@ -1863,7 +1863,36 @@ impl BrowserSsrfGuard {
 ```
 
 The browser boundary has **four layers** (all default-on; policy knobs under
-`[browser.policy]`):
+`[browser.policy]`). ⚠️ **The 2026-09-06 dual-engine round moved the driver in-process and moved
+none of them.** `CdpBackend` (`src/browser/cdp_backend/`) speaks CDP to the browser over a
+websocket Aleph owns, instead of shelling out to `playwright-cli`, so page bytes now arrive as JSON
+in this process rather than as a CLI's stdout. Every layer below still applies at the same call
+sites, because none of them was ever a property of the transport: `check_navigation` runs in the
+tool, `post_nav` runs inside the backend's `open_tab`/`navigate`, the input scan runs before the
+approval gate, and `redact_and_wrap` runs on the way out. The full six-chokepoint enumeration
+(these four plus per-`ActionType` approval and the `tools/scoped` execution tier) is in
+[FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第三轮 A.
+
+⚠️ **What the new driver adds is a place they could be skipped, and it is held shut by convention
+rather than by the type system.** A tool that drove a raw `CdpConnection` itself would bypass all
+four. Every production path goes through `ProfileManager::get_backend` → `BrowserBackend`, so no
+tool does — **but nothing stops one**: `aleph_cdp::CdpConnection` is a `pub` type in a `pub` crate
+and `EngineHandle::conn` is a `pub` field, and `src/builtin_tools/browser_tools/{click,tabs}.rs`
+already construct connections directly inside their `#[cfg(test)]` blocks, which is proof the type
+is reachable from the tool layer. There is **no census** asserting that the production half does
+not. This is recorded as a gap, not described as a control — a boundary whose only enforcement is
+that nobody has crossed it yet must not be written down as though it were closed (判据 §17: 错的标签
+比缺的贵). Tightening it is a one-test change (a source-level census in the shape of
+`approval_wiring_census`), deliberately not made in the documentation round that found it.
+
+⚠️ **Two documents count these layers differently, and this round is the one positioned to say so.**
+This file says four; FL §3.12's 打磨话术 says 「安全边界现在是五层」, the fifth being
+`backend_error_text` — the egress path for **error** text, a fourth way page-adjacent bytes reach
+the model. Neither count is wrong for what it enumerates: this list is the *policy* layers, and the
+fifth is an *egress* one that grew later. Note that the fifth layer's own description is now half a
+round out of date too: it was written for `playwright-cli`'s raw stderr, and under the `cdp` driver
+the bytes it bounds and redacts are CDP error strings instead. The layer did not move; its input
+did.
 
 1. **Navigation-in** — `check_navigation` vets every agent-initiated `open`/`goto`
    target: SSRF policy plus `block_secrets_in_url` (rejects URLs embedding a

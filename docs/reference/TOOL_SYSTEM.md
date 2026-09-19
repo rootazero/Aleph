@@ -171,6 +171,62 @@ Three things about this pair are load-bearing:
 | `web_fetch` | Fetch URL content | `url`, `method?`, `headers?` |
 | `web_search` | Search the web | `query`, `engine?` |
 
+### Browser — 26 tools, two engines, one driver
+
+Every browser tool routes through `ProfileManager::get_backend` (`src/browser/manager.rs`), which
+maps a profile's `driver` to a `BrowserBackend`. Since 2026-09-06 the default driver is `cdp`
+(`src/browser/cdp_backend/`), which speaks CDP directly through the Aleph-owned client in
+`crates/aleph-cdp` and serves **both** engines:
+
+| axis | wire values | what it decides |
+|---|---|---|
+| `driver` | `cdp` (default) · `managed` · `existing_session` | who drives the browser |
+| `engine` | `obscura` (default, `[general.browser] default_engine`) · `chromium` | which process runs |
+
+⚠️ Those are the **exact** strings serde reads and writes (`BrowserDriver::as_wire`,
+`Engine::as_str`). `managed` is the playwright-cli driver and `existing_session` the Chrome
+DevTools MCP one; the round that introduced this table nearly published them as `managed_cli` and
+`chrome_mcp`, which parse as nothing.
+
+The two axes are orthogonal, but only one of them is free. `driver = "managed"` or
+`"existing_session"` **is** `engine = "chromium"` — `resolved_engine` does not consult
+`default_engine` under those drivers at all, because a profile that names a legacy driver has
+already named its engine and a global default must not drag it somewhere it cannot run. An explicit
+`engine` on a legacy driver does not silently win either: it is a contradiction, and
+`validate_engine_driver` refuses it **by name at load**, not as a silent fallback.
+
+**The model's default observation is not a screenshot.** `browser_snapshot` returns a page-state
+tree built by `src/browser/page_state/` from the DOM plus geometry — one builder, both engines —
+carrying role, accessible name, states, rect and a generation-stamped `ref` per node. A `ref` dies
+two ways and says which (`StaleRef{reason}`, `StaleReason::{Navigated, NodeGone, Unknown}`): the
+**document** layer retires the table when the main frame's `loaderId` turns over, and the **node**
+layer asks the resolved object `this.isConnected`. Neither covers the other's case, and on the
+default engine that is load-bearing rather than belt-and-braces — see
+[FEATURE_LOCATOR §3.12](FEATURE_LOCATOR.md) 第八轮 ⑯b. Every DOM-sourced
+string in that tree is printed through one helper, `render::quote`, so a page cannot forge a
+`[ref=…]` token into the model's view by putting one in a `placeholder`.
+
+**Three tool faces carry the engine:**
+
+| Tool | Argument | Meaning |
+|---|---|---|
+| `browser_open` | `engine?` | one-shot: which engine to *start* for a cold profile. Refused, by name, if that profile already runs the other one — its cookies live in that process. |
+| `browser_session` | `action:"capabilities"` | the per-engine support table, as a tool result: rendered text plus a JSON form, each row stamped with the engine version it was measured on. |
+| `browser_session` | `action:"switch_engine", engine, migrate?` | move a live profile to the other engine, carrying cookies, tab URLs + scroll, and per-origin localStorage. Returns the new page tree; every earlier `ref` is dead. |
+
+Engine capabilities are a constant table (`src/browser/engine/capability.rs`) of exactly five rows —
+`js_dialogs`, `drag`, `file_upload`, `pdf`, `insert_text` — and **every row names the `browser_*`
+verb that dispatches it**. That rule is what keeps the table a menu rather than a brochure: a row
+with no verb behind it advertises a capability no tool can reach (判据 §9), which is why `touch`,
+`screencast`, `network_interception` and `multi_connection` are not rows.
+
+The table reaches the model **as a tool result, not as description bytes** — `browser_session`'s
+`DESCRIPTION` carries one sentence pointing at `action:"capabilities"`, and nothing in this tree
+generates description text at runtime (`AlephTool::DESCRIPTION` is a `const`). The same table raises
+`UnsupportedByEngine{engine, verb}` — the verb is named, so the model knows what it would be
+switching for. `qa/browser_dual/run.sh caps` probes every row against the real binaries **by
+effect**, which is that table's expiry check rather than a second copy of it.
+
 ### Generation
 
 | Tool | Description | Args |

@@ -1318,6 +1318,23 @@ widened a narrowly-scoped change into that question. Tracked in
   是 `attach` 里那条 argv 断言（`--use-mock-keychain` 在场、且在 `extra_args` 之后）与
   `engine/chromium.rs` 的 `rposition` 单测，**不是任何场景自己的绿**。全文见
   `docs/reference/FEATURE_LOCATOR.md` §3.12 第七轮 ①③。
+- **`browser_dual`** — 改 `src/browser/engine/`、`src/browser/cdp_backend/`、`src/browser/page_state/`
+  或 `crates/aleph-cdp/` 前跑。阶段清单在本文件顶部的命令块与
+  `qa/browser_dual/run.sh` 的头注释里（**不在这里再抄一份**）；每个阶段在证明什么、以及几条它**没有**
+  证明的事，全文在本文件上方的 **`browser_dual` — the dual-engine stack against a real obscura** 一节。
+  这里只留路由需要的那三句：
+  - **它需要两个真二进制**，缺哪个都是 `exit 69` 而不是 0——一个 obscura（`ALEPH_QA_OBSCURA`，否则
+    `~/.aleph/runtimes/obscura/<tag>/obscura`，否则 PATH——而 obscura 从不被放上 PATH，所以裸
+    `command -v` 在一台经 Aleph 装过它的机器上什么都找不到），以及在 `open` / `reap` / `switch` 上一个
+    Chrome（`ALEPH_QA_CHROME`）。`provision` 还需要**网络**，理由是产品的信任模型而不是疏忽（release
+    元数据、因而 sha256，钉在 `api.github.com`，一个 loopback 的 `http.server` 供不出来）。
+  - **`switch` 与 `reap` 的承重断言从 RPC 面一个字都看不见**：一次把旧引擎留着不关的切换，从每一个
+    工具面角度看都和正确的那次一模一样（判据 §11）。两个阶段共用 `drive.py` 的
+    `token_processes` / `main_processes` 问「这个引擎还活着吗」——**整 argv 词**比较、并剔掉浏览器自己的
+    helper 进程，和 `argv_names_dir` 在被测代码里问的是同一个问法，不是第二个更松的问法。
+  - 它和这个目录里其它用 `pgrep` 的场景一样**只在 unix 上跑得动**；而 **aarch64-windows 上根本没有
+    obscura**（上游 release 只出五个平台），所以那里 doctor 如实报「此平台只有 chromium」。两处都是
+    **没覆盖**，不是绿。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
 - **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
   执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
