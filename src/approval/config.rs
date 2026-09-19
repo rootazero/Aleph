@@ -843,6 +843,18 @@ mod tests {
         // joined the enum without an entry here" — which a typed list only
         // catches if somebody also remembers to extend the list, i.e. it
         // catches nothing (判据 §5). The enum's own declaration emits this one.
+        //
+        // Same floor as its twin `inheritance_is_one_level_and_acyclic`: a
+        // derivation that silently emitted an empty array would make the loop
+        // below unfalsifiable, and "0 variants all have an entry" is 判据 §2's
+        // 恒绿. One of a pair deriving and the other not is 判据 §16, so the
+        // twin gets the guard rather than waiting to be rediscovered there.
+        assert!(
+            ActionType::ALL.len() > 20,
+            "ActionType::ALL has {} entries — the derivation, not the enum, is \
+             what broke",
+            ActionType::ALL.len()
+        );
         for action in ActionType::ALL {
             // Probe the internal map directly: an omitted variant would
             // resolve to Ask via `check`'s step 4 (no default) — the same

@@ -368,7 +368,23 @@ mod tests {
     async fn test_browser_open_allows_public() {
         let home = tempfile::tempdir().expect("tempdir");
         let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
-        let config = BrowserSystemConfig::default();
+        let mut config = BrowserSystemConfig::default();
+        // PIN obscura at a path that does not exist, so the launch takes the
+        // pin-refusal arm on every host.
+        //
+        // The home guard alone is not enough and the older comment here said it
+        // was: `resolve_obscura_binary` tries `which::which("obscura")` BEFORE
+        // it consults the ledger, so on a machine with obscura on `PATH` this
+        // unit test starts a browser. Going red afterwards is not a defence —
+        // the browser has already been launched by then. A pin is refused
+        // rather than fallen back from, which is exactly the determinism this
+        // test needs.
+        config.obscura.binary_path = Some(
+            home.path()
+                .join("no-obscura-here")
+                .to_string_lossy()
+                .into_owned(),
+        );
         let manager = Arc::new(ProfileManager::new(config));
         manager.apply_policy(crate::browser::network_policy::SsrfConfig {
             block_private: false,
@@ -386,8 +402,8 @@ mod tests {
             .unwrap();
 
         // Without a browser to run the call degrades — and the REASON is a
-        // missing engine runtime, never a network refusal. Under an empty
-        // `$ALEPH_HOME` the ledger holds no obscura, so this is deterministic.
+        // missing engine runtime, never a network refusal. The pin above is
+        // what makes that deterministic; see its comment.
         assert!(!result.success);
         let message = result.message.expect("a refusal says why");
         assert!(

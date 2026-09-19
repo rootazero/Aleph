@@ -45,6 +45,24 @@ OBSCURA_PAT = f"--storage-dir={args.obscura_storage}"
 # `browser_state_dir("chromium")/sanitize_session_key("default")`.
 CHROMIUM_UDD = os.path.join(args.aleph_home, "data", "browser", "chromium", "default")
 
+# The orphan-reap registry. `sidecar_registry_dir()` is
+# `browser_state_dir(SIDECAR_REGISTRY_LEAF)`, and that leaf is the string
+# "chromium" for BOTH engines — frozen deliberately, because renaming it would
+# strand every existing record (the constant's own doc says so). So the
+# directory below is not the chromium data dir above despite sharing a name, and
+# the file names inside it are `<engine>-<profile>.json`.
+SIDECAR_DIR = os.path.join(args.aleph_home, "data", "browser", "chromium")
+OBSCURA_RECORD = os.path.join(SIDECAR_DIR, "obscura-default.json")
+CHROMIUM_RECORD = os.path.join(SIDECAR_DIR, "chromium-default.json")
+
+
+def sidecar_listing():
+    """What is actually in the registry, for a failure message that names it."""
+    try:
+        return sorted(os.listdir(SIDECAR_DIR))
+    except OSError as e:
+        return f"<unreadable: {e}>"
+
 
 async def main():
     async with ws_connect(args.ws) as ws:
@@ -67,6 +85,11 @@ async def main():
 
         before = token_processes(OBSCURA_PAT)
         check("an obscura owns our storage dir before the switch", bool(before), str(before))
+        check(
+            "and the orphan-reap registry has a record for it",
+            os.path.exists(OBSCURA_RECORD),
+            f"{OBSCURA_RECORD} in {sidecar_listing()}",
+        )
 
         ok, res = await rpc.invoke(
             "browser_cookies",
@@ -154,6 +177,23 @@ async def main():
             "no obscura with our storage dir survives the switch",
             not after,
             f"before={before} after={after}",
+        )
+
+        # The record, on the REAL registry layout. The unit test asserts this
+        # against a fake whose sidecar naming was itself wrong on exactly this
+        # dimension until this round, so the claim is worth making where the
+        # directory is the product's own. Keyed on (profile, engine): before
+        # that, the target's launch overwrote the source's record and the
+        # source's shutdown then deleted the file that described the SURVIVOR.
+        check(
+            "the surviving chromium has an orphan-reap record of its own",
+            os.path.exists(CHROMIUM_RECORD),
+            f"{CHROMIUM_RECORD} in {sidecar_listing()}",
+        )
+        check(
+            "and the dead obscura's record was cleaned up, not left to strand",
+            not os.path.exists(OBSCURA_RECORD),
+            f"{OBSCURA_RECORD} in {sidecar_listing()}",
         )
 
         ok, res = await rpc.invoke(

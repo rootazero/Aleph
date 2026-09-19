@@ -175,9 +175,22 @@ pub fn sidecar_registry_dir() -> Result<PathBuf, BrowserError> {
 /// `sanitize_session_key` permits `-`, so a profile literally named
 /// `default-obscura` would claim `default`'s obscura record.
 ///
-/// Records written by an older build (`<key>.json`) are still swept: the sweep
-/// walks the directory and reads each record's own `engine` field, so it never
-/// parses the name.
+/// **Old records are still READ correctly, and that does not make the two
+/// formats compatible.** The sweep walks the directory and takes each record's
+/// `engine` from its contents, so a `<key>.json` written by an older build is
+/// reaped on its own evidence. But the collision is on the WRITE side, and this
+/// does not cover it: `sanitize_session_key` keeps `-`, so a profile named
+/// `obscura-foo` wrote `obscura-foo.json` under the old scheme — byte-identical
+/// to what this function now produces for `(Engine::Obscura, "foo")`, and
+/// `write_sidecar_record` is a plain overwrite. Post-upgrade, profile `foo` on
+/// obscura would clobber profile `obscura-foo`'s record, and `reap_orphans`'
+/// `.corrupt` supersession keys on that same name, so the rename-aside copy
+/// would go with it.
+///
+/// There is no migration step for that, and the reason is not that it is
+/// harmless — it is that **this registry has never shipped**: measured, no
+/// release tag contains the commit that introduced it. A build that ever
+/// reached a user's disk under the old scheme would need one.
 pub fn sidecar_path(engine: Engine, session_key: &str) -> Result<PathBuf, BrowserError> {
     Ok(sidecar_registry_dir()?.join(sidecar_file_name(engine, session_key)))
 }
