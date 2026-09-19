@@ -36,6 +36,31 @@ enum Resolved {
 /// `elementFromPoint` is the only honest oracle here: `offsetParent` answers
 /// `null` for `position: fixed` elements that ARE visible and answers non-null
 /// for elements a modal is covering, i.e. it is wrong in both directions.
+///
+/// **The relationship test is `compareDocumentPosition`, not `===` /
+/// `contains`, and that is an engine-portability fix rather than a style
+/// choice.** The two are the same question — `Node.contains` is defined on the
+/// same tree relationship — but they are asked of different things: `===` and
+/// `contains` compare the JS *wrapper objects*, while `compareDocumentPosition`
+/// compares the *nodes*. Chromium hands out one canonical wrapper per node, so
+/// the two agree there. **obscura v0.2.2 mints a fresh JS object for every
+/// `DOM.resolveNode`**, so `this === document.elementFromPoint(cx, cy)` is
+/// `false` for an element sitting alone under its own centre, and
+/// `this.contains(top)` is `false` too — while `this.isConnected`,
+/// `document.contains(this)`, `this.compareDocumentPosition(top) === 0` and an
+/// attribute written on `this` and read back off `top` all say, correctly, that
+/// they are one node.
+///
+/// The cost of the wrapper form was total: **every `browser_click` by ref on
+/// the default engine was refused**, with the element named as its own
+/// occluder — `the element is covered by "div#blk"` for `div#blk`. 18,972 unit
+/// tests were green, because the probe only ever ran against a Chromium.
+/// `qa/browser_dual/run.sh click` is what asked.
+///
+/// The bitmask: `0` is "the same node", `16` (`DOCUMENT_POSITION_CONTAINED_BY`)
+/// is "top is inside me", `8` (`DOCUMENT_POSITION_CONTAINS`) is "top contains
+/// me" — the three cases the previous line spelled out, and no others. A
+/// disconnected `top` answers `1` and is still refused.
 pub(super) const OCCLUSION_JS: &str = r"
 function() {
   const r = this.getBoundingClientRect();
@@ -45,7 +70,8 @@ function() {
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   const top = document.elementFromPoint(cx, cy);
   if (!top) { return { ok: false, blocker: 'the point is outside the viewport' }; }
-  if (top === this || this.contains(top) || top.contains(this)) { return { ok: true }; }
+  const rel = this.compareDocumentPosition(top);
+  if (rel === 0 || (rel & 16) !== 0 || (rel & 8) !== 0) { return { ok: true }; }
   const id = top.id ? '#' + top.id : '';
   const cls = (typeof top.className === 'string' && top.className.trim())
     ? '.' + top.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
