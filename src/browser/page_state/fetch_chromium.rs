@@ -2463,16 +2463,42 @@ mod tests {
     /// returned them.
     const OOPIF_CHILD: &str = include_str!("fixtures/local-oopif-child.domsnapshot.json");
     /// The page whose `opacity: 0`, `visibility: hidden` and `display: none`
-    /// containers each hold ELEMENTS at depth 1 and depth 2 — the shape the
-    /// other four captures do not have, where every hidden container's only
-    /// descendant is a text node.
+    /// containers each hold ELEMENTS at depth 1 and depth 2, with a
+    /// `display: contents` break and a shadow-root `<slot>` mid-chain and a
+    /// descendant re-showing itself inside each of the first two.
     ///
     /// Captured by `…-evidence/probes/t17b-opacity.mjs` off
     /// `t17b-page.html` on Chrome 153.0.8010.36, with the same request as its
-    /// four siblings. It is the only capture where the parse deliberately
-    /// DISAGREES with the raw styles row — see [`cascade_opacity`] and
-    /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
-    /// which counts that disagreement rather than being blind to it.
+    /// four siblings. Where the parse deliberately DISAGREES with the raw
+    /// styles row, and by how much, is counted PER CAPTURE by
+    /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
+    /// — see [`cascade_opacity`].
+    ///
+    /// ⚠️ **Two EXCLUSIVITY claims are gone from this doc**, and they are a
+    /// worse shape than the counts swept alongside them: a stale count reads as
+    /// stale, while a false exclusivity claim reads as evidence, and the next
+    /// author builds a fixture for a shape that already exists twice.
+    ///
+    /// * *"the shape the other four captures do not have, where every hidden
+    ///   container's only descendant is a text node"* — false for
+    ///   `local-top-layer`, whose `#fade` holds `#wrap-a` → `#wrap-b` and
+    ///   `#tl-pop` → `#tl-pop-btn`, elements at both depths; and false at depth
+    ///   1 for `local-nested-frames`, whose `#op-box` holds `#op-frame` (its
+    ///   depth-2 content is real but lives in another document, which is that
+    ///   capture's whole point).
+    /// * *"the only capture where the parse deliberately disagrees with the raw
+    ///   styles row"* — `local-top-layer` cascades 11 nodes and
+    ///   `local-nested-frames` cascades 24 plus 7, all asserted by name in the
+    ///   census above.
+    ///
+    /// **Both were already false before Task 17c** — `local-top-layer` made
+    /// them so — and Task 17c made both wronger, which is why they are repaired
+    /// here rather than left for whoever owns that capture: a fix owns the
+    /// comments it falsifies. The positive statement above replaces them
+    /// instead of being re-counted, because it is checkable against this one
+    /// file and cannot be falsified by adding an eighth capture. The
+    /// neighbouring *"four siblings"* is a DIFFERENT and sound convention and
+    /// stays: it is true as of THIS capture and never re-evaluates.
     const HIDDEN_CONTAINERS: &str =
         include_str!("fixtures/local-hidden-containers.domsnapshot.json");
     /// The page whose ONE `opacity: 0` container holds, at various depths, a
