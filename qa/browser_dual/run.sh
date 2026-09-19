@@ -19,6 +19,9 @@
 #                                       # are swept, a prefix-neighbour is NOT
 #   ./qa/browser_dual/run.sh caps       # the capability table, probed against the
 #                                       # real binary, verb by verb
+#   ./qa/browser_dual/run.sh switch     # a cookie set on obscura is readable on
+#                                       # chromium afterwards, the tab is back on
+#                                       # its URL, and the obscura process is GONE
 #
 # Same scratch-HOME discipline as qa/browser_managed/run.sh. No mock provider in
 # any stage: every claim goes through `tools.invoke`, which runs a tool without
@@ -35,7 +38,7 @@ set -uo pipefail
 
 STAGE="${1:-open}"
 case "$STAGE" in
-  provision|open|snapshot|click|stall|reap|caps) ;;
+  provision|open|snapshot|click|stall|reap|caps|switch) ;;
   *) echo "unknown stage: $STAGE" >&2; exit 64 ;;
 esac
 
@@ -84,10 +87,13 @@ CHROME_BIN="${ALEPH_QA_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Go
 # sweep reaches both engines' orphans. Without a Chrome neither can say anything
 # about chromium, and a stage that passes by having nothing to check is the
 # shape qa/README.md warns about.
-if { [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ]; } && [ ! -x "$CHROME_BIN" ]; then
+if { [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "switch" ]; } \
+   && [ ! -x "$CHROME_BIN" ]; then
   echo "no browser at $CHROME_BIN; set ALEPH_QA_CHROME" >&2
   echo "(this stage's claims are about BOTH engines; without a chromium it would" >&2
-  echo " pass by having nothing to check)" >&2
+  echo " pass by having nothing to check. reap needs a LIVE chromium to spare;" >&2
+  echo " switch needs one to switch TO — without it the stage would fail at the" >&2
+  echo " launch and prove nothing about the migration)" >&2
   exit 69
 fi
 
@@ -270,6 +276,17 @@ if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ]; then
     --prefer-system-browser false
   )
 fi
+# `switch` needs no second profile — it moves the DEFAULT one — but it does need
+# a chromium binary to move it onto, and the same pin for the same reason as
+# above: so the stage never depends on which browsers this machine happens to
+# have. `--prefer-system-browser false` makes the pin the one that is used
+# rather than a fallback a system Chrome would win over.
+if [ "$STAGE" = "switch" ]; then
+  BROWSER_CFG_ARGS+=(
+    --runtime-binary-path "$CHROME_BIN"
+    --prefer-system-browser false
+  )
+fi
 python3 "$MANAGED/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || exit 1
 
 # `$HOME/.aleph`, NOT `$ALEPH_HOME` — and the two are equal in this run, which
@@ -283,11 +300,19 @@ python3 "$MANAGED/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || e
 # hopeful `"browser_snapshot"` or `"runtime_manage"` here would read like a
 # gate that was opened and would in fact be a line nothing consults. Neither
 # verb has an `ActionType`, so neither needs one (判据 §17).
+#
+# A policy file REPLACES the curated defaults wholesale (`ConfigApprovalPolicy`
+# `::load_from`), so every variant a stage exercises has to be listed here —
+# an absent key is "no policy configured", which a non-interactive run reads as
+# a refusal. `browser_cookies_write` was missing until the `switch` stage became
+# the first to call `browser_cookies`, and it failed three claims about the
+# MIGRATION for a reason that was upstream of it.
 cat > "$HOME/.aleph/approval-policy.json" <<'JSON'
 {"defaults":{
   "browser_open":"allow","browser_navigate":"allow","browser_click":"allow",
   "browser_type":"allow","browser_evaluate":"allow","browser_dialog":"allow",
-  "browser_session_state":"allow"
+  "browser_session_state":"allow","browser_switch_engine":"allow",
+  "browser_cookies_write":"allow"
 },"allowlist":[],"blocklist":[]}
 JSON
 
@@ -309,6 +334,12 @@ if [ "$STAGE" = "caps" ]; then
     --page-url "http://127.0.0.1:$PAGE_PORT/caps.html" \
     --aleph-home "$ALEPH_HOME" \
     --obscura-binary "$OBSCURA_BIN" || RC=$?
+elif [ "$STAGE" = "switch" ]; then
+  python3 "$HERE/drive_switch.py" \
+    "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+    --page-url "http://127.0.0.1:$PAGE_PORT/index.html" \
+    --aleph-home "$ALEPH_HOME" \
+    --obscura-storage "$OBSCURA_STORAGE" || RC=$?
 else
   python3 "$HERE/drive.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$STAGE" \

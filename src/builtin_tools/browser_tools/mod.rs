@@ -202,7 +202,7 @@ pub(crate) async fn current_page_block(
 /// `browser_tabs {switch}` falsified: after a switch the selected tab is not
 /// the last line, so the read-time SSRF re-check below could vet tab N while
 /// the content read landed on tab M.
-async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserError> {
+pub(crate) async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserError> {
     let tabs = backend.list_tabs().await?;
     tab_registry::active_tab_id(&tabs)
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))

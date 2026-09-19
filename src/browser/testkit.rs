@@ -699,6 +699,264 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
     }
 }
 
+/// An [`EngineHandle`] wired to a running [`aleph_cdp::testkit::FakeCdpServer`],
+/// with `tabs` pre-populated from `(target_id, url, active)` triples.
+///
+/// The process side is a [`FakeEngineProcess`] so nothing is spawned; the CDP
+/// side is real transport against a fake peer, which is what makes the
+/// migration tests assert bytes on the wire rather than that a function ran.
+///
+/// The first triple becomes [`EngineHandle::new`]'s `first_tab`, matching a
+/// real launch (the registry creates one tab before the ready gate).
+///
+/// Named `fake_handle` and not `fake_engine_handle` on purpose: the
+/// `browser::home_guard_census` flags any test body containing
+/// `engine_handle(`, on the reading that it called
+/// `ProfileManager::engine_handle` and therefore resolved `$ALEPH_HOME`. This
+/// helper resolves nothing — a tempdir for the sidecar, a literal for the data
+/// dir — so every caller of it would have been a FALSE offender, and the census
+/// would have been "fixed" by handing seven tests a guard that guards nothing
+/// (判据 §2). The census's matcher is deliberately loose and belongs to another
+/// module; the name is mine, so the name moved.
+///
+/// Each tab's session id is `S-<target id>`, so a fake that has to answer a
+/// per-session frame can predict it without this function handing one back.
+pub(crate) async fn fake_handle(
+    engine: super::engine::Engine,
+    server: &aleph_cdp::testkit::FakeCdpServer,
+    tabs: &[(&str, &str, bool)],
+) -> std::sync::Arc<super::engine::EngineHandle> {
+    let dir = tempfile::tempdir().expect("sidecar dir");
+    let process = std::sync::Arc::new(FakeEngineProcess::new(engine, server, dir.path()));
+    // The tempdir must outlive the handle; leak it, because a test fixture that
+    // deletes the sidecar under a live handle produces a failure that looks
+    // like the code under test.
+    std::mem::forget(dir);
+    fake_handle_on(&process, tabs).await
+}
+
+/// [`fake_handle`] against a launcher the CALLER owns.
+///
+/// The seam exists because `EngineHandle::shutdown` calls `kill` on the process
+/// object the handle was built with, and `kills()` is read off a specific
+/// instance. A fixture that wants to assert "this engine was stopped" has to
+/// hold the same `Arc` the handle does — building a second `FakeEngineProcess`
+/// beside it gives a reader that can never see the write, which is a green that
+/// means nothing (判据 §4, and this is how it was found: the assertion was red,
+/// and the reason was the fixture, not the code under test).
+pub(crate) async fn fake_handle_on(
+    process: &std::sync::Arc<FakeEngineProcess>,
+    tabs: &[(&str, &str, bool)],
+) -> std::sync::Arc<super::engine::EngineHandle> {
+    use super::engine::process::{EngineProcess, LaunchRequest};
+    use std::sync::Arc;
+
+    let engine = process.engine();
+    let process: Arc<dyn EngineProcess> = Arc::clone(process) as Arc<dyn EngineProcess>;
+    let launched = process
+        .launch(LaunchRequest {
+            profile: "default".into(),
+            session_key: "default".into(),
+            // Never read: `FakeEngineProcess::launch` writes its sidecar under
+            // the directory it was constructed with, and nothing else on this
+            // path touches a data dir.
+            data_dir: std::path::PathBuf::from("/nonexistent/aleph-qa"),
+            headless: true,
+            proxy: None,
+            browser: crate::browser::profile::BrowserType::default(),
+            allow_private_network: false,
+            stealth: false,
+            extra_args: vec![],
+        })
+        .await
+        .expect("fake launch");
+    let conn = aleph_cdp::CdpConnection::connect(
+        &launched.endpoint.ws_url,
+        aleph_cdp::ConnectOptions {
+            // Short: one migration test asserts the timeout arm, and the 30 s
+            // production default would make it take 30 s.
+            command_timeout: std::time::Duration::from_millis(400),
+        },
+    )
+    .await
+    .expect("connect to fake");
+
+    let (first_id, _first_url, _) = tabs
+        .first()
+        .copied()
+        .unwrap_or(("T-0", "about:blank", true));
+    let handle = Arc::new(super::engine::EngineHandle::new(
+        engine,
+        "default".into(),
+        launched,
+        conn,
+        process,
+        (
+            first_id.to_string(),
+            aleph_cdp::SessionId(format!("S-{first_id}")),
+        ),
+    ));
+    {
+        let mut table = handle.tabs.lock().await;
+        for (id, url, active) in tabs {
+            let mut entry = super::engine::TabEntry::new(aleph_cdp::SessionId(format!("S-{id}")));
+            entry.url = (*url).to_string();
+            table.entries.insert((*id).to_string(), entry);
+            if *active {
+                table.active = Some((*id).to_string());
+            }
+        }
+    }
+    handle
+}
+
+/// A [`ProfileManager`](crate::browser::manager::ProfileManager) whose `default`
+/// profile is already running `from`, with a launcher for `to` registered so the
+/// switch can stand one up.
+pub(crate) struct SwitchFixture {
+    pub manager: std::sync::Arc<crate::browser::manager::ProfileManager>,
+    /// The SOURCE engine's launcher. [`Self::source_killed`] reads its
+    /// `kills()` list — the pids its `kill(&self, launched, grace)` arm was
+    /// asked to stop.
+    ///
+    /// Deliberately **not** a second `AtomicBool` set inside `kill`: the fake
+    /// already records that fact and a flag beside it would be the same fact
+    /// with two writers (判据 §1). What matters is where the recording happens,
+    /// and `kill` is where it happens — never `EngineHandle::shutdown`, which
+    /// is the caller under test and would go green for a shutdown that reached
+    /// no process (判据 §4 — assert the effect arrived, not that the call was
+    /// made).
+    pub source_proc: std::sync::Arc<FakeEngineProcess>,
+    pub source: aleph_cdp::testkit::FakeCdpServer,
+    pub target: aleph_cdp::testkit::FakeCdpServer,
+}
+
+impl SwitchFixture {
+    /// Whether the source engine's process was asked to die.
+    pub(crate) fn source_killed(&self) -> bool {
+        !self.source_proc.kills().is_empty()
+    }
+}
+
+/// `target_rejects_cookies` makes the target's fake answer `Network.setCookies`
+/// with an error — the failure the ordering claim is about.
+pub(crate) async fn switch_fixture(
+    from: super::engine::Engine,
+    to: super::engine::Engine,
+    target_rejects_cookies: bool,
+) -> SwitchFixture {
+    use super::engine::process::EngineProcess;
+    use super::engine::registry::EngineRegistry;
+    use super::engine::Engine;
+    use super::manager::ProfileManager;
+    use super::profile::BrowserSystemConfig;
+    use aleph_cdp::testkit::{FakeCdpServer, Responder};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    let source = FakeCdpServer::start(|req| {
+        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let expr = req
+            .get("params")
+            .and_then(|p| p.get("expression"))
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        match method {
+            "Target.getTargets" => Responder::Reply(json!({ "targetInfos": [] })),
+            "Network.getAllCookies" => Responder::Reply(json!({
+                "cookies": [{
+                    "name": "sid", "value": "abc123", "domain": "example.com",
+                    "path": "/", "expires": -1.0, "httpOnly": true,
+                    "secure": false, "sameSite": "Lax"
+                }]
+            })),
+            "Runtime.evaluate" if expr.contains("scrollX") => {
+                Responder::Reply(json!({ "result": { "type": "object", "value": [0, 0] } }))
+            }
+            _ => Responder::Reply(json!({ "result": { "type": "string", "value": "[]" } })),
+        }
+    })
+    .await;
+    let target = FakeCdpServer::start(move |req| {
+        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        match method {
+            "Network.setCookies" if target_rejects_cookies => Responder::Error {
+                code: -32000,
+                message: "cookie store is read-only".into(),
+            },
+            // The readiness gate the registry runs before handing the handle
+            // back: `launch_detached` goes through the same `bring_up` every
+            // production launch does, so a fake that could not answer this
+            // would fail the switch before the migration was reached.
+            "Browser.getVersion" => Responder::Reply(json!({
+                "protocolVersion": "1.3", "product": "Fake/1.0",
+                "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
+            })),
+            "Target.createTarget" => Responder::Reply(json!({ "targetId": "T-NEW" })),
+            "Target.attachToTarget" => Responder::Reply(json!({ "sessionId": "S-NEW" })),
+            "Page.navigate" => Responder::Reply(json!({ "frameId": "F-NEW", "loaderId": "L-NEW" })),
+            // The readiness gate evaluates the literal `1` and REFUSES anything
+            // that is not numerically one (`readiness::is_numeric_one`). A fake
+            // that answered `"ok"` to every evaluate failed the launch at the
+            // gate, before the migration was reached — and the failure text is
+            // a `LaunchFailed`, not the cookie refusal the switch tests are
+            // about.
+            "Runtime.evaluate"
+                if req
+                    .get("params")
+                    .and_then(|p| p.get("expression"))
+                    .and_then(|e| e.as_str())
+                    .is_some_and(|e| e.trim() == "1") =>
+            {
+                Responder::Reply(json!({ "result": { "type": "number", "value": 1 } }))
+            }
+            _ => Responder::Reply(json!({ "result": { "type": "string", "value": "ok" } })),
+        }
+    })
+    .await;
+
+    let src_dir = tempfile::tempdir().expect("dir");
+    let dst_dir = tempfile::tempdir().expect("dir");
+    let src_proc = Arc::new(FakeEngineProcess::new(from, &source, src_dir.path()));
+    let dst_proc = Arc::new(FakeEngineProcess::new(to, &target, dst_dir.path()));
+
+    let mut processes: std::collections::HashMap<Engine, Arc<dyn EngineProcess>> =
+        std::collections::HashMap::new();
+    processes.insert(from, Arc::clone(&src_proc) as Arc<dyn EngineProcess>);
+    processes.insert(to, dst_proc as Arc<dyn EngineProcess>);
+    let registry = Arc::new(EngineRegistry::new(
+        processes,
+        std::time::Duration::from_millis(400),
+        std::time::Duration::from_secs(2),
+    ));
+
+    // The source handle is PARKED under "default" — which is precisely the
+    // state that makes `EngineRegistry::handle` refuse the target with
+    // `EngineMismatch`, and therefore why `switch_engine` uses
+    // `launch_detached`.
+    // On `src_proc`, not on a fresh launcher of its own: the fixture's
+    // `source_killed()` reads THIS instance's `kills()`, and a handle built
+    // around a second `FakeEngineProcess` would be shut down without that
+    // reader ever seeing it.
+    let src_handle = fake_handle_on(&src_proc, &[("T-A", "https://example.com/a", true)]).await;
+    registry
+        .insert_for_test("default", Arc::clone(&src_handle))
+        .await;
+
+    let config = BrowserSystemConfig {
+        default_engine: from,
+        ..BrowserSystemConfig::default()
+    };
+    let manager = Arc::new(ProfileManager::with_engine_registry(config, registry));
+    std::mem::forget(src_dir);
+    std::mem::forget(dst_dir);
+    SwitchFixture {
+        manager,
+        source_proc: src_proc,
+        source,
+        target,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -112,7 +112,15 @@ pub fn BrowserView() -> impl IntoView {
                 </p>
             </div>
 
-            <RuntimeSummaryBanner />
+            // The banner needs the DRIVER to know which runtimes this install
+            // requires — `cdp` runs obscura, `managed` runs the playwright
+            // chain. `None` until the config lands (and if it never does): the
+            // `RwSignal` above is seeded with a placeholder, and a banner
+            // driven off a placeholder would report on whichever chain that
+            // literal happens to name.
+            <RuntimeSummaryBanner driver=Signal::derive(move || {
+                (!loading.get() && error.get().is_none()).then(|| config.get().default_driver)
+            }) />
 
             <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm">
                 {t!(i18n, browser_settings.restart_hint)}

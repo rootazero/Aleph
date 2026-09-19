@@ -260,9 +260,26 @@ pub fn capabilities_json() -> serde_json::Value {
 #[must_use]
 pub fn describe_for_tool() -> String {
     let mut out = String::from(
+        // What moves and what does not is `cdp_backend::migration`'s
+        // `MigrationState` — three fields, three carried clauses. This sentence
+        // said scroll position does NOT move; the switch reads
+        // `window.scrollX/Y` and writes `window.scrollTo`, so it did, and the
+        // sentence was the one lying (判据 §1).
+        //
+        // The EXHAUSTIVE list lives here rather than in
+        // `BrowserSessionTool::DESCRIPTION` and that is the R2' split, not an
+        // accident: this string is the RESULT of `action='capabilities'`, so it
+        // costs nothing on a turn that never asks, while `DESCRIPTION` ships
+        // with the tool list on every turn. `DESCRIPTION` therefore keeps only
+        // the three things a model needs BEFORE it decides — the verb, what it
+        // carries, and that page state and every ref are lost — and points
+        // here for the rest.
         "Browser engines. obscura is the default; chromium is the escape hatch, reached with \
-         browser_session{action:\"switch_engine\", engine:\"chromium\"} (cookies and open URLs \
-         move across; scroll position and page state do not).\n",
+         browser_session{action:\"switch_engine\", engine:\"chromium\"}. A switch moves every \
+         cookie, each open tab's URL and scroll position, and the localStorage of each open \
+         tab's origin (best effort). It does not move the JS heap or in-flight form input, \
+         the history stack, sessionStorage, IndexedDB, service workers, or the localStorage \
+         of origins with no open tab; every snapshot ref dies with the old process.\n",
     );
     for engine in Engine::ALL {
         let caps = capabilities(engine);

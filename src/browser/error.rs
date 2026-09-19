@@ -133,6 +133,21 @@ pub enum BrowserError {
     #[error("No active browser session for '{0}'. Call open/goto first.")]
     NoSession(String),
 
+    /// A `switch_engine` to the engine that is already running. Refused rather
+    /// than answered `Ok`: a no-op reported as a success is indistinguishable
+    /// from a switch that worked, and the model would believe it had taken the
+    /// escape hatch when it had not (判据 §11).
+    ///
+    /// The mirror of [`Self::EngineMismatch`], which says "a DIFFERENT engine is
+    /// running"; the two cannot be one variant because the recovery differs —
+    /// there is nothing to recover from here, which is why the text names no
+    /// verb.
+    #[error("profile '{profile}' is already running {engine}; nothing to switch to")]
+    AlreadyOnEngine {
+        profile: String,
+        engine: crate::browser::engine::Engine,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -285,9 +300,10 @@ pub fn engine_unavailable(engine: Engine, tried: impl fmt::Display) -> BrowserEr
             "No obscura for the browser ({tried}). It is installed only from Aleph's \
              runtime ledger. Operators can run \
              `runtime_manage{{action:\"install\", capability:\"obscura\"}}` or pin a binary \
-             with [general.browser.obscura] binary_path. To keep working right now, switch \
-             this profile to the other engine: \
-             `browser_session{{action:\"switch_engine\", engine:\"chromium\"}}`."
+             with [general.browser.obscura] binary_path. To keep working right now, start \
+             the other engine from cold: `browser_open{{engine:\"chromium\"}}` — \
+             `switch_engine` cannot help, because obscura never came up and there is no \
+             live browser to migrate."
         ),
     };
     BrowserError::EngineUnavailable {
@@ -529,6 +545,13 @@ mod tests {
             BrowserError::EngineMismatch { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::StaleRef { .. } => RecoverySignal::VerbOnly,
             BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
+            // Names the engine and NO verb, on purpose: the profile is already
+            // where the caller asked to be, so there is nothing for it to
+            // call. Naming `switch_engine` here would point at the very call
+            // that just refused — the round trip `unsupported_text`'s `None`
+            // arm exists to avoid (判据 §14: a remedy that changes nothing is
+            // worse than none).
+            BrowserError::AlreadyOnEngine { .. } => RecoverySignal::EngineOnly,
         }
     }
 
@@ -556,6 +579,7 @@ mod tests {
     /// | `EngineMismatch`                 | yes | yes | names both the running engine and the requested one, plus `switch_engine` — the call that reconciles them |
     /// | `StaleRef`                       | yes | **no** | no `engine` field — re-snapshotting the SAME tab fixes it regardless of which engine drives it |
     /// | `Cdp`                            | **no** | yes | no Aleph tool fixes a CDP protocol error; the actionable content IS the verbatim triple, and inventing a verb would name a door that does not exist |
+    /// | `AlreadyOnEngine`                | **no** | yes | the profile is already on the engine that was asked for; the only verb that could be named is the one that just refused |
     ///
     /// Every row below is checked against both a real `.to_string()` and
     /// `spec_7_1_signal`'s classification, except `StaleRef`'s "no engine" —
@@ -742,6 +766,35 @@ mod tests {
                 "Cdp names no recovery verb — no Aleph tool fixes a protocol \
                  error, and inventing one would name a door that does not \
                  exist: {cdp}"
+            );
+        }
+
+        // Already on the requested engine: names the engine so the reader can
+        // see WHICH one it is already on, and names no verb, because the only
+        // candidate is the call that just refused.
+        let already_err = BrowserError::AlreadyOnEngine {
+            profile: "default".into(),
+            engine: Engine::Obscura,
+        };
+        assert_eq!(spec_7_1_signal(&already_err), RecoverySignal::EngineOnly);
+        let already = already_err.to_string();
+        assert!(
+            already.contains("obscura"),
+            "must name which engine: {already}"
+        );
+        assert!(
+            already.contains("default"),
+            "must name which profile: {already}"
+        );
+        for tool in [
+            BrowserSessionTool::NAME,
+            BrowserOpenTool::NAME,
+            BrowserSnapshotTool::NAME,
+        ] {
+            assert!(
+                !already.contains(tool),
+                "there is nothing to recover from, so naming a verb would send \
+                 the model back to the call that just refused: {already}"
             );
         }
     }

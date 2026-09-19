@@ -30,6 +30,12 @@ pub enum SessionAction {
     /// verb this one cannot do. Reads a constant table: no browser is
     /// launched, no file is touched, no approval is consumed.
     Capabilities,
+    /// Move this profile onto the other browser engine, carrying the cookies
+    /// and the open tabs. The escape hatch: obscura renders fast and is the
+    /// default; Chromium is what you switch to when a page needs it. Ask
+    /// `action:"capabilities"` first if the question is which engine can do a
+    /// particular verb.
+    SwitchEngine,
 }
 
 /// Arguments for the `browser_session` tool.
@@ -53,6 +59,13 @@ pub struct BrowserSessionArgs {
     /// Same shape, for the same reason, as `runtime_manage`'s `capability`.
     #[serde(default)]
     pub name: Option<String>,
+    /// `switch_engine` only: which engine to move to.
+    #[serde(default)]
+    pub engine: Option<crate::browser::engine::Engine>,
+    /// `switch_engine` only: carry cookies / tabs / localStorage across
+    /// (default true). `false` starts the other engine clean.
+    #[serde(default)]
+    pub migrate: Option<bool>,
 }
 
 /// Output from the `browser_session` tool.
@@ -65,6 +78,36 @@ pub struct BrowserSessionOutput {
     /// The engine capability table, on `capabilities` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<serde_json::Value>,
+    /// `switch_engine` only: the engine now serving this profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switched_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cookies_moved: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tabs_reopened: Option<usize>,
+    /// The new page tree. Every ref the model held died with the old process,
+    /// so the replacement travels back in the same call rather than being
+    /// something it must remember to re-request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_text: Option<String>,
+}
+
+impl BrowserSessionOutput {
+    /// A refusal: no path, no capabilities, no engine, no counts. One
+    /// constructor so a new field cannot be spelled `None` in six places and
+    /// `Some` in none.
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            path: None,
+            message: Some(message.into()),
+            capabilities: None,
+            switched_to: None,
+            cookies_moved: None,
+            tabs_reopened: None,
+            snapshot_text: None,
+        }
+    }
 }
 
 /// Persists / restores browser login sessions via storage-state files.
@@ -98,6 +141,93 @@ impl BrowserSessionTool {
     pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
         self.approval_policy = Some(policy);
         self
+    }
+
+    /// The `switch_engine` arm.
+    ///
+    /// Gated the same way `save`/`load` are, and one level up for the same
+    /// reason: this moves every cookie into a new process. Argument validation
+    /// runs BEFORE the gate so a malformed call cannot consume a user approval
+    /// — the rule [`validate_session_name`] already follows.
+    async fn switch_engine(&self, args: BrowserSessionArgs) -> Result<BrowserSessionOutput> {
+        if args.name.is_some() {
+            return Ok(BrowserSessionOutput::failed(
+                "browser_session switch_engine takes no `name` — it moves the live \
+                 session, it does not read a saved one",
+            ));
+        }
+        let Some(engine) = args.engine else {
+            return Ok(BrowserSessionOutput::failed(
+                "browser_session switch_engine requires `engine`: \"obscura\" or \"chromium\"",
+            ));
+        };
+
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserSwitchEngine,
+            "switch_engine",
+            &format!("switch profile '{}' to {engine}", args.profile),
+        )
+        .await
+        {
+            return Ok(BrowserSessionOutput::failed(message));
+        }
+
+        let migrate = args.migrate.unwrap_or(true);
+        match self
+            .manager
+            .switch_engine(&args.profile, engine, migrate)
+            .await
+        {
+            Ok(report) => {
+                let mut message = format!(
+                    "Switched profile '{}' from {} to {}: {} cookie(s), {} tab(s), \
+                     {} localStorage origin(s) carried across. Every earlier ref is dead; \
+                     {}. This profile runs {} until the server restarts or you switch \
+                     back — the config file is unchanged.",
+                    args.profile,
+                    report.from,
+                    report.to,
+                    report.cookies_moved,
+                    report.tabs_reopened,
+                    report.local_storage_origins,
+                    // Not "the new page tree is in snapshot_text" unconditionally:
+                    // the read runs after the point of no return and may fail on a
+                    // switch that worked, and a sentence naming a field that is
+                    // absent is the wrong label (判据 §17). The reason is in
+                    // `warnings`, which is appended below.
+                    if report.snapshot.is_some() {
+                        "the new page tree is in snapshot_text"
+                    } else {
+                        "run browser_snapshot for the new page tree"
+                    },
+                    report.to,
+                );
+                for w in &report.warnings {
+                    message.push_str("\nNot carried: ");
+                    message.push_str(w);
+                }
+                Ok(BrowserSessionOutput {
+                    success: true,
+                    path: None,
+                    message: Some(message),
+                    capabilities: None,
+                    switched_to: Some(report.to.as_str().to_string()),
+                    cookies_moved: Some(report.cookies_moved),
+                    tabs_reopened: Some(report.tabs_reopened),
+                    // Page text is page-derived bytes: through the same egress
+                    // chokepoint every other page read uses, never raw.
+                    snapshot_text: report
+                        .snapshot
+                        .as_ref()
+                        .map(|s| super::redact_and_wrap(&self.manager, &s.snapshot_text)),
+                })
+            }
+            Err(e) => Ok(BrowserSessionOutput::failed(format!(
+                "Switch to {engine} failed: {}",
+                super::backend_error_text(&self.manager, &e)
+            ))),
+        }
     }
 }
 
@@ -160,7 +290,12 @@ impl AlephTool for BrowserSessionTool {
          so a logged-in state can be reused without re-authenticating \
          — managed or cdp profiles only (e.g. profile='default'). \
          action='capabilities' lists what each browser engine supports and which \
-         engine to switch to for a verb the current one cannot do.";
+         engine to switch to for a verb the current one cannot do. \
+         Switch this profile's engine with action='switch_engine', \
+         engine='chromium'|'obscura' when action='capabilities' says the running engine \
+         cannot do a verb you need. It carries every cookie, each open tab's URL and \
+         scroll, and that origin's localStorage; page state is lost and every earlier ref \
+         is dead — action='capabilities' lists exactly what moves.";
     type Args = BrowserSessionArgs;
     type Output = BrowserSessionOutput;
 
@@ -176,31 +311,34 @@ impl AlephTool for BrowserSessionTool {
                 path: None,
                 message: Some(crate::browser::engine::describe_for_tool()),
                 capabilities: Some(crate::browser::engine::capabilities_json()),
+                switched_to: None,
+                cookies_moved: None,
+                tabs_reopened: None,
+                snapshot_text: None,
             });
+        }
+        // Second, and for the same reason: a switch has no session name, so it
+        // must not reach the `name` refusal below. It DOES pass an approval
+        // gate — unlike `capabilities`, it starts a process and moves every
+        // cookie — but that gate lives inside `switch_engine`, after its own
+        // argument validation, so a malformed call cannot spend a user's
+        // approval.
+        if matches!(args.action, SessionAction::SwitchEngine) {
+            return self.switch_engine(args).await;
         }
         // `name` is optional on the wire so `capabilities` could omit it. Every
         // other action needs one, and the refusal names the field rather than
         // inventing a default — a defaulted name here writes a whole
         // authenticated identity to a path the caller did not choose.
         let Some(name) = args.name.clone() else {
-            return Ok(BrowserSessionOutput {
-                success: false,
-                path: None,
-                message: Some(format!(
-                    "{:?} needs a `name` (the saved session to write or read). \
-                     action='capabilities' is the one action that does not.",
-                    args.action
-                )),
-                capabilities: None,
-            });
+            return Ok(BrowserSessionOutput::failed(format!(
+                "{:?} needs a `name` (the saved session to write or read). \
+                 action='capabilities' is the one action that does not.",
+                args.action
+            )));
         };
         if let Err(e) = validate_session_name(&name) {
-            return Ok(BrowserSessionOutput {
-                success: false,
-                path: None,
-                message: Some(e),
-                capabilities: None,
-            });
+            return Ok(BrowserSessionOutput::failed(e));
         }
 
         // Gate AFTER name validation (a malformed name must not consume an
@@ -216,36 +354,22 @@ impl AlephTool for BrowserSessionTool {
         )
         .await
         {
-            return Ok(BrowserSessionOutput {
-                success: false,
-                path: None,
-                message: Some(message),
-                capabilities: None,
-            });
+            return Ok(BrowserSessionOutput::failed(message));
         }
 
         let path = match resolve_session_path(&name).await {
             Ok(p) => p,
-            Err(e) => {
-                return Ok(BrowserSessionOutput {
-                    success: false,
-                    path: None,
-                    message: Some(e),
-                    capabilities: None,
-                });
-            }
+            Err(e) => return Ok(BrowserSessionOutput::failed(e)),
         };
         let path_str = path.to_string_lossy().to_string();
 
         let backend = match super::make_backend(&self.manager, &args.profile) {
             Ok(b) => b,
             Err(e) => {
-                return Ok(BrowserSessionOutput {
-                    success: false,
-                    path: None,
-                    message: Some(super::backend_error_text(&self.manager, &e)),
-                    capabilities: None,
-                });
+                return Ok(BrowserSessionOutput::failed(super::backend_error_text(
+                    &self.manager,
+                    &e,
+                )));
             }
         };
         let result = match args.action {
@@ -258,6 +382,9 @@ impl AlephTool for BrowserSessionTool {
             // the arms at the `match`, not at the test).
             SessionAction::Capabilities => {
                 unreachable!("the capabilities action returns as call()'s first statement")
+            }
+            SessionAction::SwitchEngine => {
+                unreachable!("switch_engine returns before the session-name check")
             }
         };
         match result {
@@ -274,19 +401,21 @@ impl AlephTool for BrowserSessionTool {
                     SessionAction::Capabilities => {
                         unreachable!("the capabilities action returns as call()'s first statement")
                     }
+                    SessionAction::SwitchEngine => {
+                        unreachable!("switch_engine returns before the session-name check")
+                    }
                 }),
                 capabilities: None,
+                switched_to: None,
+                cookies_moved: None,
+                tabs_reopened: None,
+                snapshot_text: None,
             }),
-            Err(e) => Ok(BrowserSessionOutput {
-                success: false,
-                path: None,
-                message: Some(format!(
-                    "Session {:?} failed: {}",
-                    args.action,
-                    super::backend_error_text(&self.manager, &e)
-                )),
-                capabilities: None,
-            }),
+            Err(e) => Ok(BrowserSessionOutput::failed(format!(
+                "Session {:?} failed: {}",
+                args.action,
+                super::backend_error_text(&self.manager, &e)
+            ))),
         }
     }
 }
@@ -319,6 +448,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Save,
                 name: Some("unit-test".into()),
+                engine: None,
+                migrate: None,
             })
             .await
             .unwrap();
@@ -347,6 +478,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Save,
                 name: Some("github".into()),
+                engine: None,
+                migrate: None,
             })
             .await
             .unwrap();
@@ -373,6 +506,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Load,
                 name: Some("github".into()),
+                engine: None,
+                migrate: None,
             })
             .await
             .unwrap();
@@ -396,6 +531,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Load,
                 name: Some("../evil".into()),
+                engine: None,
+                migrate: None,
             })
             .await
             .unwrap();
@@ -414,6 +551,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Load,
                 name: Some("../evil".into()),
+                engine: None,
+                migrate: None,
             })
             .await
             .unwrap();
@@ -438,6 +577,8 @@ mod tests {
                 profile: "default".into(),
                 action: SessionAction::Capabilities,
                 name: None,
+                engine: None,
+                migrate: None,
             })
             .await
             .expect("capabilities must not error");
@@ -471,6 +612,8 @@ mod tests {
                     profile: "default".into(),
                     action,
                     name: None,
+                    engine: None,
+                    migrate: None,
                 })
                 .await
                 .unwrap();
@@ -495,6 +638,62 @@ mod tests {
             .find(|e| e.name == <BrowserSessionTool as AlephTool>::NAME)
             .expect("browser_session must be in the catalog");
         assert_eq!(entry.description, d);
+    }
+
+    fn deny_switch_policy() -> Arc<crate::approval::ConfigApprovalPolicy> {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        let mut defaults = std::collections::HashMap::new();
+        defaults.insert(ActionType::BrowserSwitchEngine, DefaultDecision::Deny);
+        Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }))
+    }
+
+    #[tokio::test]
+    async fn switch_engine_is_gated_before_the_manager() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_switch_policy());
+        let result = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::SwitchEngine,
+                name: None,
+                engine: Some(crate::browser::engine::Engine::Chromium),
+                migrate: None,
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("denied by approval policy")),
+            "got: {:?}",
+            result.message
+        );
+        assert!(result.switched_to.is_none());
+    }
+
+    #[tokio::test]
+    async fn switch_engine_without_an_engine_does_not_consume_an_approval() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_switch_policy());
+        let result = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::SwitchEngine,
+                name: None,
+                engine: None,
+                migrate: None,
+            })
+            .await
+            .unwrap();
+        let message = result.message.unwrap();
+        assert!(message.contains("requires `engine`"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 
     /// R2': the capability TABLE is the action's RESULT and must never be in

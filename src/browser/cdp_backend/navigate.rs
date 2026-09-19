@@ -21,10 +21,10 @@ use super::{map_cdp_err, CdpBackend};
 /// the post-navigation SSRF audit has to vet. Since `list_tabs` no longer
 /// enumerates targets, this event is also the only thing that keeps
 /// `TabEntry.url` true.
-struct LoadOutcome {
-    loader_id: Option<String>,
-    url: Option<String>,
-    completed: bool,
+pub(super) struct LoadOutcome {
+    pub(super) loader_id: Option<String>,
+    pub(super) url: Option<String>,
+    pub(super) completed: bool,
 }
 
 /// What a dropped event means on the navigation barrier. Named because
@@ -80,7 +80,7 @@ pub(super) fn lag_note(lagged: u64, consequence: &str) -> String {
 /// `events` is passed in, not opened here: the subscription has to exist BEFORE
 /// the caller issues its command, or a cached page's load event arrives while
 /// nobody is listening and the barrier waits out the whole budget.
-async fn wait_for_load(
+pub(super) async fn wait_for_load(
     events: &mut aleph_cdp::EventStream,
     session: &SessionId,
     main_frame_id: &str,
@@ -165,7 +165,7 @@ async fn wait_for_load(
 /// one fact would either wrongly discard live refs or leave the tab's URL
 /// stale — and a stale URL is what the post-navigation SSRF audit would then
 /// vet.
-async fn apply_document_boundary(
+pub(super) async fn apply_document_boundary(
     handle: &EngineHandle,
     tab_id: &str,
     loader_id: Option<&str>,

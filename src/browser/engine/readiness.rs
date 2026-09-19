@@ -142,17 +142,22 @@ fn probe_name(outstanding: u8) -> &'static str {
 /// One error shape for every way the gate can refuse, so the caller never has
 /// to guess which step is being reported.
 ///
-/// Every verb named here must EXIST. At HEAD `SessionAction` is `{Save, Load}`
-/// (`browser_tools/session.rs`); this plan adds `SwitchEngine` (Task 19) and
-/// `Capabilities` (Task 16), and nothing else. A fabricated recovery verb in a
-/// fail-closed error is the wrong-label-costs-more shape (判据 §17).
+/// Every verb named here must EXIST **and be runnable in the state this error
+/// describes**. `browser_session{action:"switch_engine"}` now exists, and it is
+/// still the wrong verb here: it migrates a LIVE browser, and this gate only
+/// fails on a launch that never parked one — `switch_engine` would answer
+/// `NoSession`. `browser_open{engine:…}` is the verb that starts the other
+/// engine from cold (判据 §14: name the door the blocked caller can open;
+/// 判据 §17: a wrong label costs more than a vague one).
 fn not_ready(method: &str, detail: &str) -> BrowserError {
     BrowserError::LaunchFailed {
         stage: "cdp-ready",
         detail: format!(
             "the engine did not become ready: {method} — {detail}. The process \
-             is running but unusable; retry, or switch engines with \
-             browser_session{{action:\"switch_engine\"}}."
+             is running but unusable, and this profile has no live browser — so \
+             browser_session{{action:\"switch_engine\"}} has nothing to move. \
+             Retry, or start the other engine from cold with \
+             browser_open{{engine:\"chromium\"}} (or engine:\"obscura\")."
         ),
     }
 }

@@ -25,6 +25,15 @@ pub enum ActionType {
     /// gate it). Defaults to Ask because the user often wants to inspect the
     /// page that opened.
     BrowserOpen,
+    /// Move a profile from one browser engine to the other
+    /// (`browser_session{action:"switch_engine"}`). Launches a second browser
+    /// process and copies every cookie into it, so it is strictly more than
+    /// [`Self::BrowserOpen`] does — which is why it inherits that key rather
+    /// than getting a looser default of its own. An operator who already wrote
+    /// `"browser_open"` in a policy file therefore covers this without a second
+    /// key: "no second door without a handle" is satisfied by inheritance, not
+    /// by a blanket allow.
+    BrowserSwitchEngine,
     /// Change a `<select>` value — single click on a picker; same policy
     /// surface as BrowserClick but typed so the prompt can read `select`
     /// clearly in the audit log.
@@ -126,6 +135,7 @@ impl ActionType {
             Self::BrowserIdentityOverride | Self::BrowserSessionState => {
                 Some(Self::BrowserCookiesWrite)
             }
+            Self::BrowserSwitchEngine => Some(Self::BrowserOpen),
             _ => None,
         }
     }
@@ -140,6 +150,7 @@ impl fmt::Display for ActionType {
             Self::BrowserFill => "browser fill",
             Self::BrowserEvaluate => "browser evaluate",
             Self::BrowserOpen => "browser open",
+            Self::BrowserSwitchEngine => "browser switch engine",
             Self::BrowserSelect => "browser select",
             Self::BrowserDialog => "browser dialog",
             Self::BrowserPressKey => "browser press key",

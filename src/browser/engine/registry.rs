@@ -506,9 +506,15 @@ async fn bring_up(
     let stalled = |step: &str| BrowserError::LaunchFailed {
         stage: "cdp-endpoint",
         detail: format!(
+            // NOT `switch_engine`: this arm has already stopped the process, so
+            // nothing is parked under this profile and that verb would answer
+            // `NoSession`. `browser_open{engine:…}` is the one that starts an
+            // engine from cold (判据 §14).
             "the {engine} process is running (pid {}) but {step} against its CDP \
-             endpoint {} did not finish within {}s. The process has been stopped; \
-             retry, or switch engines with browser_session{{action:\"switch_engine\"}}.",
+             endpoint {} did not finish within {}s. The process has been stopped, \
+             so this profile has no live browser to migrate — retry, or start the \
+             other engine from cold with browser_open{{engine:\"chromium\"}} \
+             (or engine:\"obscura\").",
             launched.pid,
             launched.endpoint.ws_url,
             budget.as_secs_f64()

@@ -10,6 +10,7 @@ use arc_swap::ArcSwap;
 use crate::sync_primitives::{AtomicBool, Mutex, Ordering, RwLock};
 
 use super::backend::BrowserBackend;
+use super::cdp_backend::migration;
 use super::chrome_mcp::ChromeMcpDriver;
 use super::chrome_mcp_backend::ChromeMcpBackend;
 use super::engine;
@@ -95,6 +96,27 @@ pub async fn shutdown_browsers_global(budget: Duration) -> usize {
 }
 
 /// Manages the lifecycle of browser profiles.
+/// What a completed [`ProfileManager::switch_engine`] actually moved.
+///
+/// Counts, not booleans: "the switch succeeded" and "the switch carried your
+/// login" are different facts, and only the numbers tell them apart.
+#[derive(Debug)]
+pub struct SwitchReport {
+    pub from: Engine,
+    pub to: Engine,
+    pub cookies_moved: usize,
+    pub tabs_reopened: usize,
+    pub local_storage_origins: usize,
+    /// Everything the migration could not carry. Rendered to the model
+    /// verbatim; empty means nothing was lost, not "nothing was checked".
+    pub warnings: Vec<String>,
+    /// The new page tree, or `None` when the switch landed but the tree could
+    /// not be read. `None` is not a failure of the switch — see
+    /// [`ProfileManager::switch_engine`]'s note on the point of no return — and
+    /// the reason is in [`Self::warnings`].
+    pub snapshot: Option<super::types::SnapshotOutput>,
+}
+
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
     /// Live SSRF policy. Swappable because `browser.update` writes a new one at
@@ -527,33 +549,71 @@ impl ProfileManager {
             .get_config(profile)
             .ok_or_else(|| BrowserError::ProfileNotFound(profile.into()))?;
         let engine = cfg.resolved_engine(self.config.default_engine);
-        let headless = cfg.headless.unwrap_or(self.config.playwright_cli.headless);
+        let req = self.request_from(&cfg, profile, engine, engine)?;
+        Ok((engine, req))
+    }
+
+    /// [`Self::launch_request_for`] for a NAMED engine, which may not be the
+    /// one this profile resolves to.
+    ///
+    /// Two callers, both of which exist because an engine can be chosen per
+    /// call: `browser_open{engine}` on a cold profile, and `switch_engine`'s
+    /// target. Both need the data dir of the engine they are about to start,
+    /// and `launch_request_for` can only answer for the configured one — hand
+    /// its request to the other engine and Chromium is pointed at obscura's
+    /// store (or the reverse). Neither engine reports that as a mismatch; each
+    /// one just finds a directory it does not understand and starts empty.
+    pub fn launch_request_for_engine(
+        &self,
+        profile: &str,
+        engine: Engine,
+    ) -> Result<LaunchRequest, BrowserError> {
+        let cfg = self
+            .get_config(profile)
+            .ok_or_else(|| BrowserError::ProfileNotFound(profile.into()))?;
+        let configured = cfg.resolved_engine(self.config.default_engine);
+        self.request_from(&cfg, profile, engine, configured)
+    }
+
+    /// The one derivation both of the above share.
+    ///
+    /// `configured` is the engine the profile's own config resolves to, and it
+    /// decides exactly one thing: whether `user_data_dir` applies. That setting
+    /// names a directory in ONE engine's on-disk format, so the other engine
+    /// gets the managed path under its own `data_subdir` instead — two
+    /// directories per profile is the point, and sharing one would hand each
+    /// engine a store it cannot read. [`Self::switch_engine`] states the
+    /// substitution in its warnings rather than performing it silently.
+    fn request_from(
+        &self,
+        cfg: &ProfileConfig,
+        profile: &str,
+        engine: Engine,
+        configured: Engine,
+    ) -> Result<LaunchRequest, BrowserError> {
         let data_dir = match &cfg.user_data_dir {
-            Some(dir) => std::path::PathBuf::from(dir),
-            None => super::playwright_launch::browser_state_dir(engine.data_subdir())?
+            Some(dir) if engine == configured => std::path::PathBuf::from(dir),
+            _ => super::playwright_launch::browser_state_dir(engine.data_subdir())?
                 .join(super::playwright_launch::sanitize_session_key(profile)),
         };
-        Ok((
-            engine,
-            LaunchRequest {
-                profile: profile.to_string(),
-                session_key: profile.to_string(),
-                data_dir,
-                headless,
-                proxy: cfg.proxy.clone(),
-                browser: cfg.browser,
-                // The LIVE guard, not the boot snapshot: `apply_policy` swaps
-                // it at runtime and this argv is written once, so reading the
-                // stale copy would hand obscura a permission the running policy
-                // has already withdrawn.
-                allow_private_network: self.ssrf_guard.load().allows_private_network(),
-                stealth: matches!(
-                    self.config.obscura.variant,
-                    super::profile::ObscuraVariant::Stealth
-                ),
-                extra_args: cfg.extra_args.clone(),
-            },
-        ))
+        Ok(LaunchRequest {
+            profile: profile.to_string(),
+            session_key: profile.to_string(),
+            data_dir,
+            headless: cfg.headless.unwrap_or(self.config.playwright_cli.headless),
+            proxy: cfg.proxy.clone(),
+            browser: cfg.browser.clone(),
+            // The LIVE guard, not the boot snapshot: `apply_policy` swaps
+            // it at runtime and this argv is written once, so reading the
+            // stale copy would hand obscura a permission the running policy
+            // has already withdrawn.
+            allow_private_network: self.ssrf_guard.load().allows_private_network(),
+            stealth: matches!(
+                self.config.obscura.variant,
+                super::profile::ObscuraVariant::Stealth
+            ),
+            extra_args: cfg.extra_args.clone(),
+        })
     }
 
     /// The live engine for `profile`, on the engine its config resolves to.
@@ -573,16 +633,238 @@ impl ProfileManager {
     /// [`Self::engine_handle`] with the engine named explicitly — the face
     /// `browser_open{engine}` and `switch_engine` use. A profile already
     /// running a different engine is refused, not swapped (`EngineMismatch`).
+    ///
+    /// The request comes from [`Self::launch_request_for_engine`], not from
+    /// [`Self::launch_request_for`]: the whole point of this entry is that
+    /// `engine` may differ from the one the profile resolves to, and the
+    /// configured engine's request carries the configured engine's data dir.
     pub async fn engine_handle_for(
         &self,
         profile: &str,
         engine: Engine,
         gate: EngineLaunch,
     ) -> Result<Arc<EngineHandle>, BrowserError> {
-        let (_, req) = self.launch_request_for(profile)?;
+        let req = self.launch_request_for_engine(profile, engine)?;
         self.engines.handle(engine, &req, gate).await
     }
 
+    /// What `browser_open` should run on, given an optional one-shot override.
+    ///
+    /// Deliberately thin: "is a different engine already running for this
+    /// profile" is a question [`EngineRegistry::handle`] already answers under
+    /// its own lock, by returning `EngineMismatch` (the `existing.engine !=
+    /// engine` arm). Re-deriving it here from a second read of the map would be
+    /// the same fact with two answers, and the registry's is the one that
+    /// cannot race.
+    ///
+    /// A successful launch on a NON-configured engine also moves the profile
+    /// onto it — see [`Self::adopt_engine`]. Without that, `browser_open
+    /// {engine:"chromium"}` on an obscura profile would succeed exactly once
+    /// and every verb after it would answer `EngineMismatch`, because every
+    /// other verb resolves its engine from the config (`get_backend` →
+    /// `launch_request_for`).
+    pub(crate) async fn prepare_engine(
+        &self,
+        profile: &str,
+        requested: Option<Engine>,
+    ) -> Result<Engine, BrowserError> {
+        let cfg = self
+            .get_config(profile)
+            .ok_or_else(|| BrowserError::ProfileNotFound(profile.into()))?;
+        if requested.is_some() && cfg.driver != BrowserDriver::Cdp {
+            return Err(BrowserError::ActionFailed(format!(
+                "profile '{profile}' uses driver '{}', which has no engine to choose; \
+                 set driver = \"cdp\" on it with `browser_profile` first",
+                cfg.driver.as_wire()
+            )));
+        }
+        let default_engine = cfg.resolved_engine(self.config.default_engine);
+        let target = requested.unwrap_or(default_engine);
+        // `EngineLaunch` is payload-free: `launch_request_for_engine` already
+        // derived everything a launch needs, so a second `SessionLaunch` here
+        // would be that derivation's second author (判据 §1).
+        self.engine_handle_for(profile, target, EngineLaunch::Allow)
+            .await?;
+        if target != default_engine {
+            self.adopt_engine(profile, target);
+        }
+        Ok(target)
+    }
+
+    /// Point the profile's live config at `engine`.
+    ///
+    /// **In memory only, and deliberately.** The escape hatch is a decision
+    /// about this session, not an edit to the operator's config file; a restart
+    /// puts the profile back on the engine its config names, and both callers
+    /// say so in the text the model reads.
+    ///
+    /// It has to happen at all because "which engine is this profile on" has
+    /// exactly one answer, `ProfileConfig::resolved_engine`, and every verb but
+    /// this one reads it: `get_backend` builds a `CdpBackend` with the
+    /// configured engine, and `EngineRegistry::handle` refuses a handle that
+    /// does not match. Swapping the registry entry without this leaves a
+    /// browser nothing can address — a switch that reports success over a
+    /// profile the next call cannot use (判据 §11).
+    fn adopt_engine(&self, profile: &str, engine: Engine) {
+        let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = profiles.get_mut(profile) {
+            entry.config.engine = Some(engine);
+        }
+    }
+
+    /// Move `profile` onto `to`, carrying the state spec §5.5 names: every
+    /// cookie, each open tab's URL and scroll, and per-origin localStorage.
+    /// Everything else — the JS heap, in-flight form input, the history stack,
+    /// sessionStorage — is gone, and `BrowserSessionTool::DESCRIPTION` is where
+    /// that is stated for the model.
+    ///
+    /// **Human control lease (plan 2's hook point, deliberately absent today).**
+    /// When a person holds the control lease on this profile's browser, this
+    /// method must refuse rather than pull the browser out from under them —
+    /// the check belongs immediately after the `AlreadyOnEngine` guard below,
+    /// before anything is exported. There is no lease to check in this round:
+    /// the live view that mints one is plan 2, and a `false`-returning stub
+    /// here would be a gate that has never once been closed (判据 §2). This
+    /// comment is the hook point, placed where the edit will be made.
+    ///
+    /// The order is the contract, chosen so **every failure before the last
+    /// step leaves the user on the browser they already had**:
+    ///
+    /// 1. find the source (still parked, still serving)
+    /// 2. read it (nothing written anywhere)
+    /// 3. `launch_detached` the target — deliberately NOT `engine_handle_for`:
+    ///    the source is still parked under this profile, which is exactly the
+    ///    case `EngineRegistry::handle` refuses with `EngineMismatch`
+    /// 4. write the target (a failure here kills the *target*; the source is
+    ///    untouched and still the profile's handle)
+    /// 5. `replace` — one locked swap, so no window exists in which the profile
+    ///    has no engine — and then [`Self::adopt_engine`], so the config and
+    ///    the registry agree about which engine this profile is on
+    /// 6. stop the displaced source
+    ///
+    /// Step 4-before-6 is the one an implementation naturally gets wrong: it
+    /// reads more cleanly to shut the old engine first, and it is wrong for the
+    /// same reason `reap_idle` stopping at `close` was wrong — the observable
+    /// state afterwards is "reported success, browser gone".
+    pub async fn switch_engine(
+        &self,
+        profile: &str,
+        to: Engine,
+        migrate: bool,
+    ) -> Result<SwitchReport, BrowserError> {
+        self.record_activity(profile);
+        let source = self
+            .engines()
+            .get(profile)
+            .await
+            .ok_or_else(|| BrowserError::NoSession(profile.into()))?;
+        let from = source.engine;
+        if from == to {
+            return Err(BrowserError::AlreadyOnEngine {
+                profile: profile.into(),
+                engine: to,
+            });
+        }
+
+        let mut state = if migrate {
+            migration::export_state(&source).await?
+        } else {
+            migration::MigrationState {
+                warnings: vec![
+                    "migrate=false: no cookies, tabs or localStorage were carried across".into(),
+                ],
+                ..migration::MigrationState::default()
+            }
+        };
+
+        // A `user_data_dir` written by an operator names ONE engine's store, in
+        // that engine's format. The target gets its own managed directory, and
+        // says so — silently ignoring a directory the operator chose is the
+        // no-op that reports success (判据 §11), one level down.
+        if self
+            .get_config(profile)
+            .is_some_and(|c| c.user_data_dir.is_some())
+        {
+            state.warnings.push(format!(
+                "this profile's configured user_data_dir belongs to {from} and is not readable \
+                 by {to}; {to} was started on its own managed directory instead"
+            ));
+        }
+
+        let req = self.launch_request_for_engine(profile, to)?;
+        let target = self.engines().launch_detached(to, &req).await?;
+
+        let report = match migration::import_state(&target, &state).await {
+            Ok(r) => r,
+            Err(e) => {
+                target.shutdown().await;
+                return Err(e);
+            }
+        };
+
+        let displaced = self.engines().replace(profile, Arc::clone(&target)).await;
+        // Immediately after the swap and before anything can read the profile
+        // again: between these two lines the registry says `to` and the config
+        // still says `from`, so a concurrent verb gets `EngineMismatch` — an
+        // error, never the wrong browser.
+        self.adopt_engine(profile, to);
+        if let Some(old) = displaced {
+            old.shutdown().await;
+        }
+
+        // ─── the point of no return is ABOVE this line ───────────────────
+        //
+        // The registry points at the target and the source process is gone.
+        // Nothing below may return `Err`: a failure reported over a switch that
+        // has already happened sends the model back to `switch_engine`, which
+        // now answers `AlreadyOnEngine` — it would be told the escape hatch
+        // failed while standing on the other side of it (判据 §15). So the read
+        // that follows degrades into a warning, never an error.
+        //
+        // The model's old refs all died with the old process, so the new tree
+        // travels back in the return value rather than being something it must
+        // remember to ask for — but "could not read it" is a different fact
+        // from "the switch failed", and only one of them is true here.
+        let mut warnings = report.warnings;
+        let snapshot = match self.snapshot_after_switch(profile, report.active_tab).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warnings.push(format!(
+                    "the switch completed, but the new page tree could not be read \
+                     ({e}); run browser_snapshot to get one"
+                ));
+                None
+            }
+        };
+
+        Ok(SwitchReport {
+            from,
+            to,
+            cookies_moved: report.cookies_moved,
+            tabs_reopened: report.tabs_reopened,
+            local_storage_origins: report.local_storage_origins,
+            warnings,
+            snapshot,
+        })
+    }
+
+    /// The post-switch page tree. Fallible, and its caller is the one that
+    /// decides a failure here is not a failure of the switch.
+    async fn snapshot_after_switch(
+        &self,
+        profile: &str,
+        active_tab: Option<String>,
+    ) -> Result<super::types::SnapshotOutput, BrowserError> {
+        let backend = self.get_backend(profile)?;
+        let tab_id = match active_tab {
+            Some(id) => id,
+            // No active tab is a fact, not an empty string. Ask the backend the
+            // same question every other verb asks rather than handing
+            // `snapshot` a `""` it will fail on obscurely.
+            None => crate::builtin_tools::browser_tools::get_active_tab(backend.as_ref()).await?,
+        };
+        backend.snapshot(&tab_id).await
+    }
     /// Test-only: build a manager around a registry the test owns.
     ///
     /// The ONE seam that lets a unit test put a browser into this manager
@@ -2250,5 +2532,182 @@ mod tests {
         let manager = ProfileManager::new(config);
         let backend = manager.get_backend("nonexistent");
         assert!(matches!(backend, Err(BrowserError::ProfileNotFound(_))));
+    }
+    /// The one ordering claim that matters: a failed migration must never cost
+    /// the user the browser they already had.
+    #[tokio::test]
+    async fn a_failed_import_leaves_the_source_engine_running_and_selected() {
+        use crate::browser::engine::Engine;
+        use crate::browser::engine::EngineLaunch;
+        use crate::browser::testkit::switch_fixture;
+
+        // `switch_engine` and `engine_handle_for` both reach
+        // `launch_request_for_engine` -> `browser_state_dir` -> the process's
+        // real `$ALEPH_HOME`. Nothing is written there (the fake launcher
+        // ignores `data_dir`), but a test that READS the developer's home is
+        // one whose result depends on it, so it holds the guard like every
+        // other resolver-reaching test under `src/browser/`.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let fixture = switch_fixture(
+            Engine::Obscura,
+            Engine::Chromium,
+            /* target_rejects_cookies */ true,
+        )
+        .await;
+
+        let err = fixture
+            .manager
+            .switch_engine("default", Engine::Chromium, true)
+            .await
+            .expect_err("a target that refuses the cookies must fail the switch");
+        // The VARIANT and the method, not a substring of the rendered text.
+        // This assertion was `err.to_string().contains("chromium")` and it
+        // passed for the wrong reason: the launch was failing at the readiness
+        // gate (the fake answered `"ok"` to the gate's `evaluate`), and the
+        // `LaunchFailed` text happens to contain the word "chromium" because
+        // it now names `browser_open{engine:"chromium"}` as the recovery. A
+        // reading taken BESIDE the path is not a reading ABOUT it.
+        assert!(
+            matches!(&err, BrowserError::Cdp { engine, method, .. }
+                     if *engine == Engine::Chromium && method == "Network.setCookies"),
+            "the switch must fail on the TARGET's cookie write, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("chromium"),
+            "and the rendered text must name the engine that failed, got: {err}"
+        );
+        assert!(
+            !fixture.source_killed(),
+            "the source engine must still be alive after a failed import"
+        );
+        // And the profile still routes to the engine it had. `Refuse` proves
+        // the handle was found rather than launched.
+        let handle = fixture
+            .manager
+            .engine_handle_for("default", Engine::Obscura, EngineLaunch::Refuse)
+            .await
+            .expect("the source handle is still the profile's handle");
+        assert_eq!(handle.engine, Engine::Obscura);
+        // The config was not moved either: a half-applied switch would leave
+        // every later verb resolving an engine the registry does not hold.
+        assert_eq!(
+            fixture.manager.get_config("default").and_then(|c| c.engine),
+            None,
+            "a failed switch must not adopt the engine it could not reach"
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_to_the_engine_already_running_is_refused_by_name() {
+        use crate::browser::engine::Engine;
+        use crate::browser::testkit::switch_fixture;
+
+        let fixture = switch_fixture(Engine::Obscura, Engine::Chromium, false).await;
+        let err = fixture
+            .manager
+            .switch_engine("default", Engine::Obscura, true)
+            .await
+            .expect_err("a no-op switch must be refused, not reported as success");
+        assert!(
+            matches!(err, BrowserError::AlreadyOnEngine { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_successful_switch_kills_the_source_and_replaces_the_handle() {
+        use crate::browser::engine::Engine;
+        use crate::browser::engine::EngineLaunch;
+        use crate::browser::testkit::switch_fixture;
+
+        // `switch_engine` and `engine_handle_for` both reach
+        // `launch_request_for_engine` -> `browser_state_dir` -> the process's
+        // real `$ALEPH_HOME`. Nothing is written there (the fake launcher
+        // ignores `data_dir`), but a test that READS the developer's home is
+        // one whose result depends on it, so it holds the guard like every
+        // other resolver-reaching test under `src/browser/`.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let fixture = switch_fixture(Engine::Obscura, Engine::Chromium, false).await;
+
+        let report = fixture
+            .manager
+            .switch_engine("default", Engine::Chromium, true)
+            .await
+            .expect("switch");
+        assert_eq!(report.from, Engine::Obscura);
+        assert_eq!(report.to, Engine::Chromium);
+        assert_eq!(report.cookies_moved, 1);
+        assert_eq!(report.tabs_reopened, 1);
+
+        // Those two counts are the code's own bookkeeping. The claim they stand
+        // for — "the cookie left the source and arrived at the target" — is only
+        // settled by the bytes, so it is read off both fakes (判据 §4: assert
+        // the effect arrived, not that the call was made).
+        let read_from_source = fixture
+            .source
+            .received()
+            .into_iter()
+            .any(|m| m.get("method").and_then(|x| x.as_str()) == Some("Network.getAllCookies"));
+        assert!(
+            read_from_source,
+            "the source's cookie jar was never read: {:?}",
+            fixture.source.received()
+        );
+        let landed = fixture
+            .target
+            .received()
+            .into_iter()
+            .find(|m| m.get("method").and_then(|x| x.as_str()) == Some("Network.setCookies"))
+            .expect("the target must be sent the cookies");
+        let cookies = landed["params"]["cookies"]
+            .as_array()
+            .expect("cookies array")
+            .clone();
+        assert_eq!(cookies.len(), 1, "{cookies:?}");
+        assert_eq!(cookies[0]["name"], "sid", "{cookies:?}");
+        assert!(
+            fixture.source_killed(),
+            "the source process must be killed once the target holds the state"
+        );
+        // The page tree is read AFTER the point of no return, and this fake
+        // cannot answer a `Page.getLayoutMetrics` (measured: it fails with
+        // `reply has no cssVisualViewport`). The contract is that such a
+        // failure is a WARNING on a completed switch, never an error — telling
+        // the model the escape hatch failed while it stands on the far side of
+        // it would send it back to `switch_engine`, which now answers
+        // `AlreadyOnEngine`. The success side of this read is covered on real
+        // binaries by `qa/browser_dual/run.sh switch`.
+        assert!(
+            report.snapshot.is_none(),
+            "this fake cannot serve a snapshot; if it now can, this assertion \
+             is measuring something else"
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("could not be read")),
+            "a read that failed after the point of no return must be stated, \
+             not swallowed: {:?}",
+            report.warnings
+        );
+        let handle = fixture
+            .manager
+            .engine_handle_for("default", Engine::Chromium, EngineLaunch::Refuse)
+            .await
+            .expect("the target is now the profile's handle");
+        assert_eq!(handle.engine, Engine::Chromium);
+        // The profile's own config moved with it. Without this every verb after
+        // the switch resolves obscura from the config, meets a chromium handle
+        // in the registry and answers `EngineMismatch` — a switch that reports
+        // success over a browser nothing can address (判据 §11).
+        assert_eq!(
+            fixture.manager.get_config("default").and_then(|c| c.engine),
+            Some(Engine::Chromium)
+        );
     }
 }

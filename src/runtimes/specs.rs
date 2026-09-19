@@ -70,7 +70,14 @@ pub enum InstallStrategy {
 
 /// The ledger name of the obscura engine runtime. Spelled once so the doctor,
 /// `runtime_manage`, the probe's search directory and this table cannot drift.
-pub const OBSCURA_RUNTIME: &str = "obscura";
+///
+/// Sourced from `aleph_protocol` rather than typed here, because there is a
+/// FOURTH reader and it is in another crate: the Panel's browser-runtime banner
+/// filters `runtimes.list` by this name, and a private copy on that side
+/// matches nothing, finds nothing missing and paints READY over an install with
+/// no engine. Both crates depend on `aleph-protocol` and neither depends on the
+/// other, so that is where the shared spelling lives (判据 §10).
+pub const OBSCURA_RUNTIME: &str = aleph_protocol::browser::OBSCURA_RUNTIME_WIRE;
 
 /// The pinned obscura release, as a macro so that the ONE place it is spelled
 /// can also be pasted into a `concat!`.

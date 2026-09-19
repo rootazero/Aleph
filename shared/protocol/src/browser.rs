@@ -23,3 +23,18 @@
 /// and adding one is a server-side decision that this array records rather
 /// than makes.
 pub const BROWSER_DRIVER_WIRE: [&str; 3] = ["managed", "existing_session", "cdp"];
+
+/// The ledger name of the browser engine the `cdp` driver runs.
+///
+/// Here for the same reason as the array above: the Panel's Browser page shows
+/// a runtime-readiness banner, and to say anything true it has to filter
+/// `runtimes.list` by the name the SERVER gives that runtime. Held privately on
+/// the Panel side, a stale or misspelled copy does not fail loudly — it matches
+/// nothing, finds nothing missing, and paints READY over an install with no
+/// engine (判据 §10: a wire key held twice cancels out, and this one cancels
+/// toward the confident wrong answer).
+///
+/// `alephcore::runtimes::specs::OBSCURA_RUNTIME` is defined AS this constant,
+/// so the ledger entry and the Panel's filter have one author rather than two
+/// that agree today.
+pub const OBSCURA_RUNTIME_WIRE: &str = "obscura";

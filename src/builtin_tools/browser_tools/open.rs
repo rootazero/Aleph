@@ -18,6 +18,13 @@ pub struct BrowserOpenArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
+    /// Which browser engine to start for this profile, when nothing is running
+    /// yet: "obscura" (default, fast) or "chromium" (the escape hatch).
+    /// Refused — not silently honoured — if this profile already has a browser
+    /// running: its cookies live in that process, so moving is
+    /// `browser_session{action:"switch_engine"}`, not a flag on open.
+    #[serde(default)]
+    pub engine: Option<crate::browser::engine::Engine>,
 }
 
 /// Output from the `browser_open` tool.
@@ -26,6 +33,10 @@ pub struct BrowserOpenOutput {
     pub success: bool,
     pub tab_id: Option<String>,
     pub message: Option<String>,
+    /// Which engine served this call. Present so the model never has to infer
+    /// which browser it is driving from the absence of an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 /// Opens a URL in a managed browser profile with SSRF protection.
@@ -67,6 +78,9 @@ impl AlephTool for BrowserOpenTool {
                 success: false,
                 tab_id: None,
                 message: Some(format!("Blocked: {violation}")),
+                // Nothing has been resolved at this point, and `None` says
+                // "unknown" — never "the default one" (判据 §8).
+                engine: None,
             });
         }
 
@@ -84,9 +98,31 @@ impl AlephTool for BrowserOpenTool {
                 success: false,
                 tab_id: None,
                 message: Some(message),
+                engine: None,
             });
         }
 
+        // Resolve (and, for a cold profile, launch) the engine BEFORE the
+        // backend: `get_backend` is synchronous and cannot start a process, and
+        // a one-shot override against a live handle of the other engine is a
+        // refusal, not a relaunch — the profile's cookies are in that process.
+        // The refusal itself is `EngineRegistry`'s `EngineMismatch`, whose text
+        // already names `switch_engine`; this call site adds no second wording.
+        let engine = match self
+            .manager
+            .prepare_engine(&args.profile, args.engine)
+            .await
+        {
+            Ok(e) => Some(e),
+            Err(e) => {
+                return Ok(BrowserOpenOutput {
+                    success: false,
+                    tab_id: None,
+                    message: Some(super::backend_error_text(&self.manager, &e)),
+                    engine: None,
+                });
+            }
+        };
         let backend = match super::make_backend(&self.manager, &args.profile) {
             Ok(b) => b,
             Err(e) => {
@@ -94,6 +130,7 @@ impl AlephTool for BrowserOpenTool {
                     success: false,
                     tab_id: None,
                     message: Some(super::backend_error_text(&self.manager, &e)),
+                    engine: engine.map(|e| e.as_str().to_string()),
                 });
             }
         };
@@ -112,6 +149,7 @@ impl AlephTool for BrowserOpenTool {
                     success: true,
                     tab_id: Some(tab_id),
                     message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
+                    engine: engine.map(|e| e.as_str().to_string()),
                 })
             }
             Err(e) => Ok(BrowserOpenOutput {
@@ -121,6 +159,7 @@ impl AlephTool for BrowserOpenTool {
                     "Failed to open tab: {}",
                     super::backend_error_text(&self.manager, &e)
                 )),
+                engine: engine.map(|e| e.as_str().to_string()),
             }),
         }
     }
@@ -142,6 +181,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "http://localhost:3000/admin".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -167,6 +207,7 @@ mod tests {
                 .call(BrowserOpenArgs {
                     url: url.to_string(),
                     profile: "default".into(),
+                    engine: None,
                 })
                 .await
                 .unwrap();
@@ -204,6 +245,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "http://sub.evil.com/payload".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -215,6 +257,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "http://malware.org/payload".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -226,6 +269,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "https://safe.com".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -258,6 +302,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "http://app.allowed.com/page".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -270,6 +315,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "http://other.com/page".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -287,6 +333,7 @@ mod tests {
             .call(BrowserOpenArgs {
                 url: "https://example.com".into(),
                 profile: "default".into(),
+                engine: None,
             })
             .await
             .unwrap();
@@ -294,5 +341,44 @@ mod tests {
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+    /// The one-shot override cannot silently relaunch. A profile already
+    /// serving one engine refuses the other by name and points at the verb that
+    /// can do it (判据 §14). The message is `EngineMismatch`'s, from the
+    /// registry — this asserts it reaches the model, not that it was written
+    /// twice.
+    #[tokio::test]
+    async fn an_engine_override_against_a_live_other_engine_names_switch_engine() {
+        use crate::browser::engine::Engine;
+        use crate::browser::testkit::{switch_fixture, SwitchFixture};
+        let SwitchFixture { manager, .. } =
+            switch_fixture(Engine::Obscura, Engine::Chromium, false).await;
+        // `browser_open` runs the SSRF pre-check before it resolves an engine,
+        // and on a host whose resolver hands back a carrier-grade / benchmark
+        // address for `example.com` the call is blocked there — a refusal about
+        // the NETWORK, which would make this test pass or fail on a fact it is
+        // not about. The subject here is the engine refusal, so the guard is
+        // opened for it explicitly rather than the URL being chosen to sneak
+        // past whatever this machine's DNS happens to answer.
+        manager.apply_policy(crate::browser::network_policy::SsrfConfig {
+            block_private: false,
+            ..Default::default()
+        });
+        let tool = BrowserOpenTool::new(Arc::clone(&manager));
+        let result = tool
+            .call(BrowserOpenArgs {
+                url: "https://example.com".into(),
+                profile: "default".into(),
+                engine: Some(Engine::Chromium),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("switch_engine"), "got: {message}");
+        assert!(message.contains("obscura"), "got: {message}");
+        // And nothing was resolved, so the engine field says "unknown" rather
+        // than naming the one it failed to reach.
+        assert!(result.engine.is_none(), "got: {:?}", result.engine);
     }
 }

@@ -63,6 +63,7 @@ mod cookies;
 mod dialog;
 mod evaluate;
 mod events;
+pub(crate) mod migration;
 mod navigate;
 mod screenshot;
 mod snapshot;
@@ -747,13 +748,14 @@ mod tests {
     fn no_verb_is_left_unwired() {
         let marker = concat!("CDP_VERB", "_NOT_WIRED");
         let helper = concat!("not_yet", "_wired");
-        let scanned: [(&str, &str); 10] = [
+        let scanned: [(&str, &str); 11] = [
             ("mod.rs", include_str!("mod.rs")),
             ("actions.rs", include_str!("actions.rs")),
             ("cookies.rs", include_str!("cookies.rs")),
             ("dialog.rs", include_str!("dialog.rs")),
             ("evaluate.rs", include_str!("evaluate.rs")),
             ("events.rs", include_str!("events.rs")),
+            ("migration.rs", include_str!("migration.rs")),
             ("navigate.rs", include_str!("navigate.rs")),
             ("screenshot.rs", include_str!("screenshot.rs")),
             ("snapshot.rs", include_str!("snapshot.rs")),

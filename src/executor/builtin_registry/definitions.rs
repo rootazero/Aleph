@@ -2857,7 +2857,49 @@ mod tests {
     /// this entry at 131 B instead of four lines of engine prose per turn.
     /// `session::tests::the_description_points_at_the_action_and_does_not_carry_the_table`
     /// is the guard on that.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_669;
+    ///
+    /// 2026-09-20 (browser dual-engine, task 19): 114_669 -> 115_023 B, +354.
+    ///   Measured, both ends, by flooring this constant to 1 and reading the
+    ///   guard's own failure line — the only thing that prints the total:
+    ///   before, on this branch's HEAD 62259c13e,
+    ///   114_669 B (95_073 catalog + 16_613 registry-only + 1_039 injected
+    ///   + 1_944 bridge), i.e. the constant was sitting EXACTLY on the
+    ///   measurement with zero headroom, so none of this round was free;
+    ///   with the first draft of the edit, 115_237 B (95_641 catalog + the
+    ///   same three unchanged) — a delta of +568, all of it catalog, and the
+    ///   edited literal was 568 B long, so the subtraction and the literal's
+    ///   own length are two independent routes to the same number.
+    ///   568 is over the 400 B pruning threshold, so the sentence was pruned
+    ///   (see below) to 354 B and the ceiling is the pruned value.
+    ///   Measured on macOS (aarch64-apple-darwin) — the guard's "Largest" line
+    ///   printed `bash` at 4_740, the Unix assembly, so the Windows gap
+    ///   recorded in the 2026-09-13 entry is carried forward unchanged.
+    ///
+    /// What the bytes buy: one sentence naming `action='switch_engine'`, its
+    /// two engine values, the three things a switch carries, and the fact that
+    /// page state and every live ref do not survive it.
+    /// Against the three questions:
+    /// (1) All of it is runtime fact. The action's existence, its `engine`
+    /// argument's two spellings, and what a switch COSTS are things no model
+    /// can infer: the cost is a property of this implementation (the two
+    /// engines persist different formats, so the state is re-stated over CDP
+    /// rather than handed over), and a model that learns it by losing a
+    /// half-filled form learns it too late.
+    /// (2) A stronger model still cannot know that obscura and chromium keep
+    /// incompatible stores. It is not a cage — it names a door and its price,
+    /// and says nothing about when to walk through it. The first draft DID say
+    /// that ("use it when a page renders wrong"); that clause is exactly what
+    /// the prune removed, under R9's first ruler.
+    /// (3) `browser_session` owns the engine-switch surface, so no other tool
+    /// says it. What another PLACE says is the exhaustive list of what moves
+    /// and what does not: `browser::engine::describe_for_tool`, which is the
+    /// RESULT of `action='capabilities'` and therefore costs nothing on a turn
+    /// that never asks. The first draft carried that list here, in full, for
+    /// 214 B per turn; the pruned sentence keeps the three carried clauses
+    /// (the count `MigrationState` has fields) and points at the result for
+    /// the rest. That is the same R2' split the 2026-09-14 entry made for the
+    /// capability table itself.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_023;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

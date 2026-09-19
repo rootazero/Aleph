@@ -310,6 +310,9 @@ impl Default for ConfigApprovalPolicy {
     /// - Browser open → Ask (a denied `browser_navigate` target was reachable
     ///   here; tighten by default so the SSRF/approval guard survives the
     ///   `tools.invoke` switch)
+    /// - Browser switch engine → Ask (it launches a browser and copies every
+    ///   cookie into it; inherits `browser_open` when a policy file names
+    ///   only that one)
     /// - Browser scroll/hover/press_key → Allow (read-only motion)
     /// - Browser select/drag/dialog/upload → Ask (page-state changing or
     ///   file-egress)
@@ -326,6 +329,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserOpen, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserSwitchEngine, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserSelect, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserDialog, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserPressKey, DefaultDecision::Allow);
@@ -836,6 +840,7 @@ mod tests {
             ActionType::BrowserFill,
             ActionType::BrowserEvaluate,
             ActionType::BrowserOpen,
+            ActionType::BrowserSwitchEngine,
             ActionType::BrowserSelect,
             ActionType::BrowserDialog,
             ActionType::BrowserPressKey,
@@ -868,6 +873,19 @@ mod tests {
                  posture the operator expected)."
             );
         }
+        // Presence is all the loop above can see, and a presence-only census
+        // is 判据 §2's 恒真的谓词 for a VALUE change: flipping this entry to
+        // `Allow` leaves the key exactly where it was. The switch launches a
+        // browser and copies every cookie into it, so it must never be looser
+        // than `browser_open`, whose own entry is `Ask`.
+        assert_eq!(
+            curated
+                .config
+                .defaults
+                .get(&ActionType::BrowserSwitchEngine),
+            Some(&DefaultDecision::Ask),
+            "the switch must not be looser than browser_open"
+        );
     }
 
     /// Splitting an `ActionType` in two must not loosen a policy file written
