@@ -203,9 +203,20 @@ impl BrowserSessionTool {
                     },
                     report.to,
                 );
-                for w in &report.warnings {
-                    message.push_str("\nNot carried: ");
-                    message.push_str(w);
+                // ONE label for the block, not a claim per line. Every
+                // warning already says what happened in its own words, and
+                // `"Not carried: "` per line was false for two of the six
+                // producers — the post-switch read failure and the
+                // `user_data_dir` substitution are not losses of migrated
+                // state, and the first of them is the exact sentence the
+                // point-of-no-return degrade exists to make readable
+                // (判据 §17: the wrong label costs more than the vague one).
+                if !report.warnings.is_empty() {
+                    message.push_str("\nWarnings:");
+                    for w in &report.warnings {
+                        message.push_str("\n- ");
+                        message.push_str(w);
+                    }
                 }
                 Ok(BrowserSessionOutput {
                     success: true,
@@ -694,6 +705,65 @@ mod tests {
         let message = result.message.unwrap();
         assert!(message.contains("requires `engine`"), "got: {message}");
         assert!(!message.contains("denied"), "got: {message}");
+    }
+
+    /// The tool's SUCCESS arm, which had no coverage at all.
+    ///
+    /// Two claims, and the second is the one this round is for:
+    ///
+    /// 1. a completed switch reports `switched_to` and the counts;
+    /// 2. the warnings are labelled ONCE, for the block. They used to be
+    ///    rendered `"Not carried: " + w` per line, and two of the producers are
+    ///    not carry losses at all — the post-switch read failure (the sentence
+    ///    the point-of-no-return degrade exists to make readable) and the
+    ///    `user_data_dir` substitution. Telling a model that a COMPLETED switch
+    ///    failed to carry the page tree is the wrong label (判据 §17).
+    #[tokio::test]
+    async fn a_completed_switch_labels_its_warnings_once_and_truthfully() {
+        use crate::browser::engine::Engine;
+        use crate::browser::testkit::switch_fixture;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        let fixture = switch_fixture(Engine::Obscura, Engine::Chromium, false).await;
+        let tool = BrowserSessionTool::new(Arc::clone(&fixture.manager));
+
+        let out = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::SwitchEngine,
+                name: None,
+                engine: Some(Engine::Chromium),
+                migrate: Some(true),
+            })
+            .await
+            .expect("the tool never errors; it degrades");
+
+        assert!(out.success, "{:?}", out.message);
+        assert_eq!(out.switched_to.as_deref(), Some("chromium"));
+        assert_eq!(out.cookies_moved, Some(1));
+        let message = out.message.expect("a success says what it did");
+
+        // This fake cannot serve a `Page.getLayoutMetrics`, so the page tree is
+        // unreadable and the degrade fires — which is exactly the warning whose
+        // label was wrong.
+        assert!(
+            message.contains("could not be read"),
+            "the degraded read must be stated: {message}"
+        );
+        assert!(
+            !message.contains("Not carried:"),
+            "a completed switch did not fail to CARRY the page tree; the label \
+             must not say it did: {message}"
+        );
+        assert!(
+            message.contains("Warnings:"),
+            "the block still needs one true label: {message}"
+        );
+        assert!(
+            message.contains("run browser_snapshot"),
+            "and it must name the verb that gets the tree: {message}"
+        );
     }
 
     /// R2': the capability TABLE is the action's RESULT and must never be in

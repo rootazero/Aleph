@@ -550,7 +550,7 @@ impl EngineProcess for ObscuraLauncher {
         // 判据 §16 warns about; the remaining single-author hazard (the writer
         // and this reader are two callers of one function) is stated in
         // `Launched::sidecar_path`'s own doc.
-        let record = sidecar_path(&req.session_key)?;
+        let record = sidecar_path(Engine::Obscura, &req.session_key)?;
         let launched = launch_with(&req, self.variant(), port, record, &fx).await?;
         tracing::info!(
             pid = launched.pid,

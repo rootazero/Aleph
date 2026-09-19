@@ -51,6 +51,11 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # and a prefix-neighbour that a RECORD points at
                                    # is not (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
+./qa/browser_dual/run.sh switch    # a cookie set on obscura is READABLE ON CHROMIUM after
+                                   # browser_session{action:"switch_engine"}, the tab is
+                                   # back on its URL, the obscura process is GONE, and the
+                                   # surviving chromium still has an orphan-reap record of
+                                   # its own (needs ALEPH_QA_CHROME)
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -677,8 +682,8 @@ processes on one vault is a documented way to lose vault data
 `browser_dual` needs two real binaries and says so at second zero: an obscura
 (`ALEPH_QA_OBSCURA`, else `~/.aleph/runtimes/obscura/v0.2.2/obscura`, else
 PATH — **obscura is never put on PATH**, so a bare `command -v` finds nothing on
-a machine that installed it through Aleph) and — for `open` and `reap` — a
-Chrome (`ALEPH_QA_CHROME`). A missing one exits **69, not 0**. `provision`
+a machine that installed it through Aleph) and — for `open`, `reap` and
+`switch` — a Chrome (`ALEPH_QA_CHROME`). A missing one exits **69, not 0**. `provision`
 additionally needs the network and exits 69 without it, for a reason below.
 
 It exists because the things this round can get wrong are invisible to a fake
@@ -694,6 +699,20 @@ EFFECT against the obscura **Aleph launched** — reached through the engine
 sidecar, never one the script starts itself, because `file_upload` is
 `unsupported` precisely *because Aleph does not pass `--allow-file-access`*, so
 the row is a property of the argv as much as of the binary.
+
+**`switch` is the only place spec §5.5's "the login survives" is a fact rather
+than an intention.** Its load-bearing claims are the two no RPC can see: the
+cookie set on obscura comes back out of chromium's jar (the migration really
+re-stated it over CDP — the two engines persist different formats and neither
+reads the other's, so nothing is handed over), and the obscura process itself is
+**gone** — a switch that leaves the old browser running is indistinguishable
+from a correct one from every tool-face angle. It also proves the profile's LIVE
+engine moved: every verb after the switch resolves its engine from the profile,
+so `browser_cookies list` and `browser_tabs list` answering at all is the
+evidence, and without it they would answer `EngineMismatch`. And it is the only
+real-machine exercise of the approval **inheritance** `ActionType` promises: the
+policy fixture writes `browser_open` and no `browser_switch_engine` key, so a
+switch that runs at all is `inherited_from` doing its job.
 
 **`provision` cannot use a local fixture release, and that is the product's
 trust model rather than an omission.** `ReleaseSource::for_runtime` pins the

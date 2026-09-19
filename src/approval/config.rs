@@ -319,7 +319,11 @@ impl Default for ConfigApprovalPolicy {
     /// - Browser cookies write → Ask (the value is a credential by design)
     /// - Browser identity override / session state → Ask (same reason: a
     ///   request header and a saved storage state are both credentials)
-    /// - Desktop actions → Ask
+    /// - Desktop actions → Ask, including `desktop read clipboard`, which had
+    ///   no entry at all until the census here was derived from
+    ///   `ActionType::ALL`. It resolved to Ask by falling through, which is the
+    ///   posture `system_tool`'s `clipboard_read` arm wants — so this line
+    ///   changes no behaviour and states an intent that "absent" could not.
     /// - Hooks manage → Ask (control-plane write)
     fn default() -> Self {
         let mut defaults = HashMap::new();
@@ -345,6 +349,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopReadClipboard, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
         defaults.insert(ActionType::MediaCapture, DefaultDecision::Ask);
@@ -833,33 +838,12 @@ mod tests {
     #[test]
     fn curated_default_covers_every_action_type() {
         let curated = ConfigApprovalPolicy::default();
-        for action in [
-            ActionType::BrowserNavigate,
-            ActionType::BrowserClick,
-            ActionType::BrowserType,
-            ActionType::BrowserFill,
-            ActionType::BrowserEvaluate,
-            ActionType::BrowserOpen,
-            ActionType::BrowserSwitchEngine,
-            ActionType::BrowserSelect,
-            ActionType::BrowserDialog,
-            ActionType::BrowserPressKey,
-            ActionType::BrowserScroll,
-            ActionType::BrowserHover,
-            ActionType::BrowserDrag,
-            ActionType::BrowserUpload,
-            ActionType::BrowserCookiesWrite,
-            ActionType::BrowserIdentityOverride,
-            ActionType::BrowserSessionState,
-            ActionType::HooksManage,
-            ActionType::DesktopClick,
-            ActionType::DesktopType,
-            ActionType::DesktopKeyCombo,
-            ActionType::DesktopLaunchApp,
-            ActionType::DesktopAutomation,
-            ActionType::PimWrite,
-            ActionType::MediaCapture,
-        ] {
+        // `ActionType::ALL`, not a second hand-written list of the same
+        // variants. The failure message below says "a new ActionType variant
+        // joined the enum without an entry here" — which a typed list only
+        // catches if somebody also remembers to extend the list, i.e. it
+        // catches nothing (判据 §5). The enum's own declaration emits this one.
+        for action in ActionType::ALL {
             // Probe the internal map directly: an omitted variant would
             // resolve to Ask via `check`'s step 4 (no default) — the same
             // answer an intentional "ask on sight" entry would give, so
@@ -946,17 +930,26 @@ mod tests {
 
     /// The chain must stay one level deep and acyclic — it exists to preserve
     /// a rename, not to grow a taxonomy that could loop in `check`.
+    /// Walks `ActionType::ALL`, which the enum's own declaration emits.
+    ///
+    /// It used to walk a hand-written six-entry list, and `BrowserSwitchEngine`
+    /// then joined the enum as a NEW inheriting variant that the only guard on
+    /// the inheritance promise could not see — 判据 §5, a list covering the
+    /// world as it was on the day it was typed.
     #[test]
     fn inheritance_is_one_level_and_acyclic() {
-        for action in [
-            ActionType::BrowserIdentityOverride,
-            ActionType::BrowserSessionState,
-            ActionType::BrowserCookiesWrite,
-            ActionType::BrowserNavigate,
-            ActionType::HooksManage,
-            ActionType::MediaCapture,
-        ] {
+        // A floor on the derivation itself: an `ALL` that silently emitted an
+        // empty array would make every assertion below unfalsifiable (判据 §2).
+        assert!(
+            ActionType::ALL.len() > 20,
+            "ActionType::ALL has {} entries — the derivation, not the enum, is \
+             what broke",
+            ActionType::ALL.len()
+        );
+        let mut inheritors = 0;
+        for action in ActionType::ALL {
             if let Some(parent) = action.inherited_from() {
+                inheritors += 1;
                 assert_ne!(parent, action, "{action} inherits from itself");
                 assert_eq!(
                     parent.inherited_from(),
@@ -965,5 +958,14 @@ mod tests {
                 );
             }
         }
+        // And the walk actually reaches inheriting variants. Without this the
+        // loop is satisfied by an `inherited_from` that answered `None` for
+        // everything — 判据 §2's 恒绿 face, and the shape that would have hidden
+        // the missing variant just as well as the short list did.
+        assert!(
+            inheritors >= 3,
+            "only {inheritors} variants inherit; the promise `ActionType`'s doc \
+             makes is no longer being exercised"
+        );
     }
 }

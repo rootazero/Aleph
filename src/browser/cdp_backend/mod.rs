@@ -195,9 +195,16 @@ pub(crate) fn map_cdp_err(engine: Engine, method: &str, err: CdpError) -> Browse
         CdpError::Disconnected(reason) => BrowserError::EngineFailure {
             engine,
             reason: format!(
+                // `migrate: false` is not decoration on this arm. The handle
+                // is still parked, so `switch_engine` runs — and its first act
+                // is `Network.getAllCookies` on the connection that just
+                // reported `Disconnected`, which returns the same error and
+                // lands the reader back here. Naming the argument is what makes
+                // the named door actually open (判据 §14).
                 "the {} process stopped answering ({reason:?}); reopen it with \
                  `browser_open`, or move to the other engine with \
-                 `browser_session{{action:\"switch_engine\"}}`",
+                 `browser_session{{action:\"switch_engine\", migrate:false}}` — the \
+                 state cannot be carried off a connection that is already gone",
                 engine.as_str()
             ),
         },

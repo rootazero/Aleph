@@ -383,7 +383,7 @@ impl ChromiumChild {
             // the thing a reader would spend as evidence.
             Err(e) => tracing::warn!(pid, error = %e, "could not kill chromium; leaving it"),
         }
-        match sidecar_path(&self.session_key) {
+        match sidecar_path(Engine::Chromium, &self.session_key) {
             Ok(path) => {
                 let _ = std::fs::remove_file(path);
             }
@@ -505,7 +505,7 @@ impl EngineProcess for ChromiumLauncher {
         };
         let child = ChromiumChild::spawn(&spec, &req.session_key, DEVTOOLS_PORT_DEADLINE).await?;
         let endpoint = child.endpoint().clone();
-        let sidecar_path = sidecar_path(&req.session_key)?;
+        let sidecar_path = sidecar_path(Engine::Chromium, &req.session_key)?;
         Ok(Launched {
             pid: endpoint.pid,
             endpoint,
@@ -752,7 +752,7 @@ mod tests {
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
 
         let session = "kill-only-guard";
-        let sidecar = sidecar_path(session).expect("home resolves");
+        let sidecar = sidecar_path(Engine::Chromium, session).expect("home resolves");
         std::fs::create_dir_all(sidecar.parent().expect("sidecar has a parent"))
             .expect("create sidecar dir");
         std::fs::write(&sidecar, br#"{"pretend":"the NEW child's own record"}"#)

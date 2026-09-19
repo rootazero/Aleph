@@ -307,12 +307,18 @@ python3 "$MANAGED/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || e
 # a refusal. `browser_cookies_write` was missing until the `switch` stage became
 # the first to call `browser_cookies`, and it failed three claims about the
 # MIGRATION for a reason that was upstream of it.
+#
+# There is deliberately NO `browser_switch_engine` key, and its absence is a
+# claim. `ActionType`'s own doc promises that an operator who wrote
+# `browser_open` covers the switch without a second key, and `decide` consults
+# `inherited_from` before it answers "no policy configured". This fixture is the
+# only place that promise is exercised against a running server — writing the
+# redundant key would retire the one real-machine test of it.
 cat > "$HOME/.aleph/approval-policy.json" <<'JSON'
 {"defaults":{
   "browser_open":"allow","browser_navigate":"allow","browser_click":"allow",
   "browser_type":"allow","browser_evaluate":"allow","browser_dialog":"allow",
-  "browser_session_state":"allow","browser_switch_engine":"allow",
-  "browser_cookies_write":"allow"
+  "browser_session_state":"allow","browser_cookies_write":"allow"
 },"allowlist":[],"blocklist":[]}
 JSON
 

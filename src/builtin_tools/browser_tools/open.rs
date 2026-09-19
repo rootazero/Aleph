@@ -23,6 +23,8 @@ pub struct BrowserOpenArgs {
     /// Refused — not silently honoured — if this profile already has a browser
     /// running: its cookies live in that process, so moving is
     /// `browser_session{action:"switch_engine"}`, not a flag on open.
+    /// The profile then STAYS on that engine until the server restarts or you
+    /// switch back; the config file is unchanged.
     #[serde(default)]
     pub engine: Option<crate::browser::engine::Engine>,
 }
@@ -104,16 +106,20 @@ impl AlephTool for BrowserOpenTool {
 
         // Resolve (and, for a cold profile, launch) the engine BEFORE the
         // backend: `get_backend` is synchronous and cannot start a process, and
-        // a one-shot override against a live handle of the other engine is a
+        // an `engine` override against a live handle of the other engine is a
         // refusal, not a relaunch — the profile's cookies are in that process.
         // The refusal itself is `EngineRegistry`'s `EngineMismatch`, whose text
         // already names `switch_engine`; this call site adds no second wording.
+        //
+        // `None` back from it is not a failure: it is a driver that has no
+        // engine at all (`managed`, `existing_session`), whose backend is built
+        // by `make_backend` just below.
         let engine = match self
             .manager
             .prepare_engine(&args.profile, args.engine)
             .await
         {
-            Ok(e) => Some(e),
+            Ok(e) => e,
             Err(e) => {
                 return Ok(BrowserOpenOutput {
                     success: false,
@@ -148,7 +154,24 @@ impl AlephTool for BrowserOpenTool {
                 Ok(BrowserOpenOutput {
                     success: true,
                     tab_id: Some(tab_id),
-                    message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
+                    message: Some(format!(
+                        "Opened {} in profile '{}'{}",
+                        args.url,
+                        args.profile,
+                        // Said only when an override actually chose the engine.
+                        // The adoption is sticky for the life of the server
+                        // process — the same boundary `switch_engine` states on
+                        // its own face — but on every open that never asked for
+                        // an engine the sentence would be noise about a setting
+                        // the caller did not touch.
+                        match (args.engine, engine) {
+                            (Some(_), Some(e)) => format!(
+                                ". This profile runs {e} until the server restarts or you \
+                                 switch back — the config file is unchanged"
+                            ),
+                            _ => String::new(),
+                        }
+                    )),
                     engine: engine.map(|e| e.as_str().to_string()),
                 })
             }
@@ -323,10 +346,34 @@ mod tests {
         assert!(result.message.as_ref().unwrap().contains("Blocked"));
     }
 
+    /// A URL the guard admits degrades on the BROWSER, not on the network.
+    ///
+    /// Three things were wrong with the older form of this test, and between
+    /// them they hid a hazard:
+    ///
+    /// * it asserted only `!success` + `message.is_some()`, which stays green
+    ///   under any failure reason at all (判据 §2) — including the one
+    ///   `prepare_engine` introduced;
+    /// * it held **no `$ALEPH_HOME` guard** while reaching a path that now
+    ///   resolves one. With a real obscura in the developer's own runtime
+    ///   ledger, a unit test that reaches `prepare_engine` **launches a
+    ///   browser** and writes into `~/.aleph`;
+    /// * it depended on the host's resolver. `example.com` is a public name and
+    ///   a benchmark-range address on this machine (measured: the call is
+    ///   refused with `198.18.0.138 resolves to a private network`), so "a
+    ///   public URL is admitted" is a claim about DNS rather than about this
+    ///   tool. The guard is opened explicitly instead — it is not this test's
+    ///   subject, and the allowlist tests above own it.
     #[tokio::test]
     async fn test_browser_open_allows_public() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
+        manager.apply_policy(crate::browser::network_policy::SsrfConfig {
+            block_private: false,
+            ..Default::default()
+        });
         let tool = BrowserOpenTool::new(manager);
 
         let result = tool
@@ -338,9 +385,20 @@ mod tests {
             .await
             .unwrap();
 
-        // Without a running browser, tools degrade gracefully
+        // Without a browser to run the call degrades — and the REASON is a
+        // missing engine runtime, never a network refusal. Under an empty
+        // `$ALEPH_HOME` the ledger holds no obscura, so this is deterministic.
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.expect("a refusal says why");
+        assert!(
+            message.contains("obscura"),
+            "the refusal must name the engine that could not start: {message}"
+        );
+        assert!(
+            !message.contains("Blocked"),
+            "the guard is open in this test; a refusal from it would mean the \
+             call never reached the browser at all: {message}"
+        );
     }
     /// The one-shot override cannot silently relaunch. A profile already
     /// serving one engine refuses the other by name and points at the verb that
@@ -351,6 +409,14 @@ mod tests {
     async fn an_engine_override_against_a_live_other_engine_names_switch_engine() {
         use crate::browser::engine::Engine;
         use crate::browser::testkit::{switch_fixture, SwitchFixture};
+        // This test resolves `$ALEPH_HOME` through
+        // `prepare_engine -> engine_handle_for -> launch_request_for_engine ->
+        // browser_state_dir`, exactly the path `browser::home_guard_census`
+        // exists for. It escapes that census only because the census scans
+        // `src/browser/` and this file is under `src/builtin_tools/` — a gap
+        // in the guard, not an exemption (判据 §3), recorded for Task 20.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let SwitchFixture { manager, .. } =
             switch_fixture(Engine::Obscura, Engine::Chromium, false).await;
         // `browser_open` runs the SSRF pre-check before it resolves an engine,

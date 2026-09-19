@@ -8,13 +8,47 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Classification of actions that require approval.
+/// Declares [`ActionType`] and its [`ActionType::ALL`] from ONE variant list.
 ///
-/// Each variant maps to a specific capability that an agent can invoke.
-/// The serialization uses `snake_case` to match the JSON policy config format.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionType {
+/// Two lists of the same variants is 判据 §5 with a fuse lit: the census that
+/// walks them only covers the world as it was on the day it was typed. That is
+/// not hypothetical here — `inheritance_is_one_level_and_acyclic`
+/// (`super::config`) walked a hand-written six-entry list, so
+/// `BrowserSwitchEngine` joined the enum as a NEW inheriting variant that the
+/// one guard on the inheritance promise could not see. Same construct, same
+/// reason, as `browser::engine::declare_engines!`.
+macro_rules! declare_action_types {
+    (
+        $(
+            $(#[$vmeta:meta])*
+            $variant:ident
+        ),+ $(,)?
+    ) => {
+        /// Classification of actions that require approval.
+        ///
+        /// Each variant maps to a specific capability that an agent can invoke.
+        /// The serialization uses `snake_case` to match the JSON policy config
+        /// format.
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum ActionType {
+            $(
+                $(#[$vmeta])*
+                $variant,
+            )+
+        }
+
+        impl ActionType {
+            /// Every action type, emitted from the same list as the enum — so
+            /// a new variant reaches every enumerator by being declared, not by
+            /// being remembered somewhere else as well.
+            pub const ALL: [Self; { [$(stringify!($variant)),+].len() }] =
+                [$(Self::$variant),+];
+        }
+    };
+}
+
+declare_action_types! {
     BrowserNavigate,
     BrowserClick,
     BrowserType,
@@ -95,8 +129,15 @@ pub enum ActionType {
     /// copies, 2FA codes, single-use tokens) — reading it has the same
     /// disclosure surface as writing it, so it deserves its own gate
     /// rather than sliding through the `_ => None` arm of the system
-    /// tool's policy check. Default Allow preserves today's behaviour for
-    /// honest callers; a deny-by-default policy tightens both at once.
+    /// tool's policy check.
+    ///
+    /// **Curated default: Ask**, like every other `Desktop*` action. This
+    /// sentence used to read "Default Allow preserves today's behaviour" and
+    /// was never true: the variant had no entry in the curated map at all, so
+    /// it resolved to Ask by falling through — which `system_tool`'s call site
+    /// describes as the fail-closed posture it wants. The entry is now written
+    /// down, because "absent" and "deliberately Ask" are the two states that
+    /// census cannot tell apart (判据 §1: the doc was the half that lied).
     DesktopReadClipboard,
     /// Run an automation script (AppleScript/JXA/shell/PowerShell) or a named
     /// Shortcut — arbitrary code execution on the host.

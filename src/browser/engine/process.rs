@@ -153,14 +153,52 @@ pub fn sidecar_registry_dir() -> Result<PathBuf, BrowserError> {
     crate::browser::playwright_launch::browser_state_dir(SIDECAR_REGISTRY_LEAF)
 }
 
-/// This profile's record. Sanitized through the same helper the launch config
-/// and the derived data dir use, so a profile name can never escape the
-/// registry.
-pub fn sidecar_path(session_key: &str) -> Result<PathBuf, BrowserError> {
-    Ok(sidecar_registry_dir()?.join(format!(
-        "{}.{SIDECAR_EXT}",
+/// This profile's record **for one engine**. Sanitized through the same helper
+/// the launch config and the derived data dir use, so a profile name can never
+/// escape the registry.
+///
+/// **The engine is part of the address, and that is not cosmetic.** It used to
+/// be `session_key` alone, which was correct while one profile could only ever
+/// have one engine. `switch_engine` made that false: it runs the target and the
+/// source at the same time under one session key, so with a coarse key the
+/// target's record overwrote the source's the moment it launched — leaving the
+/// live obscura unreapable for the whole migration — and then the source's
+/// `stop_launched` deleted that same file on its way out, leaving the *target*
+/// invisible to `reap_orphans` for the rest of the process's life. The key must
+/// be as fine-grained as the world it addresses (判据 §12); fixing it by
+/// ordering `switch_engine`'s shutdown differently would be a property of that
+/// one call site which the next caller does not inherit.
+///
+/// **Engine first**, so the mapping is injective: `Engine::as_str()` values
+/// contain no `-` and differ at their first byte, so `<engine>-<key>` can only
+/// collide with itself. `<key>-<engine>` could not promise that —
+/// `sanitize_session_key` permits `-`, so a profile literally named
+/// `default-obscura` would claim `default`'s obscura record.
+///
+/// Records written by an older build (`<key>.json`) are still swept: the sweep
+/// walks the directory and reads each record's own `engine` field, so it never
+/// parses the name.
+pub fn sidecar_path(engine: Engine, session_key: &str) -> Result<PathBuf, BrowserError> {
+    Ok(sidecar_registry_dir()?.join(sidecar_file_name(engine, session_key)))
+}
+
+/// The record's file name, split out from [`sidecar_path`] for exactly one
+/// reason: `testkit::FakeEngineProcess` writes its sidecar into a directory the
+/// test owns rather than into `$ALEPH_HOME`, and it must name that file the way
+/// production does.
+///
+/// It did not, before this round — the fake's records lived in a *per-instance*
+/// tempdir, so a fixture's two engines could never collide however coarse the
+/// key was, and the unit suite was structurally blind to the defect this
+/// function's engine parameter exists to fix (判据 §10: the fake differed from
+/// production on precisely the dimension the defect lived in). One derivation,
+/// two directories.
+pub(crate) fn sidecar_file_name(engine: Engine, session_key: &str) -> String {
+    format!(
+        "{}-{}.{SIDECAR_EXT}",
+        engine.as_str(),
         crate::browser::playwright_launch::sanitize_session_key(session_key)
-    )))
+    )
 }
 
 /// What a process's argv turned out to be — three states, not two.
@@ -258,7 +296,7 @@ pub(crate) async fn write_sidecar_record(
     data_dir: &Path,
     http_url: Option<String>,
 ) {
-    let path = match sidecar_path(session_key) {
+    let path = match sidecar_path(engine, session_key) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "cannot resolve the engine sidecar path");
@@ -341,8 +379,12 @@ pub(crate) struct ReapOutcome {
 /// Kill browsers left behind by a previous Aleph — either engine.
 ///
 /// `registry` is [`sidecar_registry_dir`] — one directory holding one record
-/// per profile, whatever each profile's `user_data_dir` happens to be. That is
-/// why the sweep can be a single walk (判据 §12: the set has one derivation).
+/// per **(profile, engine)**, whatever each profile's `user_data_dir` happens
+/// to be. That is why the sweep can be a single walk (判据 §12: the set has one
+/// derivation). Two records for one profile is the normal state during a
+/// `switch_engine`, and each is reaped on its own evidence: the `engine` field
+/// inside the record — never the file name — chooses the data-dir flag to
+/// match.
 ///
 /// Four outcomes per PARSEABLE record, and they are deliberately NOT collapsed:
 ///
@@ -946,12 +988,28 @@ mod tests {
             "",
             "a/b",
         ] {
-            let p = sidecar_path(hostile).expect("home resolves");
-            assert_eq!(p.parent(), Some(dir.as_path()), "escaped with {hostile:?}");
+            for engine in Engine::ALL {
+                let p = sidecar_path(engine, hostile).expect("home resolves");
+                assert_eq!(p.parent(), Some(dir.as_path()), "escaped with {hostile:?}");
+                assert_eq!(
+                    p.components().count(),
+                    dir.components().count() + 1,
+                    "not a single component for {hostile:?}"
+                );
+            }
+            // And the engine is IN the address: the two engines of one profile
+            // must never name the same file, which is the whole point of the
+            // parameter (判据 §12). Derived from `Engine::ALL`, so a third
+            // engine is covered by being declared.
+            let paths: Vec<PathBuf> = Engine::ALL
+                .iter()
+                .map(|e| sidecar_path(*e, hostile).expect("home resolves"))
+                .collect();
+            let unique: std::collections::HashSet<&PathBuf> = paths.iter().collect();
             assert_eq!(
-                p.components().count(),
-                dir.components().count() + 1,
-                "not a single component for {hostile:?}"
+                unique.len(),
+                paths.len(),
+                "two engines share one record for {hostile:?}: {paths:?}"
             );
         }
     }

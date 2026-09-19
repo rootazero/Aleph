@@ -46,6 +46,14 @@ pub(crate) struct TabMigration {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MigrationState {
     pub cookies: Vec<network::Cookie>,
+    /// **Order is explicitly not guaranteed**, and that is a decision rather
+    /// than an oversight: it is `HashMap` iteration order over
+    /// `TabTable.entries`, so it differs run to run. Nothing downstream may
+    /// depend on it — the target's tab positions are arbitrary, and
+    /// `get_all_cookies` is issued on whichever session lands first, which is
+    /// safe only because cookies are browser-context-wide rather than
+    /// per-session. Making it deterministic would mean choosing an order the
+    /// tab table does not have; saying so is cheaper and honest (判据 §12).
     pub tabs: Vec<TabMigration>,
     /// `(origin, [(key, value)])`, one entry per distinct origin among the open
     /// tabs. Two tabs on one origin share one entry — a second read of the same

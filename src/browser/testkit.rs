@@ -643,7 +643,16 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
                 "{}/{} headless={}",
                 req.profile, req.session_key, req.headless
             ));
-        let sidecar_path = self.sidecar_dir.join(format!("{}.json", req.session_key));
+        // The SAME name production derives (`process::sidecar_file_name`), in a
+        // directory the test owns. A locally-formatted name here would be a
+        // second author of the record's address — and this fake's address was
+        // exactly what hid the switch's sidecar collision from the unit suite.
+        let sidecar_path = self
+            .sidecar_dir
+            .join(super::engine::process::sidecar_file_name(
+                self.engine,
+                &req.session_key,
+            ));
         tokio::fs::create_dir_all(&self.sidecar_dir).await?;
         tokio::fs::write(&sidecar_path, b"{\"fake\":true}").await?;
         Ok(super::engine::process::Launched {
@@ -728,9 +737,12 @@ pub(crate) async fn fake_handle(
 ) -> std::sync::Arc<super::engine::EngineHandle> {
     let dir = tempfile::tempdir().expect("sidecar dir");
     let process = std::sync::Arc::new(FakeEngineProcess::new(engine, server, dir.path()));
-    // The tempdir must outlive the handle; leak it, because a test fixture that
-    // deletes the sidecar under a live handle produces a failure that looks
-    // like the code under test.
+    // **Leaked on purpose, and it is not a bug for a temp sweep to "fix".** A
+    // `TempDir` deletes on drop, and dropping it here would remove the sidecar
+    // registry while the handle it belongs to is still live — every later
+    // failure would then look like the code under test. The cost is one empty
+    // directory per call, under the OS temp root, for the life of one `--lib`
+    // process.
     std::mem::forget(dir);
     fake_handle_on(&process, tabs).await
 }
@@ -827,8 +839,23 @@ pub(crate) struct SwitchFixture {
     /// no process (判据 §4 — assert the effect arrived, not that the call was
     /// made).
     pub source_proc: std::sync::Arc<FakeEngineProcess>,
+    /// The TARGET engine's launcher — the one the registry would use to start a
+    /// second engine on this profile. A claim of the form "nothing was
+    /// launched" has to read THIS one: the source's `launches()` does not grow
+    /// when something starts the other engine, so asserting on it would be a
+    /// reading taken beside the path rather than about it.
+    pub target_proc: std::sync::Arc<FakeEngineProcess>,
     pub source: aleph_cdp::testkit::FakeCdpServer,
     pub target: aleph_cdp::testkit::FakeCdpServer,
+    /// The ONE directory both launchers write their orphan-reap records into.
+    ///
+    /// Production has one registry directory for every engine of every profile,
+    /// and this fixture used to give each `FakeEngineProcess` a tempdir of its
+    /// own — so the source's and the target's records could not collide no
+    /// matter how coarse their key was, and a defect that lives entirely in
+    /// that collision was invisible to every unit test that could be written
+    /// (判据 §10). Shared, so it is reproducible here.
+    pub sidecar_dir: std::path::PathBuf,
 }
 
 impl SwitchFixture {
@@ -840,10 +867,27 @@ impl SwitchFixture {
 
 /// `target_rejects_cookies` makes the target's fake answer `Network.setCookies`
 /// with an error — the failure the ordering claim is about.
+///
+/// The source engine dies when it is asked to.
+/// [`switch_fixture_with_source_kill`] is the same fixture with that scripted,
+/// for the one claim that is about a source which does NOT.
 pub(crate) async fn switch_fixture(
     from: super::engine::Engine,
     to: super::engine::Engine,
     target_rejects_cookies: bool,
+) -> SwitchFixture {
+    switch_fixture_with_source_kill(from, to, target_rejects_cookies, ScriptedKill::Died).await
+}
+
+/// [`switch_fixture`] with the source engine's death scripted.
+///
+/// One body, two entry points: "how this fixture is assembled" keeps a single
+/// definition, and the knob is visible only to the test that needs it.
+pub(crate) async fn switch_fixture_with_source_kill(
+    from: super::engine::Engine,
+    to: super::engine::Engine,
+    target_rejects_cookies: bool,
+    source_kill: ScriptedKill,
 ) -> SwitchFixture {
     use super::engine::process::EngineProcess;
     use super::engine::registry::EngineRegistry;
@@ -915,15 +959,17 @@ pub(crate) async fn switch_fixture(
     })
     .await;
 
-    let src_dir = tempfile::tempdir().expect("dir");
-    let dst_dir = tempfile::tempdir().expect("dir");
-    let src_proc = Arc::new(FakeEngineProcess::new(from, &source, src_dir.path()));
-    let dst_proc = Arc::new(FakeEngineProcess::new(to, &target, dst_dir.path()));
+    // ONE directory for both, the way production has one registry.
+    let sidecar_dir = tempfile::tempdir().expect("dir");
+    let src_proc = Arc::new(
+        FakeEngineProcess::new(from, &source, sidecar_dir.path()).with_kill_outcomes([source_kill]),
+    );
+    let dst_proc = Arc::new(FakeEngineProcess::new(to, &target, sidecar_dir.path()));
 
     let mut processes: std::collections::HashMap<Engine, Arc<dyn EngineProcess>> =
         std::collections::HashMap::new();
     processes.insert(from, Arc::clone(&src_proc) as Arc<dyn EngineProcess>);
-    processes.insert(to, dst_proc as Arc<dyn EngineProcess>);
+    processes.insert(to, Arc::clone(&dst_proc) as Arc<dyn EngineProcess>);
     let registry = Arc::new(EngineRegistry::new(
         processes,
         std::time::Duration::from_millis(400),
@@ -948,13 +994,19 @@ pub(crate) async fn switch_fixture(
         ..BrowserSystemConfig::default()
     };
     let manager = Arc::new(ProfileManager::with_engine_registry(config, registry));
-    std::mem::forget(src_dir);
-    std::mem::forget(dst_dir);
+    let sidecar_path = sidecar_dir.path().to_path_buf();
+    // Leaked on purpose, like `fake_handle`'s: a `TempDir` that drops at the
+    // end of the fixture function would delete the sidecar registry out from
+    // under handles that are still live, and the resulting failure would look
+    // like the code under test rather than like the fixture.
+    std::mem::forget(sidecar_dir);
     SwitchFixture {
         manager,
         source_proc: src_proc,
+        target_proc: dst_proc,
         source,
         target,
+        sidecar_dir: sidecar_path,
     }
 }
 #[cfg(test)]

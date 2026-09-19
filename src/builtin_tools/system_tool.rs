@@ -227,10 +227,13 @@ Examples:
             )),
             // `clipboard_read` fell through the `_ => None` arm while
             // `clipboard_write` was gated. The disclosure risk (passwords, 2FA
-            // codes, copied secrets) is symmetric. `DesktopReadClipboard` has
-            // no curated default entry, so this arm resolves to `Ask` — under
-            // a non-Full tier that is the fail-closed refusal described above;
-            // under Full it lifts (`approval::lift_ask`).
+            // codes, copied secrets) is symmetric. `DesktopReadClipboard` is
+            // `Ask` in the curated defaults, so this arm resolves to `Ask` —
+            // under a non-Full tier that is the fail-closed refusal described
+            // above; under Full it lifts (`approval::lift_ask`). It used to
+            // reach the same answer by having no entry at all, which is the
+            // same behaviour and a different fact: nothing could then tell a
+            // deliberate Ask from a variant somebody forgot.
             "clipboard_read" => Some((
                 ActionType::DesktopReadClipboard,
                 args.body.clone().unwrap_or_default(),
