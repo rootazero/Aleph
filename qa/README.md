@@ -41,7 +41,9 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
 ./qa/browser_dual/run.sh snapshot  # engine=obscura header; the elements obscura can see
                                    # get refs, display:none and opacity:0 do not
 ./qa/browser_dual/run.sh click     # by ref AND by coordinates, each changing the URL;
-                                   # a pre-navigation ref reports StaleRef
+                                   # a stale ref is refused by DESIGN on both of the two
+                                   # routes a page can go stale by — the document changed,
+                                   # and the node left the document
 ./qa/browser_dual/run.sh stall     # a spinning page yields a "did not answer" refusal
                                    # under a 2 s cdp_command_timeout_secs, and the
                                    # engine survives and recovers
@@ -733,6 +735,39 @@ established.
 actually finds; on any other build it prints `[UNKNOWN]` and settles nothing.
 Reporting PASS for "the gap is still there" on a build nobody measured would be
 vouching for a reading this run never took (判据 §18).
+
+### `click` — why a stale ref needs TWO layers, one of which the fixture had to discover
+
+Aleph decides a ref is stale two ways, and the `click` stage exercises both
+because on the default engine **neither one covers the other's case**:
+
+* the **document** layer — the event pump folds `Page.frameNavigated` into
+  `RefTable::reset_for_document`, so a ref minted before the document changed is
+  refused as `the page navigated`, ahead of the wire;
+* the **node** layer — `resolve_target` asks the resolved object
+  `this.isConnected`, one question in one place, the same JS on both engines,
+  answering `that element is no longer in the page`.
+
+The second is not a belt-and-braces addition. Measured on obscura v0.2.2
+(2026-09-19, both routes in one run): a navigation driven by
+`Input.dispatchMouseEvent` — **which is exactly what `browser_click` does** —
+emits one `Page.frameNavigated` carrying the **OLD** `loaderId`, and
+`Page.getFrameTree` afterwards still reports the old one. A navigation driven by
+`Runtime.evaluate("location.href=…")` turns the loader over properly. So for the
+commonest thing a model does, clicking a link, **nothing loader-based can fire on
+this engine** — not the pump, not `PageState::build`'s reset, not `navigate()`'s
+boundary — and the node layer is the only thing that can answer.
+
+That is why the stage has a **dated** claim recording the click-route asymmetry
+(a build that fixed it would legitimately produce the other sentence, and this
+harness must say `[UNKNOWN]` rather than fail a build for being better) and a
+plain claim on the script route, which is the document layer's only real-machine
+falsifier. Before Task 18b there was no designed refusal on either route on this
+engine: the click was stopped by `DOM.scrollIntoViewIfNeeded` failing and by
+`OCCLUSION_JS` throwing on an object with no `getBoundingClientRect` — two
+engine-side accidents, both removable by a two-line change that reads as a
+cleanup, as Task 18's fix round demonstrated by making exactly that change and
+watching `browser_click` on a dead ref report `success: true`.
 
 ## `announce` — and the wall it hit on its first run
 

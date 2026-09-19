@@ -88,6 +88,37 @@ function() {
 }
 ";
 
+/// Is the node this ref points at still in the page's document?
+///
+/// **The one question that replaced reading another engine's error prose.**
+/// `resolve_target` used to decide `StaleReason::NodeGone` by matching
+/// `DOM.resolveNode`'s message against `"No node with given id"`, and measured
+/// against both real engines that arm is ~恒假: obscura's `DOM.resolveNode`
+/// never errors on ANY id (`999999`, `nodeId: 999999`, a live id plus 100000 —
+/// all answer `Ok` with a bare `Node`), and Chrome 152 answers the actual
+/// hazard — a `backendNodeId` minted in a document that has since gone — with
+/// `"Node with given id does not belong to the document"`. The sentence the arm
+/// matches is the one Chrome uses for an id that NEVER existed, which is a ref
+/// `RefTable::resolve` refuses before any wire call. So the guard recognised a
+/// shape the hazard does not arrive in, on both engines (判据 §3, §5).
+///
+/// `isConnected` is the fact itself rather than a tell, and both engines answer
+/// it truthfully for all three cases (measured 2026-09-19, obscura v0.2.2 and
+/// Chrome 152):
+///
+/// | the node | obscura | Chrome |
+/// |---|---|---|
+/// | live, in the document | `connected: true` | `connected: true` |
+/// | detached, same document | `connected: false` | `connected: false` |
+/// | minted in a document that has gone | `connected: false` (a bare `Node`, `nodeType: 0`) | `DOM.resolveNode` errors first |
+///
+/// `=== true` rather than a truthiness test because the property is absent on a
+/// non-`Node` — an absent property must answer "no", not "undefined is falsy,
+/// close enough", and the caller distinguishes a `false` from a MISSING key.
+pub(super) const NODE_LIVENESS_JS: &str = r"
+function() { return { connected: this.isConnected === true }; }
+";
+
 /// Set a form control's value the way a user would, not the way a script does.
 ///
 /// The native property setter is taken off the prototype on purpose: frameworks
@@ -347,10 +378,21 @@ async fn resolve_target(
             )
             .await
             .map_err(|e| {
-                // The engine's own "that node is gone" is a stale ref, not a
-                // protocol failure: the model's next move is a fresh snapshot,
-                // and only this spelling tells it so.
-                if e.to_string().contains("No node with given id") {
+                // Classified by the error's KIND, never by its wording. The
+                // engine was asked for a `backendNodeId` this table minted
+                // itself, in a document the three checks above just confirmed
+                // is the current one — and it answered no. `map_cdp_err`'s own
+                // doc is what makes that reading structural rather than a
+                // guess: "a protocol error is the engine's verdict about the
+                // page". This is that verdict, and for a node id it is the only
+                // verdict it can be.
+                //
+                // The other four kinds keep going to `map_cdp_err` unchanged.
+                // `Timeout` in particular must NOT land here: "the engine did
+                // not answer" read as "the node is gone" is 判据 §8's exact
+                // collapse, and its sentence (`EngineBusy` — retry, or switch
+                // engines) is the one the model needs.
+                if matches!(e, aleph_cdp::CdpError::Protocol { .. }) {
                     BrowserError::StaleRef {
                         ref_id: ref_id.clone(),
                         reason: StaleReason::NodeGone,
@@ -359,6 +401,70 @@ async fn resolve_target(
                     map_cdp_err(be.engine(), "DOM.resolveNode", e)
                 }
             })?;
+
+            // **Ask the node whether it is still in the page.**
+            //
+            // The arm above is the whole answer only on an engine that refuses
+            // a dead id. obscura does not: measured, it resolves EVERY id —
+            // including ids that never existed — to a bare `Node`, so on the
+            // default engine `DOM.resolveNode` succeeding carries no
+            // information at all. Without this call the refusal on that engine
+            // comes from `DOM.scrollIntoViewIfNeeded` failing two steps later,
+            // or from `OCCLUSION_JS` throwing on an object with no
+            // `getBoundingClientRect` — two engine-side accidents, neither of
+            // them a gate anybody designed, and both removable by a two-line
+            // change that looks like a cleanup (Task 18 fix r1 §8.5 removed
+            // them and the click then reported SUCCESS).
+            //
+            // One question, one place, both engines — every ref-targeted verb
+            // passes through here, so this is not a per-verb check that the
+            // next verb can be written without (判据 §6, §9). It costs one
+            // round trip per ref action, which on obscura is one more trip
+            // through the per-connection V8 lock; that is the price of an
+            // answer instead of luck.
+            let live = runtime::call_function_on(
+                &handle.conn,
+                Some(session),
+                &object_id,
+                NODE_LIVENESS_JS,
+                Vec::new(),
+            )
+            .await
+            .map_err(|e| map_cdp_err(be.engine(), "Runtime.callFunctionOn", e))?;
+            match live
+                .value
+                .get("connected")
+                .and_then(serde_json::Value::as_bool)
+            {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(BrowserError::StaleRef {
+                        ref_id: ref_id.clone(),
+                        reason: StaleReason::NodeGone,
+                    });
+                }
+                // No `connected` key: the engine answered something, but not
+                // this question. Refused — but NOT as a stale ref, and the
+                // difference is the model's next move. `StaleRef` says "re-run
+                // browser_snapshot and use a fresh ref", and a fresh ref would
+                // ask the same silent engine the same question and get the same
+                // non-answer: a gate whose far side has no exit (判据 §14).
+                // Same shape as the hit test's `None` arm below, for the same
+                // reason — an unreadable answer is "I do not know", never
+                // "clear" (判据 §8) — and deliberately the same shape, because
+                // two unknowns of the same kind answered two different ways is
+                // how the two start meaning different things (判据 §9).
+                None => {
+                    return Err(BrowserError::ActionFailed(format!(
+                        "the {} engine did not say whether ref {ref_id} is still \
+                         in the page, so this action is refused rather than sent \
+                         to a node that may be gone. Re-run browser_snapshot; if \
+                         it keeps happening, move to the other engine with \
+                         `browser_session{{action:\"switch_engine\"}}`.",
+                        be.engine().as_str()
+                    )));
+                }
+            }
             Ok(Resolved::Node {
                 backend_node_id: entry.key.backend_node_id,
                 object_id,
@@ -407,12 +513,34 @@ async fn point_for(
         .await
         .map_err(|e| map_cdp_err(be.engine(), "DOM.getBoxModel", e))?;
     // `Ok(None)` is CDP saying "this element generates no box". That is a fact
-    // about the page — `display:none`, or detached — not a failure to measure,
-    // and the model needs to hear which.
+    // about the page — not a failure to measure — and the model needs to hear
+    // which fact.
+    //
+    // **It used to say "display:none, or removed from the document", and the
+    // second half is no longer this arm's to claim.** `resolve_target` now asks
+    // every ref whether its node is still connected and refuses a detached one
+    // as `StaleRef { NodeGone }` before this function is reached, so a node that
+    // gets here IS in the document and the only reading left is that it
+    // generates no layout box. Leaving the old wording would be an arm
+    // describing a case another arm now owns — the same fact in two places,
+    // where only one of them is true (判据 §1, §17: 错的标签比缺的贵).
+    //
+    // ⚠️ This arm is Chromium-only, and not by design: `Ok(None)` is itself
+    // manufactured from a prose match one crate down —
+    // `aleph_cdp::methods::dom::get_box_model` turns `-32000 "Could not compute
+    // box model"` into `None`. obscura does not produce that reply at all (see
+    // `fetch_obscura`'s dated claims for what it answers instead), so it never
+    // reaches this sentence; there, a boxless element is refused by
+    // `OCCLUSION_JS`'s zero-box arm, in different words. That is the same
+    // defect as the one Task 18b removed above, still standing in `aleph-cdp`,
+    // and it is recorded rather than quietly fixed because widening this task
+    // into that crate's error taxonomy is a different change with a different
+    // blast radius.
     let Some(model) = model else {
         return Err(BrowserError::ActionFailed(
-            "the element generates no box (display:none, or removed from the \
-             document) — re-run browser_snapshot"
+            "the element is in the page but generates no layout box \
+             (display:none, or a hidden ancestor), so there is nothing to click \
+             — re-run browser_snapshot to see what is visible"
                 .into(),
         ));
     };
@@ -1156,6 +1284,44 @@ mod tests {
     use crate::browser::page_state::{RefKey, StaleReason, quote};
     use crate::browser::types::ActionTarget;
 
+    /// A fake peer that answers `resolve_target`'s liveness probe with a LIVE
+    /// node, and every other `Runtime.callFunctionOn` with `verb_js`.
+    ///
+    /// The override table (`FakeCdpServer::on`) is keyed by METHOD, and the ref
+    /// path now makes two `Runtime.callFunctionOn` calls that ask different
+    /// questions: [`NODE_LIVENESS_JS`], then the verb's own JS (the hit test,
+    /// a value setter, the option picker). One canned reply for both would make
+    /// every one of those tests assert the liveness answer instead of the
+    /// answer it is about — and for the two helpers whose peer THROWS, the
+    /// throw would land on the liveness call and the verb's own arm would
+    /// become unreachable (判据 §2: an arm nothing can reach).
+    ///
+    /// Discriminated on the production constant itself, not on a copy of its
+    /// text: a second spelling here is a second author for the same fact, and
+    /// the day the JS changes this helper would silently start answering the
+    /// verb's reply to the liveness probe (判据 §1).
+    /// ⚠️ The verb's own JS must be answered by `base`, NOT by
+    /// `server.on("Runtime.callFunctionOn", …)`: the override table is
+    /// consulted BEFORE the constructor's closure, so an `on` entry for that
+    /// method would swallow the liveness probe as well and put this helper back
+    /// where it started.
+    fn peer_with_live_node<F>(base: F) -> impl Fn(&serde_json::Value) -> Responder + Send + Sync
+    where
+        F: Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
+    {
+        move |frame: &serde_json::Value| {
+            if frame.get("method").and_then(serde_json::Value::as_str)
+                == Some("Runtime.callFunctionOn")
+                && frame["params"]["functionDeclaration"].as_str() == Some(super::NODE_LIVENESS_JS)
+            {
+                return Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "connected": true } } }),
+                );
+            }
+            base(frame)
+        }
+    }
+
     /// Seed a tab whose ref table holds one ref minted against document `L1`,
     /// and hand back the `RefId` string.
     async fn seed_ref(handle: &crate::browser::engine::EngineHandle, tab: &str) -> String {
@@ -1241,6 +1407,224 @@ mod tests {
                 .iter()
                 .any(|m| m.starts_with("DOM.") || m.starts_with("Input.")),
             "a stale ref must not reach the page: {sent:?}"
+        );
+    }
+
+    /// Drive a click at a ref whose LIVENESS probe answers `liveness`, with
+    /// everything downstream of the probe wired to succeed — so the only thing
+    /// that can refuse the click is the probe's own arm.
+    ///
+    /// `DOM.scrollIntoViewIfNeeded`, `DOM.getBoxModel` and the hit test all
+    /// answer happily here **on purpose**: that is what obscura does for a node
+    /// that is gone (measured — it resolves every id to a bare `Node` and
+    /// fabricates a `(8,8) 100×20` box), and a fixture where a later call
+    /// refuses anyway could not tell this guard from that accident (判据 §2 —
+    /// name the case in which this goes red).
+    async fn click_with_liveness(liveness: serde_json::Value) -> (BrowserError, Vec<String>) {
+        let server = FakeCdpServer::start(move |frame: &serde_json::Value| {
+            if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
+                let value = if frame["params"]["functionDeclaration"].as_str()
+                    == Some(super::NODE_LIVENESS_JS)
+                {
+                    liveness.clone()
+                } else {
+                    json!({ "ok": true })
+                };
+                return Responder::Reply(json!({ "result": { "type": "object", "value": value } }));
+            }
+            Responder::Reply(json!({}))
+        })
+        .await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
+        );
+        server.on("DOM.scrollIntoViewIfNeeded", Responder::Reply(json!({})));
+        server.on(
+            "DOM.getBoxModel",
+            Responder::Reply(json!({ "model": {
+                "content": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "width": 100, "height": 40
+            }})),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("the click must be refused");
+        (err, methods(&server))
+    }
+
+    /// **A node that is not in the document any more is a stale ref, and this
+    /// is the arm that replaced reading another engine's error prose.**
+    ///
+    /// The old arm matched `DOM.resolveNode`'s message against
+    /// `"No node with given id"`. Measured against both real engines that is
+    /// ~恒假: obscura's `DOM.resolveNode` never errors on ANY id, and Chrome
+    /// 152 answers the actual hazard with `"Node with given id does not belong
+    /// to the document"` — the matched sentence is the one Chrome uses for an
+    /// id that never existed, which `RefTable::resolve` refuses before any wire
+    /// call. So the question is asked of the node instead.
+    ///
+    /// Driven on the OBSCURA arm deliberately: on that engine every call after
+    /// `resolve_node` succeeds on a dead node, so this refusal has no engine
+    /// accident standing behind it.
+    #[tokio::test]
+    async fn a_ref_whose_node_left_the_document_is_stale_not_a_protocol_error() {
+        let (err, sent) = click_with_liveness(json!({ "connected": false })).await;
+        match err {
+            BrowserError::StaleRef { reason, .. } => {
+                assert_eq!(
+                    reason,
+                    StaleReason::NodeGone,
+                    "the document is the same and the node has left it"
+                );
+            }
+            other => panic!("expected StaleRef, got {other:?}"),
+        }
+        assert!(
+            !sent.iter().any(|m| m.starts_with("Input.")),
+            "a node that is gone must not be clicked: {sent:?}"
+        );
+        // The sentence, not just the variant: `StaleReason`'s Display is what
+        // the model actually reads, and a refusal that named a protocol method
+        // would send it to debug the engine instead of re-snapshotting
+        // (判据 §17).
+        let text = err.to_string();
+        assert!(
+            text.contains("no longer in the page") && text.contains("browser_snapshot"),
+            "the refusal must name the model's next move: {text}"
+        );
+    }
+
+    /// An answer with no `connected` key is "I do not know", and the only safe
+    /// reading of that is a refusal — but NOT a stale one.
+    ///
+    /// `StaleRef` says "re-run browser_snapshot and use a fresh ref", and a
+    /// fresh ref would ask the same silent engine the same question and get the
+    /// same non-answer: a gate whose far side has no exit (判据 §14). So the
+    /// refusal is an `ActionFailed` that names the engine and the way across,
+    /// the same shape the hit test's own `None` arm takes.
+    #[tokio::test]
+    async fn a_liveness_answer_that_is_not_a_bool_refuses_without_claiming_staleness() {
+        let (err, sent) = click_with_liveness(json!({ "something_else": true })).await;
+        assert!(
+            !matches!(err, BrowserError::StaleRef { .. }),
+            "an engine that did not answer has not told us the ref is stale: {err:?}"
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("did not say whether") && text.contains("switch_engine"),
+            "the refusal must name the indeterminacy and a way across: {text}"
+        );
+        assert!(
+            !sent.iter().any(|m| m.starts_with("Input.")),
+            "an unanswered liveness question must not be clicked through: {sent:?}"
+        );
+    }
+
+    /// The other half of the same derivation: `DOM.resolveNode` failing is
+    /// classified by the error's KIND, never by its wording.
+    ///
+    /// The message used here is Chrome 152's REAL answer for the real hazard —
+    /// `"Node with given id does not belong to the document"` — which the arm
+    /// this replaced did **not** match. That is what makes this test a
+    /// falsifier for the old code rather than a restatement of the new: put the
+    /// `contains("No node with given id")` arm back and this goes red.
+    #[tokio::test]
+    async fn a_protocol_error_from_resolve_node_is_a_stale_ref_whatever_it_says() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Error {
+                code: -32000,
+                message: "Node with given id does not belong to the document".into(),
+            },
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("a node the engine refuses must not be clicked");
+        match err {
+            BrowserError::StaleRef { reason, .. } => assert_eq!(reason, StaleReason::NodeGone),
+            other => panic!("expected StaleRef, got {other:?}"),
+        }
+        assert!(
+            !methods(&server).iter().any(|m| m.starts_with("Input.")),
+            "nothing may be dispatched after the engine refused the node"
+        );
+    }
+
+    /// …and the kinds that are NOT the engine's verdict about the page keep
+    /// their own sentence. "The engine did not answer" read as "the node is
+    /// gone" is 判据 §8's exact collapse, and it would send the model to
+    /// re-snapshot a browser that is simply busy.
+    ///
+    /// `Hang` rather than a slow `Delay`: this has to be an unanswered call,
+    /// not a late one.
+    #[tokio::test]
+    async fn a_timeout_resolving_the_node_is_a_busy_engine_not_a_stale_ref() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on("DOM.resolveNode", Responder::Hang);
+        let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("an engine that never answers must not click");
+        assert!(
+            matches!(err, BrowserError::EngineBusy { .. }),
+            "a timeout is a busy engine, not a verdict about the node: {err:?}"
+        );
+    }
+
+    /// A reply that arrived but did not have the shape `DOM.resolveNode`
+    /// promises is `CdpError::Decode`, and it is not a verdict about the node
+    /// either — it is a fact about the ENGINE. Reading it as staleness would
+    /// send the model to re-snapshot a browser whose replies this build cannot
+    /// parse, forever.
+    ///
+    /// **This test exists because a mutation prediction missed.** Widening the
+    /// classification to every error kind (`if true`) turned two tests red, and
+    /// only one of them was predicted: the other was the *precondition line* of
+    /// `a_ref_whose_document_the_last_capture_did_not_see_is_refused_as_stale`,
+    /// which asserts its ref is "not stale yet" against a fake whose
+    /// `DOM.resolveNode` answers `{}`. An arm whose only falsifier is a
+    /// precondition inside a test about something else is covered by accident
+    /// (判据 §3), so it is named here.
+    #[tokio::test]
+    async fn an_unparseable_resolve_node_reply_is_not_a_stale_ref() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        // A reply with no `object` field — the shape the method promises.
+        server.on("DOM.resolveNode", Responder::Reply(json!({})));
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("an unparseable reply must not be clicked through");
+        assert!(
+            !matches!(err, BrowserError::StaleRef { .. }),
+            "a reply this build cannot parse says nothing about the node: {err:?}"
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("DOM.resolveNode"),
+            "the refusal must name the call that could not be read: {text}"
         );
     }
 
@@ -1776,7 +2160,11 @@ mod tests {
     /// question of different answers, and a helper copied into both is where
     /// the two copies start disagreeing about what "the same setup" means.
     async fn click_with_hit_test(hit: serde_json::Value) -> (BrowserError, Vec<String>) {
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        let server = FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value": hit } })),
+        )])))
+        .await;
         wire_session(&server, "S1");
         server.on(
             "DOM.resolveNode",
@@ -1792,10 +2180,6 @@ mod tests {
                 "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
                 "width": 100, "height": 40
             }})),
-        );
-        server.on(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({ "result": { "type": "object", "value": hit } })),
         );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -1903,17 +2287,17 @@ mod tests {
             hostile.contains('"') && hostile.contains("[ref="),
             "precondition: hostile in both dimensions: {hostile}"
         );
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        // The page's answer: no option matched, and here is what it does have.
+        let server = FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value":
+                { "ok": false, "options": [hostile] } } })),
+        )])))
+        .await;
         wire_session(&server, "S1");
         server.on(
             "DOM.resolveNode",
             Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
-        );
-        // The page's answer: no option matched, and here is what it does have.
-        server.on(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({ "result": { "type": "object", "value":
-                { "ok": false, "options": [hostile] } } })),
         );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -1961,7 +2345,14 @@ mod tests {
 
         let seen = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&seen);
-        let server = FakeCdpServer::start(move |frame: &serde_json::Value| {
+        let server = FakeCdpServer::start(peer_with_live_node(move |frame: &serde_json::Value| {
+            if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
+                // The hit test. The liveness probe on the same method is
+                // answered by `peer_with_live_node` before this runs.
+                return Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                );
+            }
             if frame["method"].as_str() == Some("Input.dispatchMouseEvent")
                 // 0 = move, 1 = press, 2 = release.
                 && counter.fetch_add(1, Ordering::SeqCst) == 2
@@ -1973,7 +2364,7 @@ mod tests {
                 }));
             }
             Responder::Reply(json!({}))
-        })
+        }))
         .await;
         wire_session(&server, "S1");
         server.on(
@@ -1990,10 +2381,6 @@ mod tests {
                 "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
                 "width": 100, "height": 40
             }})),
-        );
-        server.on(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
         );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -2283,20 +2670,20 @@ mod tests {
         );
         let quoted = quote(hostile);
 
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        let server = FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({
+                "result": { "type": "undefined" },
+                "exceptionDetails": { "exception": { "description": hostile } }
+            })),
+        )])))
+        .await;
         wire_session(&server, "S1");
         server.on(
             "DOM.resolveNode",
             Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
         );
         server.on("DOM.focus", Responder::Reply(json!({})));
-        server.on(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({
-                "result": { "type": "undefined" },
-                "exceptionDetails": { "exception": { "description": hostile } }
-            })),
-        );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
         let ref_id = seed_ref(&handle, "T1").await;
@@ -2351,7 +2738,17 @@ mod tests {
     /// rather than answering. Separate because the wire script differs in
     /// `exceptionDetails`, which `Responder::Reply` cannot vary per call.
     async fn click_with_hit_test_throwing(detail: &str) -> (BrowserError, Vec<String>) {
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        let thrown = detail.to_string();
+        let server = FakeCdpServer::start(peer_with_live_node(move |frame: &serde_json::Value| {
+            if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
+                return Responder::Reply(json!({
+                    "result": { "type": "undefined" },
+                    "exceptionDetails": { "exception": { "description": thrown } }
+                }));
+            }
+            Responder::Reply(json!({}))
+        }))
+        .await;
         wire_session(&server, "S1");
         server.on(
             "DOM.resolveNode",
@@ -2367,13 +2764,6 @@ mod tests {
                 "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
                 "width": 100, "height": 40
             }})),
-        );
-        server.on(
-            "Runtime.callFunctionOn",
-            Responder::Reply(json!({
-                "result": { "type": "undefined" },
-                "exceptionDetails": { "exception": { "description": detail } }
-            })),
         );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -2478,7 +2868,8 @@ mod tests {
     /// for the whole run, and no per-character key events.
     #[tokio::test]
     async fn type_text_uses_insert_text_when_the_table_says_it_can() {
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        let server =
+            FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![]))).await;
         wire_session(&server, "S1");
         server.on("DOM.focus", Responder::Reply(json!({})));
         server.on("Input.insertText", Responder::Reply(json!({})));
@@ -2521,7 +2912,8 @@ mod tests {
     /// the reason it is worth a test nobody's production config can reach.
     #[tokio::test]
     async fn type_text_falls_back_to_per_character_keys_when_it_cannot() {
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        let server =
+            FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![]))).await;
         wire_session(&server, "S1");
         server.on("DOM.focus", Responder::Reply(json!({})));
         server.on("Input.dispatchKeyEvent", Responder::Reply(json!({})));

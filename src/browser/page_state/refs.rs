@@ -193,14 +193,22 @@ impl RefTable {
     /// Point the table at `main_loader_id`, clearing it if that is a different
     /// document. `PageState::build` calls this on every capture, so the
     /// same-document case must be free.
-    pub fn reset_for_document(&mut self, main_loader_id: &str) {
+    ///
+    /// Answers whether the document actually CHANGED. The bool exists for the
+    /// event pump, which has to report whether folding an event in altered any
+    /// state, and the alternative was for the pump to compare
+    /// [`Self::document`] itself — a second copy of the rule "the same loader
+    /// is not a new document", free to drift from this one (判据 §1). Callers
+    /// that only want the effect may ignore it.
+    pub fn reset_for_document(&mut self, main_loader_id: &str) -> bool {
         if self.document.as_deref() == Some(main_loader_id) {
-            return;
+            return false;
         }
         self.by_key.clear();
         self.by_id.clear();
         self.retired_below = self.next;
         self.document = Some(main_loader_id.to_string());
+        true
     }
 
     #[must_use]

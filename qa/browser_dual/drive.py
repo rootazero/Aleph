@@ -568,24 +568,103 @@ async def stage_click(rpc, led, a):
     _, ev = await rpc.invoke("browser_evaluate",
                              {"profile": "default", "script": "location.pathname"})
     led.check("…and the page did not move", "second" in json.dumps(ev), json.dumps(ev)[:300])
-    # The QUALITY half, DATED, because on obscura it is currently a gap rather
-    # than a property. Aleph classifies a dead ref by matching the ENGINE's own
-    # error prose — `"No node with given id"` in `cdp_backend/actions.rs` —
-    # which is Chromium's spelling (判据 §5: a name list covers the world on
-    # the day it was written). obscura answers `DOM.resolveNode` on a dead
-    # backendNodeId with SUCCESS, so that classifier never fires and the
-    # failure surfaces three calls later as `DOM.scrollIntoViewIfNeeded failed:
-    # -32601 node N could not be resolved to a scrollable element`. Fail-closed,
-    # so nothing is unsafe — but the model is handed a protocol error where it
-    # needs the one sentence naming its next move (判据 §17). The durable fix is
-    # to stop reading the engine's prose at all and compare the ref's document
-    # against `TabEntry`'s current main loader, which `Page.frameNavigated`
-    # already keeps true on BOTH engines (measured: obscura emits it for
-    # script-initiated navigations too).
+    # The QUALITY half. This was a DATED KNOWN GAP until Task 18b, and it is now
+    # an ordinary claim — that flip is the whole of 18b seen from here.
+    #
+    # The gap was: Aleph classified a dead ref by matching the ENGINE's own error
+    # prose (`"No node with given id"`), which is a sentence obscura never emits
+    # — and, measured on Chrome 152, one Chromium does not emit for this hazard
+    # either (it says `Node with given id does not belong to the document`). So
+    # the refusal arrived three calls later as `DOM.scrollIntoViewIfNeeded
+    # failed: -32601`, a protocol error where the model needed the one sentence
+    # naming its next move (判据 §17).
+    #
+    # It is refused by Aleph's own bookkeeping now: the event pump folds
+    # `Page.frameNavigated` into `RefTable::reset_for_document`, so by the time
+    # this ref is used the tab knows its document changed and `resolve` answers
+    # `Navigated` before anything reaches the wire.
+    #
+    # NOT `dated()`, deliberately. A dated claim says "this is what this build of
+    # the other project does"; this sentence is produced by Aleph before the
+    # engine is consulted at all. What is still build-dependent is that the
+    # engine ANNOUNCES its navigations — and a build that stopped doing so must
+    # turn this RED, not print `[UNKNOWN]`, because the refusal would silently
+    # fall back to the engine accidents this task removed.
+    #
+    # Stated POSITIVELY, which also closes a blindness the previous version had:
+    # the old negative form ("no 'stale', no 'browser_snapshot'") stayed green
+    # under the fix-r1 mutation that made this very click report
+    # `{"success": true}` — a string test that cannot tell "refused with the
+    # wrong words" from "not refused at all" (判据 §2).
+    led.check("…and the refusal uses the ref vocabulary, not a protocol error",
+              "is stale" in blob and "browser_snapshot" in blob
+              and "-32601" not in blob,
+              blob[:400])
+
+    # WHICH of the two layers answered, and why this stage does not assert one.
+    #
+    #   * the DOCUMENT layer — the event pump folds `Page.frameNavigated` into
+    #     `RefTable::reset_for_document`, so `resolve` answers `Navigated`
+    #     before anything reaches the wire. Cheapest, and the better sentence.
+    #   * the NODE layer — `resolve_target` asks the resolved object whether it
+    #     is still connected. Costs a round trip, needs no event to have
+    #     arrived.
+    #
+    # On obscura 0.2.2 the document layer CANNOT see this particular
+    # navigation, and the reason is the engine's, not Aleph's — measured
+    # 2026-09-19 with `<scratchpad>/t18b_probe4.py`, both routes in one run:
+    #
+    #   dispatched mouse click on <div onclick="location.href=…">
+    #       -> ONE Page.frameNavigated, carrying the OLD loaderId,
+    #          and Page.getFrameTree afterwards still reports the OLD loaderId
+    #   Runtime.evaluate("location.href=…")
+    #       -> Page.frameNavigated with a NEW loaderId, then loadEventFired
+    #          and frameStoppedLoading; getFrameTree reports the new one
+    #
+    # So for a click-driven navigation the loader never turns over on this
+    # engine, and NOTHING loader-based can fire: not the pump, not
+    # `PageState::build`'s reset, not `navigate()`'s boundary. The node layer is
+    # the only thing that can answer, which is why it exists and why it is not
+    # an optional extra on top of a document comparison.
+    #
+    # DATED, because it is a statement about what THIS build of the other
+    # project does: on a build that turned the loader over here, the sentence
+    # would legitimately become "the page navigated", and this harness must say
+    # UNKNOWN rather than fail a build for being better.
     dated(led, build,
-          "KNOWN GAP: on obscura the stale-ref refusal does not yet use the ref "
-          "vocabulary — no 'stale', no 'browser_snapshot'",
-          "stale" not in blob.lower() and "browser_snapshot" not in blob, blob[:400])
+          "KNOWN GAP: a CLICK-driven navigation does not turn obscura's main "
+          "loaderId over, so the refusal names the node rather than the "
+          "navigation — the document layer is blind to it on this engine",
+          "no longer in the page" in blob, blob[:400])
+
+    # …and the document layer, on the route where this engine DOES turn the
+    # loader over. Aleph issues no `navigate` here — the page moves itself, from
+    # a script — so the only thing that can have retired the ref is the pump
+    # folding `Page.frameNavigated` in. Delete that arm and this goes red while
+    # every safety claim above stays green: the difference between "refused" and
+    # "refused for the right reason" (判据 §17).
+    #
+    # The half second is a margin, not a guess: the fold is one lock and one
+    # map clear, measured at under a millisecond in the server log.
+    await goto(rpc, a.page_url)
+    _, _, text_sc = await snapshot_text(rpc)
+    sc_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text_sc.splitlines()
+                   if "[ref=" in ln and "go by coordinates" not in ln and "@" in ln), None)
+    led.check("the block clickable has a ref for the script-navigation case",
+              sc_ref is not None, text_sc[:800])
+    if sc_ref is not None:
+        await rpc.invoke("browser_evaluate",
+                         {"profile": "default", "script": "location.href='/second.html'"})
+        time.sleep(0.5)
+        _, ev = await rpc.invoke("browser_evaluate",
+                                 {"profile": "default", "script": "location.pathname"})
+        led.check("the page moved itself, with no browser_navigate",
+                  "second" in json.dumps(ev), json.dumps(ev)[:300])
+        ok, body = await rpc.invoke("browser_click", {"profile": "default", "ref_id": sc_ref})
+        moved = json.dumps(body)
+        led.check("a ref from before a navigation the PAGE started is refused, "
+                  "and the refusal names the navigation",
+                  (not ran(ok, body)) and "the page navigated" in moved, moved[:400])
 
     # Coordinates, on the same BLOCK element. Not on the link: measured on
     # obscura v0.2.2 an inline element reports a zero box from every route, so a
@@ -639,6 +718,68 @@ async def stage_click(rpc, led, a):
         _, ev = await rpc.invoke("browser_evaluate",
                                  {"profile": "default", "script": "location.pathname"})
         led.check("…and nothing navigated", "index" in json.dumps(ev), json.dumps(ev)[:300])
+
+    # --- the OTHER staleness: same document, the node left it ---------------
+    #
+    # The navigation case above is decided from Aleph's own ref table. This one
+    # cannot be — the document has not changed, so no bookkeeping Aleph keeps
+    # can know the element is gone; the page is the only thing that knows. It is
+    # the case the deleted prose classifier was written for, and the case that
+    # engine never had an answer to: obscura's `DOM.resolveNode` succeeds on a
+    # dead `backendNodeId`, `DOM.getBoxModel` invents a box for it, and what
+    # used to refuse the click was `OCCLUSION_JS` reporting a "zero-sized box" —
+    # a label describing the wrong fact about an element that is not in the page
+    # at all (判据 §17).
+    #
+    # `resolve_target` now asks the node itself (`this.isConnected`), one
+    # question in one place, the same JS on both engines. This is that answer
+    # measured on the real default engine.
+    await goto(rpc, a.page_url)
+    _, _, text2 = await snapshot_text(rpc)
+    gone_ref = next((ln.split("[ref=")[1].split("]")[0] for ln in text2.splitlines()
+                     if "[ref=" in ln and "go by coordinates" not in ln and "@" in ln), None)
+    led.check("the block clickable has a ref for the detach case",
+              gone_ref is not None, text2[:800])
+    if gone_ref is not None:
+        # ONE expression, not two statements: `browser_evaluate` on obscura
+        # rejects `a(); b` with `SyntaxError: Unexpected token ';'`, and the
+        # first draft of this stage did exactly that — the removal never
+        # happened and the click below succeeded, correctly.
+        ok, ev = await rpc.invoke("browser_evaluate", {
+            "profile": "default",
+            "script": "document.getElementById('blk').remove()",
+        })
+        led.check("the remove() call itself ran",
+                  ran(ok, ev) and "threw" not in json.dumps(ev), json.dumps(ev)[:300])
+        # The removal is asserted, not assumed: if the element were still there
+        # the refusal below would be about something else entirely, and the
+        # claim would be green for the wrong reason.
+        #
+        # A SENTINEL, not a bare boolean: the first draft asserted
+        # `"true" in json.dumps(ev)` and was green against a body that carried
+        # `"success": true` from the ENVELOPE while the script had thrown — a
+        # predicate that could not go red (判据 §2). `BLK-GONE` appears nowhere
+        # else, and its opposite is spelled out so the two are distinguishable.
+        ok, ev = await rpc.invoke("browser_evaluate", {
+            "profile": "default",
+            "script": "document.getElementById('blk') === null "
+                      "? 'BLK-GONE' : 'BLK-STILL-HERE'",
+        })
+        led.check("the element really was removed, same document",
+                  "BLK-GONE" in json.dumps(ev), json.dumps(ev)[:300])
+        ok, body = await rpc.invoke("browser_click", {"profile": "default", "ref_id": gone_ref})
+        blob2 = json.dumps(body)
+        led.check("a ref whose node left the document REFUSES the click",
+                  not ran(ok, body), blob2[:400])
+        led.check("…and says the element is no longer in the page, not that it "
+                  "has an odd box",
+                  "no longer in the page" in blob2 and "browser_snapshot" in blob2
+                  and "zero-sized box" not in blob2,
+                  blob2[:400])
+        _, ev = await rpc.invoke("browser_evaluate",
+                                 {"profile": "default", "script": "location.pathname"})
+        led.check("…and the page did not move for it",
+                  "index" in json.dumps(ev), json.dumps(ev)[:300])
 
 
 # --------------------------------------------------------------------------

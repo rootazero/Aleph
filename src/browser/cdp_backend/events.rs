@@ -124,6 +124,51 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
             push_bounded(&mut entry.network, format!("<- {status} {url}"));
             true
         }
+        // **The wire that makes `StaleReason::Navigated` reachable at all.**
+        //
+        // A ref is a promise about one document, and `RefTable::resolve` has
+        // always been able to answer "that document is gone" — but only from
+        // what `reset_for_document` was told, and before this arm it was told
+        // by exactly two writers: `PageState::build` (a snapshot) and
+        // `apply_document_boundary` (an Aleph-issued `navigate`/`history`).
+        // **Neither runs when the PAGE navigates itself**, which is what every
+        // link click and every `location.href =` is. So the sequence
+        // snapshot → click a link → use a ref from before the click left the
+        // table pointing at a document that no longer existed, `resolve`
+        // answered `Ok`, and a dead `backendNodeId` went to the wire. Measured
+        // on both engines: what stopped the click was the engine refusing a
+        // later call, not any gate Aleph designed (判据 §7 — 两端完整而中间没线,
+        // with the missing wire hidden by a foreign engine's unrelated
+        // behaviour).
+        //
+        // MAIN frame only, by the same discriminator `wait_for_load` uses: a
+        // subframe navigation does not end the tab's document, and resetting
+        // the whole table on one would throw away every live ref in the page.
+        // A ref whose own SUBFRAME document has gone is `FrameVerdict::Unseen`'s
+        // job, decided at the next capture.
+        //
+        // **The URL is deliberately NOT written here**, though this event
+        // carries one. `navigate()` applies a URL and then runs
+        // `post_nav::audit_landed_tab` against it in the same breath; a pump arm
+        // that moved the field the audit vets without running the audit would be
+        // taking on that obligation silently. A page that navigates itself past
+        // the SSRF guard is a real gap and a separate task — this arm narrows
+        // itself to the ref question it was added for rather than widening into
+        // one it cannot honour (判据 §5).
+        //
+        // Both engines emit this for a script-initiated navigation with
+        // `parentId` absent and a fresh `loaderId` (measured 2026-09-19 on
+        // obscura v0.2.2 and Chrome 152).
+        "Page.frameNavigated" => {
+            let frame = &ev.params["frame"];
+            if frame.get("parentId").is_some() {
+                return false;
+            }
+            let Some(loader) = frame["loaderId"].as_str() else {
+                return false;
+            };
+            entry.refs.reset_for_document(loader)
+        }
         "Page.javascriptDialogOpening" => {
             let kind = ev.params["type"].as_str().unwrap_or("dialog");
             let message = ev.params["message"].as_str().unwrap_or("");
@@ -739,5 +784,136 @@ mod tests {
             "a popup our own tab opened must become addressable"
         );
         assert_eq!(tabs.entries["POPUP"].url, "https://popup.example/");
+    }
+
+    /// Mint a ref against document `L1` in the one tab, and hand it back.
+    fn seed_ref_at_l1(tabs: &mut TabTable) -> crate::browser::page_state::RefId {
+        let entry = tabs.entries.get_mut("T1").expect("tab entry");
+        entry.refs.reset_for_document("L1");
+        entry.refs.mint(
+            &crate::browser::page_state::RefKey {
+                frame_id: "F1".into(),
+                loader_id: "L1".into(),
+                backend_node_id: 42,
+            },
+            1,
+        )
+    }
+
+    fn frame_navigated(
+        session: &SessionId,
+        loader: &str,
+        parent: Option<&str>,
+    ) -> crate::browser::cdp_backend::events::CdpEvent {
+        let mut frame = json!({ "id": "F1", "loaderId": loader, "url": "https://example/2" });
+        if let Some(p) = parent {
+            frame["parentId"] = json!(p);
+        }
+        ev(session, "Page.frameNavigated", json!({ "frame": frame }))
+    }
+
+    /// **The wire Task 18b added, and the one the defect was.**
+    ///
+    /// Before it, the ONLY writers of the tab's current document were a
+    /// snapshot and an Aleph-issued `navigate`/`history`, so a page that
+    /// navigated itself — every link a model clicks — left the ref table
+    /// pointing at a document that no longer existed. `resolve` answered `Ok`
+    /// and a dead `backendNodeId` went to the wire.
+    ///
+    /// Asserted through the ref table's own answer rather than through
+    /// `apply_event`'s bool, because the bool is bookkeeping and the answer is
+    /// the product: a version of this arm that returned `true` and reset
+    /// nothing would pass a bool assertion (判据 §4 — assert the effect
+    /// arrived, not that the call happened).
+    #[test]
+    fn a_main_frame_navigation_the_page_started_retires_the_tabs_refs() {
+        let (mut tabs, session) = table_with_one_tab();
+        let old = seed_ref_at_l1(&mut tabs);
+        assert!(
+            tabs.entries["T1"].refs.resolve(&old).is_ok(),
+            "precondition: the ref resolves while its document is current"
+        );
+
+        let changed = apply_event(&mut tabs, &frame_navigated(&session, "L2", None));
+
+        assert!(changed, "a new main document changed the tab");
+        assert_eq!(
+            tabs.entries["T1"].refs.resolve(&old),
+            Err(crate::browser::page_state::StaleReason::Navigated),
+            "a ref from the previous document must now read as Navigated"
+        );
+        assert_eq!(tabs.entries["T1"].refs.document(), Some("L2"));
+    }
+
+    /// A SUBFRAME navigation does not end the tab's document, and resetting on
+    /// one would throw away every live ref in the page — the whole page's refs
+    /// destroyed because an ad iframe reloaded. `wait_for_load` uses the same
+    /// discriminator (`parentId` absent) for the same reason; this is the
+    /// falsifier for the pump's copy of it.
+    ///
+    /// The second half is the one that matters: a ref whose OWN subframe
+    /// document has gone is `FrameVerdict::Unseen`'s job, decided at the next
+    /// capture, not this arm's.
+    #[test]
+    fn a_subframe_navigation_changes_nothing_and_leaves_the_refs_alone() {
+        let (mut tabs, session) = table_with_one_tab();
+        let old = seed_ref_at_l1(&mut tabs);
+
+        let changed = apply_event(&mut tabs, &frame_navigated(&session, "L2", Some("F0")));
+
+        assert!(!changed, "a subframe navigation changes nothing in the tab");
+        assert!(
+            tabs.entries["T1"].refs.resolve(&old).is_ok(),
+            "a subframe navigation must not retire the page's refs"
+        );
+        assert_eq!(tabs.entries["T1"].refs.document(), Some("L1"));
+    }
+
+    /// A re-announcement of the SAME document is not a new document, and the
+    /// arm has to say so — `apply_event`'s bool is documented as "did this
+    /// change anything", and a `true` here would be a fact the pump made up.
+    ///
+    /// The rule lives in `RefTable::reset_for_document`, which is why this arm
+    /// returns what that function answers instead of comparing loaders itself
+    /// (判据 §1).
+    #[test]
+    fn the_same_loader_announced_twice_is_not_a_new_document() {
+        let (mut tabs, session) = table_with_one_tab();
+        let old = seed_ref_at_l1(&mut tabs);
+
+        let changed = apply_event(&mut tabs, &frame_navigated(&session, "L1", None));
+
+        assert!(!changed, "the same loader is the same document");
+        assert!(
+            tabs.entries["T1"].refs.resolve(&old).is_ok(),
+            "a re-announced document must not retire its own refs"
+        );
+    }
+
+    /// An event with no `loaderId` cannot name a document, and guessing one
+    /// would be worse than ignoring it: `reset_for_document("")` would retire
+    /// every ref in the page and then claim the empty string as the current
+    /// document, so the NEXT real announcement would look like a change from
+    /// `""` and retire them again.
+    #[test]
+    fn a_frame_navigated_with_no_loader_id_is_ignored() {
+        let (mut tabs, session) = table_with_one_tab();
+        let old = seed_ref_at_l1(&mut tabs);
+
+        let changed = apply_event(
+            &mut tabs,
+            &ev(
+                &session,
+                "Page.frameNavigated",
+                json!({ "frame": { "id": "F1", "url": "https://example/2" } }),
+            ),
+        );
+
+        assert!(!changed, "an event that names no document changes nothing");
+        assert!(
+            tabs.entries["T1"].refs.resolve(&old).is_ok(),
+            "refs must survive an announcement that named no loader"
+        );
+        assert_eq!(tabs.entries["T1"].refs.document(), Some("L1"));
     }
 }
