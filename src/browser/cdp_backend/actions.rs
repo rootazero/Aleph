@@ -485,19 +485,48 @@ async fn resolve_target(
                 // forge a ref token in a sentence the model reads outside the
                 // fence.
                 //
-                // ⚠️ On obscura a JS throw does not arrive here at all: that
-                // engine reports it as a PROTOCOL error (measured: `-32601 JS
-                // error: TypeError…`), so it leaves through `map_cdp_err` above
-                // as `BrowserError::Cdp`, scrubbed but NOT quoted. That is a
-                // pre-existing shape — `OCCLUSION_JS` has had the identical
-                // exposure since Task 12 — which this call widens from the
-                // hit-testing verbs to every ref-targeted verb. It is named
-                // rather than fixed on purpose: the only way to catch it here
-                // would be to match `"JS error:"` in the engine's message,
-                // which is exactly the prose classification this task existed
-                // to remove. Quoting at `map_cdp_err`'s own boundary is the
-                // structural fix, and it belongs to whoever owns that crate's
-                // error taxonomy.
+                // ⚠️ **The page arm is unreachable on obscura, and the reason
+                // is the OBJECT, not the error shape.** Measured 2026-09-19 in
+                // the shape `aleph_cdp` actually sends (`runtime.rs:66-67`
+                // hardcodes `returnByValue: true, awaitPromise: true`, and it
+                // is the only construction site of this method in the
+                // workspace), with a throwing own getter for `isConnected`
+                // installed page-side:
+                //
+                // | | obscura v0.2.2 | Chrome 152 |
+                // |---|---|---|
+                // | own descriptor visible? | **no** | yes |
+                // | reading `isConnected` | ok — the getter is never consulted | threw |
+                // | page's expando visible? | no | yes |
+                // | so the call answers | `connected: true` | REPLY + `exceptionDetails` |
+                //
+                // obscura's `DOM.resolveNode` hands back a WRAPPER carrying
+                // none of the page's own properties — the same fact
+                // [`OCCLUSION_JS`]'s doc records as "obscura mints a fresh JS
+                // object for every `DOM.resolveNode`" — so the probe there
+                // reads the ENGINE's attachment state and a page cannot reach
+                // it. On Chromium it is the page's object, which is why the
+                // page arm exists and why it quotes.
+                //
+                // ⚠️ **The corollary, in the other direction: on Chromium this
+                // gate's input IS page-controllable, and something else is
+                // holding it up.** A page can define an own `isConnected`
+                // getter returning `true` on a DETACHED element; measured, the
+                // probe then answers `connected: true` and this gate passes it.
+                // **What refuses it afterwards is `point_for`'s `Ok(None)`
+                // zero-box arm** — Chrome answers `DOM.getBoxModel` on that
+                // node with `-32000 "Could not compute box model"` (measured) —
+                // i.e. the arm Task 18b's brief proposed deleting. Delete or
+                // simplify it and Chromium's half of this gate loses its
+                // backstop with nothing saying so. On obscura the same spoof
+                // simply fails (`connected: false`), for the reason above.
+                //
+                // The verbs that do NOT call `point_for` (`fill`, `select`,
+                // `type_text`, `upload`) have no such backstop — but a spoof
+                // there only returns them to their PRE-18b behaviour, since
+                // before this probe they made no liveness check at all. It
+                // takes nothing away; it is stated so the asymmetry is not
+                // rediscovered as a regression.
                 None => {
                     return Err(BrowserError::ActionFailed(match &live.exception {
                         Some(detail) => format!(
@@ -578,6 +607,16 @@ async fn point_for(
     // generates no layout box. Leaving the old wording would be an arm
     // describing a case another arm now owns — the same fact in two places,
     // where only one of them is true (判据 §1, §17: 错的标签比缺的贵).
+    //
+    // ⚠️ **…but this arm is also the BACKSTOP for that other one, on Chromium.**
+    // A page there can define an own `isConnected` getter returning `true` on a
+    // detached element, and `resolve_target`'s liveness probe then passes it
+    // (measured — the corollary is written out at that probe, which is where
+    // the readings live). **This is what refuses the click afterwards.**
+    // Deleting or simplifying it takes away Chromium's half of a gate that
+    // neither arm names on its own, which is how this branch keeps producing
+    // "safe by accident" — so the pointer, and not a second copy of the
+    // measurement, lives here.
     //
     // ⚠️ This arm is Chromium-only, and not by design: `Ok(None)` is itself
     // manufactured from a prose match one crate down —
