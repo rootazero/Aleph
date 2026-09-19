@@ -3,13 +3,23 @@
 > **This file is for a human to submit** as an issue on the obscura repository. Aleph does not open
 > issues or pull requests against other people's repositories, and this round did not.
 >
-> Measured against **obscura 0.2.2** (the released binary, not a source build) on 2026-09-05/06.
-> Source: `obscura-spike-v022.md` §M12/M12b in this directory; the probe is
-> `probes/m12e-dense.mjs`, also in this directory.
+> **Two different as-ofs, and they must not be blurred.**
 >
-> ⚠️ **Before submitting, re-run the probe and regenerate the two count tables.** See
-> "A discrepancy in the recorded counts" at the end — the finding does not depend on it, but an
-> issue whose own arithmetic does not close hands the maintainer a reason to stop reading.
+> - **The measurement** is against **obscura 0.2.2** — the released binary, not a source build — on
+>   2026-09-05/06. Source: `obscura-spike-v022.md` §M12/M12b in this directory; the probe is
+>   `probes/m12e-dense.mjs`, also in this directory.
+> - **Every `dispatch.rs` line number below was re-read on 2026-09-20** in the clone at
+>   `/Volumes/TBU4/Github/obscura`, whose working tree is at
+>   **`eec047a188cc75b7a1a257397ad84493ee59c091`** (fetched 2026-09-12). They are **not** the
+>   survey's numbers: the survey was taken at `72c84ad` and recorded the allowlist as
+>   `dispatch.rs:653-717`, which no longer locates it. Attributing re-measured anchors to the
+>   survey would be the cheap half of 判据 §1 — a citation that was true when written, pointing at
+>   a document that has since moved under it.
+>
+> ⚠️ **Before submitting, re-read both files and re-run the probe.** Upstream may have moved again
+> since 2026-09-12, and the two count tables do not close — see "A discrepancy in the recorded
+> counts" at the end. The finding does not depend on either, but an issue whose own arithmetic does
+> not close, or whose line numbers do not resolve, hands the maintainer a reason to stop reading.
 
 ## Title
 
@@ -82,10 +92,12 @@ measuring its own waiting.
 ## What is NOT measured
 
 The binary was not instrumented, so this issue **cannot say which lock it is**. The source survey
-notes `ctx.v8_lock` (`crates/obscura-cdp/src/dispatch.rs:125`), taken by every method outside the
-`is_v8_free_method` allowlist (`dispatch.rs:651`, whose first arm is literally `"Target.getTargets"`
-at `:654`; the same predicate also decides at `:767` whether the per-command watchdog is armed at
-all), and observes that `Target.getTargets` and
+pointed at `ctx.v8_lock` and the `is_v8_free_method` allowlist; re-read at `eec047a1` (2026-09-20),
+those are `crates/obscura-cdp/src/dispatch.rs:125` and `dispatch.rs:651` — whose first arm is
+literally `"Target.getTargets"` at `:654`, and the same predicate also decides at `:767` whether the
+per-command watchdog is armed at all. The survey's own figure for the allowlist was `653-717`, taken
+at `72c84ad`; it is cited here only to say it has moved. The observation the survey made still
+stands: `Target.getTargets` and
 `Page.getLayoutMetrics` appear to be *on* that allowlist yet stall anyway — so either the allowlist
 is not protecting them in practice at 0.2.2, or the shared resource is something else. The 15 ms
 `Runtime.evaluate` sitting beside a 23 s `DOM.getDocument` in the same tick is evidence against both
@@ -110,8 +122,8 @@ submitting and replace both tables from the fresh run.**
 
 ## Why it matters downstream
 
-The per-command watchdog (`OBSCURA_CDP_COMMAND_TIMEOUT_MS`, default 60,000 ms,
-`dispatch.rs:766-780`) bounds the stall by **terminating the isolate**. A client that wants to
+The per-command watchdog (`OBSCURA_CDP_COMMAND_TIMEOUT_MS`, default 60,000 ms —
+`dispatch.rs:766-775` at `eec047a1`) bounds the stall by **terminating the isolate**. A client that wants to
 survive the barrier must therefore answer before 60 s and treat the wait as a fact about the engine
 rather than an error — which is what we do (30 s per-command timeout, surfaced as a typed "engine
 busy" the model can act on). But the barrier also means "issue the geometry call on a different CDP

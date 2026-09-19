@@ -120,7 +120,7 @@
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · FL §3.6 §4.9 | E.9 | — |
 | `src/spend/` `src/providers/metering.rs` | FL §5.22（round-7 的 per-principal 美元上限：`[policies.spend]` → `SpendLedger` → 两条执行臂）· FL §5.25（`install_ledger` / `install_policy` 两个进程级句柄——`MeteringProvider` 有 7 个生产构造点，所以裁决是进程级而非构造参数穿线） | E.0 E.9 | `qa/spend_budget/run.sh`（**需要真 python3**，Windows 主机上是 UNRUN 而不是 PASS——见 [`qa/README.md`](qa/README.md) 该条目） |
 | `src/search/` `src/builtin_tools/search.rs` | FL §3.18 | E.3 E.9 | `qa/web_search/run.sh {reach,order,degrade,empty,fanout,demote}`（SearXNG 是唯一能指向 mock 的后端，其余八个由 `providers/capability_census.rs` 在源码级覆盖）|
-| `src/browser/` `crates/aleph-cdp/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh` · `qa/browser_dual/run.sh`（两个真引擎）——**两套的阶段清单、`ALEPH_QA_DRIVER` 轴、以及每个阶段在证明什么，全见 [`qa/README.md`](qa/README.md)；数目和阶段名都不写在这里**：这张表里没有任何东西能让它们变红，它已经因此漂过一次 |
+| `src/browser/` `crates/aleph-cdp/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh` · `qa/browser_dual/run.sh`（两个真引擎）——**两套的阶段清单、`ALEPH_QA_DRIVER` 轴、以及每个阶段在证明什么，全见 [`qa/README.md`](qa/README.md)；数目和阶段名都不写在这里** —— ⚠️ 理由要说准：`qa/README.md` **同样**没有任何测试或脚本会让它变红，**搬过去买到的不是「可证伪」，是「一份而不是两份」**（判据 §1），而活下来的那一份就躺在脚本旁边。这张表曾因为自己抄了一个数而漂过一次 |
 | `src/mcp/` · `src/hub/` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | `qa/plugins/run.sh` |
 | `src/loop_graph/` `src/workflow/` · `src/identity/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) FL §4.12 · [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) FL §5.17 | E.3 E.0 | — |
 | `src/config/` `src/diagnostics/` · `src/sandbox/` | FL §5.8 §5.9 §5.10 §5.24 · [SANDBOX.md](docs/reference/SANDBOX.md) FL §3.8 §3.15 | E.8 E.3 | — |
