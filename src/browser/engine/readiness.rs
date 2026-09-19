@@ -59,7 +59,7 @@ pub async fn ready_gate(
         if let Some(exception) = eval.exception {
             return Err(not_ready("Runtime.evaluate", &exception));
         }
-        if eval.value.as_i64() != Some(1) {
+        if !is_numeric_one(&eval.value) {
             return Err(not_ready(
                 "Runtime.evaluate",
                 &format!("expected 1, got {}", eval.value),
@@ -77,6 +77,34 @@ pub async fn ready_gate(
             ),
         )),
     }
+}
+
+/// Did the engine hand back the **number one**, however it spells one?
+///
+/// JavaScript has a single number type, so `1` and `1.0` are one value and the
+/// only thing that differs is how an engine's CDP layer serialises it. Chromium
+/// emits the JSON integer `1`; **obscura v0.2.2 emits the JSON float `1.0`**
+/// (measured: `Runtime.evaluate("1+1")` answers
+/// `{"type":"number","description":"2.0","value":2.0}`).
+///
+/// `serde_json::Value::as_i64` answers `None` for any value parsed from a float
+/// literal, so the previous `eval.value.as_i64() != Some(1)` refused **every
+/// obscura launch that ever reached this line** — `browser_open` on the DEFAULT
+/// engine failed at stage `cdp-ready` with `expected 1, got 1.0`, and the
+/// registry then stopped the browser it had just started. Nothing caught it
+/// because the gate's own fake peer answers `"value": 1`: a fake backend
+/// answering the question the code hoped for, which is the shape
+/// `qa/README.md` records four earlier browser defects under. It took a real
+/// binary — `qa/browser_dual/run.sh open` — to ask the question differently.
+///
+/// A non-integral float is still a refusal: the probe evaluates the literal
+/// `1`, so `1.5` back would mean the engine is not evaluating what it was sent,
+/// which is exactly the unusable-but-running state this gate exists to catch.
+fn is_numeric_one(value: &serde_json::Value) -> bool {
+    if value.as_i64() == Some(1) {
+        return true;
+    }
+    value.as_f64() == Some(1.0)
 }
 
 const PROBE_VERSION: u8 = 0;
@@ -212,6 +240,48 @@ mod tests {
         assert!(asked.iter().any(|m| m == "Page.navigate"), "{asked:?}");
         assert!(asked.iter().any(|m| m == "Runtime.evaluate"), "{asked:?}");
         server.shutdown().await;
+    }
+
+    /// The other engine's spelling of one.
+    ///
+    /// `healthy` answers Chromium's `"value": 1`, and for as long as that was
+    /// the only peer in this file the gate's number check was a claim about
+    /// serde and not about the engine — it passed because the fake wrote the
+    /// literal the code read back (判据 §10). obscura v0.2.2 answers
+    /// `"value": 1.0`, and the gate refused every one of its launches until
+    /// [`is_numeric_one`] existed. Measured on the real binary by
+    /// `qa/browser_dual/run.sh open`, which is the only instrument that asked.
+    fn healthy_float_number(msg: &serde_json::Value) -> Responder {
+        match msg.get("method").and_then(serde_json::Value::as_str) {
+            Some("Runtime.evaluate") => Responder::Reply(json!({
+                "result": {"type": "number", "description": "1.0", "value": 1.0}
+            })),
+            _ => healthy(msg),
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_gate_accepts_an_engine_that_spells_one_as_a_float() {
+        let server = FakeCdpServer::start(healthy_float_number).await;
+        let conn = connect(&server).await;
+        let session = aleph_cdp::SessionId("S1".to_string());
+        ready_gate(&conn, &session, Duration::from_secs(2))
+            .await
+            .expect("1.0 IS one; obscura serialises every JS number as a float");
+        server.shutdown().await;
+    }
+
+    /// The negative half, so the arm above is a widening and not a deletion:
+    /// a number that is not one still refuses, whichever way it is spelled.
+    #[test]
+    fn only_the_number_one_is_numeric_one() {
+        assert!(is_numeric_one(&json!(1)));
+        assert!(is_numeric_one(&json!(1.0)));
+        assert!(!is_numeric_one(&json!(1.5)));
+        assert!(!is_numeric_one(&json!(0)));
+        assert!(!is_numeric_one(&json!(2.0)));
+        assert!(!is_numeric_one(&json!("1")));
+        assert!(!is_numeric_one(&serde_json::Value::Null));
     }
 
     #[tokio::test]
