@@ -1886,10 +1886,18 @@ fn parse_nodes(
 /// Complete in this sense: everything found by the census above, by the corpus
 /// census in
 /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
-/// and by the four probes named in this doc. A list that reads as exhaustive and
+/// and by **every probe named in this doc**. A list that reads as exhaustive and
 /// is not costs more than no list (判据 §17), so that is the scope it carries —
 /// and it was not exhaustive twice already, which is why the scope is written
 /// down instead of the word "complete" being left to do the work.
+///
+/// ⚠️ This said "the four probes named in this doc" and there were **five**
+/// before Task 17c added a sixth — a count in prose next to the list it scopes,
+/// undercounting in the direction miscounts always go (判据 §6). Counted with
+/// `grep -o '[a-z0-9-]*\.mjs' | sort -u` rather than by reading: `t17b-opacity`,
+/// `t17b-escape`, `t17b-boxless`, `t17d-toplayer`, `t17d-disable`,
+/// `t17c-frame`. The number is gone rather than corrected, because the next
+/// probe added here would have rotted it again.
 ///
 /// **Both directions, because the list used to be titled "what is NOT reached"
 /// and that framing hid the one that matters most.** An entry that says
