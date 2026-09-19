@@ -10,7 +10,7 @@ use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
 
 use super::types::HistoryMessage;
-use crate::session::events::SessionEventRecord;
+use crate::session::store::MarkerSlice;
 use aleph_protocol::SessionListRow;
 
 /// A session's `derived_title` is computed from the first user message's raw
@@ -61,13 +61,15 @@ pub async fn handle_list_db(
     // row's `last_run` at `None`, which reads as "we did not find out". The
     // arm that must never exist is one that renders a session as clean because
     // nobody asked: the interrupted rows are exactly the ones this column is
-    // for (criterion #8).
-    let run_markers: Option<std::collections::HashMap<String, Vec<SessionEventRecord>>> =
+    // for (criterion #8). Per session the value is a `MarkerSlice`: `Err` is
+    // a marker row this build could not decode, kept as `Err` all the way to
+    // the renderer so it lists as `log_inconsistent`, never as `never_ran`.
+    let run_markers: Option<std::collections::HashMap<String, MarkerSlice>> =
         match crate::session::store::global_session_event_store() {
             Some(events) => match events.load_run_markers().await {
                 Ok(rows) => Some(
                     rows.into_iter()
-                        .map(|(session, markers)| (session.to_key_string(), markers))
+                        .map(|(session, slice)| (session.to_key_string(), slice))
                         .collect(),
                 ),
                 Err(e) => {
@@ -125,12 +127,16 @@ pub async fn handle_list_db(
 
                     // A session absent from the marker map has no run markers
                     // at all — `never_ran`, which is a different answer from
-                    // "its last run finished". Derived through the same
+                    // "its last run finished". A session PRESENT with an `Err`
+                    // slice is handed over as `Err`: a row this build could
+                    // not decode is not "no markers". Derived through the same
                     // reducer the attach face uses, so the two faces cannot
                     // disagree about the word.
                     let last_run = run_markers.as_ref().map(|by_session| {
                         crate::gateway::session_snapshot::last_run_from_markers(
-                            by_session.get(&m.key).map_or(&[][..], Vec::as_slice),
+                            by_session
+                                .get(&m.key)
+                                .map_or(Ok(&[][..]), |slice| slice.as_deref()),
                         )
                     });
 

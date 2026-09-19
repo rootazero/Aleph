@@ -625,12 +625,24 @@ pub async fn handle_history(
             // read failed — because both mean "we did not find out". Neither
             // may decay to a clean answer: a list that renders absence as
             // "fine" hides exactly the sessions this field exists to surface
-            // (criterion #8).
+            // (criterion #8). A row this build cannot decode is not an
+            // absence: the log was opened and refused, and the refusal is
+            // named under its own tag, as the list face and the doctor name it.
             session_snapshot.last_run = match crate::session::store::global_session_event_store() {
                 Some(events_store) => match events_store.load_all_events(&session_key).await {
                     Ok(events) => Some(crate::gateway::session_snapshot::last_run_from_events(
                         &events,
                     )),
+                    Err(crate::session::service::SessionError::UndecodableRecord(u)) => {
+                        tracing::warn!(
+                            session = %canonical,
+                            record = %u,
+                            "this session's event log holds a record this build cannot read"
+                        );
+                        Some(crate::gateway::session_snapshot::last_run_refused(
+                            &crate::session::reduction::LogContradiction::from(&u),
+                        ))
+                    }
                     Err(e) => {
                         tracing::warn!(
                             session = %canonical,
@@ -812,7 +824,19 @@ pub async fn handle_rewind(
 
     debug!(session_key = %params.session_key, seq = params.seq, "Rewinding chat");
 
-    let retired = match crate::session::store::retire_live_events(&session_key, params.seq).await {
+    // A rewind that cut away a `RunFinished` and left its `RunStarted` behind
+    // does not corrupt anything — it makes the log SAY a run is still open, and
+    // the boot scan believes it: every later boot re-classifies this session
+    // `Interrupted`, appends a crash-boundary repair and re-triggers a run the
+    // user deleted, forever, because nothing else ever closes that marker. So
+    // the retire and the closer that balances it commit as ONE batch.
+    let retired = match super::retire_events_and_balance(
+        &session_key,
+        params.seq,
+        run_manager.as_ref(),
+    )
+    .await
+    {
         Ok(n) => n,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -822,13 +846,6 @@ pub async fn handle_rewind(
             );
         }
     };
-
-    // A rewind that cut away a `RunFinished` and left its `RunStarted` behind
-    // does not corrupt anything — it makes the log SAY a run is still open, and
-    // the boot scan believes it: every later boot re-classifies this session
-    // `Interrupted`, appends a crash-boundary repair and re-triggers a run the
-    // user deleted, forever, because nothing else ever closes that marker.
-    super::balance_run_markers_after_retire(&session_key, run_manager.as_ref()).await;
 
     // Realign the Panel's projection with the shortened log by deleting the
     // rows the retired events produced — matched by their source seq, never by

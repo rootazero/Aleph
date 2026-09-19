@@ -351,7 +351,22 @@ pub(crate) fn last_run_notice(
 ) -> Option<String> {
     use aleph_protocol::LastRunDisposition as D;
 
-    let dangling = last_run.dangling().map(<[_]>::len);
+    // One split, from the protocol's own count: the calls the log proves
+    // never completed, and the rest, whose outcome nobody can vouch for. Both
+    // halves are `None` together — the list face never looked.
+    let counts = last_run
+        .dangling()
+        .zip(last_run.never_completed_count())
+        .map(|(d, never_completed)| (d.len() - never_completed, never_completed));
+    let parked_line =
+        |m: usize| td_string!(locale, narration.last_run_parked, parked = m as i64).to_string();
+    let with_parked = |base: String, m: usize| {
+        if m > 0 {
+            format!("{base}; {}", parked_line(m))
+        } else {
+            base
+        }
+    };
     match last_run.disposition() {
         D::LogInconsistent => {
             // The server always names at least one tag on this path; an empty
@@ -364,15 +379,18 @@ pub(crate) fn last_run_notice(
             };
             Some(td_string!(locale, narration.last_run_log_inconsistent, tags = tags).to_string())
         }
-        D::Interrupted => Some(match (last_run.progress, dangling) {
-            (Some(p), Some(n)) => td_string!(
-                locale,
-                narration.last_run_interrupted,
-                answered = i64::from(p.tool_calls_answered),
-                dispatched = i64::from(p.tool_calls_dispatched),
-                unknown = n as i64
-            )
-            .to_string(),
+        D::Interrupted => Some(match (last_run.progress, counts) {
+            (Some(p), Some((unknown, never_completed))) => with_parked(
+                td_string!(
+                    locale,
+                    narration.last_run_interrupted,
+                    answered = i64::from(p.tool_calls_answered),
+                    dispatched = i64::from(p.tool_calls_dispatched),
+                    unknown = unknown as i64
+                )
+                .to_string(),
+                never_completed,
+            ),
             _ => td_string!(locale, narration.last_run_interrupted_plain).to_string(),
         }),
         D::Unrecognized => Some(
@@ -383,10 +401,16 @@ pub(crate) fn last_run_notice(
             )
             .to_string(),
         ),
-        D::Clean | D::NeverRan => match dangling {
-            Some(n) if n > 0 => {
-                Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
-            }
+        // No numbers: nothing ran, so there is nothing to count. The server
+        // stopped between the seed and the run's own marker, and recovery
+        // retries the message.
+        D::Unanswered => Some(td_string!(locale, narration.last_run_unanswered).to_string()),
+        D::Clean | D::NeverRan => match counts {
+            Some((unknown, never_completed)) if unknown > 0 => Some(with_parked(
+                td_string!(locale, narration.last_run_dangling, count = unknown as i64).to_string(),
+                never_completed,
+            )),
+            Some((0, never_completed)) if never_completed > 0 => Some(parked_line(never_completed)),
             _ => None,
         },
     }
@@ -409,6 +433,7 @@ pub(crate) fn run_badge(session: &SessionEntry) -> Option<RunBadge> {
         D::Interrupted => Some(RunBadge::Interrupted),
         D::LogInconsistent => Some(RunBadge::LogInconsistent),
         D::Unrecognized => Some(RunBadge::Unknown),
+        D::Unanswered => Some(RunBadge::Unanswered),
         D::Clean | D::NeverRan if dangling => Some(RunBadge::Interrupted),
         D::Clean | D::NeverRan => None,
     }
@@ -428,6 +453,8 @@ pub(crate) enum RunBadge {
     LogInconsistent,
     /// The server used a disposition word this build does not know.
     Unknown,
+    /// The last user message reached the server and no run answered it.
+    Unanswered,
 }
 
 impl RunBadge {
@@ -438,6 +465,7 @@ impl RunBadge {
             Self::Interrupted => t_string!(i18n, chat.run_badge_interrupted).to_string(),
             Self::LogInconsistent => t_string!(i18n, chat.run_badge_log_inconsistent).to_string(),
             Self::Unknown => t_string!(i18n, chat.run_badge_unknown).to_string(),
+            Self::Unanswered => t_string!(i18n, chat.run_badge_unanswered).to_string(),
         }
     }
 }
@@ -2148,7 +2176,7 @@ mod rehydrate_tests {
 #[cfg(test)]
 mod last_run_face_tests {
     use super::{last_run_notice, run_badge, RunBadge, SessionEntry};
-    use crate::i18n::Locale;
+    use crate::i18n::{td_string, Locale};
     use aleph_protocol::{DanglingCallView, LastRunState, RunProgressView};
 
     /// `n` calls that crossed the dispatch line and never came back.
@@ -2159,6 +2187,7 @@ mod last_run_face_tests {
                 tool_name: "shell".into(),
                 provenance: DanglingCallView::THIS_RESTART.into(),
                 denied: false,
+                parked: None,
             })
             .collect()
     }
@@ -2259,6 +2288,50 @@ mod last_run_face_tests {
         assert!(notice.contains('2'), "the count rides: {notice}");
     }
 
+    /// §6.1: a call the log shows parked at a gate never completed, and the
+    /// sentence must not count it among the outcomes nobody can vouch for.
+    /// The split comes from the protocol's own predicate, so a parked call is
+    /// the same bucket as a denied one on every face.
+    #[test]
+    fn parked_calls_are_counted_as_never_completed_not_unknown() {
+        let mut lr = interrupted();
+        lr.dangling[0].parked = Some("approval".into());
+        let notice = last_run_notice(&lr, Locale::default()).expect("news");
+        // The digits in the order the sentence says them — 2/5 landed, 2
+        // unknown, 1 never completed. Locale-independent, and a swapped split
+        // would read "…1…2" rather than merely "contains a 1".
+        let digits: String = notice.chars().filter(char::is_ascii_digit).collect();
+        assert_eq!(digits, "2521", "{notice}");
+        assert_ne!(
+            notice,
+            last_run_notice(&interrupted(), Locale::default()).unwrap(),
+            "a parked call changes the sentence"
+        );
+        let all_parked = LastRunState {
+            disposition: LastRunState::NEVER_RAN.into(),
+            inspected: true,
+            dangling: lr
+                .dangling
+                .iter()
+                .map(|d| DanglingCallView {
+                    parked: Some("clarification".into()),
+                    ..d.clone()
+                })
+                .collect(),
+            ..LastRunState::default()
+        };
+        let n = last_run_notice(&all_parked, Locale::default())
+            .expect("never-completed calls are news too");
+        // Exactly the standalone parked line, rendered through the same key
+        // the notice uses — a swapped split would print the "no receipt"
+        // sentence for 3 instead, which also carries a lone '3'.
+        assert_eq!(
+            n,
+            td_string!(Locale::default(), narration.last_run_parked, parked = 3_i64).to_string(),
+            "only-parked calls get the parked line alone"
+        );
+    }
+
     /// The list face fills the word and nothing else, and that is enough to
     /// badge the row. Its empty `dangling` is not evidence — `dangling()`
     /// withholds it — so the badge is derived from the word, never from a list
@@ -2281,12 +2354,12 @@ mod last_run_face_tests {
     /// The two silences a row can carry, neither of which earns a badge — and
     /// the one that must never be painted as "fine" is the first.
     #[test]
-    fn an_unanswered_or_clean_row_carries_no_badge() {
-        let unanswered = SessionEntry {
+    fn a_silent_or_clean_row_carries_no_badge() {
+        let silent = SessionEntry {
             key: "agent:main:main:s2".into(),
             ..SessionEntry::default()
         };
-        assert_eq!(run_badge(&unanswered), None);
+        assert_eq!(run_badge(&silent), None);
 
         let clean = SessionEntry {
             key: "agent:main:main:s3".into(),
@@ -2294,6 +2367,42 @@ mod last_run_face_tests {
             ..SessionEntry::default()
         };
         assert_eq!(run_badge(&clean), None);
+    }
+
+    /// §5.2: the server's word for "your message reached the log and no run
+    /// answered it". It is news on the attach face (one sentence, no numbers
+    /// — nothing ran, so there is nothing to count).
+    ///
+    /// The row badge arm exists for exhaustiveness and the safe direction,
+    /// but **a row cannot carry the word today**: `SessionEntry` is fed by
+    /// `sessions.list`, whose `last_run_from_markers` is marker-only and by
+    /// design never says `unanswered` (the message lives outside the
+    /// markers). The second half here pins the arm, not a feature — if rows
+    /// should show it, the list face needs a bounded tail read.
+    #[test]
+    fn an_unanswered_attach_face_is_news_and_the_row_badge_arm_is_pinned_though_unreachable() {
+        let unanswered = LastRunState {
+            disposition: LastRunState::UNANSWERED.into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let notice =
+            last_run_notice(&unanswered, Locale::default()).expect("an unanswered message is news");
+        assert!(
+            notice.contains("not answered"),
+            "the en sentence names the fact: {notice}"
+        );
+
+        let row = SessionEntry {
+            key: "agent:main:main:s5".into(),
+            last_run: Some(LastRunState::from_markers(
+                LastRunState::UNANSWERED,
+                None,
+                0,
+            )),
+            ..SessionEntry::default()
+        };
+        assert_eq!(run_badge(&row), Some(RunBadge::Unanswered));
     }
 
     /// A word this build has never heard of is "cannot vouch", not "fine" —

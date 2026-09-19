@@ -29,6 +29,9 @@ use super::super::tool_refresh::active_plugin_tools_for_agent;
 use super::project_context::{
     collect_project_skill_block, lifecycle_hook_context, workspace_directive,
 };
+// The pre-seed hook-stop receipt (§5.4), shared with `BeforeAgentStart`.
+use super::journal_hook_stop;
+use crate::session::events::RunOutcome;
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Inner body of the think→act loop. `run_agent_loop` wraps this with the
@@ -372,6 +375,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // `<system-reminder>` blocks. This is Claude Code's seam for
         // project-scoped prompt augmentation (sprint context, env reminders,
         // policy nudges) without touching the agent loop's logic.
+        //
+        // §5.4: this seam is PRE-SEED — the bridge's `seed_history` runs
+        // inside the orchestrator dispatch further down, so nothing of this
+        // turn is in the log yet when a hook stops it here. Both stop exits
+        // therefore journal the same receipt `BeforeAgentStart` writes
+        // (`journal_hook_stop`: seed pair + closed run + `Error{HookStop}`;
+        // a resume gets only the run bracket) before they return. Only the
+        // deny arm's `Err` reaches the user on its own (`RunError`); the
+        // prevent_continuation `Ok` string is dropped by `execute.rs`, so
+        // there the receipt's projected row is the report itself — see
+        // `journal_hook_stop`'s doc for what best-effort costs on each arm.
         // The user's message is persisted verbatim as the session's user turn;
         // the per-turn `<system-reminder>` augmentations below are collected
         // separately into `transient_blocks` and delivered to the model as the
@@ -404,6 +418,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason = %reason,
                         "UserPromptSubmit hook aborted the run"
                     );
+                    // A deny surfaces as `Err`, so the closer says `Errored`
+                    // — the same mapping as the `BeforeAgentStart` deny arm.
+                    journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "UserPromptSubmit hook aborted the run: {reason}"
                     )));
@@ -421,6 +438,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             run_id = run_id,
                             "UserPromptSubmit hook requested prevent_continuation; stopping run"
                         );
+                        // `Cancelled`: the run did what the hook asked. The
+                        // receipt is the only report on this arm (the `Ok`
+                        // string below is dropped by `execute.rs`).
+                        journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                         return Ok(stop_msg);
                     }
                     // Claude-Code convention for UserPromptSubmit: PLAIN
@@ -1416,6 +1437,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // session default; primary dispatch inherits whatever
                     // the gateway already resolved.
                     response_language: None,
+                    // §6.3 per-run facts for the `RunStarted` envelope: the
+                    // SAME scope that narrowed the tool surface above, and
+                    // the SAME stamp `turn_permissions` read for the
+                    // read-only ceiling. Neither is rendered; both are
+                    // replayed on resume.
+                    allowed_tools: slash_skill_scope.as_ref().map(|scope| {
+                        let mut names: Vec<String> = scope.iter().cloned().collect();
+                        names.sort();
+                        names
+                    }),
+                    btw: request
+                        .metadata
+                        .get(crate::gateway::btw::BTW_METADATA_KEY)
+                        .cloned(),
                 },
                 // This turn's explicit model pick. Cloned because the request is
                 // rebuilt on each retry iteration of the enclosing loop.

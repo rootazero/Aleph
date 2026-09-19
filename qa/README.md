@@ -132,19 +132,6 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                               # found (one terminal frame per retry attempt, last one
                               # zeroed). See the header of its run.sh.
 
-./qa/resume_boundary/run.sh crash      # a dangling tool call (`kill -9` mid-dispatch) gets
-                                       # an OUTCOME UNKNOWN repair, and the boot-scan resume's
-                                       # NEXT request to the model actually carries it — the
-                                       # oracle is the mock's request log, not the event log,
-                                       # because a repair synthesised but dropped by
-                                       # `build_prompt` would pass every unit test here.
-./qa/resume_boundary/run.sh attribute  # a dangle left by an EARLIER interrupted run is not
-                                       # blamed on THIS restart: two dangling calls from two
-                                       # separate crashes, repaired in the same boot scan, must
-                                       # read two different sentences. Run against the pre-round
-                                       # tree this must FAIL — both misattributed to "the server
-                                       # restarted" — which is the falsifying arm for the design
-                                       # spec's §1.4 claim.
 ./qa/resume_boundary/run.sh claims     # ONE reduction, three faces, and they must agree: the wire
                                        # (`chat.history` → `session.last_run`, the exact field the
                                        # Panel sidebar and TUI picker render), the operator
@@ -174,8 +161,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # re-runs a turn the user deleted, and does it forever —
                                        # nothing else ever closes that marker. The rewind is aimed
                                        # ONE ROW PAST the open `RunStarted` on purpose: aimed AT it,
-                                       # the opening half is retired too, `close_open_run_after_retire`
-                                       # returns `Ok(None)` without appending anything, and the stage
+                                       # the opening half is retired too, `open_run_after_retire`
+                                       # answers `Ok(None)` and nothing is appended, and the stage
                                        # is green on a build with no balancer at all (that was the
                                        # first-round arrangement; the tail then read `never_ran` and
                                        # the receipt `no_runs`). So the stage asserts the effects the
@@ -187,9 +174,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # every counter of `ResumeReceipt` is serialised
                                        # unconditionally, so grepping for one of their keys matches
                                        # any well-formed receipt). Resume is OFF:
-                                       # `balance_run_markers_after_retire` deliberately leaves a
-                                       # RUNNING session alone, so a stage that let the boot scan
-                                       # resume first would be green over a session it never tested.
+                                       # `retire_from_and_close_run` deliberately leaves a RUNNING
+                                       # session alone (its `is_running` predicate fails closed), so
+                                       # a stage that let the boot scan resume first would be green
+                                       # over a session it never tested. Since r3 the closer rides
+                                       # the SAME store transaction as the retire (`Retire::From` +
+                                       # `RunFinished{cancelled}` in one `append_batch`), so the
+                                       # torn "tail gone, marker open" state cannot be produced.
 ./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
                                        # carried, not the session's current row. The crashing
                                        # turn carries an explicit per-turn directive for model
@@ -231,21 +222,175 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # FINISH before the kill — `dangle` returns on the first
                                        # durable dispatch, and killing there would leave dangling
                                        # calls whose resume adds a turn's usage. Two measured
-                                       # bounds the stage prints rather than hides: the 4096
-                                       # projector queue never fills (0 deferrals at both 40 and
-                                       # 900 calls), and above the store's compaction bound the
-                                       # projection is trimmed ON PURPOSE — at `QA_BURST=900`,
-                                       # 1803 projectable events, history total 69,
-                                       # `compaction_count 34`. So the comparison is guarded by
-                                       # an explicit `compaction_count == 0` precondition:
-                                       # raising the burst turns THAT red, not the row count,
-                                       # which would otherwise read like data loss.
+                                       # bounds the stage prints rather than hides. (1) The
+                                       # projector's deferrals: lines containing `projector queue
+                                       # full` / `projector drain task stopped` (no level filter)
+                                       # in the TRACING log files
+                                       # (`$ALEPH_HOME/logs/aleph-server.log.<date>`) — 0 of each
+                                       # at the default `QA_BURST=40` (83 projectable events;
+                                       # re-measured 2026-09-18 at commit `efe648878`, the `holes`
+                                       # phase printing the file names it counted). Until then
+                                       # the driver counted those lines in `$QA_ROOT/server.log`,
+                                       # the process's STDOUT, which never holds a tracing line —
+                                       # so the "0 at 40 and 900" this paragraph used to claim was
+                                       # a count over a file that could not contain the line, and
+                                       # 900 has NOT been re-measured (a 40-call burst takes
+                                       # ~205 s here; at 900 the stage is red on the compaction
+                                       # precondition anyway). (2) Above the store's compaction
+                                       # bound the projection is trimmed ON PURPOSE — at
+                                       # `QA_BURST=900` (2026-09-03), 1803 projectable events,
+                                       # history total 69, `compaction_count 34`. So the
+                                       # comparison is guarded by an explicit
+                                       # `compaction_count == 0` precondition: raising the burst
+                                       # turns THAT red, not the row count, which would otherwise
+                                       # read like data loss.
+./qa/resume_boundary/run.sh parked     # a call parked at the approval gate when the server dies
+                                       # is answered "NEVER RAN", not "OUTCOME UNKNOWN" (§6.1 /
+                                       # T11–T13): the gate writes `ToolCallParked{reason}` BEFORE
+                                       # it parks, so the kill is aimed at the PARK ROW (the r2
+                                       # instrument — `bash = "ask"` — waited for the dispatch
+                                       # only; a kill there would be indistinguishable from an
+                                       # in-flight dangle). Resume OFF, so the receipt is the only
+                                       # pass. Three faces: the wire (`chat.history` →
+                                       # `last_run.dangling[0].parked == "approval"`, `denied ==
+                                       # false`, disposition still `interrupted`), the model (the
+                                       # resumed run's next request says the call NEVER RAN, names
+                                       # `operator approval` and the tool `bash`, and NO request
+                                       # calls that call's outcome UNKNOWN), and the receipt
+                                       # (`resumed == 1`). One WebSocket per node process — a
+                                       # second one aborts Node v24 — so each phase is its own
+                                       # `drive` call. Mutation (T13): moving the park write after
+                                       # the requester makes the first check red and the stage
+                                       # reports `instrument failure: no parked dangle`.
+./qa/resume_boundary/run.sh unanswered # a crash between the seed (`UserMessage`) and
+                                       # `RunStarted` leaves a session with NO marker, and the
+                                       # boot must still resume that message (§5.2): the wire
+                                       # face reads `unanswered` with resume OFF, the resume-ON
+                                       # boot line says `resumed=1`, one `ResumeAttempted` stamp
+                                       # names the message, the original text reaches the mock,
+                                       # and the session settles `clean`. The window is ~30 ms
+                                       # wide on this host, so memory is switched ON with the
+                                       # mock as the embedding provider and `/v1/embeddings`
+                                       # stalls 10 s — the only remote call inside that window.
+                                       # Step 0 is an ASSERTION, not a thing to eyeball: the
+                                       # stalling embeddings request must fall between the
+                                       # `user_message` row and the kill, and the window must
+                                       # still be open 2 s after it was first seen; otherwise
+                                       # INSTRUMENT FAILURE, never a pass. The same stage carries
+                                       # the §8.2(b) twin on a SECOND session: a kill inside a
+                                       # `BeforeAgentStart` sleeper hook (after the engine's
+                                       # `agent_tasks` row, before the seed) leaves a message no
+                                       # log holds; the next boot writes ONE `SystemMessage`
+                                       # ("…was lost before it was recorded…", `notified=1`),
+                                       # stamps `adjudicated_at_ms`, and the boot after says
+                                       # nothing (`notified=0`, still one note).
+./qa/resume_boundary/run.sh ratchet    # `[resume] max_attempts = 2` counts every crash AFTER
+                                       # the `ResumeAttempted` stamp (§5.1): the stamp is written
+                                       # BEFORE the retrigger, so a crash inside the resumed run's
+                                       # `BeforeAgentStart` hook — admitted, no `RunStarted` yet —
+                                       # still moves the ratchet. Boot 1 → stamp #1, boot 2 →
+                                       # stamp #2, boot 3 → `abandoned=1` with a
+                                       # `RunFinished{abandoned}` closer and no third stamp,
+                                       # boot 4 → nothing. On boots 1–2 the boot-scan line can
+                                       # NOT print (`settle` joins the retrigger, which is inside
+                                       # the hook), so the kill is aimed at the engine's own
+                                       # `Agent execution started` line and the stage asserts the
+                                       # line's ABSENCE for those boots. Every settled boot also
+                                       # asserts `notified=0`: a resume proxy row (empty prompt)
+                                       # and a seeded turn are not lost messages (T16).
+./qa/resume_boundary/run.sh parallel   # `[resume] max_concurrent = 2` bounds the boot scan's
+                                       # fan-out AND loses nobody to it (§8.1): three sessions
+                                       # (three epochs of the main key), one parked dangle each,
+                                       # one resume-ON boot. The oracle for "in flight" is the
+                                       # run registry's own `gateway.metrics.run_concurrency`
+                                       # (`running_sessions`, the set `chat.abort` reads), polled
+                                       # every 150 ms while the mock holds each resumed run's END
+                                       # for `QA_SLOW_MS` (4 s) so two of them overlap for
+                                       # seconds; the max observed must be EXACTLY the cap — 1 is
+                                       # the T15 mutation (or an overlap shorter than the poll:
+                                       # widen `QA_SLOW_MS`, never the equality), 3 is the cap
+                                       # not honoured. Then every key was seen running, the boot
+                                       # line reads `scanned=3, resumed=3`, and no refusal line
+                                       # was written since the boot mark.
+./qa/resume_boundary/run.sh undecodable # a `session_events` row this build cannot decode (an
+                                       # outer `type` from the future, forged with the server
+                                       # DOWN — the store is that table's only writer while it
+                                       # runs) refuses ITS session and no other (§4.5 / T14): the
+                                       # clean session resumes, the bad one reads
+                                       # `log_inconsistent` under `session-log-undecodable-record`
+                                       # on the attach face, is left exactly as found (no stamp,
+                                       # no second `RunStarted`), the coordinator logs ONE refusal
+                                       # under that tag, and the doctor names the record's seq,
+                                       # type and session — and not the clean one. Then the same
+                                       # row marked `ignorable: true` (what a future writer would
+                                       # stamp) is SKIPPED on the next boot: the session resumes
+                                       # and settles clean, the row stays live (nobody ran
+                                       # `fix=true`), and the doctor counts `1 ignorable row(s)
+                                       # skipped` instead of naming a record.
+./qa/resume_boundary/run.sh attribute  # a dangle left by an EARLIER interrupted run is not
+                                       # blamed on THIS restart (§1.4 of the r2 design spec):
+                                       # two dangling calls from two separate crashes in ONE
+                                       # session (resume OFF between them, so the first
+                                       # survives), repaired by one boot scan, must read two
+                                       # different sentences — "an earlier run in this session"
+                                       # and "the server restarted" — and every repair text that
+                                       # reaches the model carries the five OUTCOME UNKNOWN
+                                       # points. Node since r3 (the round-1 Python pair is gone).
+                                       # The instrument is no longer the `ask` gate: after §6.1 a
+                                       # PARKED call is answered by the fourth arm ("NOT
+                                       # EXECUTED"), whose wording this stage does not assert, so
+                                       # the marker (`qa-spawn`) dispatches a foreground `subagent`
+                                       # whose child turn the mock holds 120 s, and `in-flight`
+                                       # after each kill pins that the dangle is genuinely in
+                                       # flight (names `subagent`, no `tool_call_parked` row).
+./qa/resume_boundary/run.sh tombstone  # U5: a background `bash` job (`sleep 300`) is a real OS
+                                       # process that outlives the server, and the model is told
+                                       # what became of it — never handed a pretend kill. Boot 1
+                                       # spawns it; the first durable write for the job is a
+                                       # pidless `running` row and the pid + OS creation time
+                                       # arrive on a later write (every distinct `state.json` is
+                                       # collected at 5 ms). Whether that first write precedes
+                                       # the OS spawn is NOT observable here — a `record_spawn`
+                                       # deferred into the pid hook still writes pidless first
+                                       # and the stage stays green (measured 2026-09-18); that
+                                       # ordering is `spawn_background`'s oneshot gate, pinned by
+                                       # the `process_registry.rs` tests that `lookup` a row
+                                       # right after `register_running` before any pid is
+                                       # reported. What the stage does falsify is a journal whose
+                                       # first disk write is `record_child`'s (the row would
+                                       # arrive with a pid). `kill -9` of the server
+                                       # (TerminateProcess: no reaper) leaves the orphan alive —
+                                       # asked of the OS, not of the server. Boot 2's reconcile
+                                       # probes the pid and writes the `still_running_unattached`
+                                       # tombstone with `ended_ms`; the bash `poll` hands the
+                                       # model `lost_with_restart: true`, that status, the pid
+                                       # and the `stop_command` (`taskkill /PID N /T /F` here),
+                                       # and `kill` answers "kill was NOT attempted … run
+                                       # `<stop_command>`" while the orphan stays alive. The
+                                       # FIXTURE then kills it, the server is killed again, and
+                                       # boot 3 RE-ASKS the still-running row: `exited_during_
+                                       # restart`, "has EXITED", no stop command, nothing deleted
+                                       # and `ended_ms` asserted equal to boot 2's stamp. Every
+                                       # tool result is read by peeling the JSON layers off the
+                                       # request log (the envelope is a string of a string
+                                       # there), not by a regex over the line, and anchored on
+                                       # the mock's tool_use ids so the previous boot's answer
+                                       # cannot stand in for this one's. Windows sandbox
+                                       # primitives are switched off for this stage only
+                                       # (`QA_WINDOWS_SANDBOX_OFF=1`, `patch_r2.mjs` point 7); a
+                                       # job whose row SETTLED within 2 s is exit 78 — instrument
+                                       # unavailable, UNRUN, never green; no row at all is a FAIL.
+                                       # From a worktree with no `.cargo/config.toml` the binary
+                                       # lives in the shared target dir, so run it as
+                                       # `CARGO_TARGET_DIR=D:/Workspace/Aleph/target SKIP_BUILD=1
+                                       # bash qa/resume_boundary/run.sh tombstone` (the same env
+                                       # every other stage here needs from a worktree).
 #
-# Two things hold the five r2 stages themselves honest, because a QA fixture is
-# also code that can stop working without saying so:
+# Two things hold the stages themselves honest, because a QA fixture is also
+# code that can stop working without saying so:
 #
-#   * **Every stage has an assertion FLOOR** — the case block at
-#     `qa/resume_boundary/run.sh:234-240` holds the measured counts;
+#   * **Every stage has an assertion FLOOR** — the `FLOOR=` case block at
+#     `qa/resume_boundary/run.sh:279-293` holds the measured counts;
 #     deliberately not copied here — the rewind copy already drifted. Each
 #     `drive` call is its own node process with its own counters, so the last
 #     line a green stage prints is whichever phase ran last; for `claims` that
@@ -253,12 +398,36 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 #     A phase whose assertions all vanished prints the SAME line and still
 #     exits 0. run.sh sums the counts and turns a stage RED when it passes
 #     while measuring less than its floor. Adding an assertion raises the floor
-#     in the same commit.
-#   * **The round-1 `crash` / `attribute` stages refuse to run without a real
-#     python3** (exit 78, with the reason named). On this Windows host `python3`
-#     and `python` are both the `WindowsApps` stub — no output, exit 49 — so they
-#     have NOT been re-measured this round; the r2 stages above are the coverage
-#     that exists here. Do not read their absence as a pass.
+#     in the same commit. The last full run of the roster (T23 part A, tree
+#     `e3e31733a`, 2026-09-19) printed every stage at exactly its floor with
+#     `rc=0`: claims 13 · denied 5 · rewind 11 · knobs 10 · holes 12 · parked 11
+#     · unanswered 29 · ratchet 23 · parallel 30 · undecodable 30 · attribute 27
+#     · tombstone 32 (ran; did not exit 78). That is a dated observation, not a
+#     second copy of the floor table — when a number here and `run.sh` disagree,
+#     `run.sh` is the one that was measured.
+#   * **The binary the stages run is the shared one** — from a worktree pass
+#     `CARGO_TARGET_DIR=D:/Workspace/Aleph/target` (see the `tombstone` row).
+#     `SKIP_BUILD=1` is NOT valid after a `cargo clippy --all-targets` (that
+#     leaves a 0-byte `aleph-server.exe`) nor after an integration build
+#     (`--features test-helpers --test …` builds the bin target with that
+#     feature); the runner rebuilds in both cases and its build step printing
+#     `Compiling alephcore` is the tell. Run the twelve stages BEFORE clippy in
+#     a verification sweep, not after. `KEEP=1` roots accumulate under
+#     `%TEMP%\aleph-qa-resume-*` (six kept roots measured ~48 MB together at
+#     the start of T23) and `cleanup` never removes a kept root — delete them
+#     by hand between rounds.
+#   * **Every stage is Node; the round-1 Python pair is gone** (r3). On this
+#     Windows host `python3` and `python` are both the `WindowsApps` stub — no
+#     output, exit 49 — so the round-1 `crash` / `attribute` stages had refused
+#     to run here (exit 78) since r2 and were never re-measured. `attribute` is
+#     ported above; `crash` is deleted rather than ported, because what it
+#     proved — a dangling call is answered OUTCOME UNKNOWN and that text
+#     reaches the model on the resumed run's next request — is the dangle →
+#     boundary-repair path every stage above walks: `claims` pins its wire and
+#     receipt faces, `denied` and `parked` pin the sentence the model is handed
+#     (and that the dangle's disposition, not the restart, chooses it), and
+#     `attribute` pins the OUTCOME UNKNOWN wording itself on a call that is
+#     genuinely in flight.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch

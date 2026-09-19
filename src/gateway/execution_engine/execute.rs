@@ -467,12 +467,13 @@ where
         // (`AgentState`). `_run_slot` is bound here — in `execute()`'s own
         // body scope, not inside this match arm — so it lives across the
         // run's execution (including every early return below and a panic
-        // unwind). It is dropped explicitly further down, at the same point
-        // the legacy per-agent gate used to reset `AgentState::Idle`, which
-        // is before the post-run continuation/steering-rescue logic that may
-        // re-enter `execute()` on the SAME session (see the drop site for why
+        // unwind). It is dropped explicitly inside each terminal arm of the
+        // result match further down — on the `Ok` arm only after the run's
+        // `AssistantRunMeta` is appended — and in both arms before the
+        // post-run continuation/steering-rescue logic that may re-enter
+        // `execute()` on the SAME session (see the release sites for why
         // holding it until the literal end of this function would deadlock
-        // that re-entry).
+        // that re-entry, and why the `Ok` arm holds it through the meta).
         let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
@@ -943,15 +944,31 @@ where
             }
         };
 
-        // Release the session claim + concurrency permit now — this run's own
-        // execution is complete. Explicit (not left to drop at the end of
-        // `execute()`): the post-run continuation/steering-rescue logic below
-        // may re-enter `execute()` on this SAME session (a fresh run, new
-        // run_id), which needs `try_claim` to succeed again. Mirrors where
-        // the legacy per-agent `agent.set_state(AgentState::Idle)` gate
-        // release used to sit.
-        drop(_run_slot);
-
+        // The session claim + concurrency permit (`_run_slot`) is released
+        // explicitly inside each arm below — not left to drop at the end of
+        // `execute()`, because the post-run continuation/steering-rescue
+        // logic may re-enter `execute()` on this SAME session (a fresh run,
+        // new run_id), which needs `try_claim` to succeed again.
+        //
+        // `Ok` arm: released right AFTER `stamp_run_meta` returns. While the
+        // claim is held, no queued run on this session can append its
+        // `RunStarted` ahead of this run's `AssistantRunMeta`. Released before
+        // the meta — where the single drop used to sit, above this match —
+        // a queued run's opener landed first; the projector then anchored the
+        // meta on THAT opener, found no assistant row in the range, finalised
+        // it `NoRowInRange`, and this run went unbilled until the next boot,
+        // where the heal synthesizes a stamp from the run's own messages —
+        // tokens only, never the meta's gauge, cost or model
+        // (`session_projector::collect_run_spans`). Holding across the stamp
+        // cannot deadlock: `stamp_run_meta` is one append through the session
+        // actor, and nothing on that path takes the claim or the permit.
+        //
+        // `Err` arm: there is no meta, so the release is the arm's first
+        // statement — the same lifetime the old single drop gave it.
+        //
+        // Pinned by `tests::execute_holds_the_run_slot_through_the_meta_stamp_
+        // and_releases_it_on_both_arms` (source ordering, because the real
+        // `Ok` arm needs a live orchestrator).
         let final_result = match result {
             Ok(_response) => {
                 if trace_task_persisted {
@@ -963,50 +980,20 @@ where
                 // SSOT: the harness already emitted SessionEvent::AssistantMessage for
                 // `_response` (the projector writes that row). Emit run_id + occupancy so
                 // the projector stamps them onto that row — preserving the Panel context
-                // gauge + workspace trace across a session reload.
-                if let Some(svc) = crate::session::service::global_session_service() {
-                    let occ = match occupancy {
-                        Some(o) => o,
-                        None => super::helpers::RunContextOccupancy {
-                            context_tokens: 0,
-                            context_window: 0,
-                            total_tokens: 0,
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            cost_usd: None,
-                            model: None,
-                            model_provider: None,
-                        },
-                    };
-                    let _ = svc
-                        .emit_event(
-                            &request.session_key,
-                            crate::session::events::SessionEvent::AssistantRunMeta {
-                                turn_id: uuid::Uuid::new_v4(),
-                                run_id: run_id.clone(),
-                                context_tokens: occ.context_tokens,
-                                context_window: occ.context_window,
-                                total_tokens: occ.total_tokens,
-                                input_tokens: occ.input_tokens,
-                                output_tokens: occ.output_tokens,
-                                cost_usd: occ.cost_usd,
-                                model: occ.model,
-                                model_provider: occ.model_provider,
-                                at: crate::session::events::now_ms(),
-                            },
-                        )
-                        .await;
-                } else {
-                    // Degraded, not missing: the harness already emitted the
-                    // AssistantMessage row (see the SSOT comment above), so no
-                    // content is lost — only this stamp (Panel context gauge
-                    // + workspace trace) is, and the next turn restamps it.
-                    tracing::debug!(
-                        session_key = %request.session_key.to_key_string(),
-                        run_id = %run_id,
-                        "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
-                    );
-                }
+                // gauge + workspace trace across a session reload — and bills the
+                // session from the run's own messages. `None` here means no gauge
+                // was resolved (no usage reported, no window known), not "no
+                // assistant row": the meta still goes out, gauge-less, so the
+                // run_id join lands — the arms are in `stamp_run_meta`'s doc.
+                let svc = crate::session::service::global_session_service();
+                super::helpers::stamp_run_meta(
+                    svc.as_deref(),
+                    &request.session_key,
+                    &run_id,
+                    occupancy,
+                )
+                .await;
+                drop(_run_slot);
 
                 // Notify UI that the session was updated (global bus, so
                 // channel-originated runs reach the Panel too). RunComplete
@@ -1179,6 +1166,8 @@ where
                 Ok(())
             }
             Err(e) => {
+                // No meta on this arm (see the release note above the match).
+                drop(_run_slot);
                 let task_status = match e {
                     ExecutionError::Cancelled => TaskStatus::Interrupted,
                     _ => TaskStatus::Failed,

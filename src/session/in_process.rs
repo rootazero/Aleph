@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 
 use crate::session::actor::{ActorCommand, SessionActor, DEFAULT_IDLE_TIMEOUT};
-use crate::session::events::{now_ms, EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::events::{now_ms, EventSeq, Retire, SessionEvent, SessionEventRecord};
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
 use crate::session::store::SessionEventStore;
 
@@ -323,27 +323,44 @@ impl SessionService for InProcessActorSessionService {
         })?
     }
 
-    async fn emit_event(
+    async fn emit_batch(
         &self,
         id: &SessionId,
-        event: SessionEvent,
-    ) -> Result<EventSeq, SessionError> {
+        events: Vec<SessionEvent>,
+        retire: Option<Retire>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
         let sender = match self.sender_for(id).await {
             Some(s) => s,
             None => self.spawn_actor(id, None).await?,
         };
         let (tx, rx) = oneshot::channel();
         sender
-            .send(ActorCommand::EmitEvent { event, reply: tx })
+            .send(ActorCommand::EmitBatch {
+                events,
+                retire,
+                reply: tx,
+            })
             .await
             .map_err(|e| {
-                tracing::warn!(session_id = ?id, error = %e, "EmitEvent send failed");
+                tracing::warn!(session_id = ?id, error = %e, "EmitBatch send failed");
                 SessionError::ActorShutdown
             })?;
         rx.await.map_err(|e| {
-            tracing::warn!(session_id = ?id, error = %e, "EmitEvent reply dropped");
+            tracing::warn!(session_id = ?id, error = %e, "EmitBatch reply dropped");
             SessionError::ActorShutdown
         })?
+    }
+
+    /// A batch of one through `emit_batch`, so the service has one write path.
+    async fn emit_event(
+        &self,
+        id: &SessionId,
+        event: SessionEvent,
+    ) -> Result<EventSeq, SessionError> {
+        let seqs = self.emit_batch(id, vec![event], None).await?;
+        seqs.first()
+            .copied()
+            .ok_or_else(|| SessionError::Other("emit_batch: one event in, no seq out".into()))
     }
 
     async fn subscribe(
@@ -488,21 +505,207 @@ impl SessionService for InProcessActorSessionService {
     }
 }
 
+/// The process-wide `SessionService` used by tests whose code under test
+/// reaches the service through the global slot (`global_session_service`) and
+/// so cannot be handed one.
+///
+/// Wraps [`crate::session::store::install_test_event_store`]: one shared
+/// service over that one shared in-memory store. `set_global_session_service`
+/// only ever honours the first call, so every test must install the SAME
+/// instance or the losers would silently write through a service the slot
+/// never exposed. Tests keep to their own session keys.
+#[cfg(test)]
+pub(crate) fn install_test_session_service() -> Arc<InProcessActorSessionService> {
+    static SVC: std::sync::OnceLock<Arc<InProcessActorSessionService>> = std::sync::OnceLock::new();
+    let svc = SVC
+        .get_or_init(|| {
+            Arc::new(InProcessActorSessionService::new(
+                crate::session::store::install_test_event_store(),
+            ))
+        })
+        .clone();
+    crate::session::service::set_global_session_service(svc.clone());
+    svc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{MessageContent, TurnTrigger};
+    use crate::session::events::{MessageContent, RunOutcome, TurnTrigger};
     use crate::session::store::{migrate_add_session_events, SqliteEventStore};
 
-    async fn fresh_service() -> InProcessActorSessionService {
+    async fn test_store() -> Arc<dyn SessionEventStore> {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).unwrap();
-        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        InProcessActorSessionService::new(store)
+        Arc::new(SqliteEventStore::new(conn))
+    }
+
+    async fn fresh_service() -> InProcessActorSessionService {
+        InProcessActorSessionService::new(test_store().await)
     }
 
     fn sample_id(label: &str) -> SessionId {
         crate::routing::session_key::SessionKey::ephemeral(label)
+    }
+
+    fn turn_started(turn_id: uuid::Uuid) -> SessionEvent {
+        SessionEvent::TurnStarted {
+            turn_id,
+            trigger: TurnTrigger::UserMessage,
+            at: now_ms(),
+        }
+    }
+
+    fn user_msg(turn_id: uuid::Uuid, text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id,
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: false,
+            author_user_id: None,
+        }
+    }
+
+    fn run_started(run_id: &str) -> SessionEvent {
+        SessionEvent::RunStarted {
+            run_id: run_id.to_string(),
+            at: now_ms(),
+            project_root: None,
+            envelope: None,
+        }
+    }
+
+    fn run_finished(run_id: &str) -> SessionEvent {
+        SessionEvent::RunFinished {
+            run_id: run_id.to_string(),
+            outcome: RunOutcome::Completed,
+            at: now_ms(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_contiguous_observed_in_order_and_not_refired_on_replay() {
+        struct Seen(std::sync::Mutex<Vec<EventSeq>>);
+        impl crate::session::observer::SessionEventObserver for Seen {
+            fn on_appended(&self, _id: &SessionId, rec: &SessionEventRecord) {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(rec.seq);
+            }
+        }
+        let seen = Arc::new(Seen(std::sync::Mutex::new(vec![])));
+        let store = test_store().await;
+        let svc = InProcessActorSessionService::new(store).with_observer(seen.clone());
+        let id = sample_id("batch");
+        let t = uuid::Uuid::new_v4();
+        let seqs = svc
+            .emit_batch(
+                &id,
+                vec![turn_started(t), user_msg(t, "hi"), run_started("r")],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        assert_eq!(
+            *seen.0.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![1, 2, 3]
+        );
+        svc.detach(&id).await.unwrap();
+        // Re-attaching replays the log; the observer must NOT fire again.
+        svc.attach(id.clone()).await.unwrap();
+        assert_eq!(seen.0.lock().unwrap_or_else(|e| e.into_inner()).len(), 3);
+        assert_eq!(svc.get_events(&id, None, None).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_batch_with_retire_from_keeps_its_own_rows_live() {
+        let svc = fresh_service().await;
+        let id = sample_id("retire-batch");
+        let t = uuid::Uuid::new_v4();
+        for _ in 0..3 {
+            svc.emit_event(&id, turn_started(t)).await.unwrap();
+        }
+        let seqs = svc
+            .emit_batch(&id, vec![run_finished("r")], Some(Retire::From(2)))
+            .await
+            .unwrap();
+        assert_eq!(seqs, vec![4]);
+        let live: Vec<_> = svc
+            .get_events(&id, None, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(live, vec![1, 4]);
+    }
+
+    /// A retire-only batch (no events) is legitimate: it appends nothing,
+    /// replies with no seqs, shrinks the live log, and leaves seq allocation
+    /// untouched — the next append still lands past the retired rows.
+    #[tokio::test]
+    async fn a_retire_only_batch_appends_nothing_and_shrinks_the_live_log() {
+        let svc = fresh_service().await;
+        let id = sample_id("retire-only");
+        let t = uuid::Uuid::new_v4();
+        for _ in 0..3 {
+            svc.emit_event(&id, turn_started(t)).await.unwrap();
+        }
+        let seqs = svc
+            .emit_batch(&id, vec![], Some(Retire::From(2)))
+            .await
+            .unwrap();
+        assert_eq!(seqs, Vec::<EventSeq>::new());
+        let live: Vec<_> = svc
+            .get_events(&id, None, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(live, vec![1]);
+        assert_eq!(
+            svc.emit_event(&id, turn_started(t)).await.unwrap(),
+            4,
+            "retiring allocates nothing; the next append lands past the retired rows"
+        );
+    }
+
+    /// The helper's whole contract is "the SAME instance every time, and that
+    /// instance is what the global slot hands out" — a caller handed a fresh
+    /// service would write through one the slot never exposed. `addr_eq`
+    /// compares the data address behind the fat `dyn` pointer and the thin
+    /// concrete one.
+    #[test]
+    fn install_test_session_service_is_one_instance_and_fills_the_slot() {
+        let first = install_test_session_service();
+        let second = install_test_session_service();
+        assert!(Arc::ptr_eq(&first, &second));
+        let global = crate::session::service::global_session_service()
+            .expect("install must fill the global slot");
+        assert!(std::ptr::addr_eq(Arc::as_ptr(&global), Arc::as_ptr(&first)));
+    }
+
+    /// The service face surfaces the actor's refusal as the caller's `Err`
+    /// (not swallowed into `ActorShutdown`). That the refusal happens BEFORE
+    /// the store is pinned one layer down, in
+    /// `actor::tests::an_empty_batch_is_refused_before_the_store`, over a
+    /// store that records whether it was reached — the real store here would
+    /// refuse the same predicate with the same variant.
+    #[tokio::test]
+    async fn an_empty_batch_error_reaches_the_service_caller() {
+        let svc = fresh_service().await;
+        assert!(matches!(
+            svc.emit_batch(&sample_id("empty"), vec![], None).await,
+            Err(SessionError::Other(_))
+        ));
     }
 
     #[tokio::test]
@@ -826,9 +1029,9 @@ mod tests {
     /// Fix #2 regression: `wake()` and `emit_event` racing for the same
     /// session must never let a foreign event land before the
     /// `SessionWoken` marker for that wake. Pre-fix, the window between
-    /// `wake()`'s shutdown and its own `SpawnActor(...) → send(EmitEvent
-    /// { SessionWoken })` allowed a concurrent `emit_event` to insert
-    /// itself into the freshly-spawned actor's inbox first. We assert
+    /// `wake()`'s shutdown and its own "spawn actor, then send the
+    /// `SessionWoken` emit command" allowed a concurrent `emit_event` to
+    /// insert itself into the freshly-spawned actor's inbox first. We assert
     /// the post-fix invariant: every `SessionWoken` in the log has
     /// `seq == prior_head + 1` and no foreign event interleaves between
     /// `prior_head` and the marker.

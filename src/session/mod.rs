@@ -9,6 +9,7 @@
 
 pub mod actor;
 pub mod boundary_repair;
+pub mod call_log;
 pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;
@@ -20,6 +21,7 @@ pub mod service;
 pub mod steer_signal;
 pub mod store;
 pub mod tool_trace;
+pub mod usage_fold;
 
 pub use actor::{ActorCommand, SessionActor};
 pub use boundary_repair::{
@@ -30,7 +32,7 @@ pub use events::{
     Timestamp, ToolOutput, TurnId, TurnTrigger,
 };
 pub use in_process::InProcessActorSessionService;
-pub use marker_balance::close_open_run_after_retire;
+pub use marker_balance::{open_run_after_retire, retire_from_and_close_run, RetireOutcome};
 pub use projection::project_row;
 pub use reduction::{
     reduce_disposition, reduce_run, validate_slice, DanglingCall, DanglingProvenance,

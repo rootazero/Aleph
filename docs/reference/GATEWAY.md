@@ -164,14 +164,32 @@ Four things worth knowing before touching it:
   sentence twice, the second time as prose that no longer references the call it
   answers — duplicated text it must reconcile, not an API error that bricks
   every later turn. The boot scan never
-  exposed this (it walks sessions in a sequential loop); the on-demand face
-  does, and it can collide with the boot scan itself, which is spawned while the
-  gateway is already serving requests. `ResumeCoordinator.in_flight` claims the
-  session before anything reads the log; a collision returns `busy` rather than
-  proceeding. `already_resuming` is checked **first** when deriving the status
+  exposed this on its own: through round-2 it walked sessions in a sequential
+  loop, and since round-3 (T15) `launch_resume` spawns one `JoinSet` task per
+  candidate under `[resume] max_concurrent` permits
+  (`resume_coordinator.rs:1070-1121`, permits from `:997`, default 2 at
+  `config/types/resume.rs:46-48`) — but every task claims a **different**
+  session, so the fan-out cannot collide with itself. Before T15 the knob
+  bounded only `retrigger` and the scan was serial, so the permit pool was never
+  contended; now one permit spans a candidate's boundary repair AND re-trigger
+  and is shared with the on-demand face (`resume_session` takes the same
+  permit). The on-demand face is what can collide with the boot scan, which is
+  spawned while the gateway is already serving requests.
+  `ResumeCoordinator.in_flight` claims the session before anything reads the
+  log; a collision returns `busy` rather than proceeding (line numbers measured
+  at `dded43c7f`). `already_resuming` is checked **first** when deriving the status
   word, because a busy report has every other counter at zero and would
   otherwise render as `no_runs` — telling the operator a session has no history
   at the moment it is being resumed.
+  What the fan-out still costs is latency, not correctness: each candidate
+  task holds its permit across the whole re-triggered run, `launch.settle()`
+  joins every task, and boot's late `reinject_survivors` pass (busy-queue
+  survivors whose session the scan visits) and the §8.2(b) lost-input notices
+  (`adjudicate_orphaned_tasks`, run from `settle`) only start after that join
+  — so a survivor for a session the scan merely skipped, or a user whose
+  message was lost pre-seed, waits for the **slowest resumed run** to finish
+  (`start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
+  per-session release).
 
 Status vocabulary (same on both surfaces): `resumed` · `already_resuming` ·
 `already_finished`
@@ -182,8 +200,8 @@ or the re-trigger failed; the server log has the reason).
 
 **Crash-boundary wording is part of this contract.** A dangling
 `ToolCallRequested` is answered by `boundary_repair_text(tool, provenance,
-denied, degrade)`, which has **three arms because there are three true
-sentences**, all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
+denied, parked, degrade)`, which has **four arms because there are four true
+sentences** (the fourth, `parked`, since round-3 — see below), all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
 the sentences cannot drift apart on the one point that tells the model what to
 *do*):
 
@@ -194,11 +212,20 @@ the sentences cannot drift apart on the one point that tells the model what to
   saying "the server restarted" about a dangle left by an interrupted earlier
   run is false about *when*;
 - `NOT EXECUTED — this <tool> call was denied by the approval gate and did not
-  run` (`denied`), which explicitly lists what has therefore **not** happened.
+  run` (`denied`), which explicitly lists what has therefore **not** happened;
+- `NOT EXECUTED — this <tool> call never ran: … while it was still waiting for
+  <reason>` (`parked: Some(ParkReason)`, round-3 §6.1): the gate wrote a
+  `ToolCallParked { reason }` intent stamp BEFORE it parked (Normal durability —
+  losing it reads as "outcome unknown", the safe direction), and nothing answered
+  the gate before the log ends. `Approval` / `PreHook` say "never ran"; the
+  `Clarification` body does not, because the question WAS delivered and only
+  the answer is missing. `denied` wins over `parked` (the reducer never sets
+  both). A parked call is only TOLD to the model — no approval or clarification
+  is re-delivered (U4). Full text: FEATURE_LOCATOR §4.13a ㉑.
 
-None of the three says the call *failed*: the rational response to a failed call
+None of the four says the call *failed*: the rational response to a failed call
 is to issue it again. The first two say its side effects may already have
-landed; the third says they cannot exist.
+landed; the last two say they cannot exist.
 
 **Why there is a third arm — the two-item enumeration above it was not enough.**
 `ToolCallRequested` is persisted immediately before dispatch, and the two things
@@ -975,17 +1002,15 @@ CREATE TABLE messages (
 ### `messages` is a projection, not a source
 
 The SSOT is `session_events` ([SESSION_SERVICE.md](SESSION_SERVICE.md)).
-`MessageProjector` (`src/gateway/session_projector.rs`) is the **only** writer
-of the rows projected from it — the ones carrying a `source_seq` — and it is
-asynchronous: an append lands in the log first and reaches the transcript on a
-per-session drain. It is **not** the table's only writer: two production paths
-append straight to `messages` and leave `source_seq` NULL —
-`AgentInstance::add_message` (`src/gateway/agent_instance.rs`) and the boot
-orphan notice (`src/gateway/orphan_notice.rs`) — the 「另两个生产者」
-FEATURE_LOCATOR §6.9 names; `map_message_row`
-(`src/gateway/session_manager/ops/crud.rs`) reads that NULL back as "not
-event-sourced, leave it alone", which is what keeps those rows out of the
-projection's seq-set arithmetic.
+`MessageProjector` (`src/gateway/session_projector.rs`) is, since 2026-09-13,
+the table's **only production writer** — pinned by
+`session_projector::tests::the_projector_is_the_only_production_writer_of_the_messages_table`
+— and it is asynchronous: an append lands in the log first and reaches the
+transcript on a per-session drain. The two direct writers that used to bypass
+the log (`AgentInstance::add_message`, the boot orphan notice) are gone (T17,
+T16); rows they left carry a NULL `source_seq`, which `map_message_row`
+(`src/gateway/session_manager/ops/crud.rs`) reads back as "not event-sourced,
+leave it alone", keeping them out of the projection's seq-set arithmetic.
 
 The projection is **self-healing, never lossy**. Back-pressure or a stopped
 drain records the event's `seq` in `missed` (the payload is already durable in

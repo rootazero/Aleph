@@ -215,7 +215,21 @@ impl StateDatabase {
                 completed_at INTEGER,
 
                 -- Extensible metadata
-                metadata_json TEXT
+                metadata_json TEXT,
+
+                -- When the resume coordinator decided whether this interrupted
+                -- row's seed reached the session log (unix ms). Stamped once,
+                -- whatever it decided; NULL = not yet examined.
+                adjudicated_at_ms INTEGER,
+
+                -- When boot's reconcile flipped this row `running` →
+                -- `interrupted` because the process that owned it died (unix
+                -- ms). `status` alone cannot say who wrote `interrupted`: the
+                -- engine's cancel arm writes the same word for a deliberate
+                -- cancel, and only a restart orphan may have lost its seed.
+                -- NULL = interrupted by something other than a restart, or
+                -- never interrupted.
+                interrupted_by_restart_at_ms INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent_session ON agent_tasks(parent_session_id);

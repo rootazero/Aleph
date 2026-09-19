@@ -86,7 +86,7 @@ impl AlephTool for SessionCompactTool {
 }
 
 /// Drive a manual compaction for `session_key_str`, resolving the process-wide
-/// session service / event store / summarizer.
+/// session service / summarizer.
 ///
 /// Shared by this tool and the `session.compact` RPC handler so the two
 /// surfaces cannot drift (R6): both resolve the same collaborators, apply the
@@ -112,8 +112,6 @@ pub async fn run_manual_compaction(
     let service = crate::session::service::global_session_service().ok_or_else(|| {
         AlephError::tool("session_compact: session service unavailable (daemon not initialised)")
     })?;
-    let store = crate::session::store::global_session_event_store()
-        .ok_or_else(|| AlephError::tool("session_compact: session event store unavailable"))?;
 
     // The summarizer is optional by design: without a provider the compaction
     // still runs, falling back to the same deterministic truncation the
@@ -131,7 +129,6 @@ pub async fn run_manual_compaction(
 
     crate::context::compact::manual::compact_session(
         service.as_ref(),
-        store.as_ref(),
         compactor.as_ref(),
         &session_id,
         &opts,

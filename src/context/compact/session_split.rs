@@ -5,6 +5,11 @@
 //! (`epoch + 1`) seeded with a summary of the pre-tail history plus the
 //! verbatim fresh tail. The parent session's log is frozen — never re-read
 //! by the loop — so per-turn cost resets to bounded.
+//!
+//! The split is two `emit_batch` transactions (parent closer, then the whole
+//! child seed) followed by the routing write; the order and its torn states
+//! are documented at the call sites in [`perform_session_split`], and the
+//! boot-side half is `ProjectionReconciler::heal_split_epochs`.
 
 use crate::context::compact::compactor::ContextCompactor;
 use crate::context::compact::preserve::SUMMARY_MARKER;
@@ -28,7 +33,17 @@ pub enum SplitError {
     /// The session key kind has no epoch — `with_next_epoch()` returned the
     /// key unchanged (Group/Task/Subagent/Ephemeral).
     NotSplittable,
-    /// Summarization, epoch registration, or event emission failed.
+    /// The parent log holds no open `RunStarted` to inherit from — either no
+    /// marker at all, or the last one is already closed. The child's opener
+    /// is a clone of the parent's, so with nothing to clone the split is
+    /// refused before any batch is written rather than seeded with an empty
+    /// envelope that a later crash would resume unsnapshotted.
+    NoOpenRun,
+    /// The parent log could not be reduced, summarization failed, or event
+    /// emission failed. Epoch registration is NOT fatal (see step 5 in
+    /// [`perform_session_split`]): once both batches are committed the split
+    /// has happened, and a refused routing write is logged and healed at the
+    /// next boot rather than reported here.
     Failed(anyhow::Error),
 }
 
@@ -36,6 +51,10 @@ impl std::fmt::Display for SplitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotSplittable => write!(f, "session key kind is not splittable"),
+            Self::NoOpenRun => write!(
+                f,
+                "parent log has no open RunStarted for the child to inherit"
+            ),
             Self::Failed(e) => write!(f, "session split failed: {e}"),
         }
     }
@@ -86,6 +105,21 @@ pub async fn perform_session_split(
     // already finished. See the guard's doc in `event_snap`.
     let tail_start = super::event_snap::snap_past_tool_results(events, tail_start);
 
+    // The run the child continues. Its opener below is a CLONE of the
+    // parent's open `RunStarted` — the envelope a resume replays and the
+    // project root it resumes in — because a crash after the split is
+    // detected against the child, and a child opened with no envelope
+    // resumes unsnapshotted: every knob replaced by today's value, the skill
+    // scope gone. `reduce_run` is the one derivation of "which run is open"
+    // (the last `RunStarted` with no `RunFinished` after it); an `Err` here
+    // means the log cannot be reasoned about, which is a failure, and no
+    // open run means nothing to inherit, which is a refusal — both before
+    // the summarizer is paid for and before either batch is written.
+    let open_run = crate::session::reduction::reduce_run(events)
+        .map_err(|c| SplitError::Failed(anyhow::anyhow!("parent log contradiction: {c}")))?
+        .open_run
+        .ok_or(SplitError::NoOpenRun)?;
+
     // The split path used to be the one compaction surface with zero
     // telemetry: the breaker escalated to it, and the only trace of what
     // happened next was the parent's RunFinished appearing in the log. Emit
@@ -113,97 +147,111 @@ pub async fn perform_session_split(
         "session split: pre-tail summarized; seeding child epoch",
     );
 
-    // 3. Register the new epoch so gateway routing sees it.
-    epoch_registrar
-        .register_epoch(&child)
-        .await
-        .map_err(SplitError::Failed)?;
-
-    // 3b. …and retire what belonged to the epoch that was just superseded.
-    // Routing now resolves this conversation to `child`, so anything keyed to
-    // the parent's exact epoch — the `/btw` side session, whose key is derived
-    // from it — stops being derivable by any surface. Unlike `/new` or a
-    // delete, nobody asked for this: the split happens on its own, so without
-    // this call the orphan is created by the system and reported to no one.
-    // After the registration, deliberately: registration is what makes the
-    // parent superseded, and a retirement before a failed registration would
-    // have thrown away a side session that is still live.
-    epoch_registrar.retire_superseded(parent_session_id).await;
-
-    // 4. Seed the child: SessionForked -> SystemMessage(summary) -> fresh tail.
-    let parent_str = parent_session_id.to_key_string();
-    session
-        .emit_event(
-            &child,
-            SessionEvent::SessionForked {
-                parent_session_id: parent_str,
-                at: crate::session::events::now_ms(),
-            },
-        )
-        .await
-        .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit SessionForked: {e}")))?;
-
-    session
-        .emit_event(&child, build_summary_event(summary_text))
-        .await
-        .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit summary: {e}")))?;
-
-    for record in &events[tail_start..] {
-        session
-            .emit_event(&child, record.event.clone())
-            .await
-            .map_err(|e| SplitError::Failed(anyhow::anyhow!("copy fresh-tail event: {e}")))?;
-    }
-
-    // 5. Balance the run markers across the split (Cycle 5 × Cycle 6
-    //    integration). The harness bridge emitted `RunStarted` on the parent
-    //    at run start; without this the parent's log would end on a dangling
-    //    `RunStarted` and `ResumeCoordinator` would mis-detect the frozen
-    //    parent as an interrupted run. Close the parent's run, and open one on
-    //    the child so a crash *after* the split is detected against the child
-    //    (the live epoch the run actually continues on). The run_id need only
-    //    correlate within each session's log — the resume scan is positional.
+    // Two batches and one routing write, in a DECIDED order. The order is the
+    // crash contract: the boot heal (`ProjectionReconciler::heal_split_epochs`)
+    // reads "a `SessionForked` at seq 1 of a child" as "the parent is already
+    // closed", so the parent's closer must be durable before the child exists.
+    //
+    //   3. parent  [RunFinished{Completed}]                 ← one transaction
+    //   4. child   [SessionForked, summary, tail…, RunStarted] ← one transaction
+    //   5. routing  register_epoch(child)                    ← other connection
+    //
+    // Torn states, parent-first: (i) died after 3 — the parent reads `Clean`,
+    // no child exists, routing still names the parent; the next turn simply
+    // re-splits, nothing runs twice. (ii) died after 4 — the log says split,
+    // routing says parent; the heal registers the child at boot, BEFORE the
+    // resume pass, so the one interrupted run resume finds is the child's.
+    // Child-first would have a window where BOTH sessions reduce to
+    // `Interrupted` and both get resumed (double execution), and no boot
+    // pass could tell that apart from two independent crashes.
+    //
+    // The epoch cannot join either transaction: the routing table is the
+    // gateway `SessionStore`'s own connection, not the event log's.
+    let at = crate::session::events::now_ms();
     let split_run_id = uuid::Uuid::new_v4().to_string();
+
+    // 3. Close the parent FIRST. The harness bridge emitted `RunStarted` on
+    //    the parent at run start; without this closer the frozen parent's log
+    //    would end on a dangling `RunStarted` and `ResumeCoordinator` would
+    //    resume it. The run_id need only correlate the closer with the child's
+    //    opener — the resume scan is positional.
     session
-        .emit_event(
+        .emit_batch(
             parent_session_id,
-            SessionEvent::RunFinished {
+            vec![SessionEvent::RunFinished {
                 run_id: split_run_id.clone(),
                 outcome: crate::session::events::RunOutcome::Completed,
-                at: crate::session::events::now_ms(),
-            },
+                at,
+            }],
+            None,
         )
         .await
         .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit parent RunFinished: {e}")))?;
+
+    // 4. Seed the child in ONE transaction: fork marker, summary, verbatim
+    //    tail, and the open run — so a crash *after* the split is detected
+    //    against the child, the live epoch the run actually continues on.
+    let tail = &events[tail_start..];
+    let mut child_batch = Vec::with_capacity(tail.len() + 3);
+    child_batch.push(SessionEvent::SessionForked {
+        parent_session_id: parent_session_id.to_key_string(),
+        at,
+    });
+    child_batch.push(build_summary_event(summary_text, at));
+    child_batch.extend(tail.iter().map(|record| record.event.clone()));
+    child_batch.push(SessionEvent::RunStarted {
+        run_id: split_run_id,
+        at,
+        // The parent's open run, verbatim. The in-memory `RunRequest` does
+        // carry the same facts for the LIVE continuation — but a resume
+        // after a crash has no `RunRequest`; it has only this marker, and
+        // reads its project root and envelope from nowhere else.
+        project_root: open_run.project_root,
+        envelope: open_run.envelope,
+    });
     session
-        .emit_event(
-            &child,
-            SessionEvent::RunStarted {
-                run_id: split_run_id,
-                at: crate::session::events::now_ms(),
-                // Session-split forks emit a marker on the child session;
-                // the child inherits whatever project context the parent
-                // was running under via the in-memory RunRequest, so the
-                // resume path does not need a duplicate persisted value
-                // here.
-                project_root: None,
-                envelope: None,
-            },
-        )
+        .emit_batch(&child, child_batch, None)
         .await
-        .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit child RunStarted: {e}")))?;
+        .map_err(|e| SplitError::Failed(anyhow::anyhow!("seed child: {e}")))?;
+
+    // 5. Routing LAST. From here the log is authoritative: the parent's run is
+    //    closed and the child's is open, so a refused registration is NOT an
+    //    `Err` — returning one would send the caller back to compact-to-fit
+    //    on a parent whose run is already closed, while a child with an open
+    //    `RunStarted` waits to be resumed as well. Log it; the boot heal
+    //    registers the child (log leads, routing follows). Until then inbound
+    //    routing still resolves to the parent.
+    //
+    //    Retire what belonged to the superseded epoch only AFTER a successful
+    //    registration: registration is what makes the parent superseded, and
+    //    the `/btw` side session keyed to the parent's exact epoch is still
+    //    live and reachable behind a registration that did not happen.
+    //    Nobody asked for this split, so without the retire the orphan would
+    //    be created by the system and reported to no one.
+    match epoch_registrar.register_epoch(&child).await {
+        Ok(()) => epoch_registrar.retire_superseded(parent_session_id).await,
+        Err(e) => tracing::error!(
+            target: "context_budget",
+            parent = ?parent_session_id,
+            child = ?child,
+            error = %e,
+            "session split committed but epoch registration failed; \
+             routing resolves to the parent until the boot heal",
+        ),
+    }
 
     Ok(SplitOutcome {
         child_session_id: child,
     })
 }
 
-/// Wrap a summary string in a `SessionEvent::SystemMessage`.
-fn build_summary_event(summary: String) -> SessionEvent {
+/// Wrap a summary string in a `SessionEvent::SystemMessage` stamped `at` —
+/// the one instant the whole child batch carries.
+fn build_summary_event(summary: String, at: crate::session::events::Timestamp) -> SessionEvent {
     SessionEvent::SystemMessage {
         turn_id: uuid::Uuid::new_v4(),
         content: format!("{SUMMARY_MARKER}\n{summary}"),
-        at: crate::session::events::now_ms(),
+        at,
     }
 }
 
@@ -344,27 +392,72 @@ mod tests {
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
     use crate::context::compact::summary_utils::SUMMARIZER_INPUT_TOKEN_BUDGET;
     use crate::providers::mock::MockProvider;
-    use crate::session::events::{now_ms, EventSeq, MessageContent, SessionEventRecord};
+    use crate::routing::session_key::SessionKey;
+    use crate::session::events::{
+        now_ms, EventSeq, MessageContent, Retire, RunEnvelopeSnapshot, RunOutcome,
+        SessionEventRecord,
+    };
     use crate::session::service::{SessionError, SessionHandle, SessionService};
     use crate::sync_primitives::Arc as AlephArc;
+
+    /// One trace shared by every fake in a test, so the ORDER in which the
+    /// split touches the session service and the registrar is a single
+    /// vector — the thing the batch-order test asserts.
+    type Trace = Arc<Mutex<Vec<String>>>;
+
+    /// One recorded `emit_batch` call: target session, the rows in batch
+    /// order, and the retire the batch carried.
+    type RecordedBatch = (SessionId, Vec<SessionEvent>, Option<Retire>);
 
     // -------------------------------------------------------------------------
     // Fake SessionService
     // -------------------------------------------------------------------------
 
-    #[derive(Default)]
     struct RecordingSessionService {
-        log: Mutex<Vec<(SessionId, SessionEvent)>>,
+        batches: Mutex<Vec<RecordedBatch>>,
         next_seq: Mutex<EventSeq>,
+        trace: Trace,
+        /// When `Some(n)`, the n-th `emit_batch` call (0-based) fails with
+        /// `SessionError::Storage` — the in-process failure the split's
+        /// caller falls back from.
+        fail_batch_at: Option<usize>,
     }
 
     impl RecordingSessionService {
         fn new() -> Arc<Self> {
-            Arc::new(Self::default())
+            Self::with_trace(Arc::new(Mutex::new(vec![])))
         }
 
+        fn with_trace(trace: Trace) -> Arc<Self> {
+            Arc::new(Self {
+                batches: Mutex::new(vec![]),
+                next_seq: Mutex::new(1),
+                trace,
+                fail_batch_at: None,
+            })
+        }
+
+        fn failing_batch_at(n: usize) -> Arc<Self> {
+            Arc::new(Self {
+                batches: Mutex::new(vec![]),
+                next_seq: Mutex::new(1),
+                trace: Arc::new(Mutex::new(vec![])),
+                fail_batch_at: Some(n),
+            })
+        }
+
+        async fn batches(&self) -> Vec<RecordedBatch> {
+            self.batches.lock().await.clone()
+        }
+
+        /// Every row that reached the service, flattened in commit order.
         async fn emitted(&self) -> Vec<(SessionId, SessionEvent)> {
-            self.log.lock().await.clone()
+            self.batches
+                .lock()
+                .await
+                .iter()
+                .flat_map(|(id, events, _)| events.iter().map(|e| (id.clone(), e.clone())))
+                .collect()
         }
     }
 
@@ -383,16 +476,43 @@ mod tests {
             Ok(vec![])
         }
 
+        /// A batch of one, as the production service does — so a split that
+        /// regressed to per-row `emit_event` would still show up in
+        /// `batches()` as N batches of one, not vanish from the record.
         async fn emit_event(
             &self,
             id: &SessionId,
             event: SessionEvent,
         ) -> Result<EventSeq, SessionError> {
+            let seqs = self.emit_batch(id, vec![event], None).await?;
+            seqs.first()
+                .copied()
+                .ok_or_else(|| SessionError::Other("one event in, no seq out".into()))
+        }
+
+        async fn emit_batch(
+            &self,
+            id: &SessionId,
+            events: Vec<SessionEvent>,
+            retire: Option<Retire>,
+        ) -> Result<Vec<EventSeq>, SessionError> {
+            let call_index = self.batches.lock().await.len();
+            if self.fail_batch_at == Some(call_index) {
+                self.trace
+                    .lock()
+                    .await
+                    .push(format!("batch_failed:{}", id.to_key_string()));
+                return Err(SessionError::Storage("injected batch failure".into()));
+            }
             let mut seq = self.next_seq.lock().await;
-            let s = *seq;
-            *seq += 1;
-            self.log.lock().await.push((id.clone(), event));
-            Ok(s)
+            let seqs: Vec<EventSeq> = (0..events.len() as EventSeq).map(|i| *seq + i).collect();
+            *seq += events.len() as EventSeq;
+            self.trace
+                .lock()
+                .await
+                .push(format!("batch:{}:{}", id.to_key_string(), events.len()));
+            self.batches.lock().await.push((id.clone(), events, retire));
+            Ok(seqs)
         }
 
         async fn subscribe(
@@ -418,25 +538,65 @@ mod tests {
 
     struct RecordingRegistrar {
         registered: Mutex<Vec<SessionId>>,
+        retired: Mutex<Vec<SessionId>>,
+        trace: Trace,
+        /// When true, `register_epoch` refuses — the routing-table write that
+        /// the split must survive (the log leads; the boot heal follows).
+        refuse: bool,
     }
 
     impl RecordingRegistrar {
         fn new() -> Arc<Self> {
+            Self::with_trace(Arc::new(Mutex::new(vec![])))
+        }
+
+        fn with_trace(trace: Trace) -> Arc<Self> {
             Arc::new(Self {
                 registered: Mutex::new(vec![]),
+                retired: Mutex::new(vec![]),
+                trace,
+                refuse: false,
+            })
+        }
+
+        fn refusing() -> Arc<Self> {
+            Arc::new(Self {
+                registered: Mutex::new(vec![]),
+                retired: Mutex::new(vec![]),
+                trace: Arc::new(Mutex::new(vec![])),
+                refuse: true,
             })
         }
 
         async fn keys(&self) -> Vec<SessionId> {
             self.registered.lock().await.clone()
         }
+
+        async fn retired(&self) -> Vec<SessionId> {
+            self.retired.lock().await.clone()
+        }
     }
 
     #[async_trait]
     impl crate::session::epoch_registrar::SessionEpochRegistrar for RecordingRegistrar {
         async fn register_epoch(&self, key: &SessionId) -> anyhow::Result<()> {
+            self.trace
+                .lock()
+                .await
+                .push(format!("register_epoch:{}", key.to_key_string()));
+            if self.refuse {
+                anyhow::bail!("registrar deliberately refuses");
+            }
             self.registered.lock().await.push(key.clone());
             Ok(())
+        }
+
+        async fn retire_superseded(&self, superseded: &SessionId) {
+            self.trace
+                .lock()
+                .await
+                .push(format!("retire_superseded:{}", superseded.to_key_string()));
+            self.retired.lock().await.push(superseded.clone());
         }
     }
 
@@ -461,6 +621,106 @@ mod tests {
             },
             created_at_ms: now_ms(),
         }
+    }
+
+    /// A summarizer that only counts. The refusal test asserts it was never
+    /// paid for; its positive control asserts the same double IS paid for on
+    /// a successful split, so the zero is a measurement and not a provider
+    /// nobody could reach.
+    #[derive(Default)]
+    struct CountingSummarizer {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingSummarizer {
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::providers::AiProvider for CountingSummarizer {
+        fn process(
+            &self,
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "S".to_string(),
+                ))
+            })
+        }
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// The envelope the parent's open run carries in every fixture below —
+    /// distinctive values so the child-opener test can tell "inherited" from
+    /// "defaulted".
+    fn parent_envelope() -> RunEnvelopeSnapshot {
+        RunEnvelopeSnapshot {
+            exec_tier: Some("ask".to_string()),
+            model: Some("m-parent".to_string()),
+            allowed_tools: Some(vec!["grep".to_string()]),
+            ..RunEnvelopeSnapshot::default()
+        }
+    }
+
+    const PARENT_ROOT: &str = "/parent/project";
+
+    fn run_started_record(seq: EventSeq, run_id: &str) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event: SessionEvent::RunStarted {
+                run_id: run_id.to_string(),
+                at: now_ms(),
+                project_root: Some(PARENT_ROOT.to_string()),
+                envelope: Some(parent_envelope()),
+            },
+            created_at_ms: now_ms(),
+        }
+    }
+
+    fn run_finished_record(seq: EventSeq, run_id: &str) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event: SessionEvent::RunFinished {
+                run_id: run_id.to_string(),
+                outcome: RunOutcome::Completed,
+                at: now_ms(),
+            },
+            created_at_ms: now_ms(),
+        }
+    }
+
+    /// A parent log with the run's opener placed BEFORE the messages, so the
+    /// summarised half owns it and the copied tail is messages only. That is
+    /// not the bridge's real order — production seeds the turn first and the
+    /// bridge emits `RunStarted` after it (message-then-opener), which
+    /// `a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last`
+    /// exercises. Every other fixture that expects the split to SUCCEED
+    /// starts from this — the child inherits the opener's envelope, so a
+    /// parent without one is refused, not seeded blind.
+    fn parent_log(messages: &[&str]) -> Vec<SessionEventRecord> {
+        std::iter::once(run_started_record(1, "run-parent"))
+            .chain(
+                messages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| user_record(i as EventSeq + 2, text)),
+            )
+            .collect()
     }
 
     // -------------------------------------------------------------------------
@@ -499,26 +759,96 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 2: successful split seeds child in correct order
+    // Test 2: the split is two batches in a decided order, routing last
+    // -------------------------------------------------------------------------
+
+    /// Parent `[RunFinished{Completed}]` FIRST, child `[SessionForked,
+    /// SystemMessage, tail…, RunStarted]` SECOND, `register_epoch` THIRD.
+    ///
+    /// The order is the crash contract, not a style choice: the boot heal
+    /// (`ProjectionReconciler::heal_split_epochs`) reads "a `SessionForked`
+    /// on the child" as "the parent is already closed". Child-first would
+    /// open a window where BOTH sessions reduce to `Interrupted` and both
+    /// get resumed; epoch-first would let routing point at a child whose log
+    /// does not exist yet.
+    #[tokio::test]
+    async fn split_commits_parent_then_child_then_registers_the_epoch() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let child = parent.with_next_epoch();
+        let events = parent_log(&["pre-tail 1", "pre-tail 2", "fresh tail"]);
+        let trace = Arc::new(Mutex::new(vec![]));
+        let session = RecordingSessionService::with_trace(trace.clone());
+        let registrar = RecordingRegistrar::with_trace(trace.clone());
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            3,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *trace.lock().await,
+            vec![
+                format!("batch:{}:1", parent.to_key_string()),
+                format!("batch:{}:4", child.to_key_string()),
+                format!("register_epoch:{}", child.to_key_string()),
+                format!("retire_superseded:{}", parent.to_key_string()),
+            ]
+        );
+        let batches = session.batches().await;
+        assert!(matches!(
+            batches[0].1.as_slice(),
+            [SessionEvent::RunFinished {
+                outcome: RunOutcome::Completed,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            batches[1].1.as_slice(),
+            [
+                SessionEvent::SessionForked { .. },
+                SessionEvent::SystemMessage { .. },
+                SessionEvent::UserMessage { .. },
+                SessionEvent::RunStarted { .. },
+            ]
+        ));
+        assert!(batches.iter().all(|(_, _, retire)| retire.is_none()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 3: the child batch's content — fork marker, summary, verbatim tail
     // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn split_seeds_child_with_forked_summary_and_fresh_tail() {
         // Parent: Main session at epoch 0.
-        let parent = crate::routing::session_key::SessionKey::Main {
+        let parent = SessionKey::Main {
             agent_id: "agent-a".to_string(),
             main_key: "main".to_string(),
             epoch: 0,
         };
         let expected_child = parent.with_next_epoch();
 
-        // Build events: 2 pre-tail + 1 fresh tail.
-        let events = vec![
-            user_record(1, "pre-tail message 1"),
-            user_record(2, "pre-tail message 2"),
-            user_record(3, "fresh tail message"),
-        ];
-        let tail_start = 2; // events[..2] summarized; events[2..] copied verbatim
+        // Build events: the opener + 2 pre-tail + 1 fresh tail.
+        let events = parent_log(&[
+            "pre-tail message 1",
+            "pre-tail message 2",
+            "fresh tail message",
+        ]);
+        let tail_start = 3; // events[..3] summarized; events[3..] copied verbatim
 
         let session = RecordingSessionService::new();
         let registrar = RecordingRegistrar::new();
@@ -540,33 +870,39 @@ mod tests {
         // 1. Returned child matches epoch+1.
         assert_eq!(outcome.child_session_id, expected_child);
 
-        // 2. Registrar received the child key.
-        let reg_keys = registrar.keys().await;
-        assert_eq!(reg_keys, vec![expected_child.clone()]);
+        // 2. Registrar received the child key, and the parent was retired.
+        assert_eq!(registrar.keys().await, vec![expected_child.clone()]);
+        assert_eq!(registrar.retired().await, vec![parent.clone()]);
 
-        // 3. Events emitted, in order:
-        //    [0] SessionForked        -> child
-        //    [1] SystemMessage        -> child
-        //    [2] verbatim fresh tail  -> child
-        //    [3] RunFinished{Completed} -> parent (run-marker balancing)
-        //    [4] RunStarted           -> child  (run-marker balancing)
-        let emitted = session.emitted().await;
-        assert_eq!(
-            emitted.len(),
-            5,
-            "expected 5 emitted events (forked + summary + 1 tail + 2 run markers), got {}",
-            emitted.len()
-        );
+        // 3. Exactly two batches: the parent's closer, then the child's seed.
+        let batches = session.batches().await;
+        assert_eq!(batches.len(), 2, "one parent batch + one child batch");
+        let (parent_target, parent_rows, _) = &batches[0];
+        let (child_target, child_rows, _) = &batches[1];
+        assert_eq!(parent_target, &parent);
+        assert_eq!(child_target, &expected_child);
 
-        // Seeding + the child RunStarted go to the child; only the parent
-        // RunFinished targets the parent.
-        for (i, (id, _)) in emitted.iter().enumerate() {
-            let expected = if i == 3 { &parent } else { &expected_child };
-            assert_eq!(id, expected, "event {i} emitted to wrong session");
+        // Parent batch: the one closer, `Completed` — the frozen parent must
+        // never read as an interrupted run.
+        match parent_rows.as_slice() {
+            [SessionEvent::RunFinished { outcome, .. }] => {
+                assert_eq!(*outcome, RunOutcome::Completed);
+            }
+            other => panic!("expected [RunFinished] on the parent, got {other:?}"),
         }
 
-        // [0] SessionForked with the parent's key string.
-        match &emitted[0].1 {
+        // Child batch, in order:
+        //    [0] SessionForked        (names the parent)
+        //    [1] SystemMessage        (the summary)
+        //    [2] verbatim fresh tail
+        //    [3] RunStarted           (a crash after the split is detected
+        //                              against the live epoch)
+        assert_eq!(
+            child_rows.len(),
+            4,
+            "forked + summary + 1 tail + RunStarted, got {child_rows:?}"
+        );
+        match &child_rows[0] {
             SessionEvent::SessionForked {
                 parent_session_id, ..
             } => {
@@ -574,9 +910,7 @@ mod tests {
             }
             other => panic!("expected SessionForked, got {other:?}"),
         }
-
-        // [1] SystemMessage containing the summary.
-        match &emitted[1].1 {
+        match &child_rows[1] {
             SessionEvent::SystemMessage { content, .. } => {
                 assert!(
                     content.contains("[Context Summary]"),
@@ -589,30 +923,402 @@ mod tests {
             }
             other => panic!("expected SystemMessage, got {other:?}"),
         }
-
-        // [2] Verbatim fresh-tail event (UserMessage with "fresh tail message").
-        match &emitted[2].1 {
+        match &child_rows[2] {
             SessionEvent::UserMessage { content, .. } => {
                 assert_eq!(content.text, "fresh tail message");
             }
             other => panic!("expected UserMessage (fresh tail), got {other:?}"),
         }
-
-        // [3] RunFinished{Completed} closes the parent's run so the frozen
-        //     parent is not later mis-detected as an interrupted run.
-        match &emitted[3].1 {
-            SessionEvent::RunFinished { outcome, .. } => {
-                assert_eq!(*outcome, crate::session::events::RunOutcome::Completed);
+        match &child_rows[3] {
+            SessionEvent::RunStarted { run_id, .. } => {
+                // The closer and the opener correlate by run_id.
+                let SessionEvent::RunFinished {
+                    run_id: closer_id, ..
+                } = &parent_rows[0]
+                else {
+                    unreachable!("asserted above");
+                };
+                assert_eq!(
+                    run_id, closer_id,
+                    "split run_id must correlate both markers"
+                );
             }
-            other => panic!("expected RunFinished on parent, got {other:?}"),
-        }
-
-        // [4] RunStarted opens a run on the child so a crash after the split
-        //     is detected against the live (child) epoch.
-        match &emitted[4].1 {
-            SessionEvent::RunStarted { .. } => {}
             other => panic!("expected RunStarted on child, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // The child's opener inherits the parent's run envelope — the crash path
+    // -------------------------------------------------------------------------
+
+    /// A crash after a split is resumed against the CHILD, and a resume
+    /// replays whatever the child's opener froze. An opener written with
+    /// `envelope: None` resumes unsnapshotted — every knob replaced by
+    /// today's value, the skill scope gone — so the child's `RunStarted`
+    /// must carry the parent's open run's envelope and project root, read
+    /// through the service the batch was handed to.
+    #[tokio::test]
+    async fn the_child_opener_carries_the_parents_envelope_and_project_root() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let events = parent_log(&["pre-tail", "fresh tail"]);
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await
+        .expect("split should succeed");
+
+        let child = parent.with_next_epoch();
+        let openers: Vec<(Option<String>, Option<RunEnvelopeSnapshot>)> = session
+            .emitted()
+            .await
+            .into_iter()
+            .filter(|(target, _)| *target == child)
+            .filter_map(|(_, event)| match event {
+                SessionEvent::RunStarted {
+                    project_root,
+                    envelope,
+                    ..
+                } => Some((project_root, envelope)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            openers,
+            vec![(Some(PARENT_ROOT.to_string()), Some(parent_envelope()))],
+            "the child's opener must be a clone of the parent's open run's \
+             envelope and project root, not a blank marker"
+        );
+    }
+
+    /// No open `RunStarted` in the parent log ⇒ nothing to inherit ⇒ the split
+    /// is REFUSED before the summarizer is paid for and before either batch
+    /// is written: the parent keeps its log, routing never learns a child,
+    /// and the caller falls back to compact-to-fit. Two shapes of "no open
+    /// run": no marker at all, and a run the log already closed. The positive
+    /// control at the end proves the counting summarizer IS reached by a
+    /// split that succeeds, so its zero above is a measurement.
+    #[tokio::test]
+    async fn a_parent_without_an_open_run_is_refused_before_any_batch() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let no_marker = vec![user_record(1, "pre-tail"), user_record(2, "fresh tail")];
+        let closed_run = vec![
+            run_started_record(1, "run-parent"),
+            user_record(2, "pre-tail"),
+            run_finished_record(3, "run-parent"),
+            user_record(4, "fresh tail"),
+        ];
+        for (label, events, tail_start) in [
+            ("no marker at all", no_marker, 1),
+            ("a run the log already closed", closed_run, 3),
+        ] {
+            let session = RecordingSessionService::new();
+            let registrar = RecordingRegistrar::new();
+            let summarizer = AlephArc::new(CountingSummarizer::default());
+            let compactor = ContextCompactor::new(
+                summarizer.clone() as AlephArc<dyn crate::providers::AiProvider>,
+                CompactorConfig::default(),
+            );
+
+            let result = perform_session_split(
+                session.as_ref(),
+                registrar.as_ref(),
+                &compactor,
+                &parent,
+                &events,
+                tail_start,
+            )
+            .await;
+
+            assert!(
+                matches!(result, Err(SplitError::NoOpenRun)),
+                "{label}: expected NoOpenRun, got {result:?}"
+            );
+            assert_eq!(
+                summarizer.calls(),
+                0,
+                "{label}: a refused split must not pay for the summarizer"
+            );
+            assert!(
+                session.batches().await.is_empty(),
+                "{label}: a refused split must write nothing — not even the parent closer"
+            );
+            assert!(
+                registrar.keys().await.is_empty(),
+                "{label}: routing must never learn a child"
+            );
+        }
+
+        // Positive control: the same double, a parent WITH an open run, one
+        // message to summarise ⇒ exactly one summarizer call.
+        let summarizer = AlephArc::new(CountingSummarizer::default());
+        let compactor = ContextCompactor::new(
+            summarizer.clone() as AlephArc<dyn crate::providers::AiProvider>,
+            CompactorConfig::default(),
+        );
+        perform_session_split(
+            RecordingSessionService::new().as_ref(),
+            RecordingRegistrar::new().as_ref(),
+            &compactor,
+            &parent,
+            &parent_log(&["pre-tail", "fresh tail"]),
+            2,
+        )
+        .await
+        .expect("a parent with an open run splits");
+        assert_eq!(
+            summarizer.calls(),
+            1,
+            "the control must reach the summarizer, or the zero above proves nothing"
+        );
+    }
+
+    /// The bridge's real order — the turn is seeded, THEN `RunStarted` is
+    /// emitted — puts the parent's own opener inside the copied tail whenever
+    /// the split fires before the run's first assistant message. The child
+    /// then holds that copied opener AND the split's own; `reduce_run` reads
+    /// the LAST `RunStarted` as the open one, so the split opener must come
+    /// last and must carry the parent's envelope and project root — which is
+    /// what makes the two answers agree instead of the copied one winning by
+    /// position. Read back through the service, in emission order.
+    #[tokio::test]
+    async fn a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        // Production order: an earlier answered turn, then this turn's
+        // message, then its opener. `tail_start` is "after the last
+        // AssistantMessage", so the tail is [UserMessage, RunStarted].
+        let events = vec![
+            user_record(1, "earlier question"),
+            SessionEventRecord {
+                seq: 2,
+                event: SessionEvent::AssistantMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text: "earlier answer".to_string(),
+                        blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    usage: None,
+                    at: now_ms(),
+                },
+                created_at_ms: now_ms(),
+            },
+            user_record(3, "this turn"),
+            run_started_record(4, "run-parent"),
+        ];
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await
+        .expect("split should succeed");
+
+        let child = parent.with_next_epoch();
+        let openers: Vec<(String, Option<String>, Option<RunEnvelopeSnapshot>)> = session
+            .emitted()
+            .await
+            .into_iter()
+            .filter(|(target, _)| *target == child)
+            .filter_map(|(_, event)| match event {
+                SessionEvent::RunStarted {
+                    run_id,
+                    project_root,
+                    envelope,
+                    ..
+                } => Some((run_id, project_root, envelope)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            openers.len(),
+            2,
+            "the copied parent opener and the split opener, got {openers:?}"
+        );
+        assert_eq!(
+            openers[0].0, "run-parent",
+            "the tail is copied verbatim, parent opener first"
+        );
+        let (split_run_id, split_root, split_envelope) = &openers[1];
+        assert_ne!(split_run_id, "run-parent", "the split mints its own run id");
+        assert_eq!(
+            (split_root.as_deref(), split_envelope.as_ref()),
+            (Some(PARENT_ROOT), Some(&parent_envelope())),
+            "the LAST opener — the one `reduce_run` treats as open — is the split's \
+             and carries the parent's envelope and project root"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 4: routing is not fatal — the log leads, the boot heal follows
+    // -------------------------------------------------------------------------
+
+    /// Once both batches are committed the split HAS happened: the parent's
+    /// run is closed and the child's is open. Failing the split here would
+    /// send the caller back to a parent whose run is already closed while a
+    /// child with an open `RunStarted` waits to be resumed twice. So a refused
+    /// `register_epoch` is logged and healed at boot, not returned.
+    #[tokio::test]
+    async fn a_refused_epoch_registration_is_not_a_failed_split() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let events = parent_log(&["pre-tail", "fresh tail"]);
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::refusing();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        let outcome = perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await
+        .expect("both batches committed: the split succeeded even though routing refused");
+
+        assert_eq!(outcome.child_session_id, parent.with_next_epoch());
+        assert_eq!(
+            session.batches().await.len(),
+            2,
+            "both batches still landed"
+        );
+        assert!(
+            registrar.keys().await.is_empty(),
+            "the refusal really refused"
+        );
+        assert!(
+            registrar.retired().await.is_empty(),
+            "nothing is retired behind a registration that did not happen — \
+             the parent's side session is still live and still reachable"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: an in-process batch failure is an Err, and nothing later runs
+    // -------------------------------------------------------------------------
+
+    /// The parent batch refused ⇒ `Err`, no child rows, no registration: the
+    /// caller falls back to compact-to-fit on a parent whose run is still
+    /// open, exactly as if the split had never been attempted.
+    #[tokio::test]
+    async fn a_refused_parent_batch_fails_the_split_before_anything_else() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let events = parent_log(&["pre-tail", "fresh tail"]);
+        let session = RecordingSessionService::failing_batch_at(0);
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        let result = perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(SplitError::Failed(_))),
+            "expected Failed, got {result:?}"
+        );
+        assert!(session.batches().await.is_empty(), "nothing was committed");
+        assert!(
+            registrar.keys().await.is_empty(),
+            "routing never learned a child"
+        );
+    }
+
+    /// The child batch refused ⇒ `Err` too (the caller's fallback contract),
+    /// and routing is NOT registered: a child the log does not hold must never
+    /// become the routing target. The parent closer that already landed is the
+    /// accepted torn state — `FinishWithoutStart` when the run's own closer
+    /// follows it, REPORT class, readable and counted.
+    #[tokio::test]
+    async fn a_refused_child_batch_fails_the_split_without_registering() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let events = parent_log(&["pre-tail", "fresh tail"]);
+        let session = RecordingSessionService::failing_batch_at(1);
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        let result = perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(SplitError::Failed(_))),
+            "expected Failed, got {result:?}"
+        );
+        let batches = session.batches().await;
+        assert_eq!(batches.len(), 1, "only the parent closer landed");
+        assert_eq!(batches[0].0, parent);
+        assert!(
+            registrar.keys().await.is_empty(),
+            "routing never learned a child"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -699,14 +1405,14 @@ mod tests {
             main_key: "main".to_string(),
             epoch: 0,
         };
-        let events = vec![user_record(1, "only message")];
+        let events = parent_log(&["only message"]);
 
         let session = RecordingSessionService::new();
         let registrar = RecordingRegistrar::new();
         let provider = AlephArc::new(MockProvider::new("summary"));
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
-        // tail_start = 5 ≫ events.len() = 1.
+        // tail_start = 5 ≫ events.len() = 2.
         let outcome = perform_session_split(
             session.as_ref(),
             registrar.as_ref(),

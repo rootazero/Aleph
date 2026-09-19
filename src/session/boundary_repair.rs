@@ -11,7 +11,7 @@
 //!
 //! It used to live in `gateway::resume_coordinator`, which made it a boot-scan
 //! private: `ProjectionReconciler`, the sub-agent recovery path and the doctor
-//! check all needed the same three sentences and could not reach them without
+//! check all needed the same sentences and could not reach them without
 //! pulling in a coordinator, a semaphore and an execution adapter. The repair
 //! is a pure derivation over a [`RunReduction`] plus two store calls; nothing
 //! about it is a gateway concern.
@@ -31,7 +31,7 @@
 //! its `in_flight` slot across the whole candidate, and the team path holds the
 //! dispatcher's task-row lock.
 
-use crate::session::events::{now_ms, RunOutcome, SessionEvent};
+use crate::session::events::{now_ms, ParkReason, RunOutcome, SessionEvent};
 use crate::session::reduction::{reduce_run, DanglingProvenance, RunProgress, RunReduction};
 use crate::session::service::{SessionError, SessionId};
 use crate::session::store::SessionEventStore;
@@ -66,8 +66,8 @@ pub struct RepairReport {
     pub appended: usize,
 }
 
-/// The instruction every arm ends with. Shared so the three sentences cannot
-/// drift apart on the one point that tells the model what to *do*.
+/// The instruction every arm ends with. Shared so the arms cannot drift apart
+/// on the one point that tells the model what to *do*.
 const VERIFY_CLOSE: &str = "Verify the current state before deciding whether to repeat it.";
 
 /// The sentence a dangling call is answered with.
@@ -77,17 +77,31 @@ const VERIFY_CLOSE: &str = "Verify the current state before deciding whether to 
 /// to redo?" from a tool name and its arguments is exactly the reasoning R7
 /// reserves for the model. State the fact; let it judge.
 ///
-/// Three arms because there are three true sentences, and the third one is the
-/// reason `denied` is a field on [`crate::session::reduction::DanglingCall`]
-/// rather than a detail of the approval path: a call the approval gate refused
-/// **did not run**, so telling it "this may have completed and its side effects
-/// have already landed" is a fabrication, and the model's most likely reaction
-/// to that fabrication is to go looking for state that does not exist.
+/// Four arms because there are four true sentences (the parked and the
+/// unknown arms each carry two provenance leads). The third one is the reason
+/// `denied` is a field on [`crate::session::reduction::DanglingCall`] rather
+/// than a detail of the approval path: a call the approval gate refused **did
+/// not run**, so telling it "this may have completed and its side effects have
+/// already landed" is a fabrication, and the model's most likely reaction to
+/// that fabrication is to go looking for state that does not exist. The
+/// fourth (§6.1) is the same fact from the other side of the gate: a call the
+/// log shows still **parked** — on a confirm card, on the sandbox's
+/// capability card, on a hook's card — never ran either, and it says what it
+/// was waiting for. A [`ParkReason::Clarification`] park is the one exception
+/// inside that arm: the stamp is written only after the question was
+/// delivered, so the call did run as far as showing the question — what is
+/// missing is the answer, and the sentence says that instead. Told, not
+/// redelivered (U4): the model decides whether to ask again.
+///
+/// `denied` wins over `parked` — the reducer never sets both, and if a log
+/// ever did the denied sentence is the one that names a decision a person
+/// made.
 #[must_use]
 pub fn boundary_repair_text(
     tool: &str,
     provenance: DanglingProvenance,
     denied: bool,
+    parked: Option<ParkReason>,
     degrade: Option<&DegradeNote>,
 ) -> String {
     let body = if denied {
@@ -97,6 +111,32 @@ pub fn boundary_repair_text(
              happened: no file writes, no commands, no network calls, no change to external \
              state. {VERIFY_CLOSE}"
         )
+    } else if let Some(reason) = parked {
+        // Provenance still decides the lead, as it does for the unknown-outcome
+        // arms: an older parked dangle was left by a run that ended, not by
+        // this restart, and the sentence must not say otherwise.
+        let ended = match provenance {
+            DanglingProvenance::ThisRestart => "the server restarted",
+            DanglingProvenance::EarlierRun => "an earlier run in this session ended",
+        };
+        match reason {
+            // The question reached the person (the stamp is written after
+            // delivery is proven); the answer is what never landed. "Never
+            // ran", "nothing it would have done has happened" and "the gate"
+            // would all be false here.
+            ParkReason::Clarification => format!(
+                "NOT ANSWERED — this `{tool}` call delivered its question, but no answer was \
+                 recorded before {ended}; {reason} is still missing. If you still need the \
+                 answer, ask again. {VERIFY_CLOSE}"
+            ),
+            ParkReason::Approval | ParkReason::PreHook => format!(
+                "NOT EXECUTED — this `{tool}` call never ran: {ended} while it was still \
+                 waiting for {reason}. Nothing it would have done has happened: no file \
+                 writes, no commands, no network calls, no change to external state. If you \
+                 still need it, call it again — it will go through the gate again. \
+                 {VERIFY_CLOSE}"
+            ),
+        }
     } else {
         let lead = match provenance {
             DanglingProvenance::ThisRestart => format!(
@@ -148,6 +188,7 @@ pub fn repairs_for(reduction: &RunReduction, degrade: Option<&DegradeNote>) -> V
                 &call.tool_name,
                 call.provenance,
                 call.denied,
+                call.parked,
                 if i == 0 { degrade } else { None },
             ),
             at,
@@ -273,7 +314,9 @@ pub async fn repair_and_close_abandoned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord, ToolOutput, TurnId};
+    use crate::session::events::{
+        EventSeq, ParkReason, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
+    };
     use crate::session::reduction::reduce_run;
 
     fn rec(seq: EventSeq, event: SessionEvent, created_at_ms: i64) -> SessionEventRecord {
@@ -340,12 +383,28 @@ mod tests {
     }
 
     #[test]
-    fn the_three_arms_are_three_different_sentences() {
-        let restart =
-            boundary_repair_text("bash_exec", DanglingProvenance::ThisRestart, false, None);
-        let earlier =
-            boundary_repair_text("bash_exec", DanglingProvenance::EarlierRun, false, None);
-        let denied = boundary_repair_text("bash_exec", DanglingProvenance::ThisRestart, true, None);
+    fn the_four_arms_are_four_different_sentences() {
+        let restart = boundary_repair_text(
+            "bash_exec",
+            DanglingProvenance::ThisRestart,
+            false,
+            None,
+            None,
+        );
+        let earlier = boundary_repair_text(
+            "bash_exec",
+            DanglingProvenance::EarlierRun,
+            false,
+            None,
+            None,
+        );
+        let denied = boundary_repair_text(
+            "bash_exec",
+            DanglingProvenance::ThisRestart,
+            true,
+            None,
+            None,
+        );
 
         for text in [&restart, &earlier, &denied] {
             assert_shared_points(text, "bash_exec");
@@ -379,6 +438,119 @@ mod tests {
         assert_ne!(restart, earlier);
         assert_ne!(restart, denied);
         assert_ne!(earlier, denied);
+
+        // The fourth arm (§6.1): a call parked at a gate never ran. Like the
+        // denied arm it must deny the side effects outright, and it must name
+        // what the call was waiting for — that clause is `ParkReason`'s
+        // `Display`, so the reasons read as different waits.
+        let parked = boundary_repair_text(
+            "bash_exec",
+            DanglingProvenance::ThisRestart,
+            false,
+            Some(ParkReason::Approval),
+            None,
+        );
+        assert_shared_points(&parked, "bash_exec");
+        assert!(
+            parked.contains("never ran") && parked.contains("operator approval"),
+            "{parked}"
+        );
+        assert!(
+            !parked.contains("may have completed") && parked.contains("no file writes"),
+            "{parked}"
+        );
+        assert!(
+            !parked.contains("OUTCOME UNKNOWN"),
+            "a parked call's outcome is known — it never ran: {parked}"
+        );
+        // The clarification wait is the exception inside the arm: the question
+        // was delivered, so "never ran" would be false; the answer is missing.
+        let unanswered = boundary_repair_text(
+            "ask_user",
+            DanglingProvenance::ThisRestart,
+            false,
+            Some(ParkReason::Clarification),
+            None,
+        );
+        assert_shared_points(&unanswered, "ask_user");
+        assert!(
+            unanswered.contains("delivered its question")
+                && unanswered.contains("no answer was recorded")
+                && unanswered.contains("ask again"),
+            "{unanswered}"
+        );
+        for false_claim in [
+            "never ran",
+            "Nothing it would have done",
+            "the gate",
+            "OUTCOME UNKNOWN",
+        ] {
+            assert!(
+                !unanswered.contains(false_claim),
+                "a delivered question must not be told `{false_claim}`: {unanswered}"
+            );
+        }
+        // Distinct sentences, arm by arm (and the two parked bodies apart).
+        for (a, b) in [
+            (&parked, &denied),
+            (&parked, &restart),
+            (&parked, &earlier),
+            (&unanswered, &parked),
+            (&unanswered, &denied),
+            (&unanswered, &restart),
+        ] {
+            assert_ne!(a, b);
+        }
+        // Every reason reads its own clause; only the two "never ran" reasons
+        // say so; no `EarlierRun` parked dangle is blamed on this restart.
+        for reason in ParkReason::ALL {
+            let text = boundary_repair_text(
+                "t",
+                DanglingProvenance::EarlierRun,
+                false,
+                Some(reason),
+                None,
+            );
+            assert!(text.contains(&reason.to_string()), "{reason:?}: {text}");
+            assert_eq!(
+                text.contains("never ran"),
+                !matches!(reason, ParkReason::Clarification),
+                "{reason:?}: {text}"
+            );
+            assert!(
+                !text.contains("the server restarted"),
+                "an older parked dangle must not be blamed on this restart: {text}"
+            );
+        }
+    }
+
+    /// The reducer marks the call parked; `repairs_for` reads it and picks the
+    /// fourth arm. Asserted through the real reduction so the seam between
+    /// `DanglingCall::parked` and the text is the thing under test.
+    #[test]
+    fn a_parked_dangling_call_is_answered_with_the_parked_arm() {
+        let events = vec![
+            rec(1, run_started(10), 10),
+            rec(2, tool_requested("c1"), 20),
+            rec(
+                3,
+                SessionEvent::ToolCallParked {
+                    turn_id: TurnId::new_v4(),
+                    call_id: "c1".to_string(),
+                    reason: ParkReason::Approval,
+                },
+                30,
+            ),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        let repairs = repairs_for(&reduction, None);
+        assert_eq!(repairs.len(), 1, "a parked call is still unanswered");
+        let SessionEvent::ToolError { error, .. } = &repairs[0] else {
+            panic!("expected ToolError, got {:?}", repairs[0]);
+        };
+        assert!(error.contains("never ran"), "got: {error}");
+        assert!(error.contains("operator approval"), "got: {error}");
+        assert!(!error.contains("OUTCOME UNKNOWN"), "got: {error}");
     }
 
     #[test]

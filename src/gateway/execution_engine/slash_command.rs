@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::sync_primitives::Arc;
 
@@ -236,7 +236,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason: "moa one-shot".to_string(),
                     });
                 }
-                self.execute_direct_tool(run_id, &mode, request, &agent, emitter)
+                // The log the dispatch is journaled into: the process-wide
+                // slot's handle. Resolved HERE, in the dispatcher, so the one
+                // arm that executes anything takes the service as a parameter
+                // — which is what lets a test hand it a refusing one and prove
+                // the tool does not run over an unrecorded dispatch.
+                let session = crate::session::service::global_session_service();
+                self.execute_direct_tool(run_id, &mode, request, &agent, emitter, session)
                     .await
             }
 
@@ -311,13 +317,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// The fast path dispatches through the raw [`ToolRegistry`], which holds
     /// none of the loop's gates. Anything the loop would gate must therefore
     /// NOT run here — see [`Self::slash_gate_reason`].
-    async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
+    ///
+    /// `session` is the log the dispatch is journaled into (§5.3): the
+    /// process-wide slot's handle in production, resolved by the dispatch
+    /// table above; a double in tests. `None` = no log to be durable into,
+    /// the pre-existing degraded shape (tests, the simple engine).
+    /// `pub(super)` for exactly that second caller: `execution_engine::tests`
+    /// hands in a refusing service and asserts the registry saw nothing.
+    pub(super) async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         mode: &serde_json::Value,
         request: &RunRequest,
         agent: &AgentInstance,
         emitter: Arc<E>,
+        session: Option<Arc<dyn crate::session::service::SessionService>>,
     ) -> Result<String, ExecutionError> {
         let tool_id = mode["tool_id"]
             .as_str()
@@ -329,12 +343,43 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let arguments = build_tool_arguments(tool_id, args_str, &request.input);
 
         // Fail closed: a gated call leaves the fast path entirely rather than
-        // running ungated here.
-        if let Some(reason) = self
+        // running ungated here. A call that may run gets the envelope the
+        // gate resolved, frozen onto the run marker below.
+        let envelope = match self
             .slash_gate_reason(tool_id, &arguments, request, agent)
             .await
         {
-            return Err(ExecutionError::Fallthrough { reason });
+            Ok(envelope) => envelope,
+            Err(reason) => return Err(ExecutionError::Fallthrough { reason }),
+        };
+
+        // §5.3: the fact lands before the effect. No handle = no log to be
+        // durable into, the pre-existing degraded shape; a handle whose write
+        // FAILS is a refusal — running the tool over an unrecorded dispatch is
+        // the defect this closes. Both are pinned behaviourally in
+        // `execution_engine::tests` (a witness registry that reads the log
+        // from inside the tool body; a refusing service that must see zero
+        // dispatches), not only by the source census below.
+        let journal = session.map(|svc| {
+            super::fast_path::FastPathJournal::new(svc, request.session_key.clone(), tool_id)
+        });
+        if let Some(journal) = journal.as_ref() {
+            journal
+                .open(
+                    request.input.clone(),
+                    crate::scope::room_author_from_metadata(&request.metadata),
+                    envelope,
+                    arguments.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    ExecutionError::Failed(format!("session log write failed before dispatch: {e}"))
+                })?;
+        } else {
+            warn!(
+                session_key = %request.session_key.to_key_string(),
+                "session/service capability absent; fast path runs unjournaled — see `aleph doctor`"
+            );
         }
 
         // Emit reasoning event
@@ -398,6 +443,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 let response = extract_tool_response(&result);
 
+                // The close batch: receipt, reply, `RunFinished`. A failed
+                // close is logged, not raised — the tool ran and the user is
+                // about to see its answer; the open dispatch stays for the
+                // boot repair to read, which is the truth of what happened.
+                if let Some(journal) = journal.as_ref() {
+                    if let Err(e) = journal.close_ok(result.clone(), response.clone()).await {
+                        warn!(
+                            error = %e,
+                            "fast path: close batch failed; the dispatch stays open for the boot repair"
+                        );
+                    }
+                }
+
                 // Stream response
                 let _ = emitter
                     .emit(StreamEvent::ResponseChunk {
@@ -413,13 +471,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 Ok(response)
             }
-            Err(e) => Err(ExecutionError::Failed(format!(
-                "Tool '{tool_id}' execution failed: {e}"
-            ))),
+            Err(e) => {
+                let msg = format!("Tool '{tool_id}' execution failed: {e}");
+                let failed = ExecutionError::Failed(msg.clone());
+                // The receipt carries the tool's failure; the reply row
+                // carries the echo the user actually saw — `execute.rs` hands
+                // `finalize_fast_path_error` this error's `Display`, which
+                // prefixes "Execution failed: ", so the transcript must be
+                // built from the same `Display` or it shows a different line.
+                if let Some(journal) = journal.as_ref() {
+                    if let Err(e2) = journal.close_err(msg, format!("❌ {failed}")).await {
+                        warn!(
+                            error = %e2,
+                            "fast path: close batch failed; the dispatch stays open for the boot repair"
+                        );
+                    }
+                }
+                Err(failed)
+            }
         }
     }
 
-    /// Why this slash call may not take the fast path, or `None` when it may.
+    /// Why this slash call may not take the fast path (`Err(reason)`), or the
+    /// knob envelope it runs under when it may (`Ok`).
     ///
     /// The fast path is the one tool-dispatch surface with no approval
     /// transport, no `TurnContext` and no `ScopedToolService` — it calls
@@ -432,13 +506,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ///
     /// Every clause is a deterministic hard filter over declared metadata and a
     /// static role — no message-content inspection, no intent classification.
+    ///
+    /// The `Ok` value is the same [`RunEnvelopeSnapshot`] the harness bridge
+    /// freezes onto its `RunStarted` (`runner_impl::run_envelope_snapshot`),
+    /// built from the four knobs this gate already resolves — so the fast
+    /// path's run marker names the tier / mode / think / memory it ran under
+    /// with the same vocabulary, and a resume reads it the same way.
+    ///
+    /// [`RunEnvelopeSnapshot`]: crate::session::events::RunEnvelopeSnapshot
     async fn slash_gate_reason(
         &self,
         name: &str,
         arguments: &serde_json::Value,
         request: &RunRequest,
         agent: &AgentInstance,
-    ) -> Option<String> {
+    ) -> Result<crate::session::events::RunEnvelopeSnapshot, String> {
         use crate::config::types::policies::{effective_permission, ToolFacts};
         use crate::extension::PermissionAction;
 
@@ -458,9 +540,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // The permissions resolver above persists a request-carried tier onto
         // the session as a side effect (stamp-on-carry). Its twins carry the
         // same contract, and a fast-path dispatch IS the turn: run every one of
-        // them too (values unused here — the fast path builds no tool surface
-        // and no prompt) so a knob riding a slash message is not silently
-        // dropped.
+        // them too (the fast path builds no tool surface and no prompt from
+        // the values — they only go onto the run marker's envelope below) so
+        // a knob riding a slash message is not silently dropped.
         //
         // "Every one of them" is load-bearing and was once "the mode and
         // think-level twins" — a count, written when there were three. The
@@ -471,9 +553,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // to stick. `every_stamp_on_carry_resolver_runs_on_the_fast_path`
         // derives the set from the modules that stamp rather than from this
         // list, so a fifth twin is a red test and not a rediscovery.
-        let _ = self.resolve_turn_mode(request).await;
-        let _ = self.resolve_turn_think_level(request).await;
-        let _ = self.resolve_turn_memory_mode(request).await;
+        let mode = self.resolve_turn_mode(request).await;
+        let think = self.resolve_turn_think_level(request).await;
+        let memory = self.resolve_turn_memory_mode(request).await;
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
@@ -491,7 +573,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
 
         if permission != PermissionAction::Allow {
-            return Some(format!(
+            return Err(format!(
                 "`/{name}` resolves to {permission:?} under tier `{}`",
                 exec_tier.id()
             ));
@@ -502,14 +584,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // fires at `full` too — `/self_config` writing the approval settings
         // has to reach the gated path whatever the tier says.
         if exec_tier.asks_for_arguments(name, arguments) {
-            return Some(format!(
+            return Err(format!(
                 "`/{name}` arguments trip the tier's destructive filter or the \
                  gate-removal floor"
             ));
         }
         // Declared `requires_confirmation` gates at EVERY tier, including Full.
         if facts.requires_approval {
-            return Some(format!("`/{name}` requires confirmation"));
+            return Err(format!("`/{name}` requires confirmation"));
         }
         if !caller_is_operator {
             // The config-tier gate (`method_authz`) and the untrusted-surface
@@ -517,15 +599,42 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // contract — a Panel / CLI / loopback operator is never restricted
             // here, so their `/bash` keeps its fast path.
             if crate::gateway::method_authz::tool_requires_operator(name) {
-                return Some(format!("`/{name}` requires an operator caller"));
+                return Err(format!("`/{name}` requires an operator caller"));
             }
             if crate::security::dangerous_tools::is_dangerous_tool(name) {
-                return Some(format!(
+                return Err(format!(
                     "`/{name}` is off-limits to untrusted surfaces by default"
                 ));
             }
         }
-        None
+        Ok(crate::session::events::RunEnvelopeSnapshot {
+            // The `/btw` stamp, copied verbatim as `run_loop` does for a full
+            // turn. On the shipped catalog this is always `None`: the channel
+            // router claims `/btw` ahead of the parser, and no shipped command
+            // word resolves as a side question (both pinned in
+            // `btw_wire_tests`). But `stamp_slash_mode` stamps the key and
+            // THEN asks the parser, so a user-installed tool named `btw`
+            // would bring a stamped `/btw …` here — and the marker must
+            // record what the run actually carried, not what the catalog
+            // usually holds.
+            btw: request
+                .metadata
+                .get(crate::gateway::btw::BTW_METADATA_KEY)
+                .cloned(),
+            // `allowed_tools` stays `None` and that is the truth: the `skill`
+            // arm of the dispatcher above always falls through to the full
+            // loop, and a `direct_tool` mode JSON carries no `allowed_tools`,
+            // so no fast-path run ever executes under a skill scope. `model`
+            // / `model_provider` stay `None` too: no LLM call on this path,
+            // so the run served on no model — the reading `plan_resume`'s
+            // "recorded no model" sentence names.
+            ..crate::session::events::RunEnvelopeSnapshot::from_knobs(
+                Some(exec_tier),
+                Some(mode),
+                think,
+                Some(memory),
+            )
+        })
     }
 }
 
@@ -1112,6 +1221,53 @@ mod arg_mapping_tests {
              surface that completes a turn never runs their resolver — a pick \
              riding that message is silently dropped and the next turn reads \
              the stale stamp: {missing:?}"
+        );
+    }
+
+    /// §5.3: every L0 arm that executes a tool journals the dispatch first.
+    /// Derived from the dispatch table — the ONE `execute_tool(` call in this
+    /// file's production text — and equality on its count.
+    ///
+    /// Anchors are matched on a line-joined view of the code: rustfmt breaks
+    /// a method chain at every `.` once it outgrows the line, so
+    /// `journal.open(` is spelled `journal` / `.open(` across two lines in
+    /// the file. Joining trimmed lines with no separator makes the anchor
+    /// independent of how the chain happened to be wrapped, without touching
+    /// the ordering the assertions below are about.
+    #[test]
+    fn every_fast_path_dispatch_is_journaled_before_it_runs() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/execution_engine/slash_command.rs"
+        ))
+        .unwrap()
+        .replace('\r', "");
+        let code: String = code_text(&production_prefix(&src))
+            .lines()
+            .map(str::trim)
+            .collect();
+        let dispatch_sites = code.matches(".execute_tool(").count();
+        assert_eq!(
+            dispatch_sites, 1,
+            "the fast path has one dispatch site; a second must journal too"
+        );
+        let body = code
+            .split("async fn execute_direct_tool")
+            .nth(1)
+            .expect("execute_direct_tool exists");
+        let open = body
+            .find("journal.open(")
+            .expect("the open batch is written in execute_direct_tool");
+        let run = body
+            .find(".execute_tool(")
+            .expect("dispatch is in execute_direct_tool");
+        assert!(open < run, "the open batch must precede the dispatch");
+        assert!(
+            body.get(run..)
+                .is_some_and(|after| after.contains("journal.close_ok(")
+                    && after.contains("journal.close_err(")),
+            "both closes follow the dispatch"
         );
     }
 

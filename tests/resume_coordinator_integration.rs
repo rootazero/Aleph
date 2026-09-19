@@ -6,7 +6,9 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -19,9 +21,13 @@ use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus
 use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::ResumeCoordinator;
+use alephcore::resilience::{AgentTask, Lane, RiskLevel, StateDatabase, TaskStatus};
 use alephcore::routing::session_key::SessionKey;
-use alephcore::session::events::{now_ms, RunOutcome, SessionEvent, TurnId};
+use alephcore::session::events::{
+    now_ms, Durability, EventSeq, Retire, RunOutcome, SessionEvent, TurnId,
+};
 use alephcore::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+use alephcore::session::SessionError;
 use alephcore::ResumeConfig;
 
 /// Mock `ExecutionAdapter` that records every `execute` call's
@@ -84,6 +90,12 @@ impl ExecutionAdapter for RecordingAdapter {
 /// `SessionKey` under test, so `retrigger`'s `registry.get(agent_id)`
 /// resolves.
 async fn registry_with_agent(agent_id: &str) -> Arc<AgentRegistry> {
+    registry_with_agents(&[agent_id]).await
+}
+
+/// The same registry with one agent per id, all sharing one session manager
+/// — for scans that walk several sessions of different agents at once.
+async fn registry_with_agents(agent_ids: &[&str]) -> Arc<AgentRegistry> {
     use alephcore::gateway::agent_instance::AgentInstanceConfig;
     use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
 
@@ -95,18 +107,20 @@ async fn registry_with_agent(agent_id: &str) -> Arc<AgentRegistry> {
         })
         .expect("session manager"),
     );
-    let cfg = AgentInstanceConfig {
-        agent_id: agent_id.to_string(),
-        workspace: temp.path().join("ws"),
-        agent_dir: temp.path().join("agents").join(agent_id),
-        ..Default::default()
-    };
-    // `AgentRegistry::register` takes `AgentInstance` BY VALUE (not `Arc`)
-    // and is `async` (verified: agent_instance.rs:551). `get` then returns
-    // `Arc<AgentInstance>`.
-    let agent = AgentInstance::new(cfg, sm).unwrap();
     let registry = Arc::new(AgentRegistry::new());
-    registry.register(agent).await;
+    for agent_id in agent_ids {
+        let cfg = AgentInstanceConfig {
+            agent_id: (*agent_id).to_string(),
+            workspace: temp.path().join("ws"),
+            agent_dir: temp.path().join("agents").join(agent_id),
+            ..Default::default()
+        };
+        // `AgentRegistry::register` takes `AgentInstance` BY VALUE (not `Arc`)
+        // and is `async` (verified: agent_instance.rs:551). `get` then returns
+        // `Arc<AgentInstance>`.
+        let agent = AgentInstance::new(cfg, sm.clone()).unwrap();
+        registry.register(agent).await;
+    }
     // The dirs must outlive the registry, which outlives this frame. Registered
     // for removal at process exit instead of abandoned: this helper is called
     // once per test, so `mem::forget` here left 14 trees behind every run.
@@ -259,14 +273,14 @@ async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions,
         test_bus(),
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let calls = calls.lock().await;
@@ -293,14 +307,14 @@ async fn interrupted_run_is_repaired_and_retriggered() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.scanned, 1);
@@ -379,6 +393,8 @@ async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_rais
             memory_mode: Some(MemoryMode::Off.id().to_string()),
             model: Some("aleph-test-model".to_string()),
             model_provider: Some("openai".to_string()),
+            allowed_tools: None,
+            btw: None,
         }),
     )
     .await;
@@ -387,14 +403,14 @@ async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_rais
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
     assert_eq!(
@@ -498,8 +514,9 @@ async fn on_demand_resume_repairs_and_retriggers_the_named_session() {
 /// `repair_boundary` is a read-then-append, so two winners append the same
 /// synthetic `ToolError` twice and the session ends up with one `call_id`
 /// answered by two `tool_result`s — which the provider rejects on every
-/// subsequent turn. The boot scan never exposed this (sequential loop); the
-/// on-demand face does, including against the boot scan itself.
+/// subsequent turn. The boot scan claims one slot per session, so its own
+/// candidates never collide; the on-demand face does, including against the
+/// boot scan itself.
 ///
 /// The assertion is the invariant, not the lock: **exactly one** repair event,
 /// whichever way the two futures interleave. If they serialize instead of
@@ -636,7 +653,7 @@ async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig {
             enabled: false,
@@ -646,7 +663,7 @@ async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
 
     // The scan stays off...
     assert_eq!(
@@ -677,14 +694,14 @@ async fn disabled_config_never_triggers_execute() {
         enabled: false,
         ..ResumeConfig::default()
     };
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         cfg,
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report, alephcore::gateway::ResumeReport::default());
@@ -694,42 +711,48 @@ async fn disabled_config_never_triggers_execute() {
     );
 }
 
+/// Seed the state the coordinator itself produces after `n` resumes that each
+/// crashed before the resumed run's `RunStarted`: one open run, then `n`
+/// `ResumeAttempted` stamps naming it. This is the shape production writes;
+/// three bare `RunStarted` (the old fixture) is one it never does, and under
+/// the intent-side ratchet that shape reads `attempts: 0` and would retrigger.
+async fn seed_crash_looped_run(store: &Arc<dyn SessionEventStore>, sid: &SessionKey, n: u32) {
+    let at = now_ms();
+    store
+        .append(
+            sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r1".into(),
+                at,
+                project_root: None,
+                envelope: None,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    for attempt in 1..=n {
+        store
+            .append(
+                sid,
+                1 + u64::from(attempt),
+                &SessionEvent::ResumeAttempted { target: 1, attempt },
+                at + i64::from(attempt),
+            )
+            .await
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let store = store();
     // Unique agent/session key: the goal store is process-global in this
     // test binary, so each abandon-path test owns its own session.
     let sid = SessionKey::main("cap-agent");
-    let at = now_ms();
-    // 3 consecutive RunStarted with no RunFinished == default max_attempts.
-    for (i, ev) in [
-        SessionEvent::RunStarted {
-            run_id: "r1".into(),
-            at,
-            project_root: None,
-            envelope: None,
-        },
-        SessionEvent::RunStarted {
-            run_id: "r2".into(),
-            at: at + 1,
-            project_root: None,
-            envelope: None,
-        },
-        SessionEvent::RunStarted {
-            run_id: "r3".into(),
-            at: at + 2,
-            project_root: None,
-            envelope: None,
-        },
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        store
-            .append(&sid, (i as u64) + 1, &ev, now_ms())
-            .await
-            .unwrap();
-    }
+    // One RunStarted + 3 intent stamps == default max_attempts.
+    seed_crash_looped_run(&store, &sid, 3).await;
 
     // Active goal in the session — its crash recovery hangs entirely on the
     // coordinator's retrigger→post_run chain, so abandoning must block it
@@ -749,14 +772,14 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.scanned, 1);
@@ -808,44 +831,15 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         migrate_add_session_events(&conn).unwrap();
         Arc::new(SqliteEventStore::new(conn))
     };
-    passive_store
-        .append(
-            &passive_sid,
-            1,
-            &SessionEvent::RunStarted {
-                run_id: "r-p1".into(),
-                at,
-                project_root: None,
-                envelope: None,
-            },
-            at,
-        )
-        .await
-        .unwrap();
-    for (i, run) in ["r-p2", "r-p3"].iter().enumerate() {
-        passive_store
-            .append(
-                &passive_sid,
-                (i as u64) + 2,
-                &SessionEvent::RunStarted {
-                    run_id: (*run).into(),
-                    at: at + 1 + i as i64,
-                    project_root: None,
-                    envelope: None,
-                },
-                at,
-            )
-            .await
-            .unwrap();
-    }
-    let coordinator2 = ResumeCoordinator::new(
+    seed_crash_looped_run(&passive_store, &passive_sid, 3).await;
+    let coordinator2 = Arc::new(ResumeCoordinator::new(
         passive_store.clone(),
         ResumeConfig::default(),
         Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(passive_sid.agent_id()).await,
         sessions(),
         test_bus(),
-    );
+    ));
     coordinator2.resume_interrupted_runs().await;
     assert_eq!(
         goals
@@ -855,6 +849,150 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
             .status,
         alephcore::goal::GoalStatus::Active,
         "a passive goal must survive an unrelated abandon untouched"
+    );
+}
+
+/// §5.1 / §5.6: three boots whose retrigger never reaches `RunStarted` — the
+/// adapter records the call and writes nothing, i.e. a crash in admit / hook /
+/// seed. Under the old counter `trailing_starts` never moved and this looped
+/// forever; the intent stamp counts the ATTEMPT, not the run's own marker.
+#[tokio::test]
+async fn a_retrigger_that_never_starts_is_capped_by_the_intent_stamp() {
+    let store = store();
+    let sid = SessionKey::main("ratchet-agent");
+    seed_interrupted_run(&store, &sid).await;
+    let cfg = ResumeConfig {
+        max_attempts: 2,
+        ..ResumeConfig::default()
+    };
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    // Each boot is a fresh coordinator over the SAME log. The coordinator is
+    // built outside the future so the future owns it outright.
+    let boot = || {
+        let c = Arc::new(ResumeCoordinator::new(
+            store.clone(),
+            cfg.clone(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions(),
+            test_bus(),
+        ));
+        async move { c.resume_interrupted_runs().await }
+    };
+    let r1 = boot().await;
+    assert_eq!((r1.resumed, r1.abandoned), (1, 0));
+    let r2 = boot().await;
+    assert_eq!((r2.resumed, r2.abandoned), (1, 0));
+    let r3 = boot().await;
+    assert_eq!(
+        (r3.resumed, r3.abandoned),
+        (0, 1),
+        "attempts == max_attempts: abandon, no retrigger"
+    );
+    let r4 = boot().await;
+    assert_eq!((r4.resumed, r4.abandoned, r4.skipped), (0, 0, 1));
+    assert_eq!(
+        calls.lock().await.len(),
+        2,
+        "exactly two retriggers were ever dispatched"
+    );
+    let stamps: Vec<(u64, u32)> = store
+        .load_all_events(&sid)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ResumeAttempted { target, attempt } => Some((*target, *attempt)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stamps,
+        vec![(3, 1), (3, 2)],
+        "each stamp names the RunStarted (seq 3) and its ordinal"
+    );
+}
+
+/// An adapter that, at the moment `execute` is invoked, reads the session's
+/// log and records how many `ResumeAttempted` stamps are ALREADY durable.
+///
+/// The ratchet test above counts boots and stamps after the fact, which a
+/// stamp written AFTER the retrigger passes just as well (the mock adapter
+/// returns at once, so the stamp lands either way — measured: moving the stamp
+/// below `retrigger` left that test green). Only an observer inside `execute`
+/// can tell "written before" from "written after".
+struct StampWitnessAdapter {
+    store: Arc<dyn SessionEventStore>,
+    /// Stamp count visible in the log at each `execute` call, in call order.
+    seen: Arc<Mutex<Vec<usize>>>,
+}
+
+#[async_trait]
+impl ExecutionAdapter for StampWitnessAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        let stamps = self
+            .store
+            .load_all_events(&request.session_key)
+            .await
+            .map_err(|e| ExecutionError::Failed(e.to_string()))?
+            .iter()
+            .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
+            .count();
+        self.seen.lock().await.push(stamps);
+        Ok(())
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+/// §5.1's ORDER, asserted where it is observable: when the engine is handed
+/// the resumed run, this boot's stamp is already in the log. A crash inside
+/// `execute` (admit / hook / seed — before the run's own `RunStarted`) then
+/// still counts on the next boot.
+#[tokio::test]
+async fn the_intent_stamp_is_durable_before_the_engine_is_handed_the_run() {
+    let store = store();
+    let sid = SessionKey::main("stamp-order-agent");
+    seed_interrupted_run(&store, &sid).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let adapter = Arc::new(StampWitnessAdapter {
+        store: store.clone(),
+        seen: seen.clone(),
+    });
+    let registry = registry_with_agent(sid.agent_id()).await;
+    for _ in 0..2 {
+        let c = Arc::new(ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions(),
+            test_bus(),
+        ));
+        let r = c.resume_interrupted_runs().await;
+        assert_eq!(r.resumed, 1);
+    }
+    assert_eq!(
+        *seen.lock().await,
+        vec![1, 2],
+        "at each execute, this boot's own stamp was already durable"
     );
 }
 
@@ -891,14 +1029,14 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.abandoned, 1);
@@ -914,6 +1052,226 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
         goal.note.as_deref().unwrap_or("").contains("too old"),
         "blocked note must carry the reason: {:?}",
         goal.note
+    );
+}
+
+/// `max_age_secs` is measured from the interruption, not from the last
+/// ATTEMPT to resume it. Since §5.1 every boot writes a `ResumeAttempted`
+/// stamp — the newest marker AND the newest in-scope event — and a stamp that
+/// counted as "alive" would let each boot's own attempt resurrect a run the
+/// operator's window had already ruled out. Here the run is two days old and
+/// the stamp is a moment old: still too old.
+#[tokio::test]
+async fn a_fresh_stamp_does_not_resurrect_a_run_interrupted_too_long_ago() {
+    let store = store();
+    let sid = SessionKey::main("stale-stamped-agent");
+    let old_at = now_ms() - 2 * 86_400 * 1000; // 2 days > default max_age 1 day
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-old".into(),
+                at: old_at,
+                project_root: None,
+                envelope: None,
+            },
+            old_at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            &sid,
+            2,
+            &SessionEvent::ResumeAttempted {
+                target: 1,
+                attempt: 1,
+            },
+            now_ms(),
+        )
+        .await
+        .unwrap();
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+
+    assert_eq!((report.abandoned, report.resumed), (1, 0));
+    assert!(
+        calls.lock().await.is_empty(),
+        "a fresh stamp must not make a two-day-old run resumable"
+    );
+}
+
+/// The one thing a [`FaultingStore`] refuses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fault {
+    /// Any batch carrying a `ResumeAttempted` — the intent stamp (§5.1).
+    StampAppend,
+    /// Every `load_events_range` — the unanswered tail read (§5.2).
+    TailRead,
+}
+
+/// A store that refuses exactly one thing and nothing else: every other call
+/// reaches the real `SqliteEventStore` underneath, so the rest of the log
+/// stays readable and writable and the refusal is the only fault in play.
+struct FaultingStore {
+    inner: Arc<dyn SessionEventStore>,
+    fault: Fault,
+}
+
+#[async_trait]
+impl SessionEventStore for FaultingStore {
+    async fn append_batch(
+        &self,
+        session_id: &SessionKey,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError> {
+        if self.fault == Fault::StampAppend
+            && events
+                .iter()
+                .any(|(e, _)| matches!(e, SessionEvent::ResumeAttempted { .. }))
+        {
+            return Err(SessionError::Storage("disk full: stamp refused".into()));
+        }
+        self.inner
+            .append_batch(session_id, first_seq, events, retire, durability)
+            .await
+    }
+    async fn load_all_events(
+        &self,
+        session_id: &SessionKey,
+    ) -> Result<Vec<alephcore::session::SessionEventRecord>, SessionError> {
+        self.inner.load_all_events(session_id).await
+    }
+    async fn load_events_range(
+        &self,
+        session_id: &SessionKey,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<alephcore::session::SessionEventRecord>, SessionError> {
+        if self.fault == Fault::TailRead {
+            return Err(SessionError::Storage("i/o error: tail read refused".into()));
+        }
+        self.inner.load_events_range(session_id, from, to).await
+    }
+    async fn load_head_seq(&self, session_id: &SessionKey) -> Result<EventSeq, SessionError> {
+        self.inner.load_head_seq(session_id).await
+    }
+    async fn retire_from(
+        &self,
+        session_id: &SessionKey,
+        from_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        self.inner.retire_from(session_id, from_seq).await
+    }
+    async fn is_retired(
+        &self,
+        session_id: &SessionKey,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        self.inner.is_retired(session_id, seq).await
+    }
+    async fn load_run_markers(
+        &self,
+    ) -> Result<Vec<(SessionKey, alephcore::session::store::MarkerSlice)>, SessionError> {
+        self.inner.load_run_markers().await
+    }
+    async fn load_rows(
+        &self,
+        session_id: &SessionKey,
+    ) -> Result<Vec<alephcore::session::store::DecodedRow>, SessionError> {
+        self.inner.load_rows(session_id).await
+    }
+    async fn retire_record(
+        &self,
+        session_id: &SessionKey,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        self.inner.retire_record(session_id, seq).await
+    }
+}
+
+/// §5.1's closed side: a stamp that does not land REFUSES the resume. The
+/// alternative — warn and retrigger anyway — is a resume the next boot cannot
+/// count, i.e. the unbounded loop the stamp exists to close. Pinned at the
+/// effect: the refusal is filed under its own word, the adapter is never
+/// called, and nothing pretends the run was abandoned either.
+#[tokio::test]
+async fn a_stamp_that_does_not_land_refuses_the_resume_without_retriggering() {
+    let inner = store();
+    let sid = SessionKey::main("stamp-refused-agent");
+    seed_interrupted_run(&inner, &sid).await;
+    let store: Arc<dyn SessionEventStore> = Arc::new(FaultingStore {
+        inner: inner.clone(),
+        fault: Fault::StampAppend,
+    });
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+
+    assert_eq!(
+        (report.scanned, report.resumed, report.abandoned),
+        (1, 0, 0)
+    );
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    let (refused_sid, refusal) = &report.refused[0];
+    assert_eq!(refused_sid, &sid);
+    assert!(
+        matches!(
+            refusal,
+            alephcore::gateway::ResumeRefusal::IntentStampFailed(_)
+        ),
+        "filed under its own word, not as a retrigger or repair failure: {refusal:?}"
+    );
+    assert_eq!(refusal.reason(), "intent_stamp_failed");
+    assert!(
+        calls.lock().await.is_empty(),
+        "a resume without its stamp must not be dispatched"
+    );
+
+    let all = inner.load_all_events(&sid).await.unwrap();
+    assert!(
+        all.iter().any(|r| matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "dangling-1")),
+        "the boundary repair before the stamp still landed"
+    );
+    assert!(
+        !all.iter().any(|r| matches!(
+            &r.event,
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Abandoned,
+                ..
+            }
+        )),
+        "a refused stamp is not an abandonment: the run stays resumable"
+    );
+    assert!(
+        !all.iter()
+            .any(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. })),
+        "the refused stamp is not in the log"
     );
 }
 
@@ -972,14 +1330,14 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
     );
     set_channel_config_snapshot(channel_configs);
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
 
@@ -1026,14 +1384,14 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let calls = calls.lock().await;
@@ -1110,14 +1468,14 @@ async fn a_resumed_run_reaches_the_gateway_bus() {
     let bus = Arc::new(alephcore::gateway::event_bus::GatewayEventBus::new());
     let mut rx = bus.subscribe_typed();
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         Arc::new(EmittingAdapter) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions(),
         bus,
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let mut saw_accepted = None;
@@ -1218,14 +1576,14 @@ async fn a_delegated_session_is_repaired_and_its_own_marker_closed() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -1266,14 +1624,14 @@ async fn a_delegated_session_the_engine_is_running_is_left_alone() {
     });
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -1289,4 +1647,1041 @@ async fn a_delegated_session_the_engine_is_running_is_left_alone() {
         store.load_all_events(&sid).await.expect("load").len(),
         "not one append while somebody else is writing"
     );
+}
+
+// ---- §5.2 Unanswered: the seed→RunStarted window ---------------------------
+
+/// A `UserMessage` with no marker around it, exactly as `seed_session` writes
+/// it before the run's own `RunStarted`.
+fn seeded_user(tid: TurnId, text: &str, at: i64) -> SessionEvent {
+    SessionEvent::UserMessage {
+        turn_id: tid,
+        content: alephcore::session::events::MessageContent {
+            text: text.into(),
+            blocks: vec![],
+            thinking: None,
+            thinking_signature: None,
+        },
+        at,
+        synthetic: false,
+        author_user_id: None,
+    }
+}
+
+/// Every `ResumeAttempted` stamp in the log, in seq order, as `(target,
+/// attempt)`.
+async fn stamps(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<(EventSeq, u32)> {
+    store
+        .load_all_events(sid)
+        .await
+        .expect("load")
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ResumeAttempted { target, attempt } => Some((*target, *attempt)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// §5.2: a seeded message no run ever answered, in a session with no run
+/// marker at all. The marker scan cannot see it; the activity window can —
+/// the session row `execute()` creates before seeding is what puts it there.
+/// The stamp names the message, the retrigger carries `resume`, and nothing
+/// is repaired because nothing dangled.
+#[tokio::test]
+async fn an_unanswered_seed_is_stamped_and_retriggered_without_repair() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let sessions = sessions();
+    // The row `execute()` creates before seeding — what puts it in the window.
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let c = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    ));
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!(
+        (r.scanned, r.resumed, r.unsnapshotted),
+        (1, 1, 0),
+        "not counted as unsnapshotted: there was no RunStarted to snapshot ({r:?})"
+    );
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+    let all = store.load_all_events(&sid).await.unwrap();
+    assert!(matches!(
+        all.last().map(|r| &r.event),
+        Some(SessionEvent::ResumeAttempted {
+            target: 2,
+            attempt: 1
+        })
+    ));
+    assert!(
+        !all.iter()
+            .any(|r| matches!(r.event, SessionEvent::ToolError { .. })),
+        "no boundary repair: nothing dangled"
+    );
+}
+
+/// The shape the SECOND boot sees: `[.., RunFinished, UserMessage,
+/// ResumeAttempted]`. The stamp is the newest marker, so a read that started
+/// past the last marker would never see the message again — the seed would
+/// hide behind its own stamp forever. The read starts past the last
+/// `RunFinished` instead, and the ratchet climbs: `[1, 2]`, both naming the
+/// message.
+#[tokio::test]
+async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-stamped-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let events: Vec<SessionEvent> = vec![
+        SessionEvent::RunStarted {
+            run_id: "run-0".into(),
+            at,
+            project_root: None,
+            envelope: None,
+        },
+        SessionEvent::RunFinished {
+            run_id: "run-0".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 1,
+        },
+        SessionEvent::TurnStarted {
+            turn_id: tid,
+            trigger: alephcore::session::events::TurnTrigger::UserMessage,
+            at: at + 2,
+        },
+        seeded_user(tid, "still there?", at + 3),
+    ];
+    for (i, ev) in events.iter().enumerate() {
+        store
+            .append(&sid, i as EventSeq + 1, ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let boot = || {
+        Arc::new(ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions.clone(),
+            test_bus(),
+        ))
+    };
+
+    let first = boot().resume_interrupted_runs().await;
+    assert_eq!((first.scanned, first.resumed), (1, 1), "{first:?}");
+    assert_eq!(stamps(&store, &sid).await, vec![(4, 1)]);
+
+    let second = boot().resume_interrupted_runs().await;
+    assert_eq!(
+        (second.scanned, second.resumed, second.skipped),
+        (1, 1, 0),
+        "the stamped seed is still unanswered, not `skipped`: {second:?}"
+    );
+    assert_eq!(stamps(&store, &sid).await, vec![(4, 1), (4, 2)]);
+    assert_eq!(calls.lock().await.len(), 2);
+}
+
+/// The cap reads the unanswered ratchet the same way `Interrupted` reads its
+/// own: `max_attempts` stamps already spent ⇒ abandoned, not retriggered, and
+/// the closer pairs with no `RunStarted` (a `FinishWithoutStart` by design).
+#[tokio::test]
+async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-capped-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(&sid, 1, &seeded_user(tid, "hello?", at), at)
+        .await
+        .unwrap();
+    let max_attempts = ResumeConfig::default().max_attempts;
+    for attempt in 1..=max_attempts {
+        store
+            .append(
+                &sid,
+                1 + EventSeq::from(attempt),
+                &SessionEvent::ResumeAttempted { target: 1, attempt },
+                at + i64::from(attempt),
+            )
+            .await
+            .unwrap();
+    }
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let r = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    ))
+    .resume_interrupted_runs()
+    .await;
+    assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 0, 1), "{r:?}");
+    assert!(
+        calls.lock().await.is_empty(),
+        "capped: nothing re-triggered"
+    );
+    let all = store.load_all_events(&sid).await.unwrap();
+    // The closer is the last MARKER: after every stamp, and nothing but the
+    // coordinator's own note about it follows (the note's position is pinned
+    // by `an_abandoned_run_gets_a_system_note_after_its_closer`).
+    let closer = all
+        .iter()
+        .rposition(|r| {
+            matches!(
+                r.event,
+                SessionEvent::RunFinished {
+                    outcome: RunOutcome::Abandoned,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("the abandon closer landed: {all:?}"));
+    assert!(
+        all[closer + 1..]
+            .iter()
+            .all(|r| matches!(r.event, SessionEvent::SystemMessage { .. })),
+        "nothing but the note follows the closer: {:?}",
+        &all[closer + 1..]
+    );
+}
+
+/// §5.2's closed side: a tail that cannot be read is "I cannot tell whether
+/// the last message was answered", filed under its own word — not a repair
+/// failure (none was attempted), not `skipped` (nothing was decided), and
+/// nothing is stamped or dispatched on a question with no answer.
+#[tokio::test]
+async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
+    let inner = store();
+    let sid = SessionKey::main("tail-refused-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    inner
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    inner
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let store: Arc<dyn SessionEventStore> = Arc::new(FaultingStore {
+        inner: inner.clone(),
+        fault: Fault::TailRead,
+    });
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let report = Arc::new(ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    ))
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(
+        (
+            report.scanned,
+            report.resumed,
+            report.skipped,
+            report.abandoned
+        ),
+        (1, 0, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    let (refused_sid, refusal) = &report.refused[0];
+    assert_eq!(refused_sid, &sid);
+    assert!(
+        matches!(
+            refusal,
+            alephcore::gateway::ResumeRefusal::TailReadFailed(_)
+        ),
+        "filed under its own word, not as a repair failure: {refusal:?}"
+    );
+    assert_eq!(refusal.reason(), "tail_read_failed");
+    assert!(
+        calls.lock().await.is_empty(),
+        "an unanswerable question must not be dispatched"
+    );
+    assert!(stamps(&inner, &sid).await.is_empty(), "nothing was stamped");
+    assert_eq!(
+        inner.load_all_events(&sid).await.unwrap().len(),
+        2,
+        "not one append on a log nobody could read"
+    );
+}
+
+/// Criterion #8 at the resume face, with the real store: a session whose
+/// marker row this build cannot decode is refused under its own kind — filed
+/// as `log_inconsistent` with the undecodable-record contradiction, never
+/// read as "no markers" and never as clean — while its neighbour, interrupted
+/// and decodable, is resumed exactly as before. The whole scan used to fail
+/// on the first such row, refusing every session at once.
+#[tokio::test]
+async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_face() {
+    use alephcore::session::reduction::LogContradiction;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    migrate_add_session_events(&conn).unwrap();
+    let concrete = Arc::new(SqliteEventStore::new(conn));
+    let store: Arc<dyn SessionEventStore> = concrete.clone();
+    let bad = SessionKey::main("undecodable-marker-agent");
+    let good = SessionKey::main("decodable-neighbour-agent");
+    seed_interrupted_run(&store, &bad).await;
+    seed_interrupted_run(&store, &good).await;
+    // A marker row with an outcome word this build's `RunOutcome` does not
+    // know: a `run_finished` written by a newer build, inserted RAW — past
+    // `encode_row`, exactly as it would sit on disk.
+    concrete
+        .insert_raw_row_for_test(
+            &bad,
+            99,
+            "run_finished",
+            r#"{"type":"run_finished","run_id":"run-1","outcome":"from_the_future","at":1}"#,
+        )
+        .await;
+
+    let sessions = sessions();
+    for sid in [&bad, &good] {
+        sessions.get_or_create(sid).await.unwrap();
+    }
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let report = Arc::new(ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(good.agent_id()).await,
+        sessions,
+        test_bus(),
+    ))
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(
+        (report.scanned, report.resumed, report.skipped),
+        (2, 1, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        report.refused,
+        vec![(
+            bad.clone(),
+            alephcore::gateway::ResumeRefusal::LogInconsistent(
+                LogContradiction::UndecodableRecord { seq: 99 }
+            )
+        )],
+        "refused under its own kind, naming the row"
+    );
+    assert_eq!(report.refused[0].1.reason(), "log_inconsistent");
+    let dispatched: Vec<String> = calls.lock().await.iter().map(|c| c.0.clone()).collect();
+    assert_eq!(
+        dispatched,
+        vec![good.to_key_string()],
+        "the neighbour resumed; the refused session was never dispatched"
+    );
+}
+
+/// The verb's second face (criterion #9): `agent.resume` / `aleph-server
+/// resume` on a session with no run marker asks the same §5.2 question and
+/// acts on it — it used to return the zero report ("nothing to resume") for
+/// exactly the session whose user is waiting.
+#[tokio::test]
+async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retriggers() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-on-demand-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    );
+
+    let report = coordinator
+        .resume_session(&sid)
+        .await
+        .expect("markers readable");
+    assert_eq!(
+        (report.scanned, report.resumed, report.skipped),
+        (1, 1, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        stamps(&store, &sid).await,
+        vec![(2, 1)],
+        "the stamp names the message"
+    );
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, sid.to_key_string());
+    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+}
+
+/// An adapter whose `execute` takes real time: every session at least `floor`,
+/// ONE session `slow_delay`. The boot scan's fan-out is only observable
+/// through runs that overlap: this wraps [`RecordingAdapter`] and records, per
+/// call, when it entered and left, plus the high-water mark of calls in
+/// flight at once. The floor is what makes the high-water mark a fact about
+/// the cap rather than about spawn order — whichever two candidates hold the
+/// permits first, both are still inside `execute` after `floor`.
+///
+/// The slow session is matched by its WHOLE key string, never by substring:
+/// `agent:a:main` and `agent:b:main` share most of their bytes.
+struct SlowAdapter {
+    inner: RecordingAdapter,
+    slow_key: String,
+    slow_delay: Duration,
+    floor: Duration,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+    entries: Mutex<Vec<(String, Instant)>>,
+    exits: Mutex<Vec<(String, Instant)>>,
+}
+
+impl SlowAdapter {
+    fn new(slow: &SessionKey, slow_delay: Duration, floor: Duration) -> Self {
+        Self {
+            inner: RecordingAdapter::new(),
+            slow_key: slow.to_key_string(),
+            slow_delay,
+            floor,
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            entries: Mutex::new(Vec::new()),
+            exits: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn entries(&self) -> Vec<(String, Instant)> {
+        self.entries.lock().await.clone()
+    }
+
+    async fn exits(&self) -> Vec<(String, Instant)> {
+        self.exits.lock().await.clone()
+    }
+
+    fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl ExecutionAdapter for SlowAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        let key = request.session_key.to_key_string();
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        self.entries
+            .lock()
+            .await
+            .push((key.clone(), Instant::now()));
+        let delay = if key == self.slow_key {
+            self.slow_delay
+        } else {
+            self.floor
+        };
+        tokio::time::sleep(delay).await;
+        let result = self.inner.execute(request, agent, emitter).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.exits.lock().await.push((key, Instant::now()));
+        result
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        self.inner.cancel(run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        self.inner.get_status(run_id).await
+    }
+
+    async fn active_run_count(&self) -> usize {
+        self.inner.active_run_count().await
+    }
+}
+
+/// §8.1: the boot scan walks its candidates `[resume] max_concurrent` at a
+/// time, so one slow resume does not hold every later candidate behind it.
+///
+/// Three interrupted sessions under a cap of 2: every resume takes at least
+/// 300 ms and one (`b`) takes 2 s. The discriminating assertion is
+/// `max_in_flight == 2`: a serial walk never has two runs in flight, an
+/// unbounded fan-out reaches 3, and the 300 ms floor makes the 2 hold by
+/// construction — whichever two candidates take the permits first (the store
+/// orders groups by session id, but the test must not lean on that), both
+/// are still running 300 ms later. The ordering assertions say the same
+/// thing from the other side — the two fast sessions finish while the slow
+/// one is still running — and the wall clock bound is a sanity ceiling on
+/// the whole scan: measured on this host, fan-out 2.06–2.09 s (a and c
+/// overlap b), serial 2.70 s (0.3 + 2 + 0.3 with `Semaphore::new(1)`), so
+/// the bound alone cannot tell the shapes apart, which is why it is not the
+/// only guard here. Under that same cap-1 mutation the permit order followed
+/// the scheduler rather than the spawn order (c ran before b), and only
+/// `max_in_flight` went red — the ordering assertions are the weaker pair.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_not_block_the_rest()
+{
+    let store = store();
+    let keys = ["a", "b", "c"].map(SessionKey::main);
+    for k in &keys {
+        seed_interrupted_run(&store, k).await;
+    }
+    let adapter = Arc::new(SlowAdapter::new(
+        &keys[1],
+        Duration::from_secs(2),
+        Duration::from_millis(300),
+    ));
+    let registry = registry_with_agents(&["a", "b", "c"]).await;
+    let cfg = ResumeConfig {
+        max_concurrent: 2,
+        ..ResumeConfig::default()
+    };
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store,
+        cfg,
+        adapter.clone() as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+
+    let t0 = Instant::now();
+    let report = coordinator.resume_interrupted_runs().await;
+    let elapsed = t0.elapsed();
+    assert_eq!((report.scanned, report.resumed), (3, 3), "{report:?}");
+
+    let key = |k: &str| SessionKey::main(k).to_key_string();
+    let entered = adapter.entries().await;
+    let exited = adapter.exits().await;
+    let entered_at = |k: &str| {
+        entered
+            .iter()
+            .find(|(s, _)| *s == key(k))
+            .unwrap_or_else(|| panic!("{k} never reached the adapter: {entered:?}"))
+            .1
+    };
+    let exited_at = |k: &str| {
+        exited
+            .iter()
+            .find(|(s, _)| *s == key(k))
+            .unwrap_or_else(|| panic!("{k} never left the adapter: {exited:?}"))
+            .1
+    };
+    assert!(
+        exited_at("a") < exited_at("b") && exited_at("c") < exited_at("b"),
+        "a and c must finish before the 2 s session: {exited:?}"
+    );
+    assert!(
+        entered_at("c") < exited_at("b"),
+        "c must START while b is still running — a serial walk starts it after: \
+         entries {entered:?} / exits {exited:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(3500),
+        "the whole scan took {elapsed:?}; serial would be ≥ 2 s + everything else"
+    );
+    assert_eq!(adapter.max_in_flight(), 2, "the cap bounds the burst");
+}
+
+// ---------------------------------------------------------------------------
+// §8.2(b): a queued task whose seed never reached the log
+// ---------------------------------------------------------------------------
+
+/// The `agent_tasks` row the engine writes BEFORE it seeds the session:
+/// Main-lane, `running`, `task_prompt` = the user's input, `created_at` in
+/// unix SECONDS (floored, so a seed appended in the same second already reads
+/// as "at or after the row" — every test below writes the row first, the
+/// production order). Left `running` so `reconcile_orphaned_tasks` — the boot
+/// step that runs before the scan — flips it to `interrupted` the way a real
+/// crash leaves it.
+async fn orphan_task_row(db: &StateDatabase, sid: &SessionKey, prompt: &str) {
+    orphan_task_row_keyed(db, &sid.to_key_string(), sid.agent_id(), prompt).await;
+}
+
+/// The same row with `parent_session_id` spelled by the caller: the store has
+/// written more than one spelling of a session key over its life, and a row
+/// carries whichever one it was given.
+async fn orphan_task_row_keyed(
+    db: &StateDatabase,
+    parent_session_id: &str,
+    agent_id: &str,
+    prompt: &str,
+) {
+    let mut task = AgentTask::new(
+        "run-orphan",
+        parent_session_id,
+        agent_id,
+        prompt,
+        RiskLevel::Low,
+    );
+    task.lane = Lane::Main;
+    db.insert_agent_task(&task).await.unwrap();
+    db.update_task_status(&task.id, TaskStatus::Running)
+        .await
+        .unwrap();
+}
+
+/// A session whose task row promised a run that never seeded: the log holds
+/// only the `SessionWoken` the engine writes on wake — no `UserMessage`, no
+/// `RunStarted` — and the row carries `prompt`.
+async fn orphan_fixture(
+    prompt: &str,
+) -> (Arc<dyn SessionEventStore>, Arc<StateDatabase>, SessionKey) {
+    let store = store();
+    let sid = SessionKey::main("orphan");
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    orphan_task_row(&db, &sid, prompt).await;
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::SessionWoken { at, prior_head: 0 },
+            at,
+        )
+        .await
+        .unwrap();
+    (store, db, sid)
+}
+
+/// Every `SystemMessage` in the session's log, in seq order.
+async fn system_notes(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<String> {
+    store
+        .load_all_events(sid)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.event {
+            SessionEvent::SystemMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user typed something, the engine wrote its task row, and the process
+/// died before the seed reached the log. The message is gone; the only honest
+/// thing is to say so, ONCE — the row is stamped, so a second boot writes
+/// nothing more — and never to re-run anything (R7: no run is chosen for the
+/// user here).
+#[tokio::test]
+async fn a_task_whose_seed_never_landed_gets_exactly_one_resend_notice_across_two_boots() {
+    let (store, db, sid) = orphan_fixture("buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let boot = || {
+        Arc::new(
+            ResumeCoordinator::new(
+                store.clone(),
+                ResumeConfig::default(),
+                adapter.clone() as Arc<dyn ExecutionAdapter>,
+                registry.clone(),
+                sessions(),
+                test_bus(),
+            )
+            .with_state_database(db.clone()),
+        )
+    };
+    assert_eq!(boot().resume_interrupted_runs().await.notified, 1);
+    assert_eq!(
+        boot().resume_interrupted_runs().await.notified,
+        0,
+        "idempotent across boots"
+    );
+    let notes = system_notes(&store, &sid).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("lost before it was recorded")
+            && notes[0].contains("buy milk")
+            && notes[0].contains("re-send"),
+        "{}",
+        notes[0]
+    );
+    assert!(
+        calls.lock().await.is_empty(),
+        "a lost-input notice never re-triggers a run"
+    );
+}
+
+/// The row's session has an open run: the seed DID land and the resume arm
+/// owns the session. The notice arm must neither speak nor leave the row for
+/// the next boot to re-ask — the question is closed, so the row is stamped.
+#[tokio::test]
+async fn a_task_whose_session_has_an_open_run_is_left_to_the_resume_arm() {
+    let store = store();
+    let sid = SessionKey::main("orphan-open-run");
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    // Row first, then the seed — the engine's order.
+    orphan_task_row(&db, &sid, "do a long task").await;
+    seed_interrupted_run(&store, &sid).await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!((report.resumed, report.notified), (1, 0), "{report:?}");
+    assert_eq!(
+        calls.lock().await.len(),
+        1,
+        "the resume arm re-triggered it"
+    );
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "no notice for a session the resume arm owns"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the row IS stamped: closed by the resume arm, not left for the next boot"
+    );
+}
+
+/// An abandoned run gets its in-band note AFTER the `RunFinished { Abandoned }`
+/// closer, so a reader of the log sees the verdict before the sentence about
+/// it, and the note is a `SystemMessage` event — the one voice the coordinator
+/// has, never a direct write into the `messages` projection.
+#[tokio::test]
+async fn an_abandoned_run_gets_a_system_note_after_its_closer() {
+    let store = store();
+    let sid = SessionKey::main("orphan-abandoned");
+    // A few seconds old: with `max_age_secs: 0` the age is strictly positive
+    // whatever millisecond the scan runs in.
+    let old_at = now_ms() - 5_000;
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-old".into(),
+                at: old_at,
+                project_root: None,
+                envelope: None,
+            },
+            old_at,
+        )
+        .await
+        .unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig {
+            max_age_secs: 0,
+            ..ResumeConfig::default()
+        },
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.abandoned, 1, "{report:?}");
+    assert!(
+        calls.lock().await.is_empty(),
+        "abandoned must not re-trigger"
+    );
+
+    let all = store.load_all_events(&sid).await.unwrap();
+    let [closer, note] = &all[all.len() - 2..] else {
+        panic!("expected a closer and a note at the tail: {all:?}");
+    };
+    assert!(
+        matches!(
+            closer.event,
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Abandoned,
+                ..
+            }
+        ),
+        "the closer comes first: {:?}",
+        closer.event
+    );
+    match &note.event {
+        SessionEvent::SystemMessage { content, .. } => {
+            assert!(content.contains("abandoned"), "{content}");
+        }
+        other => panic!("the note follows its closer, got {other:?}"),
+    }
+}
+
+/// A resume re-trigger writes a task row with `task_prompt = ""` (`retrigger`
+/// sends `input: String::new()`), and the crash-loop ratchet leaves such a row
+/// with no events of its own every boot. There is no message to re-send, so
+/// the row is adjudicated silently — stamped, never announced.
+#[tokio::test]
+async fn a_resume_retrigger_row_with_an_empty_prompt_is_adjudicated_without_a_notice() {
+    // empty prompt = the retrigger's shape
+    let (store, db, sid) = orphan_fixture("").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    assert_eq!(boot.resume_interrupted_runs().await.notified, 0);
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "an empty prompt is never a lost message"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped, so it is not re-examined every boot"
+    );
+}
+
+/// The seed landed and its run closed before the process died: the shape
+/// every row on an upgraded database has on its first boot, and the one a
+/// crash between `RunFinished` and the row's status update leaves behind.
+/// Nothing was lost, so a notice here would tell the user to re-send a
+/// message that was answered. Mutation partner: `let seeded = false;` turns
+/// this red (the lost-seed test cannot — it has no `UserMessage` to detect).
+#[tokio::test]
+async fn a_task_whose_seed_landed_and_whose_run_closed_is_stamped_without_a_notice() {
+    let store = store();
+    let sid = SessionKey::main("orphan-landed");
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    // Row first, then the seed and its whole run — the engine's order.
+    orphan_task_row(&db, &sid, "buy milk").await;
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let events = [
+        seeded_user(tid, "buy milk", at),
+        SessionEvent::RunStarted {
+            run_id: "r-landed".into(),
+            at: at + 1,
+            project_root: None,
+            envelope: None,
+        },
+        SessionEvent::RunFinished {
+            run_id: "r-landed".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 2,
+        },
+    ];
+    for (i, ev) in events.into_iter().enumerate() {
+        store
+            .append(&sid, (i as u64) + 1, &ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let coordinator = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(
+        (report.resumed, report.abandoned, report.notified),
+        (0, 0, 0),
+        "{report:?}"
+    );
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "the seed landed: there is nothing to re-send"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped: the question is closed"
+    );
+}
+
+/// `[resume] enabled = false` turns off run resumption, not the lost-input
+/// notice: a message that never reached the log is not a run to resume. A
+/// disabled launch visits no candidate and walks no marker log, and its
+/// `settle` still adjudicates the task rows — the boot wiring settles it
+/// for exactly this reason.
+#[tokio::test]
+async fn a_disabled_resume_scan_still_writes_the_lost_input_notice() {
+    let (store, db, sid) = orphan_fixture("buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig {
+                enabled: false,
+                ..ResumeConfig::default()
+            },
+            adapter as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = boot.resume_interrupted_runs().await;
+    assert_eq!(
+        (report.scanned, report.notified),
+        (0, 1),
+        "nothing scanned, one notice: {report:?}"
+    );
+    assert!(
+        calls.lock().await.is_empty(),
+        "disabled: nothing re-triggered"
+    );
+    let notes = system_notes(&store, &sid).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("buy milk"), "{}", notes[0]);
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped even with the scan off"
+    );
+}
+
+/// A row whose `parent_session_id` is spelled the LEGACY way still gets its
+/// notice. The coordinator reads a key string somebody else PERSISTED, so it
+/// must accept every spelling the store ever wrote — `from_key_string`
+/// (= `parse().or_else(from_legacy)`), never `parse` alone. Derived from the
+/// parser pair rather than from a hand-written key: the fixture asserts the
+/// string is legacy-only before relying on it. (The pin the deleted
+/// `orphan_notice` module carried, moved to the arm that replaced it.)
+#[tokio::test]
+async fn a_legacy_spelled_session_key_still_gets_its_lost_input_notice() {
+    let legacy = "agent:legacyorphan:peer:telegram:99";
+    assert!(
+        SessionKey::parse(legacy).is_none() && SessionKey::from_key_string(legacy).is_some(),
+        "fixture no longer exercises the legacy-only branch"
+    );
+    let key = SessionKey::from_key_string(legacy).unwrap();
+    let store = store();
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    orphan_task_row_keyed(&db, legacy, key.agent_id(), "buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(key.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    assert_eq!(
+        boot.resume_interrupted_runs().await.notified,
+        1,
+        "a legacy-spelled key got no lost-input notice at all"
+    );
+    let notes = system_notes(&store, &key).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("buy milk"), "{}", notes[0]);
 }

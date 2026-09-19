@@ -410,10 +410,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
 
-        // Wire L0 raw-memory writer so every gateway-mediated agent turn is
-        // captured into raw_memories. Without this, only session-compaction
-        // residue and SessionEnd writes reach L0; short conversations under
-        // the WS path never persist and the L1 pipeline starves.
+        // L0 raw-memory writer, carried onto every instance the registry
+        // builds. Nothing on the per-turn path consumes it: its one reader
+        // was `AgentInstance::add_message_with_run_id`'s transcript capture,
+        // deleted 2026-09-13 with zero production callers, so this is a
+        // SEVERED FEATURE (criterion #7), not a wire that captures turns.
+        // What reaches L0 today: per-turn, only the compactor's residue
+        // (`post_turn_compress`); on disconnect, the `SessionEnd` row the
+        // `SessionManager`'s own writer emits (`session_manager/ops/emit.rs`).
+        // CUT or CONNECT-at-the-projector is a pending product decision — see
+        // the T17 report's FOLLOW-UP; do not read this call as capture.
         agent_registry
             .set_raw_memory_writer(memory_db.clone()
                 as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
@@ -1342,7 +1348,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Reconcile agent tasks orphaned by a previous crash: a row still
         // marked `running` means the prior process died mid-flight. Mark them
         // interrupted and report each one. This runs before the engine accepts
-        // any request, so no live task can be misclassified.
+        // any request, so no live task can be misclassified. What the user is
+        // told about each row is decided later, by the resume scan
+        // (`ResumeCoordinator::adjudicate_orphaned_tasks`), which can read the
+        // session log and tell a run it resumed from a message that was lost.
         if let Some(ref state_db) = resilience_db {
             match state_db.reconcile_orphaned_tasks().await {
                 Ok(orphans) => {
@@ -1356,19 +1365,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         );
                     }
                     if !orphans.is_empty() {
-                        // Leave the user a durable receipt in each orphaned
-                        // task's session so a mid-run restart no longer ends
-                        // their conversation silently.
-                        let notified = alephcore::gateway::orphan_notice::notify_interrupted_tasks(
-                            session_store.as_ref(),
-                            &orphans,
-                        )
-                        .await;
-                        tracing::info!(
-                            count = orphans.len(),
-                            notified,
-                            "Reconciled orphaned agent tasks"
-                        );
+                        tracing::info!(count = orphans.len(), "Reconciled orphaned agent tasks");
                     }
                 }
                 Err(error) => {

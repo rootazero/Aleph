@@ -23,6 +23,7 @@ use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
 use crate::projects::binding::ClaimSource;
+use crate::session::events::{now_ms, ErrorKind, MessageContent, RunOutcome, SessionEvent, TurnId};
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -442,6 +443,136 @@ pub(super) async fn ensure_session_under_request_scope(
     .await;
 }
 
+/// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
+/// a receipt, so a reload shows "this turn was stopped by a hook" and the
+/// reducer reads `Clean` rather than `Unanswered` (which would retrigger a
+/// run the hook already refused). Its writers are the pre-seed hook seams —
+/// the ones that return before the harness is handed the request; the set is
+/// derived by `hook_stop_tests::every_pre_seed_hook_exit_journals_the_stop`,
+/// not listed here.
+///
+/// The seed pair is written here because the bridge's `seed_history`
+/// (`runner_impl.rs`) never runs on this path — **text only**: the receipt
+/// writes `blocks: Vec::new()`, so a stopped attachment turn reloads without
+/// its images (both seams fire before media is resolved, and the seed the
+/// bridge would have written is the one carrying `media_blocks`). A resume
+/// (`is_resume`) already holds its user message in the log and gets only the
+/// run bracket. With no
+/// turn opened on that arm the receipt names `turn_id: None` — a turn id that
+/// points at no `TurnStarted` would be a specific lie. `RunStarted.envelope`
+/// is `None` for the same reason: this writer resolved no knobs, and the run
+/// is closed in the same batch so nothing ever replays it. `Error{HookStop}`
+/// reuses the guardrail receipt's projection row
+/// (`session::projection::project_row`) and is NOT prompt-bearing.
+///
+/// One `now_ms()` for the whole batch: it is one moment, and per-row calls
+/// can straddle a millisecond. The batch's durability is derived from its
+/// members by `events::durability_of` (U3) — `RunStarted` makes it a barrier
+/// on both arms — never chosen here.
+pub(super) fn hook_stop_receipt(
+    request: &RunRequest,
+    outcome: RunOutcome,
+    text: &str,
+) -> Vec<SessionEvent> {
+    let at = now_ms();
+    let run_id = format!("hookstop-{}", uuid::Uuid::new_v4());
+    // `Some` exactly when this batch opens the turn it files the receipt under.
+    let seeded_turn = (!request.is_resume()).then(TurnId::new_v4);
+    let mut events = Vec::with_capacity(5);
+    if let Some(turn_id) = seeded_turn {
+        events.extend(SessionEvent::user_turn(
+            turn_id,
+            MessageContent {
+                text: request.input.clone(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            crate::scope::room_author_from_metadata(&request.metadata),
+            at,
+        ));
+    }
+    events.push(SessionEvent::RunStarted {
+        run_id: run_id.clone(),
+        at,
+        project_root: request
+            .workspace_override
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        envelope: None,
+    });
+    events.push(SessionEvent::Error {
+        turn_id: seeded_turn,
+        kind: ErrorKind::HookStop,
+        message: text.to_string(),
+        // The model cannot retry its way past a hook; the hook (or the
+        // input it judged) has to change.
+        recoverable: false,
+        at,
+    });
+    events.push(SessionEvent::RunFinished {
+        run_id,
+        outcome,
+        at,
+    });
+    events
+}
+
+/// One batch, best-effort: a stop that could not be journaled still stops
+/// the run; the warn is the trace. Mirrors
+/// `harness_bridge::callback::record_input_block`, the guardrail twin.
+///
+/// What "best-effort" costs is NOT the same on the two arms that call this:
+/// - **deny** (`return Err`): the user sees a `RunError` from the `Err`
+///   regardless (`execute.rs`'s failure arm); a lost receipt loses the
+///   reload, not the report.
+/// - **prevent_continuation** (`return Ok(stop_msg)`): `execute.rs` binds
+///   the loop's `Ok` string as `_response` and drops it — no
+///   `ResponseChunk`, no `RunComplete` — so the receipt's projected row
+///   ("Stopped by hook: …") IS the report. A refused or absent journal there
+///   is a silent stop: no error, no text, the turn gone (the pre-receipt
+///   behaviour). Logged, not escalated — escalating would change the arm's
+///   contract, which is not this writer's call.
+///
+/// Resolves the process-global service and delegates to
+/// [`journal_hook_stop_with`], which is the testable half.
+pub(super) async fn journal_hook_stop(request: &RunRequest, outcome: RunOutcome, text: &str) {
+    let svc = crate::session::service::global_session_service();
+    journal_hook_stop_with(svc.as_deref(), request, outcome, text).await;
+}
+
+/// [`journal_hook_stop`] with the service handed in. Returns `()` whatever
+/// the store says, so no caller can make its own `return` depend on the
+/// receipt — that is the "best-effort" contract, as a type.
+pub(super) async fn journal_hook_stop_with(
+    svc: Option<&dyn crate::session::service::SessionService>,
+    request: &RunRequest,
+    outcome: RunOutcome,
+    text: &str,
+) {
+    let Some(svc) = svc else {
+        warn!(
+            session_key = %request.session_key.to_key_string(),
+            "session/service capability absent; hook stop not journaled — see `aleph doctor`"
+        );
+        return;
+    };
+    if let Err(e) = svc
+        .emit_batch(
+            &request.session_key,
+            hook_stop_receipt(request, outcome, text),
+            None,
+        )
+        .await
+    {
+        warn!(
+            session_key = %request.session_key.to_key_string(),
+            error = %e,
+            "hook stop receipt append failed"
+        );
+    }
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
@@ -498,6 +629,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason = %reason,
                         "BeforeAgentStart hook aborted the run"
                     );
+                    // §5.4: the receipt goes down BEFORE the stop is reported
+                    // — and on this arm it IS reported: the `Err` becomes a
+                    // `RunError` in `execute.rs`, so the user sees the reason
+                    // whether or not the batch landed; the receipt only adds
+                    // the reload. The closer says `Errored` — the plan's word
+                    // (the spec said `Cancelled`; both reduce `Clean`, and
+                    // `Errored` is what the caller's `RunState::Failed`
+                    // already says about this exit).
+                    journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "BeforeAgentStart hook aborted the run: {reason}"
                     )));
@@ -518,6 +658,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         run_id = run_id,
                         "BeforeAgentStart hook requested prevent_continuation; stopping run"
                     );
+                    // §5.4: same receipt as the deny arm; `Cancelled` because
+                    // the run did what the hook asked — this is not an error.
+                    // Unlike the deny arm, the receipt is the ONLY report
+                    // here: `execute.rs` drops this `Ok` string
+                    // (`Ok(_response)`), so a refused batch is a silent stop
+                    // — see `journal_hook_stop`'s doc.
+                    journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                     return Ok(stop_msg);
                 }
                 Ok(_) => {}
@@ -658,5 +805,529 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
         result
+    }
+}
+
+/// The receipt a `BeforeAgentStart` stop leaves (§5.4) is a pure builder, so
+/// it is tested next to itself; `tests.rs` holds the integration-shaped ones.
+#[cfg(test)]
+mod hook_stop_tests {
+    use super::*;
+    use crate::session::events::{
+        batch_durability, Durability, ErrorKind, RunOutcome, SessionEvent, SessionEventRecord,
+    };
+    use crate::session::reduction::{reduce_run, RunDisposition};
+    use crate::session::store::event_type_tag;
+
+    fn request(input: &str, resume: bool) -> RunRequest {
+        let mut metadata = std::collections::HashMap::new();
+        if resume {
+            metadata.insert("resume".to_string(), "true".to_string());
+        }
+        RunRequest {
+            run_id: "test-run".to_string(),
+            input: input.to_string(),
+            session_key: crate::routing::session_key::SessionKey::main("hook-stop"),
+            timeout_secs: None,
+            metadata,
+            attachments: Vec::new(),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            model_override: None,
+        }
+    }
+
+    fn seq_log(events: Vec<SessionEvent>) -> Vec<SessionEventRecord> {
+        events
+            .into_iter()
+            .enumerate()
+            .map(|(i, e)| SessionEventRecord {
+                seq: i as u64 + 1,
+                event: e,
+                created_at_ms: (i as i64 + 1) * 10,
+            })
+            .collect()
+    }
+
+    fn kinds(events: &[SessionEvent]) -> Vec<&'static str> {
+        events.iter().map(event_type_tag).collect()
+    }
+
+    /// Every payload `at` in the batch is the same instant: it is one moment,
+    /// and per-row `now_ms()` calls can straddle a millisecond.
+    fn assert_one_instant(events: &[SessionEvent]) {
+        let ats: Vec<i64> = events
+            .iter()
+            .map(|e| match e {
+                SessionEvent::TurnStarted { at, .. }
+                | SessionEvent::UserMessage { at, .. }
+                | SessionEvent::RunStarted { at, .. }
+                | SessionEvent::Error { at, .. }
+                | SessionEvent::RunFinished { at, .. } => *at,
+                other => panic!("unexpected receipt member {other:?}"),
+            })
+            .collect();
+        assert!(
+            ats.windows(2).all(|w| w[0] == w[1]),
+            "one batch, one instant; got {ats:?}"
+        );
+    }
+
+    /// §5.4: the log says "a run happened and the hook stopped it" — five
+    /// events, reducing Clean, so §5.2 does not read it as an unanswered
+    /// message and retrigger it three times.
+    #[test]
+    fn a_stopping_hook_leaves_five_events_that_reduce_clean() {
+        let evs = hook_stop_receipt(
+            &request("hi", false),
+            RunOutcome::Cancelled,
+            "halted by policy",
+        );
+        assert_eq!(
+            kinds(&evs),
+            [
+                "turn_started",
+                "user_message",
+                "run_started",
+                "error",
+                "run_finished"
+            ]
+        );
+        assert!(matches!(
+            &evs[3],
+            SessionEvent::Error { kind: ErrorKind::HookStop, message, recoverable: false, .. }
+                if message == "halted by policy"
+        ));
+        let r = reduce_run(&seq_log(evs)).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+        assert!(r.dangling.is_empty() && r.contradictions.is_empty());
+    }
+
+    /// The seed pair carries the user's text, the run bracket shares one
+    /// `run_id`, the receipt files under the turn the batch opened, and the
+    /// closer carries the outcome the arm chose.
+    #[test]
+    fn the_receipt_is_one_turn_one_run_one_instant() {
+        let evs = hook_stop_receipt(&request("hi", false), RunOutcome::Cancelled, "halted");
+        assert_one_instant(&evs);
+        let (
+            SessionEvent::TurnStarted { turn_id: t0, .. },
+            SessionEvent::UserMessage {
+                turn_id: t1,
+                content,
+                synthetic,
+                ..
+            },
+        ) = (&evs[0], &evs[1])
+        else {
+            panic!("seed pair first, got {:?}", kinds(&evs));
+        };
+        assert_eq!(t0, t1, "the seed pair shares a turn");
+        assert_eq!(content.text, "hi");
+        assert!(!synthetic, "the user's own words are not harness-authored");
+        let (
+            SessionEvent::RunStarted {
+                run_id: r0,
+                envelope,
+                ..
+            },
+            SessionEvent::Error { turn_id, .. },
+            SessionEvent::RunFinished {
+                run_id: r1,
+                outcome,
+                ..
+            },
+        ) = (&evs[2], &evs[3], &evs[4])
+        else {
+            panic!("run bracket around the receipt, got {:?}", kinds(&evs));
+        };
+        assert_eq!(r0, r1, "the bracket names one run");
+        assert!(
+            r0.starts_with("hookstop-"),
+            "a locally-minted marker id, got {r0}"
+        );
+        assert!(envelope.is_none(), "this writer resolved no knobs");
+        assert_eq!(
+            *turn_id,
+            Some(*t0),
+            "the receipt files under the turn it opened"
+        );
+        assert_eq!(*outcome, RunOutcome::Cancelled);
+    }
+
+    /// A resumed run already holds its user message; the receipt must not
+    /// seed a second, empty one — and with no turn opened here, the receipt
+    /// names none rather than a turn the log never saw.
+    #[test]
+    fn a_hook_stopped_resume_writes_no_seed_pair() {
+        let evs = hook_stop_receipt(&request("", true), RunOutcome::Errored, "denied");
+        assert_eq!(kinds(&evs), ["run_started", "error", "run_finished"]);
+        assert_one_instant(&evs);
+        assert!(
+            matches!(
+                &evs[1],
+                SessionEvent::Error {
+                    turn_id: None,
+                    kind: ErrorKind::HookStop,
+                    ..
+                }
+            ),
+            "no turn was opened, so none is named; got {:?}",
+            evs[1]
+        );
+        assert!(matches!(
+            &evs[2],
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Errored,
+                ..
+            }
+        ));
+        let r = reduce_run(&seq_log(evs)).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+    }
+
+    /// U3: the batch's durability is DERIVED from its members by the store's
+    /// policy table, never chosen here. Both shapes carry `RunStarted`, so
+    /// both are a barrier — asserted through the real derivation, so a
+    /// receipt that lost its marker would fail here, not in production.
+    #[test]
+    fn both_receipt_shapes_derive_a_barrier_from_their_members() {
+        for (resume, label) in [(false, "seeded"), (true, "resume")] {
+            let evs = hook_stop_receipt(&request("hi", resume), RunOutcome::Cancelled, "x");
+            assert_eq!(
+                batch_durability(evs.iter()),
+                Durability::Barrier,
+                "{label}: a receipt without a barrier member could be lost on crash"
+            );
+        }
+    }
+
+    /// The effect, not the call: after `journal_hook_stop` the session log
+    /// holds the receipt, in order, and the real reducer reads it `Clean` —
+    /// so the census below is guarding a wire that actually reaches the
+    /// store. `SessionKey::ephemeral` mints a fresh id: the shared test
+    /// service is one store, and tests keep to their own keys.
+    #[tokio::test]
+    async fn journal_hook_stop_appends_the_receipt_to_the_session_log() {
+        use crate::session::service::SessionService;
+        let svc = crate::session::in_process::install_test_session_service();
+        let mut req = request("hi", false);
+        req.session_key = crate::routing::session_key::SessionKey::ephemeral("hook-stop");
+
+        journal_hook_stop(&req, RunOutcome::Cancelled, "halted by policy").await;
+
+        let records = svc
+            .get_events(&req.session_key, None, None)
+            .await
+            .expect("the log reads back");
+        let logged: Vec<&'static str> = records.iter().map(|r| event_type_tag(&r.event)).collect();
+        assert_eq!(
+            logged,
+            [
+                "turn_started",
+                "user_message",
+                "run_started",
+                "error",
+                "run_finished"
+            ],
+            "the receipt reached the store as one batch, in order"
+        );
+        let r = reduce_run(&records).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+    }
+
+    /// The best-effort contract as behaviour: a refused batch and an absent
+    /// service both come back normally, so the arm's `return` that follows
+    /// the call runs unconditionally (`journal_hook_stop_with` returns `()`;
+    /// there is nothing an arm could branch on). What each arm LOSES when
+    /// this happens differs and is stated in `journal_hook_stop`'s doc. This
+    /// goes red the day someone `expect`s the batch result inside.
+    #[tokio::test]
+    async fn a_refused_or_absent_journal_returns_normally() {
+        let refusing = super::super::tests::RefusingSessionService;
+        let req = request("hi", false);
+        journal_hook_stop_with(Some(&refusing), &req, RunOutcome::Cancelled, "halted").await;
+        journal_hook_stop_with(None, &req, RunOutcome::Errored, "denied").await;
+    }
+
+    /// §5.2 "a hook-stopped resume does not retrigger", on the two REAL resume
+    /// shapes rather than the receipt in isolation. The coordinator stamps
+    /// `ResumeAttempted{target}` naming the open `RunStarted` (interrupted)
+    /// or the unanswered `UserMessage`, writes no `RunFinished` before
+    /// retriggering, and the retriggered run is then stopped by a hook,
+    /// leaving the resume-arm receipt. Without the receipt each log reads
+    /// `Interrupted{1}` / `Unanswered{1}` — the shape the coordinator would
+    /// stamp and retrigger again; with it, `Clean` and no contradiction.
+    #[test]
+    fn a_hook_stopped_resume_reduces_clean_in_both_real_shapes() {
+        let turn = TurnId::new_v4();
+        let seed = SessionEvent::user_turn(
+            turn,
+            MessageContent {
+                text: "hi".into(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            None,
+            1,
+        );
+        let receipt = || hook_stop_receipt(&request("", true), RunOutcome::Cancelled, "halted");
+
+        // Interrupted: the crash landed after `RunStarted` (seq 3).
+        let mut interrupted: Vec<SessionEvent> = seed.to_vec();
+        interrupted.push(SessionEvent::RunStarted {
+            run_id: "crashed".into(),
+            at: 1,
+            project_root: None,
+            envelope: None,
+        });
+        interrupted.push(SessionEvent::ResumeAttempted {
+            target: 3,
+            attempt: 1,
+        });
+        let before = reduce_run(&seq_log(interrupted.clone())).expect("legal");
+        assert_eq!(
+            before.disposition,
+            RunDisposition::Interrupted { attempts: 1 },
+            "control: without the receipt this is what the coordinator would retrigger"
+        );
+        interrupted.extend(receipt());
+        let after = reduce_run(&seq_log(interrupted)).expect("legal");
+        assert_eq!(after.disposition, RunDisposition::Clean);
+        assert!(
+            after.contradictions.is_empty(),
+            "{:?}",
+            after.contradictions
+        );
+
+        // Unanswered: the crash landed before `RunStarted` (the message is seq 2).
+        let mut unanswered: Vec<SessionEvent> = seed.to_vec();
+        unanswered.push(SessionEvent::ResumeAttempted {
+            target: 2,
+            attempt: 1,
+        });
+        let before = reduce_run(&seq_log(unanswered.clone())).expect("legal");
+        assert_eq!(
+            before.disposition,
+            RunDisposition::Unanswered {
+                user_seq: 2,
+                attempts: 1
+            },
+            "control: without the receipt this is what the coordinator would retrigger"
+        );
+        unanswered.extend(receipt());
+        let after = reduce_run(&seq_log(unanswered)).expect("legal");
+        assert_eq!(after.disposition, RunDisposition::Clean);
+        assert!(
+            after.contradictions.is_empty(),
+            "{:?}",
+            after.contradictions
+        );
+    }
+
+    /// The corpus the two censuses below walk: each file of the loop that
+    /// dispatches lifecycle hooks, as comment- and literal-stripped production
+    /// code, with the **hand-off** after which a hook stop is no longer
+    /// "before the seed" — the seed pair is written by the bridge's
+    /// `seed_history`, which runs inside the stage each hand-off starts.
+    /// Everything before the hand-off is pre-seed by construction; nothing
+    /// here names which hooks live there.
+    struct PreSeedFile {
+        name: &'static str,
+        code: String,
+        hand_off: &'static str,
+    }
+
+    fn pre_seed_files() -> Vec<PreSeedFile> {
+        use crate::utils::source_scan::{code_text, production_prefix};
+        vec![
+            PreSeedFile {
+                name: "run_loop/mod.rs",
+                code: code_text(&production_prefix(include_str!("mod.rs"))),
+                hand_off: ".run_agent_loop_inner(",
+            },
+            PreSeedFile {
+                name: "run_loop/inner.rs",
+                code: code_text(&production_prefix(include_str!("inner.rs"))),
+                hand_off: "run_dispatch_and_drain_classified(",
+            },
+        ]
+    }
+
+    /// The dispatch line is the anchor: a hook-event name inside a comment or
+    /// a `warn!` string cannot satisfy it (`code_text` strips both).
+    const DISPATCH: &str = "execute_interceptors(HookEvent::";
+
+    /// Where a file's pre-seed region ends — asserted unique so a moved or
+    /// renamed hand-off cannot silently widen or empty the region.
+    fn hand_off_at(file: &PreSeedFile) -> usize {
+        assert_eq!(
+            file.code.matches(file.hand_off).count(),
+            1,
+            "{}: the hand-off marker `{}` must occur exactly once in the production half",
+            file.name,
+            file.hand_off
+        );
+        file.code.find(file.hand_off).expect("counted once above")
+    }
+
+    /// The block a hook dispatch is matched on: from the first `{` after the
+    /// anchor to its matching `}`. Brace-balanced on stripped code, so a
+    /// brace inside a literal cannot desynchronise it, and indifferent to
+    /// how the arms are spelled (`Ok(_) => {}`, `Err(e) =>`, an `if let`).
+    ///
+    /// **It recognises exactly ONE shape of stop exit**: a `return ` (with
+    /// the trailing space) lexically inside that first brace block. It
+    /// cannot see a hoisted result (`let hr = match … { … }; if hr.denied {
+    /// return … }` — the `return` is in the NEXT statement), a `?`, or a
+    /// bare `return;`. Both live seams are the recognised shape, and
+    /// `the_twin_hook_seams_fire_before_anything_seeds_the_turn` pins them
+    /// by name; a seam written in one of the unseen shapes would be counted
+    /// as zero exits and pass — write it in this shape, or extend this.
+    fn dispatch_body(after_anchor: &str) -> &str {
+        let open = after_anchor
+            .find('{')
+            .expect("a hook dispatch is followed by a block");
+        let mut depth = 0usize;
+        for (i, c) in after_anchor.char_indices() {
+            if i < open {
+                continue;
+            }
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return after_anchor.get(open..=i).expect("char boundaries");
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced braces after a hook dispatch:\n{after_anchor}");
+    }
+
+    /// Every hook exit that stops a run before the seed owes the receipt, and
+    /// owes it BEFORE it returns. Derived, not listed: the corpus is the two
+    /// loop files, the sites are every interceptor dispatch before each
+    /// file's hand-off, the exits are the `return`s inside each dispatch's
+    /// block, and the equality is `journal calls == exits` — so a third
+    /// pre-seed seam with a bare `return` is red on arrival, and a journal
+    /// call moved after its `return` (or into the caller) leaves that exit's
+    /// segment empty. The post-seed dispatch (`AgentEnd`) sits after the
+    /// hand-off and is deliberately outside the rule.
+    #[test]
+    fn every_pre_seed_hook_exit_journals_the_stop() {
+        let mut exits_total = 0usize;
+        let mut journaled_total = 0usize;
+        let mut sites: Vec<(&str, String, usize)> = Vec::new();
+        for file in pre_seed_files() {
+            let cut = hand_off_at(&file);
+            for (offset, _) in file.code.match_indices(DISPATCH) {
+                if offset >= cut {
+                    continue;
+                }
+                // The body is taken from the whole file so a block that
+                // straddles the cut is not truncated; only the site's
+                // position decides whether it is governed.
+                let after = file
+                    .code
+                    .get(offset + DISPATCH.len()..)
+                    .expect("char boundary");
+                let hook = after.split(',').next().unwrap_or("?").to_string();
+                let body = dispatch_body(after);
+                let segments: Vec<&str> = body.split("return ").collect();
+                let exits = segments.len() - 1;
+                for (i, before) in segments[..exits].iter().enumerate() {
+                    let n = before.matches("journal_hook_stop(").count();
+                    assert_eq!(
+                        n, 1,
+                        "{}: HookEvent::{hook} exit {i} must journal exactly once before it \
+                         returns; segment:\n{before}",
+                        file.name
+                    );
+                    journaled_total += n;
+                }
+                assert_eq!(
+                    segments[exits].matches("journal_hook_stop(").count(),
+                    0,
+                    "{}: HookEvent::{hook} — a journal call after the last return is unreachable",
+                    file.name
+                );
+                exits_total += exits;
+                sites.push((file.name, hook, exits));
+            }
+        }
+        assert_eq!(
+            journaled_total, exits_total,
+            "every pre-seed stop exit journals; derived sites (file, hook, exits): {sites:?}"
+        );
+        assert!(
+            exits_total > 0,
+            "no pre-seed hook exit found at all — the dispatch anchor or a hand-off rotted; \
+             sites: {sites:?}"
+        );
+    }
+
+    /// The twins are PRE-SEED, which is what licenses the receipt to write the
+    /// seed pair (and, on a resume, to skip it): each dispatch sits before its
+    /// file's hand-off, and no seed writer is spelled on the path from the
+    /// enclosing function's signature to the dispatch. `prepare_history` on
+    /// that path may compact, but the seed-pair constructors it could reach
+    /// are pinned by `reduction::tests::user_message_producers_are_the_known_set`
+    /// — none is in the compactor. Names are written here on purpose: this
+    /// pins two facts, it does not count anything.
+    #[test]
+    fn the_twin_hook_seams_fire_before_anything_seeds_the_turn() {
+        const SEED_WRITERS: [&str; 4] = [
+            "user_turn(",
+            "seed_history(",
+            "seed_session(",
+            "UserMessage {",
+        ];
+        let files = pre_seed_files();
+        for (name, enclosing_fn, hook) in [
+            ("run_loop/mod.rs", "fn run_agent_loop<", "BeforeAgentStart"),
+            (
+                "run_loop/inner.rs",
+                "fn run_agent_loop_inner<",
+                "UserPromptSubmit",
+            ),
+        ] {
+            let file = files
+                .iter()
+                .find(|f| f.name == name)
+                .expect("the corpus names this file");
+            let anchor = format!("{DISPATCH}{hook},");
+            assert_eq!(
+                file.code.matches(&anchor).count(),
+                1,
+                "{name}: exactly one HookEvent::{hook} dispatch"
+            );
+            let at = file.code.find(&anchor).expect("counted once above");
+            let start = file
+                .code
+                .find(enclosing_fn)
+                .expect("the enclosing function is where it was");
+            assert!(
+                start < at && at < hand_off_at(file),
+                "{name}: HookEvent::{hook} must fire inside {enclosing_fn}.. and before the \
+                 hand-off `{}` — otherwise it is no longer pre-seed and the receipt would \
+                 double-seed",
+                file.hand_off
+            );
+            let path = file.code.get(start..at).expect("char boundaries");
+            for writer in SEED_WRITERS {
+                assert_eq!(
+                    path.matches(writer).count(),
+                    0,
+                    "{name}: `{writer}` on the path to HookEvent::{hook} — the seam is no \
+                     longer pre-seed; `hook_stop_receipt` would seed a second user message"
+                );
+            }
+        }
     }
 }

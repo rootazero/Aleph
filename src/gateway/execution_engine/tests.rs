@@ -1609,9 +1609,9 @@ impl crate::executor::ToolRegistry for CountingToolRegistry {
     }
 }
 
-fn slash_engine(
-    registry: Arc<CountingToolRegistry>,
-) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, CountingToolRegistry> {
+fn slash_engine<R: crate::executor::ToolRegistry + 'static>(
+    registry: Arc<R>,
+) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, R> {
     ExecutionEngine::new(
         ExecutionEngineConfig::default(),
         Arc::new(crate::thinker::SingleProviderRegistry::new(
@@ -1806,6 +1806,269 @@ async fn operator_slash_command_for_an_ungated_tool_still_fast_paths() {
         assert_eq!(out, "ran");
     }
     assert_eq!(registry.calls(), 2);
+}
+
+// =============================================================================
+// §5.3 — the fast path's journal lands BEFORE the tool, and refuses the tool
+// when it cannot land
+// =============================================================================
+//
+// `slash_command.rs`'s census proves `journal.open(` is SPELLED before
+// `.execute_tool(`. It stays green if the write's result is thrown away
+// (`let _ = journal.open(..).await;`) — the exact habit T8 deleted from the
+// old finalizers. Criterion #4: a guard that survives discarding the return
+// value guards the call, not the effect. These two pin the effect, from the
+// only two vantage points that can see it: a tool body that reads the log at
+// the moment it runs, and a service that refuses the batch and must therefore
+// find the registry untouched.
+
+/// A registry whose tool body snapshots the session log at the moment it
+/// runs. Reads through the global slot — what production's dispatcher
+/// resolves — which `install_test_session_service` fills for the test.
+struct WitnessToolRegistry {
+    session: SessionKey,
+    calls: AtomicUsize,
+    seen: std::sync::Mutex<Option<Vec<crate::session::SessionEventRecord>>>,
+}
+
+impl WitnessToolRegistry {
+    fn new(session: SessionKey) -> Self {
+        Self {
+            session,
+            calls: AtomicUsize::new(0),
+            seen: std::sync::Mutex::new(None),
+        }
+    }
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+    /// The log as the tool body saw it, or `None` if the body never ran.
+    fn seen(&self) -> Option<Vec<crate::session::SessionEventRecord>> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl crate::executor::ToolRegistry for WitnessToolRegistry {
+    fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+        None
+    }
+
+    fn execute_tool(
+        &self,
+        _tool_name: &str,
+        _arguments: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+    > {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            let svc = crate::session::service::global_session_service()
+                .expect("the test installs the global service before dispatching");
+            let log = svc
+                .get_events(&self.session, None, None)
+                .await
+                .expect("the log is readable from inside the tool body");
+            *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(log);
+            Ok(serde_json::json!({"_display": "ran"}))
+        })
+    }
+}
+
+/// A `SessionService` that refuses every batch. Only `emit_batch` is reached
+/// by the fast path; the rest answer the same refusal so a stray call cannot
+/// pass as a success. `pub(super)` so `run_loop::hook_stop_tests` can hand it
+/// to `journal_hook_stop_with` — the second best-effort writer in this tree.
+pub(super) struct RefusingSessionService;
+
+#[async_trait]
+impl crate::session::SessionService for RefusingSessionService {
+    async fn attach(
+        &self,
+        _id: crate::session::SessionId,
+    ) -> Result<crate::session::SessionHandle, crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn get_events(
+        &self,
+        _id: &crate::session::SessionId,
+        _from: Option<crate::session::EventSeq>,
+        _to: Option<crate::session::EventSeq>,
+    ) -> Result<Vec<crate::session::SessionEventRecord>, crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn emit_event(
+        &self,
+        _id: &crate::session::SessionId,
+        _event: crate::session::SessionEvent,
+    ) -> Result<crate::session::EventSeq, crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn emit_batch(
+        &self,
+        _id: &crate::session::SessionId,
+        _events: Vec<crate::session::SessionEvent>,
+        _retire: Option<crate::session::events::Retire>,
+    ) -> Result<Vec<crate::session::EventSeq>, crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn subscribe(
+        &self,
+        _id: &crate::session::SessionId,
+    ) -> Result<
+        tokio::sync::broadcast::Receiver<crate::session::SessionEventRecord>,
+        crate::session::SessionError,
+    > {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn wake(
+        &self,
+        _id: &crate::session::SessionId,
+    ) -> Result<crate::session::SessionHandle, crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+    async fn detach(
+        &self,
+        _id: &crate::session::SessionId,
+    ) -> Result<(), crate::session::SessionError> {
+        Err(crate::session::SessionError::Storage("refused".into()))
+    }
+}
+
+/// (a) The rows are in the log when the tool body starts — asserted from
+/// inside the body — and the run marker's envelope carries the gate's REAL
+/// knob resolution, spelled with each knob's own `.id()`. Four distinct
+/// request-carried picks so a swapped field (`session_mode` / `memory_mode`
+/// are both `Option<String>`) cannot pass.
+#[tokio::test]
+async fn the_open_batch_is_in_the_log_when_the_tool_body_runs_and_carries_the_gates_knobs() {
+    use crate::agents::thinking::{ThinkLevel, THINK_LEVEL_SESSION_KEY};
+    use crate::config::types::policies::{
+        ExecTier, SessionMode, EXEC_TIER_SESSION_KEY, MODE_SESSION_KEY,
+    };
+    use crate::memory::session_memory_mode::{MemoryMode, MEMORY_MODE_SESSION_KEY};
+    use crate::session::events::RunEnvelopeSnapshot;
+    use crate::session::store::event_type_tag;
+    use crate::session::{SessionEvent, SessionService};
+
+    let svc = crate::session::in_process::install_test_session_service();
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-journal").await;
+    let session = SessionKey::main("slash-journal");
+    let registry = Arc::new(WitnessToolRegistry::new(session.clone()));
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+
+    let mut request = slash_request(&session, None);
+    request.input = "/search hello".to_string();
+    for (key, value) in [
+        (EXEC_TIER_SESSION_KEY, ExecTier::Full.id()),
+        (MODE_SESSION_KEY, SessionMode::Code.id()),
+        (THINK_LEVEL_SESSION_KEY, ThinkLevel::High.id()),
+        (MEMORY_MODE_SESSION_KEY, MemoryMode::Off.id()),
+    ] {
+        request.metadata.insert(key.to_string(), value.to_string());
+    }
+
+    let out = engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("search", "hello"),
+            &request,
+            Arc::clone(&agent),
+            emitter,
+        )
+        .await
+        .expect("an operator's /search fast-paths");
+    assert_eq!(out, "ran");
+    assert_eq!(registry.calls(), 1);
+
+    // What the tool body saw: the open batch, complete, and nothing after it.
+    let seen = registry.seen().expect("the tool body ran and read the log");
+    let kinds: Vec<&str> = seen.iter().map(|r| event_type_tag(&r.event)).collect();
+    assert_eq!(
+        kinds,
+        [
+            "turn_started",
+            "user_message",
+            "run_started",
+            "tool_call_requested"
+        ],
+        "the dispatch must be durable before the tool starts"
+    );
+    match &seen[1].event {
+        SessionEvent::UserMessage { content, .. } => assert_eq!(content.text, "/search hello"),
+        other => panic!("expected the user's command, got {other:?}"),
+    }
+    match &seen[2].event {
+        SessionEvent::RunStarted { envelope, .. } => {
+            let want = RunEnvelopeSnapshot {
+                exec_tier: Some(ExecTier::Full.id().to_string()),
+                session_mode: Some(SessionMode::Code.id().to_string()),
+                think_level: Some(ThinkLevel::High.id().to_string()),
+                memory_mode: Some(MemoryMode::Off.id().to_string()),
+                ..RunEnvelopeSnapshot::default()
+            };
+            assert_eq!(
+                envelope.as_ref(),
+                Some(&want),
+                "the run marker must carry the knobs the gate resolved, in each knob's own id"
+            );
+        }
+        other => panic!("expected the run marker, got {other:?}"),
+    }
+    match &seen[3].event {
+        SessionEvent::ToolCallRequested { name, input, .. } => {
+            assert_eq!(name, "search");
+            assert_eq!(input["query"], "hello");
+        }
+        other => panic!("expected the dispatch, got {other:?}"),
+    }
+
+    // And after the tool: the close batch, on the same log, right behind it.
+    let log = svc.get_events(&session, None, None).await.unwrap();
+    let kinds: Vec<&str> = log.iter().map(|r| event_type_tag(&r.event)).collect();
+    assert_eq!(
+        &kinds[4..],
+        ["tool_result", "assistant_message", "run_finished"]
+    );
+}
+
+/// (b) A refused open batch refuses the TOOL: `Failed`, and the registry
+/// saw nothing. This is the assertion the census cannot make — it would stay
+/// green with the write's error discarded, and the tool would run over a
+/// dispatch the log never recorded.
+#[tokio::test]
+async fn a_refused_open_batch_means_the_tool_never_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-refused").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-refused");
+    let request = slash_request(&session, None);
+    let mode = serde_json::json!({"type": "direct_tool", "tool_id": "search", "args": "hello"});
+    let refusing: Arc<dyn crate::session::SessionService> = Arc::new(RefusingSessionService);
+
+    let err = engine
+        .execute_direct_tool(
+            "slash-run",
+            &mode,
+            &request,
+            &agent,
+            emitter,
+            Some(refusing),
+        )
+        .await
+        .expect_err("a dispatch the log refused to record must not run");
+    assert!(
+        matches!(&err, ExecutionError::Failed(msg) if msg.contains("session log write failed before dispatch")),
+        "the refusal must name its cause, got {err:?}"
+    );
+    assert_eq!(
+        registry.calls(),
+        0,
+        "the tool ran over an unrecorded dispatch — the defect §5.3 exists to close"
+    );
 }
 
 /// Captures the `RunRequest` a continuation is actually dispatched with, so the
@@ -2271,5 +2534,117 @@ fn execute_announces_the_turn_end_on_both_terminal_arms() {
         production[err_arm..].contains("self.announce_turn_end(&request)"),
         "the announcement must also happen after the failure receipt is \
          emitted — a failed or cancelled turn moved the transcript too"
+    );
+}
+
+/// Regression pin: `execute()` holds the run slot (session claim + concurrency
+/// permit) THROUGH the `AssistantRunMeta` append on the `Ok` arm, releases it
+/// as the first statement of the `Err` arm, and in both arms releases it
+/// before the post-run logic that may re-enter `execute()` on the same
+/// session.
+///
+/// Until T5b fix round 1 the single `drop(_run_slot)` sat above the result
+/// match, BEFORE `stamp_run_meta`. Releasing there let a queued run on the
+/// same session append its `RunStarted` ahead of this run's meta; the
+/// projector then anchored the meta on the NEXT run's opener, found no
+/// assistant row in that range and finalised it `NoRowInRange` — the run went
+/// unbilled until the next boot, and what the boot heal can give it then is a
+/// token-only stamp from its own messages, never the meta's gauge, cost or
+/// model (`session_projector::tests::
+/// a_historical_meta_that_landed_after_the_next_opener_leaves_the_older_run_synthesized`).
+///
+/// A source-ordering pin, for the same reason as
+/// `execute_announces_the_turn_end_on_both_terminal_arms`: the real `Ok` arm
+/// needs a live orchestrator, and the queued run arrives through the busy
+/// queue's `notify_slot_free` two layers out — no unit harness here observes
+/// the order of the two appends. What is pinned is what the fix IS: the
+/// textual order of `stamp_run_meta(` and `drop(_run_slot)` inside the `Ok`
+/// arm, one release per arm, and the `Err` release ahead of anything that arm
+/// does. Comment lines are stripped first, so the release note above the
+/// match — which names both anchors — can neither satisfy nor defeat a
+/// `find`. Move the `Ok` release back above `stamp_run_meta` and the first
+/// ordering assertion reds by name.
+#[test]
+fn execute_holds_the_run_slot_through_the_meta_stamp_and_releases_it_on_both_arms() {
+    use crate::utils::source_scan::{production_prefix, strip_comment_lines};
+    let src = include_str!("execute.rs").replace('\r', "");
+    let code = strip_comment_lines(&production_prefix(&src));
+    assert!(
+        code.len() > 1000,
+        "the production code must be the bulk of execute.rs, not an empty \
+         slice — a mis-split would make every assertion below vacuous"
+    );
+
+    // Each anchor must be unique, or an ordering read off `find` names the
+    // wrong occurrence and the pin passes for the wrong reason.
+    let at = |needle: &str| -> usize {
+        let hits = code.matches(needle).count();
+        assert_eq!(
+            hits, 1,
+            "`{needle}` must occur exactly once in execute.rs's production \
+             code to anchor this ordering pin; found {hits}"
+        );
+        code.find(needle).expect("counted once above")
+    };
+    let result_match = at("let final_result = match result {");
+    let ok_arm = at("Ok(_response) => {");
+    let stamp = at("super::helpers::stamp_run_meta(");
+    let continuation = at("super::goal_continuation::post_run(");
+    let err_first_statement = at("let task_status = match e {");
+    let rescue = at("build_steering_rescue_request(");
+    assert!(
+        result_match < ok_arm && ok_arm < stamp && stamp < continuation,
+        "the Ok-arm anchors are in the order the source has them"
+    );
+    assert!(
+        continuation < err_first_statement && err_first_statement < rescue,
+        "the Err arm follows the Ok arm and precedes the steering rescue"
+    );
+    // The `Err` arm's opener is the last `Err(e) => {` before its first
+    // statement — the file has other `Err(e) => {` arms above and inside the
+    // `Ok` arm, so a plain `find` would name one of those.
+    let err_arm = code[..err_first_statement]
+        .rfind("Err(e) => {")
+        .expect("the terminal match still has an Err(e) arm");
+    assert!(
+        continuation < err_arm,
+        "the Err arm's opener sits after the Ok arm's continuation hook"
+    );
+
+    let releases: Vec<usize> = code
+        .match_indices("drop(_run_slot)")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        releases.len(),
+        2,
+        "one explicit release per terminal arm — a third would be a use after \
+         move, a single one means an arm holds the slot into the re-entry \
+         below; found {}",
+        releases.len()
+    );
+    let (ok_release, err_release) = (releases[0], releases[1]);
+
+    assert!(
+        stamp < ok_release,
+        "Ok arm: the run slot must be released AFTER `stamp_run_meta` — \
+         released before it, a queued run on the same session can append its \
+         RunStarted ahead of this run's AssistantRunMeta, and the meta is \
+         finalised NoRowInRange against the wrong opener"
+    );
+    assert!(
+        ok_release < continuation,
+        "Ok arm: …and before the continuation hook, which may re-enter \
+         execute() on the same session and needs try_claim to succeed"
+    );
+    assert!(
+        err_arm < err_release && err_release < err_first_statement,
+        "Err arm: no meta is appended there, so the release is the arm's \
+         first statement — the lifetime the old single drop gave it"
+    );
+    assert!(
+        err_release < rescue,
+        "both releases precede the post-run steering rescue, the other \
+         re-entry point"
     );
 }

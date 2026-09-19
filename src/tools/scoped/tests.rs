@@ -4028,3 +4028,243 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
         "expected SideQuestion, got {rule:?}"
     );
 }
+
+// -------------------------------------------------------------------------
+// §6.2 — every production dispatch into the gate carries a CallIdentity
+// -------------------------------------------------------------------------
+
+/// A file that DEFINES `execute_with_cancel` forwards or implements it (the
+/// trait default, the scoped service, the allowlist / MCP-scope decorators);
+/// ORIGINATORS only call it. Today that set is the harness Act phase alone,
+/// each call inside a `with_call_identity(..)` scope — which is what lets
+/// `session::call_log::emit_for_ambient_call` treat a missing identity as a
+/// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
+/// on the originator set, derived from the source: a new originator must scope
+/// an identity around its dispatch, or not reach the gate.
+///
+/// What it does not see: a 2-arg `ToolService::execute(name, input)`
+/// originator — `.execute(` is too common a name to census textually (it is
+/// also every `LoopTool`, every `rusqlite` statement, every probe executor).
+/// Today the only production 2-arg `.execute(` on a `ToolService` is the
+/// `AllowlistToolService` forwarder; that is a measurement, not a pin.
+#[test]
+fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut originators: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains("fn execute_with_cancel(") {
+            continue;
+        }
+        let calls = code.matches(".execute_with_cancel(").count();
+        if calls > 0 {
+            originators.insert(rel, (calls, code.matches("with_call_identity(").count()));
+        }
+    }
+    assert_eq!(
+        originators.keys().collect::<Vec<_>>(),
+        vec!["src/harness/agent/act.rs"],
+        "a new originator must scope a CallIdentity around its dispatch, or not reach the gate: {originators:?}"
+    );
+    let (calls, scoped) = originators["src/harness/agent/act.rs"];
+    assert!(calls >= 1, "self-protection: the scan found the Act phase");
+    assert_eq!(
+        calls, scoped,
+        "every dispatch in act.rs is wrapped by exactly one identity scope"
+    );
+}
+
+/// Every production site that parks a call on a human — awaits an
+/// `ApprovalRequester` — either stamps `ToolCallParked` first (§6.1) or is
+/// named here with the reason it cannot. Derived from the source, equality on
+/// the set of originating files: a fourth site turns this red until it is
+/// classified.
+///
+/// A file that DEFINES `fn request_approval(` / `fn request_approval_for_action(`
+/// implements or forwards the requester face (`ApprovalGate`, the guardian /
+/// adapter / operator requesters) and is not an originator. One unrelated
+/// method of the same name — `scratchpad.rs::request_approval`, the plan
+/// gate, which parks through `clarification::ask` and is stamped THERE — is
+/// excluded by the same rule; stated so nobody reads that exclusion as a
+/// classification. The blind spot is the same one the dispatch census has: an
+/// originator that also defines a method of that name is invisible here.
+///
+/// "Stamped first" is measured as a stamp call within `WINDOW_LINES` lines
+/// above the await with no `fn ` header in between (same function). The two
+/// real distances are 5 lines (`dispatch.rs`, `record_parked` → the await)
+/// and 17 (`workspace/mod.rs`, the multi-line `emit_for_ambient_call` → the
+/// await); the window is those plus slack, not a hand-tuned exact. The
+/// window is textual, not structural: a stamp in a SIBLING branch of the same
+/// function — one the await's own path never executes — would satisfy it if
+/// it fell within the lines. Both real sites are straight-line code, and the
+/// stamp firing on the executed path is what the behavioural tests beside
+/// this one (and the mutation that removed each stamp) prove; this census
+/// only proves the stamp is in the function.
+#[test]
+fn every_production_approval_park_is_stamped_or_named_exempt() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    const AWAITS: [&str; 2] = [".request_approval(", ".request_approval_for_action("];
+    const STAMPS: [&str; 2] = ["record_parked(", "emit_for_ambient_call("];
+    const WINDOW_LINES: usize = 20;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // file -> [(1-based line of the await, stamped within the window)]
+    let mut sites: std::collections::BTreeMap<String, Vec<(usize, bool)>> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains("fn request_approval(") || code.contains("fn request_approval_for_action(")
+        {
+            continue;
+        }
+        let lines: Vec<&str> = code.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !AWAITS.iter().any(|needle| line.contains(needle)) {
+                continue;
+            }
+            let window = &lines[i.saturating_sub(WINDOW_LINES)..i];
+            let same_fn = !window.iter().any(|l| l.contains("fn "));
+            let stamped = same_fn && window.iter().any(|l| STAMPS.iter().any(|s| l.contains(s)));
+            sites.entry(rel.clone()).or_default().push((i + 1, stamped));
+        }
+    }
+    // The borrow-cloud card (`escalation_allowed`) is a THINK-phase park: it
+    // gates a provider route, not a tool call, so there is no `call_id` for a
+    // `ToolCallParked` to name — out of the event's scope by construction.
+    const EXEMPT: &str = "src/providers/failover/provider.rs";
+    assert_eq!(
+        sites.keys().map(String::as_str).collect::<Vec<_>>(),
+        [EXEMPT, APPROVAL_PARK_FILES[0], APPROVAL_PARK_FILES[1]],
+        "a new site that parks a call on a human must stamp `ToolCallParked` first, or be \
+         named exempt here with its reason: {sites:?}"
+    );
+    for file in APPROVAL_PARK_FILES {
+        for (line, stamped) in &sites[file] {
+            assert!(
+                stamped,
+                "{file}:{line} awaits a requester with no `ToolCallParked` stamp within \
+                 {WINDOW_LINES} lines of the same function"
+            );
+        }
+    }
+    assert!(
+        sites[EXEMPT].iter().all(|(_, stamped)| !stamped),
+        "the borrow-cloud card has no call_id; a `ToolCallParked` there would always be \
+         dropped for a missing identity — classify it, do not stamp it: {:?}",
+        sites[EXEMPT]
+    );
+}
+
+/// The production files that park a tool call on a human's approval — the
+/// expected value both censuses above and below compare their derivation to.
+const APPROVAL_PARK_FILES: [&str; 2] = [
+    "src/sandbox/workspace/mod.rs",
+    "src/tools/scoped/dispatch.rs",
+];
+
+/// A park is an entry fact; the gate that wrote it owes the exit fact
+/// (criterion #14 — final review C1). Every production file that writes
+/// `ToolCallParked` with an `Approval` / `PreHook` reason through the one
+/// writer (`session::call_log::emit_for_ambient_call`) must also write BOTH
+/// releases through it — `ToolCallApproved` and `ToolCallDenied` — or a crash
+/// after the human's yes reduces to "never ran … call it again" for a command
+/// that ran. Equality on the file sets, derived from the source: a park file
+/// with no release is red BY FILE NAME, and the park set is pinned to the
+/// requester census above so the two cannot drift apart.
+///
+/// Files that DEFINE the writer are not writers; `clarification::ask` parks
+/// with `Clarification`, whose release is the ask tool's own receipt, so the
+/// reason filter leaves it out by construction rather than by name. Textual,
+/// like its sibling: it proves each release is in the file, and the
+/// behavioural pins (`sandbox::workspace::tests::an_approved_capability_card_
+/// is_released_in_the_log_before_the_spawn`, `an_answered_gate_leaves_park_
+/// then_decision_in_the_session_log`) prove it fires on the executed path.
+#[test]
+fn every_file_that_parks_on_an_approval_also_writes_both_releases() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    const WRITER: &str = "emit_for_ambient_call(";
+    const REASONS: [&str; 2] = ["ParkReason::Approval", "ParkReason::PreHook"];
+    const RELEASES: [&str; 2] = ["ToolCallApproved {", "ToolCallDenied {"];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut parks: std::collections::BTreeSet<String> = Default::default();
+    let mut releases: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains(&format!("fn {WRITER}")) || !code.contains(WRITER) {
+            continue;
+        }
+        if REASONS.iter().any(|r| code.contains(r)) {
+            parks.insert(rel.clone());
+        }
+        let written: Vec<&str> = RELEASES
+            .iter()
+            .copied()
+            .filter(|needle| code.contains(needle))
+            .collect();
+        if written.len() == RELEASES.len() {
+            releases.insert(rel, written);
+        }
+    }
+    assert_eq!(
+        parks.iter().map(String::as_str).collect::<Vec<_>>(),
+        APPROVAL_PARK_FILES,
+        "self-protection: the park set is the requester census's, or the scan is reading \
+         the wrong thing: {parks:?}"
+    );
+    assert_eq!(
+        releases.keys().collect::<std::collections::BTreeSet<_>>(),
+        parks.iter().collect::<std::collections::BTreeSet<_>>(),
+        "a file that parks a call on an approval must write its release (`ToolCallApproved`) \
+         and its twin (`ToolCallDenied`) through the same writer — parks {parks:?}, \
+         releases {releases:?}"
+    );
+}
+
+/// §6.1 from the writer's side, through the one writer and the real actor
+/// service: a gate that is asked and answered leaves `ToolCallParked` and THEN
+/// the decision, in that order, in one session's log — the shape the
+/// reducer's `an_answered_gate_ends_the_park` reads. The "before the
+/// requester" half is `tests/parked_gate_integration.rs`; this pins the pair.
+/// `SessionKey::ephemeral` so the shared test service's other users cannot
+/// interleave rows here.
+#[tokio::test]
+async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    use crate::session::events::{ParkReason, SessionEvent, TurnId};
+    use crate::session::service::SessionService as _;
+    let sessions = crate::session::in_process::install_test_session_service();
+    let key = crate::routing::session_key::SessionKey::ephemeral("parked-gate-unit");
+    let mut turn = turn_ctx("parked-gate-unit");
+    turn.session_key = key.clone();
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Denied));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn)
+        .with_confirmation(StdArc::clone(&requester) as _);
+    let identity = crate::approval::CallIdentity {
+        turn_id: TurnId::new_v4(),
+        call_id: "toolu_unit".into(),
+    };
+    let result =
+        crate::approval::with_call_identity(Some(identity), svc.execute("danger", json!({}))).await;
+    assert!(result.is_err(), "a denied card does not run the tool");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "the gate asked once"
+    );
+
+    let rows = sessions.get_events(&key, None, None).await.unwrap();
+    let kinds: Vec<&str> = rows
+        .iter()
+        .map(|r| crate::session::store::event_type_tag(&r.event))
+        .collect();
+    assert_eq!(kinds, ["tool_call_parked", "tool_call_denied"]);
+    assert!(
+        matches!(
+            &rows[0].event,
+            SessionEvent::ToolCallParked { call_id, reason: ParkReason::Approval, .. }
+                if call_id == "toolu_unit"
+        ),
+        "the confirm card parks as `Approval`, under the ambient call id: {:?}",
+        rows[0].event
+    );
+}

@@ -304,6 +304,7 @@
     "run_badge_interrupted": "interrupted",
     "run_badge_log_inconsistent": "log inconsistent",
     "run_badge_unknown": "unknown",
+    "run_badge_unanswered": "unanswered",
     "new_chat": "New Chat",
     "new_group_chat": "New group chat",
     "confirm_delete": "Confirm delete?",
@@ -2716,7 +2717,9 @@
     "last_run_interrupted_plain": "The previous run was interrupted",
     "last_run_log_inconsistent": "This conversation's log is inconsistent ({{ tags }}) — recovery refused it; run aleph doctor",
     "last_run_unknown_state": "The previous run's state is a word this client does not know ({{ word }}) — it cannot vouch for it",
-    "last_run_dangling": "The previous run left {{ count }} tool calls with no receipt — their outcomes are unknown"
+    "last_run_dangling": "The previous run left {{ count }} tool calls with no receipt — their outcomes are unknown",
+    "last_run_parked": "{{ parked }} of the previous run's tool calls never completed — they were waiting for approval or for your answer when the server stopped, or were denied",
+    "last_run_unanswered": "Your last message was not answered — the run stopped before it could start; recovery will retry it"
   },
   "appearance": {
     "mode": {

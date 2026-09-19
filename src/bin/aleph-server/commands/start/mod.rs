@@ -387,12 +387,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // consumed into `session_store` below. `SessionManager` implements both
     // `SessionStore` and `SessionEpochRegistrar`; saving it here lets the
     // orchestrator enable compaction-driven session-split in the SQLite path.
-    // `None` in file-backend deployments — split degrades to FinalReply there.
+    // `None` in file-backend deployments — there the `SplitSession` directive
+    // degrades to compact-to-fit on the parent
+    // (`context/compact/directive.rs`, the `(compactor, registrar)` match),
+    // and the boot heal counts `epoch_heal_skipped` instead of registering.
     let epoch_registrar_for_orchestrator: Option<
         std::sync::Arc<dyn alephcore::session::epoch_registrar::SessionEpochRegistrar>,
     > = sqlite_sm
         .as_ref()
         .map(|sm| std::sync::Arc::new(sm.clone()) as _);
+    // The same registrar, for the boot-scan wiring site below: the split
+    // writes its epoch AFTER its log batches, and `ProjectionReconciler`
+    // heals the crash window in between (`heal_split_epochs`). Cloned here
+    // because the orchestrator consumes the original.
+    let epoch_registrar_for_reconcile = epoch_registrar_for_orchestrator.clone();
     // Build the final session_store first so MessageProjector writes to the
     // same Arc<dyn SessionStore> that Panel reads from.
     //
@@ -479,8 +487,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             "the session_events SQLite service could not be built, so there is \
              no actor pipeline to publish: opening or migrating \
              `<data_dir>/sessions.db` failed \
-             (`build_sqlite_session_service` logs which of the two). Edge-path \
-             callers fall back to writing the transcript directly.",
+             (`build_sqlite_session_service` logs which of the two). Every \
+             reader takes its own `None` arm — the edge paths warn and drop \
+             what they would have journaled; nothing writes the transcript in \
+             the log's place.",
         );
     }
 
@@ -2975,10 +2985,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // see `alephcore::tasks` for why — which also removes the only boot path
     // that built the per-OS desktop platform eagerly at start-up.
 
-    // Boot-scan: ProjectionReconciler (display back-fill) THEN ResumeCoordinator
-    // (agent re-execution), in one ordered detached task so back-filled old
-    // rows are appended before re-trigger appends new ones (the file backend's
-    // get_history returns append order). The reconciler runs unconditionally;
+    // Boot-scan: ProjectionReconciler (display back-fill + split-epoch heal)
+    // THEN ResumeCoordinator (agent re-execution), in one ordered detached
+    // task so back-filled old rows are appended before re-trigger appends new
+    // ones (the file backend's get_history returns append order), and so a
+    // forked child the routing table never learned is registered before the
+    // resume pass reads its open run. The reconciler runs unconditionally;
     // only re-trigger is gated by [resume] enabled. Detached — boot is NOT
     // blocked on it.
     {
@@ -2992,11 +3004,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 session_store_for_reconcile.clone(),
                 message_projector.clone(),
                 resume_cfg.max_age_secs,
+                epoch_registrar_for_reconcile,
             );
             let resume_collaborators = (
                 agent_result.execution_adapter.clone(),
                 agent_result.agent_registry.clone(),
             );
+            // The `agent_tasks` table, so the scan can adjudicate the rows
+            // whose seed never reached the log (§8.2(b)). `None` on a
+            // deployment without the resilience database — then no such row
+            // exists and the coordinator's pass is a no-op.
+            let state_db_for_resume = agent_result.state_db.clone();
             // The resumed run's owner/scope comes off this store's persisted
             // session row — see `ResumeCoordinator::stamp_persisted_scope`.
             let sessions_for_resume = session_store_for_reconcile.clone();
@@ -3010,10 +3028,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     scanned = rr.scanned,
                     holes_filled = rr.holes_filled,
                     stamps_reapplied = rr.stamps_reapplied,
+                    stamps_synthesized = rr.stamps_synthesized,
                     usage_rebilled = rr.usage_rebilled,
                     skipped_up_to_date = rr.skipped_up_to_date,
                     skipped_legacy = rr.skipped_legacy,
                     errored = rr.errored,
+                    epochs_healed = rr.epochs_healed,
+                    epoch_heal_skipped = rr.epoch_heal_skipped,
                     "ProjectionReconciler boot scan finished"
                 );
                 if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
@@ -3024,15 +3045,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     let reinject_registry = registry.clone();
                     let reinject_bus = bus_for_resume.clone();
                     let auto_scan = resume_cfg.enabled;
-                    let coordinator =
-                        std::sync::Arc::new(alephcore::gateway::ResumeCoordinator::new(
-                            event_store,
-                            resume_cfg,
-                            exec_adapter,
-                            registry,
-                            sessions_for_resume,
-                            bus_for_resume,
-                        ));
+                    let coordinator = alephcore::gateway::ResumeCoordinator::new(
+                        event_store,
+                        resume_cfg,
+                        exec_adapter,
+                        registry,
+                        sessions_for_resume,
+                        bus_for_resume,
+                    );
+                    let coordinator = std::sync::Arc::new(match state_db_for_resume {
+                        Some(db) => coordinator.with_state_database(db),
+                        None => coordinator,
+                    });
                     // Published unconditionally, on purpose. `[resume] enabled`
                     // governs the automatic scan below; `agent.resume` /
                     // `aleph-server resume` are explicit operator requests and
@@ -3043,7 +3067,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     // symptom is a rejection that reads like a missing feature.
                     alephcore::gateway::set_global_resume_coordinator(coordinator.clone());
 
-                    if auto_scan {
+                    // Re-delivery of the messages that were parked in the
+                    // busy-input lane when the previous process died. Not
+                    // gated by `[resume] enabled`: that flag governs *run*
+                    // resumption, while these are user-typed messages that
+                    // never became runs. Split around the scan below: a
+                    // survivor for a session the scan will visit re-enters the
+                    // lane only after the scan has settled, because the
+                    // engine's admission gate cannot see a resume still waiting
+                    // on its `max_concurrent` permit and would admit the
+                    // survivor first (`reinject_survivors` says what that
+                    // costs); every other survivor re-enters at once.
+                    let busy_queue_cfg =
+                        alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(
+                            &busy_queue_execution_cfg,
+                        );
+                    let reinjected = if auto_scan {
                         // This scan is spawned before `initialize_inbound_router`
                         // publishes the channel-config snapshot; park until it is
                         // ready so `stamp_origin_identity` sees the per-channel deny
@@ -3052,37 +3091,87 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             std::time::Duration::from_secs(30),
                         )
                         .await;
-                        let report = coordinator.resume_interrupted_runs().await;
-                        tracing::info!(
-                            scanned = report.scanned,
-                            resumed = report.resumed,
-                            abandoned = report.abandoned,
-                            skipped = report.skipped,
-                            "ResumeCoordinator boot scan finished"
-                        );
+                        let launch = coordinator.launch_resume().await;
+                        let pending = launch.pending.clone();
+                        // Read before `settle` consumes the launch: a scan
+                        // that never walked (resume disabled, or the marker
+                        // load failed — the coordinator has already logged
+                        // which) settles to an EMPTY report, and a "finished
+                        // scanned = 0" line for it would read that failure as
+                        // an empty result.
+                        let walked = launch.walked;
+                        let scan = tokio::spawn(launch.settle());
+                        let early = alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter.clone(),
+                            reinject_registry.clone(),
+                            reinject_bus.clone(),
+                            busy_queue_cfg,
+                            &|k| !pending.contains(&k.to_key_string()),
+                        )
+                        .await;
+                        match scan.await {
+                            Ok(report) if walked => tracing::info!(
+                                scanned = report.scanned,
+                                resumed = report.resumed,
+                                abandoned = report.abandoned,
+                                skipped = report.skipped,
+                                notified = report.notified,
+                                "ResumeCoordinator boot scan finished"
+                            ),
+                            Ok(_) => tracing::debug!(
+                                "ResumeCoordinator boot scan did not walk the marker log; \
+                                 no report to print"
+                            ),
+                            // A scan task that did not settle has an UNKNOWN
+                            // outcome — never an empty one: no `scanned = 0`
+                            // line may stand in for it. The held-back
+                            // survivors are still re-delivered below; dropping
+                            // them would lose user messages, and a race with a
+                            // resume still running is exactly what the
+                            // busy-queue lane exists to absorb.
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "ResumeCoordinator boot scan task did not settle; its report is unknown"
+                            ),
+                        }
+                        let late = alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter,
+                            reinject_registry,
+                            reinject_bus,
+                            busy_queue_cfg,
+                            &|k| pending.contains(&k.to_key_string()),
+                        )
+                        .await;
+                        early + late
                     } else {
                         tracing::debug!(
                             "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
                              on-demand resume still available"
                         );
-                    }
-
-                    // Re-deliver messages that were parked in the busy-input
-                    // lane when the previous process died. Not gated by
-                    // `[resume] enabled`: that flag governs *run* resumption,
-                    // while these are user-typed messages that never became
-                    // runs. Runs after the scan (above) so an interrupted run
-                    // reclaims its session slot before its queued follow-ups
-                    // re-enter the lane.
-                    let reinjected = alephcore::gateway::busy_queue::durable::reinject_survivors(
-                        reinject_adapter,
-                        reinject_registry,
-                        reinject_bus,
-                        alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(
-                            &busy_queue_execution_cfg,
-                        ),
-                    )
-                    .await;
+                        // Not gated by `[resume] enabled` either, for the same
+                        // reason as the survivors: a message that was lost
+                        // before it was recorded (§8.2(b)) is not a run to
+                        // resume. A disabled launch visits no candidate and
+                        // walks no marker log; its `settle` still adjudicates
+                        // the task rows and writes the lost-input notices.
+                        let report = coordinator.launch_resume().await.settle().await;
+                        if report.notified > 0 {
+                            tracing::info!(
+                                notified = report.notified,
+                                "resume scan disabled; lost-input notices written"
+                            );
+                        } else {
+                            tracing::debug!("resume scan disabled; no lost-input notice to write");
+                        }
+                        alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter,
+                            reinject_registry,
+                            reinject_bus,
+                            busy_queue_cfg,
+                            &|_| true,
+                        )
+                        .await
+                    };
                     if reinjected > 0 {
                         tracing::info!(
                             reinjected,
@@ -3671,6 +3760,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
+    }
+    // The bash reaper's twin for terminal sessions. A shell a person opened
+    // through the Panel is a child of this process too, and after the daemon
+    // is gone nothing can re-attach to it — but the reason this line exists
+    // is the journal: the bash reap above records `killed` on every job, and
+    // a clean stop that closed no terminal left every open PTY row `running`
+    // on disk, which the next boot tombstoned as a shell the restart had
+    // *interrupted*, and the terminal faces then told the person who merely
+    // restarted the server that their shell was lost. `close_all` records
+    // `killed` before each kill. Synchronous, no scheduler pass needed.
+    let terminals = alephcore::gateway::pty::manager().close_all();
+    if terminals > 0 {
+        tracing::info!(count = terminals, "closed terminal sessions on shutdown");
     }
     // Same shape and the same reason as the background-bash reap above: the
     // browsers are OUR child processes, `Child` does not kill on drop, and

@@ -90,6 +90,24 @@ pub struct SpawnOptions {
     pub created_by: Option<String>,
 }
 
+impl SpawnOptions {
+    /// The label of the program these options spawn — the explicit `command`,
+    /// or the resolved platform default shell — exactly what
+    /// [`PtySession::spawn`] stamps on [`PtySession::shell`] (and so what
+    /// `pty.list` shows). A projection of the same `default_shell_command`
+    /// pair the spawn uses, not a second guess at it (that function's doc
+    /// says why there must be only one), so the journal's intent row —
+    /// written BEFORE the session exists, by `PtyManager::spawn` — names the
+    /// shell the session will report, not a `<default shell>` placeholder
+    /// that a later face would quote as if it were the program.
+    #[must_use]
+    pub fn shell_label(&self) -> String {
+        self.command
+            .clone()
+            .unwrap_or_else(|| default_shell_command().1)
+    }
+}
+
 /// A live PTY session handle. Cloneable via `Arc`; all mutating operations are
 /// internally synchronized so the handler layer can stay stateless.
 pub struct PtySession {
@@ -180,6 +198,8 @@ impl PtySession {
             .map_err(|e| format!("openpty failed: {e}"))?;
 
         // Build the command (explicit program or the platform default shell).
+        // `SpawnOptions::shell_label` projects the same pair, so the journal's
+        // intent row and this label cannot disagree.
         let (mut cmd, label) = match &opts.command {
             Some(prog) => (CommandBuilder::new(prog), prog.clone()),
             None => default_shell_command(),
@@ -291,12 +311,19 @@ impl PtySession {
         self.closed.load(Ordering::SeqCst)
     }
 
-    // A `pub fn shell_pid(&self) -> Option<u32>` accessor lived here with zero
-    // callers crate-wide (R10 / YAGNI — CUT 2026-09-04). Its doc named "the
-    // only consumer, the non-Unix foreground heuristic", and that consumer
-    // reads the FIELD directly in `maybe_probe_foreground` below — so the
-    // accessor was both dead and describing someone else's call site (判据 §1).
-    // Re-add it when a reader outside this type exists, not before.
+    /// The pid `portable-pty` reported for the process this session spawned
+    /// — the shell, normally; `None` when it would not say.
+    ///
+    /// Reader: [`super::manager::PtyManager::spawn`], which hands it to
+    /// `process_journal::record_pty_child` right after the spawn so a later
+    /// daemon can ask the OS whether this shell outlived the one that
+    /// started it. (An earlier accessor here was CUT on 2026-09-04 for having
+    /// zero callers; the non-Unix foreground heuristic reads the field
+    /// directly in `maybe_probe_foreground` below and is not a caller of
+    /// this.)
+    pub(crate) fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
+    }
 
     /// Probe the terminal's foreground process, if this tick is due. Returns
     /// whether the believed foreground process CHANGED.
@@ -635,7 +662,10 @@ fn spawn_reader(
     std::thread::Builder::new()
         .name(format!("pty-waiter-{}", session.id))
         .spawn(move || {
-            let exit_code = child.wait().map_or(0, |s| s.exit_code());
+            // A `wait()` that errors has no exit code to report — `None`, not
+            // `0`: an `Err` may only say "I do not know" (criterion #8), and
+            // the journal row below is durable.
+            let exit_code = child.wait().ok().map(|s| s.exit_code());
             settle_exit(&session, exit_code, bus.as_ref(), &reader_gone);
         })
         .ok();
@@ -683,13 +713,18 @@ const READER_UNBLOCK_GRACE: std::time::Duration = std::time::Duration::from_mill
 ///    master. That is the lever that ends the read (~2 ms, measured), and it
 ///    is applied as a remedy for a terminal that demonstrably did not EOF,
 ///    not as routine teardown.
-/// 4. `pty.exit`, then the manager removal. The manager keeps the last
+/// 4. The journal verdict, with the screen as the reader left it. Before the
+///    `pty.exit` frame so a client that hears the exit and asks the journal
+///    finds the row already settled — the ordering `bash_exec` keeps around
+///    `reg.complete` for the same reason. A `close` that got here first has
+///    already written `killed`; the journal keeps the first verdict.
+/// 5. `pty.exit`, then the manager removal. The manager keeps the last
 ///    `OWNER_RETENTION` sessions' owners precisely so this frame can still be
 ///    addressed to the client whose shell just died — see `owner_of`.
-/// 5. The runtime row, then its change edge.
+/// 6. The runtime row, then its change edge.
 fn settle_exit(
     session: &Arc<PtySession>,
-    exit_code: u32,
+    exit_code: Option<u32>,
     bus: Option<&Arc<GatewayEventBus>>,
     reader_gone: &std::sync::mpsc::Receiver<()>,
 ) {
@@ -716,10 +751,31 @@ fn settle_exit(
         drop(taken);
         let _ = reader_gone.recv_timeout(READER_UNBLOCK_GRACE);
     }
+    // Read after the drain above, so the screen holds the child's last
+    // output. The exit code is `portable-pty`'s `u32` reinterpreted the way
+    // `std::process::ExitStatus::code()` reports it on Windows (an NTSTATUS
+    // crash code such as `0xC0000005` is a negative `i32` there), so the
+    // journal's `exit_code` column reads the same for a bash child and a
+    // shell — `i32::try_from` would spell every crash code as "unknown". A
+    // `wait()` that could not report one is recorded as `None`, never `0`.
+    let screen = session.with_screen(super::screen::Screen::visible_text);
+    crate::builtin_tools::process_journal::record_pty_settled(
+        &session.id,
+        crate::builtin_tools::process_journal::Verdict::Exited,
+        exit_code.map(|c| c as i32),
+        &screen,
+    );
     if let Some(bus) = bus {
+        // KNOWN LIMIT, kept deliberately: the `pty.exit` payload has always
+        // carried `exit_code` as an integer, and a `wait()` error has always
+        // been spelled `0` there. No client reads the field today (the Panel
+        // takes only `session_id`; `shared/protocol` has no type for this
+        // payload), but making it nullable is a wire-contract change and is
+        // recorded for the docs task rather than made here. The journal row
+        // above is the truthful copy.
         let ev = TopicEvent::new(
             aleph_protocol::pty::PTY_EXIT_TOPIC,
-            json!({ "session_id": session.id, "exit_code": exit_code }),
+            json!({ "session_id": session.id, "exit_code": exit_code.unwrap_or(0) }),
         );
         let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
     }
@@ -877,7 +933,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         drop(tx);
         let t0 = std::time::Instant::now();
-        settle_exit(&session, 0, None, &rx);
+        settle_exit(&session, Some(0), None, &rx);
         let took = t0.elapsed();
 
         let master_kept = session

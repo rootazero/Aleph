@@ -1343,11 +1343,23 @@ deterministic HITL gate (R7/R9).
 
 ## Audit Logging
 
-**The live trail is the session event log.** Every approval decision at the
-enforcement chokepoint is recorded by
-`tools/scoped/dispatch.rs::record_approval_decision`, which writes
-`ToolCallApproved` / `ToolCallDenied` session events. Query it through the
-session service, alongside every other event of the run that produced it.
+**The live trail is the session event log.** Every gate that parks a call on
+`ParkReason::Approval` releases it through the one writer
+`session::call_log::emit_for_ambient_call`, as `ToolCallApproved` /
+`ToolCallDenied` session events; the census
+`every_file_that_parks_on_an_approval_also_writes_both_releases`
+(`src/tools/scoped/tests.rs`) is the list of those gates — do not count them
+here. The two trails are not written the same way at every gate: the tool-confirm
+gate's `tools/scoped/dispatch.rs::record_approval_decision` writes the signed
+identity ledger row (with its `[gate: <rule_id>]` suffix, "Signed agent ledger" below) and
+the session copy from ONE function; the sandbox capability-elevation gate
+(`sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
+while its ledger row comes from a different function at a different chokepoint
+— `sandbox/exec_approval/gate.rs::record_gate_decision`, inside
+`ApprovalGate::request_approval_for_action`, without a `[gate: …]` suffix
+because that card is raised outside the `GateRule` chain. Query the session
+copy through the session service, alongside every other event of the run that
+produced it.
 
 **Deleted (2026-07-14), do not go looking for it**: `src/exec/approval/storage.rs`
 + `audit.rs` and the `aleph-server audit` CLI command. They queried three SQLite

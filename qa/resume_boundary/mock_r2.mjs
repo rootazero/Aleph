@@ -15,15 +15,49 @@
 //   qa-burst   -> ONE assistant message with $QA_BURST tool_use blocks of
 //                 bash{cmd:"echo n"} — the projector queue is what is under
 //                 test, so the calls must be cheap and simultaneous
+//   qa-spawn   -> tool_use subagent{action:"run", task:"qa-child-slow: …"}.
+//                 The `attribute` stage needs a call that is GENUINELY in
+//                 flight when the server is killed: after §6.1 a call parked
+//                 at the `ask` gate is answered by the fourth arm ("NOT
+//                 EXECUTED"), not by the "OUTCOME UNKNOWN" wording whose
+//                 provenance that stage asserts. A foreground sub-agent whose
+//                 own model turn this mock holds for 120 s is one — the
+//                 parent's `subagent` dispatch is durable and unanswered for
+//                 as long as the child's request sits here.
+//   qa-child-slow (in the user side of a tool-surfaced request) -> the
+//                 child's turn: held $QA_CHILD_HOLD_MS (120 s), then end_turn
+//   qa-bg      -> tool_use bash{cmd:"sleep 300", background:true} — the
+//                 `tombstone` stage's orphan: a real OS process that outlives
+//                 the `kill -9` of the server that spawned it. `sleep` is one
+//                 spelling on both hosts (the bash tool's Windows shell is the
+//                 probed PowerShell, where `sleep` aliases `Start-Sleep`).
+//   qa-poll:<N>-<tag> -> bash{process_action:"poll", process_id:N}; the tag
+//                 makes each turn's marker unique, so every poll is answered
+//                 exactly once. `qa-kill:<N>-<tag>` is the same for `kill`.
 //   the repair text ("OUTCOME UNKNOWN" / "NOT EXECUTED") -> end_turn, so the
 //                 resumed run FINISHES and the session's own `last_run` face
-//                 can be observed settling to `clean`
+//                 can be observed settling to `clean`. When a marker's tag
+//                 starts with `slow` (`qa-dangle:slow-a`), the end is DELAYED
+//                 $QA_SLOW_MS (4 s) first: the `parallel` stage needs two
+//                 resumed runs to overlap long enough for a 150 ms poll of
+//                 `gateway.metrics.run_concurrency` to see both in flight.
 //   anything else -> end_turn
 //
 // Every request body is appended to the request log as one JSON object per
 // line. That file is the only oracle for "what was actually put in front of
 // the model", which is the question every producer-side unit test in
 // `session::boundary_repair` cannot answer.
+//
+// `POST /v1/embeddings` is the one route that is NOT a model turn: the
+// `unanswered` stage points the memory layer's embedding provider here
+// (`patch_r2.mjs embed-stall`) and this route waits `$QA_EMBED_STALL_MS`
+// before answering a valid 8-dim vector. The wait is the stage's instrument —
+// it stretches the seed→RunStarted window (~30 ms on this host) into
+// something a `kill -9` can be aimed into — so the line it logs carries a
+// wall-clock ISO stamp: the driver's Step-0 check reads it back and proves
+// the request fell between the `user_message` row and the kill. Deliberately
+// kept out of the request log and the turn counter: neither an embedding
+// request nor its answer was ever put in front of the model.
 //
 // usage: mock_r2.mjs <port> <request-log>
 import http from "node:http";
@@ -35,6 +69,13 @@ const BURST = Number(process.env.QA_BURST || 40);
 
 const T0 = Date.now();
 const log = (...a) => console.log(`${((Date.now() - T0) / 1000).toFixed(2)}s [mock]`, ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// How long a `slow`-tagged marker's END is held (the `parallel` overlap
+// window) and how long a sub-agent child's turn is held (the `attribute`
+// in-flight window). The child hold is a hard 120 s by default: it only has to
+// outlive the kill, and a kill lands seconds after the dispatch is durable.
+const SLOW_MS = Number(process.env.QA_SLOW_MS || 4000);
+const CHILD_HOLD_MS = Number(process.env.QA_CHILD_HOLD_MS || 120_000);
 
 let turns = 0;
 /** Markers already answered with a tool call. One answer each, ever. */
@@ -49,9 +90,11 @@ const textOf = (content) => {
     .join(" ");
 };
 
-const MARKER = /qa-(dangle|burst)(?::([\w-]+))?/g;
+const MARKER = /qa-(dangle|burst|spawn|bg|poll|kill)(?::([\w-]+))?/g;
 
-const decide = (body) => {
+// `async` because two arms wait: the `slow`-tagged end and the child hold.
+// One handler per request, so a held turn never blocks another session's.
+const decide = async (body) => {
   const msgs = body.messages || [];
   // A request with no tool surface is a side channel (topic naming, strategy
   // synthesis, compaction). It carries the conversation's text, markers and
@@ -65,18 +108,56 @@ const decide = (body) => {
     .map((m) => textOf(m.content))
     .join("\n");
 
+  const hits = [...userSide.matchAll(MARKER)];
+  // A `slow` tag anywhere in the conversation slows the END of every later
+  // turn on it — the resumed run's included, which is the one that has to
+  // overlap. The dispatching turn itself is never delayed: the dangle must
+  // be durable before the shell's kill, and that timing is the driver's.
+  const slow = hits.some((h) => (h[2] ?? "").startsWith("slow"));
+  const end = async (text) => {
+    if (slow) await sleep(SLOW_MS);
+    return { kind: "end", text };
+  };
+
   // The boundary repair reached this turn: answer it and let the run END, so
   // the session's `last_run` can be watched settling to `clean`.
   if (userSide.includes("OUTCOME UNKNOWN") || userSide.includes("NOT EXECUTED")) {
-    return { kind: "end", text: "QA: I see the previous call's outcome. Stopping here." };
+    return end("QA: I see the previous call's outcome. Stopping here.");
   }
 
-  const hits = [...userSide.matchAll(MARKER)];
+  // A sub-agent child's own turn (`qa-spawn` above): hold it, so the parent's
+  // `subagent` dispatch stays in flight across the kill. Checked AFTER the
+  // repair arm: the parent's resumed request may quote the child's task text
+  // inside the repair, and that turn must end, not hang.
+  if (userSide.includes("qa-child-slow")) {
+    log(`child turn held ${CHILD_HOLD_MS}ms`);
+    await sleep(CHILD_HOLD_MS);
+    return { kind: "end", text: "QA child: done waiting." };
+  }
+
   const pending = hits.filter((h) => !answered.has(h[0]));
-  if (pending.length === 0) return { kind: "end", text: "QA: nothing to do." };
-  const [whole, verb] = pending[pending.length - 1];
+  if (pending.length === 0) return end("QA: nothing to do.");
+  const [whole, verb, arg] = pending[pending.length - 1];
   answered.add(whole);
 
+  // `qa-poll:12-a` → process 12; the suffix after the id is only there to
+  // keep the marker unique per turn.
+  const pid = Number.parseInt(String(arg ?? ""), 10);
+  if (verb === "bg") {
+    return { kind: "tools", calls: [{ name: "bash", input: { cmd: "sleep 300", background: true } }] };
+  }
+  if (verb === "poll") {
+    return { kind: "tools", calls: [{ name: "bash", input: { process_action: "poll", process_id: pid } }] };
+  }
+  if (verb === "kill") {
+    return { kind: "tools", calls: [{ name: "bash", input: { process_action: "kill", process_id: pid } }] };
+  }
+  if (verb === "spawn") {
+    return {
+      kind: "tools",
+      calls: [{ name: "subagent", input: { action: "run", task: "qa-child-slow: wait for the operator" } }],
+    };
+  }
   if (verb === "burst") {
     return {
       kind: "tools",
@@ -94,6 +175,8 @@ const decide = (body) => {
 
 const sse = (p) => Buffer.from(`event: ${p.type}\ndata: ${JSON.stringify(p)}\n\n`);
 
+const EMBED_STALL_MS = Number(process.env.QA_EMBED_STALL_MS || 0);
+
 const server = http.createServer((req, res) => {
   if (req.method !== "POST") {
     const raw = JSON.stringify({ data: [{ id: "qa-model-a", type: "model" }] });
@@ -101,9 +184,30 @@ const server = http.createServer((req, res) => {
     res.end(raw);
     return;
   }
+  if (req.url.endsWith("/embeddings")) {
+    // Drain the body so the connection is reusable, but never log it: this
+    // is not a model turn (see the header).
+    req.on("data", () => {});
+    req.on("end", () => {
+      log(`embeddings request at ${new Date().toISOString()}; stalling ${EMBED_STALL_MS}ms`);
+      setTimeout(() => {
+        const raw = JSON.stringify({
+          object: "list",
+          data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }],
+          model: "qa-embed",
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        });
+        res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(raw) });
+        res.end(raw);
+      }, EMBED_STALL_MS);
+    });
+    req.on("error", (e) => log("embeddings request stream error (server killed?):", e.message));
+    res.on("error", (e) => log("embeddings response stream error (server killed?):", e.message));
+    return;
+  }
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
-  req.on("end", () => {
+  req.on("end", async () => {
     let body = {};
     try {
       body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -118,7 +222,13 @@ const server = http.createServer((req, res) => {
         log("could not append to the request log:", e.message);
       }
     }
-    const act = decide(body);
+    const act = await decide(body);
+    // A held turn usually outlives the server that asked for it (that is the
+    // point of holding it); nothing to answer into then.
+    if (res.destroyed) {
+      log(`turn #${turn} model=${body.model} -> ${act.kind}, but the requester is gone (server killed?)`);
+      return;
+    }
     log(`turn #${turn} model=${body.model} -> ${act.kind}${act.kind === "tools" ? `(${act.calls.length})` : ""}`);
 
     const content = [{ type: "text", text: act.kind === "end" ? act.text : "Working on it." }];
@@ -192,4 +302,9 @@ const server = http.createServer((req, res) => {
   res.on("error", (e) => log("response stream error (server killed?):", e.message));
 });
 
-server.listen(PORT, "127.0.0.1", () => log(`listening on 127.0.0.1:${PORT}, burst size ${BURST}`));
+server.listen(PORT, "127.0.0.1", () =>
+  log(
+    `listening on 127.0.0.1:${PORT}, burst size ${BURST}, embedding stall ${EMBED_STALL_MS}ms, ` +
+      `slow end ${SLOW_MS}ms, child hold ${CHILD_HOLD_MS}ms`,
+  ),
+);

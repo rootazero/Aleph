@@ -43,7 +43,7 @@ use crate::agents::subagent_spawner::{
     background_child_session_key, parent_session_id_of, SUBAGENT_BG_CHILD_PREFIX,
 };
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::session::events::{ParkReason, SessionEvent, SessionEventRecord};
 use crate::session::reduction::{DanglingCall, LogContradiction, RunProgress};
 use crate::tools::runtime::ToolResult;
 
@@ -517,6 +517,9 @@ fn in_flight_json(progress: Option<&RunProgress>, calls: &[DanglingCall]) -> Val
                     "tool_name": c.tool_name,
                     "call_id": c.call_id,
                     "denied": c.denied,
+                    // The reason's wire word, or `null` for a call that was not
+                    // parked — the same spelling `chat.history` carries.
+                    "parked": c.parked.map(ParkReason::as_str),
                 })
             })
             .collect(),
@@ -561,6 +564,12 @@ fn settled_note(record: &crate::agents::background_persistence::PersistedRun) ->
 /// half-run, may never have reached the tool at all, and a call the approval
 /// gate denied definitely did not run. Naming the calls is what lets the model
 /// decide; claiming they landed decides for it.
+///
+/// Four buckets, the twin of `session::boundary_repair`'s four arms (§6.1):
+/// unknown, denied, parked on a gate (never ran), parked on a delivered
+/// question (ran as far as asking; the answer is what is missing). A parked
+/// call filed as "unknown" would send the model looking for state that does
+/// not exist, exactly as a denied one would.
 fn interrupted_note(
     opening: &str,
     progress: Option<&RunProgress>,
@@ -590,23 +599,54 @@ fn interrupted_note(
             messages_word
         );
     }
-    let (denied, unknown): (Vec<&DanglingCall>, Vec<&DanglingCall>) =
-        in_flight.iter().partition(|c| c.denied);
+    // `denied` wins over `parked`, as it does in the boundary repair: the
+    // reducer never sets both, and if a log ever did the denied sentence is
+    // the one that names a decision a person made.
+    let mut unknown = Vec::new();
+    let mut denied = Vec::new();
+    let mut gated = Vec::new();
+    let mut asked = Vec::new();
+    for c in in_flight {
+        let bucket = if c.denied {
+            &mut denied
+        } else {
+            match c.parked {
+                None => &mut unknown,
+                Some(ParkReason::Approval | ParkReason::PreHook) => &mut gated,
+                Some(ParkReason::Clarification) => &mut asked,
+            }
+        };
+        bucket.push(c.tool_name.as_str());
+    }
     if !unknown.is_empty() {
-        let names: Vec<&str> = unknown.iter().map(|c| c.tool_name.as_str()).collect();
         let _ = write!(
             note,
             " These calls were dispatched with no recorded result — their outcome is unknown: \
              [{}].",
-            names.join(", ")
+            unknown.join(", ")
         );
     }
     if !denied.is_empty() {
-        let names: Vec<&str> = denied.iter().map(|c| c.tool_name.as_str()).collect();
         let _ = write!(
             note,
             " These calls were denied by the approval gate and did not run: [{}].",
-            names.join(", ")
+            denied.join(", ")
+        );
+    }
+    if !gated.is_empty() {
+        let _ = write!(
+            note,
+            " These calls were waiting at a gate (approval or a hook's card) when the child \
+             stopped and never ran: [{}].",
+            gated.join(", ")
+        );
+    }
+    if !asked.is_empty() {
+        let _ = write!(
+            note,
+            " These calls had delivered a question but no answer was recorded when the child \
+             stopped: [{}].",
+            asked.join(", ")
         );
     }
     note.push_str(
@@ -855,7 +895,7 @@ impl super::SubagentTool {
 mod tests {
     use super::*;
     use crate::agents::background_persistence::{PersistedRun, RecoveredRun, RunPhase};
-    use crate::session::events::{now_ms, SessionEventRecord, TurnId};
+    use crate::session::events::{now_ms, ParkReason, SessionEventRecord, TurnId};
 
     fn rec(event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -1511,6 +1551,7 @@ mod tests {
             seq: 7,
             provenance: crate::session::reduction::DanglingProvenance::EarlierRun,
             denied,
+            parked: None,
         }
     }
 
@@ -1623,6 +1664,75 @@ mod tests {
         assert!(
             !note.contains("their outcome is unknown"),
             "a denied call has a known outcome: {note}"
+        );
+    }
+
+    /// §6.1 in the sub-agent twin (criterion #16): a call parked at a gate
+    /// when the child stopped is not "unknown". Two bodies, mirroring the
+    /// boundary repair's fourth arm — a call parked on a gate never ran; a
+    /// call parked on a delivered question ran as far as asking, and the
+    /// answer is what is missing. Every reason the core can stamp lands in
+    /// exactly one of the four sentences, the tool is named exactly once, and
+    /// the row carries the reason's wire word — the reason set is walked, not
+    /// listed here, and which sentence each one earns is an exhaustive match
+    /// so a new variant cannot compile into the wrong bucket silently.
+    #[test]
+    fn a_parked_call_lands_in_exactly_one_sentence_per_reason() {
+        const SENTENCES: [&str; 4] = [
+            "waiting at a gate",
+            "had delivered a question",
+            "their outcome is unknown",
+            "denied by the approval gate",
+        ];
+        for reason in ParkReason::ALL {
+            let expected = match reason {
+                ParkReason::Approval | ParkReason::PreHook => "waiting at a gate",
+                ParkReason::Clarification => "had delivered a question",
+            };
+            let mut call = dangling("bash_exec", false);
+            call.parked = Some(reason);
+            let row = Recovered::Interrupted {
+                child_session: bg_child("agent-a", "req-1"),
+                flow: "explore".into(),
+                progress: Some(RunProgress::default()),
+                in_flight: vec![call],
+                tail: Vec::new(),
+                contradictions: Vec::new(),
+            };
+            let json = to_json("req-1", &row);
+            let note = json["note"].as_str().unwrap();
+            let landed: Vec<&str> = SENTENCES
+                .iter()
+                .copied()
+                .filter(|s| note.contains(s))
+                .collect();
+            assert_eq!(landed, vec![expected], "{reason:?}: {note}");
+            assert_eq!(
+                note.matches("bash_exec").count(),
+                1,
+                "{reason:?} is named in exactly one list: {note}"
+            );
+            assert_eq!(
+                json["in_flight_calls"][0]["parked"],
+                json!(reason.as_str()),
+                "{reason:?}: the row carries the wire word"
+            );
+        }
+        let unparked = to_json(
+            "req-1",
+            &Recovered::Interrupted {
+                child_session: bg_child("agent-a", "req-1"),
+                flow: "explore".into(),
+                progress: Some(RunProgress::default()),
+                in_flight: vec![dangling("bash_exec", false)],
+                tail: Vec::new(),
+                contradictions: Vec::new(),
+            },
+        );
+        assert_eq!(
+            unparked["in_flight_calls"][0]["parked"],
+            Value::Null,
+            "an unparked call says so with null, not with a word"
         );
     }
 

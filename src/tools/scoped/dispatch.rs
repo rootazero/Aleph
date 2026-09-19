@@ -955,6 +955,18 @@ impl ScopedToolService {
         // approves something they never read. The ambient id is exact per call
         // (task-local per future), which is what lets multiple gated calls
         // pend approval concurrently.
+        //
+        // §6.1: the park is a fact BEFORE the park. Which gate raised the card
+        // is on the action (`gated_by`): a hook's card reads "a pre-tool
+        // hook", every other card "operator approval". Written — and awaited
+        // to the store — before the requester is entered, so a crash while
+        // the card is up reads "never ran" instead of "outcome unknown".
+        let reason = if action.rule_id == Some(super::gate_chain::GateRule::HookRequested.id()) {
+            crate::session::events::ParkReason::PreHook
+        } else {
+            crate::session::events::ParkReason::Approval
+        };
+        self.record_parked(name, reason).await;
         let asked_at = std::time::Instant::now();
         // Correlation rides the ambient `CallIdentity` scoped around this
         // dispatch (see above) — no per-call wrapper needed here. The response
@@ -996,12 +1008,9 @@ impl ScopedToolService {
             }
             // The trail says who refused, not just that something did: naming
             // the user on an `Unavailable` would put a decision they never made
-            // into a signed, non-repudiable ledger row.
-            let trail = if reason_kind.is_a_human_decision() {
-                format!("user did not approve ({outcome:?})")
-            } else {
-                format!("not authorized — nobody was asked ({outcome:?})")
-            };
+            // into a signed, non-repudiable ledger row. One sentence, shared
+            // with the sandbox elevation gate's `ToolCallDenied`.
+            let trail = reason_kind.refusal_trail(outcome);
             self.record_approval_decision(
                 name,
                 &fingerprint,
@@ -1108,9 +1117,13 @@ impl ScopedToolService {
     /// [`crate::approval::CallIdentity`] the harness Act phase scoped around
     /// this dispatch — exact per call, immune to guardrail `Sanitize` rewrites
     /// and to same-name siblings in a parallel batch (both of which broke the
-    /// session-log scan this replaced). `None` outside harness dispatch (direct
-    /// `tools.invoke` RPC, tests), where there is no `ToolCallRequested` event
-    /// to anchor to anyway. That is exactly why the ledger append comes first
+    /// session-log scan this replaced). Every production dispatch into this
+    /// service is scoped that way (spec §6.2, pinned by
+    /// `tests::every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity`);
+    /// a `None` is therefore a dispatch nobody scoped — not the direct
+    /// `tools.invoke` RPC, which bypasses this service altogether — and
+    /// `session::call_log` counts and reports it rather than treating it as
+    /// an expected shape. That is exactly why the ledger append comes first
     /// and does not share the early return: an approval granted on a
     /// non-harness surface is still an authorization that happened.
     ///
@@ -1156,52 +1169,52 @@ impl ScopedToolService {
         })
         .await;
 
-        let Some(session_svc) = crate::session::service::global_session_service() else {
-            // The identity-ledger record above still lands — this is the
-            // *session* copy of the same decision. Its neighbour ten lines
-            // down (missing ambient call identity) explains itself before
-            // returning; a silently-dropped approval/denial record deserves
-            // at least as much, and more: it's the audit record itself.
-            tracing::warn!(
-                tool = %name,
-                session_key = %turn.session_key,
-                "session/service capability absent; approval decision not persisted — see `aleph doctor`"
-            );
+        // The identity-ledger record above still lands whatever happens here
+        // — this is the *session* copy of the same decision, and the one
+        // writer says why when it cannot land it (missing service, missing
+        // ambient identity, refused append).
+        crate::session::call_log::emit_for_ambient_call(
+            &turn.session_key,
+            name,
+            "approval decision",
+            |turn_id, call_id| match decision.denial_reason() {
+                Some(reason) => SessionEvent::ToolCallDenied {
+                    turn_id,
+                    call_id,
+                    reason: reason.to_string(),
+                    at: now_ms(),
+                },
+                None => SessionEvent::ToolCallApproved {
+                    turn_id,
+                    call_id,
+                    by: decision.approval_source(),
+                    at: now_ms(),
+                },
+            },
+        )
+        .await;
+    }
+
+    /// §6.1 — the park is a fact BEFORE the park. Same anchor as the
+    /// decision (`record_approval_decision`): the ambient call identity, the
+    /// turn's session key, the one writer. Best-effort like the decision —
+    /// the park goes ahead without its stamp, since a missing stamp reads
+    /// "outcome unknown" (U3's safe direction), never "it ran".
+    async fn record_parked(&self, name: &str, reason: crate::session::events::ParkReason) {
+        let Some(turn) = self.turn_context.as_ref() else {
             return;
         };
-        let session_id = &turn.session_key;
-
-        let Some(crate::approval::CallIdentity { turn_id, call_id }) =
-            crate::approval::current_call_identity()
-        else {
-            tracing::debug!(
-                tool = %name,
-                "no ambient call identity — approval decision not persisted"
-            );
-            return;
-        };
-
-        let event = match decision.denial_reason() {
-            Some(reason) => SessionEvent::ToolCallDenied {
+        crate::session::call_log::emit_for_ambient_call(
+            &turn.session_key,
+            name,
+            "park",
+            |turn_id, call_id| crate::session::events::SessionEvent::ToolCallParked {
                 turn_id,
                 call_id,
-                reason: reason.to_string(),
-                at: now_ms(),
+                reason,
             },
-            None => SessionEvent::ToolCallApproved {
-                turn_id,
-                call_id,
-                by: decision.approval_source(),
-                at: now_ms(),
-            },
-        };
-        if let Err(e) = session_svc.emit_event(session_id, event).await {
-            tracing::warn!(
-                tool = %name,
-                error = ?e,
-                "failed to persist tool approval decision to the session log"
-            );
-        }
+        )
+        .await;
     }
 
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)

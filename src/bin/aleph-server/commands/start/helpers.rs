@@ -324,15 +324,18 @@ pub(super) async fn initialize_session_store(
 /// Build a `SessionService` backed by the same `SQLite` file that the
 /// `SessionManager` uses.
 ///
-/// Phase 1 dual-write wiring: opens a **dedicated** connection to the
-/// sessions DB, runs the `session_events` migration, and returns an
-/// `InProcessActorSessionService` around a `SqliteEventStore`. Uses a
-/// separate connection (not the one owned by `SessionManager`) because
-/// `SessionManager` and `SqliteEventStore` use different `Mutex` types.
-/// Reconciling them is out of scope for Task 9 and will be revisited in Phase 6.
+/// Opens a **dedicated** connection to the sessions DB, runs the
+/// `session_events` migration, and returns an `InProcessActorSessionService`
+/// around a `SqliteEventStore`. Uses a separate connection (not the one owned
+/// by `SessionManager`) because `SessionManager` and `SqliteEventStore` use
+/// different `Mutex` types.
 ///
-/// Returns `None` on any failure (non-fatal — dual-write simply stays
-/// off for this run; the legacy `messages` table remains authoritative).
+/// Returns `None` on any failure — then no event log exists for this run:
+/// `decline_global_session_service` / `decline_global_session_event_store`
+/// say so on the capability roster, every reader of the two handles takes its
+/// own `None` arm (`SESSION_SERVICE_READERS` / `SESSION_EVENT_STORE_READERS`
+/// name each one), and the `messages` projection has nothing to project from.
+/// Nothing writes the transcript in the log's place.
 pub(super) fn build_sqlite_session_service(
     db_path: &std::path::Path,
     observer: Option<Arc<dyn alephcore::session::observer::SessionEventObserver>>,
@@ -346,8 +349,7 @@ pub(super) fn build_sqlite_session_service(
             tracing::warn!(
                 path = ?db_path,
                 error = %e,
-                "Phase 1 dual-write: failed to open session_events connection; \
-                 mirroring disabled"
+                "failed to open the session_events connection; no event log this run"
             );
             return None;
         }
@@ -355,7 +357,7 @@ pub(super) fn build_sqlite_session_service(
     if let Err(e) = alephcore::session::store::migrate_add_session_events(&conn) {
         tracing::warn!(
             error = %e,
-            "Phase 1 dual-write: session_events migration failed; mirroring disabled"
+            "session_events migration failed; no event log this run"
         );
         return None;
     }
@@ -517,7 +519,7 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
-        // Third thing the skipped destructors would have done: `main`'s
+        // Another thing the skipped destructors would have done: `main`'s
         // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is
         // exactly what `std::process::exit(0)` never runs. Without this the
         // sidecar outlives the exit naming a dead PID and the next `aleph
@@ -525,13 +527,26 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // that was merely slow. Still holding the lock here — the OS releases
         // it at exit — so no successor can have written a record yet. One
         // `unlink`, the cheapest line in this block, so it goes before the
-        // browser stop by the same ordering-by-cost rule the next comment
-        // spells out.
+        // terminal and browser stops by the same ordering-by-cost rule the
+        // browser comment spells out.
         let records = alephcore::utils::instance_lock::remove_held_holder_records_before_exit();
         if records > 0 {
             tracing::warn!(
                 count = records,
                 "removed instance-lock holder record before forced exit"
+            );
+        }
+        // The bash reaper's twin (see the orderly site in `start/mod.rs` for
+        // why it is the journal, not the shell, that needs it): one journal
+        // write plus one synchronous kill per open terminal, so a wedged stop
+        // is not read by the next boot as a crash that interrupted every open
+        // terminal. After the unlink (cheaper), before the browser stop and
+        // the 2 s sleep (both dearer).
+        let terminals = alephcore::gateway::pty::manager().close_all();
+        if terminals > 0 {
+            tracing::warn!(
+                count = terminals,
+                "closed terminal sessions before forced exit"
             );
         }
         // The wedged path. `std::process::exit(0)` below skips the orderly
@@ -684,9 +699,20 @@ mod tests {
     /// under `attach --cdp` playwright-cli was never the browser's parent, so
     /// a missing call leaks a Chromium — and leaks it on precisely the loaded
     /// shutdowns the failsafe exists for.
+    ///
+    /// The PTY reaper (`pty::manager().close_all()`) joined for the journal's
+    /// sake as much as the shell's: the bash reaper records `killed` on every
+    /// job it aborts, and a clean stop that closed no terminal left every open
+    /// PTY row `running` on disk — which the next boot tombstoned as a shell
+    /// the restart *interrupted*, and the terminal faces then rendered that
+    /// verdict to the person who had merely restarted the server.
     #[test]
     fn both_daemon_exit_paths_reap_background_jobs_and_browsers() {
-        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
+        for reaper in [
+            "kill_all_running_background",
+            "shutdown_browsers_global",
+            "close_all",
+        ] {
             for (label, raw) in [
                 ("start/helpers.rs", include_str!("helpers.rs")),
                 ("start/mod.rs", include_str!("mod.rs")),
