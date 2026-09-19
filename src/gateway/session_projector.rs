@@ -2657,9 +2657,14 @@ mod tests {
 
     /// Final review I1, at the store: a `chat.rewind` / `session.truncate` /
     /// `/undo` whose cut lands inside a finished run the live drain already
-    /// billed retires the run's meta and closes the run again with a
-    /// `Cancelled` closer (one batch, as `retire_events_and_balance` writes
-    /// it), and realigns the transcript. The next whole-session heal must
+    /// billed retires the run's meta and, in the same batch, appends the
+    /// closer production's own [`open_run_after_retire`] derives for that cut
+    /// — `RunFinished { Cancelled }` when the surviving prefix leaves the run
+    /// open (cuts (i) and (iii)), nothing when it already ends in the run's
+    /// `RunFinished` (cut (ii): a retire-only batch), exactly as
+    /// `retire_from_and_close_run` writes it — and realigns the transcript.
+    /// The fixture calls the helper rather than spelling a closer per cut so
+    /// it cannot drift from the balancer. The next whole-session heal must
     /// then bill NOTHING, wherever the cut fell: (i) at the second message —
     /// the stamped row is retired and the first message survives unstamped
     /// (before the fix: synthesized under the marker id and billed again,
@@ -2714,22 +2719,31 @@ mod tests {
 
             // The rewind: retire from `cut` and close the run the surviving
             // prefix leaves open, in ONE batch; then realign the projection
-            // by source seq, as `chat.rewind` does.
-            let closer = SessionEvent::RunFinished {
-                run_id: marker_of("a"),
-                outcome: crate::session::events::RunOutcome::Cancelled,
-                at: 9,
-            };
-            log.append_batch(
-                &id,
-                6,
-                &[(closer.clone(), 0)],
-                Some(Retire::From(cut)),
-                Durability::Normal,
-            )
-            .await
-            .unwrap();
-            projector.on_appended(&id, &rec(6, closer));
+            // by source seq, as `chat.rewind` does. The closer is whatever
+            // the balancer's own builder derives from the live log at this
+            // cut — possibly none — never a closer hand-picked per arm.
+            let live = log.load_all_events(&id).await.unwrap();
+            let closer: Vec<(SessionEvent, i64)> =
+                crate::session::open_run_after_retire(&live, cut)
+                    .expect("the fixture log reduces")
+                    .into_iter()
+                    .map(|run_id| {
+                        (
+                            SessionEvent::RunFinished {
+                                run_id,
+                                outcome: crate::session::events::RunOutcome::Cancelled,
+                                at: 9,
+                            },
+                            0,
+                        )
+                    })
+                    .collect();
+            log.append_batch(&id, 6, &closer, Some(Retire::From(cut)), Durability::Normal)
+                .await
+                .unwrap();
+            for (ev, _) in &closer {
+                projector.on_appended(&id, &rec(6, ev.clone()));
+            }
             projector.flush(Duration::from_secs(5)).await.unwrap();
             store.delete_messages_from_seq(&id, cut).await.unwrap();
 
