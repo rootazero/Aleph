@@ -305,34 +305,6 @@ impl StateDatabase {
         .await
     }
 
-    /// Mark all running tasks as interrupted (for graceful shutdown)
-    pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
-        let now = chrono::Utc::now().timestamp();
-        self.with_conn(move |conn| {
-            // `Connection::execute` returns `Result<usize>` (rows changed),
-            // not i64. Cast to i64 via try_from so an unexpected
-            // `usize > i64::MAX` (impossible per SQLite's row-count cap)
-            // is surfaced as a typed error rather than a silent truncation.
-            let count: usize = conn
-                .execute(
-                    r#"
-                    UPDATE agent_tasks
-                    SET status = 'interrupted', updated_at = ?1
-                    WHERE status = 'running'
-                    "#,
-                    params![now],
-                )
-                .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
-            let count_i64 = i64::try_from(count).map_err(|_| {
-                AlephError::config(format!(
-                    "mark_running_as_interrupted: row count {count} exceeds i64::MAX"
-                ))
-            })?;
-            super::i64_to_u64_count(count_i64, "marked_tasks")
-        })
-        .await
-    }
-
     /// Reconcile tasks orphaned by a crash or hard restart.
     ///
     /// Finds tasks still marked `running` (see `get_recoverable_tasks`) — the
@@ -486,30 +458,6 @@ mod tests {
         let recoverable = db.get_recoverable_tasks().await.unwrap();
         let ids: Vec<&str> = recoverable.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["run-1"]);
-    }
-
-    /// After marking running rows interrupted, they must not resurface as
-    /// recoverable — otherwise every restart re-reports the same tasks.
-    #[tokio::test]
-    async fn mark_running_as_interrupted_then_recoverable_is_empty() {
-        let db = StateDatabase::in_memory().unwrap();
-        insert_with_status(&db, "run-1", TaskStatus::Running).await;
-
-        let marked = db.mark_running_as_interrupted().await.unwrap();
-        assert_eq!(marked, 1);
-
-        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
-    }
-
-    /// Reconciliation run twice in a row: the second pass is a no-op.
-    #[tokio::test]
-    async fn reconcile_is_idempotent_across_two_runs() {
-        let db = StateDatabase::in_memory().unwrap();
-        insert_with_status(&db, "run-1", TaskStatus::Running).await;
-
-        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 1);
-        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 0);
-        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
     }
 
     /// reconcile_orphaned_tasks returns the orphans and marks them
