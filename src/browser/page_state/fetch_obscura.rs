@@ -1775,9 +1775,35 @@ mod tests {
     /// `:focus` never matches; `pierce` is ignored; a `display:none` element
     /// answers `getBoxModel` successfully with a zero quad; **obscura has no
     /// top layer**, which is the whole reason [`cascade_effective_styles`] has
-    /// no second arm where the twin does. Each is one grep in an obscura
-    /// checkout, and this test is what makes that grep happen instead of being
-    /// assumed — a claim that rots LOUDLY rather than silently.
+    /// no second arm where the twin does; and — the newest —
+    /// **`DOM.getDocument` turns on no event stream here, and `DOM.disable`
+    /// does not exist.** Each is one grep in an obscura checkout, and this test
+    /// is what makes that grep happen instead of being assumed — a claim that
+    /// rots LOUDLY rather than silently.
+    ///
+    /// # The DOM-agent reading, and why an ABSENCE has to be dated
+    ///
+    /// `fetch_chromium::top_layer_backend_ids` sends `DOM.disable` because on
+    /// Chromium `DOM.getDocument` enables an event stream that outlives the
+    /// call. This fetcher sends `DOM.getDocument(-1, true)` at `:454` and does
+    /// **not** disable — and the reason is a fact about the BUILD, which is
+    /// exactly the kind of fact this stamp exists to expire. Measured twice,
+    /// independently, on the installed v0.2.2 artefact with default flags:
+    ///
+    /// | | obscura v0.2.2 |
+    /// |---|---|
+    /// | unsolicited `DOM.*` with no handshake | **0** |
+    /// | unsolicited `DOM.*` after `DOM.getDocument(-1, true)` | **0** |
+    /// | `DOM.disable` | **`-32601 Unknown DOM method: disable`** |
+    /// | `DOM.enable` | accepted, and still emits nothing |
+    ///
+    /// So there is nothing to disable, and nothing to disable it WITH — the two
+    /// halves point the same way today and would come apart the moment either
+    /// changes. Without this entry the absence reads as "we did not look over
+    /// there", which is what the previous round's scope sentence actually said.
+    /// If v0.3 emits `DOM.*` events, D1 becomes live on the **default** engine
+    /// with an undisabled `getDocument` sitting in this file, and this stamp is
+    /// the thing that says so.
     ///
     /// **The top-layer claim is the most expensive one on that list and the
     /// newest, so it is worth saying what its rot looks like.** obscura is the
@@ -1851,7 +1877,15 @@ mod tests {
              tag paints a top layer, cascade_effective_styles deletes every open \
              modal dialog inside a faded container from the page state on the \
              DEFAULT engine, silently, and fetch_chromium::cascade_opacity's \
-             top-layer arm is the shape the fix has to take here too."
+             top-layer arm is the shape the fix has to take here too. And the \
+             DOM AGENT: on v0.2.2, DOM.getDocument(-1, true) at :454 turns on NO \
+             event stream (0 unsolicited DOM.* events, measured twice) and \
+             DOM.disable does not exist (-32601 Unknown DOM method: disable), \
+             which is why this fetcher does not pair its handshake with a \
+             disable the way fetch_chromium does. If the new tag emits DOM.* \
+             events, that omission becomes Task 17d's D1 live on the DEFAULT \
+             engine — and if it also implements DOM.disable, the fix is the \
+             same shape as top_layer_backend_ids'."
         );
     }
 

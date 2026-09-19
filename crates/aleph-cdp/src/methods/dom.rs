@@ -82,11 +82,20 @@ pub const NO_BOX_MESSAGE: &str = "Could not compute box model";
 /// its own target, its own session, and frame-local coordinates. One call here or in
 /// `dom_snapshot` never sees "the whole page" when it contains a cross-origin frame.
 ///
-/// ⚠️ **This call ENABLES the session's DOM agent, permanently, as a side effect** — it is the only
-/// thing in this crate's production callers that does. Every DOM mutation on that tab then pushes
-/// an unsolicited `DOM.*` event at the connection for the rest of the session's life. If you want
-/// the node map for one operation rather than for the session, pair this with [`disable`], which
-/// carries the measurements.
+/// ⚠️ **On Chromium this call ENABLES the session's DOM agent, permanently, as a side effect** —
+/// it is the only thing in this crate's production callers that does. Every DOM mutation on that
+/// tab then pushes an unsolicited `DOM.*` event at the connection for the rest of the session's
+/// life. If you want the node map for one operation rather than for the session, pair this with
+/// [`disable`], which carries the measurements.
+///
+/// ⚠️ **That pairing is engine-specific, and following it blindly breaks the other engine.**
+/// Measured twice, independently, on obscura v0.2.2: `DOM.getDocument(-1, true)` turns on **no**
+/// event stream there (0 unsolicited `DOM.*` events), and `DOM.disable` answers **`-32601 Unknown
+/// DOM method: disable`** — it is absent, not a no-op. So on obscura there is nothing to disable
+/// and nothing to disable it with, and an engine-blind "always pair them" makes every snapshot on
+/// the default engine fail. `alephcore`'s
+/// `only_the_two_page_state_fetchers_touch_a_sessions_dom_agent` is what keeps that from being
+/// written by accident; this crate cannot enforce it, so it says it.
 pub async fn get_document(
     conn: &CdpConnection,
     session: Option<&SessionId>,
@@ -279,8 +288,8 @@ pub async fn get_top_layer_elements(
 /// Measured on Chrome 153.0.8010.48
 /// (`docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/probes/t17d-disable.mjs`, arm
 /// A), three fresh production-shaped sessions on one page, each given the same 250 inserts + 250
-/// attribute writes + 125 removals, counting every unsolicited `DOM.*` frame the connection
-/// received AFTER setup:
+/// attribute writes + 125 removals **rooted in a freshly created host appended to `<body>`**,
+/// counting every unsolicited `DOM.*` frame the connection received AFTER setup:
 ///
 /// | session | `DOM.*` events |
 /// |---|---|
@@ -291,6 +300,14 @@ pub async fn get_top_layer_elements(
 /// The first row is the instrument's control — it must be zero by construction, because nothing
 /// but `DOM.getDocument` enables the agent — and the second is the control that says a zero in the
 /// third is the disable working rather than a quiet page.
+///
+/// ⚠️ **377 is the LOW reading and the churn root is why.** Under `depth: 0` the frontend knows
+/// only the document root plus whatever `describeNode` pushed, so mutations under a host it has
+/// never had children pushed for collapse into `childNodeCountUpdated` (375 of the 377) and
+/// attribute writes on those nodes emit nothing at all. Re-measured independently with the same
+/// session shape and the same 625 operations, rooted instead **on the pushed ancestor chain**:
+/// **626** events, ~1:1 with the mutations. `depth: 0` buys a cheaper event SHAPE, not fewer
+/// events — and the expensive shape is the one a page with an open dialog is most likely to have.
 ///
 /// Those events land on the connection's event broadcast, which is bounded
 /// ([`crate::events`]'s capacity), so on a churning page they can push a subscriber past its

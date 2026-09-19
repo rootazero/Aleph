@@ -470,11 +470,25 @@ async fn send_mouse(
 
 /// Press and release at a point, racing the release against a dialog opening.
 ///
-/// Chromium does not answer `Input.dispatchMouseEvent` for the release that
+/// **Chromium** does not answer `Input.dispatchMouseEvent` for the release that
 /// triggers an `alert()` until the dialog is handled — so a plain `await` would
 /// spend the whole command budget on every click that opens a modal and then
 /// report a timeout for a click that in fact happened. The dialog event IS the
 /// evidence that the click landed, so whichever arrives first is the answer.
+///
+/// ⚠️ **That premise is Chromium's, and this function is engine-blind** — so
+/// the sentence above needs the engine's name on it (判据 §1: a claim about one
+/// engine, sitting where both arrive, is read as a claim about both). Measured
+/// on obscura v0.2.2: `alert()` produces **zero** unsolicited frames, a
+/// following `Runtime.evaluate` answers in ~0.01 s so the renderer never
+/// blocks, and `Page.handleJavaScriptDialog` answers `-32601`. So on obscura
+/// the `select!` below always resolves on its dispatch arm and the dialog arm
+/// is dead code — benign **because** the premise is false there, which is
+/// exactly the shape that stops being benign the day it changes.
+///
+/// No behaviour change is made here: what `browser_dialog` should do on an
+/// engine with no dialogs is a separate question, carried to Task 18, which
+/// exercises the verbs on both engines on a real machine.
 async fn press_and_release(
     be: &CdpBackend,
     handle: &EngineHandle,

@@ -262,6 +262,21 @@ async fn capture_session(
 /// above says nothing else enables the agent — and row 2 is the control that
 /// says a zero in row 3 is the disable working rather than a quiet page.
 ///
+/// ⚠️ **377 is the LOW reading, and the missing half of its predicate is where
+/// the churn was ROOTED.** The probe appends a freshly created host to `<body>`
+/// and mutates inside that. The frontend has never had children pushed for it,
+/// so its mutations collapse into `childNodeCountUpdated` (375 of the 377) and
+/// attribute writes on those undiscovered nodes produce **nothing at all**.
+/// Re-measured independently with the *same* session shape and the *same* 625
+/// operations, differing only in rooting the churn on the ancestor chain the
+/// `describeNode`s pushed: **626** events — `childNodeInserted` 250,
+/// `attributeModified` 250, `childNodeRemoved` 125, i.e. ~1:1. A page mutating
+/// inside the pushed chain is the *common* case precisely when a dialog is
+/// open, so the honest reading of row 2 is "377 to 626 depending on where the
+/// page is changing", and `depth: 0` buys a cheaper event SHAPE rather than
+/// fewer events (判据 §18: a number carries the predicate it measured, and this
+/// one hid the variable that moves it 1.66×).
+///
 /// Why it reaches a user: those events land on the same connection whose event
 /// broadcast is bounded, so a burst can push a subscriber past its window. One
 /// subscriber reports the hole (the pump's lag note); `cdp_backend::actions`'
@@ -275,11 +290,24 @@ async fn capture_session(
 ///
 /// Events still flow between the `DOM.getDocument` and the `DOM.disable`.
 /// Measured, same probe, arm G, counting strictly inside that window: **7** on
-/// a quiet page (one `DOM.setChildNodes` per `describeNode`), **9** with the
-/// page mutating through it. Small against the broadcast's capacity, and not
-/// zero — a large enough burst landing inside one handshake can still lag a
-/// subscriber. That is [`cascade_opacity`]'s residual entry 5 rather than a
-/// comment, because it is a residual this round created.
+/// a quiet page, and **9** with the page mutating through it — the churning
+/// figure is a *sample*, not a constant (an independent run got 10; it depends
+/// on how many mutations land in a few milliseconds).
+///
+/// ⚠️ **The 7 is not "one `setChildNodes` per `describeNode`"**, which is what
+/// this doc said until it was checked: an independent run listed **4** ids, made
+/// **4** `describeNode` calls and still produced **7**. The events track the
+/// **ancestor-chain depth being pushed**, not the number of ids — so the way to
+/// predict this window's growth is page depth, not list length. The count was
+/// right and the sentence beside it was the part a reader would spend (判据 §1).
+///
+/// Small against the broadcast's capacity, and not zero — a large enough burst
+/// landing inside one handshake can still lag a subscriber. That is
+/// [`cascade_opacity`]'s residual entry 5 rather than a comment, because it is a
+/// residual this round created. Its one guard is
+/// `the_handshake_window_is_the_list_and_the_describe_nodes_and_nothing_else`,
+/// which watches the round-trip count rather than the event count — see there
+/// for why.
 ///
 /// ## 闸的两个方向: what the disable takes away, and from whom
 ///
@@ -1744,13 +1772,25 @@ fn parse_nodes(
 ///    events it produces are bounded by that function rather than by the tab's
 ///    life, which is what its table measures. They are not zero. Measured
 ///    strictly inside the window (`…-evidence/probes/t17d-disable.mjs`, arm G):
-///    **7** `DOM.setChildNodes` on a quiet page — one per `describeNode` — and
-///    **9** with the page mutating through it. A burst large enough to land
-///    inside one handshake can still push a subscriber past the connection's
-///    bounded event broadcast, and one of those subscribers does not read
-///    `lagged()`. Numbered here rather than left in a comment because it is a
-///    residual THIS round created, which is the standard this list applies to
-///    everyone else.
+///    **7** `DOM.setChildNodes` on a quiet page, and **9** with the page
+///    mutating through it — the churning figure is a *sample* rather than a
+///    constant (an independent run got 10).
+///
+///    ⚠️ **The 7 is not one event per `describeNode`**, which is what this entry
+///    said until it was checked: an independent run listed **4** ids, made
+///    **4** `describeNode` calls and still got **7**, because the events track
+///    the **ancestor-chain depth being pushed** and not the number of ids. The
+///    number was right; the mechanism beside it is the part a reader spends to
+///    predict growth, and it predicted wrongly (判据 §1). Growth here is a
+///    function of page DEPTH, not of how many things are in the top layer.
+///
+///    A burst large enough to land inside one handshake can still push a
+///    subscriber past the connection's bounded event broadcast, and one of those
+///    subscribers does not read `lagged()`. Numbered here rather than left in a
+///    comment because it is a residual THIS round created, which is the standard
+///    this list applies to everyone else. What defends it is
+///    `the_handshake_window_is_the_list_and_the_describe_nodes_and_nothing_else`
+///    — a round-trip count, not an event count, for the reason stated there.
 ///
 /// **What used to be entry 1 — the top layer — is closed**, not dropped: the
 /// membership test at the head of the loop is the fix, and
@@ -3792,7 +3832,12 @@ mod tests {
     ///
     /// Leg 2 pins the OTHER measured face: a refusal must reach the caller as a
     /// refusal. Spending it as an empty set would put the deleted dialog back,
-    /// silently, which is the whole defect (判据 §8).
+    /// silently, which is the whole defect (判据 §8). **It also carries the
+    /// error path's cleanup**, which is fix round 2's and the only assertion
+    /// anywhere that watches the failing arm turn the agent off — measured:
+    /// moving the disable back to the trailing position, or wrapping it in
+    /// `if read.is_ok()`, leaves the entire `browser::` suite green without it,
+    /// because every other test that touches the disable is happy-path.
     ///
     /// **Leg 3 is fix round 1's**, and it goes red for a different reason than
     /// any of the others: delete the `DOM.disable` and the fetcher leaves the
@@ -3909,6 +3954,34 @@ mod tests {
             assert!(
                 text.contains("browser_snapshot"),
                 "and say what to do next: {text}"
+            );
+
+            // **AND THE ERROR PATH HANDS THE SESSION BACK COLD TOO.** Fix round
+            // 2's, and the only assertion in this file that watches the failing
+            // arm's cleanup.
+            //
+            // The handshake SUCCEEDED before the read failed, so the agent is on
+            // at the moment the `?` fires. A disable in the trailing position —
+            // or wrapped in `if read.is_ok()` — is skipped here and leaks the
+            // enablement on exactly the path a retrying caller hits over and
+            // over. Measured: putting the disable back in the trailing position
+            // leaves the whole `browser::` suite green, because every other test
+            // that touches it is happy-path.
+            //
+            // Asserted through the peer's measured semantics rather than by
+            // looking for a frame (判据 §4): `DOM.disable` on an already-off
+            // agent is an ERROR, so this call FAILING is the proof that
+            // production already turned it off.
+            let second = aleph_cdp::methods::dom::disable(&conn, Some(&session))
+                .await
+                .expect_err(
+                    "after a FAILED top-layer read the session's DOM agent must already be off \
+                     — this disable succeeding means the fetcher left it enabled on the error \
+                     path",
+                );
+            assert!(
+                second.to_string().contains("DOM agent hasn't been enabled"),
+                "and it is off for the reason Chrome gives: {second}"
             );
         }
 
@@ -4080,6 +4153,91 @@ mod tests {
         );
     }
 
+    /// **Residual entry 5's guard**: the handshake window holds the list and the
+    /// `describeNode`s and **nothing else**.
+    ///
+    /// # Why a round-trip count and not the event count the residual is about
+    ///
+    /// The residual is measured in unsolicited `DOM.*` events, and an event
+    /// count needs a real browser — a fake peer emits what the test tells it to,
+    /// so asserting on it would be asking the instrument to confirm itself
+    /// (判据 §10). What is countable here, and what actually governs the
+    /// residual's size on our side, is the number of **round trips** made while
+    /// the agent is on: the window is `getDocument` + `getTopLayerElements` +
+    /// `describeNode` × k + `disable`, and every extra call inside it is extra
+    /// wall time for the page to mutate through.
+    ///
+    /// # In what situation does it go red?
+    ///
+    /// Someone adds a round trip between the handshake and the disable — a
+    /// `getBoxModel` per top-layer element, a `resolveNode`, a second capture,
+    /// anything. That is the only way this residual grows **without the page
+    /// changing**, which is the half we control.
+    ///
+    /// # What it does not cover
+    ///
+    /// The page's own churn, which dominates the number and is not ours; the
+    /// ancestor-chain depth that decides how many `setChildNodes` one
+    /// `describeNode` costs; and moving work from inside the window to a place
+    /// that re-enables the agent later. It pins the shape of one window, not the
+    /// residual's magnitude.
+    #[tokio::test]
+    async fn the_handshake_window_is_the_list_and_the_describe_nodes_and_nothing_else() {
+        use aleph_cdp::testkit::FakeCdpServer;
+
+        let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::AsChromeDoes)).await;
+        let (conn, session) = server.connect_and_attach().await;
+        fetch_chromium(&conn, &session)
+            .await
+            .expect("the page is captured");
+
+        // Every frame this connection sent, in order — then the slice between
+        // the handshake and the disable.
+        let methods: Vec<String> = server
+            .received()
+            .iter()
+            .filter_map(|f| f.get("method").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        let open = methods
+            .iter()
+            .position(|m| m == "DOM.getDocument")
+            .expect("the handshake is on the wire at all");
+        let close = methods
+            .iter()
+            .position(|m| m == "DOM.disable")
+            .expect("and so is the disable");
+        assert!(
+            open < close,
+            "the disable must come AFTER the handshake, or the window is not a \
+             window: {methods:?}"
+        );
+
+        let inside = &methods[open + 1..close];
+        let expected: Vec<&str> = std::iter::once("DOM.getTopLayerElements")
+            .chain(std::iter::repeat_n(
+                "DOM.describeNode",
+                recorded_top_layer().len(),
+            ))
+            .collect();
+        assert_eq!(
+            inside, expected,
+            "the agent is on for exactly these calls and no others. Anything \
+             added here widens `cascade_opacity`'s residual 5 — the window the \
+             page can mutate through — and the events that window produces are \
+             not countable from a fake peer, so this round-trip count is what \
+             stands in for them. Window was {inside:?}"
+        );
+
+        // Non-vacuity: the window must not be empty, and the `describeNode`s
+        // must be the recorded list's, not a number this test chose.
+        assert_eq!(
+            inside.len(),
+            1 + 6,
+            "one list call plus one describeNode per id Chrome named (three \
+             escapers and their three ::backdrops)"
+        );
+    }
+
     /// **闸的两个方向 for the `DOM.disable`**: it is session-wide, so the
     /// question is not whether it works but **who else needed the agent on**.
     ///
@@ -4099,21 +4257,43 @@ mod tests {
     ///
     /// # In what situation does it go red?
     ///
-    /// A third production `dom::get_document(` appears under `src/`, or any
-    /// `DOM.enable` / `dom::enable(` appears at all. Both are ways of becoming
-    /// the second enabler; the message says what the new caller has to reckon
-    /// with, and there is deliberately **no `enable` wrapper in `aleph-cdp`** to
-    /// make the second spelling awkward on purpose.
+    /// **Two sets, from one walk**, because the agent has two halves and only
+    /// one of them was guarded when this census was written:
+    ///
+    /// * **enablers** — a third production `dom::get_document(` appears under
+    ///   `src/`, or any `DOM.enable` / `dom::enable(` / raw `"DOM.getDocument"`
+    ///   appears at all. Each is a way of becoming the second enabler; there is
+    ///   deliberately **no `enable` wrapper in `aleph-cdp`** to make one of the
+    ///   spellings awkward on purpose.
+    /// * **disablers** — `dom::disable(` appears in any production file but
+    ///   `fetch_chromium.rs`. This half is fix round 2's, and it is not
+    ///   symmetry: **obscura v0.2.2 does not implement `DOM.disable` at all**
+    ///   (measured twice, independently: `-32601 Unknown DOM method: disable`),
+    ///   so an engine-blind "always disable after the tree read" refactor turns
+    ///   a working `fetch_obscura` into one that errors on **every** snapshot on
+    ///   the DEFAULT engine. A unified CDP layer is this branch's stated
+    ///   direction of travel, so that refactor is not hypothetical.
+    ///
+    /// The enabler set alone could not catch it: `fetch_obscura.rs` is already
+    /// an expected entry, so a `dom::disable(` added there changes no file set
+    /// at all. Two sets from one walk rather than a second census — the fact is
+    /// in hand, and splitting the walk would be two derivations of one
+    /// membership question (判据 §12).
     ///
     /// # What it cannot see, stated rather than implied
     ///
-    /// A caller reaching the agent through some other spelling — a raw
-    /// `conn.call(..., "DOM.getDocument", ...)`, or a wrapper added later under
-    /// a different name. It scans for two literals in the PRODUCTION half of
-    /// every `.rs` file under `src/`, which is a 列举法 census of two needles,
-    /// not a proof about the agent. That is the direction it fails in, and it
-    /// fails green there — so the message below asks the next author to widen
-    /// it rather than trusting it.
+    /// **A wrapper added later under a different name.** That is the genuine
+    /// unclosable half: a census of literals cannot know about a spelling that
+    /// does not exist yet.
+    ///
+    /// It is NOT the raw-string half any more. That was listed here until fix
+    /// round 2 measured how cheap it was to close — the raw `"DOM.enable"` was
+    /// already caught and only `"DOM.getDocument"` slipped through, so the
+    /// needle list gained it, with zero false positives at this commit (the one
+    /// production quoted copy is `fetch_obscura.rs`'s own error label, in a file
+    /// that is an expected entry anyway). A stated limit that no longer applies
+    /// is this file's own §1 defect pointed at its own guard, so it is deleted
+    /// rather than left standing.
     ///
     /// `production_text` and not `production_prefix`: a whole-file test module
     /// carries no `#[cfg(test)]` of its own, so the one-file cut would scan
@@ -4147,29 +4327,41 @@ mod tests {
         );
 
         let mut enablers: Vec<String> = Vec::new();
+        let mut disablers: Vec<String> = Vec::new();
         for file in files {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
             let production = crate::utils::source_scan::production_text(&file, &text);
-            // Comment lines are stripped first: this file's own doc names both
-            // needles repeatedly, and a census that counted prose would be
+            // Comment lines are stripped first: this file's own doc names every
+            // needle repeatedly, and a census that counted prose would be
             // measuring how much it explains itself (my own note from the round
             // before: 剥注释行 before grepping).
             let code = crate::utils::source_scan::strip_comment_lines(&production);
+            let rel = || {
+                file.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            };
+            // Four spellings of "turn the agent on". The two raw strings are
+            // here because the wrappers are not the only way to send a frame —
+            // `conn.call` is public, and a probe spelled that way was measured
+            // slipping through when only `"DOM.enable"` was listed.
             if code.contains("dom::get_document(")
                 || code.contains("dom::enable(")
                 || code.contains("\"DOM.enable\"")
+                || code.contains("\"DOM.getDocument\"")
             {
-                enablers.push(
-                    file.strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                        .unwrap_or(&file)
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
+                enablers.push(rel());
+            }
+            // And one of "turn it off", which only Chromium's fetcher may say.
+            if code.contains("dom::disable(") || code.contains("\"DOM.disable\"") {
+                disablers.push(rel());
             }
         }
         enablers.sort();
+        disablers.sort();
         assert_eq!(
             enablers,
             vec![
@@ -4186,6 +4378,19 @@ mod tests {
              here do not collide: they are different engines on different \
              connections, and only the Chromium one disables.) Found: \
              {enablers:?}"
+        );
+        assert_eq!(
+            disablers,
+            vec!["src/browser/page_state/fetch_chromium.rs".to_string()],
+            "`DOM.disable` belongs to the Chromium fetcher and nowhere else, and \
+             the reason is the ENGINE rather than tidiness: measured twice on \
+             the installed obscura v0.2.2, `DOM.disable` answers `-32601 Unknown \
+             DOM method: disable` — it is absent, not a no-op. So an \
+             engine-blind \"always disable after the tree read\" turns a working \
+             `fetch_obscura` into one that errors on EVERY snapshot, on the \
+             DEFAULT engine. If a unified CDP layer needs this verb, gate it on \
+             the engine and re-measure the one you are adding it for. Found: \
+             {disablers:?}"
         );
     }
 
