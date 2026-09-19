@@ -3832,12 +3832,12 @@ mod tests {
     ///
     /// Leg 2 pins the OTHER measured face: a refusal must reach the caller as a
     /// refusal. Spending it as an empty set would put the deleted dialog back,
-    /// silently, which is the whole defect (判据 §8). **It also carries the
-    /// error path's cleanup**, which is fix round 2's and the only assertion
-    /// anywhere that watches the failing arm turn the agent off — measured:
-    /// moving the disable back to the trailing position, or wrapping it in
-    /// `if read.is_ok()`, leaves the entire `browser::` suite green without it,
-    /// because every other test that touches the disable is happy-path.
+    /// silently, which is the whole defect (判据 §8). The **cleanup** on that
+    /// same error path is asserted by
+    /// `a_failed_top_layer_read_still_hands_the_session_back_cold` and
+    /// deliberately not here — fix round 2 put it in leg 2 and fix round 3 took
+    /// it out again, because a shared test name is a shared LABEL and the two
+    /// defects need different ones. That test's doc carries the reason.
     ///
     /// **Leg 3 is fix round 1's**, and it goes red for a different reason than
     /// any of the others: delete the `DOM.disable` and the fetcher leaves the
@@ -3955,34 +3955,9 @@ mod tests {
                 text.contains("browser_snapshot"),
                 "and say what to do next: {text}"
             );
-
-            // **AND THE ERROR PATH HANDS THE SESSION BACK COLD TOO.** Fix round
-            // 2's, and the only assertion in this file that watches the failing
-            // arm's cleanup.
-            //
-            // The handshake SUCCEEDED before the read failed, so the agent is on
-            // at the moment the `?` fires. A disable in the trailing position —
-            // or wrapped in `if read.is_ok()` — is skipped here and leaks the
-            // enablement on exactly the path a retrying caller hits over and
-            // over. Measured: putting the disable back in the trailing position
-            // leaves the whole `browser::` suite green, because every other test
-            // that touches it is happy-path.
-            //
-            // Asserted through the peer's measured semantics rather than by
-            // looking for a frame (判据 §4): `DOM.disable` on an already-off
-            // agent is an ERROR, so this call FAILING is the proof that
-            // production already turned it off.
-            let second = aleph_cdp::methods::dom::disable(&conn, Some(&session))
-                .await
-                .expect_err(
-                    "after a FAILED top-layer read the session's DOM agent must already be off \
-                     — this disable succeeding means the fetcher left it enabled on the error \
-                     path",
-                );
-            assert!(
-                second.to_string().contains("DOM agent hasn't been enabled"),
-                "and it is off for the reason Chrome gives: {second}"
-            );
+            // The cleanup on this same error path is asserted by
+            // `a_failed_top_layer_read_still_hands_the_session_back_cold`, which
+            // is a separate test ON PURPOSE — see its doc.
         }
 
         // Leg 3 — **the session is handed back COLD.** Fix round 1's, and the
@@ -4035,6 +4010,69 @@ mod tests {
                 "the disable must not cost the NEXT snapshot its answer"
             );
         }
+    }
+
+    /// **The FAILING arm hands the session back cold too**, and it has its own
+    /// name because it needs its own name.
+    ///
+    /// # Why this is not a leg of the test above
+    ///
+    /// It was one, for exactly one round. Measured on that shape: deleting the
+    /// `dom::get_document` handshake reddened four tests, and wrapping the
+    /// disable in `if read.is_ok()` — the enablement leak — reddened **one**,
+    /// and that one was named
+    /// `a_missing_top_layer_handshake_would_delete_the_modal_and_this_is_what_notices`.
+    /// A suite showing a single red labelled *missing handshake* while the
+    /// handshake sits in the code sends the reader to the wrong place; the
+    /// assertion message was right, but the label is what a failures list and a
+    /// bisect show (判据 §17: 错的标签比缺的贵). Split out, the two defects redden
+    /// disjoint names — measured both ways, below.
+    ///
+    /// # In what situation does it go red?
+    ///
+    /// The disable stops running on the path where the read FAILED: moved back
+    /// to the trailing position after the `?`, or wrapped in `if read.is_ok()`.
+    /// Both leave the agent enabled for the life of the session on exactly the
+    /// path a retrying caller hits over and over, and **every other test that
+    /// touches the disable is happy-path**, so without this one the whole
+    /// `browser::` suite stays green.
+    ///
+    /// # What it does not cover
+    ///
+    /// The success path (that is leg 3 of the test above) and the
+    /// `describeNode` error arm, which exits through the same inline block but
+    /// is not driven here — this peer fails at `getTopLayerElements`, one call
+    /// earlier.
+    ///
+    /// Asserted through the peer's measured semantics rather than by looking
+    /// for a frame (判据 §4): `DOM.disable` on an already-off agent is an ERROR,
+    /// so this call FAILING is the proof that production already sent one.
+    #[tokio::test]
+    async fn a_failed_top_layer_read_still_hands_the_session_back_cold() {
+        use aleph_cdp::testkit::FakeCdpServer;
+
+        let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::Refuse)).await;
+        let (conn, session) = server.connect_and_attach().await;
+
+        // The handshake SUCCEEDS and the read then fails, so the agent is on at
+        // the moment the `?` fires. That is the whole point of this peer: a
+        // fetcher that never got as far as enabling would pass the assertion
+        // below for entirely the wrong reason.
+        fetch_chromium(&conn, &session)
+            .await
+            .expect_err("the top layer could not be read, so the page is refused");
+
+        let second = aleph_cdp::methods::dom::disable(&conn, Some(&session))
+            .await
+            .expect_err(
+                "after a FAILED top-layer read the session's DOM agent must already be off \
+                 — this disable succeeding means the fetcher left it enabled on the error \
+                 path",
+            );
+        assert!(
+            second.to_string().contains("DOM agent hasn't been enabled"),
+            "and it is off for the reason Chrome gives: {second}"
+        );
     }
 
     /// The other half of the census: **one call site, and its handshake beside
@@ -4181,6 +4219,16 @@ mod tests {
     /// `describeNode` costs; and moving work from inside the window to a place
     /// that re-enables the agent later. It pins the shape of one window, not the
     /// residual's magnitude.
+    ///
+    /// **And it assumes ONE session on the connection**: `received()` is
+    /// connection-wide and `position()` takes the FIRST of each boundary, so on
+    /// a multi-renderer capture the slice between them could span two sessions'
+    /// frames and this would be measuring a window that nobody is in. The
+    /// fixture here is single-renderer, which is what makes it correct as
+    /// written rather than a property of the assertion —
+    /// `cdp_backend::snapshot::tests::a_child_renderers_own_top_layer_reaches_the_page_state`
+    /// is the one that drives two sessions, and it checks for the frames
+    /// per session rather than for a window.
     #[tokio::test]
     async fn the_handshake_window_is_the_list_and_the_describe_nodes_and_nothing_else() {
         use aleph_cdp::testkit::FakeCdpServer;

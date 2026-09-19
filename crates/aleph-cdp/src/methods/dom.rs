@@ -95,7 +95,10 @@ pub const NO_BOX_MESSAGE: &str = "Could not compute box model";
 /// and nothing to disable it with, and an engine-blind "always pair them" makes every snapshot on
 /// the default engine fail. `alephcore`'s
 /// `only_the_two_page_state_fetchers_touch_a_sessions_dom_agent` is what keeps that from being
-/// written by accident; this crate cannot enforce it, so it says it.
+/// written by accident; this crate cannot enforce it, so it says it. That name is a second copy
+/// living where nothing can check it, so if it has rotted, the guard is whatever asserts on
+/// `dom::disable(` in `alephcore/src/` — a needle a rename cannot move, because it is the thing
+/// being guarded.
 pub async fn get_document(
     conn: &CdpConnection,
     session: Option<&SessionId>,

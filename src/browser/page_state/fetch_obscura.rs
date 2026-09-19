@@ -1805,8 +1805,9 @@ mod tests {
     /// with an undisabled `getDocument` sitting in this file, and this stamp is
     /// the thing that says so.
     ///
-    /// **The top-layer claim is the most expensive one on that list and the
-    /// newest, so it is worth saying what its rot looks like.** obscura is the
+    /// **The top-layer claim is the most expensive one on that list — which is
+    /// why it, and not the newest, is the one to re-read FIRST — so it is worth
+    /// saying what its rot looks like.** obscura is the
     /// DEFAULT engine. If v0.3 implements a top layer and this stamp is bumped
     /// without re-reading, `cascade_effective_styles` goes on ORing
     /// `opacity_zero` down DOM parent edges into a modal dialog that the engine
