@@ -1511,11 +1511,15 @@ fn parse_nodes(
 /// reading is recorded in the probe and deliberately not transcribed here,
 /// because the CSSOM entry point may be named in exactly one file under `src/`
 /// and this is not it — `fetch_obscura`'s
-/// `the_obscura_source_claims_here_name_the_build_they_were_read_on` enforces
-/// that, so the omission is a constraint being honoured rather than an
-/// oversight. What dates the readings here is not that stamp, which expires on
-/// an obscura tag and would say nothing about Chrome: it is the browser build
-/// named above plus the committed capture taken from it.
+/// `every_dated_obscura_claim_has_exactly_the_homes_it_declares` enforces that,
+/// as the row of its `DATED_CLAIMS` whose declared home list is that one file,
+/// so the omission is a constraint being honoured rather than an oversight.
+/// (Named that way because a test name is the fragile half: until Task 17e's
+/// fix round the census and the tag expiry shared one name, and this sentence
+/// pointed at the half that kept it.) What dates the readings here is not
+/// `fetch_obscura`'s stamp, which expires on an obscura tag and would say
+/// nothing about Chrome: it is the browser build named above plus the
+/// committed capture taken from it.
 ///
 /// | container | descendant | Chrome says | so |
 /// |---|---|---|---|
