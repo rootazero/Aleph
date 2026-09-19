@@ -30,6 +30,26 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Aleph's own CDP client
                                      # runnable under cdp: open tools frames exec-offload
 
+./qa/browser_dual/run.sh provision # the ledger installs obscura from the REAL release
+                                   # (needs the network — see below); then the asset
+                                   # mirror is pointed at a dead host and the CHECKSUM
+                                   # host is shown not to follow it
+./qa/browser_dual/run.sh open      # the readiness gate on BOTH engines: /json/version AND
+                                   # a navigate; obscura's argv and port owner checked out
+                                   # of band, chromium's --use-mock-keychain asserted
+                                   # (unix only: lsof, pgrep; needs ALEPH_QA_CHROME)
+./qa/browser_dual/run.sh snapshot  # engine=obscura header; the elements obscura can see
+                                   # get refs, display:none and opacity:0 do not
+./qa/browser_dual/run.sh click     # by ref AND by coordinates, each changing the URL;
+                                   # a pre-navigation ref reports StaleRef
+./qa/browser_dual/run.sh stall     # a spinning page yields a "did not answer" refusal
+                                   # under a 2 s cdp_command_timeout_secs, and the
+                                   # engine survives and recovers
+./qa/browser_dual/run.sh reap      # kill -9 the server: BOTH engines' orphans are swept
+                                   # and an unrecorded prefix-neighbour is not
+                                   # (needs ALEPH_QA_CHROME)
+./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
+
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
 ./qa/file_search/run.sh page    # the window reports the whole; pages are disjoint
@@ -649,6 +669,58 @@ Each run creates its own scratch `HOME` / `ALEPH_HOME` and deletes it on exit.
 Nothing touches your real `~/.aleph` — which matters more than convenience: two
 processes on one vault is a documented way to lose vault data
 (`PROCESS_MANAGEMENT.md`).
+
+## `browser_dual` — the dual-engine stack against a real obscura
+
+`browser_dual` needs two real binaries and says so at second zero: an obscura
+(`ALEPH_QA_OBSCURA`, else `~/.aleph/runtimes/obscura/v0.2.2/obscura`, else
+PATH — **obscura is never put on PATH**, so a bare `command -v` finds nothing on
+a machine that installed it through Aleph) and — for `open` and `reap` — a
+Chrome (`ALEPH_QA_CHROME`). A missing one exits **69, not 0**. `provision`
+additionally needs the network and exits 69 without it, for a reason below.
+
+It exists because the things this round can get wrong are invisible to a fake
+engine. **`stall`** is the only place a refusal is produced by an engine that is
+genuinely wedged — measured on v0.2.2, a page busy-loop blocks *every* command
+on the connection, including `Target.getTargets`, which the source survey lists
+as lock-free (a raw `Target.getTargets` issued 1.5 s after the navigate answered
+4.32 s later); obscura then ends the page's own task at its autonomous budget
+and recovers, so the stage also asserts that the engine answers again and that
+the page's script was *terminated* (`document.title` never becomes `done`)
+rather than finishing. **`caps`** probes every row of the capability table by
+EFFECT against the obscura **Aleph launched** — reached through the engine
+sidecar, never one the script starts itself, because `file_upload` is
+`unsupported` precisely *because Aleph does not pass `--allow-file-access`*, so
+the row is a property of the argv as much as of the binary.
+
+**`provision` cannot use a local fixture release, and that is the product's
+trust model rather than an omission.** `ReleaseSource::for_runtime` pins the
+release *metadata* — and therefore the expected sha256 — at `api.github.com` and
+never at the operator's mirror, and `configured_host` discards any
+`download_host` that is not `https://`. A loopback `python3 -m http.server` can
+supply neither half, so the stage installs from the real release and says out
+loud, as `[UNRUN]`, that the tampered-digest refusal is not exercised here
+(`github_release.rs::a_digest_mismatch_installs_nothing` owns it). What it
+asserts instead is the claim no unit test makes about a real socket: with the
+asset mirror pointed at a dead https host, the install fails on **the release
+asset bytes** while the checksum fetch — which would have named itself — did
+not follow the mirror.
+
+**`reap` does not expect a live chromium to be spared, and an earlier draft
+did.** `reap_orphans` decides per record: a sidecar's pid whose argv names that
+sidecar's own `data_dir` under that record's own engine flag is killed, so both
+engines' orphans go and neither is the other's control. The control that can
+actually go red is an obscura the registry never recorded whose `--storage-dir`
+is a **prefix-neighbour** of one it did (`<store>-neighbour` against a record of
+`<store>`) — `argv_names_dir` compares whole argv words, and an implementation
+that joined the argv and used `contains` kills it. That is the
+`work` / `work-archive` case `argv_names_dir`'s own doc names.
+
+**A KNOWN GAP assertion has three states here, not two.** The `click` stage's
+"this inline link has no rect" is dated to the obscura build the harness
+actually finds; on any other build it prints `[UNKNOWN]` and settles nothing.
+Reporting PASS for "the gap is still there" on a build nobody measured would be
+vouching for a reading this run never took (判据 §18).
 
 ## `announce` — and the wall it hit on its first run
 

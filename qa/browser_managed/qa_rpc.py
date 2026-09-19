@@ -37,6 +37,34 @@ def ws_connect(url):
     return websockets.connect(url, max_size=None, ping_interval=None)
 
 
+def ran(ok, body):
+    """The TOOL's own verdict, not merely the RPC's — `(ok, body)` in, bool out.
+
+    [`Rpc.invoke`]'s `ok` is the gateway's flag, and its own docstring says why
+    that is not the whole answer: a tool that DEGRADES returns a body carrying
+    `success: false` and a message, and arrives here as `ok=True`. Reading `ok`
+    alone therefore reports PASS for a verb that refused.
+
+    It lives HERE rather than in each driver because it is a property of
+    `invoke`'s contract, and because the first fixture to need it grew two
+    copies and fixed only one: `qa/browser_dual/drive.py` learned the lesson
+    from a `browser_open` that reported success for a launch that had died with
+    `unexpected argument '--disable-gpu'`, and `caps.py` — the same round, the
+    same author, one file over — still read `not ok` and reported FAIL for a
+    `browser_dialog` refusal that was exactly right (判据 §16: carry the fix to
+    the twin instead of waiting for it to be rediscovered there).
+
+    A body carrying neither flag is taken at the RPC's word.
+    """
+    if not ok:
+        return False
+    body = body or {}
+    for key in ("success", "ok"):
+        if key in body:
+            return bool(body[key])
+    return True
+
+
 class Ledger:
     """Pass/fail accumulator. `check` prints as it goes so a run that dies
     half-way still shows which claims had already been settled."""

@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><title>stall</title></head>
+<body>
+  <h1>__MARKER__-stall</h1>
+  <!-- Measured on obscura v0.2.2 (2026-09-19, this machine): this loop does NOT
+       run for 20 s. obscura terminates it at its own autonomous-task budget,
+       and `document.title` stays "stall" rather than becoming "done" — i.e. the
+       script is killed, not completed. While it spins, EVERY command on the
+       connection blocks: a raw `Target.getTargets` issued 1.5 s after the
+       navigate took 4.32 s to answer, and that verb is the one the source
+       survey lists as v8-free. So the stage's assertion is about the tool
+       reporting the engine did not answer inside a low cdp_command_timeout_secs,
+       not about a 20 s number. The 20 s is kept so the stall outlives the budget
+       on a faster machine too. -->
+  <script>
+    setTimeout(function () {
+      var t = Date.now();
+      while (Date.now() - t < 20000) {}
+      document.title = "done";
+    }, 300);
+  </script>
+</body></html>

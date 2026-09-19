@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><title>caps</title></head>
+<body>
+  <input id="txt" type="text" value="">
+  <input id="file" type="file">
+  <script>
+    // Only the drag listener: R39 cut the `touch` capability row (no
+    // `browser_*` verb dispatches `Input.dispatchTouchEvent`), so a touchpad
+    // and a `__touched` flag here would be fixture nobody reads — the same
+    // "exists but has no consumer" shape the row itself was cut for.
+    window.__dragged = false;
+    document.addEventListener('dragover', function () { window.__dragged = true; });
+  </script>
+</body></html>

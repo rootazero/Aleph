@@ -117,7 +117,93 @@ p.add_argument(
     choices=["", "true", "false"],
     help="[browser.runtime] prefer_system_browser",
 )
+p.add_argument(
+    "--obscura-binary-path",
+    default="",
+    help="[general.browser.obscura] binary_path — pins the obscura the engine "
+    "launches. Every qa/browser_dual stage but `provision` sets it, so those "
+    "stages never depend on a network install; `provision` is the one stage "
+    "that must NOT set it, or it would test nothing.",
+)
+p.add_argument(
+    "--obscura-download-host",
+    default="",
+    help="[general.browser.obscura] download_host — where the ASSET BYTES come "
+    "from. NOT [general.browser.runtime] download_host, which is the Playwright "
+    "CDN mirror and serves no GitHub release tree (github_release.rs:530-534). "
+    "The release METADATA never follows this key (ReleaseSource::for_runtime "
+    "pins it at api.github.com), and a non-https value here is ignored with a "
+    "warning — both facts are what qa/browser_dual/run.sh provision asserts.",
+)
+p.add_argument(
+    "--cdp-command-timeout-secs",
+    type=int,
+    default=0,
+    help="[general.browser] cdp_command_timeout_secs — Aleph's per-CDP-command "
+    "budget. Must be 1..=59 (profile.rs:626-644); the `stall` stage sets it "
+    "below the window a spinning page blocks the connection for.",
+)
+p.add_argument(
+    "--default-extra-args",
+    default=None,
+    metavar="'ARG ARG'",
+    help="the default profile's extra_args, space-separated; omit to keep the "
+    "historical `--disable-gpu`, pass '' for none. It has to be settable "
+    "because extra_args reaches the ENGINE's own argv and the engines do not "
+    "share a flag vocabulary: obscura refuses an unknown argument outright "
+    "(`unexpected argument '--disable-gpu' found`, exit 2, measured), so the "
+    "Chromium-era default is fatal on an obscura profile.",
+)
+p.add_argument(
+    "--profile-engine",
+    action="append",
+    default=[],
+    metavar="NAME=ENGINE",
+    help="append a SECOND profile on the named engine, repeatable. `driver` is "
+    "written as `cdp` explicitly rather than inherited: the global default is "
+    "`cdp` today and a fixture that relied on that would break the day it moves "
+    "again (判据 §5).",
+)
+p.add_argument(
+    "--profile-user-data-dir",
+    action="append",
+    default=[],
+    metavar="NAME=DIR",
+    help="that profile's user_data_dir, repeatable. Separate from "
+    "--profile-engine because a QA run that must `pgrep` for the process needs "
+    "to KNOW the directory, and the derived default "
+    "(`browser_state_dir(engine.data_subdir())/<profile>`, manager.rs:531-535) "
+    "is not a path the fixture chose.",
+)
 args = p.parse_args()
+
+
+def pairs(specs, flag):
+    """`NAME=VALUE` occurrences as a dict, refusing anything else BY NAME.
+
+    Fail-closed rather than skipped: a typo'd `--profile-engine escape:chromium`
+    that silently wrote no section would leave the fixture asserting about a
+    profile that does not exist, and `browser_open` would answer
+    `ProfileNotFound` — which reads like a product defect (判据 §8).
+    """
+    out = {}
+    for spec in specs:
+        name, sep, value = spec.partition("=")
+        if not sep or not name or not value:
+            raise SystemExit(f"{flag} needs NAME=VALUE, got {spec!r}")
+        out[name] = value
+    return out
+
+
+profile_engines = pairs(args.profile_engine, "--profile-engine")
+profile_udds = pairs(args.profile_user_data_dir, "--profile-user-data-dir")
+# A udd for a profile nobody declares is written nowhere, so it would be a
+# setting that reports success and does nothing (判据 §11).
+for name in profile_udds:
+    if name not in profile_engines:
+        raise SystemExit(
+            f"--profile-user-data-dir names {name!r}, which no --profile-engine declares"
+        )
 
 src = open(args.path).read()
 
@@ -175,15 +261,27 @@ if args.runtime_binary_path:
     src = set_key(src, "general.browser.runtime", "binary_path", f'"{args.runtime_binary_path}"')
 if args.prefer_system_browser:
     src = set_key(src, "general.browser.runtime", "prefer_system_browser", args.prefer_system_browser)
+if args.obscura_binary_path:
+    src = set_key(src, "general.browser.obscura", "binary_path", f'"{args.obscura_binary_path}"')
+if args.obscura_download_host:
+    src = set_key(src, "general.browser.obscura", "download_host", f'"{args.obscura_download_host}"')
+if args.cdp_command_timeout_secs:
+    # Bare integer, no quotes — it is a `u64`, and a quoted value is a TOML
+    # string that serde rejects at load with a type error, which reads like a
+    # corrupt config rather than a fixture bug.
+    src = set_key(
+        src, "general.browser", "cdp_command_timeout_secs", str(args.cdp_command_timeout_secs)
+    )
 
 # A sub-table of the already-declared (empty) `[general.browser.profiles]`.
 # Declaring a child of a defined table is valid TOML; re-declaring the parent
 # would not be.
+extra = ["--disable-gpu"] if args.default_extra_args is None else args.default_extra_args.split()
 default_lines = [
     "[general.browser.profiles.default]",
     f'driver = "{args.driver}"',
     f'user_data_dir = "{args.user_data_dir}"',
-    'extra_args = ["--disable-gpu"]',
+    "extra_args = [" + ", ".join(f'"{x}"' for x in extra) + "]",
 ]
 if args.engine:
     default_lines.append(f'engine = "{args.engine}"')
@@ -233,6 +331,25 @@ if args.chrome_mcp_command:
     arg_list = ", ".join(f'"{a}"' for a in args.chrome_mcp_arg)
     src = set_key(src, "general.browser.chrome_mcp", "command", f'"{args.chrome_mcp_command}"')
     src = set_key(src, "general.browser.chrome_mcp", "args", f"[{arg_list}]")
+
+for name, engine in profile_engines.items():
+    extra_lines = [
+        f"[general.browser.profiles.{name}]",
+        f'engine = "{engine}"',
+        # Stated, not inherited — see --profile-engine's help.
+        'driver = "cdp"',
+        # Per ENGINE, not per fixture: `extra_args` is prepended to that
+        # engine's own argv, and obscura exits 2 on an unrecognised one.
+        'extra_args = ["--disable-gpu"]' if engine == "chromium" else "extra_args = []",
+        # Far enough out that no QA run reaches it: a profile added by this flag
+        # exists to still be there later in the stage, never to be reaped
+        # mid-run.
+        "idle_timeout_secs = 99999",
+        "tab_idle_timeout_secs = 99999",
+    ]
+    if name in profile_udds:
+        extra_lines.append(f'user_data_dir = "{profile_udds[name]}"')
+    src += "\n" + "\n".join(extra_lines) + "\n"
 
 open(args.path, "w").write(src)
 print(f"patched [general.browser] in {args.path}: cli={args.cli_binary} headless={args.headless}")
