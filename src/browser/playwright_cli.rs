@@ -593,6 +593,7 @@ impl PlaywrightCliDriver {
     /// Pairs with [`ChromiumChild::from_parts`]. **Task 6 consumes this same
     /// seam** for the reaper's tests; do not add a second one.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn insert_test_child(&self, session_key: &str, child: ChromiumChild) {
         self.chromium
             .lock()

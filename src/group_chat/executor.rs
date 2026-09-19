@@ -1225,12 +1225,18 @@ mod tests {
     async fn test_empty_plan_loop_is_bounded() {
         // Provider returns an empty-plan coordinator response on every call.
         let empty_plan = r#"{"respondents":[],"need_summary":false}"#.to_string();
-        let provider = Arc::new(SequentialMockProvider::new(vec![empty_plan]));
+        let mut session = make_session().with_max_rounds(Some(1));
+        let cap = session.max_no_commit_attempts();
+        // SequentialMockProvider drains its response Vec in call order and
+        // returns a synthetic "unexpected call #N" string once exhausted,
+        // which would be parsed as a parse failure and trigger the fallback
+        // plan (all participants). Feed it `cap` copies so every iteration
+        // of the loop below gets the intended empty plan, not the
+        // unexpected-call sentinel.
+        let provider = Arc::new(SequentialMockProvider::new(vec![empty_plan; cap as usize]));
         let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
             provider as Arc<dyn AiProvider>,
         )));
-        let mut session = make_session().with_max_rounds(Some(1));
-        let cap = session.max_no_commit_attempts();
 
         // Drive `cap` empty-plan calls. All should return Ok (no commit, but
         // the gate has not tripped yet) and bump `no_commit_attempts`.

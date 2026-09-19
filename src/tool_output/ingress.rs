@@ -332,7 +332,7 @@ mod tests {
         let mut value = json!({ "content": [ { "type": "text", "text": base64 } ] });
         let raw = value.to_string();
 
-        let outcome = clean_for_ingress("take_screenshot", &mut value, Some(8_000));
+        let outcome = clean_for_ingress("chrome_devtools__take_screenshot", &mut value, Some(8_000));
 
         assert!(outcome.compressed);
         assert!(

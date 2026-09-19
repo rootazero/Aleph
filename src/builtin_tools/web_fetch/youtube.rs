@@ -215,6 +215,7 @@ impl YtDlpCommand {
     /// Construct a runner for an explicit binary path and timeout.
     /// Test-only seam for pointing the runner at stand-in binaries.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_binary(bin: PathBuf, timeout: Duration) -> Self {
         Self { bin, timeout }
     }

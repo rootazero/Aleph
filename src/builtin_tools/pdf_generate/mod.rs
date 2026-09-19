@@ -194,6 +194,23 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         // output dir. `check_and_resolve_path` canonicalizes, so this is
         // a real check even for paths that exist on disk and even when
         // the input went through a `..` component.
+        //
+        // We must canonicalize the SAME way on both sides: if the output
+        // dir was just created (e.g. by an isolated test's first call) and
+        // the resolved path was canonicalized through `safe_normalize` —
+        // which uses the long-path `\\?\` UNC form on Windows — while
+        // `output_dir.canonicalize()` falls back to the un-prefixed form
+        // when the path doesn't exist YET, the starts_with check fails
+        // even though the resolved path is genuinely inside. Materialise
+        // the output dir (idempotent) and re-canonicalize so both sides
+        // agree on the prefix.
+        std::fs::create_dir_all(&output_dir).map_err(|e| {
+            ToolError::Execution(format!(
+                "Failed to create output dir {}: {}",
+                output_dir.display(),
+                e
+            ))
+        })?;
         let canonical_output_dir = output_dir
             .canonicalize()
             .unwrap_or_else(|_| output_dir.clone());

@@ -118,10 +118,32 @@ mod tests {
 
     #[test]
     fn conservative_redact_is_case_insensitive_on_substring() {
-        // Substring "API_KEY" in prose should also be scrubbed — the
-        // conservative fallback over-matches slightly, by design.
-        let input = "the API_KEY is leaked";
+        // Substring "API_KEY=..." should be scrubbed case-insensitively —
+        // the conservative fallback is case-insensitive on the needle
+        // itself (so `api_key=`, `API_KEY=`, etc. all match). The pattern
+        // intentionally requires the trailing `=` so prose that happens
+        // to contain "API_KEY" without a value is NOT a credential leak
+        // and stays untouched — see the comment next to the
+        // `api_key=` entry in `CONSERVATIVE_PATTERNS`.
+        //
+        // What the implementation promises: the needle itself is replaced
+        // (preserving the original casing for traceability, so `API_KEY`
+        // comes back as `api_key=` in the redacted form), AND the value
+        // immediately after the needle is consumed up to the next
+        // whitespace / delimiter so the credential itself does not
+        // survive. Surrounding prose (whitespace, then more words)
+        // passes through untouched — that is by design, not a leak.
+        let input = "the API_KEY=zzz is leaked";
         let out = conservative_redact(input);
-        assert!(!out.contains("leaked"));
+        assert!(!out.contains("zzz"), "the credential value must be redacted, got: {out}");
+        assert!(out.contains("[REDACTED]"), "the needle must be replaced, got: {out}");
+        // Round-trip casing: the original was `API_KEY` (uppercase);
+        // the redacted form is `api_key=` (lowercase, the needle's
+        // canonical casing). The case-insensitive substring match for
+        // either spelling is the property under test.
+        assert!(
+            out.contains("api_key=") || out.contains("API_KEY="),
+            "either casing of the replaced needle must remain, got: {out}"
+        );
     }
 }

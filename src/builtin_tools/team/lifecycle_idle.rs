@@ -183,6 +183,23 @@ mod tests {
     #[tokio::test]
     async fn worker_idle_message_lands_in_leader_inbox() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // The 2026-09-08 audit (39a99baf9) gated this tool with
+        // `require_team_auth`, which rejects callers that are neither
+        // leader nor member. The fixture creates the team with a leader
+        // only — tests that pretend to be a worker must explicitly add
+        // themselves, or the membership check answers NotFound.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleIdleTool::new(router, team_store, "worker-1".into());
 
         let out = tool
@@ -249,6 +266,21 @@ mod tests {
     #[tokio::test]
     async fn idle_default_summary_is_filled_in() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // See `worker_idle_message_lands_in_leader_inbox` for why we add
+        // the worker to the team — `require_team_auth` was added in
+        // audit 39a99baf9 and rejects non-members.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleIdleTool::new(router, team_store, "worker-1".into());
 
         tool.call(LifecycleIdleArgs {

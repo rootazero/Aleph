@@ -131,7 +131,23 @@ mod tests {
                     if code.starts_with("//") || code.starts_with("///") {
                         continue;
                     }
-                    if code.contains("\"HOSTNAME\"") || code.contains("\"COMPUTERNAME\"") {
+                    // Match ACTUAL env-var reads, not bare string-literal
+                    // occurrences. `env::var("HOSTNAME")`,
+                    // `var_os("HOSTNAME")`, etc. — the things that bypass
+                    // `utils::host::hostname()`. A bare `"HOSTNAME"` token
+                    // inside a `const X: &[&str] = [..., "HOSTNAME", ...]`
+                    // passthrough list (see `code_exec.rs` `WINDOWS_PASS_ENV`)
+                    // is not a read — it is preserving the env var for a
+                    // child process, which is the legitimate reason to
+                    // hold the name. Catching both with one regex produced
+                    // false positives on every legitimate passthrough.
+                    let reads_hostname = code.contains("env::var(\"HOSTNAME\"")
+                        || code.contains("var_os(\"HOSTNAME\"")
+                        || code.contains("var(\"HOSTNAME\"")
+                        || code.contains("env::var(\"COMPUTERNAME\"")
+                        || code.contains("var_os(\"COMPUTERNAME\"")
+                        || code.contains("var(\"COMPUTERNAME\"");
+                    if reads_hostname {
                         offenders.push(format!("{}:{}", path.display(), i + 1));
                     }
                 }

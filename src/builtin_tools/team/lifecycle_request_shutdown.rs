@@ -170,6 +170,20 @@ mod tests {
     #[tokio::test]
     async fn worker_shutdown_request_reaches_leader_inbox() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // Audit 39a99baf9 added `require_team_auth` to this tool — same
+        // membership registration the sibling lifecycle_idle tests need.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleRequestShutdownTool::new(router, team_store, "worker-1".into());
 
         let out = tool
@@ -209,6 +223,19 @@ mod tests {
     #[tokio::test]
     async fn empty_reason_rejected() {
         let (router, _, team_store, team_id) = make_fixture("leader-1").await;
+        // Audit 39a99baf9 — same membership requirement as above.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleRequestShutdownTool::new(router, team_store, "worker-1".into());
 
         let err = tool

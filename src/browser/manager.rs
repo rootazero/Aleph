@@ -744,6 +744,7 @@ impl ProfileManager {
     /// that lets something outside put a browser into the driver is a door that
     /// goes around the launch chain.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn insert_test_child(&self, profile: &str, child: std::process::Child) {
         let endpoint = super::CdpEndpoint {
             http_url: "http://127.0.0.1:1".into(),
