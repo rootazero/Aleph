@@ -4700,9 +4700,14 @@ mod tests {
     ///
     /// * the faded arm: `#oop-inner` arrives transparent, though its own
     ///   capture declares `opacity: 1` and its own top-layer set is empty;
+    /// * `#oop-grandchild`, in the child capture's OWN sub-frame, which needs
+    ///   the seed AND one hop of that capture's BFS — the two are different
+    ///   lines and a one-document child capture exercises only the first;
+    /// * the `visibility` arm, which arrives by a different route from the
+    ///   `opacity` one and is spelled out in the fixture rather than assumed;
     /// * the PAIRED CONTROL: the same child under an owner that is not faded
-    ///   arrives visible. Without it this test would pass against a stitch that
-    ///   marked every child capture.
+    ///   arrives visible, at both depths. Without it this test would pass
+    ///   against a stitch that marked every child capture.
     #[test]
     fn a_cross_renderer_child_capture_inherits_its_owners_hidden_state() {
         use super::super::build::visibility_of;
@@ -4750,20 +4755,48 @@ mod tests {
                 }]
             })
         };
-        // The child target's own capture: one document, one probe element,
-        // declaring full opacity and visibility — which is what the real one
-        // does.
+        // The child target's own capture — **TWO documents**, because the
+        // seeded flag and the transitive term are different code paths and a
+        // one-document child exercises only the first. A cross-origin ad or
+        // consent frame that loads its own SAME-origin sub-frame puts that
+        // sub-frame's document in this capture, so the shape is ordinary
+        // rather than exotic. Every element declares full opacity and
+        // visibility, which is what the real ones do.
         let child = serde_json::json!({
-            "strings": ["F-oop", "HTML", "DIV", "id", "oop-inner", "block", "visible", "1", "auto"],
+            "strings": ["F-oop", "HTML", "DIV", "id", "oop-inner", "block", "visible", "1",
+                        "auto", "IFRAME", "oop-frame", "F-oop-sub", "oop-grandchild"],
             "documents": [{
                 "frameId": 0,
+                "nodes": {
+                    "parentIndex": [-1, 0, 0],
+                    "nodeType": [1, 1, 1],
+                    "nodeName": [1, 2, 9],
+                    "nodeValue": [-1, -1, -1],
+                    "backendNodeId": [5, 6, 7],
+                    "attributes": [[], [3, 4], [3, 10]],
+                    // The sub-frame's document IS in this capture, at index 1.
+                    "contentDocumentIndex": { "index": [2], "value": [1] },
+                    "isClickable": { "index": [] },
+                    "inputChecked": { "index": [] },
+                    "optionSelected": { "index": [] },
+                    "inputValue": { "index": [], "value": [] },
+                    "textValue": { "index": [], "value": [] }
+                },
+                "layout": {
+                    "nodeIndex": [0, 1, 2],
+                    "bounds": [[0, 0, 300, 200], [5, 5, 100, 20], [5, 40, 200, 100]],
+                    "styles": [[5, 6, 7, 8], [5, 6, 7, 8], [5, 6, 7, 8]],
+                    "text": [-1, -1, -1]
+                }
+            }, {
+                "frameId": 11,
                 "nodes": {
                     "parentIndex": [-1, 0],
                     "nodeType": [1, 1],
                     "nodeName": [1, 2],
                     "nodeValue": [-1, -1],
-                    "backendNodeId": [5, 6],
-                    "attributes": [[], [3, 4]],
+                    "backendNodeId": [8, 9],
+                    "attributes": [[], [3, 12]],
                     "contentDocumentIndex": { "index": [], "value": [] },
                     "isClickable": { "index": [] },
                     "inputChecked": { "index": [] },
@@ -4773,7 +4806,7 @@ mod tests {
                 },
                 "layout": {
                     "nodeIndex": [0, 1],
-                    "bounds": [[0, 0, 300, 200], [5, 5, 100, 20]],
+                    "bounds": [[0, 0, 200, 100], [2, 2, 50, 10]],
                     "styles": [[5, 6, 7, 8], [5, 6, 7, 8]],
                     "text": [-1, -1]
                 }
@@ -4799,18 +4832,20 @@ mod tests {
             )
             .expect("the parent and its cross-renderer child stitch")
         };
-        let inner = |dom: &RawDom| -> RawNode {
+        let node_named = |dom: &RawDom, id: &str| -> RawNode {
             dom.frames
                 .iter()
                 .flat_map(|f| f.nodes.iter())
-                .find(|n| n.attr("id") == Some("oop-inner"))
-                .expect("the child's #oop-inner is in the stitched page")
+                .find(|n| n.attr("id") == Some(id))
+                .unwrap_or_else(|| panic!("the child capture's #{id} is in the stitched page"))
                 .clone()
         };
+        let inner = |dom: &RawDom| -> RawNode { node_named(dom, "oop-inner") };
 
         // Container `opacity: 0`, `<iframe>` declaring `opacity: 1` — the
         // measured shape, where only the in-document cascade knows.
-        let faded = inner(&stitch([7, 8, 10, 12], [7, 8, 11, 12]));
+        let faded_page = stitch([7, 8, 10, 12], [7, 8, 11, 12]);
+        let faded = inner(&faded_page);
         assert!(
             faded
                 .computed
@@ -4822,6 +4857,26 @@ mod tests {
              reach it through the owner's cascaded reading at the stitch"
         );
         assert!(!visibility_of(&faded));
+
+        // **The seeded flag and the transitive term are different lines**, and
+        // this is the one assertion that needs both: `#oop-grandchild` is in
+        // the child capture's OWN sub-frame, so it is reached from the seed
+        // through `hiding[parent] ||` inside that capture's BFS. Measured by
+        // mutation: seeding `FrameHiding::VISIBLE` instead of `inherited`
+        // reddens this test and nothing else in the file; deleting the
+        // transitive term reddens it together with the nested-frame test.
+        let grandchild = node_named(&faded_page, "oop-grandchild");
+        assert!(
+            grandchild
+                .computed
+                .expect("#oop-grandchild has a styles row")
+                .opacity_zero,
+            "#oop-grandchild is a frame inside a cross-renderer frame inside a \
+             transparent container. Its own capture declares nothing, its own \
+             document declares nothing, and the flag has to travel the seed \
+             AND one hop of the BFS to reach it"
+        );
+        assert!(!visibility_of(&grandchild));
 
         // Container `visibility: hidden` and the `<iframe>` reading `hidden`
         // too — Chrome resolved the inheritance onto the element, which is the
@@ -4840,15 +4895,20 @@ mod tests {
 
         // The PAIRED CONTROL. Without it, a stitch that marked every child
         // capture would pass both assertions above.
-        let plain = inner(&stitch([7, 8, 11, 12], [7, 8, 11, 12]));
-        let computed = plain.computed.expect("#oop-inner has a styles row");
-        assert!(
-            !computed.opacity_zero && !computed.visibility_hidden,
-            "the container declares nothing and the child capture came back \
-             hidden anyway — the stitch is marking children rather than \
-             children of a hidden owner"
-        );
-        assert!(visibility_of(&plain));
+        let plain_page = stitch([7, 8, 11, 12], [7, 8, 11, 12]);
+        for id in ["oop-inner", "oop-grandchild"] {
+            let node = node_named(&plain_page, id);
+            let computed = node
+                .computed
+                .unwrap_or_else(|| panic!("#{id} has a styles row"));
+            assert!(
+                !computed.opacity_zero && !computed.visibility_hidden,
+                "the container declares nothing and #{id} came back hidden \
+                 anyway — the stitch is marking children rather than children \
+                 of a hidden owner"
+            );
+            assert!(visibility_of(&node));
+        }
     }
 
     /// A CDP peer that carries **the DOM agent's two bits of state**, each
