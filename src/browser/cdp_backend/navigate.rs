@@ -115,14 +115,15 @@ async fn wait_for_load(
                 // Measured 2026-09-19 on obscura v0.2.2: a navigation driven by
                 // `Input.dispatchMouseEvent` is announced with the **OLD**
                 // loader, and `Page.getFrameTree` afterwards still reports the
-                // old one (Chrome 153.0.8010.48 gets this right on both routes). That
-                // why `navigate` below reads `result.loader_id.or(outcome
-                // .loader_id)` and not the other way round: `Page.navigate`'s
-                // own reply is the authority, and this is the fallback for
-                // engines that omit it. Swapping the order — "the event is
-                // closer to the truth" — would feed `reset_for_document` a
-                // stale loader on that engine, and a stale loader reads as "the
-                // document did not change", which is permission (判据 §8).
+                // old one; Chrome 153.0.8010.48 gets this right on both routes.
+                // That is why `navigate` below reads
+                // `result.loader_id.or(outcome.loader_id)` and not the other
+                // way round: `Page.navigate`'s own reply is the authority, and
+                // this is the fallback for engines that omit it. Swapping the
+                // order — "the event is closer to the truth" — would feed
+                // `reset_for_document` a stale loader on that engine, and a
+                // stale loader reads as "the document did not change", which is
+                // permission (判据 §8).
                 //
                 // Only the MAIN frame ends a document. A subframe navigation
                 // must not reset the whole tab's ref table, and a subframe's

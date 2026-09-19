@@ -180,10 +180,10 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // one it cannot honour (判据 §5).
         //
         // Where this arm DOES fire, measured 2026-09-19 on obscura v0.2.2 and
-        // Chrome 153.0.8010.48: a script-initiated navigation on either engine, and
-        // navigation on Chrome including the click-driven one. `parentId`
-        // absent and a fresh `loaderId` in all of those. The one measured hole
-        // is obscura's click-driven route, above.
+        // Chrome 153.0.8010.48: a script-initiated navigation on either engine,
+        // and every navigation on Chrome including the click-driven one.
+        // `parentId` absent and a fresh `loaderId` in all of those. The one
+        // measured hole is obscura's click-driven route, above.
         "Page.frameNavigated" => {
             let frame = &ev.params["frame"];
             if frame.get("parentId").is_some() {

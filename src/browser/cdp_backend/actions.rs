@@ -95,12 +95,13 @@ function() {
 /// `DOM.resolveNode`'s message against `"No node with given id"`, and measured
 /// against both real engines that arm is ~恒假: obscura's `DOM.resolveNode`
 /// never errors on ANY id (`999999`, `nodeId: 999999`, a live id plus 100000 —
-/// all answer `Ok` with a bare `Node`), and Chrome 153.0.8010.48 answers the actual
-/// hazard — a `backendNodeId` minted in a document that has since gone — with
-/// `"Node with given id does not belong to the document"`. The sentence the arm
-/// matches is the one Chrome uses for an id that NEVER existed, which is a ref
-/// `RefTable::resolve` refuses before any wire call. So the guard recognised a
-/// shape the hazard does not arrive in, on both engines (判据 §3, §5).
+/// all answer `Ok` with a bare `Node`), and Chrome 153.0.8010.48 answers the
+/// actual hazard — a `backendNodeId` minted in a document that has since gone —
+/// with `"Node with given id does not belong to the document"`. The sentence
+/// the arm matches is the one Chrome uses for an id that NEVER existed, which
+/// is a ref `RefTable::resolve` refuses before any wire call. So the guard
+/// recognised a shape the hazard does not arrive in, on both engines
+/// (判据 §3, §5).
 ///
 /// `isConnected` is the fact itself rather than a tell, and both engines answer
 /// it truthfully for all three cases (measured 2026-09-19, obscura v0.2.2 and
@@ -112,9 +113,22 @@ function() {
 /// | detached, same document | `connected: false` | `connected: false` |
 /// | minted in a document that has gone | `connected: false` (a bare `Node`, `nodeType: 0`) | `DOM.resolveNode` errors first |
 ///
-/// `=== true` rather than a truthiness test because the property is absent on a
-/// non-`Node` — an absent property must answer "no", not "undefined is falsy,
-/// close enough", and the caller distinguishes a `false` from a MISSING key.
+/// `=== true` rather than a truthiness test — **and NOT for the reason this
+/// line used to give.** It said "the property is absent on a non-`Node`", and
+/// this task's own measurements say the opposite: on obscura's bare `Node` (the
+/// third row above, `nodeType: 0`) `isConnected` is **present** and answers a
+/// real boolean `false`. In every case measured, on both engines, the property
+/// was there and was a boolean.
+///
+/// The real reason is what `=== true` does to the CALLER's reading. It forces
+/// this expression to a strict boolean whatever the property yields, which is
+/// what keeps the caller's three answers three: `true`, `false`, and a MISSING
+/// key meaning "the engine did not answer this question". A page getter
+/// returning a truthy non-boolean would otherwise serialise as that
+/// non-boolean, `as_bool()` would answer `None`, and the page would have talked
+/// its way out of "that element is no longer in the page" and into "the engine
+/// did not say" — a different sentence with a different next move (判据 §17).
+/// Both refuse; only one of them is true.
 pub(super) const NODE_LIVENESS_JS: &str = r"
 function() { return { connected: this.isConnected === true }; }
 ";
@@ -1740,8 +1754,8 @@ mod tests {
     /// classified by the error's KIND, never by its wording.
     ///
     /// The message used here is Chrome 153.0.8010.48's REAL answer for the real
-    /// `"Node with given id does not belong to the document"` — which the arm
-    /// this replaced did **not** match. That is what makes this test a
+    /// hazard — `"Node with given id does not belong to the document"` — which
+    /// the arm this replaced did **not** match. That is what makes this test a
     /// falsifier for the old code rather than a restatement of the new: put the
     /// `contains("No node with given id")` arm back and this goes red.
     #[tokio::test]
