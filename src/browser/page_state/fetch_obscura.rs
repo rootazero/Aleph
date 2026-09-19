@@ -750,10 +750,15 @@ pub async fn fetch_obscura(
 ///   and it stays inside the renderer: at `v0.2.2`, `effectively_invisible` has
 ///   **zero** occurrences outside `obscura-render` — **none in the
 ///   computed-style map, none in `obscura-cdp`, none in `obscura-js`** — which
-///   is the whole of the claim. (16 inside it. The sentence here used to say
-///   "14 occurrences in `crates/`"; that was `main`'s count, re-measured at the
-///   tag rather than carried over. The total was never the evidence — the ZERO
-///   outside is.)
+///   is the whole of the claim. **16 occurrences on 14 LINES** — `dom.rs:1051`
+///   and `:1054` each carry two — which is the number with its instrument
+///   attached (判据 §18). The sentence here used to say "14 occurrences", and
+///   fix round 1 established what that was: **not `main`'s number, a UNIT
+///   error.** `grep -c` counts lines and `grep -o | wc -l` counts occurrences,
+///   and they differ here by exactly the amount of the original mistake — so
+///   the round that "corrected" it to 16 got the number right and the reason
+///   wrong, and wrote the wrong reason down. The total was never the evidence
+///   either way: the ZERO outside is.
 ///
 ///   **And the wire says the same thing, which is stronger than the grep.**
 ///   Read on the installed `v0.2.2` binary: neither computed-style key set
@@ -771,12 +776,24 @@ pub async fn fetch_obscura(
 ///   key straight out of the native snapshot and does no ancestor walk
 ///   (`crates/obscura-js/js/bootstrap.js:8472` at `v0.2.2`).
 ///
-///   Both addresses were repaired this round: they read `paint.rs:1444-1452`
-///   and `bootstrap.js:8479`, which are `main`'s. At the tag those resolve —
-///   which is the failure mode that reads like fact — to the `white-space` /
-///   `text-overflow` inserts and to a blank line. The CONTENT at the two
-///   correct addresses is byte-identical to what was read, so the conclusion
-///   never moved; only the evidence pointing at it did.
+///   Both addresses were repaired: they read `paint.rs:1444-1452` and
+///   `bootstrap.js:8479`, which are `main`'s. At `a1e09de6` those resolve —
+///   which is the failure mode that reads like fact — to the tail of the
+///   `white-space` insert running into the head of the `text-overflow` one,
+///   and to `if (Number.isFinite(value)) return String(…)`, the opacity clamp
+///   inside `lookup`'s inline tier. The CONTENT at the two correct addresses is
+///   byte-identical to what was read, so the conclusion never moved; only the
+///   evidence pointing at it did.
+///
+///   *(Those two landing readings are at a FIXED commit, so unlike a citation
+///   into a moving file they cannot rot. They were nonetheless wrong when first
+///   written here: the `8479` one said "a blank line", inherited from the
+///   citation map's `bootstrap.js` rows, which are permuted. Fix round 1
+///   re-measured all seven landing readings in this file at the tag; three were
+///   wrong and all three were the map's `bootstrap.js` trio. The round that
+///   wrote them had verified every repaired ADDRESS itself and then reported
+///   that as having checked every number the map gave — 判据 §18, a
+///   conclusion's scope is its method.)*
 ///
 /// ## 连线优先: the resolved answer was looked for before it was re-derived
 ///
@@ -948,11 +965,21 @@ pub async fn fetch_obscura(
 /// `cursor: 'auto'` (`:8454`). So no stylesheet rule reaches this flag and it
 /// does not inherit.
 ///
-/// Three of those four addresses were repaired this round — they read
-/// `paint.rs:10718`, `bootstrap.js:8482` and `:8461`, which are `main`'s. At
-/// the tag they land, respectively, on a DIFFERENT function adjacent to the
-/// right one, on one tier PAST the one cited, and on a bare `}`. Every one
-/// resolves; not one says what it was cited for.
+/// Three of those four addresses were repaired — they read `paint.rs:10718`,
+/// `bootstrap.js:8482` and `:8461`, which are `main`'s. At `a1e09de6` they land,
+/// respectively, on `fn svg_presentation_substitution_is_guaranteed_invalid`
+/// (a DIFFERENT function, adjacent to the right one, which starts at `:10623`),
+/// on the closing `}` of the very tier that was cited — with the next tier,
+/// `dimensionFor`, on the line after — and on a blank line, one past
+/// `defaultsKebab`'s own `};`. Every one resolves; not one says what it was
+/// cited for.
+///
+/// *(Re-measured in fix round 1. Two of those three were wrong as first
+/// written: `8482` was called "one tier PAST the one cited" when it is that
+/// tier's own closing brace, and `8461` was called "a bare `}`" when the bare
+/// `}` is `8482` and `8461` is blank. Both came from the citation map's
+/// `bootstrap.js` rows, which are a cyclic permutation of each other, and
+/// neither was re-measured by the round that copied them.)*
 ///
 /// **It is NOT 恒假** — the round that raised this said it was, and the inline
 /// arm is the one step that claim went too far. It is false for very nearly
@@ -1105,7 +1132,17 @@ mod tests {
     /// The reply obscura sends for a node it has no box for — spelled with
     /// `aleph-cdp`'s own constants, because that crate TRANSLATES exactly this
     /// `(code, message)` pair into `Ok(None)` and lets every other protocol
-    /// error through as `Err` (`dom.rs:165-169`). Two facts, one wire shape
+    /// error through as `Err` — the `Err(CdpError::Protocol { .. }) if code ==
+    /// NO_BOX_CODE && message.starts_with(NO_BOX_MESSAGE) => Ok(None)` arm of
+    /// `aleph_cdp::methods::dom::get_box_model`. **Named, not numbered: this
+    /// cited `dom.rs:165-169` until fix round 1, and by then the arm had moved
+    /// to `:186` — that file was edited by the two commits immediately before
+    /// the one that wrote this sentence, and `165-169` had become the tail of
+    /// the `object.objectId` decode. Same defect, found the same way, as the
+    /// DOM-agent handshake the stamp below dates — which cited its own call by
+    /// line number until that number rotted too. An arm identified by the
+    /// constants it matches on cannot be moved by an edit above it.** Two
+    /// facts, one wire shape
     /// apart; a literal here would let the two drift and this test module
     /// silently stop covering one of them.
     ///
@@ -1993,6 +2030,45 @@ mod tests {
     const OBSCURA_READ_ON_SHA256: &str =
         "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b";
 
+    /// Every `(tag, digest)` this stamp has ever certified, oldest first. The
+    /// LAST row is the live one, and appending is the only legal edit.
+    ///
+    /// ## Why a history and not just the pair above
+    ///
+    /// The pair alone guards the CONTENT of the receipt and never its AGE, and
+    /// that hole was measured rather than argued: move the pin **and**
+    /// `OBSCURA_READ_ON_TAG` to a new release, leave the digest at the retired
+    /// artefact's, and **nothing in this repository reddens.** The tag
+    /// comparison passes because the tags agree; the archive guard passes
+    /// because a stale *binary* digest is still not an *archive* digest. That
+    /// is the author who bumps the pin and dutifully re-stamps the half they
+    /// can see — and the receipt they leave behind is the same lie the old
+    /// one-literal stamp told, with more digits and therefore *less* legible:
+    /// a tag that disagrees can be spotted at a glance, a 64-hex string that
+    /// disagrees cannot be.
+    ///
+    /// The history closes it with two assertions and no new instrument
+    /// (`the_obscura_source_claims_here_name_the_build_they_were_read_on`):
+    /// the last row must equal the live pair, so bumping the tag half without
+    /// appending is red; and no digest may appear in two rows, so a row
+    /// appended with the previous release's digest is red, naming both tags.
+    /// The only way out of the pair is to hash a file.
+    ///
+    /// ## Its limit, stated the same way the runtime-hash refusal is
+    ///
+    /// **A fabricated row still passes.** Nothing here can tell 64 invented hex
+    /// characters from a digest, and no unit test in this crate could. What the
+    /// history buys is the achievable property, not unforgeability: the value
+    /// **cannot be filled in by COPYING** — not from the pin, not from the
+    /// release page, and now not from the row above it either. Every path that
+    /// produces a plausible value without holding the artefact is closed;
+    /// inventing one is a different act, and this file does not claim to catch
+    /// it.
+    const RECEIPTS: &[(&str, &str)] = &[(
+        "v0.2.2",
+        "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b",
+    )];
+
     /// One claim class the stamp dates.
     struct DatedClaim {
         /// The claim, in the words the failure message prints.
@@ -2025,7 +2101,19 @@ mod tests {
     /// **In what situation does a row go red?** When a file outside its homes
     /// starts carrying the needle — exactly the drift that put an uncited
     /// engine claim in `raw.rs` the same hour the first stamp arrived, asked
-    /// now once per class instead of once for the file.
+    /// now once per class instead of once for the file. The test is
+    /// [`every_dated_obscura_claim_has_exactly_the_homes_it_declares`], and it
+    /// is deliberately NOT the one that dates the build: a pin bump and a
+    /// second author demand opposite actions, and a reader of red NAMES cannot
+    /// act on a name that covers both.
+    ///
+    /// **A green here does not mean the claim is still stated.** Every needle
+    /// literal appears in a file the row declares as a home — this list is one
+    /// of them — so that hit is self-satisfied and the row can only ever redden
+    /// on a NEW file, never on the claim leaving its home. That is the intended
+    /// direction (it is a drift census, not a liveness check), and it is
+    /// written down because a reader could otherwise spend the green as
+    /// "fetch_obscura.rs still says this."
     ///
     /// **What a row cannot see, stated rather than implied:** a second author
     /// who makes the same claim in different words. A needle census covers only
@@ -2062,10 +2150,24 @@ mod tests {
             homes: &["src/browser/page_state/fetch_obscura.rs"],
         },
         DatedClaim {
-            claim: "`pierce: true` is accepted and ignored, so a capture is always \
-                    exactly one frame and every frame element is declared \
-                    unreached",
-            needle: "pierce",
+            claim: "obscura ignores pierce — `pierce: true` is accepted and \
+                    unimplemented, so a capture is always exactly one frame and \
+                    every frame element is declared unreached",
+            // NOT the bare word `pierce`, which this row used until fix round 1
+            // and which breaks the rule stated above: it is a `DOM.getDocument`
+            // PARAMETER, so a refactor can plant it in a second file without
+            // making any claim at all. Two concrete reasons, not a worry: the
+            // cross-frame task that follows this one may legitimately send
+            // `pierce: true` from `fetch_chromium.rs`, and `:387` in THIS file
+            // already uses the word in the unrelated sense "does not pierce
+            // shadow roots". Widening `homes` to pre-admit the twin was the
+            // other candidate and is wrong twice over — `fetch_chromium.rs`
+            // carries zero occurrences today, so the row would go red
+            // immediately, and a home list that admits a file for a spelling it
+            // does not have is an allowlist written for a future that may not
+            // arrive (判据 §5). The phrase is refactor-proof and still matches
+            // the sentence a second author would actually write.
+            needle: "ignores pierce",
             homes: &["src/browser/page_state/fetch_obscura.rs"],
         },
         DatedClaim {
@@ -2096,7 +2198,8 @@ mod tests {
             ],
         },
         DatedClaim {
-            claim: "the DOM AGENT: `DOM.getDocument(-1, true)` at `:454` turns on \
+            claim: "the DOM AGENT: the `dom::get_document(conn, Some(session), \
+                    -1, true)` call in `fetch_obscura` turns on \
                     NO event stream (0 unsolicited `DOM.*` events, measured twice) \
                     and `DOM.disable` does not exist (`-32601 Unknown DOM method: \
                     disable`) — which is why this fetcher does not pair its \
@@ -2125,29 +2228,51 @@ mod tests {
             .collect()
     }
 
-    /// **In what situation does this go red?** Two situations, named before the
-    /// guard was written — a stamp that cannot answer that question is 判据
-    /// §2's fourth face, which is precisely what the previous version of this
-    /// one was.
+    /// **In what situation does this go red?** ONE situation, in two stages —
+    /// a bump of the pinned build that was not carried all the way through.
     ///
-    /// 1. **The pin moves.** Somebody edits `obscura_tag!()` in
-    ///    `runtimes::specs` and does not re-read: every claim in
-    ///    [`DATED_CLAIMS`] becomes a statement about a binary Aleph no longer
-    ///    installs, and neither half of the stamp matches it any more.
-    /// 2. **A second author appears — once per claim class.** A file outside a
-    ///    row's `homes` starts carrying that row's needle. Seven distinct reds,
-    ///    where the previous version had one.
+    /// 1. **The pin moves and nobody re-reads.** Somebody edits `obscura_tag!()`
+    ///    in `runtimes::specs`: every claim in [`DATED_CLAIMS`] becomes a
+    ///    statement about a binary Aleph no longer installs, and
+    ///    `OBSCURA_READ_ON_TAG` no longer matches it.
+    /// 2. **The tag half is re-stamped and the receipt is not.** The tags agree
+    ///    again, and [`RECEIPTS`] still ends at the retired artefact — so the
+    ///    file certifies "I held this build" while naming a file nobody
+    ///    installs. Measured to be green before fix round 1; it is stage 2 that
+    ///    the receipt history exists for, and both stages ask the same thing of
+    ///    the reader: go and read the new build.
     ///
-    /// The third situation belongs to the sibling test: the receipt gets filled
-    /// from the release page. See
+    /// **What this test deliberately does NOT cover, and why it used to.** A
+    /// second author appearing in another file is a different situation
+    /// demanding the opposite action — *move the claim back or widen the row*,
+    /// not *re-read everything against a new build* — and until fix round 1 the
+    /// two printed this one name. A reader of red NAMES (a CI summary, the
+    /// extractor the brief's addendum says broke a round) could not tell them
+    /// apart, which is the defect the commit immediately before this work
+    /// existed to remove: *"give the error-path cleanup its own test name, so
+    /// the two defects stop sharing a label."* The census now lives in
+    /// [`every_dated_obscura_claim_has_exactly_the_homes_it_declares`].
+    ///
+    /// ⚠️ **One reader outside this file followed the old arrangement.**
+    /// `fetch_chromium.rs` says the CSSOM entry point may be named in exactly
+    /// one file under `src/` and names THIS test as what enforces it. That
+    /// enforcement moved one hop, to the census named above; the constraint
+    /// itself is unchanged and still enforced. That sentence belongs to another
+    /// task's file and was not edited here — this note is the forwarding
+    /// pointer, and the sentence is worth correcting the next time that file is
+    /// open.
+    ///
+    /// The remaining situation belongs to the sibling test: a receipt filled
+    /// from the release page rather than from a file. See
     /// [`the_artefact_stamp_records_the_binary_not_the_published_archive`].
     ///
     /// # The DOM-agent reading, and why an ABSENCE has to be dated
     ///
     /// `fetch_chromium::top_layer_backend_ids` sends `DOM.disable` because on
     /// Chromium `DOM.getDocument` enables an event stream that outlives the
-    /// call. This fetcher sends `DOM.getDocument(-1, true)` at `:454` and does
-    /// **not** disable — and the reason is a fact about the BUILD, which is
+    /// call. This fetcher sends its `dom::get_document(conn, Some(session), -1,
+    /// true)` — the one call in [`fetch_obscura`] — and does **not** disable,
+    /// and the reason is a fact about the BUILD, which is
     /// exactly the kind of fact this stamp exists to expire. Measured twice,
     /// independently, on the installed v0.2.2 artefact with default flags, with
     /// a Chromium control in the third column:
@@ -2194,24 +2319,6 @@ mod tests {
     /// resolver's, not a remembered one.
     #[test]
     fn the_obscura_source_claims_here_name_the_build_they_were_read_on() {
-        for c in DATED_CLAIMS {
-            let found = files_mentioning(c.needle);
-            let expected: Vec<String> = c.homes.iter().map(|h| (*h).to_string()).collect();
-            assert_eq!(
-                found,
-                expected,
-                "the claim dated by this stamp — {claim} — is spelled `{needle}`, \
-                 and the set of files carrying that spelling moved. Every file \
-                 here is a copy of one engine fact; a new one is a second author \
-                 whose claims nothing dates, which is how an earlier round left \
-                 an uncited one in raw.rs. Either move the claim into \
-                 fetch_obscura.rs, or widen this row — which widens the failure \
-                 message with it, because they are the same list. \
-                 Expected: {expected:?}",
-                claim = c.claim,
-                needle = c.needle,
-            );
-        }
         assert_eq!(
             OBSCURA_READ_ON_TAG,
             crate::runtimes::OBSCURA_TAG,
@@ -2233,6 +2340,83 @@ mod tests {
              the DEFAULT engine, silently. fetch_chromium::cascade_opacity's \
              top-layer arm is the shape the fix has to take here too (判据 §16).",
             claims = dated_claim_list(),
+        );
+
+        // Stage 2. Reached only once the tags agree again, which is exactly the
+        // state the author is in after fixing the assertion above.
+        assert_eq!(
+            RECEIPTS.last().copied(),
+            Some((OBSCURA_READ_ON_TAG, OBSCURA_READ_ON_SHA256)),
+            "the stamp names {OBSCURA_READ_ON_TAG} and the receipt history does \
+             not end there, so this file certifies holding a build it has no \
+             receipt for. Append a row: (\"{OBSCURA_READ_ON_TAG}\", <sha256 of \
+             the EXTRACTED executable you measured on>) — \
+             `shasum -a 256 ~/.aleph/runtimes/obscura/{OBSCURA_READ_ON_TAG}/obscura`. \
+             Carrying the previous row's digest forward is refused below, and \
+             the release archive's digest is refused by \
+             the_artefact_stamp_records_the_binary_not_the_published_archive, so \
+             there is nothing to copy: hashing the file is the only way through. \
+             History: {RECEIPTS:?}"
+        );
+
+        for (i, (tag, digest)) in RECEIPTS.iter().enumerate() {
+            if let Some((earlier, _)) = RECEIPTS[..i].iter().find(|(_, d)| d == digest) {
+                panic!(
+                    "receipt row {i} says {tag} was read on the same bytes as \
+                     {earlier}: {digest}. Two releases cannot hash alike, so one \
+                     of those rows was carried forward rather than measured — \
+                     which is the whole defect this history exists to refuse. \
+                     Hash the artefact for {tag}."
+                );
+            }
+        }
+    }
+
+    /// **In what situation does this go red?** When a file outside a
+    /// [`DATED_CLAIMS`] row's `homes` starts carrying that row's needle: a
+    /// second author of an engine fact whose claims nothing dates. That is the
+    /// drift that left an uncited `getComputedStyle` claim in `raw.rs` the same
+    /// hour the first stamp arrived, asked now once per claim class.
+    ///
+    /// **Its own name, and not the stamp's, on purpose.** This and a pin bump
+    /// demand opposite actions — *move the claim back or widen the row* versus
+    /// *re-read every claim against a new build* — and they shared one name
+    /// until fix round 1. See
+    /// [`the_obscura_source_claims_here_name_the_build_they_were_read_on`] for
+    /// the other half and for the one cross-reference that still points at the
+    /// old arrangement.
+    ///
+    /// **It collects rather than stops at the first mismatch**, which is not
+    /// tidiness. A `for` loop around an `assert_eq!` reports two simultaneous
+    /// drifts as one, and the second stays invisible until the first is fixed —
+    /// measured: with two needles planted in `raw.rs` at once, only the earlier
+    /// row was named. A second author copying a paragraph usually carries more
+    /// than one of these phrases, which is precisely when that matters.
+    #[test]
+    fn every_dated_obscura_claim_has_exactly_the_homes_it_declares() {
+        let mut drifted = Vec::new();
+        for c in DATED_CLAIMS {
+            let found = files_mentioning(c.needle);
+            let expected: Vec<String> = c.homes.iter().map(|h| (*h).to_string()).collect();
+            if found != expected {
+                drifted.push(format!(
+                    "\n  * needle `{needle}` — {claim}\n      declared: {expected:?}\n      found:    {found:?}",
+                    needle = c.needle,
+                    claim = c.claim,
+                ));
+            }
+        }
+        assert!(
+            drifted.is_empty(),
+            "the file set carrying a dated obscura claim moved, on {n} of the \
+             {total} claim classes this stamp dates. Every file in a row is a \
+             copy of one engine fact; a new one is a second author whose claims \
+             nothing dates. Either move the claim into fetch_obscura.rs, or \
+             widen the row — which widens the stamp's failure message with it, \
+             because they are the same list.{rows}",
+            n = drifted.len(),
+            total = DATED_CLAIMS.len(),
+            rows = drifted.concat(),
         );
     }
 
@@ -2283,20 +2467,26 @@ mod tests {
     /// inside it are different bytes by construction.
     #[test]
     fn the_artefact_stamp_records_the_binary_not_the_published_archive() {
-        assert_eq!(
-            OBSCURA_READ_ON_SHA256.len(),
-            64,
-            "the artefact receipt must be a whole sha256. A 64-character digest \
-             elided to `9e14e821fc…` is a value nobody can check against a file, \
-             which is the one thing this constant exists to be."
-        );
-        assert!(
-            OBSCURA_READ_ON_SHA256
-                .bytes()
-                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
-            "the artefact receipt must be lowercase hex, as `shasum -a 256` \
-             prints it: {OBSCURA_READ_ON_SHA256}"
-        );
+        // Every ROW, not just the live one. A history whose older rows go
+        // unchecked would let an appended row be wrong the moment the next one
+        // is appended past it, which is the same shape as the age hole the
+        // history exists to close.
+        for (tag, digest) in RECEIPTS {
+            assert_eq!(
+                digest.len(),
+                64,
+                "the receipt for {tag} must be a whole sha256. A digest elided \
+                 to `9e14e821fc…` is a value nobody can check against a file, \
+                 which is the one thing these rows exist to be."
+            );
+            assert!(
+                digest
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "the receipt for {tag} must be lowercase hex, as `shasum -a 256` \
+                 prints it: {digest}"
+            );
+        }
 
         let readme = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/README.md");
@@ -2324,17 +2514,20 @@ mod tests {
              `Binary measured:` line.",
             readme.display()
         );
-        assert!(
-            !published.contains(&OBSCURA_READ_ON_SHA256),
-            "OBSCURA_READ_ON_SHA256 is a release ARCHIVE's digest, not the \
-             extracted binary's. The archive digest is published on the release \
-             page and recorded in {}, so writing it here proves nothing about \
-             having held the artefact — which is the whole and only job of this \
-             constant. Hash the executable the readings were taken on: \
-             `shasum -a 256 ~/.aleph/runtimes/obscura/<tag>/obscura`. Archive \
-             digests found: {published:?}",
-            readme.display()
-        );
+        for (tag, digest) in RECEIPTS {
+            assert!(
+                !published.contains(digest),
+                "the receipt for {tag} is a release ARCHIVE's digest, not the \
+                 extracted binary's. The archive digest is published on the \
+                 release page and recorded in {}, so writing it here proves \
+                 nothing about having held the artefact — which is the whole \
+                 and only job of these rows. Hash the executable the readings \
+                 were taken on: \
+                 `shasum -a 256 ~/.aleph/runtimes/obscura/{tag}/obscura`. \
+                 Archive digests found: {published:?}",
+                readme.display()
+            );
+        }
     }
 
     /// obscura reaches no iframe content, ever (U3). The `<iframe>` element is
