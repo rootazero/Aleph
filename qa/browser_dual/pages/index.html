@@ -5,11 +5,14 @@
   <!-- Two clickables on purpose. The LINK is inline, and on obscura v0.2.2 an
        inline element reports a zero box from DOM.getBoxModel,
        DOM.getContentQuads AND getBoundingClientRect() alike (measured
-       2026-09-19 against the binary this fixture launches) — so it can be
-       clicked by ref and NOT by coordinates. The DIV is block-level and has a
-       real box (8,30 220x44 on the same run), which is what the coordinate
-       half of the `click` stage aims at. Asserting both is what stops "click
-       works" from meaning "one of the two worked". -->
+       2026-09-19 against the binary this fixture launches) — so it cannot be
+       clicked AT ALL: not by coordinates, and not by ref either, because
+       OCCLUSION_JS hit-tests the resolved element and refuses a zero-sized box
+       whichever route reached it. `drive.py`'s stage_click asserts that
+       refusal. The DIV is block-level and has a real box (8,30 220x44 on the
+       same run), which is what BOTH halves of the `click` stage aim at.
+       Asserting both is what stops "click works" from meaning "one of the two
+       worked". -->
   <a id="lnk" href="/second.html">go by ref</a>
   <div id="blk" style="display:block;width:220px;height:44px;background:#eee;cursor:pointer"
        onclick="location.href='/second.html'">go by coordinates</div>

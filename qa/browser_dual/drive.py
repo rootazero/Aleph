@@ -114,8 +114,18 @@ def sidecars(aleph_home):
     return out
 
 
+def engine_record_items(aleph_home, engine):
+    """`(path, record)` for every sidecar naming `engine`.
+
+    The path is not decoration: anything this fixture must write ALONGSIDE a
+    genuine record has to take the leaf directory from one, not spell it — see
+    `sidecars()` on why this file must not be a second decider for that leaf."""
+    return [(p, r) for p, r in sidecars(aleph_home).items()
+            if r and r.get("engine") == engine]
+
+
 def engine_records(aleph_home, engine):
-    return [r for r in sidecars(aleph_home).values() if r and r.get("engine") == engine]
+    return [r for _, r in engine_record_items(aleph_home, engine)]
 
 
 def server_log(a):
@@ -502,9 +512,13 @@ async def stage_snapshot(rpc, led, a):
     # box test could not tell the ghost from the link).
     led.check("a display:none element is not offered", f"{a.marker}-hidden" not in text, text[:800])
     led.check("an opacity:0 element is not offered", f"{a.marker}-ghost" not in text, text[:800])
-    led.check("ref_count agrees with the rendered refs",
-              body.get("ref_count", -1) == text.count("[ref="),
-              f"{body.get('ref_count')} vs {text.count('[ref=')}")
+    # `ref_count agrees with the rendered refs` stood here and could not go red:
+    # on the TEXT face `ref_count` IS `text.matches("[ref=").count()`
+    # (`snapshot.rs`), so this was the tool's own derivation recomputed over the
+    # tool's own string — 判据 §2, a predicate with no failing case. The claim
+    # belongs to `snapshot.rs`'s tests. The cross-check worth having is against the
+    # `format="json"` face, where `ref_count` is `snap.ref_count` and the two
+    # derivations really are independent.
     led.check("the snapshot was not truncated (so ref_count is the page total here)",
               body.get("truncated") is False, str(body.get("truncated")))
 
@@ -785,21 +799,32 @@ async def stage_reap(rpc, led, a):
     # Written after the server is dead so nothing overwrites it, and alongside
     # the genuine record rather than replacing it, so the positive claims below
     # still have their own orphan to sweep.
-    genuine = engine_records(a.aleph_home, "obscura")
+    items = engine_record_items(a.aleph_home, "obscura")
+    genuine = [r for _, r in items]
     led.check("the genuine obscura record is readable before the control is added",
-              len(genuine) == 1, json.dumps(genuine)[:300])
-    forged_path = os.path.join(a.aleph_home, "data", "browser", "chromium", "neighbour-probe.json")
-    with open(forged_path, "w") as fh:
-        json.dump({
-            "engine": "obscura",
-            "pid": neighbour_pids[0] if neighbour_pids else 0,
-            "http_url": None,
-            "user_data_dir": a.obscura_storage,
-            "aleph_version": (genuine[0].get("aleph_version") if genuine else "unknown"),
-        }, fh)
+              len(items) == 1, json.dumps(genuine)[:300])
+    # The leaf is taken from the genuine record's OWN path, never spelled. It is
+    # the frozen literal `chromium` for both engines today, but that is
+    # `engine/process.rs`'s decision and a rename is a permitted act with a
+    # migration — on that day a hard-coded leaf would drop this control into a
+    # directory the sweep never walks, and the stage would stay green while
+    # proving less (判据 §3). No record, no control: the leaf is then a thing
+    # this fixture does not know, and inventing one would be reading an absent
+    # answer as a value (判据 §8), so the claim below goes red instead.
+    forged_path = (os.path.join(os.path.dirname(items[0][0]), "neighbour-probe.json")
+                   if items else None)
+    if forged_path:
+        with open(forged_path, "w") as fh:
+            json.dump({
+                "engine": "obscura",
+                "pid": neighbour_pids[0] if neighbour_pids else 0,
+                "http_url": None,
+                "user_data_dir": a.obscura_storage,
+                "aleph_version": genuine[0].get("aleph_version"),
+            }, fh)
     led.check("the control record names the recorded dir but the neighbour's pid",
-              os.path.exists(forged_path) and bool(neighbour_pids),
-              f"pid={neighbour_pids} dir={a.obscura_storage}")
+              bool(forged_path) and os.path.exists(forged_path) and bool(neighbour_pids),
+              f"path={forged_path} pid={neighbour_pids} dir={a.obscura_storage}")
     led.check("both engines survived the server's death (they are orphans now)",
               bool(token_processes(f"--storage-dir={a.obscura_storage}"))
               and bool(main_processes(f"--user-data-dir={a.chromium_udd}")),

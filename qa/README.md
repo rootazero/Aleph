@@ -46,8 +46,8 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # under a 2 s cdp_command_timeout_secs, and the
                                    # engine survives and recovers
 ./qa/browser_dual/run.sh reap      # kill -9 the server: BOTH engines' orphans are swept
-                                   # and an unrecorded prefix-neighbour is not
-                                   # (needs ALEPH_QA_CHROME)
+                                   # and a prefix-neighbour that a RECORD points at
+                                   # is not (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
@@ -709,12 +709,24 @@ not follow the mirror.
 **`reap` does not expect a live chromium to be spared, and an earlier draft
 did.** `reap_orphans` decides per record: a sidecar's pid whose argv names that
 sidecar's own `data_dir` under that record's own engine flag is killed, so both
-engines' orphans go and neither is the other's control. The control that can
-actually go red is an obscura the registry never recorded whose `--storage-dir`
-is a **prefix-neighbour** of one it did (`<store>-neighbour` against a record of
-`<store>`) — `argv_names_dir` compares whole argv words, and an implementation
-that joined the argv and used `contains` kills it. That is the
-`work` / `work-archive` case `argv_names_dir`'s own doc names.
+engines' orphans go and neither is the other's control. **The control that can
+actually go red is a fabricated sidecar record.** The stage writes
+`neighbour-probe.json` beside the genuine one, carrying the RECORDED
+`--storage-dir` and the pid of a live obscura whose own `--storage-dir` is a
+**prefix-neighbour** of it (`<store>-neighbour` against a record of `<store>`).
+`argv_names_dir` compares whole argv words, so that record takes the
+recycled-pid arm and nothing is killed; an implementation that joined the argv
+and used `contains` finds `--storage-dir=<store>` inside
+`--storage-dir=<store>-neighbour` and kills a browser that was never ours. That
+is the `work` / `work-archive` case `argv_names_dir`'s own doc names.
+
+**An obscura the registry never recorded is NOT that control**, and this fixture
+tried it first. Measured: under exactly that substring mutation the stage stayed
+green, because `reap_orphans` iterates **sidecars** and reads each record's pid —
+a process nothing recorded is never examined. The unrecorded control only ever
+proved the sweep is registry-scoped (判据 §3). It is written down here because a
+README describing the weaker experiment reads as evidence for a guarantee nobody
+established.
 
 **A KNOWN GAP assertion has three states here, not two.** The `click` stage's
 "this inline link has no rect" is dated to the obscura build the harness

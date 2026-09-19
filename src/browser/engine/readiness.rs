@@ -83,9 +83,22 @@ pub async fn ready_gate(
 ///
 /// JavaScript has a single number type, so `1` and `1.0` are one value and the
 /// only thing that differs is how an engine's CDP layer serialises it. Chromium
-/// emits the JSON integer `1`; **obscura v0.2.2 emits the JSON float `1.0`**
-/// (measured: `Runtime.evaluate("1+1")` answers
+/// emits the JSON integer `1`; **obscura v0.2.2 emits the JSON float `1.0` for
+/// a bare number in the top-level `RemoteObject.value`** (measured:
+/// `Runtime.evaluate("1+1")` answers
 /// `{"type":"number","description":"2.0","value":2.0}`).
+///
+/// **That is the whole class — it is not "obscura floats every JS number".**
+/// Numbers nested inside a `returnByValue` object keep their integer spelling
+/// on the same binary, so the other two places the obscura path reads a JS
+/// number as an integer are sound and were measured so, not assumed:
+/// `fetch_obscura::parse_computed_rows` (`value.get("n")?.as_u64()?`, measured
+/// `{"n":8}`) and `fetch_obscura::parse_focus` (`raw.as_i64()`, measured
+/// `"focus":-1`), both reading inside a `returnByValue` object. Counted
+/// because the size of a class is what the first count says it is, and both
+/// feed a silent failure path (`fetch_computed` answers `None` with no log) —
+/// a wrong universal here would have sent the next reader to widen two call
+/// sites that never needed it. Class size: **1 site, this one.**
 ///
 /// `serde_json::Value::as_i64` answers `None` for any value parsed from a float
 /// literal, so the previous `eval.value.as_i64() != Some(1)` refused **every
@@ -267,7 +280,7 @@ mod tests {
         let session = aleph_cdp::SessionId("S1".to_string());
         ready_gate(&conn, &session, Duration::from_secs(2))
             .await
-            .expect("1.0 IS one; obscura serialises every JS number as a float");
+            .expect("1.0 IS one; obscura spells a bare top-level number as a float");
         server.shutdown().await;
     }
 

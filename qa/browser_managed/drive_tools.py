@@ -47,6 +47,7 @@ from qa_rpc import (
     cli_sessions,
     http_json,
     open_session_count,
+    ran,
     read_devtools_port_file,
     session_status,
     ws_connect,
@@ -792,7 +793,7 @@ async def scenario_pdf(rpc, led, args):
             "output_path": out,
         },
     )
-    led.check("pdf_generate(browser) returns success", ok, json.dumps(res)[:400])
+    led.check("pdf_generate(browser) returns success", ran(ok, res), json.dumps(res)[:400])
     # The engine that ran is legible from the message, and it is the claim: the
     # scenario runs with `playwright-cli` off the server's PATH, so reaching the
     # browser engine at all proves the pinned `binary_path` was consulted.
@@ -834,7 +835,7 @@ async def scenario_pdf(rpc, led, args):
             "output_path": out2,
         },
     )
-    led.check("pdf_generate(auto) returns success", ok, json.dumps(res)[:300])
+    led.check("pdf_generate(auto) returns success", ran(ok, res), json.dumps(res)[:300])
     led.check("…and wrote a file", os.path.exists(out2) and os.path.getsize(out2) > 1000,
               f"{out2} size={os.path.getsize(out2) if os.path.exists(out2) else 0}")
     # `auto` picks its engine from an availability probe. With the CLI off PATH

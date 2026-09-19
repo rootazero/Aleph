@@ -59,8 +59,17 @@ enum Resolved {
 ///
 /// The bitmask: `0` is "the same node", `16` (`DOCUMENT_POSITION_CONTAINED_BY`)
 /// is "top is inside me", `8` (`DOCUMENT_POSITION_CONTAINS`) is "top contains
-/// me" — the three cases the previous line spelled out, and no others. A
-/// disconnected `top` answers `1` and is still refused.
+/// me" — the three cases the previous line spelled out, and no others.
+///
+/// **Disconnection cannot arrive here, and the value it would carry is not
+/// `1`.** `top` is `document.elementFromPoint(...)`, which only ever hands back
+/// a node that is in the document, so only a detached `this` could set the bit
+/// — and a detached element's `getBoundingClientRect()` is `0×0` (measured on
+/// both engines), so the zero-box arm above has already returned. Were the line
+/// reached, the reply would carry `DISCONNECTED` (1) together with
+/// `IMPLEMENTATION_SPECIFIC` (32) and a direction bit: **35 or 37** — measured
+/// in both directions on Chrome and on obscura v0.2.2, never `1`. Neither 8 nor
+/// 16 is set in either value, so the refusal is right whichever way it came.
 pub(super) const OCCLUSION_JS: &str = r"
 function() {
   const r = this.getBoundingClientRect();
