@@ -95,7 +95,7 @@ function() {
 /// `DOM.resolveNode`'s message against `"No node with given id"`, and measured
 /// against both real engines that arm is ~恒假: obscura's `DOM.resolveNode`
 /// never errors on ANY id (`999999`, `nodeId: 999999`, a live id plus 100000 —
-/// all answer `Ok` with a bare `Node`), and Chrome 152 answers the actual
+/// all answer `Ok` with a bare `Node`), and Chrome 153.0.8010.48 answers the actual
 /// hazard — a `backendNodeId` minted in a document that has since gone — with
 /// `"Node with given id does not belong to the document"`. The sentence the arm
 /// matches is the one Chrome uses for an id that NEVER existed, which is a ref
@@ -104,7 +104,7 @@ function() {
 ///
 /// `isConnected` is the fact itself rather than a tell, and both engines answer
 /// it truthfully for all three cases (measured 2026-09-19, obscura v0.2.2 and
-/// Chrome 152):
+/// Chrome 153.0.8010.48):
 ///
 /// | the node | obscura | Chrome |
 /// |---|---|---|
@@ -493,7 +493,7 @@ async fn resolve_target(
                 // workspace), with a throwing own getter for `isConnected`
                 // installed page-side:
                 //
-                // | | obscura v0.2.2 | Chrome 152 |
+                // | | obscura v0.2.2 | Chrome 153.0.8010.48 |
                 // |---|---|---|
                 // | own descriptor visible? | **no** | yes |
                 // | reading `isConnected` | ok — the getter is never consulted | threw |
@@ -509,17 +509,36 @@ async fn resolve_target(
                 // page arm exists and why it quotes.
                 //
                 // ⚠️ **The corollary, in the other direction: on Chromium this
-                // gate's input IS page-controllable, and something else is
-                // holding it up.** A page can define an own `isConnected`
-                // getter returning `true` on a DETACHED element; measured, the
-                // probe then answers `connected: true` and this gate passes it.
-                // **What refuses it afterwards is `point_for`'s `Ok(None)`
-                // zero-box arm** — Chrome answers `DOM.getBoxModel` on that
-                // node with `-32000 "Could not compute box model"` (measured) —
-                // i.e. the arm Task 18b's brief proposed deleting. Delete or
-                // simplify it and Chromium's half of this gate loses its
-                // backstop with nothing saying so. On obscura the same spoof
-                // simply fails (`connected: false`), for the reason above.
+                // gate's input IS page-controllable.** A page can define an own
+                // `isConnected` getter returning `true` on a DETACHED element,
+                // and this gate then passes it. Walked in `point_for`'s real
+                // order — `scroll_into_view_if_needed(…)?` FIRST, `get_box_model`
+                // second — on `Chrome/153.0.8010.48`:
+                //
+                // ```text
+                // [2] NODE_LIVENESS_JS           -> {"connected": true}      (spoofed through)
+                // [3] DOM.scrollIntoViewIfNeeded -> -32000 "Node is detached from document"
+                // [4] DOM.getBoxModel            -> never sent: [3] took the `?`
+                // ```
+                //
+                // **So what refuses the spoof TODAY is step 3 — an engine-side
+                // accident, of exactly the shape this task exists to remove,
+                // and exactly the line Task 18's fix round deleted as a
+                // one-line "cleanup" (its M1).** `point_for`'s `Ok(None)`
+                // zero-box arm is the DESIGNED refusal standing behind it —
+                // measured in isolation, Chrome answers that call `-32000
+                // "Could not compute box model"` — and it becomes load-bearing
+                // the moment anyone performs that cleanup, which is a thing
+                // this file has already had proposed to it once. Not "delete it
+                // and the gate breaks": delete it today and the engine still
+                // refuses. The claim is conditional, and the condition is the
+                // likely future.
+                //
+                // On obscura none of this arises: the spoof fails at step 2
+                // (`connected: false`, for the reason above), and if it somehow
+                // did not, step 3 answers `{}` and step 4 returns a **zero-size
+                // model, not `Ok(None)`** — so that arm is not reachable there
+                // in any case.
                 //
                 // The verbs that do NOT call `point_for` (`fill`, `select`,
                 // `type_text`, `upload`) have no such backstop — but a spoof
@@ -608,15 +627,18 @@ async fn point_for(
     // describing a case another arm now owns — the same fact in two places,
     // where only one of them is true (判据 §1, §17: 错的标签比缺的贵).
     //
-    // ⚠️ **…but this arm is also the BACKSTOP for that other one, on Chromium.**
+    // ⚠️ **…and this arm is the DESIGNED backstop for that other one on
+    // Chromium — behind an engine-side accident, not in front of it.**
     // A page there can define an own `isConnected` getter returning `true` on a
-    // detached element, and `resolve_target`'s liveness probe then passes it
+    // detached element, and `resolve_target`'s liveness probe passes it
     // (measured — the corollary is written out at that probe, which is where
-    // the readings live). **This is what refuses the click afterwards.**
-    // Deleting or simplifying it takes away Chromium's half of a gate that
-    // neither arm names on its own, which is how this branch keeps producing
-    // "safe by accident" — so the pointer, and not a second copy of the
-    // measurement, lives here.
+    // the readings live). What refuses it **today** is the
+    // `DOM.scrollIntoViewIfNeeded` call above erroring, which is luck of the
+    // kind Task 18's fix round once deleted as a one-line cleanup. **This arm
+    // is what would be left.** So deleting both — or deleting this one after
+    // someone "cleans up" that call — takes away Chromium's half of a gate
+    // neither arm names alone, which is how this branch keeps producing "safe
+    // by accident". The pointer lives here; the measurements live there.
     //
     // ⚠️ This arm is Chromium-only, and not by design: `Ok(None)` is itself
     // manufactured from a prose match one crate down —
@@ -1717,7 +1739,7 @@ mod tests {
     /// The other half of the same derivation: `DOM.resolveNode` failing is
     /// classified by the error's KIND, never by its wording.
     ///
-    /// The message used here is Chrome 152's REAL answer for the real hazard —
+    /// The message used here is Chrome 153.0.8010.48's REAL answer for the real
     /// `"Node with given id does not belong to the document"` — which the arm
     /// this replaced did **not** match. That is what makes this test a
     /// falsifier for the old code rather than a restatement of the new: put the

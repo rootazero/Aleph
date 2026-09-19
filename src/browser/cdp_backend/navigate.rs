@@ -115,7 +115,7 @@ async fn wait_for_load(
                 // Measured 2026-09-19 on obscura v0.2.2: a navigation driven by
                 // `Input.dispatchMouseEvent` is announced with the **OLD**
                 // loader, and `Page.getFrameTree` afterwards still reports the
-                // old one (Chrome 152 gets this right on both routes). That is
+                // old one (Chrome 153.0.8010.48 gets this right on both routes). That
                 // why `navigate` below reads `result.loader_id.or(outcome
                 // .loader_id)` and not the other way round: `Page.navigate`'s
                 // own reply is the authority, and this is the fallback for

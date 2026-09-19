@@ -573,7 +573,7 @@ async def stage_click(rpc, led, a):
     #
     # The gap was: Aleph classified a dead ref by matching the ENGINE's own error
     # prose (`"No node with given id"`), which is a sentence obscura never emits
-    # — and, measured on Chrome 152, one Chromium does not emit for this hazard
+    # — and, measured on Chrome 153.0.8010.48, one Chromium does not emit for
     # either (it says `Node with given id does not belong to the document`). So
     # the refusal arrived three calls later as `DOM.scrollIntoViewIfNeeded
     # failed: -32601`, a protocol error where the model needed the one sentence
