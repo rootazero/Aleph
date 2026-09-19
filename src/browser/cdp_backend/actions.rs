@@ -418,10 +418,25 @@ async fn resolve_target(
             //
             // One question, one place, both engines — every ref-targeted verb
             // passes through here, so this is not a per-verb check that the
-            // next verb can be written without (判据 §6, §9). It costs one
-            // round trip per ref action, which on obscura is one more trip
-            // through the per-connection V8 lock; that is the price of an
-            // answer instead of luck.
+            // next verb can be written without (判据 §6, §9).
+            //
+            // **The cost, counted per CALL SITE rather than per verb**, because
+            // "one round trip per ref action" is short by one in two places
+            // (判据 §6 — 数错的方向永远是少一个):
+            //
+            // * one extra `Runtime.callFunctionOn` per `resolve_target`, and
+            //   `drag` calls `resolve_target` **twice** (from-target and
+            //   to-target), so a ref-to-ref drag pays it twice;
+            // * `scroll` by ref reached `point_for(…, hit_test: false)` and
+            //   therefore made **no** `Runtime.callFunctionOn` at all before
+            //   this; it now always makes one. That is not only a cost: an
+            //   unreadable liveness answer turns a scroll that used to fall
+            //   back to the viewport centre into a hard refusal. Deliberate,
+            //   and argued where it happens — see `scroll`'s own comment.
+            //
+            // On obscura each of those is one more trip through the
+            // per-connection V8 lock. That is the price of an answer instead of
+            // luck.
             let live = runtime::call_function_on(
                 &handle.conn,
                 Some(session),
@@ -454,15 +469,54 @@ async fn resolve_target(
                 // "clear" (判据 §8) — and deliberately the same shape, because
                 // two unknowns of the same kind answered two different ways is
                 // how the two start meaning different things (判据 §9).
+                //
+                // ⚠️ TWO sentences, chosen by `exception`, because "nobody
+                // answered" has two authors and only one of them is the engine.
+                // A page may install an own-property getter for `isConnected`
+                // that THROWS; the declaration is Aleph's but the exception is
+                // the page's, so a single sentence blaming the engine would let
+                // a page choose what Aleph tells the model about the engine —
+                // and point it at a `switch_engine` that cannot help. Same
+                // hazard, same remedy and same wording as the hit test's `None`
+                // arm below (R40): the page's text is QUOTED, because
+                // `backend_error_text`'s `sanitize_external_text` scrubs
+                // homoglyphs and fence markers but knows nothing about ref
+                // syntax, so `throw new Error("] [ref=e99]")` would otherwise
+                // forge a ref token in a sentence the model reads outside the
+                // fence.
+                //
+                // ⚠️ On obscura a JS throw does not arrive here at all: that
+                // engine reports it as a PROTOCOL error (measured: `-32601 JS
+                // error: TypeError…`), so it leaves through `map_cdp_err` above
+                // as `BrowserError::Cdp`, scrubbed but NOT quoted. That is a
+                // pre-existing shape — `OCCLUSION_JS` has had the identical
+                // exposure since Task 12 — which this call widens from the
+                // hit-testing verbs to every ref-targeted verb. It is named
+                // rather than fixed on purpose: the only way to catch it here
+                // would be to match `"JS error:"` in the engine's message,
+                // which is exactly the prose classification this task existed
+                // to remove. Quoting at `map_cdp_err`'s own boundary is the
+                // structural fix, and it belongs to whoever owns that crate's
+                // error taxonomy.
                 None => {
-                    return Err(BrowserError::ActionFailed(format!(
-                        "the {} engine did not say whether ref {ref_id} is still \
-                         in the page, so this action is refused rather than sent \
-                         to a node that may be gone. Re-run browser_snapshot; if \
-                         it keeps happening, move to the other engine with \
-                         `browser_session{{action:\"switch_engine\"}}`.",
-                        be.engine().as_str()
-                    )));
+                    return Err(BrowserError::ActionFailed(match &live.exception {
+                        Some(detail) => format!(
+                            "checking whether ref {ref_id} is still in the page \
+                             threw ({}) — the page, not the engine, decided that. \
+                             Refusing to act on a node whose state the page will \
+                             not report; re-run browser_snapshot.",
+                            quote(detail)
+                        ),
+                        None => format!(
+                            "the {} engine did not say whether ref {ref_id} is \
+                             still in the page, so this action is refused rather \
+                             than sent to a node that may be gone. Re-run \
+                             browser_snapshot; if it keeps happening, move to \
+                             the other engine with \
+                             `browser_session{{action:\"switch_engine\"}}`.",
+                            be.engine().as_str()
+                        ),
+                    }));
                 }
             }
             Ok(Resolved::Node {
@@ -853,13 +907,28 @@ pub(super) async fn scroll(
     // model recovers from a stale view.
     let (x, y) = match resolve_target(be, &handle, &session, tab_id, &target).await {
         Ok(resolved) => point_for(be, &handle, &session, &resolved, false).await?,
-        // `StaleRef` ONLY. `resolve_target`'s other exits are `TabNotFound` and
-        // `map_cdp_err`, which yields `EngineBusy` / `Cdp` / `EngineFailure` —
-        // so the `ActionFailed(_)` this or-pattern used to carry named a value
-        // that cannot arrive here (判据 §2's 不可失败 face). It was not
-        // harmless in the direction it would have failed: a real `ActionFailed`
-        // swallowed into a viewport-centre scroll is a refusal reported as
-        // success.
+        // `StaleRef` ONLY, and the reason is the CONSEQUENCE, not reachability.
+        //
+        // ⚠️ This comment used to argue that the `ActionFailed(_)` an earlier
+        // or-pattern carried "named a value that cannot arrive here". **That
+        // was already false when it was written** — `resolve_target` has two
+        // `ActionFailed` exits above (the not-a-minted-ref refusal and the
+        // cross-renderer one) — and Task 18b added a third, the liveness
+        // probe's unreadable-answer arm. Corrected rather than left standing: a
+        // reader reasons from a premise, and this one would have taught them
+        // that an `ActionFailed` reaching this `match` is impossible
+        // (判据 §1 — the comment is the copy that lies).
+        //
+        // The conclusion it reached is still right, and now rests on the right
+        // thing: a real `ActionFailed` swallowed into a viewport-centre scroll
+        // is a refusal reported as success (判据 §11). `StaleRef` is the one
+        // failure this may absorb, because it is a KNOWN fact — the ref is
+        // gone — and scrolling the viewport is then the honest best effort, and
+        // is how the model recovers from a stale view. "I could not determine
+        // whether it is gone" is a different fact and may not borrow that
+        // fallback, so **scroll by a ref whose liveness cannot be read now
+        // fails rather than scrolling the viewport.** That is a deliberate
+        // change of behaviour, not a side effect.
         Err(BrowserError::StaleRef { .. }) => {
             let m = page::get_layout_metrics(&handle.conn, Some(&session))
                 .await
@@ -1526,6 +1595,83 @@ mod tests {
         assert!(
             !sent.iter().any(|m| m.starts_with("Input.")),
             "an unanswered liveness question must not be clicked through: {sent:?}"
+        );
+    }
+
+    /// A page that THROWS from `isConnected` must not get to aim Aleph's error
+    /// message at the engine.
+    ///
+    /// `NODE_LIVENESS_JS` reads a property, and a property can be an own getter
+    /// the page installed. When it throws, `connected` is absent and the arm
+    /// fires — but the author of that silence is the PAGE. A single sentence
+    /// saying "the {engine} engine did not say whether…" would be a page
+    /// choosing what Aleph tells the model about the engine, and pointing it at
+    /// a `switch_engine` that cannot help (判据 §17: 错的标签比缺的贵).
+    ///
+    /// Hostile in both R40 dimensions, like every other page-string test in
+    /// this file: a `"` and a ref token, so a wrapper that forgets to escape
+    /// and one that forgets to quote both fail.
+    #[tokio::test]
+    async fn a_page_that_throws_from_is_connected_is_not_blamed_on_the_engine() {
+        let hostile = HOSTILE_THROW;
+        let quoted = quote(hostile);
+        let server = FakeCdpServer::start(move |frame: &serde_json::Value| {
+            if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
+                return Responder::Reply(json!({
+                    "result": { "type": "undefined" },
+                    "exceptionDetails": { "exception": { "description": hostile } }
+                }));
+            }
+            Responder::Reply(json!({}))
+        })
+        .await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("a liveness probe that threw must not click");
+        let text = err.to_string();
+        assert!(
+            text.contains(&quoted),
+            "the page's text must appear QUOTED, or a class of `x\"] [ref=e99]` \
+             forges a ref token in a sentence read outside the fence: {text}"
+        );
+        assert!(
+            !text.replace(&quoted, "").contains("[ref="),
+            "no ref token outside the quotes: {}",
+            text.replace(&quoted, "")
+        );
+        // The blame, which is the half this test exists for.
+        assert!(
+            !text.contains("switch_engine") && !text.contains("engine did not say"),
+            "the PAGE threw; the refusal must not send the model after the \
+             engine: {text}"
+        );
+        assert!(
+            !methods(&server).iter().any(|m| m.starts_with("Input.")),
+            "nothing may be dispatched when liveness could not be read"
+        );
+    }
+
+    /// …and when the ENGINE is the one that answered without the key, the
+    /// engine sentence is still the right one. Both arms of the same `match`,
+    /// because a test that only pinned the page arm would pass just as well for
+    /// an implementation that had deleted the engine one (判据 §14 — ask the
+    /// gate in both directions).
+    #[tokio::test]
+    async fn an_engine_that_answers_without_the_key_still_names_the_engine() {
+        let (err, _) = click_with_liveness(json!({ "something_else": true })).await;
+        let text = err.to_string();
+        assert!(
+            text.contains("engine did not say") && text.contains("switch_engine"),
+            "nothing threw, so the engine is the author of the silence: {text}"
         );
     }
 

@@ -133,13 +133,36 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // `apply_document_boundary` (an Aleph-issued `navigate`/`history`).
         // **Neither runs when the PAGE navigates itself**, which is what every
         // link click and every `location.href =` is. So the sequence
-        // snapshot → click a link → use a ref from before the click left the
+        // snapshot → the page navigates → use a ref from before it left the
         // table pointing at a document that no longer existed, `resolve`
         // answered `Ok`, and a dead `backendNodeId` went to the wire. Measured
-        // on both engines: what stopped the click was the engine refusing a
-        // later call, not any gate Aleph designed (判据 §7 — 两端完整而中间没线,
-        // with the missing wire hidden by a foreign engine's unrelated
-        // behaviour).
+        // on both engines: what stopped it was the engine refusing a later
+        // call, not any gate Aleph designed (判据 §7 — 两端完整而中间没线, with
+        // the missing wire hidden by a foreign engine's unrelated behaviour).
+        //
+        // # ⚠️ What this arm does NOT cover, and the layer that does
+        //
+        // **On obscura v0.2.2 this arm is a no-op for a navigation driven by a
+        // dispatched mouse event — i.e. for `browser_click` on a link, the
+        // commonest case there is.** Measured 2026-09-19, both routes against
+        // the real binary in one run: an `Input.dispatchMouseEvent` that
+        // triggers `location.href =` emits ONE `Page.frameNavigated` carrying
+        // the **OLD** `loaderId`, and `Page.getFrameTree` afterwards still
+        // reports the old one, so `reset_for_document` correctly answers "same
+        // document" and nothing is retired. The same navigation driven by
+        // `Runtime.evaluate` turns the loader over properly. So on that engine
+        // NOTHING loader-based can see a click-driven navigation — not this
+        // arm, not `PageState::build`'s reset, not `navigate()`'s boundary.
+        //
+        // That case is covered by the OTHER layer, and this comment names it so
+        // the next reader does not conclude the document layer handles it:
+        // `cdp_backend::actions::resolve_target` asks the resolved node
+        // `this.isConnected` ([`NODE_LIVENESS_JS`]) and refuses a disconnected
+        // one as `StaleReason::NodeGone`. The two layers are not belt and
+        // braces — they cover different engines and different routes, and
+        // deleting either leaves a real hole (`qa/browser_dual/run.sh click`
+        // has a claim for each, and mutations M-I and M-K redden them
+        // separately).
         //
         // MAIN frame only, by the same discriminator `wait_for_load` uses: a
         // subframe navigation does not end the tab's document, and resetting
@@ -156,9 +179,11 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
         // itself to the ref question it was added for rather than widening into
         // one it cannot honour (判据 §5).
         //
-        // Both engines emit this for a script-initiated navigation with
-        // `parentId` absent and a fresh `loaderId` (measured 2026-09-19 on
-        // obscura v0.2.2 and Chrome 152).
+        // Where this arm DOES fire, measured 2026-09-19 on obscura v0.2.2 and
+        // Chrome 152: a script-initiated navigation on either engine, and every
+        // navigation on Chrome including the click-driven one. `parentId`
+        // absent and a fresh `loaderId` in all of those. The one measured hole
+        // is obscura's click-driven route, above.
         "Page.frameNavigated" => {
             let frame = &ev.params["frame"];
             if frame.get("parentId").is_some() {
