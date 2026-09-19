@@ -1,5 +1,5 @@
 //! **INTERIM.** obscura's `DOMSnapshot.captureSnapshot` fabricates its
-//! geometry — `domsnapshot.rs:231-236` is literally
+//! geometry — `domsnapshot.rs:231-236` (**verified at `v0.2.2`**) is literally
 //! `let y = (i as f64) * 18.0; bounds.push(json!([0.0, y, 1280.0, 18.0]))`,
 //! with a constant style vector claiming `visibility:visible` for every node
 //! and no marker on the wire — so the Chromium fetcher's one-call path cannot
@@ -143,13 +143,33 @@ pub const DEFAULT_BOX_CONCURRENCY: usize = 16;
 /// `<body>`, and this reports "I looked and nothing has it", plus
 /// `focused: Some(false)` on `<body>` itself. In a real browser the
 /// discriminator is `document.body.matches(':focus')` — and **that does not
-/// work on the engine this fetcher serves.** obscura's selector engine answers
-/// `PseudoClass::Focus` with an unconditional `false`, grouped with `:hover`,
-/// `:active`, `:focus-visible` and `:focus-within` under the comment *"Dynamic
-/// user-interaction pseudo-classes have no meaning against a static DOM
-/// snapshot with no live user input"*
-/// (`crates/obscura-dom/src/selector.rs:506-510`, reached from
-/// `bootstrap.js:3556`'s `matches` via `matches_selector`). Conjoining it here
+/// work on the engine this fetcher serves. Read on the installed `v0.2.2`
+/// binary, defaults only:** after `el.focus()`, `matches(':focus')`,
+/// `:hover`, `:active`, `:focus-visible` and `:focus-within` are all `false`,
+/// `document.querySelector(':focus')` is `null`, and
+/// `querySelectorAll(':hover').length` is `0`. **Control, so this is about the
+/// dynamic pseudo-classes and not a broken selector engine:** on the same
+/// element in the same run, `matches(':enabled')` and `matches('div')` are
+/// both `true`.
+///
+/// **The half that makes this expression's SHAPE a reading rather than an
+/// inference: `document.activeElement` DOES track the caret on that same
+/// run.** After `el.focus()` it reads back as the focused element while
+/// `:focus` stays false — two faces of one fact that disagree (判据 §9). So
+/// the engine knows where focus is and the selector cannot see it, which is
+/// why the expression above reads `activeElement` and never `:focus`: a
+/// selector-based focus check on this engine is constant-false and would never
+/// go red.
+///
+/// Corroborated at source, at the tag: obscura's selector engine answers
+/// `PseudoClass::Focus` with an unconditional `false`, grouped with the other
+/// four under the comment *"Dynamic user-interaction pseudo-classes have no
+/// meaning against a static DOM snapshot with no live user input"*
+/// (`crates/obscura-dom/src/selector.rs:507-511` — the arm's own span; this
+/// read `506-510`, a pre-existing tail off-by-one rather than tag drift, since
+/// the file is byte-identical at `v0.2.2` and at the tree the claim was first
+/// read on), reached from `bootstrap.js:3556`'s `matches` via
+/// `matches_selector` (**verified unmoved at `v0.2.2`**). Conjoining it here
 /// would put a 恒假 term in front of the `-1` branch: `!matches(':focus')` is
 /// always true, so the branch would behave exactly as it does now, wearing a
 /// guard that cannot fire (判据 §2). So this is documented, not repaired. The
@@ -553,19 +573,51 @@ pub async fn fetch_obscura(
             // the §8 shape this list exists to prevent.
             //
             // Kept narrow anyway, on a MEASUREMENT taken for this decision
-            // rather than on the inherited sentence: obscura creates a browsing
-            // context for `<iframe>` and nothing else. In
-            // `obscura-browser/src/page.rs` — 9044 lines, the file that owns
-            // frame lifecycle — the quoted tag `"iframe"` occurs exactly once
-            // (a `query_selector` gate at :3587 that decides whether there are
-            // any frames at all), and `"object"` and `"embed"` occur **zero**
+            // rather than on the inherited sentence — and the measurement is a
+            // reading of the shipped binary, not a survey of its source:
+            // obscura creates a browsing context for `<iframe>` and nothing
+            // else. On the installed `v0.2.2` binary, defaults only, a
+            // PARSE-TIME document carrying an `<iframe>`, an `<object data>`
+            // and an `<embed src>` — all three parsed, `querySelectorAll`
+            // counts 1/1/1 — answers `window.frames.length` = **1**, with
+            // `contentWindow` and `contentDocument` **non-null on the
+            // `<iframe>`** and **present and NULL on the `<object>` and the
+            // `<embed>`**. Present-and-null is written down rather than
+            // summarised because it is the shape most likely to be misread as
+            // "not loaded yet" instead of "never creates one".
+            //
+            // **The CDP frame surfaces cannot settle this and were not used.**
+            // `Page.getFrameTree` reports **zero** child frames for that
+            // working `<iframe>`, and `Target.getTargets` reports one target,
+            // the page itself — the same answer both give for a page with no
+            // iframe at all. An empty enumeration is not evidence of an empty
+            // browser (判据 §8), and a frame count read off either surface
+            // would be 恒 0 on this engine (判据 §2).
+            //
+            // Corroborated at source, at the tag: in
+            // `obscura-browser/src/page.rs`, the file that owns frame
+            // lifecycle, the quoted tag `"iframe"` occurs exactly once (a
+            // `query_selector` gate at `:3526`, deciding whether there are any
+            // frames at all), and `"object"` and `"embed"` occur **zero**
             // times in it; the whole frame registry is spelled `_iframeWin` /
             // `__obscura_frameElements`. `<object>` and `<embed>` appear only in
             // `obscura-render`'s replaced-element layout list and in a URL
-            // attribute table. So on this engine an `<object>` has no document
-            // for anyone to have missed, and declaring one unreached would be a
-            // claim about a document that does not exist — 判据 §17, the wrong
-            // label costing more than the missing one.
+            // attribute table.
+            //
+            // ⚠️ This paragraph used to open that survey with "9044 lines", and
+            // `:3587` for the gate. **Both are `main`'s numbers**: at the
+            // `v0.2.2` tag the file is 8026 lines and the gate is at `:3526`.
+            // The line count carried the whole weight of "someone went and
+            // measured", so it is not quietly renumbered — it is REMOVED. A
+            // file's length was never the evidence for what creates a browsing
+            // context, and a number that moves every release is the wrong thing
+            // to lean on when the engine itself can be asked. The grep counts
+            // above are re-verified at the tag; the line count is gone.
+            //
+            // So on this engine an `<object>` has no document for anyone to
+            // have missed, and declaring one unreached would be a claim about a
+            // document that does not exist — 判据 §17, the wrong label costing
+            // more than the missing one.
             //
             // `FRAME` (a `<frameset>` child) is the one entry that is wider
             // than obscura needs. It is kept rather than filtered: sharing one
@@ -656,40 +708,104 @@ pub async fn fetch_obscura(
 /// `fetch_chromium`'s `fixtures/local-hidden-containers.domsnapshot.json`; the
 /// per-arm readings are in that function's doc, not restated here.
 ///
+/// **Measured first, on the installed `v0.2.2` binary with default flags; the
+/// source lines below are corroboration, not the evidence.**
+/// `<div style="visibility:hidden"><span>x</span></div>` answers
+/// `getComputedStyle(span).visibility` = **`"visible"`** while the div itself
+/// answers `"hidden"` — and the same pair comes back when the rule is written
+/// in a stylesheet (`#ss-vis{visibility:hidden}`) instead of inline. Chrome
+/// answers `"hidden"` on both children. **Control, so this is a statement
+/// about `visibility` and not about inheritance generally:** on the same
+/// engine in the same run, `color: rgb(1,2,3)` on a parent reads back as
+/// `rgb(1, 2, 3)` on a dynamically appended child. Inheritance works;
+/// `visibility` specifically does not. That one reading is the only thing that
+/// distinguishes `None` → `"visible"` from a real inherited `"hidden"`, which
+/// is the entire subject of the three bullets below.
+///
 /// * `LayoutStyle::visibility_hidden` is the element's **own** value. obscura's
 ///   words: *"`visibility: hidden|visible`, own value. `None` means 'inherit
 ///   the ancestor's computed value' (visibility, unlike most box properties, is
 ///   a real inherited CSS property). Resolved into `effectively_invisible`
 ///   during `dom::layout_dom`'s inheritance pass"*
-///   (`crates/obscura-render/src/lib.rs:1409-1413`).
+///   (`crates/obscura-render/src/lib.rs:1409-1413` — **verified unmoved at
+///   `v0.2.2`**; the file is byte-identical between the tag and the tree this
+///   claim was first read on).
 /// * The resolution is real and it **never reaches JS**.
 ///   `refresh_effective_visibility` computes
 ///   `style.visibility_hidden.unwrap_or(parent_state.0)` and writes the answer
-///   to `effectively_invisible` (`crates/obscura-render/src/dom.rs:1043-1049`);
-///   `effectively_invisible` has 14 occurrences in `crates/`, every one of them
-///   inside `obscura-render` (the field, the two inheritance passes, four
-///   paint-time readers, one test) — **none in the computed-style map, none in
-///   `obscura-cdp`, none in `obscura-js`**.
+///   to `effectively_invisible` (`crates/obscura-render/src/dom.rs:1043-1049`
+///   — **verified unmoved at `v0.2.2`**, file byte-identical);
+///
+///   **This is the one claim in this file whose primary evidence is still a
+///   source line, and the reason no reading replaces it is worth stating.**
+///   How the field is COMPUTED — the `||` between `visibility_hidden` and
+///   `opacity_zero` inside the inheritance pass — is an internal layout value
+///   on no CDP surface. Its only external consequence is paint, and reading a
+///   rendered pixel and calling it a `getComputedStyle` fact would be a chain
+///   rather than a capture: the conclusion's scope would be the method, and
+///   the method would be "something in the paint path made this dark", which
+///   does not name the operator between the two terms (判据 §18). No probe was
+///   invented for it. What IS measured is the next bullet's half — that the
+///   field never crosses the wire — and those are different claims.
+///   and it stays inside the renderer: at `v0.2.2`, `effectively_invisible` has
+///   **zero** occurrences outside `obscura-render` — **none in the
+///   computed-style map, none in `obscura-cdp`, none in `obscura-js`** — which
+///   is the whole of the claim. (16 inside it. The sentence here used to say
+///   "14 occurrences in `crates/`"; that was `main`'s count, re-measured at the
+///   tag rather than carried over. The total was never the evidence — the ZERO
+///   outside is.)
+///
+///   **And the wire says the same thing, which is stronger than the grep.**
+///   Read on the installed `v0.2.2` binary: neither computed-style key set
+///   carries anything matching `/invisib|effective|occlud|obscur/i` — zero hits
+///   among the native map's 74 entries and zero among the JS wrapper's 309 —
+///   and `'effectivelyInvisible' in getComputedStyle(el)` is `false`. *(Method
+///   note: `getPropertyValue('effectively-invisible')` returns `""`, but so
+///   does `getPropertyValue('totally-made-up-prop')`. `""` can only say "I do
+///   not know" (判据 §8), so the verdict rests on the key enumeration and not
+///   on that.)*
 /// * What the map inserts for `"visibility"` is
 ///   `if style.visibility_hidden.unwrap_or(false) { "hidden" } else { "visible" }`
-///   (`crates/obscura-render/src/paint.rs:1444-1452`) — **the own value, with
-///   `None` collapsed into `Some(false)`**. The JS shim serves that key
-///   straight out of the native snapshot and does no ancestor walk
-///   (`crates/obscura-js/js/bootstrap.js:8479`).
+///   (`crates/obscura-render/src/paint.rs:1379-1387` at `v0.2.2`) — **the own
+///   value, with `None` collapsed into `Some(false)`**. The JS shim serves that
+///   key straight out of the native snapshot and does no ancestor walk
+///   (`crates/obscura-js/js/bootstrap.js:8472` at `v0.2.2`).
+///
+///   Both addresses were repaired this round: they read `paint.rs:1444-1452`
+///   and `bootstrap.js:8479`, which are `main`'s. At the tag those resolve —
+///   which is the failure mode that reads like fact — to the `white-space` /
+///   `text-overflow` inserts and to a blank line. The CONTENT at the two
+///   correct addresses is byte-identical to what was read, so the conclusion
+///   never moved; only the evidence pointing at it did.
 ///
 /// ## 连线优先: the resolved answer was looked for before it was re-derived
 ///
-/// It is on no obscura CDP surface. There is **no `CSS` domain** —
-/// `crates/obscura-cdp/src/domains/` has no `css.rs`,
-/// `CSS.getComputedStyleForNode` has zero occurrences in that crate, and
-/// `CSS.enable` is a fast-path `{}` in `server.rs:1719`.
+/// It is on no obscura CDP surface. All four readings below were re-taken at
+/// `v0.2.2` for this round. There is **no `CSS` domain** —
+/// `crates/obscura-cdp/src/domains/` has no `css.rs` (verified: fifteen
+/// domain modules beside `mod.rs`, none of them CSS), `CSS.getComputedStyleForNode` has zero
+/// occurrences in that crate (verified), and `CSS.enable` is a fast-path `{}`
+/// in `server.rs:1615` — **this read `:1719`, which is `main`'s and at the tag
+/// is the `Message::Close` arm of the socket loop**.
 /// `DOMSnapshot.captureSnapshot` writes the literal `"visible"` into a constant
-/// style vector for every node (`domains/domsnapshot.rs:215-226`) — the
+/// style vector for every node (`domains/domsnapshot.rs:215-226`, **verified
+/// unmoved at `v0.2.2`** — the vector is exactly those twelve lines) — the
 /// fabrication this module's head doc already refuses to read.
 /// `Accessibility.getFullAXTree` hard-codes `"ignored": false`
-/// (`domains/accessibility.rs:131`). `DOM.*` reports no visibility at all. One
-/// `Runtime.evaluate` on `getComputedStyle` is the only surface there is, so
-/// the inheritance obscura already computed has to be re-derived here.
+/// (`domains/accessibility.rs:131`, **verified unmoved**). `DOM.*` reports no
+/// visibility at all. One `Runtime.evaluate` on `getComputedStyle` is the only
+/// surface there is, so the inheritance obscura already computed has to be
+/// re-derived here.
+///
+/// ⚠️ **Those four citations were missed by the audit that repaired the rest of
+/// this file, and the reason is worth more than the fix (判据 §6 — 数错的方向
+/// 永远是少一个).** That audit enumerated citations by grepping for the
+/// `crates/obscura-…:NNN` form. These four are written WITHOUT the prefix, so
+/// the census reported seventeen citations and nine repairs when the true
+/// numbers were twenty-one and ten — and the one extra repair is in this
+/// paragraph. A citation that does not name the crate it points into is
+/// invisible to the next person auditing them; when you add one here, spell the
+/// path in full.
 ///
 /// # What is cascaded
 ///
@@ -711,22 +827,56 @@ pub async fn fetch_obscura(
 ///   rather than an omission.
 ///
 ///   obscura has no top layer **in layout at all**, which is why the exactness
-///   survives here with no second arm. Its own source says so at the one place
-///   that would have to implement it: `showModal()` sets the `open` attribute
-///   and a `_dialogModal` flag and nothing else, under the comment *"Modal
+///   survives here with no second arm — and that is a reading of the shipped
+///   binary on four independent surfaces, not a grep. On the installed
+///   `v0.2.2` binary, defaults only, with a `<dialog>` and a `[popover]`
+///   inside an `opacity: 0` ancestor:
+///
+///   | probe | Chrome would say | obscura `v0.2.2` says |
+///   |---|---|---|
+///   | `DOM.getTopLayerElements` | the top-layer element list | **`-32601 "Unknown DOM method: getTopLayerElements"`** |
+///   | `getComputedStyle(dialog).display`, dialog CLOSED | `"none"` (UA `dialog:not([open])`) | **`"block"`** |
+///   | `getBoundingClientRect()` before → after `showModal()` | re-centred, `width:fit-content` | **byte-identical: `{x:8,y:80,width:1264,height:18}`** |
+///   | `DOM.getBoxModel(dialog)` after promotion | — | `[8,80,1272,80,1272,98,8,98]` — a normal-flow box CONTAINED IN the `opacity:0` div's own box |
+///   | `showPopover()` then `getComputedStyle(pop).display` | `"none"` → `"block"` | **`"block"` both before and after** |
+///
+///   The full-width `1264px` box and the unchanged rect say it never receives
+///   modal UA styling at all: the dialog is an ordinary block child of its
+///   faded ancestor and stays there when promoted.
+///
+///   **Two controls, because a CONFIRMING reading is exactly when to check the
+///   instrument.** `:modal` is not 恒真 — `true` on the open modal, `false` on
+///   a closed dialog, `false` on a plain `<div>`, `false` again after
+///   `close()`; same for `:popover-open`. And the prober's own `DOMSnapshot`
+///   needle search produced a **false positive** they caught: `modal` and
+///   `popover` both hit until the fixture's TEXT was changed to neutral
+///   strings, at which point `modal` went false — the first hit had been their
+///   own input, not a structural field (判据 §3). `topLayer` / `top_layer` /
+///   `isModal` were false throughout. That format carries property *indices*
+///   rather than names, so it is one surface of four and deliberately not the
+///   load-bearing one; the load-bearing evidence is the unchanged geometry and
+///   the absent CDP method.
+///
+///   **What obscura implements is the STATE, not the rendering**, which is
+///   this bullet's other half: `showModal()` sets the `open` attribute and a
+///   `_dialogModal` flag and nothing else, under the comment *"Modal
 ///   top-layer/focus/render is layout (out of scope)"*
-///   (`crates/obscura-js/js/bootstrap.js:3904-3905`, `showModal` at `:3925`).
-///   `top_layer` has **zero** occurrences in `obscura-render`. `:modal` and
-///   `:popover-open` ARE answerable in JS (`bootstrap.js:3560-3573`, off
+///   (`crates/obscura-js/js/bootstrap.js:3904-3905`, `showModal` at `:3925` —
+///   **both verified unmoved at `v0.2.2`**). `:modal` and `:popover-open` ARE
+///   answerable in JS (`bootstrap.js:3560-3573`, **verified unmoved**, off
 ///   `_dialogModal` / `_popoverState`) — so the state is observable while
 ///   having no rendering consequence, which is exactly the shape that would
 ///   let someone "fix" this arm here and change nothing but the output.
-///   Read at the same checkout as every other obscura citation in this file
-///   and expiring with the same stamp — which now NAMES this claim, because
-///   obscura is the default engine and the way this one rots is a user finding
-///   their modal has gone missing, not a reader noticing a stale sentence.
-///   obscura is not installed on this host, so this is a source reading and not
-///   a run.
+///
+///   `top_layer` having **zero** occurrences in `obscura-render` (**re-measured
+///   at `v0.2.2` for this round**, where the earlier reading was taken on
+///   `main`) is kept as a source note and DEMOTED on purpose: a string's
+///   absence from a source tree
+///   is not a fact an artefact can testify to, and the table above decides the
+///   same question on the binary Aleph actually installs. The claim expires
+///   with the stamp below, which NAMES it, because obscura is the default
+///   engine and the way this one rots is a user finding their modal has gone
+///   missing, not a reader noticing a stale sentence.
 /// * `visibility` — cascaded, **and this OR is an APPROXIMATION.** See below.
 ///
 /// ## The residual on `visibility`, named as a residual
@@ -756,15 +906,53 @@ pub async fn fetch_obscura(
 /// # `cursor` is left alone, and not for the reason CSS would give
 ///
 /// On obscura `c.cursor === 'pointer'` is **the element's own INLINE
-/// `style="cursor:pointer"`, or nothing**. The computed-style map has no
-/// `cursor` key at all: `"cursor"` occurs exactly once in
-/// `crates/obscura-render/src/paint.rs`, at `:10718`, inside
+/// `style="cursor:pointer"`, or nothing** — read on the installed `v0.2.2`
+/// binary, defaults only, as a DIFFERENTIAL, which is the only instrument that
+/// settles it:
+///
+/// | | `getComputedStyle(el).cursor` |
+/// |---|---|
+/// | no author rule | `"auto"` |
+/// | **inline** `style="cursor:pointer"` | **`"pointer"`** |
+/// | **stylesheet** `#ss-cursor{cursor:pointer}` | **`"auto"`** |
+///
+/// ⚠️ **Do not settle this by enumerating keys. There are TWO key sets and they
+/// disagree.** `Object.keys(getComputedStyle(el))` is the JS wrapper's accessor
+/// list — **309** entries, and `cursor` IS one of them (`'cursor' in
+/// getComputedStyle(el)` is likewise `true`). The **native** indexed map behind
+/// it, `s.item(i)` for `i < s.length`, is **74** entries and `cursor` is NOT
+/// one of them (neither are `pointer-events` or `user-select`; `display`,
+/// `opacity`, `visibility` and `color` are). And the clincher: **with
+/// `cursor:pointer` set inline the native set is still exactly 74 and still has
+/// no `cursor`** — the delta against a plain element is empty, so the inline
+/// value is served by the shim reading the `style` attribute and never by the
+/// map. A reader who ran the obvious `Object.keys` probe would have found
+/// `cursor` present and concluded this section was wrong: the surface a key
+/// enumeration reaches is the one that disagrees with the claim (判据 §9).
+///
+/// The observable tier ORDER was read the same way — contrast a property the
+/// native map carries against one it does not, each set inline and by
+/// stylesheet: `display` answers `"none"` from both, `cursor` answers
+/// `"pointer"` from inline and falls to the default `"auto"` from a stylesheet.
+/// The literal four-branch shape of `lookup()` stays source-only: which tier
+/// WINS is measurable, how many branches exist is not.
+///
+/// Corroborated at source, at the tag: the computed-style map has no `cursor`
+/// key at all — `"cursor"` occurs exactly once in
+/// `crates/obscura-render/src/paint.rs`, at `:10636`, inside
 /// `svg_css_presentation_attribute`'s name list. The shim's `lookup` misses the
 /// native snapshot, falls through to the element's **inline** CSSOM
-/// (`bootstrap.js:8482`, where `target` is `el.style`, whose
-/// `getPropertyValue` `_pull()`s the `style` attribute at `:1704`), and only
-/// then to `defaultsKebab`, where `cursor: 'auto'` (`:8461`). So no stylesheet
-/// rule reaches this flag and it does not inherit.
+/// (`bootstrap.js:8475`, where `target` is `el.style`, whose
+/// `getPropertyValue` `_pull()`s the `style` attribute at `:1704`, **verified
+/// unmoved at `v0.2.2`**), and only then to `defaultsKebab`, where
+/// `cursor: 'auto'` (`:8454`). So no stylesheet rule reaches this flag and it
+/// does not inherit.
+///
+/// Three of those four addresses were repaired this round — they read
+/// `paint.rs:10718`, `bootstrap.js:8482` and `:8461`, which are `main`'s. At
+/// the tag they land, respectively, on a DIFFERENT function adjacent to the
+/// right one, on one tier PAST the one cited, and on a bare `}`. Every one
+/// resolves; not one says what it was cited for.
 ///
 /// **It is NOT 恒假** — the round that raised this said it was, and the inline
 /// arm is the one step that claim went too far. It is false for very nearly
@@ -1096,9 +1284,9 @@ mod tests {
     ///
     /// | col | flag | provenance |
     /// |---|---|---|
-    /// | 0 | `display_none` | **Constructed, corroborated indirectly.** U2 measured obscura answering `getBoxModel` on `#hidden-none` with a zero quad, which requires its layout to know the element is `display: none`; the map reads that same field (`obscura-render/src/paint.rs:1400`). A BOX reading is not a `getComputedStyle` reading (判据 §18) — this is a chain, not a capture. |
-    /// | 1 | `visibility_hidden` | **Constructed, source-derived.** `#hidden-vis { visibility:hidden }` is a stylesheet rule, obscura's declaration applier writes `LayoutStyle::visibility_hidden`, and the map serves that own value. True of the DECLARING element only — which is the whole subject of [`cascade_effective_styles`]. |
-    /// | 2 | `opacity_zero` | **Constructed, source-derived.** `paint.rs:1453` serves `css_number(opacity.unwrap_or(1.0))`, so the declaring element answers `"0"`. |
+    /// | 0 | `display_none` | **Constructed, corroborated indirectly.** U2 measured obscura answering `getBoxModel` on `#hidden-none` with a zero quad, which requires its layout to know the element is `display: none`; the map reads that same field (`obscura-render/src/paint.rs:1338` at `v0.2.2`; this read `:1400`, which is `main`'s and off by three even there). A BOX reading is not a `getComputedStyle` reading (判据 §18) — this is a chain, not a capture. |
+    /// | 1 | `visibility_hidden` | **Constructed; the behaviour behind it is now MEASURED.** `#hidden-vis { visibility:hidden }` is a stylesheet rule, obscura's declaration applier writes `LayoutStyle::visibility_hidden`, and the map serves that own value — confirmed on the installed `v0.2.2` binary by the parent/child reading in [`cascade_effective_styles`]'s doc. True of the DECLARING element only, which is that function's whole subject. |
+    /// | 2 | `opacity_zero` | **Constructed, source-derived.** `paint.rs:1388` at `v0.2.2` serves `css_number(opacity.unwrap_or(1.0))`, so the declaring element answers `"0"`. (This read `:1453`, `main`'s address, which at the tag is `crate::TextOverflow::Clip => "clip",`.) |
     /// | 3 | `cursor_pointer` | **Constructed, and CONTRADICTED by this file's own derivation — pure scaffolding.** See below. |
     ///
     /// ## Column 3 is scaffolding and must be read as scaffolding
@@ -1392,8 +1580,9 @@ mod tests {
     /// computed-style map serves `style.visibility_hidden.unwrap_or(false)`,
     /// the element's OWN value, and the inheritance pass that resolves it
     /// writes `effectively_invisible`, which reaches no CDP surface
-    /// (`crates/obscura-render/src/lib.rs:1409-1413`, `paint.rs:1444-1452`,
-    /// `dom.rs:1043-1049`). See [`cascade_effective_styles`] for the full
+    /// (`crates/obscura-render/src/lib.rs:1409-1413`, `paint.rs:1379-1387`,
+    /// `dom.rs:1043-1049`, all at `v0.2.2`). See [`cascade_effective_styles`]
+    /// for the reading that settles it on the shipped binary, for the full
     /// derivation and for the residual the OR carries.
     ///
     /// **This assertion previously pinned the opposite answer**, on the CSS
@@ -1469,7 +1658,8 @@ mod tests {
             a_home.computed.unwrap().visibility_hidden,
             "an element inside a visibility:hidden subtree must say so: obscura \
              reports each element's OWN `visibility`, never the inherited one \
-             (obscura-render/src/paint.rs:1444-1452), so nothing upstream of \
+             (obscura-render/src/paint.rs:1379-1387 at v0.2.2), so nothing \
+             upstream of \
              this cascade has applied the inheritance"
         );
         assert!(!crate::browser::page_state::build::visibility_of(a_home));
@@ -1748,38 +1938,209 @@ mod tests {
         hits
     }
 
-    /// The obscura build this module's source-level claims were READ ON.
+    /// The obscura ARTEFACT this module's claims were read on — **two values,
+    /// because a tag and a build are different facts and only one of them is
+    /// copyable.**
     ///
-    /// A literal on purpose. Deriving it from `runtimes::OBSCURA_TAG` would make
-    /// the comparison below 恒真 and guard nothing (判据 §2) — the whole point
-    /// is that the two are free to disagree, and the disagreement is the signal.
-    /// It is the same shape as `capability.rs`'s CHROMIUM `measured_on` and the
-    /// deliberate opposite of its OBSCURA row, because the two fields answer
-    /// different questions: that one records the build a capability table is
-    /// FOR, this one records the build a source reading was TAKEN ON.
+    /// ## What the single literal could not do
     ///
-    /// Scoped to this file, so it is not a second author of the pinned tag for
-    /// anyone else: `the_obscura_tag_has_one_author` reads only `specs.rs` and
-    /// `the_obscura_row_is_stamped_with_the_pinned_tag` reads only
-    /// `capability.rs`, and neither census sees this constant.
-    const OBSCURA_SOURCE_READ_AT: &str = "v0.2.2";
+    /// This was one constant, `OBSCURA_SOURCE_READ_AT = "v0.2.2"`, whose doc
+    /// argued — correctly — that deriving it from `runtimes::OBSCURA_TAG` would
+    /// make the comparison below 恒真 and guard nothing (判据 §2): the whole
+    /// point is that the two are free to disagree, and the disagreement is the
+    /// signal. It was then filled **from the pin** instead of from the checkout
+    /// that was read, and the readings behind every `crates/obscura-…` citation
+    /// in this file had in fact been taken in obscura's `main`, 49 commits and
+    /// 7 days past the tag. The mechanism was built to let the two disagree and
+    /// then initialised so they never could about the one thing it names —
+    /// 判据 §2's fourth face: a real comparison against a real constant that
+    /// cannot go red for the single drift it exists to catch.
+    ///
+    /// The repair is not a better sentence. It is a second value that **cannot
+    /// be filled in from this repository or from the release page.**
+    const OBSCURA_READ_ON_TAG: &str = "v0.2.2";
 
-    /// **In what situation does this go red?** When somebody bumps
-    /// `runtimes::specs::OBSCURA_TAG` — which is the moment every sentence in
-    /// this file citing `crates/obscura-…` becomes a claim about a binary Aleph
-    /// no longer installs.
+    /// sha256 of the EXTRACTED executable every behavioural reading in this
+    /// file was taken on: `~/.aleph/runtimes/obscura/v0.2.2/obscura`,
+    /// 94,864,016 bytes, Mach-O arm64, hashed on the measuring host.
     ///
-    /// Several of those claims are load-bearing and none of them can be
-    /// re-measured from inside this crate: the computed-style map has no
-    /// `cursor` key; `visibility` is served as the element's own value;
-    /// `:focus` never matches; `pierce` is ignored; a `display:none` element
-    /// answers `getBoxModel` successfully with a zero quad; **obscura has no
-    /// top layer**, which is the whole reason [`cascade_effective_styles`] has
-    /// no second arm where the twin does; and — the newest —
-    /// **`DOM.getDocument` turns on no event stream here, and `DOM.disable`
-    /// does not exist.** Each is one grep in an obscura checkout, and this test
-    /// is what makes that grep happen instead of being assumed — a claim that
-    /// rots LOUDLY rather than silently.
+    /// **Not the release ARCHIVE's digest — and that distinction is the whole
+    /// reason this constant is a digest at all.**
+    /// `obscura-aarch64-macos.tar.gz` is 76,038,298 bytes and hashes to
+    /// something else entirely, and that number is *published on the release
+    /// page* and recorded in this repository at
+    /// `docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/README.md`
+    /// — so it is writable by someone who never held the artefact, which is the
+    /// same defect as copying the tag from the pin, wearing a longer number. A
+    /// draft of this task's own brief made exactly that substitution, attaching
+    /// an archive's digest to a binary's path (判据 §1, two facts linked as
+    /// one). The binary's digest is published nowhere: the only way to write it
+    /// down is to have hashed the file you measured on.
+    /// [`the_artefact_stamp_records_the_binary_not_the_published_archive`]
+    /// turns that substitution back into a red.
+    ///
+    /// **What this is NOT: a runtime check**, said plainly because a stamp
+    /// reads like a warranty (判据 §17). Nothing hashes a file to compare
+    /// against it, on purpose — obscura is absent on CI, and the bytes differ
+    /// per platform and per release flavour, so a live comparison would be 恒绿
+    /// wherever the artefact is missing and falsely RED on a host that
+    /// installed a different platform's build, and a guard that misfires is
+    /// dearer than one that stays quiet (判据 §3). It is a receipt, and its
+    /// force is at AUTHORING time: re-stamping requires hashing a file, and
+    /// there is nothing to copy instead. A determined author can still invent
+    /// 64 hex characters — that is fabrication, not the accident this repairs,
+    /// and no unit test in this crate can tell the two apart.
+    const OBSCURA_READ_ON_SHA256: &str =
+        "9e14e821fca149698b7dbf21c4e61a727b1032469660f2459792f18bbc2b2b4b";
+
+    /// One claim class the stamp dates.
+    struct DatedClaim {
+        /// The claim, in the words the failure message prints.
+        claim: &'static str,
+        /// The spelling a second author of THIS claim has to use — a phrase the
+        /// claim is hard to state without, never a topic word.
+        needle: &'static str,
+        /// Every `src/` file whose text carries `needle` today, sorted as
+        /// [`files_mentioning`] sorts.
+        homes: &'static [&'static str],
+    }
+
+    /// The claim classes this stamp dates — **one list, two readers.**
+    ///
+    /// Before this round the failure message enumerated the classes in prose
+    /// while the census knew a single needle, `getComputedStyle`, and nothing
+    /// could notice the two disagreed. Counted on the committed bytes: **two of
+    /// seven** classes sat inside the census half and five sat outside it,
+    /// while the scope paragraph was read as though it covered the message
+    /// (判据 §1 — two spellings of one fact, and the expensive copy is the one
+    /// in the prose). The list is now the single author: the message is printed
+    /// FROM it and the census walks it, so a class added to either is a class
+    /// added to both.
+    ///
+    /// **`homes` is a COUNT, not a permission** (判据 §6 — 先数一遍). It says
+    /// how many copies of one fact live in `src/` today; a second entry is
+    /// 判据 §1 debt the row makes visible rather than hides, and each is named
+    /// with why it is there.
+    ///
+    /// **In what situation does a row go red?** When a file outside its homes
+    /// starts carrying the needle — exactly the drift that put an uncited
+    /// engine claim in `raw.rs` the same hour the first stamp arrived, asked
+    /// now once per class instead of once for the file.
+    ///
+    /// **What a row cannot see, stated rather than implied:** a second author
+    /// who makes the same claim in different words. A needle census covers only
+    /// the spellings it recognises (判据 §3). That is why every needle here is
+    /// a phrase the claim is hard to state without — and why `top_layer`,
+    /// `getBoxModel` and `visibility_hidden` are NOT used: those are code
+    /// identifiers the twin and the shared types legitimately carry, so a
+    /// census over them would go red for refactors rather than for claims.
+    const DATED_CLAIMS: &[DatedClaim] = &[
+        DatedClaim {
+            claim: "the computed-style map has no `cursor` key — `cursor:pointer` \
+                    reaches this fetcher from an element's INLINE style attribute \
+                    or not at all, never from a stylesheet rule",
+            needle: "getComputedStyle",
+            homes: &["src/browser/page_state/fetch_obscura.rs"],
+        },
+        DatedClaim {
+            claim: "`visibility` is served as the element's OWN value with `None` \
+                    collapsed to false, which is the entire reason \
+                    `cascade_effective_styles` exists",
+            // obscura's own field name for the resolved answer. A second author
+            // of "obscura resolves inheritance somewhere the wire cannot see"
+            // has to name the place.
+            needle: "effectively_invisible",
+            homes: &["src/browser/page_state/fetch_obscura.rs"],
+        },
+        DatedClaim {
+            claim: "`:focus` / `:hover` / `:active` / `:focus-visible` / \
+                    `:focus-within` match an unconditional false, while \
+                    `document.activeElement` DOES track the caret — two faces of \
+                    one fact that disagree, which is why this fetcher reads the \
+                    property and never the selector",
+            needle: ":focus-within",
+            homes: &["src/browser/page_state/fetch_obscura.rs"],
+        },
+        DatedClaim {
+            claim: "`pierce: true` is accepted and ignored, so a capture is always \
+                    exactly one frame and every frame element is declared \
+                    unreached",
+            needle: "pierce",
+            homes: &["src/browser/page_state/fetch_obscura.rs"],
+        },
+        DatedClaim {
+            claim: "a `display:none` element answers `DOM.getBoxModel` \
+                    SUCCESSFULLY with a zero quad, where Chromium fails the call \
+                    honestly — so a zero quad is an absence here, never a verdict",
+            needle: "zero quad",
+            // `build.rs` quotes this obscura reading in the doc of the test that
+            // depends on it (`a_boxless_but_styled_node_stays_visible…`). A real
+            // second copy of one fact, recorded rather than discovered later.
+            homes: &[
+                "src/browser/page_state/build.rs",
+                "src/browser/page_state/fetch_obscura.rs",
+            ],
+        },
+        DatedClaim {
+            claim: "NO TOP LAYER: `showModal()` sets an attribute and a flag, the \
+                    promoted dialog's rect is byte-identical before and after, and \
+                    `DOM.getTopLayerElements` does not exist on this engine",
+            needle: "no top layer",
+            // `fetch_chromium.rs` says the phrase about its OWN captures, not
+            // about obscura. It is in the set because the needle cannot tell the
+            // two subjects apart, and a needle narrowed until it could would be
+            // one rewording away from matching nothing.
+            homes: &[
+                "src/browser/page_state/fetch_chromium.rs",
+                "src/browser/page_state/fetch_obscura.rs",
+            ],
+        },
+        DatedClaim {
+            claim: "the DOM AGENT: `DOM.getDocument(-1, true)` at `:454` turns on \
+                    NO event stream (0 unsolicited `DOM.*` events, measured twice) \
+                    and `DOM.disable` does not exist (`-32601 Unknown DOM method: \
+                    disable`) — which is why this fetcher does not pair its \
+                    handshake with a disable the way `fetch_chromium` does. If the \
+                    new tag emits `DOM.*` events, that omission becomes Task 17d's \
+                    D1 live on the DEFAULT engine; if it also implements \
+                    `DOM.disable`, the fix is `top_layer_backend_ids`' shape",
+            needle: "Unknown DOM method",
+            // `fetch_chromium.rs` carries the obscura reading because its
+            // enabler/disabler census is justified BY it: an engine-blind
+            // "always disable after the tree read" refactor would break the
+            // DEFAULT engine. A genuine second copy of one fact (判据 §1),
+            // written down here instead of left to be found.
+            homes: &[
+                "src/browser/page_state/fetch_chromium.rs",
+                "src/browser/page_state/fetch_obscura.rs",
+            ],
+        },
+    ];
+
+    /// The dated claims as the failure message prints them.
+    fn dated_claim_list() -> String {
+        DATED_CLAIMS
+            .iter()
+            .map(|c| format!("\n  * {}", c.claim))
+            .collect()
+    }
+
+    /// **In what situation does this go red?** Two situations, named before the
+    /// guard was written — a stamp that cannot answer that question is 判据
+    /// §2's fourth face, which is precisely what the previous version of this
+    /// one was.
+    ///
+    /// 1. **The pin moves.** Somebody edits `obscura_tag!()` in
+    ///    `runtimes::specs` and does not re-read: every claim in
+    ///    [`DATED_CLAIMS`] becomes a statement about a binary Aleph no longer
+    ///    installs, and neither half of the stamp matches it any more.
+    /// 2. **A second author appears — once per claim class.** A file outside a
+    ///    row's `homes` starts carrying that row's needle. Seven distinct reds,
+    ///    where the previous version had one.
+    ///
+    /// The third situation belongs to the sibling test: the receipt gets filled
+    /// from the release page. See
+    /// [`the_artefact_stamp_records_the_binary_not_the_published_archive`].
     ///
     /// # The DOM-agent reading, and why an ABSENCE has to be dated
     ///
@@ -1788,105 +2149,191 @@ mod tests {
     /// call. This fetcher sends `DOM.getDocument(-1, true)` at `:454` and does
     /// **not** disable — and the reason is a fact about the BUILD, which is
     /// exactly the kind of fact this stamp exists to expire. Measured twice,
-    /// independently, on the installed v0.2.2 artefact with default flags:
+    /// independently, on the installed v0.2.2 artefact with default flags, with
+    /// a Chromium control in the third column:
     ///
-    /// | | obscura v0.2.2 |
-    /// |---|---|
-    /// | unsolicited `DOM.*` with no handshake | **0** |
-    /// | unsolicited `DOM.*` after `DOM.getDocument(-1, true)` | **0** |
-    /// | `DOM.disable` | **`-32601 Unknown DOM method: disable`** |
-    /// | `DOM.enable` | accepted, and still emits nothing |
+    /// | | obscura v0.2.2 | Chromium |
+    /// |---|---|---|
+    /// | unsolicited `DOM.*` with no handshake | **0** | 0 |
+    /// | unsolicited `DOM.*` after `DOM.getDocument(-1, true)` | **0** | many |
+    /// | `DOM.disable` | **`-32601 Unknown DOM method: disable`** | `ok` |
+    /// | `DOM.enable` | accepted, and still emits nothing | — |
+    /// | `alert()` → `Page.javascriptDialogOpening` | **no frames** | fires |
+    /// | `Runtime.evaluate` after `alert()` | **0 ms, value 2** | times out at 4000 ms |
+    /// | `Page.handleJavaScriptDialog` | unknown method | `ok` |
     ///
     /// So there is nothing to disable, and nothing to disable it WITH — the two
     /// halves point the same way today and would come apart the moment either
     /// changes. Without this entry the absence reads as "we did not look over
-    /// there", which is what the previous round's scope sentence actually said.
-    /// If v0.3 emits `DOM.*` events, D1 becomes live on the **default** engine
-    /// with an undisabled `getDocument` sitting in this file, and this stamp is
-    /// the thing that says so.
+    /// there".
     ///
     /// **The top-layer claim is the most expensive one on that list — which is
-    /// why it, and not the newest, is the one to re-read FIRST — so it is worth
-    /// saying what its rot looks like.** obscura is the
+    /// why it, and not the newest, is the one to re-read FIRST.** obscura is the
     /// DEFAULT engine. If v0.3 implements a top layer and this stamp is bumped
-    /// without re-reading, `cascade_effective_styles` goes on ORing
-    /// `opacity_zero` down DOM parent edges into a modal dialog that the engine
-    /// now paints outside them — and the way anyone finds out is a user whose
+    /// without re-reading, [`cascade_effective_styles`] goes on ORing
+    /// `opacity_zero` down DOM parent edges into a modal dialog the engine now
+    /// paints outside them — and the way anyone finds out is a user whose
     /// dialog is missing from the page state, with the agent told the page does
-    /// not contain the thing the user is looking at. That is the same defect the
-    /// twin's Task 17d arm closed on Chromium, arriving on the other engine by
-    /// a version bump instead of by a code change (判据 §16).
+    /// not contain the thing the user is looking at. That is the same defect
+    /// the twin's Task 17d arm closed on Chromium, arriving on the other engine
+    /// by a version bump instead of by a code change (判据 §16).
     ///
-    /// **What it does not buy, stated because a stamp reads like a warranty —
-    /// and there are TWO doors past it, not the one this doc first named.**
+    /// **What it does not buy — and there are TWO doors past it, not one.**
     /// `OBSCURA_TAG` names the build the ledger INSTALLS.
     /// `diagnostics::checks::engine_missing::run_obscura` reaches a binary by:
     ///
     /// 1. the **config pin** `[general.browser.obscura] binary_path` — resolved
     ///    FIRST (`engine_missing.rs:333-363`), returning found-or-missing
     ///    without ever consulting the ledger, and advertised to the operator in
-    ///    the install hint itself. This is the nearer door, and the first
-    ///    version of this doc did not name it;
+    ///    the install hint itself. This is the nearer door;
     /// 2. then a `which` PATH walk (`:366`).
     ///
     /// Either one hands Aleph an operator-supplied build of any version with
     /// this stamp green. It covers the pinned path, which is the path Aleph
     /// controls, and it can cover no other — 判据 §5, and the list is the
     /// resolver's, not a remembered one.
-    ///
-    /// **Its SCOPE is this file, and that is now a guard rather than a
-    /// sentence.** The message enumerates claims in `fetch_obscura.rs`; the
-    /// round that added this test also put an uncited engine claim in `raw.rs`,
-    /// outside the scope and outside the expiry, which is 判据 §1's fourth face
-    /// arriving the same hour the stamp did. Prose could not have caught that,
-    /// so the second assertion below counts the files in `src/` that mention
-    /// `getComputedStyle` at all — the spelling any second author of an
-    /// engine's computed-style behaviour must use, whether or not they cite a
-    /// line. **In what situation does it go red?** When a second file starts
-    /// making, or calling, `getComputedStyle` claims: exactly the drift that
-    /// happened, and the guard is derived from a whole-`src/` walk rather than
-    /// from an allowlist.
     #[test]
     fn the_obscura_source_claims_here_name_the_build_they_were_read_on() {
-        let homes = files_mentioning("getComputedStyle");
+        for c in DATED_CLAIMS {
+            let found = files_mentioning(c.needle);
+            let expected: Vec<String> = c.homes.iter().map(|h| (*h).to_string()).collect();
+            assert_eq!(
+                found,
+                expected,
+                "the claim dated by this stamp — {claim} — is spelled `{needle}`, \
+                 and the set of files carrying that spelling moved. Every file \
+                 here is a copy of one engine fact; a new one is a second author \
+                 whose claims nothing dates, which is how an earlier round left \
+                 an uncited one in raw.rs. Either move the claim into \
+                 fetch_obscura.rs, or widen this row — which widens the failure \
+                 message with it, because they are the same list. \
+                 Expected: {expected:?}",
+                claim = c.claim,
+                needle = c.needle,
+            );
+        }
         assert_eq!(
-            homes,
-            vec!["src/browser/page_state/fetch_obscura.rs".to_string()],
-            "`getComputedStyle` must have exactly one home in src/, and it must \
-             be the file this stamp expires. Every other file that names it is \
-             a second author of an engine's computed-style behaviour whose \
-             claims nothing dates — which is how the last round left an uncited \
-             one in raw.rs. Either move the claim here, or widen the stamp's \
-             message and this assertion together. Found: {homes:?}"
-        );
-        assert_eq!(
-            OBSCURA_SOURCE_READ_AT,
+            OBSCURA_READ_ON_TAG,
             crate::runtimes::OBSCURA_TAG,
             "the pinned obscura release moved. Every claim in fetch_obscura.rs \
-             that cites `crates/obscura-…` was read on {OBSCURA_SOURCE_READ_AT} \
-             and is now unverified — re-read them in the new checkout and \
-             re-stamp this constant. The ones that decide behaviour: no `cursor` \
-             key in the computed-style map (paint.rs), `visibility` served as the \
-             element's OWN value (paint.rs, which is what cascade_effective_styles \
-             compensates for), `:focus` matching false unconditionally \
-             (obscura-dom/src/selector.rs), `pierce` ignored, a zero quad \
-             returned successfully for `display:none`, and NO TOP LAYER — \
-             showModal() sets an attribute and a flag under the comment \"Modal \
-             top-layer/focus/render is layout (out of scope)\" \
-             (obscura-js/js/bootstrap.js:3904-3905) and `top_layer` has zero \
-             occurrences in obscura-render. Re-read that one FIRST: if the new \
-             tag paints a top layer, cascade_effective_styles deletes every open \
-             modal dialog inside a faded container from the page state on the \
-             DEFAULT engine, silently, and fetch_chromium::cascade_opacity's \
-             top-layer arm is the shape the fix has to take here too. And the \
-             DOM AGENT: on v0.2.2, DOM.getDocument(-1, true) at :454 turns on NO \
-             event stream (0 unsolicited DOM.* events, measured twice) and \
-             DOM.disable does not exist (-32601 Unknown DOM method: disable), \
-             which is why this fetcher does not pair its handshake with a \
-             disable the way fetch_chromium does. If the new tag emits DOM.* \
-             events, that omission becomes Task 17d's D1 live on the DEFAULT \
-             engine — and if it also implements DOM.disable, the fix is the \
-             same shape as top_layer_backend_ids'."
+             was read on {OBSCURA_READ_ON_TAG} — the `crates/obscura-…` \
+             citations against that tag, the behavioural readings against the \
+             binary that hashes to {OBSCURA_READ_ON_SHA256} — and all of them \
+             are now unverified. Re-read them on the new build and re-stamp \
+             BOTH constants: the digest is the half you cannot fill in without \
+             holding the artefact (`shasum -a 256` the extracted executable, \
+             NOT the release archive — the archive's digest is published, which \
+             is what makes it the wrong number). The classes that decide \
+             behaviour:{claims}\n\
+             Re-read the top layer FIRST — not because it is newest but because \
+             it is the most expensive: if the new tag paints one, \
+             cascade_effective_styles goes on ORing opacity_zero down DOM parent \
+             edges into a modal the engine now paints outside them, and deletes \
+             every open dialog inside a faded container from the page state on \
+             the DEFAULT engine, silently. fetch_chromium::cascade_opacity's \
+             top-layer arm is the shape the fix has to take here too (判据 §16).",
+            claims = dated_claim_list(),
+        );
+    }
+
+    /// Every 64-character lowercase-hex run in `line`, and nothing shorter or
+    /// longer: a sha256 as it is written down, not any hex it is embedded in.
+    fn sha256_runs(line: &str) -> Vec<&str> {
+        let bytes = line.as_bytes();
+        let mut out = Vec::new();
+        let mut start: Option<usize> = None;
+        for i in 0..=bytes.len() {
+            let hex = i < bytes.len() && matches!(bytes[i], b'0'..=b'9' | b'a'..=b'f');
+            match (hex, start) {
+                (true, None) => start = Some(i),
+                (false, Some(s)) => {
+                    if i - s == 64 {
+                        out.push(&line[s..i]);
+                    }
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// **In what situation does this go red?** When [`OBSCURA_READ_ON_SHA256`]
+    /// is filled with the release ARCHIVE's digest instead of the extracted
+    /// binary's.
+    ///
+    /// That is not a hypothetical shape. The archive's digest is published on
+    /// the release page and recorded in this repository, so it is **copyable by
+    /// someone who never held the artefact** — the same defect as copying the
+    /// tag from the pin, wearing a longer number — and a draft of the brief
+    /// that commissioned this stamp attached exactly that number to the
+    /// binary's path. The binary's own digest is published nowhere.
+    ///
+    /// The comparand is READ from the tree rather than restated here: a second
+    /// literal spelling of the archive digest would be two copies of one fact
+    /// free to drift, and an assertion between two literals written in the same
+    /// breath tests nothing at all (判据 §10). If that file stops yielding an
+    /// archive digest this goes RED naming it, rather than passing quietly — a
+    /// missing comparand can only say "I don't know" (判据 §8).
+    ///
+    /// **Its limit, stated:** it knows the digests this repository records
+    /// today. A future release's published archive digest is not among them, so
+    /// this catches the confusion for the artefact in hand and not for the next
+    /// one. It cannot fail falsely, though — an archive and the executable
+    /// inside it are different bytes by construction.
+    #[test]
+    fn the_artefact_stamp_records_the_binary_not_the_published_archive() {
+        assert_eq!(
+            OBSCURA_READ_ON_SHA256.len(),
+            64,
+            "the artefact receipt must be a whole sha256. A 64-character digest \
+             elided to `9e14e821fc…` is a value nobody can check against a file, \
+             which is the one thing this constant exists to be."
+        );
+        assert!(
+            OBSCURA_READ_ON_SHA256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+            "the artefact receipt must be lowercase hex, as `shasum -a 256` \
+             prints it: {OBSCURA_READ_ON_SHA256}"
+        );
+
+        let readme = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/README.md");
+        let text = std::fs::read_to_string(&readme).unwrap_or_else(|e| {
+            panic!(
+                "this guard compares the artefact receipt against the release \
+                 ARCHIVE digests this repo records, and {} could not be read \
+                 ({e}). That is a red, not a skip: with no comparand the guard \
+                 knows nothing, and a guard that answers \"I don't know\" as \
+                 \"fine\" is the shape it exists to refuse (判据 §8). Point it \
+                 at wherever the evidence README moved to.",
+                readme.display()
+            )
+        });
+        let published: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains(".tar.gz") || l.contains(".zip"))
+            .flat_map(sha256_runs)
+            .collect();
+        assert!(
+            !published.is_empty(),
+            "no archive digest was found in {}, so this guard has nothing to \
+             compare against and is certifying an absence. It recorded one when \
+             it was written — the `obscura-aarch64-macos.tar.gz` sha256 on the \
+             `Binary measured:` line.",
+            readme.display()
+        );
+        assert!(
+            !published.contains(&OBSCURA_READ_ON_SHA256),
+            "OBSCURA_READ_ON_SHA256 is a release ARCHIVE's digest, not the \
+             extracted binary's. The archive digest is published on the release \
+             page and recorded in {}, so writing it here proves nothing about \
+             having held the artefact — which is the whole and only job of this \
+             constant. Hash the executable the readings were taken on: \
+             `shasum -a 256 ~/.aleph/runtimes/obscura/<tag>/obscura`. Archive \
+             digests found: {published:?}",
+            readme.display()
         );
     }
 
