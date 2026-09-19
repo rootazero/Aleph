@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17c probe page</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  /* The same three containers `t17b-page.html` carries, each now holding an
+     `<iframe>` instead of an element. The question T17b answered INSIDE one
+     document is open again at the frame boundary, because the child document's
+     root inherits nothing from the `<iframe>` element. */
+  #op-box   { opacity:0; }
+  #vis-box  { visibility:hidden; }
+  #none-box { display:none; }
+  /* The NEGATIVE control, and it carries the nested frame too: a cross-frame
+     cascade that marks every child document instead of the ones under a
+     transparent owner passes every positive assertion and fails here. */
+  #plain-box { }
+  iframe { display:block; width:260px; height:120px; border:0; }
+  /* The OWNER WITH NO READING. `display: contents` is what T17b's census found generates no
+     layout entry at all, so the `<iframe>` itself would arrive with `computed: None` while
+     sitting inside the transparent container — the one shape where "read the owner's cascaded
+     flag" has nothing to read. Whether Chrome then lays the child document out at all is the
+     measurement; the spec says `display: contents` computes to `none` on a replaced element,
+     and a spec sentence is not a reading. */
+  /* The `<iframe>` DECLARES the transparency itself, with nothing hiding above it. It separates
+     "the boundary reads the owner's CASCADED flag" from "the boundary reads any flag at all":
+     read the owner's own styles row instead of the cascade's output and this one still works
+     while `#op-frame`'s child goes visible. */
+  #self-frame     { opacity:0; }
+  #contents-box   { opacity:0; }
+  #contents-frame { display:contents; }
+</style>
+</head>
+<body>
+  <main id="main">
+    <div id="op-box"><iframe id="op-frame" title="child under opacity zero"></iframe></div>
+    <div id="vis-box"><iframe id="vis-frame" title="child under visibility hidden"></iframe></div>
+    <div id="none-box"><iframe id="none-frame" title="child under display none"></iframe></div>
+    <div id="plain-box"><iframe id="plain-frame" title="child under nothing"></iframe></div>
+    <div id="self-box"><iframe id="self-frame" title="child under a self-transparent frame"></iframe></div>
+    <div id="contents-box"><iframe id="contents-frame" title="child under a boxless owner"></iframe></div>
+    <button id="page-control" type="button">page control</button>
+  </main>
+  <script>
+    // `?child=<url>&inner=<url>`. The `op` and `plain` frames get the INNER frame as well, so
+    // the capture carries a frame nested inside a frame on both the positive and the negative
+    // side — a one-hop cross-frame cascade passes a single-frame fixture, which is the trap this
+    // task line has fallen into three times.
+    var p = new URL(location.href).searchParams;
+    var child = p.get('child');
+    var inner = p.get('inner');
+    function wire(id, tag, withInner) {
+      var f = document.getElementById(id);
+      if (!child) { f.remove(); return; }
+      var u = child + '?tag=' + encodeURIComponent(tag);
+      if (withInner && inner) { u += '&inner=' + encodeURIComponent(inner); }
+      if (p.get('modal')) { u += '&modal=1'; }
+      f.src = u;
+    }
+    wire('op-frame', 'op', true);
+    wire('vis-frame', 'vis', false);
+    wire('none-frame', 'none', false);
+    wire('plain-frame', 'plain', true);
+    wire('self-frame', 'self', false);
+    wire('contents-frame', 'contents', false);
+  </script>
+</body>
+</html>

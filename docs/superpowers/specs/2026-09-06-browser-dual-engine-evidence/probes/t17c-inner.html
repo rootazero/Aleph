@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>T17c inner frame</title>
+<style>
+  html,body { margin:0; padding:0; font:13px/1.2 monospace; background:#fff; }
+  #i-probe { position:absolute; left:8px; top:8px; width:100px; height:16px; background:#ccf; }
+  #i-btn   { position:absolute; left:8px; top:28px; }
+</style></head>
+<body>
+  <div id="i-probe">inner probe</div>
+  <button id="i-btn" type="button">inner button</button>
+  <script>
+    var tag = new URL(location.href).searchParams.get('tag') || 'x';
+    Array.prototype.slice.call(document.querySelectorAll('[id]'))
+      .forEach(function (el) { el.id = el.id + '-' + tag; });
+  </script>
+</body>
+</html>

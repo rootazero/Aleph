@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>T17c child frame</title>
+<style>
+  html,body { margin:0; padding:0; font:14px/1.2 monospace; background:#fff; }
+  #c-probe { position:absolute; left:10px; top:10px; width:120px; height:18px; background:#cfc; }
+  #c-btn   { position:absolute; left:10px; top:34px; }
+  #c-inner { position:absolute; left:10px; top:62px; width:200px; height:50px; border:0; }
+</style></head>
+<body>
+  <div id="c-probe">child probe</div>
+  <button id="c-btn" type="button">child button</button>
+  <iframe id="c-inner" title="inner frame"></iframe>
+  <!-- OPT-IN via `?modal=1`, and deliberately NOT in the committed capture: a fixture carrying an
+       open modal would also need `DOM.getTopLayerElements`' answer committed beside it, and a
+       recorded empty set over a page that has one is the lie `real_captures()` warns about. This
+       shape is measured by PIXELS instead — does a modal in the CHILD document escape the
+       PARENT's transparent/hidden container, the way one escapes an in-document one? -->
+  <dialog id="c-dlg"><button id="c-dlg-btn" type="button">modal button</button></dialog>
+  <script>
+    // Every id gets the `?tag=` suffix, because all four frames load THIS file: without it the
+    // capture carries four `#c-probe`s and an assertion naming one of them would be about
+    // whichever document the lookup happened to reach first.
+    var p = new URL(location.href).searchParams;
+    var tag = p.get('tag') || 'x';
+    var ids = Array.prototype.slice.call(document.querySelectorAll('[id]'));
+    ids.forEach(function (el) { el.id = el.id + '-' + tag; });
+    var inner = p.get('inner');
+    var f = document.getElementById('c-inner-' + tag);
+    if (inner) { f.src = inner + '?tag=' + encodeURIComponent(tag); } else { f.remove(); }
+    var dlg = document.getElementById('c-dlg-' + tag);
+    if (p.get('modal')) { dlg.showModal(); } else { dlg.remove(); }
+  </script>
+</body>
+</html>

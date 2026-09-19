@@ -880,8 +880,17 @@ pub fn stitch_snapshots(
     loaders: &HashMap<String, String>,
 ) -> Result<RawDom, BrowserError> {
     let parent_snapshot = decode(parent)?;
-    let (mut frames, mut unreached) =
-        frames_of(&parent_snapshot, (0, 0), loaders, true, parent_top_layer)?;
+    let (mut frames, mut unreached) = frames_of(
+        &parent_snapshot,
+        (0, 0),
+        loaders,
+        true,
+        parent_top_layer,
+        // The PAGE's own document has no owning element, so nothing above it
+        // hides it. This is the one place that value is a fact rather than an
+        // argument.
+        FrameHiding::VISIBLE,
+    )?;
     // **Where the parent's node space ends.** Everything `frames_of` produced
     // above came from ONE capture and therefore from one renderer, so those ids
     // are mutually comparable; everything appended below comes from a different
@@ -904,13 +913,29 @@ pub fn stitch_snapshots(
         // child document at another child's element's coordinates — plausible
         // numbers, wrong page (判据 §12: a value chosen in one ordering and
         // applied in another names a different thing).
-        let base = owner_origin(&frames[..parent_frames], child.owner_backend_node_id)?;
+        let placement = owner_placement(&frames[..parent_frames], child.owner_backend_node_id)?;
         let snapshot = decode(child.raw)?;
         // `child.top_layer`, never `parent_top_layer`. Same reason as the slice above and the
         // empty `accounted` set below: these are three different node spaces that share one
         // integer type, and the OOPIF fixtures collide on 15 ids.
-        let (child_frames, child_unplaceable) =
-            frames_of(&snapshot, base, loaders, false, child.top_layer)?;
+        //
+        // `placement.hiding` is the CROSS-RENDERER half of the frame boundary, and it is the
+        // same defect as the same-renderer one with a different transport: an `<iframe>` in a
+        // faded modal whose content is cross-ORIGIN is a separate target, so its document is not
+        // in `parent` at all and `cascade_across_frames` cannot reach it from there. Measured on
+        // Chrome 153.0.8010.48 (`…/probes/t17c-frame.mjs --oopif`): the parent capture comes back
+        // with ONE document, and the child target's own capture has seven laid-out nodes all
+        // reporting `opacity: "1"` while their owner sits in an `opacity: 0` container. This
+        // argument seeds that capture's document 0, and the BFS inside carries it to the child's
+        // own sub-frames.
+        let (child_frames, child_unplaceable) = frames_of(
+            &snapshot,
+            placement.origin,
+            loaders,
+            false,
+            child.top_layer,
+            placement.hiding,
+        )?;
         frames.extend(child_frames);
         unreached.extend(child_unplaceable);
         child_snapshots.push(snapshot);
@@ -1047,12 +1072,21 @@ fn decode(raw: &serde_json::Value) -> Result<Snapshot, BrowserError> {
 /// `top_layer` belongs to THIS capture's renderer and is passed down to every
 /// document in it, which is right for the same reason it would be wrong across
 /// captures: every document of one `captureSnapshot` shares one node space.
+///
+/// `inherited` is what the element owning **this capture's document 0** says
+/// about hidden-ness, which is [`FrameHiding::VISIBLE`] for a page's own
+/// capture and the owner `<iframe>`'s cascaded reading for a child capture —
+/// see [`cascade_across_frames`], which spends it, and [`owner_placement`],
+/// which reads it. It is a parameter for the same reason `top_layer` is: a
+/// child capture's owner lives in a different renderer's node space, so this
+/// function cannot go and look.
 fn frames_of(
     snapshot: &Snapshot,
     base: (i32, i32),
     loaders: &HashMap<String, String>,
     is_page_root: bool,
     top_layer: &HashSet<u64>,
+    inherited: FrameHiding,
 ) -> Result<(Vec<RawFrame>, Vec<UnreachedFrame>), BrowserError> {
     let strings = &snapshot.strings;
     // Before anything reads by index. `frame_offsets` indexes `bounds` by a
@@ -1064,7 +1098,32 @@ fn frames_of(
     // Built once and shared, so "which layout entry is this node's box" has
     // exactly one derivation (判据 §12).
     let slots: Vec<HashMap<usize, usize>> = snapshot.documents.iter().map(layout_slots).collect();
-    let offsets = frame_offsets(&snapshot.documents, &slots, base);
+    // The same for "which element owns this document" — one map, two payloads.
+    let owner = frame_owners(&snapshot.documents);
+    let offsets = frame_offsets(&snapshot.documents, &slots, base, &owner);
+
+    // **EVERY document is parsed before ANY of them becomes a frame**, and that
+    // is an ordering constraint rather than a refactor. [`cascade_across_frames`]
+    // reads the `<iframe>` element that owns each document, which can live in a
+    // document later in `documents[]` than the one it owns — the array is not
+    // ordered by ownership, which is exactly why [`frame_offsets`] is a BFS and
+    // not a forward sweep. Parsing inside the assembly loop below would hand it
+    // an owner that has not been read yet.
+    //
+    // It also parses documents the loop below then DROPS (an unplaceable one).
+    // That is a few nodes of wasted work on a shape that is already an error
+    // path, and it buys the cross-frame pass a complete `documents`-indexed
+    // array: a `Vec` with holes in it would be a second answer to "which
+    // document is this", beside `offsets`. It brings NO new failure with it —
+    // `parse_nodes` returns a `Result` and has no `Err` arm in its body, so a
+    // document that used to be dropped silently cannot start refusing the
+    // capture by being parsed (checked rather than assumed, because "it is only
+    // extra work" is how a widened error surface gets waved through).
+    let mut parsed: Vec<Vec<RawNode>> = Vec::with_capacity(snapshot.documents.len());
+    for (doc_index, doc) in snapshot.documents.iter().enumerate() {
+        parsed.push(parse_nodes(doc, &slots[doc_index], strings, top_layer)?);
+    }
+    cascade_across_frames(&mut parsed, &owner, inherited);
 
     let mut frames = Vec::with_capacity(snapshot.documents.len());
     let mut unplaceable = Vec::new();
@@ -1116,10 +1175,80 @@ fn frames_of(
             // state and stays in the markup after the agent itself unchecks
             // the box. See `RawFrame::live_properties_observed`.
             live_properties_observed: true,
-            nodes: parse_nodes(doc, &slots[doc_index], strings, top_layer)?,
+            // Taken, not re-parsed: this document's nodes were built and
+            // cross-frame-cascaded above, and parsing again here would discard
+            // the cascade for every frame (判据 §1 — the second derivation is
+            // the one that goes quietly wrong).
+            nodes: std::mem::take(&mut parsed[doc_index]),
         });
     }
     Ok((frames, unplaceable))
+}
+
+/// Which element owns each document: `owner[child document] = (owning
+/// document, node index within it)`.
+///
+/// One capture's `contentDocumentIndex`, read once and handed to both walks
+/// that need it — [`frame_offsets`] for the coordinate payload and
+/// [`cascade_across_frames`] for the hidden-ness payload. They are the same
+/// edge set, so deriving it twice would be 判据 §12 on day one: two derivations
+/// of one ordering, free to answer differently the day one of them gains a
+/// filter.
+///
+/// **What lifting it out of `frame_offsets` costs, stated rather than left to
+/// be discovered.** `frame_offsets` used to build this itself and therefore
+/// could not be handed a map belonging to a different capture; now it can be,
+/// and a caller that did so would place documents by another page's frame tree
+/// with coordinates that look entirely plausible. What keeps that closed is
+/// proximity and nothing stronger: both calls are three lines apart in
+/// [`frames_of`], on the same `snapshot.documents`, and there is no other call
+/// site in the tree. A second caller is the moment to make the pairing a type
+/// rather than a convention.
+///
+/// A `contentDocumentIndex` entry whose node index or child index is not a
+/// `usize` is dropped rather than guessed: it is a capture, i.e. a system
+/// boundary (P7).
+fn frame_owners(documents: &[DocumentSnapshot]) -> HashMap<usize, (usize, usize)> {
+    let mut owner: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (d, doc) in documents.iter().enumerate() {
+        let rare = &doc.nodes.content_document_index;
+        for (slot, &node_index) in rare.index.iter().enumerate() {
+            let Some(&child) = rare.value.get(slot) else {
+                continue;
+            };
+            if let (Ok(node), Ok(child)) = (usize::try_from(node_index), usize::try_from(child)) {
+                owner.insert(child, (d, node));
+            }
+        }
+    }
+    owner
+}
+
+/// What an `<iframe>` above a document says about whether the user can see it.
+///
+/// Two flags and not four, because two of `Computed`'s four have no business
+/// crossing a frame boundary and that is a MEASUREMENT rather than a
+/// simplification — see [`cascade_across_frames`], which is the one place the
+/// per-flag answers are derived.
+///
+/// [`Self::VISIBLE`] is named rather than derived from `Default`, for the same
+/// reason [`parse_snapshot`] takes `top_layer` as a parameter: "nothing above
+/// this capture hides it" is a real answer for a PAGE's root document and a
+/// forgotten argument for a child capture's, and the two must not share a
+/// spelling that appears by omission (判据 §8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameHiding {
+    opacity_zero: bool,
+    visibility_hidden: bool,
+}
+
+impl FrameHiding {
+    /// Nothing above this document hides it. True of a page's own root
+    /// document, and of nothing else without a reading to say so.
+    const VISIBLE: Self = Self {
+        opacity_zero: false,
+        visibility_hidden: false,
+    };
 }
 
 /// Where each document's origin sits in page coordinates.
@@ -1146,31 +1275,23 @@ fn frames_of(
 /// undefined (判据 §14). The caller drops those documents and names them in
 /// [`RawDom::unreached_frames`]. Transitive by construction — a document whose
 /// parent has no offset gets none either, and is named in its turn.
+///
+/// `owner` is [`frame_owners`]' map, PASSED IN rather than built here. Task 17c
+/// needed the same walk for a different payload and building it twice would
+/// have been two derivations of one ordering (判据 §12). What that costs is
+/// stated on `frame_owners` itself.
 fn frame_offsets(
     documents: &[DocumentSnapshot],
     slots: &[HashMap<usize, usize>],
     base: (i32, i32),
+    owner: &HashMap<usize, (usize, usize)>,
 ) -> Vec<Option<(i32, i32)>> {
-    // owner[child document] = (owning document, node index within it)
-    let mut owner: HashMap<usize, (usize, usize)> = HashMap::new();
-    for (d, doc) in documents.iter().enumerate() {
-        let rare = &doc.nodes.content_document_index;
-        for (slot, &node_index) in rare.index.iter().enumerate() {
-            let Some(&child) = rare.value.get(slot) else {
-                continue;
-            };
-            if let (Ok(node), Ok(child)) = (usize::try_from(node_index), usize::try_from(child)) {
-                owner.insert(child, (d, node));
-            }
-        }
-    }
-
     let mut offsets: Vec<Option<(i32, i32)>> = vec![None; documents.len()];
     offsets[0] = Some(base);
     let mut queue = VecDeque::from([0usize]);
     while let Some(parent) = queue.pop_front() {
         let parent_offset = offsets[parent].unwrap_or(base);
-        for (&child, &(owner_doc, owner_node)) in &owner {
+        for (&child, &(owner_doc, owner_node)) in owner {
             if owner_doc != parent || child >= offsets.len() || offsets[child].is_some() {
                 continue;
             }
@@ -1244,13 +1365,44 @@ fn node_rect(
     rect_from(doc.layout.bounds.get(*slots.get(&node_index)?)?)
 }
 
-/// Where an already-parsed node sits in PAGE coordinates — its frame's offset
-/// plus its own frame-local box.
+/// Everything a child capture needs from the element that owns it, **read in
+/// one lookup**.
+///
+/// Two facts, and the reason they travel together is that they are two answers
+/// about ONE node: where its content document goes, and whether the user can
+/// see it. Asking twice would mean two searches for "which node is the owner",
+/// free to land on different nodes the day either one gains a filter (判据 §12).
+struct OwnerPlacement {
+    /// Where the owned document's origin sits in PAGE coordinates — the frame's
+    /// offset plus the owner's own frame-local box.
+    origin: (i32, i32),
+    /// The owner's CASCADED hidden-ness, i.e. what
+    /// [`cascade_opacity`] left in its `computed` and not what the element
+    /// declared. An `<iframe>` inside an `opacity: 0` container reads `"1"` for
+    /// itself, so the declaration is the wrong reading — and an `<iframe>` the
+    /// engine put in the top layer is NOT transparent under such a container,
+    /// which this reading carries for free because the cascade already skipped
+    /// its parent edge.
+    hiding: FrameHiding,
+}
+
+/// Where an already-parsed node sits in PAGE coordinates, and what it says
+/// about hidden-ness.
 ///
 /// Reads the parsed frames rather than the wire again, so the owner's rect has
 /// one derivation (判据 §1). An owner with no box hands back its frame's origin,
 /// for the reason [`frame_offsets`] gives.
-fn owner_origin(frames: &[RawFrame], backend_node_id: u64) -> Result<(i32, i32), BrowserError> {
+///
+/// An owner with **no `computed` at all** hands back [`FrameHiding::VISIBLE`],
+/// which is the fail-closed direction here and not a claim: "Chrome laid out no
+/// box for this node" is not entitled to say the content behind it is hidden,
+/// and writing the flag would manufacture a reading out of an absence
+/// (判据 §8). What that costs is measured in [`cascade_across_frames`], where
+/// the same rule applies to the same shape.
+fn owner_placement(
+    frames: &[RawFrame],
+    backend_node_id: u64,
+) -> Result<OwnerPlacement, BrowserError> {
     for frame in frames {
         let Some(node) = frame
             .nodes
@@ -1259,9 +1411,15 @@ fn owner_origin(frames: &[RawFrame], backend_node_id: u64) -> Result<(i32, i32),
         else {
             continue;
         };
-        return Ok(node.rect.as_ref().map_or(frame.offset, |r| {
-            (frame.offset.0 + r.x, frame.offset.1 + r.y)
-        }));
+        return Ok(OwnerPlacement {
+            origin: node.rect.as_ref().map_or(frame.offset, |r| {
+                (frame.offset.0 + r.x, frame.offset.1 + r.y)
+            }),
+            hiding: FrameHiding {
+                opacity_zero: node.computed.is_some_and(|c| c.opacity_zero),
+                visibility_hidden: node.computed.is_some_and(|c| c.visibility_hidden),
+            },
+        });
     }
     Err(BrowserError::ActionFailed(format!(
         "no element with backendNodeId {backend_node_id} is in this capture, so \
@@ -1558,8 +1716,11 @@ fn parse_nodes(
 ///   and it is named where it happens.
 /// * **`display` has nothing to OR.** Chrome lays out no box for a
 ///   `display: none` subtree, so those nodes have no styles row, `computed` is
-///   `None`, and `rect: None` carries the fact. Measured across all five
-///   captures in `fixtures/`: **zero** laid-out nodes report `display: none`.
+///   `None`, and `rect: None` carries the fact. Measured across all seven real
+///   captures in `fixtures/`: **zero** laid-out nodes report `display: none`
+///   — which is the `none` count asserted at the end of
+///   `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
+///   so this sentence rots loudly rather than quietly.
 ///
 /// # The TOP LAYER leaves the group without declaring anything — the second arm
 ///
@@ -1734,15 +1895,17 @@ fn parse_nodes(
 /// and that framing hid the one that matters most.** An entry that says
 /// "reaches too far" belongs here as much as one that says "does not reach".
 ///
-/// 1. **UNDER-reports: across a frame boundary** — `parse_nodes` runs per
+/// 1. **UNDER-reports: across a frame boundary.** `parse_nodes` runs per
 ///    document and `parent` indexes that document only, so an `<iframe>` inside
 ///    an `opacity: 0` container leaves every node of its content document
-///    reporting `opacity: 1`. Measured: `t17b-opacity.mjs --child` nests a
-///    same-origin frame in a third transparent container and all seven
-///    laid-out child nodes come back `"1"` while the owner's container reports
-///    `"0"`. **Task 17c**, deliberately not folded in here — it must run after
-///    every document is parsed, so it cannot live in `parse_nodes`, and it
-///    should share [`frame_offsets`]' owner map rather than re-derive it.
+///    reporting `opacity: 1` — measured by `t17b-opacity.mjs --child`, and
+///    again on the nested shape by `t17c-frame.mjs`. **CLOSED by Task 17c**, in
+///    [`cascade_across_frames`] rather than here: it must run after every
+///    document is parsed, so it cannot live in `parse_nodes`. It is kept on the
+///    list rather than deleted because a list that silently loses an entry
+///    reads as a list that never had one — and because what it closed is the
+///    frame boundary INSIDE one capture and across a child capture, not the two
+///    residuals that pass names for itself.
 /// 2. **UNDER-reports: opacity that composes below the threshold without any
 ///    single element reaching zero.** `computed_from` maps `opacity <= 0.0`,
 ///    and CSS multiplies group opacity down the tree, so two nested
@@ -1755,7 +1918,7 @@ fn parse_nodes(
 ///    (判据 §17). It is the LESS COMMON direction here, which is a different
 ///    and smaller claim.
 /// 3. **Refused rather than followed: a parent index that is out of range, or
-///    that points forward or at itself.** Measured across all seven fixtures:
+///    that points forward or at itself.** Measured across all eight fixtures:
 ///    zero of any of them, so this is a direction to fail in and not an
 ///    observed loss. The out-of-range case is the one the guard below still
 ///    exists for — an earlier version of this entry named only forward/self,
@@ -1857,11 +2020,19 @@ fn cascade_opacity(nodes: &mut [RawNode], top_layer: &HashSet<u64>) {
             continue;
         }
         // `false` here is the IDENTITY of a monotone OR, not a claim that the
-        // parent is opaque — the same reason `build.rs`'s fold is safe to start
-        // from `false` (`build.rs:919`). A chain this pass cannot walk
-        // therefore adds nothing and leaves Chrome's own reading standing; it
-        // does not fail OPEN, because an identity element in a monotone fold is
-        // not an answer.
+        // parent is opaque. A chain this pass cannot walk therefore adds
+        // nothing and leaves Chrome's own reading standing; it does not fail
+        // OPEN, because an identity element in a monotone fold is not an
+        // answer.
+        //
+        // This sentence used to end "— the same reason `build.rs`'s fold is
+        // safe to start from `false` (`build.rs:919`)". **That address never
+        // pointed at anything**: `build.rs:919` is a blank line, it was blank
+        // when the sentence was written (`git show 1a9176565`), and `build.rs`
+        // contains no fold at all. Deleted rather than repaired, because the
+        // argument stands on its own and there is nothing to repair it TO —
+        // an address that resolves to nothing is this file's own "failure mode
+        // that reads like fact".
         if !effective[parent] {
             continue;
         }
@@ -1876,6 +2047,202 @@ fn cascade_opacity(nodes: &mut [RawNode], top_layer: &HashSet<u64>) {
             continue;
         };
         own.opacity_zero = true;
+    }
+}
+
+/// OR hidden-ness ACROSS the `<iframe>` boundary, which [`cascade_opacity`]
+/// cannot reach: `parse_nodes` runs per document and `parent` indexes that
+/// document only.
+///
+/// Without this pass an `<iframe>` inside an `opacity: 0` container hands the
+/// model the **entire child document** as visible, with refs and rects already
+/// offset into the parent page — it clicks coordinates where nothing is. Unlike
+/// the in-document case there is no partial protection: not one node of the
+/// child is reached.
+///
+/// # Which flags cross the boundary, measured rather than reasoned
+///
+/// **Inheritance is document-scoped, so a frame boundary is not a parent edge**
+/// and [`cascade_opacity`]'s per-flag answers do not transfer: the child
+/// document's root inherits nothing from the `<iframe>` element. Every flag was
+/// therefore asked again, on the boundary, on **Chrome 153.0.8010.48** —
+/// `…-evidence/probes/t17c-frame.mjs`, page `t17c-page.html`, capture committed
+/// as `fixtures/local-nested-frames.domsnapshot.json`.
+///
+/// Two readings per row, because a styles row says what production parses and
+/// only the pixels say what the user gets. The pixel method: screenshot the
+/// page, then screenshot it again with that frame's child (and grandchild)
+/// body emptied. IDENTICAL means the child painted nothing. `#plain-box` is the
+/// instrument's control — there the two MUST differ, and do (15836 → 8700
+/// bytes), or every "identical" below is 判据 §2's vacuous pass.
+///
+/// | flag on the owner `<iframe>` | what the CHILD document says | pixels | so |
+/// |---|---|---|---|
+/// | `opacity: 0` (on the container) | 9 laid-out nodes, **all `opacity: "1"`**; the grandchild document's 7, all `"1"` | identical when blanked | **this function** |
+/// | `visibility: hidden` (on the container) | 7 laid-out nodes, **all `visibility: "visible"`** | identical when blanked | **this function** — see below |
+/// | `display: none` (on the container) | the document IS in `documents[]`, with **zero** laid-out nodes | identical when blanked | nothing to cascade |
+///
+/// ## `visibility` crosses here and must NOT cross a parent edge — the same
+/// ## flag, opposite answers, and that is the point of asking twice
+///
+/// [`cascade_opacity`] proves `visibility` must not be ORed down parent edges:
+/// a descendant re-shows itself with `visibility: visible` and Chrome reports
+/// it, so an OR there deletes a visible control. **At a frame boundary the
+/// child cannot re-show itself.** Every node of the child document already
+/// reads `"visible"` — that is the row above — and the page still paints none
+/// of them, because what hides them is the owner element not being painted, not
+/// an inherited value they could override. There is no declaration available to
+/// the child that changes the reading, so the OR is exact in the direction that
+/// matters, and 17b's in-document answer would have been the wrong one to
+/// carry over. Reasoning from "Chrome resolves inheritance before answering"
+/// gets this backwards, which is why it was measured.
+///
+/// ## The OVER-report direction, which this file calls the worse one
+///
+/// A `<dialog>` opened with `showModal()` **inside the child document** is in
+/// that document's top layer. In-document that escapes the ancestor's paint
+/// group and needed [`cascade_opacity`]'s exemption. Across the boundary it
+/// does not: measured the same way (`t17c-frame.mjs`, `?modal=1`), blanking the
+/// child leaves the page byte-identical under both the transparent and the
+/// hidden container, while the control still differs. The child's top layer is
+/// painted inside the owner's box, and the owner is what is not painted — so
+/// this pass needs no cross-frame exemption, and a future one would be a change
+/// of engine behaviour rather than a gap here.
+///
+/// # The ordering constraint, derived in ONE place
+///
+/// "Effectively transparent" must mean the owner's **cascaded** flag, never its
+/// own styles row: `#op-frame` in the fixture reads `opacity: "1"` for itself
+/// and is only transparent because [`cascade_opacity`] walked it up to
+/// `#op-box`. So this pass runs after every document's `parse_nodes` — which is
+/// where that cascade lives — and [`frames_of`] states that constraint at the
+/// loop that satisfies it.
+///
+/// It is not left to the accident of call sequence (判据 §12). Run this on
+/// un-cascaded nodes and `#op-frame` reads opaque, so the whole `op` subtree
+/// comes back visible and
+/// `a_frame_inside_an_opacity_zero_container_is_not_offered_as_visible`
+/// reddens. The fixture's shape IS the guard: `#self-frame`, which declares
+/// `opacity: 0` on the `<iframe>` itself, is the paired negative — it survives
+/// the wrong order, so the two shapes together say which of the two mistakes
+/// was made.
+///
+/// Reading the cascaded flag also carries Task 17d's top-layer exemption for
+/// free: an `<iframe>` the engine names is a cascade ROOT, so it reads opaque
+/// under a transparent container and its content stays visible. Re-deriving
+/// anything here would have got that wrong.
+///
+/// # Two phases, because the transitive term has to be able to fail
+///
+/// DERIVE first, over every document, reading only what the in-document
+/// cascade left behind; APPLY second. Written the other way — marking each
+/// document's nodes as the walk reaches it — the grandchild's owner would be
+/// read AFTER its own document was marked, and the `hiding[parent]` term below
+/// would be dead code that changes no output. Deleting it would then redden
+/// nothing, and "the cross-frame OR is one-hop" would be a defect no falsifier
+/// on this branch could name. That is the trap this task line fell into three
+/// times, so the shape is chosen to keep the term load-bearing:
+/// `…_reaches_a_frame_nested_inside_a_frame` reddens when it goes, and the
+/// depth-1 test does not.
+///
+/// # An owner with no reading at all
+///
+/// `computed: None` on the owner is an UNKNOWN and is spent as nothing
+/// (判据 §8) — the same rule [`cascade_opacity`] applies to a node it cannot
+/// read. **Both members of that class were measured, and both cost zero:** an
+/// `<iframe>` under `display: none` and an `<iframe>` that is itself
+/// `display: contents` (Chrome treats it as `none` on a replaced element — read,
+/// not taken from the spec) each get no layout entry, and each owns a document
+/// with **zero** laid-out nodes, so there is nothing in it to mark either way.
+/// Both shapes are in the fixture, as `#none-frame` and `#contents-frame`.
+///
+/// That is a census of this page and therefore a lower bound (判据 §5). If a
+/// third shape ever pairs a boxless owner with a laid-out child document, this
+/// pass under-reports it, and the fix would be to carry the flag in the side
+/// vector [`cascade_opacity`] already keeps instead of reading it back out of
+/// `computed`.
+///
+/// # The twin has no counterpart, and that is a fact rather than an omission
+///
+/// `fetch_obscura` emits **exactly one frame, always**, and puts every frame
+/// element in `RawDom::unreached_frames` — its module head doc owns that
+/// reading. There is no boundary there for a cross-frame OR to cross, so
+/// 判据 §16's "carry it to the twin" is answered by the twin having no such
+/// edge, not by a second implementation.
+///
+/// # Where this is WRONG
+///
+/// * **Composed opacity below the threshold** — inherited whole from
+///   [`cascade_opacity`]'s residual 2: an owner `<iframe>` at `opacity: 0.01`
+///   inside a container at `0.01` is invisible in practice and reads visible
+///   here, because the flag is a boolean and this pass only ORs it.
+/// * **A `display: none` owner whose child document is nonetheless laid out** —
+///   not observed, bounded by the census above, and named so the next reader
+///   knows which stone was turned.
+/// * **A document owned by nothing in this capture** is unreachable from the
+///   BFS and keeps its own readings. That is the same set [`frame_offsets`]
+///   reports as `Unplaceable`, and those documents are dropped from the page
+///   before anything reads them.
+fn cascade_across_frames(
+    documents: &mut [Vec<RawNode>],
+    owner: &HashMap<usize, (usize, usize)>,
+    inherited: FrameHiding,
+) {
+    if documents.is_empty() {
+        return;
+    }
+    // ---- PHASE 1: derive. Reads the in-document cascade's output only. ----
+    let mut hiding = vec![FrameHiding::VISIBLE; documents.len()];
+    hiding[0] = inherited;
+    // `false` is "not yet reached", not "not hidden" — the two are different
+    // questions and `hiding` cannot answer the first one, because
+    // `FrameHiding::VISIBLE` is also a legitimate answer for a document that
+    // WAS reached. Without this a document owned by one of its own descendants
+    // would be walked forever.
+    let mut reached = vec![false; documents.len()];
+    reached[0] = true;
+    let mut queue = VecDeque::from([0usize]);
+    while let Some(parent) = queue.pop_front() {
+        for (&child, &(owner_doc, owner_node)) in owner {
+            if owner_doc != parent || child >= documents.len() || reached[child] {
+                continue;
+            }
+            reached[child] = true;
+            // The owner element as PARSED — i.e. after `cascade_opacity` — and
+            // `None` when this fetcher has no reading for it.
+            let own = documents[owner_doc]
+                .get(owner_node)
+                .and_then(|n| n.computed);
+            hiding[child] = FrameHiding {
+                // `hiding[parent] ||` is the TRANSITIVE term: an `<iframe>` in a
+                // frame that is itself inside a transparent container owns a
+                // document nothing in its own capture calls transparent. Delete
+                // it and the cascade is one hop deep, which passes every
+                // single-frame fixture.
+                opacity_zero: hiding[parent].opacity_zero || own.is_some_and(|c| c.opacity_zero),
+                visibility_hidden: hiding[parent].visibility_hidden
+                    || own.is_some_and(|c| c.visibility_hidden),
+            };
+            queue.push_back(child);
+        }
+    }
+
+    // ---- PHASE 2: apply. Whole documents, no per-node walk. ----
+    for (d, nodes) in documents.iter_mut().enumerate() {
+        if hiding[d] == FrameHiding::VISIBLE {
+            continue;
+        }
+        for node in nodes.iter_mut() {
+            // Same rule as the in-document write: a node Chrome laid out
+            // nowhere has no reading, and giving it one here would manufacture
+            // three claims out of an absence. `visibility_of` already reads
+            // `None` as the unknown it is.
+            let Some(own) = node.computed.as_mut() else {
+                continue;
+            };
+            own.opacity_zero |= hiding[d].opacity_zero;
+            own.visibility_hidden |= hiding[d].visibility_hidden;
+        }
     }
 }
 
@@ -2124,6 +2491,34 @@ mod tests {
     /// beside the capture is what makes the parse falsifiable against the
     /// engine's own answer instead of against a set the test chose.
     const TOP_LAYER_COMPANION: &str = include_str!("fixtures/local-top-layer.toplayer.json");
+    /// The page whose hidden containers each hold an **`<iframe>`** instead of
+    /// an element — nine documents, one capture.
+    ///
+    /// Captured by `…-evidence/probes/t17c-frame.mjs` off `t17c-page.html` on
+    /// Chrome 153.0.8010.48, same request as its six siblings. Five shapes
+    /// carry [`cascade_across_frames`], and each is here because dropping it
+    /// would let a different defect pass:
+    ///
+    /// * `#op-box` (`opacity: 0`) holds `#op-frame`, whose child document holds
+    ///   **`#c-inner-op`, a second frame**. A one-hop cross-frame cascade
+    ///   passes a single-frame fixture, which is the trap this task line has
+    ///   fallen into three times — so the nesting is the point, and the
+    ///   grandchild's own document declares nothing transparent;
+    /// * `#vis-box` (`visibility: hidden`) holds `#vis-frame`. Its child
+    ///   document reads `"visible"` on every node, which is why `visibility`
+    ///   crosses this boundary and not a parent edge;
+    /// * `#plain-box` is the NEGATIVE control and is nested too, so a cascade
+    ///   that marks every child document rather than the ones under a hidden
+    ///   owner fails at both depths;
+    /// * `#self-frame` declares `opacity: 0` on the `<iframe>` itself, with
+    ///   nothing hiding above it. It is the paired negative for the ordering
+    ///   constraint: read the owner's OWN row instead of its cascaded one and
+    ///   this one still works while `#op-frame`'s child goes visible;
+    /// * `#none-frame` (under `display: none`) and `#contents-frame`
+    ///   (`display: contents`, so Chrome lays out no box for it) are the two
+    ///   owners with **no reading at all**, and each owns a document with zero
+    ///   laid-out nodes.
+    const NESTED_FRAMES: &str = include_str!("fixtures/local-nested-frames.domsnapshot.json");
 
     fn json(text: &str) -> Value {
         serde_json::from_str(text).expect("the fixture is valid JSON")
@@ -2167,7 +2562,7 @@ mod tests {
     ///
     /// Spelled out at every call site rather than defaulted inside
     /// [`parse_snapshot`], because the two facts an empty set can carry are
-    /// different: *this page has no open dialog* (true of six of the seven
+    /// different: *this page has no open dialog* (true of seven of the eight
     /// fixtures, and of nearly every real page) and *nobody asked the engine*
     /// (the defect `top_layer_backend_ids` exists to make impossible). A
     /// parameter forces the caller to say which one it means; a default would
@@ -2199,6 +2594,14 @@ mod tests {
             ("oopif-child", OOPIF_CHILD, no_top_layer()),
             ("hidden-containers", HIDDEN_CONTAINERS, no_top_layer()),
             ("top-layer", TOP_LAYER, recorded_top_layer()),
+            // `no_top_layer()` and it is a reading, not an omission: the page
+            // this was captured from opens no dialog and shows no popover —
+            // the `?modal=1` variant that does is deliberately NOT the one
+            // committed, because a capture with an open modal needs
+            // `DOM.getTopLayerElements`' answer committed beside it and a
+            // recorded empty set over a page that has one is the lie this
+            // function's doc warns about.
+            ("nested-frames", NESTED_FRAMES, no_top_layer()),
         ]
     }
 
@@ -2392,7 +2795,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(entries, 1490, "nodeIndex entries across all seven fixtures");
+        assert_eq!(entries, 1560, "nodeIndex entries across all eight fixtures");
     }
 
     /// The element-level rect a node's layout entries agree on, or why there
@@ -2773,13 +3176,13 @@ mod tests {
             // compensating benefit. Predicate: non-empty `styles` rows summed
             // over that capture's documents, re-measured at this commit (the
             // fifth capture grew a `display: contents` break and a shadow-root
-            // `<slot>`, so its arm moved 24 → 32; the sixth capture is new).
-            // The six numbers below are the assertion; 1472 is their sum and
-            // 1479 layout entries less one empty `#document` row per document
-            // over seven documents, so both of those are restatements of
-            // numbers this test already pins rather than facts of their own —
-            // if a fixture changes, these assertions go red before the
-            // arithmetic can mislead anyone.
+            // `<slot>`, so its arm moved 24 → 32; the sixth and seventh are
+            // new). The seven numbers below are the assertion; 1533 is their
+            // sum and 1549 layout entries less one empty `#document` row per
+            // document over sixteen documents, so both of those are
+            // restatements of numbers this test already pins rather than facts
+            // of their own — if a fixture changes, these assertions go red
+            // before the arithmetic can mislead anyone.
             //
             // The sixth arm is why this test matters for the top-layer round at
             // all: `local-top-layer` is only readable through `STYLE_OPACITY`
@@ -2792,6 +3195,10 @@ mod tests {
                 "oopif-child" => 7,
                 "hidden-containers" => 32,
                 "top-layer" => 27,
+                // Nine documents and nine empty `#document` rows, which is the
+                // one capture where that per-document subtraction is visible
+                // rather than a rounding detail.
+                "nested-frames" => 61,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(arrays, want, "{name}: non-empty styles rows");
@@ -2832,6 +3239,13 @@ mod tests {
             // another, and the whole point of the fifth capture is that it is
             // the only page where this number is not zero.
             let mut cascaded = 0usize;
+            // The SECOND cascade's footprint, counted separately from the
+            // first. `visibility` never crosses a parent edge on this engine
+            // and does cross a frame boundary, so one number covering both
+            // would let a widening in the place it must not happen be paid for
+            // by the place it must (判据 §16, inverted — same flag, two edges,
+            // two answers).
+            let mut vis_cascaded = 0usize;
             let value = json(text);
             let strings = value["strings"].as_array().expect("strings[]");
             let dom = parse_snapshot(&value, &top_layer, viewport(), &loaders_of(&value))
@@ -2885,31 +3299,34 @@ mod tests {
                         opacity_zero: at(opacity).trim().parse::<f64>().is_ok_and(|o| o <= 0.0),
                         cursor_pointer: at(cursor) == "pointer",
                     };
-                    // THREE of the four must equal the raw row exactly, on
-                    // every node of every capture. That is what makes this a
-                    // falsifier for a cascade widened to `visibility_hidden`:
-                    // `#vis-d2-shown` declares `visibility: visible` inside a
-                    // hidden container, Chrome reports it as visible, and the
-                    // widening reddens here as well as in
-                    // `only_opacity_is_cascaded_on_chromium`.
+                    // TWO of the four must equal the raw row exactly, on every
+                    // node of every capture: they are reported as Chrome
+                    // answered them and nothing re-derives them.
                     //
                     // It does NOT cover a widening to `display_none`, and
                     // nothing can — such a node has no styles row, so the OR
                     // never fires and no output changes. See
-                    // `only_opacity_is_cascaded_on_chromium`'s doc; an earlier
+                    // `only_opacity_is_cascaded_down_a_parent_edge_on_chromium`'s doc; an earlier
                     // version of this comment claimed the coverage it does not
                     // have.
+                    //
+                    // `visibility_hidden` was the third member of this tuple
+                    // until Task 17c, and it moved for a measured reason rather
+                    // than to make a new capture pass: it is re-derived now, at
+                    // a frame boundary and only there. The equality it used to
+                    // provide is not lost — it is the pair of assertions below
+                    // (one-directional, plus an EXACT per-capture count), which
+                    // is the same treatment `opacity` gets and is what keeps
+                    // `#vis-d2-shown`'s falsifier alive: a parent-edge widening
+                    // makes `vis_cascaded` non-zero on `hidden-containers`,
+                    // where the honest number is zero.
                     assert_eq!(
-                        (got.display_none, got.visibility_hidden, got.cursor_pointer),
-                        (
-                            want.display_none,
-                            want.visibility_hidden,
-                            want.cursor_pointer
-                        ),
-                        "{name} doc[{d}] node {node}: display/visibility/cursor \
-                         disagree with the capture read through {captured:?}. \
-                         These three are reported as Chrome answered them — \
-                         only `opacity` is cascaded (`cascade_opacity`)"
+                        (got.display_none, got.cursor_pointer),
+                        (want.display_none, want.cursor_pointer),
+                        "{name} doc[{d}] node {node}: display/cursor disagree \
+                         with the capture read through {captured:?}. These two \
+                         are reported as Chrome answered them — nothing \
+                         cascades them on this engine"
                     );
                     // `opacity` is the one flag the parse may legitimately
                     // disagree with the raw row about, and the disagreement is
@@ -2925,7 +3342,18 @@ mod tests {
                          The cascade may only ever turn this flag ON",
                         at(opacity)
                     );
+                    // The same two halves for `visibility_hidden`, for the same
+                    // reason: the cross-frame pass may only ever turn it ON,
+                    // and how often it did is counted per capture below.
+                    assert!(
+                        got.visibility_hidden || !want.visibility_hidden,
+                        "{name} doc[{d}] node {node}: the raw row says \
+                         `visibility: {}` and the parse says the node is \
+                         visible. Neither cascade may turn this flag OFF",
+                        at(visibility)
+                    );
                     cascaded += usize::from(got.opacity_zero && !want.opacity_zero);
+                    vis_cascaded += usize::from(got.visibility_hidden && !want.visibility_hidden);
                     checked += 1;
                     pointers += usize::from(want.cursor_pointer);
                     hidden += usize::from(want.visibility_hidden);
@@ -2938,13 +3366,14 @@ mod tests {
             // whose parse says `opacity_zero` and whose raw styles row does
             // not, over the slots this test checks. Measured at this commit.
             //
-            // Four zeros, a fifteen and an eleven is the census that says what
-            // the corpus was missing: for four captures the cascade is a no-op,
-            // which is why nothing was red before it existed, and only
-            // `hidden-containers` and `top-layer` can tell any two behaviours
-            // apart here. Delete either of those captures and a whole arm of
-            // `cascade_opacity` loses its falsifier — so these numbers are also
-            // the guard on the corpus, not only on the code.
+            // Four zeros and then three non-zero captures is the census that
+            // says what the corpus was missing: for four of the seven both
+            // cascades are a no-op, which is why nothing was red before either
+            // existed, and only `hidden-containers`, `top-layer` and
+            // `nested-frames` can tell any two behaviours apart here. Delete
+            // any one of those three and a whole arm loses its falsifier — so
+            // these numbers are also the guard on the corpus, not only on the
+            // code.
             //
             // It was 8 before the chain-break shapes were added to the page,
             // and **the +7 is page growth, not coverage**. Only FOUR of the
@@ -2970,10 +3399,24 @@ mod tests {
             // this census reddens for `top-layer` alone. Measured both ways,
             // outside cargo, by a counter that first reproduced every committed
             // constant in this test (判据 §18).
-            let want_cascaded = match name {
-                "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => 0,
-                "hidden-containers" => 15,
-                "top-layer" => 11,
+            //
+            // **The seventh capture's 24 and 7 are the CROSS-FRAME pass's
+            // footprint**, and they split the way the two edges do. 24 =
+            // 1 in-document (`#op-frame`, the `<iframe>` under `#op-box`,
+            // which the parent-edge cascade flags) + 23 across boundaries:
+            // nine nodes of `#op-frame`'s child document, seven of the frame
+            // nested inside it, and seven of `#self-frame`'s child. 7 is the
+            // `visibility` arm: every laid-out node of `#vis-frame`'s child
+            // document, and nothing else anywhere in the corpus. Delete the
+            // transitive term in `cascade_across_frames` and 24 → 17; delete
+            // the pass and 24 → 1 and 7 → 0. Modelled outside cargo by a
+            // counter that first reproduced all six of the older captures'
+            // numbers and all four of the totals below (判据 §18).
+            let (want_cascaded, want_vis_cascaded) = match name {
+                "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => (0, 0),
+                "hidden-containers" => (15, 0),
+                "top-layer" => (11, 0),
+                "nested-frames" => (24, 7),
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(
@@ -2982,6 +3425,15 @@ mod tests {
                  that should have some means `cascade_opacity` stopped firing; \
                  non-zero on one that should have none means it fired where no \
                  ancestor is transparent"
+            );
+            assert_eq!(
+                vis_cascaded, want_vis_cascaded,
+                "{name}: nodes the CROSS-FRAME pass turned `visibility_hidden` \
+                 on. Non-zero on any capture but `nested-frames` means \
+                 `visibility` is being ORed down parent edges, which deletes a \
+                 `visibility: visible` descendant from the page \
+                 (`#vis-d2-shown`); zero on `nested-frames` means \
+                 `cascade_across_frames` stopped carrying the flag"
             );
         }
 
@@ -2997,31 +3449,35 @@ mod tests {
         //
         // Predicate for all four: slots whose node index occurs exactly once in
         // that document's `nodeIndex` and whose `styles` row is non-empty, over
-        // the SIX real captures. Re-measured at this commit — the previous
-        // values (1437 / 522 / 11 / 6) were the five-capture totals, and the
-        // deltas are the sixth capture's own contribution: +27 nodes,
-        // +14 pointers, +0 hidden, +1 zero. Before believing any of the four,
-        // the counter that produced them was made to reproduce all five of the
-        // old ones first — an instrument that agrees with the tree it is about
-        // to change is the only kind worth quoting (判据 §18).
+        // the SEVEN real captures. Re-measured at this commit — the previous
+        // values (1464 / 536 / 11 / 7) were the six-capture totals, and the
+        // deltas are the seventh capture's own contribution: +61 nodes,
+        // +0 pointers, +2 hidden (`#vis-box` and `#vis-frame`, which Chrome
+        // resolves to `hidden` on the element itself), +3 zero (`#op-box`,
+        // `#self-frame`, `#contents-box`, each DECLARING it). Before believing
+        // any of the four, the counter that produced them was made to reproduce
+        // all six of the old ones first — an instrument that agrees with the
+        // tree it is about to change is the only kind worth quoting (判据 §18).
         //
-        // All four of these are RAW readings — `want`, not `got` — so the
-        // cascade does not move them, in EITHER of its arms: `zero` counts the
-        // transparent containers only (`#opacity-zero`, `#fade`) and never the
-        // nodes under them, which is the split `cascaded` above measures. So a
-        // top-layer exemption that went missing moves `cascaded` and leaves
-        // these four untouched — two different questions, two different
-        // numbers, and neither can cover for the other.
-        assert_eq!(checked, 1464, "nodes cross-checked");
+        // All four of these are RAW readings — `want`, not `got` — so neither
+        // cascade moves them, in any of their arms: `zero` counts the
+        // transparent containers and the self-declaring frame only, never the
+        // nodes under or inside them, which is the split `cascaded` above
+        // measures. So a top-layer exemption or a cross-frame arm that went
+        // missing moves `cascaded` / `vis_cascaded` and leaves these four
+        // untouched — different questions, different numbers, and neither can
+        // cover for the other.
+        assert_eq!(checked, 1525, "nodes cross-checked");
         assert_eq!(pointers, 536, "`cursor: pointer` nodes");
-        assert_eq!(hidden, 11, "`visibility: hidden` nodes");
-        assert_eq!(zero, 7, "`opacity: 0` nodes, by their OWN styles row");
+        assert_eq!(hidden, 13, "`visibility: hidden` nodes");
+        assert_eq!(zero, 10, "`opacity: 0` nodes, by their OWN styles row");
         // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
         // cannot show, because such a node gets no layout entry and therefore
         // no styles array. Measured here rather than asserted from the design
-        // note — zero out of every laid-out node in six captures, one of
-        // which (`hidden-containers`) puts an element two levels inside a
-        // `display: none` container specifically to try to produce one. The
+        // note — zero out of every laid-out node in seven captures, two of
+        // which (`hidden-containers`, `nested-frames`) put an element and an
+        // `<iframe>` inside a `display: none` container specifically to try to
+        // produce one. The
         // mapping is exercised by the hand-written fixture in
         // `the_four_computed_styles_map_to_their_four_flags`, which is the only
         // place that shape can exist.
@@ -3200,10 +3656,22 @@ mod tests {
         assert!(visibility_of(control), "#control must still be visible");
     }
 
-    /// The other two flags are reported as Chrome answered them, and ORing
-    /// either one down the same edges would be a defect.
+    /// The other two flags are reported as Chrome answered them **down a PARENT
+    /// EDGE**, and ORing either one down those edges would be a defect.
     ///
     /// `cascade_opacity`'s doc says why; this says it in assertions.
+    ///
+    /// ⚠️ **The edge is half the claim, and this test was called
+    /// `only_opacity_is_cascaded_on_chromium`** — no edge named — **until Task
+    /// 17c measured the other half.** `visibility` DOES cross an `<iframe>`
+    /// boundary on this engine —
+    /// the child document reads `"visible"` for every node while the page paints
+    /// none of them — and [`cascade_across_frames`] ORs it there. Same flag,
+    /// same engine, opposite answers, because a frame boundary is not a parent
+    /// edge: inheritance is document-scoped, and the descendant that can
+    /// re-show itself here has no counterpart on the other side of a frame.
+    /// The old name stated a scope it did not have (判据 §1), so it carries the
+    /// edge now.
     ///
     /// * **`visibility`**: `#vis-d2` already reads hidden two levels down —
     ///   Chrome resolves inherited properties before it answers — so an OR
@@ -3229,7 +3697,7 @@ mod tests {
     /// that matters: a coverage claim is what a later reader spends (判据 §1 —
     /// the expensive copy is the one in the comment).
     #[test]
-    fn only_opacity_is_cascaded_on_chromium() {
+    fn only_opacity_is_cascaded_down_a_parent_edge_on_chromium() {
         let value = json(HIDDEN_CONTAINERS);
         let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
             .expect("parses");
@@ -3651,6 +4119,738 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Task 17c — the cross-frame cascade.
+    // -----------------------------------------------------------------------
+
+    /// The frame of this page that contains `id="<id>"`, or a panic naming it.
+    ///
+    /// Frames are not looked up by INDEX anywhere below: an index is stable
+    /// only until the next recapture and a test that pins one fails with a
+    /// number instead of an element, which is the same rule [`by_id`] applies
+    /// inside a frame.
+    fn frame_with<'a>(dom: &'a RawDom, id: &str) -> &'a RawFrame {
+        let mut found = dom
+            .frames
+            .iter()
+            .filter(|f| f.nodes.iter().any(|n| n.attr("id") == Some(id)));
+        let frame = found.next().unwrap_or_else(|| {
+            panic!(
+                "no frame of this page contains id=\"{id}\", so the assertion \
+                 about it would pass by never running"
+            )
+        });
+        assert!(
+            found.next().is_none(),
+            "id=\"{id}\" is in more than one frame of this page, so naming it \
+             addresses whichever document the search reached first. The probe \
+             page suffixes every child's ids with its frame's tag precisely so \
+             this cannot happen"
+        );
+        frame
+    }
+
+    /// One element's raw styles row **as Chrome answered it**, plus which
+    /// capture document it is in.
+    ///
+    /// This is the independent half of every assertion below that claims a flag
+    /// came from a cascade: without it, "the parse says hidden" is a statement
+    /// about the parse agreeing with itself (判据 §10). Read through
+    /// [`capture_time_styles`] for the reason
+    /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
+    /// gives — this module's own `STYLE_*` constants are what the parse uses.
+    ///
+    /// `None` for the row means the element generates no box, which is itself
+    /// an answer and is asserted as one.
+    fn raw_row(value: &Value, id: &str) -> (usize, Option<Vec<String>>) {
+        let strings: Vec<&str> = value["strings"]
+            .as_array()
+            .expect("strings[]")
+            .iter()
+            .map(|s| s.as_str().unwrap_or_default())
+            .collect();
+        let at = |v: &Value| -> String {
+            usize::try_from(v.as_i64().unwrap_or(-1))
+                .ok()
+                .and_then(|n| strings.get(n).copied())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        };
+        let mut hits = Vec::new();
+        for (d, doc) in value["documents"]
+            .as_array()
+            .expect("documents[]")
+            .iter()
+            .enumerate()
+        {
+            let attrs = doc["nodes"]["attributes"].as_array().expect("attributes[]");
+            let Some(node) = attrs.iter().position(|pairs| {
+                pairs.as_array().is_some_and(|p| {
+                    p.chunks_exact(2)
+                        .any(|kv| at(&kv[0]) == "id" && at(&kv[1]) == id.to_ascii_lowercase())
+                })
+            }) else {
+                continue;
+            };
+            let slot = doc["layout"]["nodeIndex"]
+                .as_array()
+                .expect("nodeIndex[]")
+                .iter()
+                .position(|n| n.as_u64() == u64::try_from(node).ok());
+            let row = slot.and_then(|s| doc["layout"]["styles"][s].as_array().cloned());
+            hits.push((
+                d,
+                row.filter(|r| !r.is_empty())
+                    .map(|r| r.iter().map(&at).collect()),
+            ));
+        }
+        assert_eq!(
+            hits.len(),
+            1,
+            "id=\"{id}\" occurs in {} documents of this capture; an assertion \
+             naming it would be about whichever one the scan reached first",
+            hits.len()
+        );
+        hits.remove(0)
+    }
+
+    /// One raw computed value of one element, by the capture-time name.
+    fn raw_style(value: &Value, id: &str, style: &str) -> String {
+        let index = capture_style_index(&capture_time_styles(), style);
+        let (_, row) = raw_row(value, id);
+        row.unwrap_or_else(|| {
+            panic!("#{id} has no layout entry in this capture, so it has no raw {style} to read")
+        })
+        .get(index)
+        .cloned()
+        .unwrap_or_default()
+    }
+
+    /// Every element id in capture document `doc` whose raw styles row declares
+    /// `opacity: 0` — the census that says whether a document could have
+    /// produced a flag by itself.
+    fn declares_opacity_zero_in(value: &Value, doc: usize) -> Vec<String> {
+        let index = capture_style_index(&capture_time_styles(), "opacity");
+        let strings: Vec<&str> = value["strings"]
+            .as_array()
+            .expect("strings[]")
+            .iter()
+            .map(|s| s.as_str().unwrap_or_default())
+            .collect();
+        let at = |v: &Value| -> String {
+            usize::try_from(v.as_i64().unwrap_or(-1))
+                .ok()
+                .and_then(|n| strings.get(n).copied())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        };
+        let document = &value["documents"][doc];
+        let mut out = Vec::new();
+        for (slot, n) in document["layout"]["nodeIndex"]
+            .as_array()
+            .expect("nodeIndex[]")
+            .iter()
+            .enumerate()
+        {
+            let row = document["layout"]["styles"][slot]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let Some(opacity) = row.get(index).map(&at) else {
+                continue;
+            };
+            if !opacity.trim().parse::<f64>().is_ok_and(|o| o <= 0.0) {
+                continue;
+            }
+            let node = usize::try_from(n.as_i64().unwrap_or(-1)).unwrap_or(usize::MAX);
+            let label = document["nodes"]["attributes"]
+                .get(node)
+                .and_then(Value::as_array)
+                .and_then(|pairs| {
+                    pairs
+                        .chunks_exact(2)
+                        .find(|kv| at(&kv[0]) == "id")
+                        .map(|kv| at(&kv[1]))
+                })
+                .unwrap_or_else(|| format!("node {node} (no id)"));
+            out.push(label);
+        }
+        out
+    }
+
+    /// **The falsifier for [`cascade_across_frames`]' `opacity` arm at depth
+    /// one**, on a real capture.
+    ///
+    /// # What each assertion is for
+    ///
+    /// * `#op-box` DECLARES `opacity: 0` — the fixture-shape control, the one
+    ///   assertion here that cannot fail for the reason this test exists.
+    /// * **`#op-frame` reads `opacity: "1"` in the capture.** That is the
+    ///   ordering constraint stated as a measurement: the owner is transparent
+    ///   only because [`cascade_opacity`] walked it up to `#op-box`, so a pass
+    ///   that read the owner's own styles row would leave this whole subtree
+    ///   visible.
+    /// * `#c-probe-op` / `#c-btn-op` are in the CHILD document, whose nodes
+    ///   `parse_nodes` cannot reach from the parent's `parentIndex` at all.
+    ///   Each is asserted against its own raw row first, so "the parse says
+    ///   transparent" is never the parse agreeing with itself.
+    /// * `#c-probe-self` / `#c-btn-self` are under `#self-frame`, which
+    ///   declares `opacity: 0` on the `<iframe>` itself. They are the PAIRED
+    ///   NEGATIVE for the ordering constraint: read the owner's own row instead
+    ///   of its cascaded one and this pair still passes while the `op` pair
+    ///   fails, so the two mistakes redden different names.
+    /// * `#c-probe-plain` / `#c-btn-plain` / `#page-control` are the negative
+    ///   half. A pass that marked every child document — or smeared the flag
+    ///   over the page — passes everything above and fails here.
+    ///
+    /// Each assertion checks the FLAG and the consequence
+    /// [`super::build::visibility_of`] draws from it, so a change that keeps
+    /// the flag and stops spending it reddens here too (判据 §4).
+    #[test]
+    fn a_frame_inside_an_opacity_zero_container_is_not_offered_as_visible() {
+        use super::super::build::visibility_of;
+
+        let value = json(NESTED_FRAMES);
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
+
+        assert_eq!(
+            raw_style(&value, "op-box", "opacity"),
+            "0",
+            "the container no longer declares `opacity: 0`, so the fixture has \
+             lost its shape and every assertion below is vacuous"
+        );
+        assert_eq!(
+            raw_style(&value, "op-frame", "opacity"),
+            "1",
+            "the owning <iframe> declares nothing — it is transparent ONLY \
+             through the in-document cascade. If Chrome ever resolves the \
+             ancestor into this row, the ordering constraint in \
+             `cascade_across_frames` stops being load-bearing and this test \
+             stops being able to catch its violation"
+        );
+        assert!(
+            by_id(frame_with(&dom, "op-frame"), "op-frame")
+                .computed
+                .expect("the <iframe> has a styles row")
+                .opacity_zero,
+            "the owner itself must arrive cascaded, or there is nothing for the \
+             frame boundary to read"
+        );
+
+        for id in ["c-probe-op", "c-btn-op"] {
+            assert_eq!(
+                raw_style(&value, id, "opacity"),
+                "1",
+                "non-vacuity: the capture itself calls #{id} opaque, so a \
+                 `true` below came from the cascade and not from Chrome"
+            );
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                node.computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .opacity_zero,
+                "#{id} is in the content document of an <iframe> inside an \
+                 `opacity: 0` container. The user cannot see it (measured: \
+                 blanking that document leaves the page byte-identical), and \
+                 the model is being handed a ref it would click at a \
+                 coordinate already offset into the parent page"
+            );
+            assert!(!visibility_of(node), "and `build` must drop #{id}");
+        }
+
+        for id in ["c-probe-self", "c-btn-self"] {
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                node.computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .opacity_zero,
+                "#{id} is inside <iframe id=self-frame>, which DECLARES \
+                 `opacity: 0` on itself. This arm survives a pass that reads \
+                 the owner's own row, which is exactly what makes it the \
+                 paired negative for the `op` arm above"
+            );
+            assert!(!visibility_of(node));
+        }
+
+        for id in ["c-probe-plain", "c-btn-plain", "page-control"] {
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                !node
+                    .computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .opacity_zero,
+                "#{id} has no transparent owner anywhere above it and the \
+                 cascade reached it anyway — it is marking documents rather \
+                 than documents under a transparent owner"
+            );
+            assert!(visibility_of(node), "#{id} must still be visible");
+        }
+    }
+
+    /// **The falsifier that separates "the cross-frame OR is GONE" from "the
+    /// cross-frame OR is ONE-HOP", by name.**
+    ///
+    /// This task line shipped a one-edge-deep guard four times, so the two
+    /// defects are deliberately given two different red name sets:
+    ///
+    /// | mutation | reddens |
+    /// |---|---|
+    /// | the pass is deleted / never called | `a_frame_inside_an_opacity_zero_container_is_not_offered_as_visible` **and** this test |
+    /// | `hiding[parent] \|\|` is deleted (one-hop) | **this test only** |
+    ///
+    /// The presence of the depth-1 name is what tells them apart. They are not
+    /// disjoint sets and cannot be — a pass that does nothing fails every
+    /// assertion about it — but the reader can read WHICH defect happened off
+    /// the names alone, which is the thing the four previous rounds could not
+    /// do.
+    ///
+    /// # Why one hop is reachable here rather than closed by construction
+    ///
+    /// The transitive term is an explicit `||` and not a consequence of walk
+    /// order, and that is a deliberate choice recorded in
+    /// [`cascade_across_frames`]: DERIVE for every document first, APPLY after.
+    /// Marking each document as the walk reached it would make the grandchild
+    /// inherit through its already-marked owner, the `||` would be dead code,
+    /// and deleting it would redden nothing at all. **So the hole this test
+    /// covers is only reachable while that two-phase shape holds** — the next
+    /// author who folds the phases together removes this test's ability to fail
+    /// without touching the test.
+    ///
+    /// # Non-vacuity, spelled as a census rather than as a claim
+    ///
+    /// The middle document must declare NOTHING transparent, or the grandchild
+    /// could be reached by a one-hop pass reading the middle document's own
+    /// answer. `declares_opacity_zero_in` asserts that, over the whole
+    /// document, by reading the capture (判据 §6 — count it, do not remember
+    /// it).
+    #[test]
+    fn the_cross_frame_cascade_reaches_a_frame_nested_inside_a_frame() {
+        use super::super::build::visibility_of;
+
+        let value = json(NESTED_FRAMES);
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
+
+        // The middle document, named by an element in it rather than by index.
+        let (middle, _) = raw_row(&value, "c-inner-op");
+        assert_ne!(middle, 0, "the middle document is not the page's own");
+        assert_eq!(
+            declares_opacity_zero_in(&value, middle),
+            Vec::<String>::new(),
+            "a node of the MIDDLE document declares `opacity: 0`. Then the \
+             grandchild could be reached one hop from that declaration, and \
+             this test would no longer be about transitivity at all"
+        );
+        assert_eq!(
+            raw_style(&value, "c-inner-op", "opacity"),
+            "1",
+            "the <iframe> owning the grandchild declares nothing either"
+        );
+
+        for id in ["i-probe-op", "i-btn-op"] {
+            assert_eq!(
+                raw_style(&value, id, "opacity"),
+                "1",
+                "non-vacuity: the capture calls #{id} opaque"
+            );
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                node.computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .opacity_zero,
+                "#{id} is TWO frame boundaries below the transparent \
+                 container. A cross-frame OR that carries the owner's own flag \
+                 and not the owner DOCUMENT's leaves this whole document \
+                 visible while the depth-1 arm passes"
+            );
+            assert!(!visibility_of(node));
+        }
+
+        // The negative at the same depth: `#plain-box` is nested too.
+        for id in ["i-probe-plain", "i-btn-plain"] {
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                !node
+                    .computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .opacity_zero,
+                "#{id} is two frames deep under nothing hidden. A pass that \
+                 marks a document because it is DEEP rather than because its \
+                 owner chain is hidden passes every positive above"
+            );
+            assert!(visibility_of(node));
+        }
+    }
+
+    /// **`visibility` crosses a frame boundary on this engine**, and the same
+    /// flag must not cross a parent edge — the pair of answers this fixture
+    /// exists to keep apart.
+    ///
+    /// Measured on Chrome 153.0.8010.48 (`…/probes/t17c-frame.mjs`): every one
+    /// of the seven laid-out nodes of `#vis-frame`'s content document reads
+    /// `visibility: "visible"`, and blanking that document leaves the page
+    /// byte-identical while the same edit under `#plain-box` changes 15836
+    /// bytes of PNG to 8700. The child reads visible; the user sees nothing.
+    ///
+    /// The in-document answer is the opposite and
+    /// `only_opacity_is_cascaded_down_a_parent_edge_on_chromium` owns it:
+    /// `#vis-d2-shown` re-shows itself with `visibility: visible` and Chrome
+    /// reports it, so an OR down parent edges deletes a control the user can
+    /// see. **There is no such move across a frame boundary** — the child's
+    /// nodes already read `visible` and are painted anyway — which is why the
+    /// two edges get different answers for one flag, and why asking again at
+    /// the boundary was the whole point of the measurement.
+    #[test]
+    fn a_frame_inside_a_visibility_hidden_container_is_not_offered_as_visible() {
+        use super::super::build::visibility_of;
+
+        let value = json(NESTED_FRAMES);
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
+
+        assert_eq!(
+            raw_style(&value, "vis-box", "visibility"),
+            "hidden",
+            "the container no longer declares it and the fixture has lost its \
+             shape"
+        );
+        assert_eq!(
+            raw_style(&value, "vis-frame", "visibility"),
+            "hidden",
+            "Chrome resolves the inherited value onto the <iframe> element \
+             itself, which is what this pass reads. If this ever says \
+             `visible`, the owner's own row stopped carrying the ancestor and \
+             `visibility` would need the parent-edge cascade this engine does \
+             not have"
+        );
+
+        for id in ["c-probe-vis", "c-btn-vis"] {
+            assert_eq!(
+                raw_style(&value, id, "visibility"),
+                "visible",
+                "non-vacuity: the capture itself calls #{id} VISIBLE — \
+                 inheritance stops at the frame boundary, so a `true` below \
+                 came from the cascade"
+            );
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                node.computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .visibility_hidden,
+                "#{id} is in the content document of an <iframe> inside a \
+                 `visibility: hidden` container and the page paints none of \
+                 it. Reading it as visible hands the model the whole widget"
+            );
+            assert!(!visibility_of(node), "and `build` must drop #{id}");
+            assert!(
+                !node.computed.expect("styles row").opacity_zero,
+                "#{id} is hidden, not transparent — if the opacity flag is set \
+                 too, the two arms are being written from one condition"
+            );
+        }
+
+        for id in ["c-probe-plain", "c-btn-plain"] {
+            let node = by_id(frame_with(&dom, id), id);
+            assert!(
+                !node
+                    .computed
+                    .unwrap_or_else(|| panic!("#{id} has a styles row"))
+                    .visibility_hidden,
+                "#{id} has no hidden owner and the visibility arm reached it \
+                 anyway"
+            );
+            assert!(visibility_of(node));
+        }
+    }
+
+    /// An owner the fetcher has **no reading for** cascades nothing — and the
+    /// measurement that says this costs nothing.
+    ///
+    /// `computed: None` is an unknown and must not be spent as a value
+    /// (判据 §8). The question that makes that safe rather than merely
+    /// principled is whether such an owner can have a child document with
+    /// anything IN it, and both members of the class were measured on Chrome
+    /// 153.0.8010.48:
+    ///
+    /// * `#none-frame` — an `<iframe>` under a `display: none` container;
+    /// * `#contents-frame` — an `<iframe>` that is itself `display: contents`,
+    ///   which Chrome treats as `none` on a replaced element. **Read, not taken
+    ///   from the spec**: the element gets no layout entry and its child
+    ///   document gets no laid-out node either.
+    ///
+    /// Each owns a document that IS in `documents[]` — so the parse must place
+    /// it, and it does — carrying **26 nodes and exactly one layout entry**,
+    /// which belongs to the `#document` node itself and has an empty styles
+    /// row. So nothing to cascade, and nothing lost: every node the builder
+    /// would emit has no reading and no rect, so `visibility_of` drops it
+    /// through the `rect: None` fallback.
+    ///
+    /// ⚠️ **`visibility_of` is `true` for the `#document` node**, and that is
+    /// not a hole: its entry carries `bounds: [0,0,0,0]`, so the fallback sees
+    /// a rect. `build::state_node` returns `None` for
+    /// `RawNodeKind::Document` before any of that is consulted — the node is
+    /// dropped on KIND, never on visibility. The first version of this test
+    /// asserted "no node of this frame is visible" and went red on exactly
+    /// that node, which is the assertion being wrong rather than the parse:
+    /// stating the reason here so the next reader does not re-weaken it.
+    ///
+    /// This is a census of one page and therefore a lower bound (判据 §5). A
+    /// third shape pairing a boxless owner with a laid-out child document would
+    /// be a real under-report, and [`cascade_across_frames`]' doc names the fix
+    /// it would take.
+    #[test]
+    fn a_frame_owner_with_no_reading_cascades_nothing_and_loses_nothing() {
+        use super::super::build::visibility_of;
+
+        let value = json(NESTED_FRAMES);
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
+
+        for (owner, probe) in [
+            ("none-frame", "c-probe-none"),
+            ("contents-frame", "c-probe-contents"),
+        ] {
+            let (_, row) = raw_row(&value, owner);
+            assert!(
+                row.is_none(),
+                "#{owner} has a layout entry, so it is no longer the \
+                 no-reading shape this test is named for"
+            );
+            assert!(
+                by_id(frame_with(&dom, owner), owner).computed.is_none(),
+                "#{owner} must arrive as the unknown Chrome reported"
+            );
+
+            let frame = frame_with(&dom, probe);
+            assert!(
+                frame.nodes.iter().all(|n| n.computed.is_none()),
+                "a node of #{owner}'s content document has a styles row. Then \
+                 the boxless-owner class is no longer free, and \
+                 `cascade_across_frames` under-reports it by design"
+            );
+            let boxed: Vec<&RawNode> = frame.nodes.iter().filter(|n| n.rect.is_some()).collect();
+            assert_eq!(
+                boxed.len(),
+                1,
+                "#{owner}'s content document should carry exactly one layout \
+                 entry — the `#document` node's, at [0,0,0,0]. {} of them have \
+                 a rect, so Chrome laid something out in a frame it does not \
+                 paint and this class is no longer free",
+                boxed.len()
+            );
+            assert_eq!(
+                boxed[0].kind,
+                RawNodeKind::Document,
+                "the one node with a rect must be the `#document`, which \
+                 `build::state_node` drops on KIND. Any other node here is one \
+                 `visibility_of` would call visible through the `rect` \
+                 fallback, and the model would be handed it"
+            );
+            assert!(
+                frame
+                    .nodes
+                    .iter()
+                    .filter(|n| n.kind != RawNodeKind::Document)
+                    .all(|n| !visibility_of(n)),
+                "#{owner}'s content document offers the model nothing, which \
+                 is what makes the missing cascade cost nothing"
+            );
+        }
+
+        // The documents are PRESENT, which is the half that says the parse had
+        // to deal with them rather than never seeing them.
+        assert_eq!(
+            dom.frames.len(),
+            value["documents"].as_array().expect("documents[]").len(),
+            "every document of this capture is placed, including the two whose \
+             owning <iframe> generates no box — those take the owner \
+             document's own origin, for the reason `frame_offsets` gives"
+        );
+    }
+
+    /// The **cross-RENDERER** half of the same boundary: a child capture
+    /// inherits its owner's hidden state through [`stitch_snapshots`].
+    ///
+    /// # Why this arm exists at all
+    ///
+    /// The user story `cascade_across_frames` was written for is a faded modal
+    /// containing a third-party widget — a payment form, a support chat, a
+    /// video player. **Third-party means cross-ORIGIN, which on Chrome means a
+    /// separate target**, so the child's document is not in the parent capture
+    /// and `contentDocumentIndex` never mentions it. Fixing only the
+    /// same-renderer path would have left the motivating case untouched.
+    ///
+    /// Measured on Chrome 153.0.8010.48 (`…/probes/t17c-frame.mjs --oopif`,
+    /// `--site-per-process`, `127.0.0.1` parent and `localhost` child): the
+    /// parent capture comes back with **one** document, and the `op` frame's
+    /// own capture has seven laid-out nodes **all reporting `opacity: "1"`**
+    /// while their owner sits in an `opacity: 0` container.
+    ///
+    /// # The captures here are CONSTRUCTED, and that word is doing work
+    ///
+    /// No recording in `fixtures/` has this shape — the OOPIF pair's owner sits
+    /// in nothing hidden, and every frame in `local-nested-frames` is
+    /// same-origin, so its content documents are in the capture. What is
+    /// constructed is the SHAPE; the reading that says the shape is real is the
+    /// probe run above. Saying which half is which is the discipline this task
+    /// line settled on after a round called a constructed fixture measured.
+    ///
+    /// # What each half asserts
+    ///
+    /// * the faded arm: `#oop-inner` arrives transparent, though its own
+    ///   capture declares `opacity: 1` and its own top-layer set is empty;
+    /// * the PAIRED CONTROL: the same child under an owner that is not faded
+    ///   arrives visible. Without it this test would pass against a stitch that
+    ///   marked every child capture.
+    #[test]
+    fn a_cross_renderer_child_capture_inherits_its_owners_hidden_state() {
+        use super::super::build::visibility_of;
+
+        // A parent page: `<html>` → `#faded` (declaring the flag) → the
+        // `<iframe>`, whose content lives in another renderer and is therefore
+        // absent from `contentDocumentIndex`. Everything the parser reads and
+        // nothing it does not.
+        const OWNER: u64 = 42;
+        // **Both rows are parameters, because the two flags do not arrive the
+        // same way and a fixture that spelled them alike would test a page
+        // Chrome does not produce.** Measured on the real capture: under a
+        // `visibility: hidden` container the `<iframe>` element's OWN row reads
+        // `hidden` (Chrome resolves inherited properties before answering),
+        // while under an `opacity: 0` container it reads `"1"` and is
+        // transparent only through `cascade_opacity`. The first version of this
+        // test gave the hidden arm a `visible` iframe row and went red for that
+        // reason — the fixture was wrong, not the parse.
+        let parent = |container_styles: [i64; 4], iframe_styles: [i64; 4]| {
+            serde_json::json!({
+                "strings": ["F-main", "HTML", "DIV", "IFRAME", "id", "faded", "oop",
+                            "block", "visible", "hidden", "0", "1", "auto"],
+                "documents": [{
+                    "frameId": 0,
+                    "nodes": {
+                        "parentIndex": [-1, 0, 1],
+                        "nodeType": [1, 1, 1],
+                        "nodeName": [1, 2, 3],
+                        "nodeValue": [-1, -1, -1],
+                        "backendNodeId": [2, 3, OWNER],
+                        "attributes": [[], [4, 5], [4, 6]],
+                        "contentDocumentIndex": { "index": [], "value": [] },
+                        "isClickable": { "index": [] },
+                        "inputChecked": { "index": [] },
+                        "optionSelected": { "index": [] },
+                        "inputValue": { "index": [], "value": [] },
+                        "textValue": { "index": [], "value": [] }
+                    },
+                    "layout": {
+                        "nodeIndex": [0, 1, 2],
+                        "bounds": [[0, 0, 800, 600], [10, 20, 400, 300], [10, 20, 300, 200]],
+                        "styles": [[7, 8, 11, 12], container_styles, iframe_styles],
+                        "text": [-1, -1, -1]
+                    }
+                }]
+            })
+        };
+        // The child target's own capture: one document, one probe element,
+        // declaring full opacity and visibility — which is what the real one
+        // does.
+        let child = serde_json::json!({
+            "strings": ["F-oop", "HTML", "DIV", "id", "oop-inner", "block", "visible", "1", "auto"],
+            "documents": [{
+                "frameId": 0,
+                "nodes": {
+                    "parentIndex": [-1, 0],
+                    "nodeType": [1, 1],
+                    "nodeName": [1, 2],
+                    "nodeValue": [-1, -1],
+                    "backendNodeId": [5, 6],
+                    "attributes": [[], [3, 4]],
+                    "contentDocumentIndex": { "index": [], "value": [] },
+                    "isClickable": { "index": [] },
+                    "inputChecked": { "index": [] },
+                    "optionSelected": { "index": [] },
+                    "inputValue": { "index": [], "value": [] },
+                    "textValue": { "index": [], "value": [] }
+                },
+                "layout": {
+                    "nodeIndex": [0, 1],
+                    "bounds": [[0, 0, 300, 200], [5, 5, 100, 20]],
+                    "styles": [[5, 6, 7, 8], [5, 6, 7, 8]],
+                    "text": [-1, -1]
+                }
+            }]
+        });
+
+        // `strings` index 7 is "block", 8 "visible", 9 "hidden", 10 "0",
+        // 11 "1", 12 "auto"; the row order is `COMPUTED_STYLES`.
+        let stitch = |container_styles: [i64; 4], iframe_styles: [i64; 4]| {
+            let page = parent(container_styles, iframe_styles);
+            let mut l = loaders_of(&page);
+            l.extend(loaders_of(&child));
+            stitch_snapshots(
+                &page,
+                &no_top_layer(),
+                &[ChildCapture {
+                    owner_backend_node_id: OWNER,
+                    raw: &child,
+                    top_layer: &no_top_layer(),
+                }],
+                viewport(),
+                &l,
+            )
+            .expect("the parent and its cross-renderer child stitch")
+        };
+        let inner = |dom: &RawDom| -> RawNode {
+            dom.frames
+                .iter()
+                .flat_map(|f| f.nodes.iter())
+                .find(|n| n.attr("id") == Some("oop-inner"))
+                .expect("the child's #oop-inner is in the stitched page")
+                .clone()
+        };
+
+        // Container `opacity: 0`, `<iframe>` declaring `opacity: 1` — the
+        // measured shape, where only the in-document cascade knows.
+        let faded = inner(&stitch([7, 8, 10, 12], [7, 8, 11, 12]));
+        assert!(
+            faded
+                .computed
+                .expect("#oop-inner has a styles row")
+                .opacity_zero,
+            "#oop-inner is in a cross-origin frame whose owning <iframe> sits \
+             in an `opacity: 0` container. Its own capture knows nothing about \
+             that — the two are different renderers — so the flag can only \
+             reach it through the owner's cascaded reading at the stitch"
+        );
+        assert!(!visibility_of(&faded));
+
+        // Container `visibility: hidden` and the `<iframe>` reading `hidden`
+        // too — Chrome resolved the inheritance onto the element, which is the
+        // asymmetry against the arm above.
+        let hidden = inner(&stitch([7, 9, 11, 12], [7, 9, 11, 12]));
+        assert!(
+            hidden
+                .computed
+                .expect("#oop-inner has a styles row")
+                .visibility_hidden,
+            "the same boundary carries `visibility`, for the reason \
+             `a_frame_inside_a_visibility_hidden_container_is_not_offered_as_visible` \
+             measures: the child cannot re-show itself across a frame"
+        );
+        assert!(!visibility_of(&hidden));
+
+        // The PAIRED CONTROL. Without it, a stitch that marked every child
+        // capture would pass both assertions above.
+        let plain = inner(&stitch([7, 8, 11, 12], [7, 8, 11, 12]));
+        let computed = plain.computed.expect("#oop-inner has a styles row");
+        assert!(
+            !computed.opacity_zero && !computed.visibility_hidden,
+            "the container declares nothing and the child capture came back \
+             hidden anyway — the stitch is marking children rather than \
+             children of a hidden owner"
+        );
+        assert!(visibility_of(&plain));
+    }
+
     /// A CDP peer that carries **the DOM agent's two bits of state**, each
     /// moved by the verb Chrome moves it with.
     ///
@@ -3823,9 +5023,9 @@ mod tests {
     /// answers `[]`, exactly as the real browser does on a session whose node
     /// map is stale, the cascade marks the modal dialog and its button
     /// transparent, and the first assertion fails by name. Nothing else in this
-    /// tree can see that change: `[]` is also the honest answer for six of the
-    /// seven fixtures and for nearly every real page, so a forgotten handshake
-    /// is a no-op that reports success (判据 §11).
+    /// tree can see that change: `[]` is also the honest answer for seven of
+    /// the eight fixtures and for nearly every real page, so a forgotten
+    /// handshake is a no-op that reports success (判据 §11).
     ///
     /// **It is not the whole census.** This drives ONE session, so it cannot
     /// see a second, unhandshaken call site appearing somewhere else — a child
