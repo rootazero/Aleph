@@ -1135,10 +1135,12 @@ mod tests {
     /// error through as `Err` — the `Err(CdpError::Protocol { .. }) if code ==
     /// NO_BOX_CODE && message.starts_with(NO_BOX_MESSAGE) => Ok(None)` arm of
     /// `aleph_cdp::methods::dom::get_box_model`. **Named, not numbered: this
-    /// cited `dom.rs:165-169` until fix round 1, and by then the arm had moved
-    /// to `:186` — that file was edited by the two commits immediately before
-    /// the one that wrote this sentence, and `165-169` had become the tail of
-    /// the `object.objectId` decode. Same defect, found the same way, as the
+    /// cited `dom.rs:165-169` until fix round 1, by which time the arm had
+    /// moved — that file was edited by the two commits immediately before the
+    /// one that wrote this sentence, and `165-169` had become the tail of the
+    /// `object.objectId` decode. Where it moved TO is deliberately not written
+    /// down: the point of the sentence is that the number rotted, and naming
+    /// the new one would start the same clock again. Same defect, found the same way, as the
     /// DOM-agent handshake the stamp below dates — which cited its own call by
     /// line number until that number rotted too. An arm identified by the
     /// constants it matches on cannot be moved by an edit above it.** Two
@@ -1924,8 +1926,8 @@ mod tests {
         );
     }
 
-    /// Every `.rs` file under `src/` whose text contains `needle`, as
-    /// repo-relative paths, sorted.
+    /// Every `.rs` file under `src/` whose text contains `needle` once
+    /// backticks are removed from both sides, as repo-relative paths, sorted.
     ///
     /// Walked, never listed (判据 §5): a file added tomorrow is in the corpus
     /// without anyone remembering it. Raw text, NOT `code_text` — the claims
@@ -1933,6 +1935,30 @@ mod tests {
     /// scanning code only would have made the guard 恒绿 in its own subject
     /// case (判据 §2). The walk asserts a floor on the file count, so a broken
     /// walk reads as broken rather than as "nothing found".
+    ///
+    /// # Why backticks come out, and what that did and did not buy
+    ///
+    /// A claim written ``obscura ignores `pierce` `` and one written "obscura
+    /// ignores pierce" are the same claim by one character, and a plain
+    /// `contains` sees only the second. That is not a hypothetical: `:640` of
+    /// this file — the comment on the single-frame `RawFrame` — is the first
+    /// spelling, and a review planted that exact sentence, verbatim, into
+    /// `raw.rs` and measured **550 passed / 0 failed**. The census's own
+    /// second author walked past it.
+    ///
+    /// Stripping is done in the EXECUTOR rather than by listing both spellings
+    /// on the one row that was caught (判据 §11): every claim in
+    /// [`DATED_CLAIMS`] is quotable, so every row had the same hole. Measured
+    /// before the change and after: **no row's home set moves**, so this is
+    /// pure widening and cost no migration.
+    ///
+    /// **It buys backticks and nothing else.** A hyphen still splits a needle —
+    /// `fetch_chromium.rs` carries both `no top layer` and "no top-layer", and
+    /// only the first is matched — and a genuine reword ("obscura never
+    /// descends into an iframe") is matched by nothing here. Those are not
+    /// closed, and are not legislated for either: there is no measured
+    /// counter-example for them in a file that is not already a home, and a
+    /// normalisation rule written for a case nobody has seen is 判据 §5.
     fn files_mentioning(needle: &str) -> Vec<String> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1960,7 +1986,7 @@ mod tests {
             .into_iter()
             .filter_map(|file| {
                 let text = std::fs::read_to_string(&file).ok()?;
-                if !text.contains(needle) {
+                if !text.replace('`', "").contains(&needle.replace('`', "")) {
                     return None;
                 }
                 Some(
@@ -2075,9 +2101,25 @@ mod tests {
         claim: &'static str,
         /// The spelling a second author of THIS claim has to use — a phrase the
         /// claim is hard to state without, never a topic word.
+        ///
+        /// **There is no free choice here, and the earlier wording asserted one
+        /// instead of stating the trade.** An IDENTIFIER needle (`pierce`,
+        /// `top_layer`) catches every restatement and also goes red when a
+        /// refactor merely uses the symbol — a false red diagnosed as a real
+        /// drift by someone with no reason to suspect the needle. A PHRASE
+        /// needle cannot be planted by a refactor and is **green on a
+        /// paraphrase**. Each way of being wrong is the other's strength; what
+        /// a row can honestly claim is which failure it chose, not that it has
+        /// neither.
+        ///
+        /// These rows choose the phrase, and pay the paraphrase. The size of
+        /// that payment is measured rather than guessed: see
+        /// [`files_mentioning`] for the one counter-example this tree actually
+        /// contained, and for the backtick case, which was cheap enough to
+        /// close and is closed.
         needle: &'static str,
-        /// Every `src/` file whose text carries `needle` today, sorted as
-        /// [`files_mentioning`] sorts.
+        /// Every `src/` file whose text carries `needle` today — backticks
+        /// removed from both sides — sorted as [`files_mentioning`] sorts.
         homes: &'static [&'static str],
     }
 
@@ -2158,15 +2200,26 @@ mod tests {
             // PARAMETER, so a refactor can plant it in a second file without
             // making any claim at all. Two concrete reasons, not a worry: the
             // cross-frame task that follows this one may legitimately send
-            // `pierce: true` from `fetch_chromium.rs`, and `:387` in THIS file
-            // already uses the word in the unrelated sense "does not pierce
-            // shadow roots". Widening `homes` to pre-admit the twin was the
+            // `pierce: true` from `fetch_chromium.rs`, and the shadow-root
+            // warning inside [`walk`] already uses the word in THIS file, in
+            // the unrelated sense "does not pierce shadow boundaries" — named,
+            // not numbered, because this file grew 891 lines over two rounds
+            // and a line number written today is the next thing to rot. Widening `homes` to pre-admit the twin was the
             // other candidate and is wrong twice over — `fetch_chromium.rs`
             // carries zero occurrences today, so the row would go red
             // immediately, and a home list that admits a file for a spelling it
             // does not have is an allowlist written for a future that may not
-            // arrive (判据 §5). The phrase is refactor-proof and still matches
-            // the sentence a second author would actually write.
+            // arrive (判据 §5).
+            //
+            // ⚠️ This comment used to end "and still matches the sentence a
+            // second author would actually write." **That was an assertion of
+            // coverage, and it was false in this very file**: `:640` writes the
+            // claim as ``obscura ignores `pierce` ``, one backtick away, and a
+            // review planted that exact sentence into `raw.rs` to 550/0. The
+            // backtick half is now closed in [`files_mentioning`], for every
+            // row rather than this one. What is still green is a real reword —
+            // the price of not using the identifier, named rather than claimed
+            // away.
             needle: "ignores pierce",
             homes: &["src/browser/page_state/fetch_obscura.rs"],
         },
