@@ -227,7 +227,7 @@ async fn resolve_output_path_prefers_fs_scope_over_shared_handle() {
     let expected = strip_unc(run_b.join("output/documents/report.pdf"));
     let actual = strip_unc(resolved);
     assert_eq!(actual, expected);
-}
+}
 
 /// Outside any run scope, resolution falls back to the shared handle — the
 /// pre-scope behaviour, preserved for callers with no published `FsScope`.
