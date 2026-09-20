@@ -165,3 +165,4 @@ backup/
 # Third-party reference clones (independent git repos, not part of Aleph)
 pi-subagents/
 pi-tasks/
+cef-rs/
