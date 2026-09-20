@@ -586,7 +586,7 @@ async fn chromium_row() -> RuntimeRow {
                 match crate::browser::chromium_resolve::resolve_binary(
                     &cfg.general.browser.runtime,
                     &crate::browser::profile::BrowserType::default(),
-                    &cli,
+                    Some(&cli),
                 )
                 .await
                 {

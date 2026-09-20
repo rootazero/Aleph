@@ -471,30 +471,28 @@ impl EngineProcess for ChromiumLauncher {
         // the profile's network policy is the gate here either way, so there
         // is no discarded intent to report.
 
-        // R43: resolve the binary now, mirroring `playwright_cli.rs:421`'s
-        // `ensure_chromium` call. The CLI binary is looked up the same cheap
-        // way the doctor and `runtime_manage` do it (`managed_cli_path`: a
-        // `which` PATH walk plus a ledger read, off the async worker) —
-        // never provisioned here, since `resolve_binary` promises never to
-        // install anything.
-        // F1 (fix round 1): NOT `error::engine_unavailable` — that hint's
-        // first remedy is "run `playwright-cli install-browser chromium`
-        // yourself", which is a dead end here specifically: playwright-cli is
-        // the thing this branch just failed to find. This is the one call
-        // site that knows the cause is "no launcher", not "no browser".
-        let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
-            .await
-            .unwrap_or(None)
-            .ok_or_else(|| {
-                crate::browser::error::engine_unavailable_no_launcher(
-                    "no playwright-cli found on PATH or in the runtime ledger",
-                )
-            })?;
+        // R43 mirrored `playwright_cli.rs:421`'s `ensure_chromium` and resolved
+        // a `playwright-cli` HERE, before `resolve_binary` was called at all.
+        // W5: that precondition was correct in the world where the only way to
+        // get a Chromium was the managed driver, and this engine carried it
+        // into a driver that needs nothing from the CLI on two of
+        // `resolve_binary`'s three routes — so a host with a pinned Chrome and
+        // no `playwright-cli` (this branch's own stated target host) was refused
+        // for the absence of a tool the resolution would never have consulted.
+        // `fe7291072` fixed the message and did not question the gate: 判据 §14
+        // asked about the wording and not about whether the refusal was owed.
+        //
+        // `None` means "look one up only if route 3 is reached". The refusal
+        // that used to live here now lands in `resolve_binary`'s `tried`, beside
+        // the pin's and the system search's, with one author for all three
+        // (判据 §17). Measured by `qa/browser_dual/run.sh escape`, which is red
+        // at the commit before this one.
+        //
         // R68: the REQUEST's browser, never `BrowserType::default()` — see the
         // type's doc comment. This is the only place a profile's `browser`
         // field can reach the resolver on this path.
         let resolved =
-            crate::browser::chromium_resolve::resolve_binary(&self.runtime, &req.browser, &cli)
+            crate::browser::chromium_resolve::resolve_binary(&self.runtime, &req.browser, None)
                 .await?;
         let spec = ChromiumLaunchSpec {
             binary: resolved.path,
@@ -930,7 +928,7 @@ mod tests {
         let flat = code.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(
-            flat.contains("resolve_binary(&self.runtime, &req.browser, &cli)"),
+            flat.contains("resolve_binary(&self.runtime, &req.browser, None)"),
             "the chromium launch must resolve the request's own BrowserType — \
              without it a profile set to Brave or Edge silently launches \
              Chromium and nothing reports the setting was ignored"

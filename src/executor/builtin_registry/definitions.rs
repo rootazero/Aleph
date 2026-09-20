@@ -2899,7 +2899,53 @@ mod tests {
     /// (the count `MigrationState` has fields) and points at the result for
     /// the rest. That is the same R2' split the 2026-09-14 entry made for the
     /// capability table itself.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_023;
+    /// 2026-09-20 (browser dual-engine, whole-branch fix round): 115_023 ->
+    ///   115_154 B, +131 — and the +131 is a NET of two edits in opposite
+    ///   directions, which is why it is not the length of anything.
+    ///   `browser_emulate`'s DESCRIPTION shrank 256 -> 246 B (-10) when the
+    ///   sentence that was false in every one of its six claims was replaced by
+    ///   the measured one; `browser_snapshot`'s grew 168 -> 309 B (+141).
+    ///   Measured, both ends, by flooring this constant to 1 and reading the
+    ///   guard's own failure line — the only thing that prints the total:
+    ///   115_154 B, made of 95_558 catalog, 16_613 registry-only, 1_039
+    ///   injected and 1_944 bridge. ⚠️ Two routes to this number disagreed by
+    ///   4 B on the first attempt, and the ARITHMETIC was the wrong one: the fix
+    ///   report had quoted the new emulate string as 250 B from the wrong draft.
+    ///   Rebuilt from the source literals (`\`-continuations eat the following
+    ///   line's indent), 115_154 less 141 plus 10 is 115_023 exactly, so the
+    ///   previous entry's "flush, zero headroom" was right and the slack was
+    ///   imaginary. Three numbers agreeing is what makes this one quotable
+    ///   (判据 §18).
+    ///
+    /// What the +141 bytes buy: one clause telling the model that on obscura a
+    /// clickable whose only signal is a JS listener earns no ref, and naming the
+    /// two things that reach it anyway — `format="json"`, which carries a rect
+    /// for exactly those nodes, and a coordinate click.
+    /// Against the three questions:
+    /// (1) All of it is runtime fact, and measured rather than argued: obscura's
+    /// capture reports no `DOMSnapshot.isClickable`, so `roles::is_interactive`'s
+    /// sixth disjunct can never fire there, and that whole class of element is
+    /// absent from the tree. No model can derive which of two engines reports a
+    /// protocol field. The door is measured too — `qa/browser_dual/run.sh switch`
+    /// asserts the ref-less node is in the json face WITH a non-zero rect, so the
+    /// sentence is not allowed to promise a door that does not open (判据 §14).
+    /// (2) It is not a cage. It states a fact and names two verbs; it says
+    /// nothing about when to snapshot or what to click. The first draft nearly
+    /// said "so prefer coordinates on obscura" — that clause is strategy and was
+    /// cut under R9's first ruler.
+    /// (3) Nothing else says it to the MODEL. The capability table cannot: every
+    /// row there names a `browser_*` verb it gates, and no verb dispatches
+    /// "mint a ref". `browser_session{action:"capabilities"}` is a RESULT that
+    /// costs nothing on a turn that does not ask — and a model that cannot find
+    /// a ref does not know to ask. The FACT has three other owners and none of
+    /// them is model-facing: `fetch_obscura`'s tests (`clickable_hint` is never
+    /// `Some`), the QA stage's two-sided pin, and FL §3.12's narrowed
+    /// interchangeability sentence.
+    /// **Expiry, stated where it can be acted on:** this clause is one of the
+    /// three things `qa/browser_dual/run.sh switch`'s failure text names for
+    /// deletion when obscura starts reporting the signal. It is not permanent
+    /// prose; it is a dated fact with a guard that reddens when it expires.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_154;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

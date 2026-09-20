@@ -22,13 +22,24 @@ from qa_rpc import Ledger, Rpc, ws_connect  # noqa: E402
 # like "the process is gone"), and the whole-word match that stops
 # `--storage-dir=<X>` from also finding `--storage-dir=<X>-neighbour`.
 sys.path.insert(0, os.path.dirname(__file__))
-from drive import main_processes, snapshot_text, token_processes  # noqa: E402
+from drive import (  # noqa: E402
+    MEASURED_ON,
+    main_processes,
+    node_named,
+    obscura_version,
+    snapshot_state,
+    snapshot_text,
+    token_processes,
+)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("ws")
 ap.add_argument("--page-url", required=True)
 ap.add_argument("--aleph-home", required=True)
 ap.add_argument("--obscura-storage", required=True)
+# Read for its VERSION, not to launch it: the F2 pin below is dated to a build,
+# and a dated expectation that never looks at the build is a date in a comment.
+ap.add_argument("--obscura-binary", required=True)
 args = ap.parse_args()
 
 led = Ledger()
@@ -120,43 +131,53 @@ def sidecar_listing():
 # anything.
 #
 # ---------------------------------------------------------------------------
-# IT CAME BACK WITH A DIFFERENCE. Measured 2026-09-20, obscura v0.2.2 against
-# Chrome in /Applications, reproduced 2/2 byte-identically:
-#
-#     obscura-only: []          chromium-only: [generic '']
-#
-# The element is `<label for="txt">Your name</label>`. chromium renders
-# `- generic "" [ref=..] @86,249 81x22` with the text leaf beneath it; obscura
-# renders the text leaf alone, so the label is not addressable there at all.
+# IT CAME BACK WITH A DIFFERENCE, AND THE DIFFERENCE IS PINNED BELOW.
 #
 # MECHANISM, established rather than guessed. `roles::is_interactive` is a
 # six-way OR. Five of the six read attributes or computed styles BOTH engines
 # supply. The sixth is `clickable_hint == Some(true)`, fed from exactly one
 # place — `fetch_chromium.rs`'s `DOMSnapshot.isClickable` — and
 # `fetch_obscura.rs` leaves it `None` deliberately, with a comment arguing
-# (correctly) that faking it from `cursor_pointer` would be worse. Chrome marks
-# a `<label for>` clickable; obscura reports no such signal, the label is
-# `Generic` with an empty name, and `anchor_flags` therefore gives it no line.
+# (correctly) that faking it from `cursor_pointer` would be worse. So an element
+# whose ONLY evidence of clickability is a script-attached listener is
+# interactive on chromium and not on obscura; on obscura it earns no line at
+# all, and the model sees only its text leaf.
 #
-# FALSIFIED, not merely read: giving the label `style="cursor:pointer"` — a
-# signal both engines report, reaching the FIFTH disjunct — made obscura mint
-# the same `generic ''` and the symmetric difference went empty, every other key
+# FALSIFIED, not merely read: giving such an element `style="cursor:pointer"` —
+# a signal both engines report, reaching the FIFTH disjunct — made obscura mint
+# the same node and the symmetric difference went empty, every other key
 # unchanged. So this assertion has been observed BOTH red and green on this
 # fixture, which is the only useful answer to "in what circumstance does it go
 # the other way?" (判据 §2).
 #
-# THE CLASS IS NOT `<label>`. It is every element whose only evidence of
-# clickability is a JS-attached listener — no `onclick` attribute, no
-# `cursor: pointer`, no `tabindex`, no interactive role. `is_interactive`'s own
-# doc names that class as the one that matters most. On obscura, Aleph cannot
-# see them.
-#
-# This claim is therefore RED on obscura v0.2.2 BY DESIGN, and left red rather
-# than pinned to the known exception: whether the branch's interchangeability
-# claim survives a whole class of elements being unaddressable on the default
-# engine is a ruling, and a claim made green on the implementer's own authority
-# is a finding nobody reads again.
+# WHY A PIN AND NOT A RED. Leaving the claim red would make this stage
+# permanently 17 PASS / 1 FAIL, and the next REAL divergence would arrive
+# hidden behind a failure everybody had learned to skip — 判据 §2's 恒红 face.
+# Widening the key would be the 恒绿 face. The third shape is to assert the
+# measured symmetric difference ITSELF, so that the gap growing and the gap
+# CLOSING are both red, for different reasons and with different sentences.
 # ---------------------------------------------------------------------------
+
+# The pin. Version and date live HERE, beside the fact they date, not in a
+# comment somewhere else that can rot on its own (判据 §1).
+#
+# `PIN_OBSCURA_BUILD` is imported from `drive.py` rather than written again:
+# "which obscura build was measured" already has an author on this branch, and a
+# second copy of it is the defect this file spends forty lines avoiding.
+PIN_MEASURED_AT = "2026-09-20"
+PIN_OBSCURA_BUILD = MEASURED_ON
+# What chromium offers and obscura does not, exactly. Two instances of ONE
+# class, kept distinguishable on purpose:
+#   * `generic ""`                    — `<label for="txt">`, the instance the
+#                                       first F2 run caught by accident;
+#   * `generic "JS listener only"`    — `<div>` + `addEventListener`, the class's
+#                                       representative shape, added so the pin
+#                                       names a class rather than an accident.
+PIN_CHROMIUM_ONLY = Counter({("generic", ""): 1, ("generic", "JS listener only"): 1})
+PIN_OBSCURA_ONLY = Counter()
+# The element whose geometry the model is told to fall back on. Block-level, so
+# obscura's zero-box-on-inline behaviour is not what is being measured here.
+PIN_DOOR_NAME = "JS listener only"
 
 
 def _quoted_at(line, start):
@@ -268,6 +289,50 @@ async def main():
             ok and bool(obscura_tree),
             json.dumps(body)[:200],
         )
+
+        # THE DOOR, measured in the same run that records the gap.
+        #
+        # `browser_snapshot`'s DESCRIPTION tells the model that an element with
+        # no ref on this engine can still be found in the `format="json"` face
+        # and clicked by coordinates. That sentence is only allowed to exist
+        # while these two claims are green — a named door that does not open is
+        # fail-dead, not fail-closed (判据 §14), and a DESCRIPTION promising one
+        # would be the same expensive-direction lie W7 was.
+        _, _, obscura_state = await snapshot_state(rpc, led)
+        door = node_named(obscura_state, PIN_DOOR_NAME, want_rect=True)
+        check(
+            "the ref-less element is still IN the json face",
+            door is not None,
+            json.dumps(door)[:200]
+            if door is not None
+            else f"NO node named {PIN_DOOR_NAME!r} among "
+            f"{len(obscura_state.get('nodes', []))} nodes",
+        )
+        if door is not None:
+            rect = door.get("rect") or {}
+            check(
+                "…and it carries a rect the model can click by coordinates",
+                bool(rect) and (rect.get("w") or 0) > 0 and (rect.get("h") or 0) > 0,
+                json.dumps(door)[:300],
+            )
+            # Outcome-dependent text, for the same reason the pin pair's is.
+            # Found by mutation N-D: when obscura DOES start seeing this
+            # element, the gap has closed and this claim goes red too — and its
+            # first wording ("which is the whole reason the door is needed")
+            # read as a breakage, so the operator got two reds where the
+            # situation calls for one instruction. Good news must not arrive
+            # wearing a failure's label (判据 §17).
+            no_ref = door.get("ref") is None
+            check(
+                "…while having no ref, which is the whole reason the door is needed",
+                no_ref,
+                json.dumps(door)[:300]
+                if no_ref
+                else f"this element now HAS a ref ({door.get('ref')}) on obscura — the gap "
+                f"closed for it, which is the SAME event the F2 pin reports below. "
+                f"Nothing is broken; follow the pin's expiry instructions and this "
+                f"claim goes with it",
+            )
 
         ok, res = await rpc.invoke(
             "browser_cookies",
@@ -433,12 +498,51 @@ async def main():
 
         only_obscura = obscura_keys - chromium_keys
         only_chromium = chromium_keys - obscura_keys
-        same = check(
-            "THE TWO ENGINES OFFER THE SAME ADDRESSABLE ELEMENTS ON THIS PAGE",
-            not only_obscura and not only_chromium,
-            f"obscura-only: [{describe(only_obscura)}] | "
-            f"chromium-only: [{describe(only_chromium)}]",
+
+        # The pin is dated to a BUILD, so the build is checked rather than
+        # assumed. A version bump is the likeliest way this expires, and an
+        # expectation that cannot notice its own expiry is prose.
+        build = obscura_version(args.obscura_binary)
+        pinned_build = check(
+            "the obscura this run used is the one the F2 pin is dated to",
+            build == PIN_OBSCURA_BUILD,
+            f"running {build or 'unreadable'}, pinned to {PIN_OBSCURA_BUILD} "
+            f"(measured {PIN_MEASURED_AT})",
         )
+
+        # Two directions, two sentences. Together they are equality; apart they
+        # say WHICH way the world moved, and the closing direction has to be as
+        # loud as the growing one or the pin outlives the fact (判据 §5).
+        no_growth = only_chromium <= PIN_CHROMIUM_ONLY and not only_obscura
+        grew = check(
+            "the known engine gap has not GROWN or changed shape",
+            no_growth,
+            f"within the pin: [{describe(only_chromium)}]"
+            if no_growth
+            else f"pinned chromium-only [{describe(PIN_CHROMIUM_ONLY)}]; observed "
+            f"chromium-only [{describe(only_chromium)}], obscura-only "
+            f"[{describe(only_obscura)}] — a key here that the pin does not name is "
+            f"a NEW divergence, and the pin does not cover it",
+        )
+        # The detail is built from the OUTCOME. A green line reading "THE PIN HAS
+        # EXPIRED" is the wrong label, and a wrong label costs more than a
+        # missing one (判据 §17) — which is the same rule the `check` above this
+        # one had to learn too.
+        still_open = PIN_CHROMIUM_ONLY <= only_chromium
+        closed = check(
+            f"the F2 pin still describes the world (obscura {PIN_OBSCURA_BUILD}, "
+            f"measured {PIN_MEASURED_AT})",
+            still_open,
+            f"as pinned: [{describe(PIN_CHROMIUM_ONLY)}]"
+            if still_open
+            else f"pinned [{describe(PIN_CHROMIUM_ONLY)}] but observed "
+            f"[{describe(only_chromium)}]. THE PIN HAS EXPIRED, GO UPDATE IT — this "
+            f"is not a breakage: obscura now offers something it did not. Delete the "
+            f"matching entry from PIN_CHROMIUM_ONLY, and if it empties, delete the pin, "
+            f"browser_snapshot's DESCRIPTION clause about JS-listener clickables, and "
+            f"the narrowed interchangeability sentence in FL §3.12 with it",
+        )
+        same = grew and closed and pinned_build
         # Printed whatever the verdict: the comparison's INPUT is the thing a
         # reader needs in order to disagree with it, and a green run that shows
         # nothing is a number without its predicate (判据 §18).

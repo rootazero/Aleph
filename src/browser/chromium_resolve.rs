@@ -368,10 +368,33 @@ fn is_executable(_path: &Path) -> bool {
 /// runs on the first browser tool call, whose hard budget is 180 s. Installing
 /// has three explicit entrances instead — the ledger's post-install, the
 /// doctor's fix hint, and `runtime_manage{install}`.
+/// # The `cli_binary` parameter is `Option`, and that is the whole of W5's fix
+///
+/// `playwright_managed` — route 3 — is the ONLY one of the three routes that
+/// consumes a `playwright-cli`. Routes 1 (a pin) and 2 (`prefer_system_browser`,
+/// which defaults **true**) return before it is ever named.
+///
+/// It used to be a `&Path`, and `ChromiumEngine::launch` therefore had to
+/// resolve one BEFORE calling this function — refusing with "no playwright-cli
+/// found" on a host that had a perfectly good pinned Chrome one route away.
+/// That is the branch's own stated target host (`tools::probes::browser`
+/// celebrates it by name: *obscura installed, no `playwright-cli`, no `npx`*),
+/// so the escape hatch did not exist on exactly the machine the escape hatch
+/// was for. Measured, not argued: `qa/browser_dual/run.sh escape`.
+///
+/// * `Some(path)` — the managed driver, which already resolved its own CLI
+///   through `PlaywrightCliDriver::resolve_binary` and therefore honours
+///   `[general.browser.playwright_cli] binary_path`. Passing it in keeps that
+///   ONE resolution authoritative; looking one up here instead would be a
+///   second answer to "which playwright-cli" (判据 §1).
+/// * `None` — the cdp engine path, which has no CLI and needs one only if
+///   route 3 is reached. The lookup then happens inside that route, and its
+///   failure lands in `tried` beside the other two routes' failures instead of
+///   being reported by a different author three frames up (判据 §17).
 pub(crate) async fn resolve_binary(
     runtime: &BrowserRuntimeConfig,
     browser: &BrowserType,
-    cli_binary: &Path,
+    cli_binary: Option<&Path>,
 ) -> Result<ResolvedChromium, BrowserError> {
     let mut tried: Vec<String> = Vec::new();
 
@@ -423,7 +446,33 @@ pub(crate) async fn resolve_binary(
         tried.push("system browsers skipped (prefer_system_browser = false)".to_string());
     }
 
-    match playwright_managed(cli_binary).await {
+    // Route 3, and the ONLY consumer of a CLI. The lookup lives here rather
+    // than at the call site so that a host without one still gets routes 1 and
+    // 2 — see this function's own doc for what that cost before.
+    //
+    // `spawn_blocking`: `managed_cli_path` is a `which` PATH walk plus a ledger
+    // read, i.e. filesystem IO on an async thread. It is never a provision —
+    // this function promises never to install anything, and that promise is
+    // unchanged.
+    let cli_owned: Option<PathBuf> = match cli_binary {
+        Some(_) => None,
+        None => tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
+            .await
+            .unwrap_or(None),
+    };
+    let Some(cli) = cli_binary.or(cli_owned.as_deref()) else {
+        // Folded into `tried`, not raised by itself: by the time execution is
+        // here, "no pin" / "no system browser" are equally part of the answer,
+        // and an error naming only the launcher would hide the other two.
+        // `engine_unavailable_no_launcher` (not `engine_unavailable`) because
+        // the generic hint's first remedy is `playwright-cli install-browser`,
+        // which is a dead end when playwright-cli is the missing thing.
+        tried.push("no playwright-cli found on PATH or in the runtime ledger".to_string());
+        return Err(crate::browser::error::engine_unavailable_no_launcher(
+            tried.join("; "),
+        ));
+    };
+    match playwright_managed(cli).await {
         Ok(path) => {
             if *browser != BrowserType::Chromium {
                 // Naming the substitution rather than performing it silently:
@@ -779,7 +828,9 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let result = resolve_binary(
             &runtime,
             &BrowserType::Brave,
-            Path::new("/nonexistent/playwright-cli-should-never-be-invoked"),
+            Some(Path::new(
+                "/nonexistent/playwright-cli-should-never-be-invoked",
+            )),
         )
         .await
         .expect("a pin pointing at an existing file must resolve");
@@ -805,7 +856,7 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let err = resolve_binary(
             &runtime,
             &BrowserType::Chromium,
-            Path::new("/nonexistent/playwright-cli"),
+            Some(Path::new("/nonexistent/playwright-cli")),
         )
         .await
         .expect_err("a missing pin must not fall back to system/Playwright routes");
@@ -851,7 +902,9 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let err = resolve_binary(
             &runtime,
             &BrowserType::Chromium,
-            Path::new("/nonexistent/playwright-cli-should-never-be-invoked"),
+            Some(Path::new(
+                "/nonexistent/playwright-cli-should-never-be-invoked",
+            )),
         )
         .await
         .expect_err("a non-executable pin must not resolve as healthy");
@@ -887,7 +940,9 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let result = resolve_binary(
             &runtime,
             &BrowserType::Chromium,
-            Path::new("/nonexistent/playwright-cli-should-never-be-invoked"),
+            Some(Path::new(
+                "/nonexistent/playwright-cli-should-never-be-invoked",
+            )),
         )
         .await;
         std::env::remove_var("ALEPH_CHROME_PATH");

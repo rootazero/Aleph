@@ -19,6 +19,12 @@
 #                                       # are swept, a prefix-neighbour is NOT
 #   ./qa/browser_dual/run.sh caps       # the capability table, probed against the
 #                                       # real binary, verb by verb
+#   ./qa/browser_dual/run.sh escape     # the host this branch is BUILT for: no
+#                                       # playwright-cli anywhere (PATH scrubbed,
+#                                       # scratch ledger). obscura still opens, and
+#                                       # so does a pinned Chrome — the escape hatch
+#                                       # must not demand a tool that two of
+#                                       # resolve_binary's three routes never consult
 #   ./qa/browser_dual/run.sh switch     # a cookie set on obscura is readable on
 #                                       # chromium afterwards, the tab is back on
 #                                       # its URL, the obscura process is GONE —
@@ -46,7 +52,7 @@ set -uo pipefail
 
 STAGE="${1:-open}"
 case "$STAGE" in
-  provision|open|snapshot|click|stall|reap|caps|switch) ;;
+  provision|open|snapshot|click|stall|reap|caps|switch|escape) ;;
   *) echo "unknown stage: $STAGE" >&2; exit 64 ;;
 esac
 
@@ -95,7 +101,8 @@ CHROME_BIN="${ALEPH_QA_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Go
 # sweep reaches both engines' orphans. Without a Chrome neither can say anything
 # about chromium, and a stage that passes by having nothing to check is the
 # shape qa/README.md warns about.
-if { [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "switch" ]; } \
+if { [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "switch" ] \
+     || [ "$STAGE" = "escape" ]; } \
    && [ ! -x "$CHROME_BIN" ]; then
   echo "no browser at $CHROME_BIN; set ALEPH_QA_CHROME" >&2
   echo "(this stage's claims are about BOTH engines; without a chromium it would" >&2
@@ -269,7 +276,7 @@ fi
 if [ "$STAGE" = "stall" ]; then
   BROWSER_CFG_ARGS+=(--cdp-command-timeout-secs "$STALL_TIMEOUT_SECS")
 fi
-if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ]; then
+if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "escape" ]; then
   # A second profile on the OTHER engine. `open` needs it because spec §7.4 says
   # the readiness gate is proven 对两引擎都成立, and a stage that only ever
   # launches obscura says nothing about the other engine's gate or about
@@ -330,6 +337,56 @@ cat > "$HOME/.aleph/approval-policy.json" <<'JSON'
 },"allowlist":[],"blocklist":[]}
 JSON
 
+# THE AXIS, and it is the whole of what `escape` measures. `managed_cli_path`
+# reads exactly two places — a `which` walk of `PATH` and the runtime ledger —
+# so hiding the CLI means emptying both. The ledger is already empty (scratch
+# `$ALEPH_HOME`); this drops every `PATH` entry that holds a `playwright-cli`.
+#
+# Done HERE and not earlier on purpose: the preamble still has to find one for
+# `add_browser_config.py --cli-binary` (a flag another fixture depends on being
+# mandatory), and `qa_build` needs the toolchain's PATH. By this line both are
+# done and nothing after it may find a launcher.
+#
+# Whole DIRECTORIES, not a `which` result: the fnm bin dir that carries
+# `playwright-cli` carries `node` and `npx` too, and a host that has one
+# normally has all three. Removing just the one file's directory entry is what
+# the target host looks like — obscura installed, no playwright-cli, no npx —
+# and leaving `npx` behind would quietly hand the existing-session driver a
+# prerequisite the real host does not have.
+if [ "$STAGE" = "escape" ]; then
+  SCRUBBED=""
+  DROPPED=""
+  IFS=':' read -ra _PATH_PARTS <<< "$PATH"
+  for _d in "${_PATH_PARTS[@]}"; do
+    [ -n "$_d" ] || continue
+    if [ -x "$_d/playwright-cli" ]; then DROPPED="${DROPPED:+$DROPPED }$_d"; continue; fi
+    SCRUBBED="${SCRUBBED:+$SCRUBBED:}$_d"
+  done
+  export PATH="$SCRUBBED"
+  echo "escape: dropped from PATH: ${DROPPED:-<none — this host had no playwright-cli to hide>}"
+  # PATH IS NOT THE ONLY DOOR, and the first draft of this stage learned that
+  # the expensive way: with PATH scrubbed the escape hatch opened anyway, and
+  # this fixture's own "is my axis real" assertion is what caught it rather
+  # than a green being believed. `managed_cli_path` also reads the runtime
+  # ledger, and the ledger is filled by `runtimes::probe`, which searches
+  # WELL-KNOWN INSTALL DIRECTORIES that no PATH contains — among them fnm's,
+  # located from `$FNM_DIR`. So a host with fnm exported still has a
+  # playwright-cli as far as Aleph is concerned, whatever PATH says.
+  #
+  # Unset rather than redirected: the target host has no fnm at all, and
+  # pointing these at an empty directory would be a fixture pretending to be a
+  # machine instead of being one.
+  unset FNM_DIR FNM_MULTISHELL_PATH npm_config_prefix ASDF_DATA_DIR
+  # A fixture that failed to hide it would report a green escape hatch on a host
+  # that still had one, which is exactly how this defect stayed invisible to 284
+  # assertions. The driver asserts it again from inside; this is the earlier of
+  # the two, so the run dies here rather than lying later.
+  if command -v playwright-cli >/dev/null 2>&1; then
+    echo "escape: playwright-cli is STILL reachable after scrubbing PATH" >&2
+    exit 1
+  fi
+fi
+
 say "start server (cwd=$CWD)"
 (cd "$CWD" && "$BIN" start) >"$QA_ROOT/server.log" 2>&1 &
 SERVER_PID=$!
@@ -348,12 +405,20 @@ if [ "$STAGE" = "caps" ]; then
     --page-url "http://127.0.0.1:$PAGE_PORT/caps.html" \
     --aleph-home "$ALEPH_HOME" \
     --obscura-binary "$OBSCURA_BIN" || RC=$?
+elif [ "$STAGE" = "escape" ]; then
+  python3 "$HERE/drive_escape.py" \
+    "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+    --page-url "http://127.0.0.1:$PAGE_PORT/index.html" \
+    --aleph-home "$ALEPH_HOME" \
+    --chromium-udd "$CHROMIUM_UDD" \
+    --chrome-bin "$CHROME_BIN" || RC=$?
 elif [ "$STAGE" = "switch" ]; then
   python3 "$HERE/drive_switch.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" \
     --page-url "http://127.0.0.1:$PAGE_PORT/index.html" \
     --aleph-home "$ALEPH_HOME" \
-    --obscura-storage "$OBSCURA_STORAGE" || RC=$?
+    --obscura-storage "$OBSCURA_STORAGE" \
+    --obscura-binary "$OBSCURA_BIN" || RC=$?
 else
   python3 "$HERE/drive.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$STAGE" \

@@ -278,7 +278,7 @@ impl EngineMissingCheck {
         };
         let probe = tokio::time::timeout(
             RESOLVE_TIMEOUT,
-            resolve_binary(&runtime, &BrowserType::default(), &cli),
+            resolve_binary(&runtime, &BrowserType::default(), Some(&cli)),
         )
         .await;
         vec![match probe {

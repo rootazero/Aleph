@@ -417,7 +417,8 @@ impl PlaywrightCliDriver {
         }
 
         let resolved =
-            super::chromium_resolve::resolve_binary(&self.runtime, &launch.browser, bin).await?;
+            super::chromium_resolve::resolve_binary(&self.runtime, &launch.browser, Some(bin))
+                .await?;
         // The replacement for the boot-time `unhonored_managed_fields` warning
         // this round deletes. `find_chromium_preferred` degrades SILENTLY when
         // the requested engine is not installed — it merely reorders candidates

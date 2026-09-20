@@ -57,4 +57,32 @@
        src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
   <ul><li><a id="nested" href="/second.html">nested link</a></li></ul>
   <div id="drag" aria-label="Drag source" draggable="true">DRAGSRC</div>
+
+  <!-- The CLASS the F2 pin names, as an element rather than as a sentence.
+       `<label for>` is the instance the first F2 run happened to catch, and it
+       is a bad representative twice over: it is inline (so obscura reports a
+       zero box for it, and any claim about reading its geometry back would be
+       false), and a label is redundant with the control it names.
+
+       This is the real shape: a block `<div>` whose ONLY evidence of
+       clickability is a listener attached from script. No `onclick` ATTRIBUTE
+       (that is `is_interactive`'s third disjunct and both engines see it —
+       `#blk` above is that case), no `cursor: pointer` (the fifth), no
+       `tabindex` (the second), not an interactive role (the first), not
+       contenteditable (the fourth). That leaves only the sixth,
+       `clickable_hint`, which is Chromium's `DOMSnapshot.isClickable` and which
+       obscura does not report.
+
+       `aria-label` on purpose: it gives this node a DISTINCT key in the
+       comparison, so the pin can name it rather than carrying two
+       indistinguishable `generic ''` entries. -->
+  <div id="js" aria-label="JS listener only"
+       style="display:block;width:200px;height:30px;background:#ddd">JS-ONLY CLICKABLE</div>
+  <script>
+    // addEventListener, never an attribute: the attribute is a different
+    // disjunct and would make this element prove nothing.
+    document.getElementById('js').addEventListener('click', function () {
+      window.__jsclicked = true;
+    });
+  </script>
 </body></html>

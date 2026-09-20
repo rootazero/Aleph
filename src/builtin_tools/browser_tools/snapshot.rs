@@ -221,7 +221,9 @@ impl AlephTool for BrowserSnapshotTool {
     const DESCRIPTION: &'static str =
         "Get a snapshot of the current browser page — an indented accessibility \
          tree by default, or the full page-state tree with geometry and element \
-         states via format=\"json\"";
+         states via format=\"json\". On obscura a clickable whose only signal is \
+         a JS listener gets no ref; it is still in the json tree with a rect, so \
+         click it by coordinates";
     type Args = BrowserSnapshotArgs;
     type Output = BrowserSnapshotOutput;
 
@@ -378,6 +380,42 @@ mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
     use crate::tools::result_store::ToolResultStore;
+
+    /// The DESCRIPTION names a gap AND the door out of it, and neither half may
+    /// leave without the other.
+    ///
+    /// **What this test is NOT.** It does not establish the gap — that is
+    /// `qa/browser_dual/run.sh switch`'s two-sided pin, which reddens both when
+    /// the divergence grows and when obscura closes it — nor the mechanism,
+    /// which is `page_state::fetch_obscura`'s own assertions that
+    /// `clickable_hint` is never `Some` on that engine. Saying so here is the
+    /// point: a guard that claimed to cover the fact would be a fourth author
+    /// for it (判据 §1), and the QA pin's failure text already names this
+    /// sentence as one of the three places to delete when the pin expires.
+    ///
+    /// **What it IS, honestly labelled.** A phrase needle, and phrase needles
+    /// are fail-GREEN on a paraphrase (B7). It buys exactly one thing: the
+    /// sentence cannot keep the bad news and lose the remedy. A refusal with no
+    /// door is fail-dead rather than fail-closed (判据 §14), and that is the
+    /// specific way this clause could rot into something worse than silence —
+    /// a model told its element is unaddressable, with no `format="json"` and
+    /// no coordinates to reach for.
+    #[test]
+    fn the_description_states_the_obscura_ref_gap_together_with_its_door() {
+        let d = BrowserSnapshotTool::DESCRIPTION;
+        assert!(
+            d.contains("no ref"),
+            "the sentence must still say an element can be missing a ref: {d}"
+        );
+        assert!(
+            d.contains("json"),
+            "…and must still name the face that carries it anyway: {d}"
+        );
+        assert!(
+            d.contains("coordinates"),
+            "…and the verb that reaches it, or the bad news arrives with no door: {d}"
+        );
+    }
 
     /// A fixture that is cut, and says so out loud.
     ///

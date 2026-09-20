@@ -51,6 +51,10 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # and a prefix-neighbour that a RECORD points at
                                    # is not (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
+./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
+                                   # anywhere (PATH scrubbed, fnm env unset, scratch
+                                   # ledger). obscura still opens AND so does a pinned
+                                   # Chrome (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh switch    # a cookie set on obscura is READABLE ON CHROMIUM after
                                    # browser_session{action:"switch_engine"}, the tab is
                                    # back on its URL, the obscura process is GONE, the
@@ -714,6 +718,33 @@ evidence, and without it they would answer `EngineMismatch`. And it is the only
 real-machine exercise of the approval **inheritance** `ActionType` promises: the
 policy fixture writes `browser_open` and no `browser_switch_engine` key, so a
 switch that runs at all is `inherited_from` doing its job.
+
+**`escape` is the one stage whose subject is a host this machine is not.** Every
+other fixture here runs where `playwright-cli` sits on `PATH`, so every
+`browser_open` in them passed through a `managed_cli_path` that answered `Some`
+— which is why 284 green assertions could not see that `ChromiumEngine::launch`
+demanded a launcher **before** `resolve_binary` chose a route, and refused a
+pinned Chrome for the absence of a tool two of the three routes never consult.
+The branch's own probe names that host by name (*obscura installed, no
+`playwright-cli`, no `npx`*), and it is the host the escape hatch exists for.
+
+**Hiding a tool is harder than it looks, and the stage asserts its own axis for
+that reason.** The first draft scrubbed `PATH` and the escape hatch opened —
+which read, for a moment, like the defect not existing. The stage's
+*is-my-axis-real* claim said otherwise: `managed_cli_path` also reads the
+runtime ledger, and the ledger is filled by `runtimes::probe`, which searches
+**well-known install directories no PATH contains** — fnm's among them, found
+via `$FNM_DIR`. So the axis is three things (PATH entries dropped, fnm/npm/asdf
+env unset, scratch `$ALEPH_HOME`), the ledger is read at **both** ends of the
+run because that probe writes lazily, and the predicate is
+`CapabilityLedger::executable` — *not* "the name appears in the file", which was
+the second wrong instrument: the ledger carries a `missing` entry for every
+capability it knows about, and a claim that read the name went red on a run
+where the launcher had correctly found nothing (判据 §18).
+
+**The control is inside the stage**: `default` must still open on obscura. Without
+it, "chromium refused" and "the PATH surgery broke this server" are the same
+reading, and a negative result with two explanations has measured nothing.
 
 **And `switch` is where spec F2 lives — the branch's own declared merge blocker,
 and the only place either engine is compared against the other.** The stage

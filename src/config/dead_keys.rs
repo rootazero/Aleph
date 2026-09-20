@@ -560,6 +560,17 @@ mod tests {
                 "binary_path = \"/nonexistent\"\nvariant = \"default\"\n\
                  download_host = \"https://example.invalid\"\n",
             ),
+            // Arrived with W5's fix: `chromium_resolve::resolve_binary`'s doc
+            // now explains that the managed driver passes its OWN resolved CLI
+            // so that `[general.browser.playwright_cli] binary_path` keeps
+            // deciding which one, and naming that section here is what this
+            // guard asks for in return. Every key the section really has, not
+            // just the one the sentence mentions — the same rule the two
+            // sections above follow.
+            "general.browser.playwright_cli" => Some(
+                "binary_path = \"/nonexistent\"\nheadless = true\n\
+                 nav_timeout_secs = 120\naction_timeout_secs = 60\n",
+            ),
             _ => None,
         }
     }

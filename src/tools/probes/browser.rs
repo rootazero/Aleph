@@ -162,18 +162,43 @@ pub(crate) fn existing_session_driver_ready() -> bool {
 /// check, a `which`, a ledger read, no subprocess, matching this module's
 /// "blocking work" contract below.
 ///
-/// # Why there is no Chromium half, and why the first version of this had one
+/// # Why there is no Chromium half — RE-DERIVED, because the premise changed
 ///
-/// A `cdp` profile CAN resolve to `Engine::Chromium`, so the obvious second
-/// disjunct is `find_chromium().is_ok()`. It was written, and it was wrong:
-/// `ChromiumLauncher::launch` refuses with `engine_unavailable_no_launcher`
-/// unless `managed_cli_path()` answers `Some`, **before** it calls
-/// `resolve_binary` at all — so not even an operator's pinned browser survives
-/// that gate. And `managed_cli_path().is_some()` IS
-/// [`managed_driver_ready`]. So `find_chromium` could only ever be *decisive*
-/// on the hosts where the launch it licenses is impossible: playwright-cli
-/// absent, Chrome present. On a stock Mac or Windows with no Node that is the
-/// normal state, and it turned "26 tools correctly withheld" into "26 tools
+/// ⚠️ **The argument below is the one this arm was written on, and W5 deleted
+/// its premise.** It is kept because the conclusion survives and the REASON is
+/// now different; reading it as current would be 判据 §1's worst form, a
+/// paragraph that reads like somebody checked it today.
+///
+/// **What was true until 2026-09-20.** `ChromiumEngine::launch` refused with
+/// `engine_unavailable_no_launcher` unless `managed_cli_path()` answered
+/// `Some`, **before** it called `resolve_binary` at all — so not even an
+/// operator's pinned browser survived that gate, and `managed_cli_path()
+/// .is_some()` IS [`managed_driver_ready`]. On that premise `find_chromium`
+/// could only ever be *decisive* on hosts where the launch it licenses is
+/// impossible.
+///
+/// **What is true now.** The CLI lookup moved INSIDE `resolve_binary`'s third
+/// route, which is its only consumer; routes 1 (a pin) and 2
+/// (`prefer_system_browser`, default **true**) return before a CLI is named. So
+/// a pinned or system Chromium IS now sufficient for a cdp/chromium launch to
+/// be attempted, and the rule this paragraph leaves behind — *a disjunct may
+/// only name a prerequisite that is SUFFICIENT for some launch to be attempted*
+/// — would now ADMIT `find_chromium`.
+///
+/// **It is still not added, and that is a decision rather than an oversight**
+/// (B6). Adding it changes which hosts are offered 26 browser tools; it moves
+/// [`GATE_REQUIREMENTS`] and, with it, the doctor twin that quotes it verbatim;
+/// and assertion (b) of
+/// [`self::tests::the_cdp_question_never_licenses_a_launch_the_launcher_refuses`]
+/// counts the literal `find_chromium()` and would have to be re-derived. That
+/// is a tool-gate change, not part of an escape-hatch fix, and it fails in the
+/// CHEAP direction meanwhile: a host with a Chrome, no obscura and a
+/// `engine = chromium` cdp profile has its browser family withheld rather than
+/// offered-and-failing. **Named follow-up.**
+///
+/// The original argument, for the record, is what the expensive direction looks
+/// like: on a stock Mac or Windows with no Node that state is normal, and the
+/// arm turned "26 tools correctly withheld" into "26 tools
 /// offered, every one of them failing" — the more expensive direction, because
 /// a refusal reads as *not available yet* and twenty-six failures read as
 /// *this product is broken* (判据 §17).
@@ -186,16 +211,19 @@ pub(crate) fn existing_session_driver_ready() -> bool {
 ///
 /// [`self::tests::the_cdp_question_never_licenses_a_launch_the_launcher_refuses`]
 /// pins two specific things, and **not** the rule above — say what a guard
-/// covers, not what it is for (判据 §17). It pins ① the launcher's precondition
-/// ORDERING in `chromium.rs`, so the premise cannot change without notifying
-/// this file, and ② the literal token `find_chromium()` appearing exactly once
-/// in this file's production code. ② is a SPELLING census: regrowing this arm
-/// as `|| which::which("chromium").is_ok()` is invisible to it. The rule itself
-/// has no mechanical guard; what it has is this paragraph and a reviewer.
+/// covers, not what it is for (判据 §17). It pins ① the ORDERING inside
+/// `chromium_resolve::resolve_binary`, so the premise cannot change without
+/// notifying this file, and ② the literal token `find_chromium()` appearing
+/// exactly once in this file's production code. ② is a SPELLING census:
+/// regrowing this arm as `|| which::which("chromium").is_ok()` is invisible to
+/// it. The rule itself has no mechanical guard; what it has is this paragraph
+/// and a reviewer.
 ///
-/// Chromium-under-cdp is therefore covered exactly once, by
-/// `managed_driver_ready` — which is the same fact, asked where the launcher
-/// asks it.
+/// ⚠️ ① used to pin the ordering in `chromium.rs` — `managed_cli_path` before
+/// `resolve_binary` — and it did its job: the W5 fix made it panic with its own
+/// instruction ("re-derive it, do not delete this test"), which is how this
+/// doc block came to be rewritten rather than quietly outlived. It now pins the
+/// ordering that makes the NEW premise true.
 fn cdp_driver_ready(obscura: &ObscuraRuntimeConfig) -> bool {
     resolve_obscura_binary(obscura).is_ok()
 }
@@ -439,36 +467,53 @@ mod tests {
         use crate::utils::source_scan::production_prefix;
 
         // (a) ---------------------------------------------------------------
-        let launcher = include_str!("../../browser/engine/chromium.rs").replace('\r', "");
-        // Comment lines OFF before looking. The doc block above the call
-        // mentions `managed_cli_path` by name, so an unstripped scan finds the
-        // prose and certifies the ordering on it — the comment standing in for
-        // the code it describes (判据 §1).
-        let launcher: String = production_prefix(&launcher)
+        //
+        // The premise this pins was REPLACED on 2026-09-20 (W5), and the old
+        // version of this assertion is what forced the replacement to be
+        // deliberate: it panicked with its own instruction rather than being
+        // edited around. What it pinned before — `managed_cli_path` ahead of
+        // `resolve_binary` inside `ChromiumLauncher::launch` — is now the
+        // defect, not the premise.
+        //
+        // What it pins NOW is the ordering INSIDE `resolve_binary`: the pin
+        // route and the system route are both decided BEFORE any CLI is named,
+        // so neither can be refused for a missing launcher. That is exactly the
+        // sentence `cdp_driver_ready`'s doc rests on, and moving the lookup back
+        // up must break this before it breaks a user.
+        let resolver = include_str!("../../browser/chromium_resolve.rs").replace('\r', "");
+        // Comment lines OFF before looking. This module's own doc block names
+        // `managed_cli_path` and both routes in order to EXPLAIN them, so an
+        // unstripped scan would certify the ordering on the prose — the comment
+        // standing in for the code it describes (判据 §1).
+        let resolver: String = production_prefix(&resolver)
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        let launch_at = launcher
-            .find("async fn launch(")
-            .expect("ChromiumLauncher::launch is gone; re-derive the cdp arm's premise");
-        let body = &launcher[launch_at..];
+        let fn_at = resolver
+            .find("pub(crate) async fn resolve_binary(")
+            .expect("chromium_resolve::resolve_binary is gone; re-derive the cdp arm's premise");
+        let body = &resolver[fn_at..];
         let cli_at = body.find("managed_cli_path").unwrap_or_else(|| {
             panic!(
-                "the chromium launch no longer requires managed_cli_path. That was the \
-                 whole reason `cdp_driver_ready` does not ask about a system Chromium — \
-                 re-derive it, do not delete this test"
+                "resolve_binary no longer looks a playwright-cli up at all. Either the \
+                 managed route is gone or the lookup moved back to a caller — both change \
+                 `cdp_driver_ready`'s premise; re-derive it, do not delete this test"
             )
         });
-        let resolve_at = body
-            .find("resolve_binary(")
-            .expect("the chromium launch no longer resolves a binary");
+        let pin_at = body
+            .find("runtime.pinned_binary()")
+            .expect("resolve_binary no longer has a pin route");
+        let system_at = body
+            .find("runtime.prefer_system_browser")
+            .expect("resolve_binary no longer has a system-browser route");
         assert!(
-            cli_at < resolve_at,
-            "the chromium launch now resolves a binary BEFORE demanding \
-             playwright-cli, so a system Chromium may be launchable without one. \
-             `cdp_driver_ready` was written on the opposite premise and must be \
-             re-derived before this test is relaxed"
+            pin_at < cli_at && system_at < cli_at,
+            "a playwright-cli is being resolved BEFORE the pin route ({pin_at}) or the \
+             system route ({system_at}) decide (cli at {cli_at}). That is W5 again: a host \
+             with a pinned or system Chromium would be refused for the absence of a tool \
+             those two routes never consult. `qa/browser_dual/run.sh escape` is the \
+             real-machine half of this claim"
         );
 
         // (b) ---------------------------------------------------------------
