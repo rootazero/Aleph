@@ -185,6 +185,14 @@ impl ExtensionManager {
         self.plugin_loader.read().await
     }
 
+    /// Test-only: the loader handle itself, so a fixture can pre-load a module.
+    #[cfg(test)]
+    pub(crate) fn get_plugin_loader_for_test(
+        &self,
+    ) -> Arc<tokio::sync::RwLock<super::PluginLoader>> {
+        self.plugin_loader.clone()
+    }
+
     /// Load a runtime plugin from a manifest.
     pub async fn load_runtime_plugin(
         &self,
@@ -213,7 +221,8 @@ impl ExtensionManager {
         // Autostart any background services this plugin declared, now that
         // its runtime is loaded (mirrors MCP servers' auto_start behavior).
         if result.is_ok() {
-            self.start_autostart_services(&manifest.id).await;
+            self.start_autostart_services_transitional(&manifest.id)
+                .await;
         }
 
         result

@@ -414,6 +414,18 @@ impl ServiceManager {
         results
     }
 
+    /// Drop every row this plugin has in the state and registration tables.
+    /// Called by the `service` effect's disposer after `stop_plugin_services`,
+    /// so an unmounted plugin leaves no `Stopped`/`Failed` ghosts behind for
+    /// `services.list` to show. Returns how many rows were dropped.
+    pub fn forget_plugin(&mut self, plugin_id: &str) -> usize {
+        let before = self.services.len();
+        self.services.retain(|_, info| info.plugin_id != plugin_id);
+        self.registrations
+            .retain(|_, reg| reg.plugin_id != plugin_id);
+        before - self.services.len()
+    }
+
     /// Stop every service that is currently Running or Starting, using the
     /// registration snapshots captured at start time.
     ///
@@ -749,5 +761,31 @@ mod tests {
         for info in results {
             assert_eq!(info.plugin_id, "plugin-a");
         }
+    }
+
+    #[test]
+    fn forget_plugin_drops_only_that_plugins_rows() {
+        let mut sm = ServiceManager::new();
+        let loader = PluginLoader::new();
+        let a = ServiceRegistration {
+            id: "svc".into(),
+            name: "svc".into(),
+            start_handler: "start".into(),
+            stop_handler: "stop".into(),
+            plugin_id: "a".into(),
+            auto_start: true,
+        };
+        let b = ServiceRegistration {
+            plugin_id: "b".into(),
+            ..a.clone()
+        };
+        // Both fail to start (no runtime loaded) and are recorded as Failed rows.
+        let _ = sm.start_service(&a, &loader);
+        let _ = sm.start_service(&b, &loader);
+        assert_eq!(sm.list_services().len(), 2);
+        assert_eq!(sm.forget_plugin("a"), 1);
+        assert_eq!(sm.list_services().len(), 1);
+        assert_eq!(sm.list_services()[0].plugin_id, "b");
+        assert_eq!(sm.forget_plugin("a"), 0, "idempotent");
     }
 }
