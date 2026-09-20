@@ -72,6 +72,18 @@ impl McpMemoryExtension {
     pub fn server_id(&self) -> Option<&str> {
         self.server_id.as_deref()
     }
+
+    /// Test-only: call the current caller directly, to observe whether the
+    /// extension is bound to a manager or still on `UnboundMcpCaller`.
+    #[cfg(test)]
+    pub(crate) async fn call_for_test(
+        &self,
+        tool: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, AlephError> {
+        let caller = self.caller.load_full();
+        caller.call(tool, args).await
+    }
 }
 
 #[async_trait]

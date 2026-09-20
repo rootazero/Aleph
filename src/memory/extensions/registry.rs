@@ -128,6 +128,28 @@ impl MemoryExtensionRegistry {
         self.register(ext as Arc<dyn MemoryExtension>)
     }
 
+    /// Remove the extension registered under `name` from the dispatch list
+    /// and, if it was MCP-backed, from the typed side-table. Returns whether
+    /// anything was removed.
+    ///
+    /// The inverse of [`register`] / [`register_mcp`]; the plugin lifecycle
+    /// calls it from the `memory_extension` effect's disposer. Until it
+    /// existed a `[memory]` extension outlived its plugin's disable and kept
+    /// routing hooks to a transient MCP server that had already been removed.
+    pub fn unregister(&self, name: &str) -> bool {
+        let removed = {
+            let mut guard = self.extensions.write().unwrap_or_else(|e| e.into_inner());
+            let before = guard.len();
+            guard.retain(|e| e.name() != name);
+            before != guard.len()
+        };
+        {
+            let mut bindings = self.mcp_bindings.write().unwrap_or_else(|e| e.into_inner());
+            bindings.retain(|e| e.name() != name);
+        }
+        removed
+    }
+
     /// Snapshot the MCP-backed extensions for the boot-time bind pass. The
     /// lock is released before the caller does any async work.
     pub fn mcp_bindings_snapshot(
@@ -892,5 +914,37 @@ mod tests {
         let snap = reg.mcp_bindings_snapshot();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].server_id(), Some("plugin:p/srv"));
+    }
+
+    #[tokio::test]
+    async fn unregister_removes_from_dispatch_and_from_the_mcp_side_table() {
+        use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
+        let reg = MemoryExtensionRegistry::new();
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound(
+            "p".to_string(),
+            Some("plugin:p/srv".to_string()),
+        )))
+        .unwrap();
+        reg.register(Arc::new(RecordDelegationExt {
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .unwrap();
+        assert_eq!(reg.len(), 2);
+
+        assert!(reg.unregister("p"), "a registered name is removed");
+        assert_eq!(reg.len(), 1, "the other extension is untouched");
+        assert!(
+            reg.mcp_bindings_snapshot().is_empty(),
+            "side-table entry goes with it"
+        );
+        assert!(!reg.unregister("p"), "second call: nothing to remove");
+
+        // The name is free again: re-registering does not hit the dedup error.
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound(
+            "p".to_string(),
+            None,
+        )))
+        .unwrap();
+        assert_eq!(reg.len(), 2);
     }
 }

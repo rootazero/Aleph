@@ -251,7 +251,12 @@ impl PluginLoader {
             }
             keys.into_iter().next()
         });
-        register_memory_extension_if_declared(manifest, server_id, memory_registry);
+        // Transitional (deleted in P1.11): the disposer is dropped here
+        // because this caller has no scope to put it in.
+        if let Err(e) = register_memory_extension_effect(manifest, server_id, memory_registry, None)
+        {
+            warn!(plugin = %manifest.id, error = %e, "memory extension not registered");
+        }
         Ok(())
     }
 
@@ -507,35 +512,51 @@ pub(crate) async fn load_wasm_effect(
 #[cfg(test)]
 pub(crate) const EMPTY_WASM_MODULE: &[u8] = b"\0asm\x01\x00\x00\x00";
 
-/// Register a `McpMemoryExtension` into `registry` when `manifest` declares a
-/// `[memory]` section.
+/// The `memory_extension` effect: register a `McpMemoryExtension` when
+/// `manifest` declares a `[memory]` section, bound to the live MCP manager
+/// when one is attached, and return the disposer that unregisters it.
 ///
-/// The extension is initially backed by `UnboundMcpCaller`, which returns a
-/// clear diagnostic error on every call. `ExtensionManager::bind_memory_callers`
-/// replaces the caller with a real `McpManager` binding at server startup.
+/// `Ok(None)` when there is no `[memory]` section — nothing to register,
+/// nothing to dispose. `Err` when the name is already taken: two plugins
+/// claiming one extension name would double-fire every hook, so the second
+/// mount fails at this step instead of logging and carrying on.
 ///
-/// This is extracted as a free function so it can be unit-tested directly
-/// without constructing a full `PluginLoader`.
-pub(crate) fn register_memory_extension_if_declared(
+/// Free function (not a `PluginLoader` method) because it never touches the
+/// loader; it lives here so the G1 census finds every plugin-facing memory
+/// registration in one file.
+pub(crate) fn register_memory_extension_effect(
     manifest: &PluginManifest,
     server_id: Option<String>,
     registry: &Arc<MemoryExtensionRegistry>,
-) {
-    if manifest.memory_manifest.is_some() {
-        let ext = McpMemoryExtension::new_unbound(manifest.name.clone(), server_id);
-        if let Err(e) = registry.register_mcp(Arc::new(ext)) {
-            warn!(
-                plugin = %manifest.name,
-                error = %e,
-                "failed to register McpMemoryExtension (duplicate or invalid plugin name)"
-            );
-            return;
-        }
-        info!(
-            plugin = %manifest.name,
-            "registered McpMemoryExtension (unbound) for plugin with [memory] section"
-        );
+    mcp_handle: Option<crate::mcp::McpManagerHandle>,
+) -> Result<Option<Disposer>, String> {
+    if manifest.memory_manifest.is_none() {
+        return Ok(None);
     }
+    let ext = Arc::new(McpMemoryExtension::new_unbound(
+        manifest.name.clone(),
+        server_id.clone(),
+    ));
+    if let (Some(handle), Some(sid)) = (mcp_handle, server_id) {
+        ext.rebind(Arc::new(
+            crate::memory::extensions::ManagerBackedMcpCaller::new(handle, sid),
+        ));
+    }
+    let name = manifest.name.clone();
+    registry
+        .register_mcp(Arc::clone(&ext))
+        .map_err(|e| format!("memory extension '{name}' not registered: {e}"))?;
+    info!(plugin = %name, "registered McpMemoryExtension for plugin with [memory] section");
+    let registry = Arc::clone(registry);
+    Ok(Some(crate::extension::effects::sync_disposer(move || {
+        if registry.unregister(&name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "memory extension '{name}' was not registered at dispose time"
+            ))
+        }
+    })))
 }
 
 impl Drop for PluginLoader {
@@ -550,6 +571,7 @@ impl Drop for PluginLoader {
 mod tests {
     use super::*;
     use crate::memory::extensions::manifest::{MemoryHook, MemoryManifestSection};
+    use crate::memory::extensions::traits::MemoryExtension;
     use std::path::PathBuf;
 
     #[test]
@@ -673,34 +695,88 @@ mod tests {
         )
     }
 
-    #[test]
-    fn register_memory_extension_registers_when_memory_section_present() {
+    #[tokio::test]
+    async fn memory_extension_effect_registers_and_its_disposer_unregisters() {
         let manifest = make_manifest_with_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
-
-        assert_eq!(registry.len(), 0);
-        register_memory_extension_if_declared(
+        let disposer = register_memory_extension_effect(
             &manifest,
             Some("plugin:test/srv".to_string()),
             &registry,
+            None,
+        )
+        .expect("fresh name registers")
+        .expect("[memory] section present → an effect");
+        assert_eq!(registry.len(), 1);
+        let snap = registry.mcp_bindings_snapshot();
+        assert_eq!(
+            snap[0].name(),
+            "Test Memory Plugin",
+            "keyed by manifest.name"
         );
-        assert_eq!(registry.len(), 1, "should have registered one extension");
+        assert_eq!(snap[0].server_id(), Some("plugin:test/srv"));
+
+        disposer().await.unwrap();
+        assert_eq!(registry.len(), 0);
+        assert!(registry.mcp_bindings_snapshot().is_empty());
     }
 
     #[test]
-    fn register_memory_extension_skips_when_no_memory_section() {
+    fn memory_extension_effect_is_none_without_a_memory_section() {
         let manifest = make_manifest_no_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
+        let effect = register_memory_extension_effect(&manifest, None, &registry, None).unwrap();
+        assert!(effect.is_none());
+        assert_eq!(registry.len(), 0);
+    }
 
-        register_memory_extension_if_declared(
+    #[test]
+    fn memory_extension_effect_refuses_a_duplicate_name_loudly() {
+        let manifest = make_manifest_with_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+        let _first = register_memory_extension_effect(&manifest, None, &registry, None)
+            .unwrap()
+            .unwrap();
+        let err = register_memory_extension_effect(&manifest, None, &registry, None)
+            .err()
+            .expect(
+                "a second plugin claiming the same extension name is a mount failure, not a warn",
+            );
+        assert!(err.contains("Test Memory Plugin"), "{err}");
+        assert_eq!(registry.len(), 1, "the loser registered nothing");
+    }
+
+    /// With a live MCP handle the extension is bound at registration — the
+    /// boot-time `bind_memory_callers` pass this replaces is no longer needed.
+    #[tokio::test]
+    async fn memory_extension_effect_binds_the_caller_when_a_handle_is_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, handle) =
+            crate::mcp::manager::McpManagerActor::new(Some(dir.path().join("mcp.json")))
+                .await
+                .unwrap();
+        tokio::spawn(actor.run());
+        let manifest = make_manifest_with_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+        let _d = register_memory_extension_effect(
             &manifest,
             Some("plugin:test/srv".to_string()),
             &registry,
-        );
-        assert_eq!(
-            registry.len(),
-            0,
-            "no extension should be registered without [memory] section"
+            Some(handle),
+        )
+        .unwrap()
+        .unwrap();
+        let ext = &registry.mcp_bindings_snapshot()[0];
+        // `UnboundMcpCaller` answers every call with its diagnostic error;
+        // a bound caller reaches the manager and gets "server not found".
+        let err = ext
+            .call_for_test("noop", serde_json::json!({}))
+            .await
+            .err()
+            .expect("no such server on a fresh manager");
+        assert!(
+            !err.to_string().contains("not yet bound"),
+            "must be bound: {err}"
         );
     }
 
