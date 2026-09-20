@@ -86,6 +86,8 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 /cua-cs.log
 /cua-som.log
 /ocu-docs.log
+# Root-level scratch dir for one-off cargo/build/check/clippy captures
+/.build-logs/
 
 # Packaged installers
 Aleph.dmg

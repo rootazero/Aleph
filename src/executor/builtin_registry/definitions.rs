@@ -2859,19 +2859,19 @@ mod tests {
     /// is the guard on that.
     ///
     /// 2026-09-20 (browser dual-engine, task 19): 114_669 -> 115_023 B, +354.
-    ///   Measured, both ends, by flooring this constant to 1 and reading the
+    /// * Measured, both ends, by flooring this constant to 1 and reading the
     ///   guard's own failure line — the only thing that prints the total:
-    ///   before, on this branch's HEAD 62259c13e,
+    /// * before, on this branch's HEAD 62259c13e,
     ///   114_669 B (95_073 catalog + 16_613 registry-only + 1_039 injected
-    ///   + 1_944 bridge), i.e. the constant was sitting EXACTLY on the
-    ///   measurement with zero headroom, so none of this round was free;
-    ///   with the first draft of the edit, 115_237 B (95_641 catalog + the
+    ///   + 1_944 bridge), i.e. the constant was sitting EXACTLY on
+    ///     the measurement with zero headroom, so none of this round was free;
+    /// * with the first draft of the edit, 115_237 B (95_641 catalog + the
     ///   same three unchanged) — a delta of +568, all of it catalog, and the
     ///   edited literal was 568 B long, so the subtraction and the literal's
     ///   own length are two independent routes to the same number.
-    ///   568 is over the 400 B pruning threshold, so the sentence was pruned
+    /// * 568 is over the 400 B pruning threshold, so the sentence was pruned
     ///   (see below) to 354 B and the ceiling is the pruned value.
-    ///   Measured on macOS (aarch64-apple-darwin) — the guard's "Largest" line
+    /// * Measured on macOS (aarch64-apple-darwin) — the guard's "Largest" line
     ///   printed `bash` at 4_740, the Unix assembly, so the Windows gap
     ///   recorded in the 2026-09-13 entry is carried forward unchanged.
     ///

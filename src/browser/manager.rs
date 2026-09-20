@@ -3012,8 +3012,10 @@ mod tests {
         let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
         let operator_dir = home.path().join("operator-chose-this");
 
-        let mut config = BrowserSystemConfig::default();
-        config.default_engine = Engine::Obscura;
+        let mut config = BrowserSystemConfig {
+            default_engine: Engine::Obscura,
+            ..Default::default()
+        };
         config.profiles.insert(
             "p".into(),
             ProfileConfig {
