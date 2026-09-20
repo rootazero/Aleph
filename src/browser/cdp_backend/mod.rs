@@ -243,6 +243,35 @@ pub(crate) fn map_cdp_err(engine: Engine, method: &str, err: CdpError) -> Browse
 /// hint has to name an engine that genuinely supports the verb, so that a test
 /// injecting a hypothetical row still gets a truthful "use this engine
 /// instead" rather than a hint invented to match the fixture (判据 §14).
+/// Which CDP method each `browser_emulate` axis is sent as, as data.
+///
+/// **Test-only on purpose.** Production reads this mapping off the code itself
+/// — `screenshot::emulate`'s `if let Some(..)` chain — so a second production
+/// copy would be 判据 §1 with the usual outcome (one of them drifts). What
+/// needs it as data is the pair of guards that check the mapping from opposite
+/// ends, neither of which can be written without it:
+///
+/// * `screenshot::tests::emulate_sends_every_axis_to_its_own_cdp_method` — each
+///   method reaches the wire, so no axis is a report-success no-op (判据 §11);
+/// * `builtin_tools::browser_tools::emulate`'s DESCRIPTION guard — which of
+///   these methods the **default engine** refuses, read out of Task 0's
+///   measured support matrix rather than out of the sentence being checked.
+///
+/// The left column is `EmulateOptions`' own serde key, and
+/// `the_axis_map_covers_every_field_of_emulate_options` derives that set from
+/// the TYPE, not from this list — so a seventh axis cannot arrive without this
+/// list going red (B18: a hand-maintained list nobody is forced to update is a
+/// guard with an invisible expiry date).
+#[cfg(test)]
+pub(crate) const EMULATE_AXIS_METHODS: [(&str, &str); 6] = [
+    ("color_scheme", "Emulation.setEmulatedMedia"),
+    ("geolocation", "Emulation.setGeolocationOverride"),
+    ("network_condition", "Network.emulateNetworkConditions"),
+    ("cpu_throttle", "Emulation.setCPUThrottlingRate"),
+    ("extra_http_headers", "Network.setExtraHTTPHeaders"),
+    ("user_agent", "Emulation.setUserAgentOverride"),
+];
+
 pub(crate) fn require(
     caps: &EngineCapabilities,
     engine: Engine,

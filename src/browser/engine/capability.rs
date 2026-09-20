@@ -13,6 +13,35 @@
 use super::Engine;
 use crate::runtimes::OBSCURA_TAG;
 
+/// Task 0's probe results, verbatim, as the only copy in the repository.
+///
+/// `include_str!`, not a runtime read: a missing matrix is a COMPILE error
+/// naming the path, rather than a test that quietly finds nothing and certifies
+/// its subject by looking nowhere (判据 §3).
+///
+/// `pub(crate)` and hoisted out of the test module because it now has a SECOND
+/// reader — `builtin_tools::browser_tools::emulate`'s DESCRIPTION guard, which
+/// asks the same fixture a different question (which emulation methods this
+/// engine refuses). One path literal, two readers: the alternative is two
+/// `include_str!` paths to one file, which is 判据 §1 with a compile error as
+/// its only saving grace.
+#[cfg(test)]
+pub(crate) const T0_SUPPORT_MATRIX: &str = include_str!("fixtures/t0-support-matrix.json");
+
+/// How Task 0 keyed each engine's half. Its Chromium capture is under
+/// `"chrome"`, not `"chromium"` — mapped in the readers rather than by
+/// rewriting the fixture, because rewriting somebody else's measurement to
+/// match our vocabulary is how a fixture stops being evidence.
+/// The one arm that diverges is spelled out; every other engine keeps
+/// `as_str`, so a third engine does not need a second name here.
+#[cfg(test)]
+pub(crate) const fn t0_key(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Chromium => "chrome",
+        other => other.as_str(),
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Cap {
     Supported,
@@ -691,10 +720,12 @@ mod tests {
     /// ⚠️ The path is `fixtures/`, beside this file — **not** the docs tree the
     /// task brief named. Task 0's own manifest (`t0-results.md`, the `files`
     /// array of both captures) records that it wrote it here, and it is the
-    /// only copy in the repository.
+    /// only copy in the repository. The `include_str!` itself now lives at
+    /// module scope as [`super::T0_SUPPORT_MATRIX`], because a second reader
+    /// arrived.
     #[test]
     fn capability_table_agrees_with_the_t0_support_matrix() {
-        const MATRIX: &str = include_str!("fixtures/t0-support-matrix.json");
+        const MATRIX: &str = super::T0_SUPPORT_MATRIX;
 
         /// Comment markers off, whitespace collapsed — so a text quoted
         /// across two wrapped `//` lines still compares equal to the single
@@ -789,14 +820,12 @@ mod tests {
         for engine in Engine::ALL {
             let caps = capabilities(engine);
             // ⚠️ Task 0 keyed the Chromium half `"chrome"`, not `"chromium"`.
-            // Mapped here, in the reader, because the matrix is that task's
-            // output: rewriting somebody else's measurement to match our
-            // vocabulary is how a fixture stops being evidence (判据 §10 — the
-            // wire shape belongs to whoever produced it).
-            let key = match engine {
-                Engine::Chromium => "chrome",
-                Engine::Obscura => engine.as_str(),
-            };
+            // Mapped in the reader, because the matrix is that task's output:
+            // rewriting somebody else's measurement to match our vocabulary is
+            // how a fixture stops being evidence (判据 §10 — the wire shape
+            // belongs to whoever produced it). The mapping moved to
+            // [`super::t0_key`] when the second reader arrived.
+            let key = super::t0_key(engine);
             // Task 0 merges each engine's half into the same file, so a missing
             // half means that engine's capture never ran — a fact worth failing
             // on, not working around.

@@ -18,4 +18,43 @@
        onclick="location.href='/second.html'">go by coordinates</div>
   <span id="ghost" style="opacity:0">__MARKER__-ghost</span>
   <div id="nope" style="display:none">__MARKER__-hidden</div>
+
+  <!-- ==================================================================
+       The `switch` stage's cross-engine ref comparison (spec F2) reads the
+       block below on obscura and again on chromium. Everything above this
+       comment is load-bearing for the `open` / `snapshot` / `click` stages,
+       which is why this is APPENDED rather than woven in: `#blk`'s box (8,30
+       220x44, measured) is what stage_click's coordinate half aims at, and an
+       element inserted before it would move it.
+
+       Chosen for ACCESSIBLE-NAME diversity, because a name is what an agent
+       addresses an element by, and the name is where two DOM readings actually
+       diverge. One element per naming route:
+         * <button>            — name from CONTENT (accname rule 8)
+         * <label for> + input — name from a LABEL ELEMENT, resolved by id
+         * aria-label          — name from an ATTRIBUTE, overriding content
+         * <img alt>           — name from `alt` on a replaced element
+         * nested <a>          — a name inside a list, i.e. under two levels of
+                                 container, so a disagreement about container
+                                 absorption shows up as a shape difference
+       Four elements would have been a comparison too small to disagree, which
+       is its own kind of tolerance (判据 §2).
+
+       `#drag` is here deliberately and is the one element expected to be
+       INTERESTING. Round 8's real-machine run found `missing=['Drag source']`
+       under the cdp driver and `missing=[]` under playwright_cli, ON THE SAME
+       PAGE, reproduced 2/2. Both sides of THIS comparison go through
+       `page_state`, so if both engines omit it the divergence is located on the
+       page_state-vs-CLI axis and NOT on the engine axis — which is a result,
+       not an absence of one.
+       ================================================================== -->
+  <h2 id="h2">Controls</h2>
+  <button id="btn">Press me</button>
+  <label for="txt">Your name</label>
+  <input id="txt" type="text">
+  <input id="chk" type="checkbox" aria-label="Agree to terms">
+  <img id="pic" alt="A tiny picture"
+       src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+  <ul><li><a id="nested" href="/second.html">nested link</a></li></ul>
+  <div id="drag" aria-label="Drag source" draggable="true">DRAGSRC</div>
 </body></html>

@@ -289,6 +289,110 @@ mod tests {
         );
     }
 
+    /// Every field of `EmulateOptions` is in the axis map, derived from the
+    /// type rather than from the map.
+    ///
+    /// The literal below is **exhaustive on purpose**: a seventh axis is a
+    /// compile error right here, which is the only thing that makes
+    /// `EMULATE_AXIS_METHODS` — and therefore both guards that read it —
+    /// unable to go stale in silence.
+    #[test]
+    fn the_axis_map_covers_every_field_of_emulate_options() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::browser::types::{Geolocation, NetworkCondition};
+
+        let all = EmulateOptions {
+            color_scheme: Some(ColorScheme::Dark),
+            geolocation: Some(Geolocation {
+                latitude: 1.0,
+                longitude: 2.0,
+            }),
+            network_condition: Some(NetworkCondition::Offline),
+            cpu_throttle: Some(2.0),
+            extra_http_headers: Some(BTreeMap::from([("X-Aleph".to_string(), "1".to_string())])),
+            user_agent: Some("aleph-unit-agent".to_string()),
+        };
+        let keys: BTreeSet<String> = match serde_json::to_value(&all).expect("serialise") {
+            serde_json::Value::Object(map) => map.keys().cloned().collect(),
+            other => panic!("EmulateOptions must serialise to an object, got {other}"),
+        };
+        let mapped: BTreeSet<String> = crate::browser::cdp_backend::EMULATE_AXIS_METHODS
+            .iter()
+            .map(|(axis, _)| (*axis).to_string())
+            .collect();
+        assert_eq!(
+            keys, mapped,
+            "the axis map and EmulateOptions disagree about which axes exist; \
+             an axis missing from the map is one no guard checks"
+        );
+    }
+
+    /// Each axis must reach its OWN CDP method.
+    ///
+    /// A single "emulate returned ok" assertion would pass on a backend that
+    /// dropped five of the six on the floor (判据 §11), and the DESCRIPTION
+    /// guard in `browser_tools::emulate` rests on exactly this: it tells the
+    /// model that everything but the engine-refused axis reaches the engine,
+    /// and that sentence is only true while this test is green.
+    ///
+    /// Run against [`Engine::default`] — the engine of a default install — so
+    /// the test is about the profile the sentence is about. The fake answers
+    /// every method, which is the point: this half measures **Aleph's** send,
+    /// and what a real engine does with each method is the other half, read
+    /// from Task 0's matrix in the DESCRIPTION guard.
+    #[tokio::test]
+    async fn emulate_sends_every_axis_to_its_own_cdp_method() {
+        use std::collections::BTreeMap;
+
+        use crate::browser::types::{Geolocation, NetworkCondition};
+
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        for (_, method) in crate::browser::cdp_backend::EMULATE_AXIS_METHODS {
+            server.on(method, Responder::Reply(json!({})));
+        }
+        let (_reg, backend) = backend_with(&server, Engine::default(), open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        backend
+            .emulate(
+                "T1",
+                // A NON-empty user agent, deliberately: the empty string means
+                // "clear the override" and takes a `Browser.getVersion`
+                // read-back first, which would make this test about that path
+                // instead of about the six sends.
+                &EmulateOptions {
+                    color_scheme: Some(ColorScheme::Dark),
+                    geolocation: Some(Geolocation {
+                        latitude: 1.0,
+                        longitude: 2.0,
+                    }),
+                    network_condition: Some(NetworkCondition::Offline),
+                    cpu_throttle: Some(2.0),
+                    extra_http_headers: Some(BTreeMap::from([(
+                        "X-Aleph".to_string(),
+                        "1".to_string(),
+                    )])),
+                    user_agent: Some("aleph-unit-agent".to_string()),
+                },
+            )
+            .await
+            .expect("every axis is routed; none is gated at this layer");
+
+        let sent = methods(&server);
+        for (axis, method) in crate::browser::cdp_backend::EMULATE_AXIS_METHODS {
+            assert!(
+                sent.iter().any(|m| m.as_str() == method),
+                "axis `{axis}` never reached `{method}` — sent: {sent:?}"
+            );
+        }
+    }
+
     /// `resize` has to reach `Emulation.setDeviceMetricsOverride` with the
     /// numbers it was given. A verb that returned `Ok` without sending them is
     /// the report-success no-op (判据 §11), and the viewport would simply never

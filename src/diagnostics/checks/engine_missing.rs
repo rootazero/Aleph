@@ -106,8 +106,9 @@ fn missing_finding(engine: Engine, detail: impl std::fmt::Display) -> Finding {
             "No Chromium for the managed browser driver",
             format!(
                 "The managed driver launches Chromium itself and could not find one ({detail}). \
-                 Browser tools will refuse until this is fixed; the existing-session driver \
-                 (attach to your own Chrome) is unaffected."
+                 Browser tools will refuse ON MANAGED PROFILES until this is fixed; the default \
+                 profile (driver = cdp, engine = obscura) and the existing-session driver \
+                 (attach to your own Chrome) are unaffected."
             ),
         )
         .with_fix_hint(

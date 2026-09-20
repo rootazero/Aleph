@@ -31,8 +31,17 @@ pub struct BrowserEmulateOutput {
 }
 
 /// Emulates color scheme, geolocation, network/CPU throttling, extra HTTP
-/// headers, and user-agent on the active tab. Full support requires an
-/// existing-session profile; the managed profile supports network state only.
+/// headers, and user-agent on the active tab.
+///
+/// **Which profile serves what is stated exactly once**, in [`Self::DESCRIPTION`],
+/// and pinned there by
+/// `tests::the_description_excepts_exactly_the_axes_the_default_engine_refuses`.
+/// A second sentence stood here saying it too ("Full support requires an
+/// existing-session profile; the managed profile supports network state only")
+/// and went false the day the default driver flipped, with nothing able to
+/// notice — 判据 §1 in its expensive form, because a doc comment is what the
+/// next reader checks and a `DESCRIPTION` is what the model obeys. Deleted
+/// rather than corrected: two copies is the defect.
 #[derive(Clone)]
 pub struct BrowserEmulateTool {
     manager: Arc<ProfileManager>,
@@ -100,10 +109,10 @@ fn emulate_approval_target(options: &EmulateOptions) -> String {
 impl AlephTool for BrowserEmulateTool {
     const NAME: &'static str = "browser_emulate";
     const DESCRIPTION: &'static str =
-        "Emulate environment overrides on the active tab. The managed (default) profile \
-         supports only network_condition offline/online; color scheme, geolocation, CPU \
-         throttle, extra HTTP headers and user-agent need an existing-session profile \
-         (e.g. profile='user')";
+        "Emulate environment overrides on the active tab. On a cdp profile (the default) \
+         every override reaches the engine except network_condition: obscura has no such \
+         method, so that one needs chromium or an existing-session profile, which serve \
+         all six";
     type Args = BrowserEmulateArgs;
     type Output = BrowserEmulateOutput;
 
@@ -334,14 +343,122 @@ mod tests {
         assert!(!target.contains("topsecret"), "got: {target}");
     }
 
+    /// The DESCRIPTION's engine claim, derived from Task 0's measurements
+    /// rather than from the sentence it is checking.
+    ///
+    /// **What stood here before did not merely miss the bug — it PINNED it.**
+    /// The retired guard asserted the DESCRIPTION contained
+    /// `"existing-session profile"`, i.e. it *required* the sentence that sends
+    /// the model away from the default profile for five axes the default
+    /// profile serves, and *required* `network_condition` — the one axis the
+    /// default ENGINE refuses — to be named as the one that works. It was
+    /// written when the default profile was `managed`, where every clause of it
+    /// was true; `71d973920` flipped the default to `cdp` / `obscura` and
+    /// nothing here could notice (B17 — a fact whose derivation is coarser than
+    /// the world a change just created). It is also why `fa0c9c5e8`'s
+    /// DESCRIPTION sweep walked past this file twice over: a needle on
+    /// `"managed profiles only"` is fail-GREEN on this file's paraphrase (B7),
+    /// and a needle that HAD hit would have met a test demanding the old words.
+    ///
+    /// **What this one is keyed to**, hardest-to-move first:
+    ///
+    /// 1. [`Engine::default`] — the exact thing whose change caused the bug. A
+    ///    third flip re-reads the other half of the matrix, and the sentence has
+    ///    to follow or this goes red.
+    /// 2. `EMULATE_AXIS_METHODS`, itself tied to `EmulateOptions`' fields by
+    ///    `cdp_backend::screenshot::tests::the_axis_map_covers_every_field_of_emulate_options`,
+    ///    and to the wire by `…::emulate_sends_every_axis_to_its_own_cdp_method`.
+    /// 3. `t0-support-matrix.json` — an on-disk measurement against real
+    ///    binaries, not a claim in a comment.
+    ///
+    /// The one phrase-keyed assertion is `contains("cdp")`, and it buys exactly
+    /// one thing: that the sentence still names a driver. It cannot see a
+    /// rewording that keeps the word and changes the claim — the axis loops can,
+    /// which is why they carry the weight.
+    ///
+    /// Neither loop is vacuous today: at HEAD the split is five answered
+    /// (`Emulation.setEmulatedMedia` / `setGeolocationOverride` /
+    /// `setCPUThrottlingRate` / `setUserAgentOverride`, `Network.setExtraHTTPHeaders`)
+    /// against one refused (`Network.emulateNetworkConditions` —
+    /// *"Unknown Network method"*). Both being empty is impossible; one of them
+    /// becoming empty is a real change in the world, and the fixture is where it
+    /// shows up.
     #[test]
-    fn description_does_not_promise_what_the_default_profile_refuses() {
-        // The managed (default) profile rejects every override except
-        // network_condition — the description must say so rather than advertise
-        // six overrides, five of which always fail.
+    fn the_description_excepts_exactly_the_axes_the_default_engine_refuses() {
+        use crate::browser::cdp_backend::EMULATE_AXIS_METHODS;
+        use crate::browser::engine::capability::{t0_key, T0_SUPPORT_MATRIX};
+        use crate::browser::engine::Engine;
+
+        let matrix: serde_json::Value =
+            serde_json::from_str(T0_SUPPORT_MATRIX).expect("t0-support-matrix.json is valid JSON");
+        let key = t0_key(Engine::default());
+        let half = matrix.get(key).unwrap_or_else(|| {
+            panic!("t0-support-matrix.json has no `{key}` half, so the default engine is unprobed")
+        });
+
+        let mut answered: Vec<&str> = Vec::new();
+        let mut refused: Vec<&str> = Vec::new();
+        for (axis, method) in EMULATE_AXIS_METHODS {
+            let protocol = half
+                .get(method)
+                .and_then(|entry| entry.get("protocol"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!("t0-support-matrix.json[{key}] has no string `protocol` for {method}")
+                });
+            // `ok` is the fixture's own word for "the engine answered". Anything
+            // else is a refusal text, and an unknown may only say "I don't
+            // know" — which here means fail-closed onto the refused side
+            // (判据 §8).
+            if protocol == "ok" {
+                answered.push(axis);
+            } else {
+                refused.push(axis);
+            }
+        }
+
+        // Every way this sentence could spell an axis, DERIVED from the axis
+        // rather than listed. Found by writing the mutation prediction for this
+        // guard before running it: the first draft matched the snake_case key
+        // only, and the retired sentence spells four of its five axes as prose
+        // ("color scheme", "CPU throttle", "extra HTTP headers", "user-agent").
+        // So the draft would have reddened on `geolocation` alone — one of five
+        // — and would have gone GREEN on a rewording that kept the claim and
+        // dropped the underscore. That is B7 on the guard's own negative half,
+        // and the cure is derivation, not a longer list.
+        fn spellings(axis: &str) -> Vec<String> {
+            vec![
+                axis.to_string(),
+                axis.replace('_', " "),
+                axis.replace('_', "-"),
+            ]
+        }
+
         let d = BrowserEmulateTool::DESCRIPTION;
-        assert!(d.contains("network_condition"), "got: {d}");
-        assert!(d.contains("existing-session profile"), "got: {d}");
+        let lower = d.to_lowercase();
+        for axis in &refused {
+            assert!(
+                spellings(axis).iter().any(|s| lower.contains(s)),
+                "`{axis}` is refused by the default engine ({key}) and the DESCRIPTION \
+                 does not name it in any spelling, so the model will try it and get a \
+                 raw protocol error: {d}"
+            );
+        }
+        for axis in &answered {
+            for spelling in spellings(axis) {
+                assert!(
+                    !lower.contains(&spelling),
+                    "`{axis}` REACHES the default engine ({key}), and the DESCRIPTION \
+                     names it as {spelling:?}; that is how the retired sentence routed \
+                     the model to profile='user', which needs the user's own Chrome plus \
+                     npx: {d}"
+                );
+            }
+        }
+        assert!(
+            d.contains("cdp"),
+            "the sentence must still name the driver these reach: {d}"
+        );
     }
 
     #[tokio::test]

@@ -83,61 +83,94 @@ impl BrowserDriver {
 /// Per-profile browser configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileConfig {
-    /// Which browser engine to use.
+    /// Which browser binary to use, within the Chromium family.
     ///
-    /// Honored by both drivers. The managed driver no longer passes the engine
-    /// to `playwright-cli` (it launches the browser itself); the value steers
-    /// `discovery::find_chromium_preferred`. When the requested engine is not
-    /// installed the search degrades to whatever is, and
-    /// `PlaywrightCliDriver::ensure_chromium` warns with the engine it actually
-    /// resolved — the substitution is reported by the code that performs it,
-    /// which is why the old boot-time warning is gone.
+    /// **Selects nothing on `engine = obscura`, which is the default**: obscura
+    /// is one binary out of the runtime ledger, not a family. The value is read
+    /// on `engine = chromium` (`engine::chromium::launch` →
+    /// `chromium_resolve::resolve_binary`) and on the managed driver, where it
+    /// steers `discovery::find_chromium_preferred`. The managed driver no
+    /// longer passes the engine to `playwright-cli` (it launches the browser
+    /// itself). When the requested one is not installed the search degrades to
+    /// whatever is, and `PlaywrightCliDriver::ensure_chromium` warns with the
+    /// engine it actually resolved — the substitution is reported by the code
+    /// that performs it, which is why the old boot-time warning is gone.
     #[serde(default)]
     pub browser: BrowserType,
 
     /// Profile-level override for headless (None = follow global `playwright_cli.headless`).
-    /// Honored by both drivers.
+    ///
+    /// **Ignored on `engine = obscura`, which is the default**: obscura has no
+    /// window and no `--headless`, so `headless = false` is warned about and the
+    /// launch proceeds headless anyway (`engine::obscura::launch`). Honoured by
+    /// the managed and existing-session drivers and on `engine = chromium`.
+    /// Which setting wins for a given profile is computed rather than guessed —
+    /// `gateway::handlers::browser_config` reports it as `headless_shadowed_by`.
     #[serde(default)]
     pub headless: Option<bool>,
 
     /// Proxy server URL (e.g. "<socks5://127.0.0.1:1080>").
     ///
-    /// Honored by both drivers: Chrome's `--proxy-server` on the
-    /// existing-session launch argv, and `browser.launchOptions.proxy.server`
-    /// in the generated `open --config` file on the managed side. The CLI has
-    /// no proxy *flag*, which is why this was once documented as
-    /// existing-session only — the surface is the config file, not the flag
-    /// list.
+    /// Honored by every driver and both engines: Chrome's `--proxy-server` on
+    /// the existing-session and cdp-chromium launch argv, obscura's own
+    /// `--proxy=`, and `browser.launchOptions.proxy.server` in the generated
+    /// `open --config` file on the managed side. The CLI has no proxy *flag*,
+    /// which is why this was once documented as existing-session only — the
+    /// surface is the config file, not the flag list.
     #[serde(default)]
     pub proxy: Option<String>,
 
     /// Custom user data directory for browser state isolation.
     ///
-    /// Honored by both drivers: Chrome's `--user-data-dir` on the
-    /// existing-session launch argv, and `browser.userDataDir` in the
-    /// generated `open --config` file on the managed side. Left unset, a
-    /// managed session keeps its profile in memory.
+    /// Honored by every driver: Chrome's `--user-data-dir` on the
+    /// existing-session and cdp-chromium launch argv, obscura's own storage-dir
+    /// flag, and `browser.userDataDir` in the generated `open --config` file on
+    /// the managed side. Left unset, a managed session keeps its profile in
+    /// memory.
+    ///
+    /// **On a cdp profile the value is per-engine.** A directory written by one
+    /// engine is in that engine's format and the other cannot read it, so
+    /// `ProfileManager::request_from` hands the target engine the managed path
+    /// under its own `data_subdir` instead of this one, and `switch_engine`
+    /// warns when it does.
     #[serde(default)]
     pub user_data_dir: Option<String>,
 
     /// Extra command-line arguments passed to the browser process.
     ///
-    /// Honored by both drivers: appended last to the Chrome launch argv on the
-    /// existing-session side, and passed as `browser.launchOptions.args` in
-    /// the generated `open --config` file on the managed side.
+    /// Honored by every driver, but **the POSITION differs between them and the
+    /// difference is a security property**. On the cdp engines they go
+    /// **first** — `engine::chromium::ChromiumLaunchSpec::argv` and
+    /// `engine::obscura::obscura_argv`, each with a test pinning the order — so
+    /// that an operator's duplicate of a flag the launch depends on
+    /// (`--use-mock-keychain`, `--password-store=basic`,
+    /// `--remote-debugging-port`) cannot displace it: Chrome takes the FIRST
+    /// occurrence. obscura additionally **refuses** a launch whose `extra_args`
+    /// names a flag it decides itself (`reserved_flag_in`). On the
+    /// existing-session side they are appended last, and on the managed side
+    /// they are passed as `browser.launchOptions.args` in the generated
+    /// `open --config` file.
     #[serde(default)]
     pub extra_args: Vec<String>,
 
     /// Seconds of inactivity before the browser session is automatically torn
     /// down.
     ///
-    /// Honored by both drivers: `ProfileManager::reap_idle` destroys the
-    /// Chrome MCP session for an existing-session profile and runs
-    /// `playwright-cli close` for a managed one. (The CLI does have a
-    /// stop-session command — `close`, plus `close-all` / `kill-all`; this was
-    /// once documented as having none, so the setting was accepted and never
-    /// enforced on the managed side.) Tabs are reclaimed sooner and
-    /// separately, via [`Self::tab_idle_timeout_secs`].
+    /// Honored by the managed and existing-session drivers:
+    /// `ProfileManager::reap_idle` destroys the Chrome MCP session for an
+    /// existing-session profile and runs `playwright-cli close` for a managed
+    /// one. (The CLI does have a stop-session command — `close`, plus
+    /// `close-all` / `kill-all`; this was once documented as having none, so the
+    /// setting was accepted and never enforced on the managed side.)
+    ///
+    /// ⚠️ **Not enforced on `driver = cdp`, which is the default.**
+    /// `idle_managed_profiles` filters `Managed` because it judges liveness
+    /// through `chromium_alive`, which cannot answer for an engine — so on a
+    /// cdp profile this setting has a writer and no reader until the CDP reaper
+    /// lands. Said here, and not only in `manager.rs`, because this is the line
+    /// an operator reads when they set it. Tabs are reclaimed sooner and
+    /// separately via [`Self::tab_idle_timeout_secs`], which **is** enforced on
+    /// cdp.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
 
@@ -153,14 +186,22 @@ pub struct ProfileConfig {
     pub engine: Option<Engine>,
 
     /// Max concurrently-open tabs for this profile before the least-recently-used
-    /// are reclaimed on the next sweep. Only enforced for `Managed` profiles
-    /// (Aleph-owned browsers); `ExistingSession` tabs belong to the user and are
-    /// never reaped. (openclaw per-session cap parity.)
+    /// are reclaimed on the next sweep. Enforced for `Managed` **and `Cdp`**
+    /// profiles (Aleph-owned browsers); `ExistingSession` tabs belong to the
+    /// user and are never reaped. (openclaw per-session cap parity.)
+    ///
+    /// The driver pair is derived in the code from `BrowserDriver::ALL` and
+    /// pinned by `the_tab_sweeper_selects_exactly_the_drivers_touch_tab_records`,
+    /// so `reap_idle_tabs` and `touch_tab` cannot drift apart. **This sentence
+    /// is not derived from that guard** — it said `Managed` only for a month
+    /// after the code learned otherwise, and nothing could notice. Anchoring
+    /// the prose to the same set is a named follow-up.
     #[serde(default = "default_max_tabs")]
     pub max_tabs_per_profile: usize,
 
     /// Seconds a tab may sit idle before it is reclaimed. Shorter than
-    /// `idle_timeout_secs` — an unused tab is cheap to reopen. `Managed` only.
+    /// `idle_timeout_secs` — an unused tab is cheap to reopen. `Managed` and
+    /// `Cdp`, as above.
     #[serde(default = "default_tab_idle_timeout")]
     pub tab_idle_timeout_secs: u64,
 }

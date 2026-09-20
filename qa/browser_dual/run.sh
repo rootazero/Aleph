@@ -21,7 +21,15 @@
 #                                       # real binary, verb by verb
 #   ./qa/browser_dual/run.sh switch     # a cookie set on obscura is readable on
 #                                       # chromium afterwards, the tab is back on
-#                                       # its URL, and the obscura process is GONE
+#                                       # its URL, the obscura process is GONE —
+#                                       # and (spec F2) the SAME page snapshotted
+#                                       # on each engine offers the same
+#                                       # addressable (role, name) refs. What that
+#                                       # comparison includes and excludes is
+#                                       # stated in drive_switch.py, above
+#                                       # `_quoted_at`; read it before trusting a
+#                                       # green, because the exclusions ARE the
+#                                       # claim's width.
 #
 # Same scratch-HOME discipline as qa/browser_managed/run.sh. No mock provider in
 # any stage: every claim goes through `tools.invoke`, which runs a tool without

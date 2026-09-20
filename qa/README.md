@@ -53,9 +53,10 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
 ./qa/browser_dual/run.sh switch    # a cookie set on obscura is READABLE ON CHROMIUM after
                                    # browser_session{action:"switch_engine"}, the tab is
-                                   # back on its URL, the obscura process is GONE, and the
+                                   # back on its URL, the obscura process is GONE, the
                                    # surviving chromium still has an orphan-reap record of
-                                   # its own (needs ALEPH_QA_CHROME)
+                                   # its own — and (spec F2) the SAME page offers the same
+                                   # addressable refs on both engines (needs ALEPH_QA_CHROME)
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -713,6 +714,46 @@ evidence, and without it they would answer `EngineMismatch`. And it is the only
 real-machine exercise of the approval **inheritance** `ActionType` promises: the
 policy fixture writes `browser_open` and no `browser_switch_engine` key, so a
 switch that runs at all is `inherited_from` doing its job.
+
+**And `switch` is where spec F2 lives — the branch's own declared merge blocker,
+and the only place either engine is compared against the other.** The stage
+snapshots `index.html` on obscura, switches, and snapshots the *same tab on the
+same page* with `browser_snapshot` again, then compares the **multiset of
+`(role, accessible name)` keys** carried by the `[ref=…]` lines. Two things make
+that a measurement rather than a formality, and both are stated in
+`drive_switch.py` above `_quoted_at` rather than here:
+
+* **the key excludes the ref id, `@x,y wxh` geometry, state tokens and the
+  header** — each because it is a *different question* (ref ids are re-minted per
+  capture and differ between two snapshots on ONE engine; geometry is a
+  measurement, and obscura's zero box on inline elements is already known and
+  already reported in the header's `no_box=` token);
+* **it is a multiset, not a set**, because name-driven absorption can make one
+  engine print one line where the other prints two — which changes how many
+  things the model can address, and a set would hide it.
+
+What remains comparable — which elements earn a ref, their roles, their
+accessible names, their multiplicity, and the exact text of every addressable
+text leaf — is the whole of what an agent's plan is written against. **A
+difference here is a finding to report, never a tolerance to widen**: the
+neighbouring axis already has a negative reading (round 8's `missing=['Drag
+source']` under `cdp` vs `missing=[]` under `playwright_cli`, same page,
+reproduced 2/2), which is why the fixture page carries that element too.
+
+The stage also prints both sides in full on a PASS, and dumps both whole trees
+on a FAIL. A green comparison whose inputs are invisible is a number without its
+predicate; a red one that names `generic ''` and not the element is unactionable.
+
+⚠️ **This claim is RED on obscura v0.2.2, deliberately, and `switch` therefore
+reports 17 PASS + 1 FAIL rather than 18 PASS.** Measured 2026-09-20 and
+reproduced 2/2 byte-identically: chromium offers one addressable element obscura
+does not — a `<label for>` — because the sixth of `roles::is_interactive`'s six
+disjuncts (`clickable_hint`, i.e. Chromium's `DOMSnapshot.isClickable`) is the
+only one no obscura capture can fill. The full mechanism, and the controlled
+probe that falsified it rather than merely reading it, are in `drive_switch.py`
+above `_quoted_at`. **It is left red on purpose**: the class it names is every
+element whose only clickability evidence is a JS-attached listener, and whether
+that is acceptable is a ruling rather than a fixture decision.
 
 **`provision` cannot use a local fixture release, and that is the product's
 trust model rather than an omission.** `ReleaseSource::for_runtime` pins the

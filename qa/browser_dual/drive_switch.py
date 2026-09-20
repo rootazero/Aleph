@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "browser_managed"))
 from qa_rpc import Ledger, Rpc, ws_connect  # noqa: E402
@@ -21,7 +22,7 @@ from qa_rpc import Ledger, Rpc, ws_connect  # noqa: E402
 # like "the process is gone"), and the whole-word match that stops
 # `--storage-dir=<X>` from also finding `--storage-dir=<X>-neighbour`.
 sys.path.insert(0, os.path.dirname(__file__))
-from drive import main_processes, token_processes  # noqa: E402
+from drive import main_processes, snapshot_text, token_processes  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("ws")
@@ -64,6 +65,173 @@ def sidecar_listing():
         return f"<unreadable: {e}>"
 
 
+# ---------------------------------------------------------------------------
+# F2 — the two-engine addressable-ref comparison
+# ---------------------------------------------------------------------------
+#
+# The branch's own declared merge blocker: *same page, both engines, compare the
+# set of addressable refs.* Both prerequisites landed in Tasks 17 and 5; the
+# comparison itself had never been made anywhere — not in QA, not in a fixture
+# pair, not in a unit test. This is it.
+#
+# **WHAT IS COMPARED, and why a comparison has to say so.** Two browser engines
+# will not produce byte-identical trees, so an assertion over the raw text has
+# exactly one possible outcome and measures nothing (判据 §2). The unit compared
+# here is therefore the thing an agent actually addresses an element BY:
+#
+#     key = (role, accessible name)          for an element line
+#     key = ("text:", rendered content)      for a text leaf
+#
+# as a MULTISET, not a set. Multiset because absorption
+# (`render::payload_flags` / `name_covers_all_text`) is decided by the name: if
+# one engine's name covers a text child and the other's does not, one tree
+# prints one line and the other prints two, and the model is looking at a
+# different number of addressable things. A set would hide exactly that.
+#
+# **WHAT IS EXCLUDED, each for a stated reason — this is the tolerance, and it
+# is the part worth attacking:**
+#
+#   * the `[ref=eN]` id itself. Refs are minted per capture
+#     (`PageState::build`), so two snapshots on the SAME engine already disagree
+#     about them. Comparing ids would be 判据 §2's 恒红 face: an assertion that
+#     can only fail.
+#   * `@x,y wxh` geometry. It is a measurement, not an address, and obscura
+#     v0.2.2 is already MEASURED to report a zero box for inline elements where
+#     Chromium reports a real one. Comparing geometry would answer "do the two
+#     engines lay this page out identically", which is a different and much
+#     weaker question than F2's. The header's own `no_box=n/m` token is where
+#     that difference is reported, and the `snapshot` stage already asserts it
+#     is printed.
+#   * state tokens (`[checked]` / `[disabled]` / …). A state is something the
+#     model reads off an element it has already addressed. Task 20 recorded a
+#     stale `[checked]` on the default engine, which would make this go red for
+#     a reason that is not about addressability.
+#   * the header lines (`# engine=`, `# INCOMPLETE:`). `engine=`, `gen=`,
+#     `fetch=…ms` and `no_box=` differ BY CONSTRUCTION.
+#
+# **What is NOT excluded, and so can still go red:** which elements earn a ref
+# at all, what each one's role is, what each one's accessible name is, how many
+# lines each element produces, and the exact text of every addressable text
+# leaf. That is the whole of what an agent's plan is written against.
+#
+# ⚠️ If this comes back with a difference, that is a FINDING and must be
+# reported as one. Widening the key until it passes would convert the one
+# measurement this branch is named after into a tolerance wide enough to accept
+# anything.
+#
+# ---------------------------------------------------------------------------
+# IT CAME BACK WITH A DIFFERENCE. Measured 2026-09-20, obscura v0.2.2 against
+# Chrome in /Applications, reproduced 2/2 byte-identically:
+#
+#     obscura-only: []          chromium-only: [generic '']
+#
+# The element is `<label for="txt">Your name</label>`. chromium renders
+# `- generic "" [ref=..] @86,249 81x22` with the text leaf beneath it; obscura
+# renders the text leaf alone, so the label is not addressable there at all.
+#
+# MECHANISM, established rather than guessed. `roles::is_interactive` is a
+# six-way OR. Five of the six read attributes or computed styles BOTH engines
+# supply. The sixth is `clickable_hint == Some(true)`, fed from exactly one
+# place — `fetch_chromium.rs`'s `DOMSnapshot.isClickable` — and
+# `fetch_obscura.rs` leaves it `None` deliberately, with a comment arguing
+# (correctly) that faking it from `cursor_pointer` would be worse. Chrome marks
+# a `<label for>` clickable; obscura reports no such signal, the label is
+# `Generic` with an empty name, and `anchor_flags` therefore gives it no line.
+#
+# FALSIFIED, not merely read: giving the label `style="cursor:pointer"` — a
+# signal both engines report, reaching the FIFTH disjunct — made obscura mint
+# the same `generic ''` and the symmetric difference went empty, every other key
+# unchanged. So this assertion has been observed BOTH red and green on this
+# fixture, which is the only useful answer to "in what circumstance does it go
+# the other way?" (判据 §2).
+#
+# THE CLASS IS NOT `<label>`. It is every element whose only evidence of
+# clickability is a JS-attached listener — no `onclick` attribute, no
+# `cursor: pointer`, no `tabindex`, no interactive role. `is_interactive`'s own
+# doc names that class as the one that matters most. On obscura, Aleph cannot
+# see them.
+#
+# This claim is therefore RED on obscura v0.2.2 BY DESIGN, and left red rather
+# than pinned to the known exception: whether the branch's interchangeability
+# claim survives a whole class of elements being unaddressable on the default
+# engine is a ruling, and a claim made green on the implementer's own authority
+# is a finding nobody reads again.
+# ---------------------------------------------------------------------------
+
+
+def _quoted_at(line, start):
+    """Read one `quote()`-produced string beginning at `line[start]`.
+
+    `page_state::render::quote` escapes `"` `\\` `\n` `\r` `\t` and C0 as
+    `\\u{..}`, and deliberately does NOT escape brackets — so a name containing
+    " [" is legal and a naive `split(" [")` would cut a name in half and then
+    report the two halves as an engine disagreement. Reading the string the way
+    it was written is the only parse that cannot invent one.
+    """
+    if start >= len(line) or line[start] != '"':
+        return None, start
+    out = []
+    i = start + 1
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            out.append(line[i : i + 2])
+            i += 2
+            continue
+        if c == '"':
+            return "".join(out), i + 1
+        out.append(c)
+        i += 1
+    # Unterminated: the renderer cannot produce this, so say so rather than
+    # returning a plausible prefix.
+    return None, len(line)
+
+
+def addressable_keys(text):
+    """The multiset of addressable (role, name) keys in one rendered tree.
+
+    Returns `(Counter, [unparsed lines])`. The second half is not decoration: a
+    ref line this function cannot read is not "no difference", it is "I could
+    not look" — and an unknown may only say so (判据 §8). Every `[ref=` line has
+    a quoted string by construction (`render::line` quotes a text leaf's content
+    and quotes an element's name whenever it is non-empty OR the node is
+    interactive, and `build` mints refs only for interactive-or-text nodes), so
+    an unparsed line means the line shape changed and this parser is stale.
+    """
+    keys = Counter()
+    unparsed = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if "[ref=" not in line:
+            continue
+        if not line.startswith("- "):
+            unparsed.append(line)
+            continue
+        rest = line[2:]
+        if rest.startswith("text: "):
+            value, _ = _quoted_at(rest, len("text: "))
+            if value is None:
+                unparsed.append(line)
+                continue
+            keys[("text:", value)] += 1
+            continue
+        role, _, after = rest.partition(" ")
+        value, _ = _quoted_at(after, 0)
+        if value is None:
+            unparsed.append(line)
+            continue
+        keys[(role, value)] += 1
+    return keys, unparsed
+
+
+def describe(counter):
+    """A stable, readable rendering of one side, for the failure message."""
+    return "; ".join(
+        f"{role} {name!r}" + (f" x{n}" if n > 1 else "")
+        for (role, name), n in sorted(counter.items())
+    )
+
+
 async def main():
     async with ws_connect(args.ws) as ws:
         rpc = Rpc(ws)
@@ -89,6 +257,16 @@ async def main():
             "and the orphan-reap registry has a record for it",
             os.path.exists(OBSCURA_RECORD),
             f"{OBSCURA_RECORD} in {sidecar_listing()}",
+        )
+
+        # F2, first half: the page as obscura sees it. Taken here, while the
+        # source engine is still the live one, because after the switch it is
+        # gone and there is no second chance.
+        ok, body, obscura_tree = await snapshot_text(rpc)
+        check(
+            "browser_snapshot on obscura returned a tree",
+            ok and bool(obscura_tree),
+            json.dumps(body)[:200],
         )
 
         ok, res = await rpc.invoke(
@@ -164,6 +342,18 @@ async def main():
             json.dumps(res)[:200],
         )
 
+        # F2, second half. A fresh `browser_snapshot`, NOT the `snapshot_text`
+        # the switch returned in its own envelope: this has to be the same TOOL
+        # on the same page with only the engine different, or the comparison is
+        # between two faces rather than between two engines (B12 — a reading
+        # taken beside the path is not a reading about the path).
+        ok, body, chromium_tree = await snapshot_text(rpc)
+        check(
+            "browser_snapshot on chromium returned a tree",
+            ok and bool(chromium_tree),
+            json.dumps(body)[:200],
+        )
+
         # Every verb above this line went through `get_backend`, which resolves
         # the engine from the PROFILE CONFIG. That they answered at all is the
         # only evidence that the switch moved the config as well as the
@@ -210,6 +400,62 @@ async def main():
             res.get("success") is False,
             json.dumps(res)[:200],
         )
+
+        # ------------------------------------------------------------------
+        # F2 — the comparison. See the block above `_quoted_at` for what the
+        # key is, what it excludes and why each exclusion is a different
+        # question rather than a tolerance.
+        # ------------------------------------------------------------------
+        obscura_keys, obscura_bad = addressable_keys(obscura_tree)
+        chromium_keys, chromium_bad = addressable_keys(chromium_tree)
+
+        # An unreadable ref line is "I could not look", never "no difference".
+        check(
+            "every ref line in obscura's tree parsed",
+            not obscura_bad,
+            str(obscura_bad[:3]),
+        )
+        check(
+            "every ref line in chromium's tree parsed",
+            not chromium_bad,
+            str(chromium_bad[:3]),
+        )
+        # Non-vacuity, and it is not optional: two empty trees have an empty
+        # symmetric difference, so without this the headline claim below is
+        # green on a comparison that saw nothing (判据 §2). Anchored on an
+        # element the fixture page adds for this stage rather than on a count,
+        # so it stays meaningful if the page grows.
+        check(
+            "the obscura tree actually offers the fixture's controls",
+            any(name == "Press me" for _, name in obscura_keys),
+            describe(obscura_keys)[:400],
+        )
+
+        only_obscura = obscura_keys - chromium_keys
+        only_chromium = chromium_keys - obscura_keys
+        same = check(
+            "THE TWO ENGINES OFFER THE SAME ADDRESSABLE ELEMENTS ON THIS PAGE",
+            not only_obscura and not only_chromium,
+            f"obscura-only: [{describe(only_obscura)}] | "
+            f"chromium-only: [{describe(only_chromium)}]",
+        )
+        # Printed whatever the verdict: the comparison's INPUT is the thing a
+        # reader needs in order to disagree with it, and a green run that shows
+        # nothing is a number without its predicate (判据 §18).
+        log(f"  obscura   ({sum(obscura_keys.values())} refs): {describe(obscura_keys)}")
+        log(f"  chromium  ({sum(chromium_keys.values())} refs): {describe(chromium_keys)}")
+        if not same:
+            # A key like `generic ''` names the SHAPE of the disagreement and
+            # not the element, and an operator cannot act on that. The trees are
+            # ~20 lines each on this fixture; printing them both is what turns
+            # "one extra generic" into "which node, at what depth, under what
+            # parent". Only on a failure — a green run has nothing to locate.
+            log("\n  --- obscura tree ---")
+            for line in obscura_tree.splitlines():
+                log(f"  | {line}")
+            log("\n  --- chromium tree ---")
+            for line in chromium_tree.splitlines():
+                log(f"  | {line}")
 
     return led.verdict()
 

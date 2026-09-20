@@ -361,6 +361,24 @@ impl BrowserBackend for PlaywrightCliBackend {
                     "failed to resolve cli-screenshots dir: {e}"
                 )))
             })?;
+        // Resolving a path creates nothing, and the CLI is the one that writes
+        // this file — so on any `$ALEPH_HOME` where the directory is not there
+        // yet, the CLI fails ENOENT, `png_bytes` comes back empty and
+        // `image_base64` is `null`. That reads like a browser failure and is a
+        // missing `mkdir`.
+        //
+        // It was invisible while the staging point was `std::env::temp_dir()`,
+        // which always exists, and became deterministic on every fresh home the
+        // day the staging moved under the data dir. `write_launch_config`
+        // already does this for the two directories IT owns (`output/<key>` and
+        // the config's parent); `cli-screenshots` is the third and was the one
+        // nobody created.
+        tokio::fs::create_dir_all(&path).await.map_err(|e| {
+            BrowserError::Io(std::io::Error::other(format!(
+                "cannot create the screenshot staging dir {}: {e}",
+                path.display()
+            )))
+        })?;
         let fname = format!("aleph-ss-{}.{ext}", uuid::Uuid::new_v4());
         path.push(fname);
         let path_str = path.to_string_lossy().to_string();
@@ -664,6 +682,82 @@ mod tests {
         ));
         let guard = Arc::new(BrowserSsrfGuard::new(SsrfConfig::default()));
         PlaywrightCliBackend::new(driver, "test", guard, SessionLaunch::headless_default())
+    }
+
+    /// The staging directory has to be CREATED, not merely resolved.
+    ///
+    /// `browser_state_dir` joins path components and nothing else, and the CLI
+    /// — not Aleph — is what opens this file for writing. On a fresh
+    /// `$ALEPH_HOME` the write therefore failed `ENOENT`, `png_bytes` came back
+    /// empty and `image_base64` was `null`, which reads like a browser problem.
+    /// `qa/browser_managed/run.sh tools` has been red on exactly this for three
+    /// weeks on both of its drivers' runs.
+    ///
+    /// **The falsifier, stated so it can be run:** delete the `create_dir_all`
+    /// in `screenshot` and this test goes red on its FIRST assertion — the fake
+    /// CLI's `> "$4"` cannot create a file in a directory that is not there, it
+    /// exits non-zero, `classify_failure` returns `PlaywrightCliError`, and the
+    /// `expect` below panics. Verified by doing it, not by reasoning about it.
+    ///
+    /// The assertions are separate on purpose (B11): the first is the EFFECT
+    /// (the CLI's bytes came back), the second is the state that made it
+    /// possible. A single `assert!(a && b)` could not say which half failed.
+    ///
+    /// This test resolves `$ALEPH_HOME`, so it holds `AlephHomeEnvGuard`; it
+    /// also names `browser_state_dir(` literally, which is what makes it
+    /// VISIBLE to `browser::home_guard_census` rather than merely compliant
+    /// with it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_screenshot_staging_directory_is_created_before_the_cli_writes_into_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::utils::paths::AlephHomeEnvGuard;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let home = tempfile::TempDir::new().expect("home");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        // argv reaching the child is `-s=<key> screenshot --filename <path>`,
+        // so the path is `$4`. The script writes the file the way the real CLI
+        // does — which is the whole point: a fake that created the directory
+        // itself would differ from production on the defect's own dimension
+        // (B19).
+        let cli = tmp.path().join("fake-playwright-cli");
+        std::fs::write(&cli, "#!/bin/sh\nprintf 'PNGDATA' > \"$4\"\n").expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let driver = Arc::new(PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(cli.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            crate::browser::profile::BrowserRuntimeConfig::default(),
+        ));
+        let backend = PlaywrightCliBackend::new(
+            driver,
+            "aleph-unit-screenshot-staging",
+            Arc::new(BrowserSsrfGuard::new(SsrfConfig::default())),
+            SessionLaunch::headless_default(),
+        );
+
+        let shot = backend
+            .screenshot("T1", ScreenshotOpts::default())
+            .await
+            .expect("the staging directory must exist by the time the CLI writes into it");
+        assert_eq!(
+            shot.png_bytes, b"PNGDATA",
+            "the CLI's bytes must come back, not an empty payload"
+        );
+
+        let staged = super::super::playwright_launch::browser_state_dir("cli-screenshots")
+            .expect("resolve the staging dir");
+        assert!(
+            staged.is_dir(),
+            "nothing created {} — the resolve-only shape is back",
+            staged.display()
+        );
     }
 
     #[test]
