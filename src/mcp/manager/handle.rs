@@ -116,6 +116,29 @@ impl McpManagerHandle {
             .map_err(AlephError::other)
     }
 
+    /// Enqueue a transient server start and return the actor's eventual
+    /// answer instead of awaiting it.
+    ///
+    /// `add_transient_server` blocks its caller for the child's `initialize`
+    /// handshake (`actor.rs:603` → `start_server_internal`); the plugin
+    /// lifecycle runs on the boot path and must not. The command is on the
+    /// actor's single queue once this returns, so a `remove_transient_server`
+    /// sent afterwards is processed after it — the caller may dispose
+    /// immediately without racing the start.
+    ///
+    /// `Err` only when the actor is gone (command channel closed).
+    pub async fn add_transient_server_detached(
+        &self,
+        config: McpManagerConfig,
+    ) -> Result<oneshot::Receiver<std::result::Result<(), String>>> {
+        let (respond_to, rx) = oneshot::channel();
+        self.tx
+            .send(McpCommand::AddTransientServer { config, respond_to })
+            .await
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+        Ok(rx)
+    }
+
     /// Remove a transient server by ID without touching the persisted config.
     ///
     /// Stops the running client (if any). Safe to call for plugin-owned servers
@@ -503,5 +526,31 @@ mod tests {
         // Should be able to subscribe multiple times
         let _sub1 = handle.subscribe();
         let _sub2 = handle.subscribe();
+    }
+
+    #[tokio::test]
+    async fn add_transient_server_detached_returns_the_actors_answer_on_the_receiver() {
+        use super::super::McpManagerActor;
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
+            .await
+            .unwrap();
+        tokio::spawn(actor.run());
+        let rx = handle
+            .add_transient_server_detached(McpManagerConfig::stdio(
+                "plugin:qa/never",
+                "never",
+                "qa-nonexistent-mcp-binary-9f3a",
+            ))
+            .await
+            .expect("enqueue");
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+            .await
+            .expect("actor answers within the spawn timeout")
+            .expect("sender not dropped");
+        assert!(
+            answer.is_err(),
+            "a nonexistent binary fails to start: {answer:?}"
+        );
     }
 }
