@@ -103,12 +103,13 @@ fn missing_finding(engine: Engine, detail: impl std::fmt::Display) -> Finding {
     match engine {
         Engine::Chromium => Finding::ok(
             CHROMIUM_ID,
-            "No Chromium for the managed browser driver",
+            "No Chromium for the chromium browser engine",
             format!(
-                "The managed driver launches Chromium itself and could not find one ({detail}). \
-                 Browser tools will refuse ON MANAGED PROFILES until this is fixed; the default \
-                 profile (driver = cdp, engine = obscura) and the existing-session driver \
-                 (attach to your own Chrome) are unaffected."
+                "Nothing here resolves to a Chromium: no pin, no system browser, and no \
+                 Playwright-managed one ({detail}). Profiles on engine = \"chromium\" — \
+                 including the escape hatch out of obscura — will refuse until this is fixed; \
+                 the default profile (driver = cdp, engine = obscura) and the existing-session \
+                 driver (attach to your own Chrome) are unaffected."
             ),
         )
         .with_fix_hint(
@@ -247,22 +248,31 @@ impl EngineMissingCheck {
         // is `check::settle_probe`'s job, not a second copy of it: a panicked
         // probe must produce the same "<subject> unknown" sentence every check
         // in this directory produces, with one author.
-        let cli = match settle_probe(
-            CHROMIUM_ID,
-            subject_for(Engine::Chromium),
-            tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path).await,
-        ) {
-            Ok(v) => v,
-            Err(finding) => return vec![finding],
-        };
-        let Some(cli) = cli else {
-            return vec![Finding::ok(
-                CHROMIUM_ID,
-                "Managed browser not checked (no playwright-cli)",
-                "The managed driver's CLI is not provisioned, so there is nothing to \
-                 attach a browser to yet. See the `browser/runtime` finding for that.",
-            )];
-        };
+        // NO `managed_cli_path` precondition. This check is dispatched per
+        // `Engine` variant — `run_chromium` / `run_obscura`, ids
+        // `browser/{chromium,obscura}-missing`, subject `subject_for(Engine)` —
+        // so its subject is THE CHROMIUM ENGINE, and an engine is exactly what
+        // the cdp driver selects between.
+        //
+        // It used to short-circuit to "Managed browser not checked (no
+        // playwright-cli)" whenever the CLI was absent. After W5 that is a
+        // managed-driver prerequisite standing in front of an engine's answer:
+        // on a host with a pinned Chrome and no CLI, `browser_open{engine:
+        // "chromium"}` succeeds (`qa/browser_dual/run.sh escape`, measured)
+        // while this check reported the engine unexamined. Two faces of one
+        // verb answering from two different derivations (判据 §9) — and the
+        // false one in the direction a reader believes rather than tests.
+        //
+        // Narrowing the sentence to the managed driver was considered and is
+        // wrong: it would put a true statement about a driver in the row where
+        // the ENGINE's answer belongs, and the reader's question would still be
+        // unanswered.
+        //
+        // `resolve_binary(..., None)` is the launcher's own call, so the two
+        // now share one derivation instead of this one adding a gate the
+        // launcher no longer has. "No playwright-cli" is not lost — it becomes
+        // one of the reasons inside `tried` rather than a precondition in front
+        // of them.
         let runtime = match crate::config::Config::load() {
             Ok(cfg) => cfg.general.browser.runtime.clone(),
             // A config we cannot read is not a config with default settings: a
@@ -278,7 +288,7 @@ impl EngineMissingCheck {
         };
         let probe = tokio::time::timeout(
             RESOLVE_TIMEOUT,
-            resolve_binary(&runtime, &BrowserType::default(), Some(&cli)),
+            resolve_binary(&runtime, &BrowserType::default(), None),
         )
         .await;
         vec![match probe {
@@ -487,7 +497,17 @@ mod tests {
             "pin: none; system: none; playwright: not installed",
         )));
         assert_eq!(missing.check_id, CHROMIUM_ID);
-        assert_eq!(missing.title, "No Chromium for the managed browser driver");
+        // "engine", not "managed browser driver": this check is dispatched per
+        // `Engine` variant, and after W5 a chromium resolves through a pin or a
+        // system browser with no managed driver involved at all. The old title
+        // named the one driver that is no longer the only way here.
+        assert_eq!(missing.title, "No Chromium for the chromium browser engine");
+        // **`Info`, and this line is the one that must not move.** The whole
+        // point of removing the `managed_cli_path` short-circuit was to stop a
+        // driver prerequisite answering an engine's question — NOT to start
+        // nagging a default obscura install about a Chromium it does not need.
+        // A host with no pin, no system browser and no CLI lands here, and it
+        // must still be informational.
         assert_eq!(
             missing.severity,
             crate::diagnostics::finding::Severity::Info

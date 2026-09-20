@@ -567,37 +567,49 @@ async fn run_install(
 }
 
 /// The chromium row, derived from the driver's own resolver.
+///
+/// **This row is keyed to an ENGINE, not to a driver.** `locate_all` above
+/// iterates `Engine::ALL` with an exhaustive match precisely so the row set and
+/// the engine set cannot drift, so the question here is "can this host produce a
+/// Chromium", and the reader is a model deciding whether to reach for
+/// `browser_open{engine:"chromium"}`.
+///
+/// It used to answer `Unknown (no playwright-cli)` whenever the CLI was absent,
+/// short-circuiting before the resolver ran. After W5 that is a managed-driver
+/// prerequisite answering an engine's question: on a host with a pinned Chrome
+/// and no CLI the launch succeeds while this row said `Unknown`, and a model
+/// reads a runtime inventory as more authoritative than a description — so the
+/// refusal is believed rather than tried. Same shape as the `browser_emulate`
+/// DESCRIPTION defect, one layer down. Measured red then green by
+/// `qa/browser_dual/run.sh escape`.
 async fn chromium_row() -> RuntimeRow {
-    // Off the async worker, same as the doctor's twin probe: a `which` PATH
-    // walk plus a JSON read (判据 §16).
-    let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
-        .await
-        .unwrap_or(None);
-    let (status, path) = match cli {
-        None => ("Unknown (no playwright-cli)".to_string(), None),
-        Some(cli) => match crate::config::Config::load() {
-            // A config we cannot read is NOT a config with default settings: a
-            // pinned `binary_path` we failed to see would make this row say
-            // "Missing" on a host that has a browser. The doctor answers this
-            // condition with `unknown`; the tool must say the same thing, or
-            // the two faces disagree about the same fact (判据 §16).
-            Err(e) => (format!("Unknown (the config could not be read: {e})"), None),
-            Ok(cfg) => {
-                match crate::browser::chromium_resolve::resolve_binary(
-                    &cfg.general.browser.runtime,
-                    &crate::browser::profile::BrowserType::default(),
-                    Some(&cli),
-                )
-                .await
-                {
-                    Ok(r) => (
-                        format!("Ready ({})", r.source.label()),
-                        Some(r.path.display().to_string()),
-                    ),
-                    Err(e) => (format!("Missing ({e})"), None),
-                }
+    let (status, path) = match crate::config::Config::load() {
+        // A config we cannot read is NOT a config with default settings: a
+        // pinned `binary_path` we failed to see would make this row say
+        // "Missing" on a host that has a browser. The doctor answers this
+        // condition with `unknown`; the tool must say the same thing, or
+        // the two faces disagree about the same fact (判据 §16).
+        Err(e) => (format!("Unknown (the config could not be read: {e})"), None),
+        Ok(cfg) => {
+            // `None`, so the CLI is looked up only if the Playwright-managed
+            // route is reached — the launcher's own call, so these two share one
+            // derivation instead of this face adding a gate the launcher does
+            // not have (判据 §9). A missing CLI still reaches the reader: it is
+            // one of the reasons inside the resolver's `tried`.
+            match crate::browser::chromium_resolve::resolve_binary(
+                &cfg.general.browser.runtime,
+                &crate::browser::profile::BrowserType::default(),
+                None,
+            )
+            .await
+            {
+                Ok(r) => (
+                    format!("Ready ({})", r.source.label()),
+                    Some(r.path.display().to_string()),
+                ),
+                Err(e) => (format!("Missing ({e})"), None),
             }
-        },
+        }
     };
     RuntimeRow {
         name: CHROMIUM.to_string(),

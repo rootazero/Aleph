@@ -170,6 +170,57 @@ async def main():
             json.dumps(res)[:300],
         )
 
+        # ------------------------------------------------ the OTHER two faces
+        #
+        # 判据 §9: one verb, several faces, ONE derivation. `browser_open` has
+        # just launched a chromium on this host. The two faces that REPORT on
+        # the chromium engine must not be answering the opposite — and both are
+        # dispatched per `Engine` variant, not per driver:
+        #
+        #   * `RealEngineLocator::locate_all` iterates `Engine::ALL` with an
+        #     exhaustive match, and its own doc says the row count IS the
+        #     variant count;
+        #   * `engine_missing` is `run_chromium()` / `run_obscura()`, ids
+        #     `browser/{chromium,obscura}-missing`, subject `subject_for(Engine)`.
+        #
+        # So these are the cdp driver's own engine inventory, and a model
+        # deciding whether to reach for `engine:"chromium"` reads them first. A
+        # `no playwright-cli` answer here is W7's shape with a runtime inventory
+        # in place of a DESCRIPTION: a refusal that is believed rather than
+        # tried.
+        ok, res = await rpc.invoke("runtime_manage", {"action": "list"})
+        rows = (res or {}).get("runtimes") or []
+        chromium = next((r for r in rows if r.get("name") == "chromium"), None)
+        check(
+            "runtime_manage{list} has a chromium row at all",
+            chromium is not None,
+            json.dumps([r.get("name") for r in rows])[:200],
+        )
+        if chromium is not None:
+            status = str(chromium.get("status", ""))
+            check(
+                "…and it does NOT blame a missing playwright-cli for the engine "
+                "this host just launched",
+                "playwright-cli" not in status,
+                f"status={status!r} path={chromium.get('path')!r} — "
+                f"browser_open{{engine:'chromium'}} succeeded on this same host, "
+                f"so this row is the tool face contradicting the launch face",
+            )
+
+        ok, res = await rpc.invoke("doctor", {"only": ["browser/chromium-missing"]})
+        report = json.dumps((res or {}).get("report") or {})
+        check(
+            "doctor ran the chromium check at all",
+            "browser/chromium-missing" in report,
+            report[:200],
+        )
+        check(
+            "…and it does NOT report the engine as unchecked for want of a CLI",
+            "not checked" not in report
+            and "nothing to attach a browser to" not in report,
+            report[:400],
+        )
+
         # The axis again, at the OTHER end. The state that matters is the one
         # during the launch, and a ledger read once at startup cannot rule out
         # an entry that appeared in between — `runtimes::probe` writes lazily.
