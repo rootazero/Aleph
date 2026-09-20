@@ -23,6 +23,7 @@ use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
 use crate::extension::mcp_config;
@@ -139,7 +140,7 @@ impl PluginLoader {
     }
 
     /// Load a plugin based on its kind.
-    pub fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+    pub(super) fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.is_loaded(&manifest.id) {
             warn!("Plugin {} is already loaded, skipping", manifest.id);
             return Ok(());
@@ -473,6 +474,39 @@ impl Default for PluginLoader {
     }
 }
 
+/// Mount-time runtime effect for a `PluginKind::Wasm` plugin: instantiate the
+/// module now and hand back the disposer that unloads it.
+///
+/// Loading at mount (not at first tool call, as `ensure_plugin_loaded` used
+/// to) is what lets the `service` step that follows run the plugin's
+/// `start_handler`, and what puts the module inside the scope's dispose order
+/// instead of beside it.
+pub(crate) async fn load_wasm_effect(
+    loader: Arc<tokio::sync::RwLock<PluginLoader>>,
+    manifest: &PluginManifest,
+) -> ExtensionResult<Disposer> {
+    debug_assert_eq!(
+        manifest.kind,
+        PluginKind::Wasm,
+        "only WASM plugins have a module to load"
+    );
+    loader.write().await.load_plugin(manifest)?;
+    let plugin_id = manifest.id.clone();
+    Ok(async_disposer(move || async move {
+        loader
+            .write()
+            .await
+            .unload_plugin(&plugin_id)
+            .map_err(|e| e.to_string())
+    }))
+}
+
+/// The smallest valid WebAssembly module (magic + version, no sections).
+/// extism links it without complaint and fails only when an export is
+/// called, which is exactly the shape a lifecycle fixture needs.
+#[cfg(test)]
+pub(crate) const EMPTY_WASM_MODULE: &[u8] = b"\0asm\x01\x00\x00\x00";
+
 /// Register a `McpMemoryExtension` into `registry` when `manifest` declares a
 /// `[memory]` section.
 ///
@@ -727,5 +761,49 @@ mod tests {
         assert!(!loader.is_loaded("mcp-test"));
         assert!(loader.get_mcp_configs("mcp-test").is_none());
         assert!(!loader.has_mcp_plugins());
+    }
+
+    #[tokio::test]
+    async fn load_wasm_effect_loads_the_module_and_its_disposer_unloads_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("plugin.wasm"), EMPTY_WASM_MODULE).unwrap();
+        let mut manifest = PluginManifest::new(
+            "qa-wasm".to_string(),
+            "QA WASM".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("plugin.wasm"),
+        );
+        manifest.root_dir = tmp.path().to_path_buf();
+
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+        let disposer = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .expect("an empty module links");
+        assert!(loader.read().await.is_loaded("qa-wasm"));
+        assert!(loader.read().await.is_wasm_runtime_active());
+
+        disposer()
+            .await
+            .expect("unload of a loaded module succeeds");
+        assert!(!loader.read().await.is_loaded("qa-wasm"));
+    }
+
+    #[tokio::test]
+    async fn load_wasm_effect_with_a_missing_file_registers_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut manifest = PluginManifest::new(
+            "qa-missing".to_string(),
+            "QA Missing".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("nope.wasm"),
+        );
+        manifest.root_dir = tmp.path().to_path_buf();
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+        let err = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .err()
+            .expect("missing file is an error, not a silent skip");
+        assert!(err.to_string().contains("WASM file not found"), "{err}");
+        assert!(!loader.read().await.is_loaded("qa-missing"));
     }
 }
