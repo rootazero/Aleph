@@ -160,6 +160,17 @@ impl ExtensionStopHookVerifier {
             .remove(session);
     }
 
+    /// Reset only the `consecutive` counter while preserving `total`, so the
+    /// cumulative cap above still fires for hooks that wedge over a long
+    /// horizon. Called on every ceiling breach and every Allow/Halt path,
+    /// matching the bookkeeping rule in the [`VetoCounters`] doc.
+    fn reset_consecutive(&self, session: &str) {
+        let mut map = self.vetoes.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(counters) = map.get_mut(session) {
+            counters.consecutive = 0;
+        }
+    }
+
     /// Core evaluation against an explicit executor — the seam unit tests
     /// use (the trait impl resolves the process-global extension manager,
     /// which tests must not depend on).
@@ -243,12 +254,17 @@ impl ExtensionStopHookVerifier {
                     };
                 }
                 if post.consecutive > MAX_CONSECUTIVE_STOP_VETOES {
-                    // Per-cycle anti-wedge bound: let this one stop
-                    // through, but keep `total` accumulating so the
-                    // cumulative cap above eventually fires. The NEXT
-                    // successful veto (after one Allow) restarts the
-                    // consecutive counter from 1, so a hook that wedges
-                    // every-other-stop will be re-detected promptly.
+                    // Per-cycle anti-wedge bound: let this one stop through,
+                    // but keep `total` accumulating so the cumulative cap
+                    // above eventually fires. The NEXT successful veto (after
+                    // this Allow) restarts the consecutive counter from 1, so
+                    // a hook that wedges every-other-stop will be re-detected
+                    // promptly. Without the reset the consecutive counter
+                    // would stay above the ceiling forever and the gate would
+                    // be permanently disabled for this session — the test
+                    // `consecutive_veto_ceiling_unwedges_the_loop` catches
+                    // exactly that regression.
+                    self.reset_consecutive(session);
                     tracing::warn!(
                         session,
                         consecutive = post.consecutive,
