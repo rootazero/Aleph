@@ -116,6 +116,13 @@ impl AlephHomeEnvGuard {
     /// whatever it was on drop. For a test that needs `get_config_dir()` to
     /// have no override at all — not a test-supplied one either — because it
     /// is proving the "neither ALEPH_HOME nor HOME resolves" failure mode.
+    ///
+    /// Unix only: the matching ledger-failure test that uses this guard
+    /// (`a_failing_ledger_still_reports_ok_for_a_real_spawn`) is `cfg(unix)`
+    /// because Windows' `home_dir()` also honours `USERPROFILE` and the
+    /// legacy `HOMEDRIVE`+`HOMEPATH` pair, so a single ALEPH_HOME clear is
+    /// not enough to make `aleph_home()` resolve to `None`.
+    #[cfg(unix)]
     pub(crate) fn acquire_and_clear() -> Self {
         let lock = ALEPH_HOME_TEST_GUARD
             .lock()

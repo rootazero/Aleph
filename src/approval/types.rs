@@ -29,6 +29,7 @@ macro_rules! declare_action_types {
         /// Each variant maps to a specific capability that an agent can invoke.
         /// The serialization uses `snake_case` to match the JSON policy config
         /// format.
+        #[non_exhaustive]
         #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         pub enum ActionType {
@@ -217,6 +218,7 @@ impl fmt::Display for ActionType {
 }
 
 /// The result of an approval policy check.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum ApprovalDecision {
@@ -232,6 +234,7 @@ pub enum ApprovalDecision {
 ///
 /// Serialized as lowercase (`"allow"`, `"deny"`, `"ask"`), so invalid values
 /// like `"Deny"` are rejected at parse time.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DefaultDecision {

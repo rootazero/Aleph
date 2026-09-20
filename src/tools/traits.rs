@@ -88,6 +88,14 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         false
     }
 
+    /// Whether this tool rewrites the CONTENT of user files (edit / write /
+    /// patch). Tools answering `true` attach a `_presentation` FileChange
+    /// to their output — `presentation_census` asserts it. Moves, deletes
+    /// and config/state writers answer `false`.
+    fn mutates_file_content(&self) -> bool {
+        false
+    }
+
     /// Per-result token budget for this tool's output (Layer-2 spill/truncate).
     ///
     /// `Some(n)` caps the tool's result at `n` tokens before the overflow
@@ -362,6 +370,14 @@ pub trait AlephToolDyn: Send + Sync {
     fn max_result_tokens(&self) -> Option<usize> {
         None
     }
+
+    /// Whether this tool mutates file content, forwarded from
+    /// [`AlephTool::mutates_file_content`]. Defaulted so manual `AlephToolDyn`
+    /// impls (MCP tools, adapters, tests) need not change; the blanket impl
+    /// below overrides it to forward the concrete tool's value.
+    fn mutates_file_content(&self) -> bool {
+        false
+    }
 }
 
 // =============================================================================
@@ -393,6 +409,10 @@ impl<T: AlephTool> AlephToolDyn for T {
 
     fn max_result_tokens(&self) -> Option<usize> {
         AlephTool::max_result_tokens(self)
+    }
+
+    fn mutates_file_content(&self) -> bool {
+        AlephTool::mutates_file_content(self)
     }
 }
 

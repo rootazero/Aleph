@@ -27,14 +27,13 @@
 //! 3. Summarize the dropped span through the same [`ContextCompactor`] the
 //!    automatic path uses (LLM, deterministic-truncation fallback), optionally
 //!    steered by the user's own `/compact <instructions>` directive.
-//! 4. Append the summary as a `SystemMessage`, then a `CompactionPerformed`
-//!    checkpoint — finally giving that long-declared, never-produced event a
-//!    producer.
-//! 5. **Soft-retire** the compacted prefix via
-//!    [`SessionEventStore::retire_through`]. The rows survive (the log stays
-//!    append-only, `/undo` and export are unaffected) and the BM25 mirror is
-//!    deliberately kept, so `recall_events` can still surface a detail the
-//!    summary abstracted away.
+//! 4. **One transaction**: append the summary as a `SystemMessage` plus a
+//!    `CompactionPerformed` checkpoint — finally giving that long-declared,
+//!    never-produced event a producer — and **soft-retire** the compacted
+//!    prefix (`Retire::Through`) in the same [`SessionService::emit_batch`]
+//!    call. The rows survive (the log stays append-only, `/undo` and export
+//!    are unaffected) and the BM25 mirror is deliberately kept, so
+//!    `recall_events` can still surface a detail the summary abstracted away.
 //!
 //! Nothing is deleted, anywhere. The Panel keeps the full scrollback and gains
 //! a visible summary row; the agent's next prompt starts from the summary.
@@ -68,9 +67,8 @@ use crate::context::compact::summary_utils::{
 };
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
-use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::session::events::{Retire, SessionEvent, SessionEventRecord};
 use crate::session::service::{SessionId, SessionService};
-use crate::session::store::SessionEventStore;
 use crate::sync_primitives::{Arc, Mutex};
 
 /// Default token budget for the tail kept verbatim by a manual compaction —
@@ -274,7 +272,7 @@ static IN_FLIGHT: Mutex<std::collections::BTreeSet<String>> =
 ///
 /// Two overlapping compactions are not merely wasteful. Both read the same
 /// un-retired log, both pay the summarizer, and both append their summary
-/// *above* the other's `retire_through` boundary — so neither retires the
+/// *above* the other's `Retire::Through` boundary — so neither retires the
 /// other's, and every future prompt of that session carries two near-identical
 /// `[Context Summary]` blocks until some later compaction sweeps them up.
 struct CompactionBracket {
@@ -313,13 +311,12 @@ impl Drop for CompactionBracket {
 /// `summarizer` is optional so a deployment with no provider wired still gets a
 /// real (deterministic) compaction instead of a silent failure.
 ///
-/// Ordering is fail-safe by construction: the summary and checkpoint are
-/// appended **before** the retire. If the retire fails, the log carries a
-/// summary and nothing was lost; the reverse order could strip the prefix and
-/// then fail to record what it said.
+/// All-or-nothing: the summary, its checkpoint and the retire are one store
+/// transaction, so a crash leaves either the old log or the compacted one —
+/// never a summary of a prefix that is still live, nor a retired prefix with
+/// no record of what it said.
 pub async fn compact_session(
     service: &dyn SessionService,
-    store: &dyn SessionEventStore,
     summarizer: Option<&ContextCompactor>,
     session_id: &SessionId,
     opts: &ManualCompactOptions,
@@ -456,47 +453,39 @@ pub async fn compact_session(
         ));
     }
 
-    let summary_seq = service
-        .emit_event(
-            session_id,
-            SessionEvent::SystemMessage {
-                turn_id: uuid::Uuid::new_v4(),
-                content: format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}"),
-                at: crate::session::events::now_ms(),
-            },
-        )
-        .await?;
-
+    let summary_turn = uuid::Uuid::new_v4();
+    // One instant for both payloads: the batch is one moment, and two
+    // `now_ms()` calls can straddle a millisecond.
+    let at = crate::session::events::now_ms();
+    let batch = vec![
+        SessionEvent::SystemMessage {
+            turn_id: summary_turn,
+            content: format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}"),
+            at,
+        },
+        SessionEvent::CompactionPerformed {
+            from_seq,
+            to_seq: cut_seq,
+            // The summary's turn_id: the one reference known BEFORE the batch
+            // commits (its seq is allocated by the actor inside the commit).
+            summary_ref: summary_turn.to_string(),
+            at,
+        },
+    ];
+    // Summary, checkpoint and retire commit together or not at all (§4.1).
     service
-        .emit_event(
-            session_id,
-            SessionEvent::CompactionPerformed {
-                from_seq,
-                to_seq: cut_seq,
-                // The seq of the `SystemMessage` carrying the summary — the one
-                // reference that survives every later compaction of this log.
-                summary_ref: summary_seq.to_string(),
-                at: crate::session::events::now_ms(),
-            },
-        )
-        .await?;
-
-    let retired = match store.retire_through(session_id, cut_seq).await {
-        Ok(n) => n,
-        Err(e) => {
-            // The summary and its checkpoint are already durable. Say so, so a
-            // reader of the log does not mistake the extra `[Context Summary]`
-            // for a compaction that happened: nothing was lost, but nothing was
-            // freed either.
+        .emit_batch(session_id, batch, Some(Retire::Through(cut_seq)))
+        .await
+        .map_err(|e| {
+            // Nothing landed: no stray `[Context Summary]` for a reader of the
+            // log to mistake for a compaction that happened.
             tracing::warn!(
                 ?session_id,
                 error = %e,
-                "manual compaction: summary recorded but the prefix could not be retired; \
-                 context is unchanged",
+                "manual compaction: transaction did not commit; context unchanged",
             );
-            return Err(e.into());
-        }
-    };
+            anyhow::Error::from(e)
+        })?;
     // Tell the prompt-cache watchdog this break was deliberate.
     //
     // Retiring the prefix guarantees the next turns are cache-cold — that is
@@ -517,7 +506,6 @@ pub async fn compact_session(
 
     tracing::info!(
         ?session_id,
-        retired,
         events_compacted = cut,
         tokens_before,
         tokens_after,
@@ -596,7 +584,12 @@ fn task_focus(tail: &[UnifiedMessage]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{now_ms, EventSeq, MessageContent, RunOutcome, ToolOutput};
+    use crate::session::events::{
+        batch_durability, now_ms, EventSeq, MessageContent, RunOutcome, ToolOutput,
+    };
+    use crate::session::store::test_support::CountingStore;
+    use crate::session::store::SessionEventStore;
+    use std::sync::atomic::Ordering;
 
     fn rec(seq: EventSeq, event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -905,8 +898,13 @@ mod tests {
     /// observes retirement exactly as production does. The old `/compact`
     /// looked correct against a mock precisely because nothing checked that the
     /// thing the prompt reads had actually changed.
+    ///
+    /// The store is a [`CountingStore`] so a test can assert "one transaction"
+    /// as a number; `emit_batch` allocates seqs the way the actor does (one
+    /// contiguous block per batch) and hands the whole batch to ONE
+    /// `append_batch`.
     struct StoreBackedService {
-        store: std::sync::Arc<crate::session::store::SqliteEventStore>,
+        store: std::sync::Arc<CountingStore>,
         next_seq: tokio::sync::Mutex<EventSeq>,
     }
 
@@ -932,11 +930,29 @@ mod tests {
             id: &SessionId,
             event: SessionEvent,
         ) -> Result<EventSeq, crate::session::service::SessionError> {
+            let seqs = self.emit_batch(id, vec![event], None).await?;
+            seqs.first().copied().ok_or_else(|| {
+                crate::session::service::SessionError::Other(
+                    "emit_batch: one event in, no seq out".into(),
+                )
+            })
+        }
+        async fn emit_batch(
+            &self,
+            id: &SessionId,
+            events: Vec<SessionEvent>,
+            retire: Option<Retire>,
+        ) -> Result<Vec<EventSeq>, crate::session::service::SessionError> {
             let mut guard = self.next_seq.lock().await;
-            let seq = *guard;
-            *guard += 1;
-            self.store.append(id, seq, &event, now_ms()).await?;
-            Ok(seq)
+            let first = *guard;
+            *guard += events.len() as EventSeq;
+            let at = now_ms();
+            let pairs: Vec<(SessionEvent, i64)> = events.into_iter().map(|e| (e, at)).collect();
+            let durability = batch_durability(pairs.iter().map(|(e, _)| e));
+            self.store
+                .append_batch(id, first, &pairs, retire, durability)
+                .await?;
+            Ok((0..pairs.len() as EventSeq).map(|i| first + i).collect())
         }
         async fn subscribe(
             &self,
@@ -965,14 +981,8 @@ mod tests {
 
     async fn seeded_session(
         turns: usize,
-    ) -> (
-        StoreBackedService,
-        std::sync::Arc<crate::session::store::SqliteEventStore>,
-        SessionId,
-    ) {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::session::store::migrate_add_session_events(&conn).unwrap();
-        let store = std::sync::Arc::new(crate::session::store::SqliteEventStore::new(conn));
+    ) -> (StoreBackedService, std::sync::Arc<CountingStore>, SessionId) {
+        let store = CountingStore::in_memory();
         let service = StoreBackedService {
             store: std::sync::Arc::clone(&store),
             next_seq: tokio::sync::Mutex::new(1),
@@ -1004,7 +1014,7 @@ mod tests {
         // rows from the `messages` read projection while the prompt was rebuilt
         // from `session_events`, so it freed nothing. Assert against
         // `get_events` — the exact call `harness::agent::think` makes.
-        let (service, store, sid) = seeded_session(40).await;
+        let (service, _store, sid) = seeded_session(40).await;
         let before = service.get_events(&sid, None, None).await.unwrap();
         assert_eq!(before.len(), 80);
 
@@ -1012,7 +1022,6 @@ mod tests {
         // compaction, which is the floor this feature must never drop below.
         let outcome = compact_session(
             &service,
-            store.as_ref(),
             None,
             &sid,
             &ManualCompactOptions {
@@ -1033,15 +1042,14 @@ mod tests {
             after.len()
         );
         // The summary and its checkpoint survive (they were appended after the
-        // retired prefix), and the checkpoint points at the summary's seq.
-        let summary_seq = after
+        // retired prefix), and the checkpoint names the summary by its
+        // `turn_id` — the one reference known before the batch commits.
+        let (summary_seq, summary_turn) = after
             .iter()
             .find_map(|r| match &r.event {
-                SessionEvent::SystemMessage { content, .. }
-                    if content.starts_with(SUMMARY_MARKER) =>
-                {
-                    Some(r.seq)
-                }
+                SessionEvent::SystemMessage {
+                    turn_id, content, ..
+                } if content.starts_with(SUMMARY_MARKER) => Some((r.seq, *turn_id)),
                 _ => None,
             })
             .expect("the summary must be live after compaction");
@@ -1056,12 +1064,89 @@ mod tests {
                 _ => None,
             })
             .expect("CompactionPerformed must be emitted — it had no producer before this module");
-        assert_eq!(checkpoint.1, summary_seq.to_string());
+        assert_eq!(checkpoint.1, summary_turn.to_string());
         assert!(
             after.iter().all(|r| r.seq > checkpoint.0
                 || r.seq == summary_seq
                 || matches!(r.event, SessionEvent::CompactionPerformed { .. })),
             "nothing at or below the checkpoint boundary may still be live"
+        );
+    }
+
+    /// §4.1: summary, checkpoint and retire are ONE `append_batch`. Counted on
+    /// the store, not inferred from the log: a two-step implementation leaves
+    /// the same log behind when nothing crashes, so only the number of write
+    /// entry points can tell the two apart.
+    #[tokio::test]
+    async fn manual_compact_is_one_store_transaction() {
+        let (service, store, sid) = seeded_session(40).await;
+        let before = store.append_batches.load(Ordering::SeqCst);
+        // The same tail budget as the regression test above: at the 20k
+        // default the 40-turn fixture already fits and nothing is written.
+        let out = compact_session(
+            &service,
+            None,
+            &sid,
+            &ManualCompactOptions {
+                instructions: None,
+                keep_tokens: Some(MIN_KEEP_TOKENS),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(out.compacted, "{:?}", out.skipped_reason);
+        assert_eq!(
+            store.append_batches.load(Ordering::SeqCst) - before,
+            1,
+            "summary + checkpoint + retire = ONE append_batch"
+        );
+        assert_eq!(
+            store.retire_froms.load(Ordering::SeqCst),
+            0,
+            "no second step: the only other write entry point was never called"
+        );
+        let after = service.get_events(&sid, None, None).await.unwrap();
+        let summary = after
+            .iter()
+            .find(|r| {
+                matches!(&r.event, SessionEvent::SystemMessage { content, .. }
+                    if content.starts_with(SUMMARY_MARKER))
+            })
+            .expect("summary live");
+        let ckpt = after
+            .iter()
+            .find(|r| matches!(r.event, SessionEvent::CompactionPerformed { .. }))
+            .expect("checkpoint live");
+        assert_eq!(ckpt.seq, summary.seq + 1, "same batch ⇒ adjacent seqs");
+        let (
+            SessionEvent::SystemMessage { turn_id, .. },
+            SessionEvent::CompactionPerformed {
+                summary_ref,
+                to_seq,
+                ..
+            },
+        ) = (&summary.event, &ckpt.event)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            summary_ref,
+            &turn_id.to_string(),
+            "summary_ref names the summary by turn_id (known before the batch commits)"
+        );
+        assert!(
+            after.iter().all(|r| r.seq > *to_seq),
+            "prefix retired in the same step"
+        );
+        // Fixture consistency, not a production pin: the `created_at_ms` here
+        // is the TEST DOUBLE's one-stamp-per-batch (`StoreBackedService::
+        // emit_batch`), standing in for the actor's (`session::actor::
+        // handle_emit_batch`, pinned by T2's actor tests). What it guards on
+        // this side is that a reader must never order inside a batch by time —
+        // seq is the order.
+        assert_eq!(
+            summary.created_at_ms, ckpt.created_at_ms,
+            "the double stamps one created_at_ms per batch; seq is the order inside it"
         );
     }
 
@@ -1074,7 +1159,6 @@ mod tests {
         let (service, store, sid) = seeded_session(40).await;
         compact_session(
             &service,
-            store.as_ref(),
             None,
             &sid,
             &ManualCompactOptions {
@@ -1098,9 +1182,7 @@ mod tests {
         // of each message, so its "summary" is the corpus. Compacting there
         // would trade structure for nothing — the guard must decline and say so
         // rather than report a zero-token "success".
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::session::store::migrate_add_session_events(&conn).unwrap();
-        let store = std::sync::Arc::new(crate::session::store::SqliteEventStore::new(conn));
+        let store = CountingStore::in_memory();
         let service = StoreBackedService {
             store: std::sync::Arc::clone(&store),
             next_seq: tokio::sync::Mutex::new(1),
@@ -1118,7 +1200,6 @@ mod tests {
 
         let outcome = compact_session(
             &service,
-            store.as_ref(),
             None,
             &sid,
             &ManualCompactOptions {
@@ -1142,16 +1223,14 @@ mod tests {
 
     #[tokio::test]
     async fn compacting_twice_is_idempotent_once_the_tail_fits() {
-        let (service, store, sid) = seeded_session(40).await;
+        let (service, _store, sid) = seeded_session(40).await;
         let opts = ManualCompactOptions {
             instructions: None,
             keep_tokens: Some(MAX_KEEP_TOKENS),
         };
         // A huge keep budget leaves nothing to compact — an honest no-op with a
         // reason, not a fabricated success.
-        let out = compact_session(&service, store.as_ref(), None, &sid, &opts)
-            .await
-            .unwrap();
+        let out = compact_session(&service, None, &sid, &opts).await.unwrap();
         assert!(!out.compacted);
         assert!(out.skipped_reason.is_some());
         assert_eq!(out.tokens_saved(), 0);
@@ -1248,7 +1327,7 @@ mod tests {
         // and the model's own `session_compact` genuinely overlap. Both would
         // read the same un-retired log and append a summary above the other's
         // retire boundary — two summaries in every future prompt.
-        let (service, store, sid) = seeded_session(40).await;
+        let (service, _store, sid) = seeded_session(40).await;
         let parked = std::sync::Arc::new(ParkingSummarizer::new());
         let compactor = parked_compactor(&parked);
         let opts = tail_budget_opts();
@@ -1257,10 +1336,10 @@ mod tests {
         // regression must fail this test's assertions, not deadlock waiting on
         // a summarizer only the first entry can release.
         let (first, second) = tokio::join!(
-            compact_session(&service, store.as_ref(), Some(&compactor), &sid, &opts),
+            compact_session(&service, Some(&compactor), &sid, &opts),
             async {
                 parked.entered.notified().await;
-                let out = compact_session(&service, store.as_ref(), None, &sid, &opts).await;
+                let out = compact_session(&service, None, &sid, &opts).await;
                 parked.release.notify_one();
                 out
             }
@@ -1303,7 +1382,7 @@ mod tests {
         let opts = tail_budget_opts();
 
         let (outcome, ()) = tokio::join!(
-            compact_session(&service, store.as_ref(), Some(&compactor), &sid, &opts),
+            compact_session(&service, Some(&compactor), &sid, &opts),
             async {
                 parked.entered.notified().await;
                 store.retire_from(&sid, 1).await.unwrap();
@@ -1338,17 +1417,13 @@ mod tests {
         // A leaked claim is silent and permanent: every later `/compact` on
         // that session answers "already in progress" for the life of the
         // process, and the conversation just stops being compactable.
-        let (service, store, sid) = seeded_session(40).await;
+        let (service, _store, sid) = seeded_session(40).await;
         let opts = tail_budget_opts();
 
-        let first = compact_session(&service, store.as_ref(), None, &sid, &opts)
-            .await
-            .unwrap();
+        let first = compact_session(&service, None, &sid, &opts).await.unwrap();
         assert!(first.compacted, "{:?}", first.skipped_reason);
 
-        let second = compact_session(&service, store.as_ref(), None, &sid, &opts)
-            .await
-            .unwrap();
+        let second = compact_session(&service, None, &sid, &opts).await.unwrap();
         assert!(
             !second
                 .skipped_reason

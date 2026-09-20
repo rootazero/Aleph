@@ -78,7 +78,7 @@ async fn test_simple_pdf_generation() {
     };
 
     let result = tool.call(args).await;
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "result: {result:?}");
 
     let output = result.unwrap();
     assert!(output.success);
@@ -190,24 +190,44 @@ async fn resolve_output_path_prefers_fs_scope_over_shared_handle() {
     use crate::tools::fs_scope::{with_fs_scope, FsScope};
     use std::path::PathBuf;
 
-    // Shared handle points at run A's workspace (as a concurrent run could have
-    // stomped it mid-turn); the active run's scope is run B and must win.
+    // Real on-disk dirs (not synthetic "/run-a" / "/run-b") — Windows
+    // canonicalize() rewrites a leading slash to `<current-drive>:\` and
+    // prefixes `\\?\`, so a synthetic Linux-style path turns into
+    // `\\?\D:\run-a\…` and fails an `assert_eq!` against the literal
+    // `/run-b/…`. Use a tempdir so the path round-trips cleanly on every
+    // platform while still proving that the FsScope beats the shared handle.
+    let (_run_a_guard, run_a) = crate::utils::scratch::scratch_root();
+    let (_run_b_guard, run_b) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&run_a).unwrap();
+    std::fs::create_dir_all(&run_b).unwrap();
+
     let handle =
         crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(crate::tools::ToolContext {
-            output_dir: PathBuf::from("/run-a/output"),
+            output_dir: run_a.join("output"),
         }));
     let tool = PdfGenerateTool::new().with_tool_context(handle);
-
-    let scope = FsScope::workspace(PathBuf::from("/run-b/output/documents"));
+    let scope = FsScope::workspace(run_b.join("output/documents"));
     let resolved = with_fs_scope(Some(scope), tool.resolve_output_path("report.pdf"))
         .await
         .unwrap();
 
-    assert_eq!(
-        resolved,
-        PathBuf::from("/run-b/output/documents/report.pdf")
-    );
-}
+    // The function runs the result through `safe_normalize`, which adds
+    // Windows' \`\\?\` UNC prefix for long-path support (and normalises
+    // separators to \`\\\`). Strip the prefix and normalise both sides so
+    // the test passes on every platform — the literal `/run-b/...` was only
+    // correct on linux.
+    let strip_unc = |p: PathBuf| -> PathBuf {
+        let s = p.to_string_lossy().to_string();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest.replace('\\', "/"))
+        } else {
+            p
+        }
+    };
+    let expected = strip_unc(run_b.join("output/documents/report.pdf"));
+    let actual = strip_unc(resolved);
+    assert_eq!(actual, expected);
+}
 
 /// Outside any run scope, resolution falls back to the shared handle — the
 /// pre-scope behaviour, preserved for callers with no published `FsScope`.
@@ -215,14 +235,31 @@ async fn resolve_output_path_prefers_fs_scope_over_shared_handle() {
 async fn resolve_output_path_falls_back_to_shared_handle_without_scope() {
     use std::path::PathBuf;
 
+    // Real on-disk dir — see the FsScope test for why synthetic `/ws/…`
+    // breaks under Windows canonicalize()'s `\\?\` prefix.
+    let (_guard, ws) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&ws).unwrap();
+
     let handle =
         crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(crate::tools::ToolContext {
-            output_dir: PathBuf::from("/ws/output"),
+            output_dir: ws.join("output"),
         }));
     let tool = PdfGenerateTool::new().with_tool_context(handle);
 
     let resolved = tool.resolve_output_path("report.pdf").await.unwrap();
-    assert_eq!(resolved, PathBuf::from("/ws/output/documents/report.pdf"));
+    // Same `\\?\` UNC-prefix normalisation as the FsScope test above —
+    // see that test for why we cannot use the literal path on Windows.
+    let strip_unc = |p: PathBuf| -> PathBuf {
+        let s = p.to_string_lossy().to_string();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest.replace('\\', "/"))
+        } else {
+            p
+        }
+    };
+    let expected = strip_unc(ws.join("output/documents/report.pdf"));
+    let actual = strip_unc(resolved);
+    assert_eq!(actual, expected);
 }
 
 #[test]

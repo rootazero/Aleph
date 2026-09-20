@@ -36,6 +36,18 @@ use crate::gateway::cancellation::CancellationToken;
 use crate::gateway::channel_approval::ChannelApprovalCapability;
 use crate::gateway::webhook_receiver::WebhookHandler;
 
+/// Prefix for `MessageId` values that denote an inbound channel-platform
+/// approval callback (Telegram / Discord button-press events). The
+/// [`crate::gateway::inbound_router`] short-circuits to the approval-callback
+/// sink for any message whose id starts with this string.
+///
+/// Both producers (`interfaces/telegram/mod.rs`, `interfaces/discord/mod.rs`)
+/// AND the router consumer MUST reference this constant rather than the
+/// literal `"cb_"`, so the convention has a single source of truth and a
+/// future drift would surface as a `cargo check` failure rather than a
+/// silently-misrouted callback.
+pub const CB_MESSAGE_ID_PREFIX: &str = "cb_";
+
 /// Result type for channel operations
 pub type ChannelResult<T> = Result<T, ChannelError>;
 

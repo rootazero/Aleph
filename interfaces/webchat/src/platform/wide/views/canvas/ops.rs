@@ -57,7 +57,12 @@ pub(super) fn apply_local(doc: &mut CanvasDoc, ops: &[CanvasOp]) {
                 }
             }
             CanvasOp::DeleteShape { id } => doc.shapes.retain(|s| s.id() != id),
-            CanvasOp::SetDocMeta { title } => doc.title.clone_from(title),
+            CanvasOp::SetDocMeta { title, timeline } => {
+                doc.title.clone_from(title);
+                if let Some(t) = timeline {
+                    doc.timeline = Some(*t).filter(|t| !t.is_empty());
+                }
+            }
             CanvasOp::UpsertDeck { deck } => match doc.decks.iter_mut().find(|d| d.id == deck.id) {
                 Some(slot) => *slot = deck.clone(),
                 None => doc.decks.push(deck.clone()),
@@ -100,8 +105,14 @@ pub(super) fn invert(doc_before: &CanvasDoc, ops: &[CanvasOp]) -> Vec<CanvasOp> 
                         shape: prev.clone(),
                     })
             }
-            CanvasOp::SetDocMeta { .. } => Some(CanvasOp::SetDocMeta {
+            // The inverse restores the timeline only when the op touched it;
+            // a document without one inverts to the EMPTY timeline, which
+            // the applier stores as none (`Timeline::is_empty`).
+            CanvasOp::SetDocMeta { timeline, .. } => Some(CanvasOp::SetDocMeta {
                 title: doc.title.clone(),
+                timeline: timeline
+                    .is_some()
+                    .then(|| doc.timeline.unwrap_or_default()),
             }),
             CanvasOp::UpsertDeck { deck } => {
                 Some(match doc.decks.iter().find(|d| d.id == deck.id) {
@@ -238,7 +249,7 @@ impl SendQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::canvas::{Deck, FracIndex, Shape, ShapeCommon, ShapeStyle};
+    use aleph_protocol::canvas::{Deck, FracIndex, Shape, ShapeCommon, ShapeStyle, Timeline};
     use std::path::Path;
 
     fn note(id: &str, x: f64) -> Shape {
@@ -251,6 +262,7 @@ mod tests {
                 h: 100.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: String::new(),
@@ -268,6 +280,7 @@ mod tests {
             decks,
             created_at_ms: 0,
             updated_at_ms: 0,
+            timeline: None,
         }
     }
 
@@ -469,6 +482,10 @@ fn apply_ops(doc: &mut Doc, ops: &[Op]) {
         let ops = vec![
             CanvasOp::SetDocMeta {
                 title: "new".into(),
+                timeline: Some(Timeline {
+                    total_ms: Some(3_000),
+                    hold_ms: 0,
+                }),
             },
             CanvasOp::UpsertDeck {
                 deck: Deck {
@@ -532,6 +549,16 @@ fn apply_ops(doc: &mut Doc, ops: &[Op]) {
                     },
                     2 => CanvasOp::SetDocMeta {
                         title: format!("title{}", lcg(&mut seed) % 7),
+                        // Untouched / set / cleared (the empty timeline) —
+                        // all three arms of the applier's timeline rule.
+                        timeline: match lcg(&mut seed) % 3 {
+                            0 => None,
+                            1 => Some(Timeline {
+                                total_ms: Some(1_000 * (lcg(&mut seed) % 5) as u32),
+                                hold_ms: 0,
+                            }),
+                            _ => Some(Timeline::default()),
+                        },
                     },
                     3 => CanvasOp::UpsertDeck {
                         deck: Deck {

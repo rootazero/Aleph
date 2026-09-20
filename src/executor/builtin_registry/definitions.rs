@@ -2945,7 +2945,35 @@ mod tests {
     /// three things `qa/browser_dual/run.sh switch`'s failure text names for
     /// deletion when obscura starts reporting the signal. It is not permanent
     /// prose; it is a dated fact with a guard that reddens when it expires.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_154;
+    ///
+    /// 2026-09-12 (canvas drawing infrastructure, task 2): 114_393 ->
+    /// 115_174 B, measured on Linux (95_578 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge); the only red test was this one and
+    /// the delta (+781 B) is `canvas`'s new runtime-facts paragraph, whole.
+    /// Three questions: (1) the `path` variant's command subset, its 64 KiB
+    /// cap and its shape-local coordinate frame, "reveal is playback, not
+    /// live animation", and "sketch jitter is seeded from the shape id" are
+    /// facts of this repository's contract and Panel, not of SVG; (2) the
+    /// canvas schema is registered conditionally (`canvas_store`), so this
+    /// catalog line is the whole of what a model reads before deciding to
+    /// fetch it — the shape/field inventory is what lets it decide; (3)
+    /// `canvas` is the sole owner of every sentence (the contract's field
+    /// docs say what a field IS; this says what the deployment DOES with
+    /// it). The style-panel gallery of hand-drawn looks was deliberately
+    /// kept out (spec D10): prompt knowledge, not a runtime fact.
+    ///
+    /// 2026-09-20 (merge of origin/main into the browser dual-engine main):
+    /// the two ledgers above both start from 114_393 and moved it
+    /// independently — this branch to 115_154, origin/main to 115_174 for the
+    /// canvas paragraph. The merged catalog was RE-MEASURED with this ceiling
+    /// floored to `1`: the guard printed 115_904 B (96_308 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge), on macOS
+    /// (aarch64-apple-darwin, `bash` at 4_740 so the Unix assembly). That is
+    /// 31 B LESS than the sum of the two deltas (761 + 781 = 1_542 over
+    /// 114_393 would give 115_935), which is exactly why this ledger forbids
+    /// deriving a ceiling by addition. No description was edited in the
+    /// merge; the +30 Windows gap recorded above is carried forward unchanged.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_904;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

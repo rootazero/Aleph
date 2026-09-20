@@ -16,7 +16,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// Cap on checklist rows (excluding the header and elision lines). The plan
 /// itself is bounded server-side at 40 items (`PROMPT_PLAN_LIMITS`), but a
@@ -90,7 +90,7 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
         return;
     }
     let width = area.width as usize;
-    let muted = Style::default().fg(DEFAULT_THEME.muted);
+    let muted = Style::default().fg(theme().muted);
     let mut lines: Vec<Line> = Vec::new();
 
     // Header: "● 6 tasks (1 done, 1 in progress, 4 open) · objective"
@@ -118,7 +118,7 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
     lines.push(Line::from(Span::styled(
         clamp_chars(&header, width),
         Style::default()
-            .fg(DEFAULT_THEME.primary)
+            .fg(theme().primary)
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -148,7 +148,7 @@ pub fn render_tasks_panel(frame: &mut Frame, plan: &PlanSnapshot, area: Rect) {
             PlanItemStatus::InProgress => (
                 "\u{273b}", // ❋
                 Style::default()
-                    .fg(DEFAULT_THEME.tool_name)
+                    .fg(theme().tool_name)
                     .add_modifier(Modifier::BOLD),
             ),
             PlanItemStatus::Pending => ("\u{25a1}", muted), // □

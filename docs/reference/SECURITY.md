@@ -1343,11 +1343,23 @@ deterministic HITL gate (R7/R9).
 
 ## Audit Logging
 
-**The live trail is the session event log.** Every approval decision at the
-enforcement chokepoint is recorded by
-`tools/scoped/dispatch.rs::record_approval_decision`, which writes
-`ToolCallApproved` / `ToolCallDenied` session events. Query it through the
-session service, alongside every other event of the run that produced it.
+**The live trail is the session event log.** Every gate that parks a call on
+`ParkReason::Approval` releases it through the one writer
+`session::call_log::emit_for_ambient_call`, as `ToolCallApproved` /
+`ToolCallDenied` session events; the census
+`every_file_that_parks_on_an_approval_also_writes_both_releases`
+(`src/tools/scoped/tests.rs`) is the list of those gates — do not count them
+here. The two trails are not written the same way at every gate: the tool-confirm
+gate's `tools/scoped/dispatch.rs::record_approval_decision` writes the signed
+identity ledger row (with its `[gate: <rule_id>]` suffix, "Signed agent ledger" below) and
+the session copy from ONE function; the sandbox capability-elevation gate
+(`sandbox/workspace/mod.rs`) writes its session copy itself, after the answer,
+while its ledger row comes from a different function at a different chokepoint
+— `sandbox/exec_approval/gate.rs::record_gate_decision`, inside
+`ApprovalGate::request_approval_for_action`, without a `[gate: …]` suffix
+because that card is raised outside the `GateRule` chain. Query the session
+copy through the session service, alongside every other event of the run that
+produced it.
 
 **Deleted (2026-07-14), do not go looking for it**: `src/exec/approval/storage.rs`
 + `audit.rs` and the `aleph-server audit` CLI command. They queried three SQLite
@@ -3798,6 +3810,46 @@ reviewer must confirm the handler does not open, read, or write any file under
 ```
 
 Any handler that cannot include this comment must be redesigned before merging.
+
+## iOS Panel TOFU: SHA-256 fingerprint is the only trust anchor {#ios-tofu-fingerprint-anchor}
+
+The `mobile/ios/` shell (`AlephPaneliOS`) trusts the gateway's TLS cert via a
+TOFU sheet that shows the user the leaf cert's SHA-256 fingerprint and the
+`SecCertificateCopySubjectSummary` string (CN / O / OU as Security.framework
+decodes them). **The sheet does not show the cert's SAN list.** Reasons:
+
+- `Security.framework` does not expose a lightweight X.509v3 extension parser
+  on iOS; parsing SAN by hand from the DER is not worth shipping inside a
+  transport shell whose only job is "did the user pin this fingerprint or not".
+- The fingerprint *is* the trust anchor. A user who has the fingerprint out of
+  band (e.g. copied from the gateway's first-boot log, or from
+  `aleph-server tls.print-fingerprint`) can verify it against the sheet. A
+  mismatch means the cert rotated — or means a MITM. Both are the same
+  diagnosis from the user's point of view.
+
+**What this means operationally:**
+
+1. **Always publish the fingerprint out of band** at pairing time (the gateway
+   logs it on first boot). The pairing screen's TOFU sheet is the *only* time
+   the user is asked to compare; afterwards, rotation prompts a re-confirm.
+2. **A SAN mismatch (e.g. host `gateway.lan` but cert is for `*.evil.com`)
+   is *not* caught by the iOS sheet.** The user would see a fingerprint that
+   does not match the one they noted down, and only that mismatch tells them
+   something is wrong. Treat the fingerprint as the canonical "is this the
+   gateway I meant to talk to" check, not the host string.
+3. **Cloud / public-internet deployments must use a real CA chain** (Tier ①
+   or Tier ③ in the [Remote-connection transport encryption](#remote-tls)
+   section). The TOFU path is for the documented self-signed LAN deployment;
+   a public deployment's fingerprint is not stable enough to act as a usable
+   trust anchor for a phone owner who only ever sees the gateway via a DNS
+   name.
+
+This limitation is local to `mobile/ios/`. The desktop shells
+(`aleph-desktop-shell`) validate the cert chain with their OS trust store on
+top of the fingerprint pin, so they catch SAN mismatches the iOS shell
+cannot. Operators using the iOS shell across an internet-routable gateway
+should treat the published fingerprint as part of their deployment runbook
+and confirm it once per device.
 
 ## Cross-process safety guarantees (Spec C, 2026-05-02)
 

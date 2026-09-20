@@ -432,6 +432,7 @@ impl RegistrySpawner {
     /// The test seam: a `RegistrySpawner` that resolves the chromium install
     /// CLI to a test-controlled path instead of walking the real PATH.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_cli_locator(cli_locator: Arc<dyn ChromiumInstallCli>) -> Self {
         Self { cli_locator }
     }
@@ -1090,6 +1091,15 @@ mod tests {
     /// `$ALEPH_HOME` under their own guard, on a separate mutex — measured
     /// red running the whole module, green only in isolation, which is
     /// exactly the ABBA-adjacent race `HomeEnvGuards` exists to close.
+    ///
+    /// Unix only: the test relies on `home_dir()` returning `None` when
+    /// `$HOME` is cleared. Windows provides `USERPROFILE` (and the legacy
+    /// `HOMEDRIVE`+`HOMEPATH` pair) as fallbacks that `home_dir()` honours,
+    /// so clearing `$HOME` alone is not enough to make `aleph_home()` fail.
+    /// The `cfg(unix)` gate keeps the test honest on the platform it was
+    /// designed for and skips it cleanly on Windows instead of falsely
+    /// reporting a regression.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_ledger_still_reports_ok_for_a_real_spawn() {
         let _guard = crate::runtimes::post_install::HomeEnvGuards::acquire_and_clear();
@@ -1372,6 +1382,7 @@ mod tests {
 
     /// The I1 seam: resolves the chromium install CLI to a fixed,
     /// test-written path instead of walking the real PATH.
+    #[cfg_attr(not(unix), allow(dead_code))]
     struct FixedCliLocator(std::path::PathBuf);
 
     #[async_trait]

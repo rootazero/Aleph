@@ -154,6 +154,7 @@ mod tests {
         async fn ocr(&self, _image: &ImageInput) -> Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "OCR extracted text".into(),
+                lines: Vec::new(),
             })
         }
 

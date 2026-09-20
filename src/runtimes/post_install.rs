@@ -242,6 +242,11 @@ impl HomeEnvGuard {
     }
 
     /// Lock, snapshot, then REMOVE `$HOME` for the guard's lifetime.
+    ///
+    /// Unix only: see `HomeEnvGuards::acquire_and_clear` — Windows has
+    /// `USERPROFILE` / `HOMEDRIVE`+`HOMEPATH` fallbacks that this single
+    /// clear cannot defeat.
+    #[cfg(unix)]
     pub(crate) fn acquire_and_clear() -> Self {
         let guard = Self::acquire();
         std::env::remove_var("HOME");
@@ -310,6 +315,14 @@ impl HomeEnvGuards {
     /// guard can supply the very fallback the `$HOME`-only test is trying to
     /// rule out, whenever `cargo test`'s default parallel execution overlaps
     /// them. Measured: green in isolation, red running the whole module.
+    ///
+    /// Unix only: Windows' `home_dir()` also honours `USERPROFILE` and the
+    /// legacy `HOMEDRIVE`+`HOMEPATH` pair, so clearing just `$HOME` is not
+    /// enough to make `aleph_home()` resolve to `None`. The matching test
+    /// (`a_failing_ledger_still_reports_ok_for_a_real_spawn`) is `cfg(unix)`
+    /// for the same reason; gate this helper the same way so it is not
+    /// defined-but-unused on Windows builds.
+    #[cfg(unix)]
     pub(crate) fn acquire_and_clear() -> Self {
         // Same fixed order as `acquire_and_set` — ALEPH_HOME first.
         let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_clear();

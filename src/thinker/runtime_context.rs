@@ -457,16 +457,18 @@ static REPO_ROOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> = Onc
 
 fn cached_repo_root(working_dir: &Path) -> Option<PathBuf> {
     let cache = REPO_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    {
-        let map = cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cached) = map.get(working_dir) {
-            return cached.clone();
-        }
+    // Single critical section: previous double-lock pattern let two concurrent
+    // first-time callers for the same `working_dir` each walk the filesystem
+    // independently, and (more importantly) let the function return the LOCAL
+    // `detected` value rather than re-reading the cache after insert — so a
+    // `None` cached by a faster thread could shadow a `Some(...)` from a
+    // slower thread on the very next call (THINK-004, high).
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cached) = map.get(working_dir) {
+        return cached.clone();
     }
     let detected = detect_repo_root(working_dir);
-    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
-    map.entry(working_dir.to_path_buf())
-        .or_insert_with(|| detected.clone());
+    map.insert(working_dir.to_path_buf(), detected.clone());
     detected
 }
 

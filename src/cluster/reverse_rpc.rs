@@ -245,10 +245,15 @@ impl ReverseRpcChannel {
 
     /// Initiate a reverse RPC request on the connection and await the response.
     ///
-    /// `timeout_ms` is the budget for the **entire call**, covering both "push
-    /// the frame onto the outbound queue" and "wait for the response". It is
-    /// clamped to [`REVERSE_RPC_MAX_TIMEOUT_MS`] — a caller may ask for less,
-    /// never for more.
+    /// `timeout_ms` is the budget for the **response wait** phase. The
+    /// outbound-enqueue phase is bounded independently by
+    /// [`OUTBOUND_PUSH_BUDGET_MS`] (500 ms), so total wall-time can be up to
+    /// `min(timeout_ms, OUTBOUND_PUSH_BUDGET_MS) + timeout_ms` — call it
+    /// `~1.5x–2x timeout_ms` in the worst case. This split is deliberate: a
+    /// slow enqueue already surfaces as [`ReverseRpcError::OutboundWedged`],
+    /// so the response half does not have to subtract from a shared clock.
+    /// It is clamped to [`REVERSE_RPC_MAX_TIMEOUT_MS`] — a caller may ask for
+    /// less, never for more.
     ///
     /// The registered waiter is removed on **every** exit, the dropped-future
     /// one included (see `WaiterGuard` below the impl).

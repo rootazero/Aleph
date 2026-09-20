@@ -324,6 +324,11 @@ pub struct BuiltinToolRegistry {
     /// Google Meet tool — always available; holds an optional out-of-core
     /// transport bridge and reports "not configured" when absent.
     pub(crate) google_meet_tool: crate::builtin_tools::google_meet::GoogleMeetTool,
+    /// Media-send tool — always available; the dispatch arm uses this
+    /// instance (with the operator's configured `[ssrf]` policy) rather
+    /// than constructing a fresh default-policy tool per call. Without
+    /// this the configured allow/deny rules never reach the gate.
+    pub(crate) media_send_tool: crate::builtin_tools::media_send::MediaSendTool,
     /// Skill management tools — always available (`SkillSystem` is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,

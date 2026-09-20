@@ -305,15 +305,14 @@ legacy `SessionManager`. **There is no dual-write shim.** This paragraph
 used to name `src/session/shim.rs`: that file does not exist, and the
 mirroring it described was removed when `session_events` became the SSOT.
 `MessageProjector` (`src/gateway/session_projector.rs`) materialises
-`messages` from `session_events` asynchronously, and it is the only writer
-of the rows it projects — the ones carrying a `source_seq`. It is **not** the
-table's only writer: two production paths append straight to `messages` and
-leave `source_seq` NULL — `AgentInstance::add_message`
-(`src/gateway/agent_instance.rs`) and the boot orphan notice
-(`src/gateway/orphan_notice.rs`) — the 「另两个生产者」 FEATURE_LOCATOR §6.9
-names. `map_message_row` (`src/gateway/session_manager/ops/crud.rs`) reads a
-NULL `source_seq` back as "not event-sourced, leave it alone". See
-SESSION_SERVICE.md.
+`messages` from `session_events` asynchronously, and since 2026-09-13 it is
+the table's **only production writer**, pinned to the tree by
+`session_projector::tests::the_projector_is_the_only_production_writer_of_the_messages_table`.
+The two direct writers that used to bypass the log —
+`AgentInstance::add_message` and the boot orphan notice — are gone (T17, T16);
+rows they left carry a NULL `source_seq`, which `map_message_row`
+(`src/gateway/session_manager/ops/crud.rs`) reads back as "not event-sourced,
+leave it alone". See SESSION_SERVICE.md.
 
 ---
 

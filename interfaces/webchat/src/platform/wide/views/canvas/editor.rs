@@ -9,8 +9,9 @@
 //!    and the app never sees them), wheel + pointer handlers.
 //! 2. One `<svg>` with a single `<g transform=…>` — every vector shape,
 //!    rendered by [`super::shape_view::ShapeView`], keyed by shape id and
-//!    z-ordered by [`FracIndex`], plus the marquee rectangle and the
-//!    selection outline with its eight resize handles.
+//!    z-ordered by [`FracIndex`], plus the marquee rectangle, the
+//!    selection outline with its eight resize handles, and the Move snap
+//!    guides (`snap.rs`).
 //! 3. An HTML overlay `<div>` carrying the *same* transform
 //!    (`transform-origin: 0 0`) — hosts the text-editing overlay
 //!    (`text_edit.rs`, world-positioned because the layer already is);
@@ -49,13 +50,15 @@
 //!
 //! # Space-bar pan and the keep-alive container
 //!
-//! `MainContent` hides this view with CSS instead of unmounting it, so the
-//! window key listeners outlive the *visible* editor. Three gates keep the
-//! chords from leaking: the editor only mounts while a document is open
-//! (structural), the route must actually be `/canvas`
-//! (`PanelMode::from_path` — the same single source the sidebar uses), and
-//! `focus_is_editable` keeps every editing key working inside inputs. Keyup
-//! clears unconditionally: a gated keyup would leave the pan mode latched on.
+//! `WorkspacePanel` hides the canvas body with CSS instead of unmounting it,
+//! so the window key listeners outlive the *visible* editor. Three gates keep
+//! the chords from leaking: the editor only mounts while a document is open
+//! (structural), the canvas body must actually be on screen
+//! ([`canvas_body_visible`] — the chat route AND a Split pane AND the canvas
+//! body selected, each of which alone would let Delete reach the board from a
+//! settings page or a collapsed pane), and `focus_is_editable` keeps every
+//! editing key working inside inputs. Keyup clears unconditionally: a gated
+//! keyup would leave the pan mode latched on.
 
 use std::collections::HashMap;
 
@@ -73,16 +76,34 @@ use super::id_mint;
 use super::interaction::{self, Bbox, Handle, InteractionState};
 use super::ops::{self, SendQueue, UndoStack};
 use super::shape_view::{HtmlFrameOverlay, ShapeView};
+use super::snap::{Axis, Guide};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
-use super::{ai, asset_ingest, decks, export, present};
+use super::{ai, asset_ingest, decks, export, present, reveal};
 use crate::api::canvas::{CanvasApi, CanvasApplyError};
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
 use crate::state::canvas::{Camera, CanvasState, CanvasTool, InflightBatch};
 use crate::state::hotkey::focus_is_editable;
+use crate::state::layout::{WorkspaceBody, WorkspaceState};
+
+/// Is the canvas body actually on screen right now?
+///
+/// The gate the window-level key handlers below ask before acting. Three
+/// conditions, because the canvas is a body of the workspace pane inside the
+/// chat route: the route has to be the chat one (every other section leaves
+/// `ChatView` mounted-but-hidden), the pane has to be open, and the canvas has
+/// to be the selected body. Dropping any one of them hands Delete / Space /
+/// paste to a board nobody can see.
+///
+/// `None` for `WorkspaceState` (a mount without the context) reads as **not
+/// visible**: an unanswerable "is it showing?" is not a licence to edit.
+fn canvas_body_visible(pathname: &str, workspace: Option<WorkspaceState>) -> bool {
+    PanelMode::from_path(pathname) == PanelMode::Chat
+        && workspace.is_some_and(|ws| ws.showing_now(WorkspaceBody::Canvas))
+}
 
 /// Click tolerance in *screen* pixels: a press that stays inside this box is
 /// a click (select), not a move. Divided by zoom before it reaches the
@@ -94,6 +115,9 @@ const HANDLE_PX: f64 = 8.0;
 /// Draw tool's decimation floor. Divided by zoom before it reaches the
 /// machine, like [`CLICK_SLOP_PX`].
 const DRAW_MIN_DIST_PX: f64 = 2.0;
+/// Move snap radius in *screen* pixels (tldraw's constant), divided by zoom
+/// like [`CLICK_SLOP_PX`]. Alt/Option held bypasses snapping.
+const SNAP_PX: f64 = 8.0;
 /// How long the selection may settle before it is pushed to the server.
 const SELECTION_DEBOUNCE_MS: u32 = 300;
 /// Arrow-key nudge distances, world units (shift = the larger one).
@@ -121,6 +145,12 @@ pub(super) fn shapes_by_id(shapes: &[Shape]) -> HashMap<String, Shape> {
         .iter()
         .map(|s| (s.id().to_string(), s.clone()))
         .collect()
+}
+
+/// The Move snap threshold for a pointer event, world units — `None` while
+/// Alt/Option is held (the bypass), else [`SNAP_PX`] ÷ zoom.
+fn snap_threshold(ev: &web_sys::MouseEvent, camera: Camera) -> Option<f64> {
+    (!ev.alt_key()).then(|| SNAP_PX / camera.zoom)
 }
 
 /// Element-local pointer position → world, via the event's current target
@@ -390,6 +420,7 @@ fn ingest_image_files<F>(
                                     h,
                                     z: FracIndex::between(top.as_ref(), None),
                                     parent_id: None,
+                                    reveal: None,
                                 },
                                 asset_id,
                                 natural_w,
@@ -426,6 +457,10 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let camera = canvas.camera;
     let doc = canvas.doc;
     let pathname = use_location().pathname;
+    // Captured here, not read inside the handlers: those run in `'static`
+    // window listeners, outside any reactive owner, where `use_context` has
+    // nothing to read from. `WorkspaceState` is `Copy`.
+    let workspace = use_context::<WorkspaceState>();
 
     let sorted_ids = Memo::new(move |_| {
         doc.with(|d| {
@@ -461,15 +496,20 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let marquee_sig: RwSignal<Option<Bbox>> = RwSignal::new(None);
     // The shape an in-flight arrow endpoint would bind to (hover highlight).
     let arrow_hover_sig: RwSignal<Option<String>> = RwSignal::new(None);
+    // Alignment guides of the in-flight Move preview (`snap.rs`).
+    let guides_sig: RwSignal<Vec<Guide>> = RwSignal::new(Vec::new());
     let surface_ref: NodeRef<leptos::html::Div> = NodeRef::new();
     // The open text-edit session, if any (`text_edit.rs` owns its rules).
     // Scoped to the editor like the machine: it must not outlive the canvas.
     let text_editing: RwSignal<Option<TextEditState>> = RwSignal::new(None);
-    // Fullscreen deck playback: `Some(deck_id)` mounts `present::PresentOverlay`.
+    // Deck playback: `Some(deck_id)` mounts `present::PresentOverlay`.
     // Editor-scoped like the machine — a show must not outlive its canvas.
     // While it is `Some`, the window key/paste handlers below stand down
     // (the overlay owns the keyboard; an arrow key must page, not nudge).
     let presenting: RwSignal<Option<String>> = RwSignal::new(None);
+    // Reveal playback on the editor surface (`reveal.rs`): idle = static
+    // rendering. Editor-scoped for the same reason as `presenting`.
+    let playback: RwSignal<reveal::Playback> = RwSignal::new(reveal::Playback::Idle);
 
     let space_down = RwSignal::new(false);
     let pan_drag: RwSignal<Option<PanDrag>> = RwSignal::new(None);
@@ -539,8 +579,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         }
     };
     // Mirror the machine's render-relevant gesture state into signals after
-    // every transition — one syncer for both, so a call site cannot refresh
-    // the marquee and leave a stale arrow highlight behind.
+    // every transition — one syncer for all three, so a call site cannot
+    // refresh the marquee and leave a stale arrow highlight or a stale
+    // guide behind.
     let sync_gesture = move || {
         marquee_sig.set(
             machine
@@ -551,6 +592,11 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             machine
                 .try_with_value(InteractionState::arrow_hover)
                 .flatten(),
+        );
+        guides_sig.set(
+            machine
+                .try_with_value(InteractionState::snap_guides)
+                .unwrap_or_default(),
         );
     };
 
@@ -585,7 +631,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
 
     // ---- keyboard ---------------------------------------------------------
     let down_handle = window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
-        if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
+        if !canvas_body_visible(&pathname.get_untracked(), workspace) {
             return;
         }
         if presenting.get_untracked().is_some() {
@@ -724,7 +770,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     // gates — and `focus_is_editable` keeps a paste aimed at a text input
     // (the composer, the text-edit overlay) out of the canvas entirely.
     let paste_handle = window_event_listener(paste, move |ev: web_sys::ClipboardEvent| {
-        if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
+        if !canvas_body_visible(&pathname.get_untracked(), workspace) {
             return;
         }
         if presenting.get_untracked().is_some() {
@@ -847,9 +893,12 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 let Some(d) = d.as_ref() else {
                     return Vec::new();
                 };
+                // The toolbar's current style, captured once per gesture —
+                // the machine itself never reads a signal.
+                let style = canvas.style.get_untracked();
                 machine
                     .try_update_value(|m| {
-                        m.begin_create(kind, world, id_mint::mint_shape_id(), &d.shapes)
+                        m.begin_create(kind, world, id_mint::mint_shape_id(), &d.shapes, style)
                     })
                     .unwrap_or_default()
             });
@@ -873,6 +922,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 let Some(d) = d.as_ref() else {
                     return Vec::new();
                 };
+                let style = canvas.style.get_untracked();
                 machine
                     .try_update_value(|m| {
                         if tool == CanvasTool::Draw {
@@ -882,10 +932,11 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                                 id_mint::mint_shape_id(),
                                 &d.shapes,
                                 DRAW_MIN_DIST_PX / cam.zoom,
+                                style,
                             )
                         } else {
                             let hit = interaction::topmost_hit(&d.shapes, world);
-                            m.begin_arrow(world, hit, id_mint::mint_shape_id(), &d.shapes)
+                            m.begin_arrow(world, hit, id_mint::mint_shape_id(), &d.shapes, style)
                         }
                     })
                     .unwrap_or_default()
@@ -945,6 +996,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             return;
         };
         let slop = CLICK_SLOP_PX / cam.zoom;
+        let snap = snap_threshold(&ev, cam);
         let pressure = interaction::effective_pressure(ev.pressure());
         let effects = canvas.doc.with_untracked(|d| {
             let Some(d) = d.as_ref() else {
@@ -955,7 +1007,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     // An active ink stroke consumes the move (with pressure);
                     // every other drag goes through the pressureless machine.
                     m.draw_move(world, pressure)
-                        .unwrap_or_else(|| m.pointer_move(world, &d.shapes, slop))
+                        .unwrap_or_else(|| m.pointer_move(world, &d.shapes, slop, snap))
                 })
                 .unwrap_or_default()
         });
@@ -982,15 +1034,17 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         {
             return;
         }
-        let Some(world) = world_of(&ev, camera.get_untracked()) else {
+        let cam = camera.get_untracked();
+        let Some(world) = world_of(&ev, cam) else {
             return;
         };
+        let snap = snap_threshold(&ev, cam);
         let effects = canvas.doc.with_untracked(|d| {
             let Some(d) = d.as_ref() else {
                 return Vec::new();
             };
             machine
-                .try_update_value(|m| m.pointer_up(world, &d.shapes))
+                .try_update_value(|m| m.pointer_up(world, &d.shapes, snap))
                 .unwrap_or_default()
         });
         run_effects(effects);
@@ -1094,12 +1148,15 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             node_ref=surface_ref
             class=move || {
                 let base = "relative flex-1 overflow-hidden bg-surface select-none";
+                // Reveal playback: the root class the `reveal.rs` rules key
+                // on (empty while idle — static rendering).
+                let play = playback.get().root_class();
                 if pan_drag.get().is_some() {
-                    format!("{base} cursor-grabbing")
+                    format!("{base} {play} cursor-grabbing")
                 } else if space_down.get() || canvas.tool.get() == CanvasTool::Pan {
-                    format!("{base} cursor-grab")
+                    format!("{base} {play} cursor-grab")
                 } else {
-                    base.to_string()
+                    format!("{base} {play}")
                 }
             }
             style="touch-action: none"
@@ -1112,6 +1169,8 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             on:dragover=on_dragover
             on:drop=on_drop
         >
+            // The document's reveal stylesheet — present only while playing.
+            <reveal::PlaybackStyle doc=canvas.doc playback=playback />
             <svg class="absolute inset-0 w-full h-full block">
                 <g transform=move || viewport::svg_transform(camera.get())>
                     <For
@@ -1185,6 +1244,23 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                             </g>
                         }
                     })}
+                    // Move snap guides — world coords, 1 px at any zoom
+                    // (non-scaling stroke), never a pointer target.
+                    {move || guides_sig.get().into_iter().map(|g| {
+                        let (x1, y1, x2, y2) = match g.axis {
+                            Axis::X => (g.at, g.from, g.at, g.to),
+                            Axis::Y => (g.from, g.at, g.to, g.at),
+                        };
+                        view! {
+                            <line
+                                x1=x1 y1=y1 x2=x2 y2=y2
+                                style="stroke: var(--color-primary);"
+                                stroke-width="1"
+                                vector-effect="non-scaling-stroke"
+                                pointer-events="none"
+                            />
+                        }
+                    }).collect_view()}
                     // Arrow-bind hover highlight: the shape the endpoint
                     // would bind to if released here.
                     {move || arrow_hover_sig.get().and_then(|id| {
@@ -1246,7 +1322,16 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     insert_frame=insert_ai_frame
                 />
                 <ai::AnnotateButton />
-                <export::ExportPngButton />
+                <export::ExportButton kind=export::ExportKind::Png />
+                <export::ExportButton kind=export::ExportKind::AnimatedSvg />
+                <reveal::PlaybackButton
+                    doc=canvas.doc
+                    playback=playback
+                    class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border \
+                           bg-surface-raised text-xs font-medium text-text-secondary \
+                           hover:text-text-primary hover:border-primary/50 shadow-sm \
+                           transition-colors"
+                />
                 <decks::DecksDrawer
                     on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {
                         commit(redo, undo);
@@ -1256,9 +1341,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     })
                 />
             </div>
-            // Fullscreen deck playback — `fixed`, so it covers the whole
-            // window regardless of where in the surface it mounts. Its root
-            // stops pointer/wheel propagation itself.
+            // Deck playback — `absolute inset-0` over this `relative`
+            // surface, which it measures for its fit (`present.rs`). Its
+            // root stops pointer/wheel propagation itself.
             {move || presenting.get().map(|deck_id| view! {
                 <present::PresentOverlay
                     deck_id=deck_id
@@ -1284,6 +1369,7 @@ mod tests {
                 h: 100.0,
                 z,
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: String::new(),

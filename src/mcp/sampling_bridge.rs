@@ -50,10 +50,10 @@ const MAX_SAMPLING_TOKENS: u32 = 4096;
 /// fixed by making `can_sample` ask about the callback, not by consulting this
 /// handle.
 ///
-/// [`sampling_llm_registered`] reads like the observability for that and is
-/// not: it has **no production caller** — its only caller is a `#[cfg(test)]`
-/// guard in this file. It is an existence oracle nothing consumes, recorded
-/// here rather than deleted because it was not orphaned by this migration.
+/// No production observability handle exists for this slot: `has_callback`
+/// (on `SamplingHandler` itself) is the sole consumer-facing check, and that
+/// capability declared on the wire is fixed in `with_sampling_bridge`
+/// (`mcp/manager/actor.rs`).
 static SAMPLING_LLM: CapabilitySlot<Arc<dyn AiProvider>> =
     CapabilitySlot::new("mcp/sampling-llm", MissingSemantics::FailsClosed);
 
@@ -77,12 +77,6 @@ pub fn register_sampling_llm(provider: Arc<dyn AiProvider>) {
 /// to an operator.
 pub fn decline_sampling_llm(because: &'static str) {
     SAMPLING_LLM.decline(because);
-}
-
-/// Whether a sampling provider has been registered.
-#[must_use]
-pub fn sampling_llm_registered() -> bool {
-    SAMPLING_LLM.get().is_some()
 }
 
 /// Answer one `sampling/createMessage`.
@@ -318,25 +312,6 @@ mod tests {
             .expect("non-empty (even whitespace-only) server prompt must produce a wrapper");
         assert!(wrapped.contains("<server-injected"));
         assert!(wrapped.contains("   "));
-    }
-
-    #[tokio::test]
-    async fn errors_clearly_when_no_provider_is_registered() {
-        // The global may have been set by another test in this binary; only the
-        // unregistered case has a determinate message to assert.
-        if sampling_llm_registered() {
-            return;
-        }
-        let err = serve_sampling(SamplingRequest {
-            messages: vec![text_msg(PromptRole::User, "hi")],
-            model_preferences: None,
-            system_prompt: None,
-            include_context: None,
-            max_tokens: None,
-        })
-        .await
-        .expect_err("no provider registered");
-        assert!(err.to_string().contains("no LLM provider is registered"));
     }
 
     /// The variant is the operator-facing severity of this handle going

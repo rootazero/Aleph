@@ -5,10 +5,11 @@
 #                               # stay in the foreground until Ctrl-C
 #   KEEP=1 ./qa/canvas/run.sh   # keep the scratch dir for post-mortem
 #
-# This fixture BOOTS AND WAITS — the nine checklist items below are driven by
+# This fixture BOOTS AND WAITS — the ten checklist items below are driven by
 # hand (Panel in a browser, chrome-devtools-mcp, or both), because every one
 # of them is about live UI behaviour: broadcast latency, conflict recovery,
-# fullscreen presentation. Each item carries its own effect assertion.
+# fullscreen presentation, the right-pane body. Each item carries its own
+# effect assertion; item 10's full assertion list is in README.md.
 #
 # Same scratch-HOME discipline as qa/busy_input/run.sh: build happens BEFORE
 # $HOME is redirected (cargo's registry lives under the real HOME), then the
@@ -140,13 +141,23 @@ cat <<'CHECKLIST'
   7. Slides：三帧组 deck→播放→翻页→Esc
   8. member 角色（0.0.0.0 + 自签 TLS + 局域网 IP，配方见 memory）看不到 operator 的私有画布；房间画布双方可见可编辑
   9. PNG 导出落文件且可打开
- 10. 左栏画廊：标题列表 + 打开高亮 + 搜索过滤 + 两面重命名（行内 / 编辑器标题）
-     + 冷加载先「加载中」后「还没有画布」（断言见 README「Item 10」）
+ 10. 右栏体 + picker + 自动弹开 + resizer + 绘图基础设施（断言全文见 README「Item 10」）：
+     · 画布是聊天右栏的一个体（tab 条切换）；`/canvas` 回落聊天路由
+     · picker 弹层：列表 / 打开即关 / 搜索 / 两面重命名（行内 / 头部标题）/ 冷加载先「加载中」
+     · 切到别的体再切回：相机 + 选区 + undo 栈都在，零 `canvas.list` 重拉（keep-alive）
+     · 模型 `canvas` 调用完成 → 右栏自动弹到 Canvas 体；已开着的画布不重开；
+       本 run 手动收起后不再弹；重放旧会话不弹；后台会话的 run 不弹到前台
+     · 左缘拖宽：抬起才写 `localStorage aleph.panel.workspace_w`，clamp 280px..80%，双击复位
+     · 样式面板 → 新建形状带样式；sketch 描边两个标签页 `<path d>` 逐字节相同
+     · 弯曲箭头 / path / reveal / timeline 只能从 wire 灌（无编辑器入口）：弧线 + 两种头 / Play draw-on
+       / 动画 SVG 导出打开即播 / `A` 命令被拒
+     · Move 拖动吸附出参考线，Alt/Option 绕过
 CHECKLIST
 
 cat <<EOF
 
-  Panel:      http://127.0.0.1:$GATEWAY_PORT  →「画布」/ Canvas in the sidebar
+  Panel:      http://127.0.0.1:$GATEWAY_PORT  → chat route → LayoutToggle (top-right) → "Canvas" tab
+              (no /canvas route, no sidebar entry — the canvas is a body of the workspace pane)
   scratch:    $QA_ROOT   (config: $CONFIG)
   logs:       $QA_ROOT/server.log · $QA_ROOT/mock.log · $ALEPH_HOME/logs/
   oracle:     $QA_ROOT/request_log.jsonl — every request body the mock saw,

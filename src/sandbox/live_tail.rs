@@ -147,14 +147,32 @@ fn trim_to_utf8_boundaries(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
+/// The OS child behind a tail, and the one party waiting to hear about it.
+///
+/// A rendezvous rather than a channel: the driver reports the pid once
+/// ([`LiveTail::set_child_pid`]) and the registry registers one hook once
+/// ([`LiveTail::on_child_pid`]), in whichever order the two tasks happen to
+/// run, and the hook fires exactly once with that pid. The pid stays readable
+/// afterwards ([`LiveTail::child_pid`]).
+struct ChildSlot {
+    pid: Option<u32>,
+    hook: Option<Box<dyn FnOnce(u32) + Send>>,
+}
+
 /// Per-stream live tails for one running child. Cheap to clone as an
 /// `Arc<LiveTail>`: the drain loops hold one clone each, the registry holds one
 /// for as long as the job is running, and the exec-context task-local
 /// [`crate::sandbox::context::LIVE_TAIL`] carries it from the spawning tool down
 /// to the platform driver.
+///
+/// The same handle also carries the child's pid back UP that path: the driver
+/// is the only party that ever holds the `Child`, and the registry — which
+/// owns the durable journal row — never sees it. The tail is the one object
+/// both already share, so the pid rides it rather than a new channel.
 pub struct LiveTail {
     stdout: Mutex<Ring>,
     stderr: Mutex<Ring>,
+    child: Mutex<ChildSlot>,
 }
 
 impl LiveTail {
@@ -171,7 +189,52 @@ impl LiveTail {
         Self {
             stdout: Mutex::new(Ring::new(cap)),
             stderr: Mutex::new(Ring::new(cap)),
+            child: Mutex::new(ChildSlot {
+                pid: None,
+                hook: None,
+            }),
         }
+    }
+
+    /// The driver's one report of the OS child. Fires the hook registered by
+    /// [`Self::on_child_pid`] (now, or when one arrives); a second report is
+    /// ignored — one child per tail, and the first pid is the one the drain
+    /// loops are reading.
+    pub fn set_child_pid(&self, pid: u32) {
+        let hook = {
+            let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.pid.is_some() {
+                return;
+            }
+            slot.pid = Some(pid);
+            slot.hook.take()
+        };
+        // Outside the slot lock: the hook does a file write.
+        if let Some(hook) = hook {
+            hook(pid);
+        }
+    }
+
+    /// Run `hook` once with the child's pid — immediately if the driver has
+    /// already reported it, otherwise when it does. A hook registered while
+    /// another is still waiting replaces it: there is one registrant
+    /// (`ProcessRegistry::attach_live`), so a second registration is the same
+    /// party re-attaching, not a second listener.
+    pub fn on_child_pid(&self, hook: Box<dyn FnOnce(u32) + Send>) {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.pid {
+            Some(pid) => {
+                drop(slot);
+                hook(pid);
+            }
+            None => slot.hook = Some(hook),
+        }
+    }
+
+    /// The pid the driver reported, if it has.
+    #[must_use]
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.lock().unwrap_or_else(|e| e.into_inner()).pid
     }
 
     /// Tee one freshly-read chunk into the ring for `stream`.
@@ -339,5 +402,27 @@ mod tests {
         let s = t.snapshot();
         assert!(s.stdout.is_empty());
         assert_eq!(s.stdout_total, 8, "the counter is independent of the ring");
+    }
+
+    /// The child slot is a rendezvous, not a mailbox: whichever of the two
+    /// sides arrives first, the hook runs exactly once with the one pid the
+    /// driver reported. A second report is ignored — one child per tail.
+    #[test]
+    fn the_child_pid_fires_the_hook_whichever_side_arrives_first() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (t, t2) = (LiveTail::new(), LiveTail::new());
+        // Hook first, pid second.
+        let s = seen.clone();
+        t.on_child_pid(Box::new(move |p| s.lock().unwrap().push(p)));
+        t.set_child_pid(41);
+        // Pid first, hook second.
+        t2.set_child_pid(42);
+        let s = seen.clone();
+        t2.on_child_pid(Box::new(move |p| s.lock().unwrap().push(p)));
+        t2.set_child_pid(43); // one child per tail: ignored
+        assert_eq!(
+            (&*seen.lock().unwrap(), t.child_pid(), t2.child_pid()),
+            (&vec![41, 42], Some(41), Some(42))
+        );
     }
 }

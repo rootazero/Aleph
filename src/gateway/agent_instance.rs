@@ -154,11 +154,18 @@ pub struct AgentInstance {
     agent_dir: PathBuf,
     /// Session store for persistence
     session_store: Arc<dyn SessionStore>,
-    /// Optional L0 raw-memory writer. When set, every persisted user/assistant
-    /// message is also captured into the `raw_memories` table as a `Transcript`
-    /// entry so the compression pipeline (`CompressionService`) can later promote
-    /// it to L1 notes. None falls back to compaction-only capture, which means
-    /// short conversations never reach L0.
+    /// Optional L0 raw-memory writer. Plumbed by [`AgentRegistry`] onto every
+    /// instance it builds, and read by NOTHING on this type: the one reader was
+    /// the transcript capture inside `add_message_with_run_id`, deleted
+    /// 2026-09-13 with zero production callers (the projector is the sole
+    /// `messages` writer, and it holds no L0 writer). A SEVERED FEATURE
+    /// (criterion #7): per-turn L0 capture today is only the compactor's
+    /// residue (`post_turn_compress`), and the `SessionEnd` row goes through
+    /// the `SessionManager`'s own writer (`session_manager/ops/emit.rs`) —
+    /// this handle is on neither path. CUT or CONNECT at the projector is a
+    /// pending product decision (T17 report, FOLLOW-UP); until then this
+    /// field carries a handle to no effect, and a doc that claimed otherwise
+    /// would be the lie.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
@@ -258,8 +265,9 @@ impl AgentInstance {
         })
     }
 
-    /// Attach an L0 raw-memory writer so every persisted message is also
-    /// captured to `raw_memories`. Wired at gateway startup.
+    /// Attach an L0 raw-memory writer. Wired at gateway startup through
+    /// [`AgentRegistry::set_raw_memory_writer`]; see the field's doc for why
+    /// nothing on this type reads it today.
     pub fn with_raw_memory_writer(
         mut self,
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
@@ -449,82 +457,6 @@ impl AgentInstance {
         origin_route_from_store(&self.session_store, key).await
     }
 
-    /// Add a message to a session (delegated to session store) and capture
-    /// it into the L0 `raw_memories` buffer when a writer is wired.
-    pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
-        self.add_message_with_run_id(key, role, content, None, None)
-            .await;
-    }
-
-    /// Like [`add_message`], but stamps `metadata.run_id` on the persisted
-    /// row. This is the link that lets `chat.history` surface a `run_id` so the
-    /// Panel can fetch the run's observability trace (`task_traces`) and
-    /// rehydrate the workspace step view on session reload/switch. Without it,
-    /// assistant rows persist with NULL metadata and the workspace pane goes
-    /// blank whenever the live event stream is gone.
-    pub async fn add_message_with_run_id(
-        &self,
-        key: &SessionKey,
-        role: MessageRole,
-        content: &str,
-        run_id: Option<&str>,
-        occupancy: Option<crate::gateway::execution_engine::helpers::RunContextOccupancy>,
-    ) {
-        let key_str = key.to_key_string();
-        let role_str = match role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::System => "system",
-            MessageRole::Tool => "tool",
-        };
-
-        let metadata = build_message_metadata(run_id, occupancy);
-
-        // Ensure session exists, then add message
-        if let Err(e) = self.session_store.get_or_create(key).await {
-            warn!("Failed to ensure session in store: {}", e);
-        }
-        if let Err(e) = self
-            .session_store
-            .append_message(
-                key,
-                crate::gateway::session_store::types::MessageRecord {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    role: role_str.to_string(),
-                    content: content.to_string(),
-                    timestamp: chrono::Utc::now().timestamp(),
-                    metadata,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    tool_call_id: None,
-                    tool_name: None,
-                },
-            )
-            .await
-        {
-            warn!("Failed to persist message to store '{}': {}", key_str, e);
-        }
-
-        // L0 capture: only persist user and assistant turns. System messages
-        // are prompt scaffolding (re-built each turn) and tool messages are
-        // captured separately via RawMemorySource::ToolOutput in the agent
-        // loop. Skipping them keeps L0 focused on conversational signal.
-        if matches!(role, MessageRole::User | MessageRole::Assistant) {
-            if let Some(writer) = self.raw_memory_writer.as_ref() {
-                let body = format!("[{role_str}] {content}");
-                let raw = crate::memory::store::raw_memory::RawMemory::new(
-                    body,
-                    crate::memory::store::raw_memory::RawMemorySource::Transcript,
-                )
-                .with_agent(self.config.agent_id.clone())
-                .with_session(key_str.clone());
-                if let Err(e) = writer.insert_raw_memory(&raw).await {
-                    warn!("L0 raw_memory write failed for {}: {}", key_str, e);
-                }
-            }
-        }
-    }
-
     /// Get session history (delegated to session store)
     pub async fn get_history(&self, key: &SessionKey, limit: Option<usize>) -> Vec<SessionMessage> {
         match self.session_store.get_history(key, limit).await {
@@ -535,46 +467,6 @@ impl AgentInstance {
             Err(e) => {
                 warn!("Failed to get history from store: {}", e);
                 Vec::new()
-            }
-        }
-    }
-
-    /// Reset (clear) a session (delegated to session store).
-    ///
-    /// Retires the live event log first, then the `/btw` side session, then the
-    /// projection — the same order, for the same two reasons, as `chat.clear`
-    /// and the `sessions.reset` RPC. The store's `reset_session` only empties
-    /// the `messages` table the Panel reads; the model replays `session_events`,
-    /// so clearing the projection alone blanks the screen while the model still
-    /// remembers every word. And the side session holds a copied prefix of this
-    /// transcript in its own event log, so a reset that spares it leaves the
-    /// cleared content readable through the next `/btw`. Side session only —
-    /// the key is unchanged, so any loop/goal keyed to it is still reachable
-    /// and must survive a content wipe.
-    ///
-    /// No production caller today; the wire is here so the first one inherits
-    /// the parity rather than the defect the other two surfaces document.
-    pub async fn reset_session(&self, key: &SessionKey) -> bool {
-        // Parity requirement with both live clear surfaces: SSOT before
-        // projection, so a failure here leaves recoverable ghost rows on screen
-        // rather than a conversation the model secretly still holds.
-        if let Err(e) = crate::session::store::retire_live_events(key, 1).await {
-            warn!("Failed to retire session event log on reset: {}", e);
-            return false;
-        }
-        crate::gateway::continuation_lifecycle::retire_side_session(
-            key,
-            "agent_instance.reset",
-            Some(self.session_store.clone()),
-        );
-        match self.session_store.reset_session(key).await {
-            Ok(deleted) => {
-                debug!("Reset session: {}", key.to_key_string());
-                deleted
-            }
-            Err(e) => {
-                warn!("Failed to reset session: {}", e);
-                false
             }
         }
     }
@@ -727,8 +619,10 @@ impl RemovedAgent {
 pub struct AgentRegistry {
     agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
     default_agent: String,
-    /// Optional L0 writer applied to every lazily-instantiated agent so
-    /// gateway-mediated turns reach `raw_memories`. Set once at startup.
+    /// Optional L0 writer carried onto every agent this registry
+    /// instantiates. Set once at startup. Nothing on [`AgentInstance`] reads
+    /// it any more — see that type's field doc: the wire is a severed
+    /// feature awaiting CUT or CONNECT, not a capture path.
     raw_memory_writer:
         Arc<RwLock<Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>>>,
 }
@@ -756,8 +650,10 @@ impl AgentRegistry {
 
     /// Register an already-instantiated agent (for tests and dynamic creation).
     /// If a raw-memory writer has been set on the registry and the instance
-    /// does not already carry one, attach it here so dynamically-created agents
-    /// also fill `raw_memories`.
+    /// does not already carry one, it is attached here — the same carry the
+    /// lazy path does, so both construction paths hold the same handle. It
+    /// fills nothing: no method on `AgentInstance` reads it (see its field
+    /// doc).
     pub async fn register(&self, instance: AgentInstance) {
         let id = instance.id().to_string();
         let instance = if instance.raw_memory_writer.is_none() {
@@ -1001,8 +897,13 @@ mod tests {
         assert!(instance.is_idle().await);
     }
 
+    /// The session row exists after `ensure_session`, with nothing in it.
+    /// (The message-writing half of the test this replaces went with
+    /// `AgentInstance::add_message` / `reset_session`, which had no production
+    /// caller: the projector is the only `messages` writer, and the clear
+    /// surfaces are `chat.clear` and the `sessions.reset` RPC.)
     #[tokio::test]
-    async fn test_session_management() {
+    async fn ensure_session_creates_an_empty_session() {
         let temp = tempdir().unwrap();
         let sm = test_session_store(&temp);
         let config = AgentInstanceConfig {
@@ -1015,85 +916,8 @@ mod tests {
         let instance = AgentInstance::new(config, sm).unwrap();
         let key = SessionKey::main("test");
 
-        // Create session
         instance.ensure_session(&key).await;
         assert!(instance.get_history(&key, None).await.is_empty());
-
-        // Add messages
-        instance.add_message(&key, MessageRole::User, "Hello").await;
-        instance
-            .add_message(&key, MessageRole::Assistant, "Hi!")
-            .await;
-
-        let history = instance.get_history(&key, None).await;
-        assert_eq!(history.len(), 2);
-
-        // Reset
-        assert!(instance.reset_session(&key).await);
-        let history = instance.get_history(&key, None).await;
-        assert!(history.is_empty());
-    }
-
-    #[tokio::test]
-    async fn assistant_message_persists_run_id_in_metadata() {
-        let temp = tempdir().unwrap();
-        let sm = test_session_store(&temp);
-        let config = AgentInstanceConfig {
-            agent_id: "test".to_string(),
-            workspace: temp.path().join("workspace"),
-            agent_dir: temp.path().join("agents/test"),
-            ..Default::default()
-        };
-        let instance = AgentInstance::new(config, sm).unwrap();
-        let key = SessionKey::main("test");
-
-        // The agent loop stamps the run_id so chat.history can later map this
-        // assistant turn back to its persisted observability trace, letting
-        // the workspace panel rehydrate on session reload/switch.
-        instance
-            .add_message_with_run_id(
-                &key,
-                MessageRole::Assistant,
-                "Hi!",
-                Some("run-xyz"),
-                Some(
-                    crate::gateway::execution_engine::helpers::RunContextOccupancy {
-                        context_tokens: 42_000,
-                        context_window: 200_000,
-                        total_tokens: 55_000,
-                        input_tokens: 40_000,
-                        output_tokens: 15_000,
-                        cost_usd: Some(0.42),
-                        model: None,
-                        model_provider: None,
-                    },
-                ),
-            )
-            .await;
-
-        let history = instance.get_history(&key, None).await;
-        let last = history.last().expect("one persisted message");
-        assert_eq!(last.role, MessageRole::Assistant);
-        let meta = last
-            .metadata
-            .as_ref()
-            .expect("assistant turn must carry metadata");
-        assert_eq!(
-            meta.get("run_id").map(String::as_str),
-            Some("run-xyz"),
-            "assistant turn must carry run_id in metadata for trace replay"
-        );
-        // Occupancy persisted as strings so the HashMap<String,String> decode in
-        // `from_record` keeps the whole blob (run_id included) intact.
-        assert_eq!(
-            meta.get("context_tokens").map(String::as_str),
-            Some("42000")
-        );
-        assert_eq!(
-            meta.get("context_window").map(String::as_str),
-            Some("200000")
-        );
-        assert_eq!(meta.get("total_tokens").map(String::as_str), Some("55000"));
     }
 
     #[test]
@@ -1114,8 +938,6 @@ mod tests {
                 context_tokens: 10,
                 context_window: 20,
                 total_tokens: 30,
-                input_tokens: 8,
-                output_tokens: 22,
                 cost_usd: None,
                 model: None,
                 model_provider: None,

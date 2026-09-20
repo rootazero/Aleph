@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::events::{EventSeq, Retire, SessionEvent, SessionEventRecord};
 
 pub type SessionId = crate::routing::session_key::SessionKey;
 
@@ -25,6 +25,11 @@ pub enum SessionError {
     Storage(String),
     #[error("serialization: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// A live `session_events` row this build cannot decode. The read that
+    /// met it is refused — for THIS session only — and the record is named,
+    /// so every face can say which row and the doctor can retire exactly it.
+    #[error("undecodable session record: {0}")]
+    UndecodableRecord(crate::session::store::UndecodableRecord),
     #[error("{0}")]
     Other(String),
 }
@@ -52,6 +57,26 @@ pub trait SessionService: Send + Sync + 'static {
         event: SessionEvent,
     ) -> Result<EventSeq, SessionError>;
 
+    /// Append `events` and apply `retire` in ONE store transaction (§4.1).
+    /// Returns every seq allocated, in batch order.
+    ///
+    /// Default is a refusal, not a loop of `emit_event`: a service that cannot
+    /// commit atomically must say so rather than report a batch that can
+    /// tear. `InProcessActorSessionService` is the only production override
+    /// (test doubles override it too).
+    async fn emit_batch(
+        &self,
+        id: &SessionId,
+        events: Vec<SessionEvent>,
+        retire: Option<Retire>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
+        let _ = (id, events, retire);
+        Err(SessionError::Other(
+            "this SessionService cannot append atomically (only InProcessActorSessionService can)"
+                .into(),
+        ))
+    }
+
     async fn subscribe(
         &self,
         id: &SessionId,
@@ -62,30 +87,78 @@ pub trait SessionService: Send + Sync + 'static {
     async fn detach(&self, id: &SessionId) -> Result<(), SessionError>;
 }
 
-/// `ConsumerDecides`, and the disagreement is measured rather than assumed:
-/// as counted on 2026-08-25, nine production call sites read this handle and
-/// they do NOT converge.
+/// Every production reader of [`global_session_service`], and what an
+/// uninstalled handle reads as THERE — one row per file, the second column
+/// taken from the code at that site.
 ///
-/// ⚠️ Recount rather than inherit that nine. `MissingSemantics::ConsumerDecides`
-/// used to quote the same figure in its own doc — that duplicate was removed
-/// (Task 15), so this comment is now the count's only home. That does not
-/// retire the warning: the count is a snapshot of a live measurement, not a
-/// constant, and a single stale number is still stale. The named sites below
-/// are the checkable part; the count is a snapshot.
+/// Not a count: the number this used to quote ("nine", counted 2026-08-25)
+/// rotted twice before it was replaced — the fast-path reader moved from
+/// `fast_path.rs` into `slash_command.rs`, `tools/scoped/dispatch.rs`'s moved
+/// into `session/call_log.rs`, and two files (`run_loop/mod.rs`,
+/// `handlers/mod.rs`) started reading it without the comment noticing. The
+/// first column is pinned to the tree by
+/// `the_reader_census_matches_the_tree_in_both_directions`: a reader that
+/// appears or vanishes is a red test, not a stale sentence. Its scope — what
+/// "production code" means to that walk, and which spellings of a read it
+/// sees — is stated on
+/// [`crate::utils::source_scan::files_whose_production_code_reads`].
 ///
-/// `tools/scoped/dispatch.rs` takes a `let … else` and silently returns;
-/// `builtin_tools/sessions/compact_tool.rs` turns the same `None` into an
-/// `AlephError`. The remaining SEVEN are gateway sites, and they do not all lose
-/// the same thing: six drop a `session_events` append (`openai_api`,
-/// `execution_engine::{execute, fast_path ×2, simple ×2}`), so the event never
-/// reaches the log and the `MessageProjector` never sees it — while
-/// `run_loop/inner.rs` skips a *legacy event-log backfill*, a different loss on
-/// a path only a pre-event-log session reaches.
+/// The second column is prose and is NOT pinned; it is true of the code on
+/// the commit that wrote it, and the reader who changes a site's `None` arm
+/// owes this table the new sentence.
 ///
-/// Whether each of those is the right answer is adjudicated in Task 15. What
-/// this variant records is that a missing handle here produces *nine separately
-/// chosen wrong answers*, not one — so no single `reads_as` sentence could be
-/// written truthfully.
+/// `#[cfg(test)]` because the census is its only reader: the table is
+/// documentation the tree can contradict, not runtime data.
+#[cfg(test)]
+pub(crate) const SESSION_SERVICE_READERS: &[(&str, &str)] = &[
+    (
+        "src/builtin_tools/sessions/compact_tool.rs",
+        "an `AlephError` to the model (\"session service unavailable\")",
+    ),
+    (
+        "src/gateway/execution_engine/execute.rs",
+        "the run's `AssistantRunMeta` stamp (run_id + occupancy) is skipped, at `debug`; the \
+         harness already journaled the `AssistantMessage`, so no content is lost",
+    ),
+    (
+        "src/gateway/execution_engine/run_loop/inner.rs",
+        "the legacy `messages`→`session_events` backfill is skipped in silence (the read is \
+         paired with the event-store handle; no `else` arm)",
+    ),
+    (
+        "src/gateway/execution_engine/run_loop/mod.rs",
+        "a `BeforeAgentStart` hook stop is not journaled, at `warn` — the run still stops",
+    ),
+    (
+        "src/gateway/execution_engine/simple.rs",
+        "the `UserMessage` and the `AssistantMessage` are each dropped, at `warn` (two sites); \
+         neither reaches `messages`",
+    ),
+    (
+        "src/gateway/execution_engine/slash_command.rs",
+        "the L0 fast path runs unjournaled, at `warn` — the tool executes over no dispatch record",
+    ),
+    (
+        "src/gateway/handlers/mod.rs",
+        "`retire_events_and_balance` answers `Ok(0)` — \"retired nothing\", indistinguishable \
+         from nothing to retire",
+    ),
+    (
+        "src/gateway/openai_api/completions/agent.rs",
+        "each replayed client-history message is dropped, at `warn`",
+    ),
+    (
+        "src/session/call_log.rs",
+        "the park / approval decision is not persisted, at `warn`",
+    ),
+];
+
+/// `ConsumerDecides`: the readers do not converge — see
+/// `SESSION_SERVICE_READERS` (above; `#[cfg(test)]`, because the tree is its
+/// reader) for each one's reading, and for how that list is kept honest.
+/// What this variant records is that a missing handle here
+/// produces several separately chosen answers, not one, so no single
+/// `reads_as` sentence could be written truthfully.
 static GLOBAL_SESSION_SERVICE: CapabilitySlot<Arc<dyn SessionService>> =
     CapabilitySlot::new("session/service", MissingSemantics::ConsumerDecides);
 
@@ -101,10 +174,10 @@ pub fn set_global_session_service(svc: Arc<dyn SessionService>) {
 
 /// Record that boot reached this slot and had nothing to install.
 ///
-/// The `else` half of [`set_global_session_service`]. Nine consumers each pick
-/// their own meaning for a missing handle (see the static above); this is the
-/// one place that can tell them it was a decision. `because` is quoted verbatim
-/// to an operator.
+/// The `else` half of [`set_global_session_service`]. The readers named in
+/// `SESSION_SERVICE_READERS` each pick their own meaning for a missing
+/// handle; this is the one place that can tell them it was a decision.
+/// `because` is quoted verbatim to an operator.
 #[inline]
 pub fn decline_global_session_service(because: &'static str) {
     GLOBAL_SESSION_SERVICE.decline(because);
@@ -154,5 +227,35 @@ mod tests {
     #[test]
     fn the_accessor_exposes_this_handle_to_the_roster() {
         assert_eq!(global_session_service_slot().id(), "session/service");
+    }
+
+    /// [`SESSION_SERVICE_READERS`]'s first column equals the set of files whose
+    /// production code reads the handle — equality, both directions, derived
+    /// from the tree by the walk the table's doc names. A reader that appears
+    /// is red until it is classified; a reader that vanishes is red until its
+    /// row goes. Mutation (T17): comment out one row ⇒ red naming that file.
+    #[test]
+    fn the_reader_census_matches_the_tree_in_both_directions() {
+        use crate::utils::source_scan::files_whose_production_code_reads;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found = files_whose_production_code_reads(&root, "global_session_service");
+        let listed: std::collections::BTreeSet<String> = SESSION_SERVICE_READERS
+            .iter()
+            .map(|(file, _)| (*file).to_string())
+            .collect();
+        assert_eq!(
+            SESSION_SERVICE_READERS.len(),
+            listed.len(),
+            "a file is listed twice in SESSION_SERVICE_READERS"
+        );
+        assert!(
+            !found.is_empty(),
+            "self-protection: the walk found no reader at all — blind, not clean"
+        );
+        assert_eq!(
+            found, listed,
+            "a reader of the session-service handle appeared or vanished; update \
+             SESSION_SERVICE_READERS with what a missing handle reads as there"
+        );
     }
 }

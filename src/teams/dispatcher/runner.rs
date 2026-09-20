@@ -313,6 +313,39 @@ pub async fn execute_member_task(
         session_name,
     } = target
     {
+        // Apply the same allowed_users fence the Agent arm runs below
+        // (TEAMS-001, critical). The Agent arm's comment explicitly warns
+        // that naming a restricted agent as a team member would bypass the
+        // per-agent permission fence; AcpSession has the same shape — an
+        // external tool selected by team membership — and was previously
+        // skipping the check entirely. Today AcpSession's `agent_id` is a
+        // synthetic `"acp:<harness>:<cwd>"` handle that the registry does
+        // not carry, so `get_allowed_users` returns `None` and the gate is
+        // vacuously satisfied; but if a future registration path adds a
+        // real row for an ACP harness, this check MUST fire. Fail-closed
+        // here so a misconfigured team cannot run a tool that should be
+        // denied to the ambient actor.
+        let agent_registry = context.agent_registry();
+        if let Some(allowed) = agent_registry.get_allowed_users(agent_id).await {
+            let actor = crate::gateway::visibility::ambient_actor();
+            if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
+                tracing::warn!(
+                    team_id = %team_id,
+                    task_id = %task_id,
+                    agent_id = %agent_id,
+                    harness_id = %harness_id,
+                    actor = ?actor,
+                    "team member run: ACP harness's allowed_users denies this caller"
+                );
+                return MemberRunOutcome {
+                    status: MemberRunStatus::Failed,
+                    reply: None,
+                    error: Some(format!(
+                        "ACP harness '{harness_id}' (agent_id '{agent_id}') does not admit this caller (allowed_users)"
+                    )),
+                };
+            }
+        }
         return execute_acp_member_task(
             context,
             agent_id,

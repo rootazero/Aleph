@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::tui::app::PaletteState;
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// Maximum number of visible items in the palette overlay.
 const MAX_VISIBLE_ITEMS: u16 = 12;
@@ -47,7 +47,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(title);
 
     let inner = block.inner(overlay_rect);
@@ -66,7 +66,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
     let filter_display = format!("{}{}", filter_prefix, palette.input);
     let filter_line = Paragraph::new(Line::from(Span::styled(
         filter_display,
-        Style::default().fg(DEFAULT_THEME.primary),
+        Style::default().fg(theme().primary),
     )));
     frame.render_widget(filter_line, input_area);
 
@@ -96,12 +96,12 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
 
             let style = if is_selected {
                 Style::default()
-                    .fg(DEFAULT_THEME.primary)
+                    .fg(theme().primary)
                     .add_modifier(Modifier::BOLD)
             } else if entry.is_namespace {
-                Style::default().fg(DEFAULT_THEME.tool_name)
+                Style::default().fg(theme().tool_name)
             } else {
-                Style::default().fg(DEFAULT_THEME.muted)
+                Style::default().fg(theme().muted)
             };
 
             ListItem::new(Line::from(Span::styled(line_str, style)))

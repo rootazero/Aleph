@@ -361,6 +361,13 @@ pub trait GenerationProvider: Send + Sync {
 /// This provider returns predictable mock responses and can be configured
 /// for different scenarios including success, errors, and delays.
 ///
+/// Gated behind `#[cfg(test)]` so a production binary cannot accidentally
+/// ship a mock provider as if it were real. Every call site that previously
+/// imported `MockGenerationProvider` from this module lives in a
+/// `#[cfg(test)] mod tests` block (`src/gateway/voice/outbound.rs`,
+/// `src/tools/probes/generation.rs`); the doctest below uses `rust,ignore`
+/// so the example compiles under both configurations.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -375,6 +382,7 @@ pub trait GenerationProvider: Send + Sync {
 /// assert!(output.data.is_url());
 /// # });
 /// ```
+#[doc(hidden)]
 pub struct MockGenerationProvider {
     name: String,
     color: String,
@@ -457,6 +465,7 @@ impl MockGenerationProvider {
     }
 }
 
+#[doc(hidden)]
 impl GenerationProvider for MockGenerationProvider {
     fn generate(
         &self,

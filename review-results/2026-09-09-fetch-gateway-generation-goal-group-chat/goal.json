@@ -1,0 +1,63 @@
+{
+  "module": "src/goal",
+  "scan": {
+    "files_scanned": ["src/goal/mod.rs", "src/goal/pursuit.rs", "src/goal/store.rs", "src/goal/types.rs"],
+    "lines_total": 4397,
+    "rust_doctor_diagnostics_in_module": 0
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "GoalStore uses std::sync::Mutex directly instead of crate::sync_primitives::Mutex (R8 violation)",
+      "file": "src/goal/store.rs",
+      "line": 113,
+      "category": "wiring",
+      "description": "src/goal/store.rs:113,145,149 import std::sync::Mutex and std::sync::MutexGuard directly, violating Aleph invariant R8. The sibling looping module (src/looping/mod.rs:14) imports Mutex from crate::sync_primitives. The two parallel subsystems use two different conventions, and the goal-side direct std::sync::Mutex cannot be swapped for loom.",
+      "trigger": "Reviewer scan for sync-primitive imports across the goal subsystem.",
+      "suggested_fix": "Mechanical substitution: std::sync::Mutex → crate::sync_primitives::Mutex (and MutexGuard accordingly). Zero-cost at runtime because the re-exports ARE std::sync.",
+      "confidence": "high",
+      "fixed_in_commit": "402452790"
+    },
+    {
+      "severity": "P3",
+      "title": "pause_all_owned_by reads now_ms from SystemTime inside the lock; inconsistent with sibling helpers",
+      "file": "src/goal/store.rs",
+      "line": 796,
+      "category": "logic",
+      "description": "Every other mutating helper on GoalStore (block_if_active, pause_if_active, park_if_active, etc.) takes now_ms: u64 as a parameter from the caller so the test harness can drive a deterministic clock. pause_all_owned_by is the sole exception.",
+      "trigger": "Test of pause_all_owned_by that asserts note includes a now_ms value.",
+      "suggested_fix": "Take now_ms: u64 as a parameter and have the single external caller in src/gateway/handlers/users.rs supply it.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "Single-call-site change; cosmetic only — the test gap is more impactful than the function signature inconsistency."
+    },
+    {
+      "severity": "P3",
+      "title": "pause_all_active has no direct unit test (only the owned_by variant does)",
+      "file": "src/goal/store.rs",
+      "line": 743,
+      "category": "logic",
+      "description": "pause_all_active is the kill-switch for 'quiet everything' across every session — its sibling pause_all_owned_by has three dedicated tests, pause_all_active itself has none.",
+      "trigger": "Any future refactor of pause_all_active that changes its terminal status or barrier cleanup.",
+      "suggested_fix": "Add pause_all_active_pauses_only_active_goals_and_drops_their_wait_barriers test alongside the existing pause_all_owned_by_* tests.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "Test coverage gap; no current defect. Documented in the comment and easy to add later."
+    },
+    {
+      "severity": "P3",
+      "title": "GoalWakeService::claim_and_spawn passes None for workspace on every wake-side claim (informational)",
+      "file": "src/gateway/execution_engine/goal_wait.rs",
+      "line": 385,
+      "category": "wiring",
+      "description": "Intended behaviour: the stored workspace is preserved across wake claims. Documented and tested. No bug.",
+      "trigger": null,
+      "suggested_fix": null,
+      "confidence": "low",
+      "fixed_in_commit": null,
+      "deferred_reason": "Informational only — wiring is verified intact."
+    }
+  ],
+  "severities_summary": {"P0": 0, "P1": 0, "P2": 1, "P3": 3},
+  "notes": "Module is otherwise well-defended: every state transition is CAS'd, every claim is atomic under a single conn lock, every cleanup is co-located with its transition, every public store method has at least one external caller. Only the sync primitives convention gap warranted a fix; the rest are hygiene / test coverage."
+}

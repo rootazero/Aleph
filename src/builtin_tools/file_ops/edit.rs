@@ -215,6 +215,9 @@ pub struct FileEditOutput {
     /// reads *after* the edit. Lets the model verify the result in place
     /// instead of spending a follow-up `file_read` on it.
     pub snippet: String,
+    /// UI side-channel; hoisted out before the model sees this output.
+    #[serde(rename = "_presentation", skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<aleph_protocol::Presentation>,
 }
 
 // =============================================================================
@@ -411,12 +414,17 @@ impl FileEditTool {
         info!(replacements, fuzzy, crlf, path = %path_str, "FileEditTool: edit complete");
         notify_tool_result("file_edit", &message, true);
 
+        let change =
+            super::diff::compute_file_change(&path_str, Some(&content), Some(&new_content));
+        let presentation = Some(super::diff::presentation_for(vec![change]));
+
         Ok(FileEditOutput {
             success: true,
             path: path_str,
             replacements,
             message,
             snippet,
+            presentation,
         })
     }
 
@@ -541,12 +549,16 @@ impl FileEditTool {
         info!(replacements, had_fuzzy, had_crlf, path = %path_str, "FileEditTool: multi-edit complete");
         notify_tool_result("file_edit", &message, true);
 
+        let change = super::diff::compute_file_change(&path_str, Some(content), Some(&new_content));
+        let presentation = Some(super::diff::presentation_for(vec![change]));
+
         Ok(FileEditOutput {
             success: true,
             path: path_str,
             replacements,
             message,
             snippet,
+            presentation,
         })
     }
 }
@@ -589,6 +601,10 @@ Use this tool for surgical edits — it only changes what you specify, leaving t
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
+    }
+
+    fn mutates_file_content(&self) -> bool {
+        true
     }
 }
 
@@ -1141,5 +1157,56 @@ mod tests {
         .unwrap();
         assert!(result.success);
         assert_eq!(fs::read_to_string(&file).unwrap(), "alpha=10\nbeta=2\n");
+    }
+
+    // ========================================================================
+    // `_presentation` side-channel — the FileChange diff attached for the UI.
+    // ========================================================================
+
+    #[tokio::test]
+    async fn single_and_multi_edit_attach_one_file_change_under_the_presentation_key() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.txt");
+        std::fs::write(&p, "one\ntwo\nthree\n").unwrap();
+        let tool = FileEditTool::default();
+        let out = tool
+            .call_impl(FileEditArgs {
+                file_path: p.to_string_lossy().into(),
+                old_string: "two".into(),
+                new_string: "2".into(),
+                replace_all: false,
+                edits: vec![],
+            })
+            .await
+            .unwrap();
+        let v = serde_json::to_value(&out).unwrap();
+        let changes = &v["_presentation"]["changes"];
+        assert_eq!(changes.as_array().unwrap().len(), 1);
+        assert_eq!(changes[0]["added"], 1);
+        assert_eq!(changes[0]["removed"], 1);
+        // multi-edit: still ONE FileChange, with both edits' stats
+        let out = tool
+            .call_impl(FileEditArgs {
+                file_path: p.to_string_lossy().into(),
+                old_string: String::new(),
+                new_string: String::new(),
+                replace_all: false,
+                edits: vec![
+                    EditOp {
+                        old_string: "one".into(),
+                        new_string: "1".into(),
+                    },
+                    EditOp {
+                        old_string: "three".into(),
+                        new_string: "3".into(),
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["_presentation"]["changes"].as_array().unwrap().len(), 1);
+        assert_eq!(v["_presentation"]["changes"][0]["added"], 2);
     }
 }

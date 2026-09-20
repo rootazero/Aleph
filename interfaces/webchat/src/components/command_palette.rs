@@ -131,16 +131,12 @@ fn build_actions() -> Vec<Action> {
         mk_nav(
             "nav.memory",
             t_string!(i18n, nav.memory).to_string(),
-            // "canvas" left this list when the whiteboard claimed the word:
-            // matching it here would race the real /canvas entry below.
+            // "canvas" left this list when the whiteboard claimed the word,
+            // and stayed out when the whiteboard stopped being a route at all
+            // (it is a body of the chat's workspace pane now, reachable by
+            // its tab — there is nothing here to navigate to).
             &["memory", "knowledge", "记忆"],
             "/memory",
-        ),
-        mk_nav(
-            "nav.canvas",
-            t_string!(i18n, nav.canvas).to_string(),
-            &["canvas", "whiteboard", "画布", "白板"],
-            "/canvas",
         ),
         mk_nav(
             "nav.agents",

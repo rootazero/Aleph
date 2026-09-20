@@ -130,6 +130,7 @@ impl CanvasStore {
             decks: Vec::new(),
             created_at_ms: now,
             updated_at_ms: now,
+            timeline: None,
         };
         let mut guard = self.locks.lock(&id, self.doc_path(&id)).await?;
         // Existence guard: a residual `<root>/<id>/doc.json` (manual restore,
@@ -398,6 +399,7 @@ mod tests {
                 h: 200.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: text.to_string(),
@@ -465,6 +467,7 @@ mod tests {
                     upsert_note("n1"),
                     CanvasOp::SetDocMeta {
                         title: "x".repeat(MAX_TITLE_BYTES + 1),
+                        timeline: None,
                     },
                 ],
                 None,
@@ -499,12 +502,198 @@ mod tests {
                 doc.revision,
                 vec![CanvasOp::SetDocMeta {
                     title: "line\nbreak".to_string(),
+                    timeline: None,
                 }],
                 None,
             )
             .await
             .unwrap_err();
         assert!(matches!(err, CanvasError::Invalid(_)), "{err:?}");
+    }
+
+    /// One rejection per drawing-infrastructure gate, each driven through
+    /// the real `apply` so the refusal is proven to reach the store's edge,
+    /// and each asserting the document is untouched afterwards (a refused
+    /// batch lands nothing — the title-cap discipline, re-used).
+    ///
+    /// The non-finite `bend` arm has no wire case: JSON cannot spell NaN or
+    /// infinity, so `serde_json` refuses such a document before the gate
+    /// ever sees it. It is exercised through the Rust value path, which is
+    /// the path the tool face and in-process callers take.
+    #[tokio::test]
+    async fn every_drawing_gate_refuses_and_lands_nothing() {
+        use aleph_protocol::canvas::{
+            ArrowEnd, ArrowHead, Ease, Reveal, RevealMode, Timeline, MAX_PATH_D_BYTES,
+            MAX_REVEAL_MS,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store.create(None, None, Some("u1".into())).await.unwrap();
+
+        let common = || ShapeCommon {
+            id: "s1".to_string(),
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+            z: FracIndex::first(),
+            parent_id: None,
+            reveal: None,
+        };
+        let path = |d: &str| Shape::Path {
+            common: common(),
+            style: ShapeStyle::default(),
+            d: d.to_string(),
+            closed: false,
+        };
+        let bad_color = Shape::Note {
+            common: common(),
+            style: ShapeStyle {
+                color: "#abc".to_string(),
+                ..ShapeStyle::default()
+            },
+            text: String::new(),
+        };
+        let bad_bend = Shape::Arrow {
+            common: common(),
+            start: ArrowEnd {
+                x: 0.0,
+                y: 0.0,
+                bind: None,
+            },
+            end: ArrowEnd {
+                x: 1.0,
+                y: 1.0,
+                bind: None,
+            },
+            style: ShapeStyle::default(),
+            label: String::new(),
+            bend: f64::NAN,
+            head_start: ArrowHead::None,
+            head_end: ArrowHead::Arrow,
+        };
+        let with_reveal = |reveal: Reveal| Shape::Note {
+            common: ShapeCommon {
+                reveal: Some(reveal),
+                ..common()
+            },
+            style: ShapeStyle::default(),
+            text: String::new(),
+        };
+        let oversize_d = format!("M0 0 {}", "L1 1 ".repeat(MAX_PATH_D_BYTES / 5));
+        assert!(oversize_d.len() > MAX_PATH_D_BYTES);
+
+        let cases: Vec<(&str, CanvasOp)> = vec![
+            (
+                "bad color",
+                CanvasOp::UpsertShape { shape: bad_color },
+            ),
+            (
+                "bad path d",
+                CanvasOp::UpsertShape {
+                    shape: path("M0 0 A1 1 0 0 1 2 2"),
+                },
+            ),
+            (
+                "oversize path d",
+                CanvasOp::UpsertShape {
+                    shape: path(&oversize_d),
+                },
+            ),
+            ("non-finite bend", CanvasOp::UpsertShape { shape: bad_bend }),
+            (
+                "reveal duration 0",
+                CanvasOp::UpsertShape {
+                    shape: with_reveal(Reveal {
+                        start_ms: 0,
+                        duration_ms: 0,
+                        ease: Ease::default(),
+                        mode: RevealMode::default(),
+                    }),
+                },
+            ),
+            (
+                "reveal overflow",
+                CanvasOp::UpsertShape {
+                    shape: with_reveal(Reveal {
+                        start_ms: MAX_REVEAL_MS,
+                        duration_ms: 1,
+                        ease: Ease::default(),
+                        mode: RevealMode::default(),
+                    }),
+                },
+            ),
+            (
+                "timeline overflow",
+                CanvasOp::SetDocMeta {
+                    title: "t".to_string(),
+                    timeline: Some(Timeline {
+                        total_ms: Some(MAX_REVEAL_MS + 1),
+                        hold_ms: 0,
+                    }),
+                },
+            ),
+        ];
+        for (why, op) in cases {
+            let err = store
+                .apply(&doc.id, doc.revision, vec![upsert_note("n-sibling"), op], None)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, CanvasError::Invalid(_)), "{why}: {err:?}");
+            let after = store.get(&doc.id).await.unwrap();
+            assert_eq!(after.revision, doc.revision, "{why}: burned a revision");
+            assert!(after.shapes.is_empty(), "{why}: the sibling op landed");
+            assert!(after.timeline.is_none(), "{why}");
+        }
+
+        // The positive half: the same gates admit a well-formed batch, and
+        // the timeline lands (and an empty one clears it).
+        let r = store
+            .apply(
+                &doc.id,
+                doc.revision,
+                vec![
+                    CanvasOp::UpsertShape {
+                        shape: path("M0 0 L10 0 L10 10 Z"),
+                    },
+                    CanvasOp::SetDocMeta {
+                        title: "t".to_string(),
+                        timeline: Some(Timeline {
+                            total_ms: Some(5_000),
+                            hold_ms: 500,
+                        }),
+                    },
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+        let after = store.get(&doc.id).await.unwrap();
+        assert_eq!(after.shapes.len(), 1);
+        assert_eq!(
+            after.timeline,
+            Some(Timeline {
+                total_ms: Some(5_000),
+                hold_ms: 500
+            })
+        );
+        store
+            .apply(
+                &doc.id,
+                r,
+                vec![CanvasOp::SetDocMeta {
+                    title: "t".to_string(),
+                    timeline: Some(Timeline::default()),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            store.get(&doc.id).await.unwrap().timeline.is_none(),
+            "the empty timeline is never stored"
+        );
+        drop(dir);
     }
 
     /// The gate is on **writes**. A document already on disk whose title
@@ -671,6 +860,7 @@ mod tests {
                 vec![
                     CanvasOp::SetDocMeta {
                         title: "new".into(),
+                        timeline: None,
                     },
                     CanvasOp::UpsertDeck { deck: deck.clone() },
                 ],

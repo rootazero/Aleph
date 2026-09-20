@@ -248,15 +248,25 @@ impl<'a> LoopGraphInspector<'a> {
 
         // coverage sources: only edges whose source can RUN. Same predicate
         // the lint uses (Round 11 / coverage_source_rejection).
+        //
+        // Dedupe by source id: a single source node may have both a
+        // `Watches` and an `Audits` edge to `node_id`, and the doc on
+        // `NodeSubgraph::coverage_sources` promises uniqueness ("Unique
+        // `Watches`/`Audits` source nodes"). Track seen ids in a HashSet so
+        // the implementation matches the doc — the lint / render layer
+        // then has one row per actual covering source, not one per edge.
+        let mut seen_coverage_ids: HashSet<&str> = HashSet::new();
         let coverage_sources: Vec<GraphNode> = incoming
             .iter()
             .filter(|(e, _)| matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits))
             .filter_map(|(_, src)| {
-                if can_cover_kind(src.kind) {
-                    Some(src.clone())
-                } else {
-                    None
+                if !can_cover_kind(src.kind) {
+                    return None;
                 }
+                if !seen_coverage_ids.insert(src.id.as_str()) {
+                    return None;
+                }
+                Some(src.clone())
             })
             .collect();
 

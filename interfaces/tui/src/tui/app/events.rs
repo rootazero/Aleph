@@ -6,13 +6,12 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::terminate::{self, UiLocale};
-use aleph_protocol::{
-    peer_message_is_renderable, summarize_tool_input, AgentTracePresentationPreset,
-    AgentTraceToolResult, AskUserQuestion, StreamEvent,
-};
+use aleph_protocol::{peer_message_is_renderable, AskUserQuestion, StreamEvent};
 
 use super::super::slash::ToolProgressMode;
-use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, ChatMessage};
+use super::{
+    row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, RowBody, TranscriptEntry,
+};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -387,14 +386,8 @@ impl AppState {
             }
 
             StreamEvent::Reasoning { content, .. } => {
-                self.ensure_assistant_message();
-                if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
-                    match reasoning {
-                        Some(existing) => existing.push_str(&content),
-                        None => *reasoning = Some(content),
-                    }
-                }
-                Action::ScrollToBottomIfAutoScroll
+                self.append_reasoning_chunk(&content);
+                Action::None
             }
 
             StreamEvent::ToolStart {
@@ -409,12 +402,8 @@ impl AppState {
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
-                self.start_tool_execution(
-                    tool_id,
-                    tool_name,
-                    summarize_tool_input(&params, AgentTracePresentationPreset::TuiDebug.options()),
-                );
-                Action::ScrollToBottomIfAutoScroll
+                self.start_tool_execution(tool_id, tool_name, &params);
+                Action::None
             }
 
             StreamEvent::ToolUpdate {
@@ -426,10 +415,13 @@ impl AppState {
                     ToolProgressMode::Off | ToolProgressMode::New => return Action::None,
                     ToolProgressMode::All | ToolProgressMode::Verbose => {}
                 }
-                if let Some(tool) = self.find_tool_mut(&tool_id) {
-                    tool.progress = Some(progress);
+                // A progress line IS the row's body while it runs: the result
+                // replaces it on `finish`, so there is no second field holding
+                // a caption that outlives the call it described.
+                if let Some(row) = self.find_tool_mut(&tool_id) {
+                    row.body = RowBody::Text(progress);
                 }
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ToolEnd {
@@ -449,14 +441,16 @@ impl AppState {
                 // state and no-ops on an unknown id.
                 //
                 // `ToolStart` stays gated: `start_tool_execution` RESETS a row
-                // to Running and clears its duration/error, so an out-of-order
-                // arrival would un-complete a finished tool — and the trace
-                // mirror's `summarize_tool_input` params render better than the
-                // raw ones here.
+                // to Pending/Running and drops its result, so an out-of-order
+                // arrival would un-complete a finished tool.
                 // Live plan projection BEFORE the display-mode gate: `/tools
                 // off` hides tool rows, not the todo panel. The frame carries
                 // no tool name; the row learned it at ToolStart.
-                let output_value = serde_json::json!(result.output);
+                //
+                // Cloned, not moved out of `result`: the whole frame is handed
+                // to `finish_tool_execution` below because it is the carrier of
+                // `presentation`.
+                let output_value = serde_json::json!(result.output.clone());
                 if result.success {
                     if let Some(name) = self.tool_name_of(&tool_id) {
                         self.maybe_apply_plan_from_tool(&name, &output_value);
@@ -465,18 +459,13 @@ impl AppState {
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
-                let result = if result.success {
-                    AgentTraceToolResult::Success {
-                        output: output_value,
-                    }
-                } else {
-                    AgentTraceToolResult::Error {
-                        error: result.error.unwrap_or_default(),
-                        retryable: false,
-                    }
-                };
+                // Passed straight through rather than re-wrapped: this frame IS
+                // the wire `ToolResult`, `presentation` and all. Converting it
+                // to the trace's own result shape here is what used to drop the
+                // structured diff on this path — the authoritative one — while
+                // the lossy mirror carried it.
                 self.finish_tool_execution(&tool_id, &result, duration_ms);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ResponseChunk { content, .. } => {
@@ -486,7 +475,7 @@ impl AppState {
                 // other side — see `turn_streamed_len`.
                 self.turn_streamed_len += content.len();
                 self.append_assistant_content(&content);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::RunComplete {
@@ -497,10 +486,15 @@ impl AppState {
                 self.current_run = None;
                 self.run_started_at = None;
                 self.dismiss_pending_approval();
-                self.last_run_duration = Some(Duration::from_millis(total_duration_ms));
                 if !self.current_run_trace_summary_applied {
                     self.update_token_usage(&summary);
                 }
+                // Unconditional, unlike the token tally above: the trace
+                // mirror carries no price at all, so this is the only carrier
+                // and there is no second application to guard against.
+                // `None` here means the pricing module had no rate — recorded
+                // as doubt, never spent as zero (判据 §8).
+                self.cost.add_run(summary.estimated_cost_usd);
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.turn_streamed_len = 0;
@@ -548,7 +542,10 @@ impl AppState {
                     self.add_system_message(halt_notice(token, UiLocale::from_env()));
                 }
 
-                Action::ScrollToBottomIfAutoScroll
+                // Last, so the turn closes on it.
+                self.append_turn_trailers(&summary.tool_summaries, total_duration_ms);
+
+                Action::None
             }
 
             StreamEvent::RunError { error, .. } => {
@@ -565,7 +562,7 @@ impl AppState {
                 self.mark_current_assistant_complete();
 
                 self.add_system_message(format!("Error: {error}"));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::AskUser {
@@ -615,7 +612,7 @@ impl AppState {
                 // core's, printed verbatim — this client does not own that
                 // vocabulary and must not paraphrase it.
                 self.add_system_message(format!("The agent's question ended ({outcome})."));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             // A room peer's message became a transcript row. Session-keyed and
@@ -652,9 +649,11 @@ impl AppState {
                 if !peer_message_is_renderable(&author_user_id, self.my_user_id.as_deref()) {
                     return Action::None;
                 }
-                let row = ChatMessage::User {
-                    content,
-                    timestamp: row_timestamp(Some(&timestamp)),
+                let id = self.next_entry_id();
+                let row = TranscriptEntry::UserText {
+                    id,
+                    text: content,
+                    at_ms: u64::try_from(row_timestamp(Some(&timestamp)).timestamp_millis()).ok(),
                 };
                 // Placed BEFORE a bubble that is still streaming. The peer's
                 // run may have opened its assistant message already, and a
@@ -662,15 +661,15 @@ impl AppState {
                 // it. Anything settled stays above, so this only ever moves the
                 // row past the one bubble that is still being written.
                 match self.messages.last() {
-                    Some(ChatMessage::Assistant {
-                        is_streaming: true, ..
+                    Some(TranscriptEntry::AssistantText {
+                        streaming: true, ..
                     }) => {
                         let at = self.messages.len() - 1;
                         self.messages.insert(at, row);
                     }
                     _ => self.messages.push(row),
                 }
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ReasoningBlock { content, .. } => {
@@ -679,7 +678,7 @@ impl AppState {
                 }
                 // Treated same as Reasoning — append to reasoning buffer
                 self.append_reasoning_entry(content);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::UncertaintySignal {
@@ -693,7 +692,7 @@ impl AppState {
                     suggested_action.description()
                 );
                 self.add_system_message(msg);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::RunRetrying {
@@ -709,7 +708,7 @@ impl AppState {
                 self.add_system_message(format!(
                     "Provider {provider} unreachable, retrying ({attempt}/{max_attempts}): {reason}"
                 ));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ModelResolved { model_info, .. } => {
@@ -731,7 +730,7 @@ impl AppState {
                         ),
                     };
                     self.add_system_message(line);
-                    return Action::ScrollToBottomIfAutoScroll;
+                    return Action::None;
                 }
                 Action::None
             }

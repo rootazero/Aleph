@@ -186,7 +186,11 @@ pub fn verify_plugin_integrity(
         return Ok(()); // No hash to verify
     };
     let actual = directory_digest(source_path)?;
-    if actual != expected {
+    // Constant-time byte compare via the workspace security helper.
+    // The expected digest is wire-stored (catalog-shipped), so the
+    // timing-attack surface is small here, but using the same primitive
+    // as the rest of the security crate keeps the audit story uniform.
+    if !crate::security::secret_equal_bytes(actual.as_bytes(), expected.as_bytes()) {
         return Err(format!(
             "Plugin integrity check failed: expected {expected}, got {actual}"
         ));

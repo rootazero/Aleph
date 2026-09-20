@@ -455,6 +455,15 @@ test-logic: test-proptest test-loom
 # Run all tests (core + desktop + proptest)
 test-all: test test-desktop-all test-proptest check-phase5 check-wiring
 
+# Re-verify the tests marked `#[ignore]` because they pass in isolation but
+# flake under the full `cargo test --lib` parallel fan-out on a contended
+# runner (one PTY geometry race, two file-lock starvation cases). Runs them
+# serially (`--test-threads=1`) and with `--include-ignored` so they
+# actually execute. Use this whenever you touch any of these tests or the
+# global PTY manager / usage-store state.
+verify-flaky:
+    bash scripts/verify-flaky-tests-serial.sh
+
 # Phase 5 exit criterion 9 gate.
 check-phase5:
     ./scripts/check-phase5-exit.sh

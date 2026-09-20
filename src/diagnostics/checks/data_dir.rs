@@ -67,7 +67,10 @@ impl HealthCheck for DataDirCheck {
                 "Data directory is missing",
                 format!("{display} does not exist; SQLite stores, vault, and the instance lock cannot be created."),
             )
-            .with_fix_hint(format!("Run `aleph doctor --fix`, or create it manually: mkdir -p \"{display}\""))
+            .with_fix_hint(
+                "Run `aleph doctor --fix`, or create it manually with `mkdir -p` on that path."
+                    .to_string(),
+            )
             .repairable();
 
             if posture.allows_repair() {
@@ -96,9 +99,11 @@ impl HealthCheck for DataDirCheck {
                 "Data directory is not writable",
                 format!("{display} exists but a write probe failed: {e}"),
             )
-            .with_fix_hint(format!(
-                "Check ownership/permissions: ls -ld \"{display}\" (the directory must be writable by the current user)."
-            ))],
+            .with_fix_hint(
+                "Check ownership/permissions: run `ls -ld` on the path — it must be \
+                 writable by the current user."
+                    .to_string(),
+            )],
         }
     }
 }

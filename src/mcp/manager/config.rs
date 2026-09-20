@@ -167,6 +167,24 @@ impl McpPersistentConfig {
             )));
         }
 
+        // fsync the parent directory so the rename itself is durable across
+        // power loss. Without this, the kernel may reorder the directory
+        // entry update after the temp file's data blocks, and a crash in
+        // between can leave a half-applied rename visible to the next boot.
+        // Same defensive pattern as auth/storage.rs::save_to_file.
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                if let Err(e) = dir.sync_all() {
+                    tracing::warn!(
+                        parent = %parent.display(),
+                        error = %e,
+                        "MCP config parent dir fsync failed (best-effort)"
+                    );
+                }
+            }
+        }
+
         tracing::debug!("Saved MCP config to {}", path.display());
         Ok(())
     }

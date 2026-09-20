@@ -256,19 +256,87 @@ where
     let arguments = merge_agent_id(params.arguments, params.agent_id.as_deref());
 
     match registry.execute_tool(&params.tool_name, arguments).await {
-        Ok(result) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "ok": true,
-                "tool_name": params.tool_name,
-                "result": result,
-            }),
-        ),
+        Ok(mut result) => {
+            mask_presentation_in_place(&mut result);
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "ok": true,
+                    "tool_name": params.tool_name,
+                    "result": result,
+                }),
+            )
+        }
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
             format!("tool '{}' failed: {}", params.tool_name, err),
         ),
+    }
+}
+
+/// Mask the `_presentation` side-channel in a tool result this surface is
+/// about to return **verbatim**.
+///
+/// The third face of the presentation. The other two — the live `tool_end`
+/// frame (`event_emitter::RedactingEmitter`) and the replayed
+/// `tool_call_completed` (`handlers::trace_replay`) — reach a human through
+/// `exec::masker::mask_presentation`, and the contract on that function is
+/// that every face shares ONE derivation. This handler dispatches straight
+/// off the raw `ToolRegistry` (see the module doc), so it never passes
+/// `ScopedToolService::apply_layer_two`: the key is not hoisted out and,
+/// until this call existed, nothing masked it. What arrives at the caller is
+/// up to `MAX_HUNK_LINES` lines of file content — including a deleted file's
+/// pre-image — in the clear.
+///
+/// **Not an escalation** (`file_write`'s caller supplied the content;
+/// `file_edit` already returns a post-edit snippet; anyone who can invoke
+/// `apply_patch` can invoke `file_read`), which is why it is masked here
+/// rather than refused. The point is that a second, unmasked copy of file
+/// content must not exist on a door the "one derivation, two faces" story
+/// does not cover.
+///
+/// **The registry is deliberately not changed**: `presentation_census`
+/// (`tools::presentation_census`) runs `reg.execute_tool` and asserts the key
+/// IS present, so the producer's contract is "attach it"; hoisting/masking is
+/// the consumer's job, and this is a consumer.
+///
+/// A value under the key that does not parse as a `Presentation` (a foreign
+/// shape from some future tool) gets `mask_json_strings` instead — every
+/// string leaf, no shape knowledge needed. That is weaker than the typed walk
+/// (it cannot run the multi-line join pass that degrades to
+/// `Unavailable::Redacted`), and it is used ONLY where the typed walk has
+/// nothing to walk.
+fn mask_presentation_in_place(result: &mut Value) {
+    let Some(obj) = result.as_object_mut() else {
+        return;
+    };
+    let Some(raw) = obj.get(aleph_protocol::PRESENTATION_KEY).cloned() else {
+        return;
+    };
+    let masker = crate::exec::masker::SecretMasker::new();
+    match serde_json::from_value::<aleph_protocol::Presentation>(raw.clone()) {
+        Ok(mut presentation) => {
+            crate::exec::masker::mask_presentation(&masker, &mut presentation);
+            match serde_json::to_value(presentation) {
+                Ok(masked) => {
+                    obj.insert(aleph_protocol::PRESENTATION_KEY.to_string(), masked);
+                }
+                // Unreachable in practice (the type is plain data). If it
+                // ever happens, drop the key — shipping the unmasked
+                // original because re-serialization failed is the one
+                // outcome this function exists to prevent.
+                Err(e) => {
+                    tracing::warn!(error = %e, "tools.invoke: could not re-serialize a masked presentation; dropping it");
+                    obj.remove(aleph_protocol::PRESENTATION_KEY);
+                }
+            }
+        }
+        Err(_) => {
+            let mut foreign = raw;
+            crate::exec::masker::mask_json_strings(&masker, &mut foreign);
+            obj.insert(aleph_protocol::PRESENTATION_KEY.to_string(), foreign);
+        }
     }
 }
 
@@ -767,5 +835,78 @@ mod tests {
         let resp = handle_invoke(req, tool_reg, Some(agents)).await;
         assert!(!resp.is_success());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+    }
+
+    /// The third face. This surface returns the registry's value verbatim —
+    /// no `apply_layer_two`, so `_presentation` is still on the object — and
+    /// the diff lines inside it carry file content. They go through the same
+    /// `mask_presentation` the live frame and the replay leg use.
+    ///
+    /// The tool is deliberately NOT one of today's three producers: all of
+    /// `file_write` / `file_edit` / `apply_patch` are in `DANGEROUS_TOOLS`,
+    /// so on this surface they are refused by the first hard floor unless an
+    /// operator sets `ALEPH_GATEWAY_TOOLS_ALLOW`. That makes today's door
+    /// narrow (the escape hatch, or a future non-dangerous tool that attaches
+    /// a presentation) — it does not make it closed, and the masking belongs
+    /// to the surface rather than to the current membership of a denylist.
+    #[tokio::test]
+    async fn a_presentation_returned_verbatim_is_masked_like_the_other_two_faces() {
+        const KEY: &str = "sk-abcdefghijklmnopqrstuvwxyz123456789012345678";
+        let reg = Arc::new(StubRegistry::new().with_ok(
+            "a_presentation_attaching_tool",
+            json!({
+                "success": true,
+                "path": "/tmp/a.rs",
+                "_presentation": {
+                    "kind": "file_changes",
+                    "changes": [{
+                        "path": "/tmp/a.rs",
+                        "kind": "modified",
+                        "hunks": [{
+                            "old_start": 1,
+                            "new_start": 1,
+                            "lines": [{"tag": "add", "text": format!("let k = \"{KEY}\";")}]
+                        }],
+                        "added": 1,
+                        "removed": 0
+                    }]
+                }
+            }),
+        ));
+        let params = json!({"tool_name": "a_presentation_attaching_tool", "arguments": {}});
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, reg, None).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+
+        let body = serde_json::to_string(&resp.result.unwrap()).unwrap();
+        assert!(
+            !body.contains("abcdefghijklmnopqrstuvwxyz"),
+            "the secret reached the caller in the clear: {body}"
+        );
+        assert!(
+            body.contains("REDACTED"),
+            "expected the masked form: {body}"
+        );
+    }
+
+    /// A shape nothing can type-walk still gets every string leaf masked,
+    /// rather than being returned untouched because it did not parse.
+    #[tokio::test]
+    async fn a_foreign_presentation_shape_is_still_masked_leaf_by_leaf() {
+        const KEY: &str = "sk-abcdefghijklmnopqrstuvwxyz123456789012345678";
+        let reg = Arc::new(StubRegistry::new().with_ok(
+            "some_future_tool",
+            json!({"_presentation": {"kind": "table", "rows": [format!("k={KEY}")]}}),
+        ));
+        let params = json!({"tool_name": "some_future_tool", "arguments": {}});
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, reg, None).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+
+        let body = serde_json::to_string(&resp.result.unwrap()).unwrap();
+        assert!(
+            !body.contains("abcdefghijklmnopqrstuvwxyz"),
+            "an unparseable presentation was returned unmasked: {body}"
+        );
     }
 }

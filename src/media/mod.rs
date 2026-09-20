@@ -74,6 +74,7 @@ mod integration_tests {
         async fn ocr(&self, _: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Extracted text".into(),
+                lines: Vec::new(),
             })
         }
         fn capabilities(&self) -> VisionCapabilities {

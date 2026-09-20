@@ -27,6 +27,13 @@ use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::thinker::nudges::REDACTED_USER_MESSAGE;
 
 /// Outcome of [`GuardrailRegistry::screen_session_input`].
+///
+/// `#[non_exhaustive]` mirrors [`GuardrailDecision`] (decision.rs) and lets
+/// the registry grow new outcomes (e.g. a future `Quarantine` that holds
+/// redacted text for human review) without breaking the external match in
+/// `src/harness/agent/think.rs`.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SessionInputScreen {
     /// The events the prompt is built from — an in-memory clone whose user
     /// text may have been rewritten. The persisted log is never touched, so
@@ -178,7 +185,18 @@ impl GuardrailRegistry {
                 events.len()
             ));
         }
-        let blocking = events[tail_start..]
+        // `.get(..)` is the P7-correct idiom for length-bounded slicing —
+        // the explicit `tail_start > events.len()` guard above covers the
+        // out-of-bounds case, but routing through `.get(..)` lets the bound
+        // check and the slice share one check instead of relying on the
+        // clippy-blind `events[start..]` indexing above.
+        let Some(slice) = events.get(tail_start..) else {
+            return SessionInputScreen::Blocked(format!(
+                "tail_start ({tail_start}) exceeds event log length ({})",
+                events.len()
+            ));
+        };
+        let blocking = slice
             .iter()
             .enumerate()
             .rev()

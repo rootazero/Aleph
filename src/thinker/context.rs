@@ -198,6 +198,21 @@ pub struct TurnEnvelope {
     /// mentions: the model needs to know its memory is muted, or it will
     /// explain its own amnesia by inventing a reason.
     pub memory_mode: Option<crate::memory::session_memory_mode::MemoryMode>,
+    /// The `/<skill>` `allowed-tools` scope this run's tool surface was
+    /// narrowed with — the SAME set `slash_skill_scope::from_metadata`
+    /// decoded in the run loop, sorted for a stable wire form. `Some(vec![])`
+    /// is the explicit deny-all, `None` "declared nothing".
+    ///
+    /// Carried for the `RunStarted` envelope only (§6.3): a resume replays it
+    /// so the recovered run keeps the skill's narrowing. **No prompt layer
+    /// renders it** — the model learns the scope from the tool list it is
+    /// handed, not from a sentence about it.
+    pub allowed_tools: Option<Vec<String>>,
+    /// The `/btw` stamp this request carried (`btw::BTW_METADATA_KEY`'s
+    /// value), copied verbatim so the `RunStarted` envelope can replay it and
+    /// a resumed side question keeps its read-only ceiling. **No prompt layer
+    /// renders it** either.
+    pub btw: Option<String>,
 }
 
 impl TurnEnvelope {

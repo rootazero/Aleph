@@ -19,8 +19,15 @@ pub struct ResumeConfig {
     #[serde(default = "default_resume_max_attempts")]
     pub max_attempts: u32,
 
-    /// Cap simultaneous resumes at boot to protect the freshly-booted
-    /// process and provider rate limits (default: 4).
+    /// Cap simultaneous resumes to protect the freshly-booted process and
+    /// provider rate limits (default: 2). One permit pool bounds the boot
+    /// scan's fan-out (`ResumeCoordinator::launch_resume`) and on-demand
+    /// `agent.resume` alike; a permit spans one candidate's boundary repair
+    /// and its re-trigger.
+    ///
+    /// Lowered from 4 with the fan-out (spec §8.1): until then the knob
+    /// bounded only `retrigger`, and the scan itself was serial, so
+    /// contention never occurred and the 4 carried no evidence.
     #[serde(default = "default_resume_max_concurrent")]
     pub max_concurrent: usize,
 }
@@ -38,7 +45,7 @@ const fn default_resume_max_attempts() -> u32 {
 }
 
 const fn default_resume_max_concurrent() -> usize {
-    4
+    2
 }
 
 impl Default for ResumeConfig {
@@ -62,7 +69,7 @@ mod tests {
         assert!(c.enabled);
         assert_eq!(c.max_age_secs, 86_400);
         assert_eq!(c.max_attempts, 3);
-        assert_eq!(c.max_concurrent, 4);
+        assert_eq!(c.max_concurrent, 2);
     }
 
     #[test]

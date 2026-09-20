@@ -9,6 +9,16 @@
 //! `RunStarted` events and no `RunFinished` after the last one. This module
 //! scans for that shape, repairs the crash boundary (synthetic `ToolError`
 //! for each dangling tool call), and re-triggers each surviving candidate.
+//! A seed is **unanswered** (§5.2) iff a real `UserMessage` sits after the
+//! last `RunFinished` with no `RunStarted` and no `AssistantMessage` after
+//! it — the crash landed before the run's own marker. Markers cannot show
+//! that shape, so the scan reads the message tail of every Clean candidate
+//! and of every marker-less session in the activity window, stamps the
+//! message and re-triggers it with no boundary repair (nothing dangled).
+//! A message is **lost** (§8.2(b)) iff the engine's `agent_tasks` row for it
+//! exists and its session log holds no `UserMessage` since — the crash
+//! landed before the seed itself. Nothing can be re-run; the user is told
+//! once, in-band, to re-send it ([`ResumeCoordinator::adjudicate_orphaned_tasks`]).
 //!
 //! R10-safe: `src/harness/` is untouched. The harness already replays the
 //! event log on every `run()`; resume only re-triggers it.
@@ -24,10 +34,14 @@ use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
-use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
-use crate::session::reduction::{reduce_disposition, reduce_run, LogContradiction, RunDisposition};
-use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::events::{
+    now_ms, EventSeq, RunOutcome, SessionEvent, SessionEventRecord, Timestamp,
+};
+use crate::session::reduction::{
+    is_disposition_bearing, reduce_disposition, reduce_run, LogContradiction, RunDisposition,
+};
+use crate::session::service::{SessionError, SessionId};
+use crate::session::store::{MarkerSlice, SessionEventStore};
 
 /// `FailsClosed`: `handlers/resume.rs` turns a missing handle into
 /// `ResumeOutcome::Unavailable`. Nothing resumes and nothing is harmed — but
@@ -84,13 +98,19 @@ pub fn global_resume_coordinator() -> Option<Arc<ResumeCoordinator>> {
 /// and for tests.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResumeReport {
-    /// Sessions inspected that had at least one run marker.
+    /// Sessions inspected that had at least one run marker, plus the
+    /// marker-less sessions in the activity window about which something was
+    /// decided: an unanswered message found (§5.2), or a tail the pass could
+    /// not read or the reducer refused (both filed under `refused`). A
+    /// marker-less session whose tail was answered is not counted, because
+    /// nothing about it was decided.
     pub scanned: usize,
     /// Interrupted runs successfully re-triggered.
     pub resumed: usize,
     /// Runs marked `Abandoned` (too old or crash-loop cap reached).
     pub abandoned: usize,
-    /// Sessions skipped (clean — newest marker is `RunFinished`).
+    /// Sessions skipped (clean — newest marker is `RunFinished`, and the
+    /// message tail after it holds no user message left unanswered).
     pub skipped: usize,
     /// Interrupted sessions handed back to the scheduler that owns them
     /// (team dispatcher / cron / heartbeat) instead of being resumed here.
@@ -153,6 +173,136 @@ pub struct ResumeReport {
     /// backlog, and a "no-op that reports success" is exactly what a silent 0
     /// here would be.
     pub unsnapshotted: usize,
+    /// §8.2(b): lost-input notices written this pass — one per interrupted
+    /// Main-lane task row whose seed never reached its session log, so the
+    /// user was told to re-send. Rendered by the boot log line only: the
+    /// adjudication runs in the boot scan's [`ResumeLaunch::settle`], never
+    /// on the per-session `agent.resume` face, whose receipt therefore does
+    /// not carry it — a wire field that is 0 on every receipt that route can
+    /// produce would read as "checked, none found".
+    pub notified: usize,
+}
+
+impl ResumeReport {
+    /// Fold one candidate's part into this total — the boot scan runs its
+    /// candidates as separate tasks and sums their reports here.
+    ///
+    /// Exhaustive destructure, no `..`: a counter added to the report is a
+    /// compile error on this line rather than a silent undercount on the boot
+    /// log line. `refused` is appended, not summed — it names sessions.
+    pub fn absorb(&mut self, other: Self) {
+        let Self {
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            delegated,
+            busy,
+            refused,
+            skipped_unknown_age,
+            contradictions,
+            degraded,
+            unsnapshotted,
+            notified,
+        } = other;
+        self.scanned += scanned;
+        self.resumed += resumed;
+        self.abandoned += abandoned;
+        self.skipped += skipped;
+        self.delegated += delegated;
+        self.busy += busy;
+        self.refused.extend(refused);
+        self.skipped_unknown_age += skipped_unknown_age;
+        self.contradictions += contradictions;
+        self.degraded += degraded;
+        self.unsnapshotted += unsnapshotted;
+        self.notified += notified;
+    }
+}
+
+/// A launched boot scan — see [`ResumeCoordinator::launch_resume`].
+///
+/// `pending` is every session the scan will VISIT (a marker group, or an
+/// activity-window row asked the §5.2 question), so a caller can hold that
+/// session's queued input back until [`settle`](Self::settle); everything
+/// else is safe to re-deliver at once. Deliberately OVER-inclusive rather
+/// than "the ones a marker-only slice already calls Interrupted": an
+/// `Unanswered` verdict is invisible to a marker slice (it is read from a
+/// bounded tail inside the task), so a narrower set would release a survivor
+/// into a session the scan is about to act on. Scheduler-owned sessions are
+/// left out — their queued input is never re-delivered by the boot path.
+#[must_use = "dropping a ResumeLaunch aborts every resume it launched; call settle()"]
+pub struct ResumeLaunch {
+    pub pending: std::collections::HashSet<String>,
+    /// Whether the marker scan was actually walked. `false` when resume is
+    /// disabled or the marker load failed — then neither `settle` nor the
+    /// caller may report a completion, because a "scan finished, scanned = 0"
+    /// line after a "scan failed" line reads the failure as an empty result.
+    /// Read it BEFORE `settle` consumes the launch.
+    pub walked: bool,
+    /// One task per candidate, tagged with its candidate ordinal so the
+    /// settled report reads in scan order whatever order the tasks finish in.
+    tasks: tokio::task::JoinSet<(usize, ResumeReport)>,
+    /// Which session each task is deciding, by task id, so a task that did
+    /// not complete can be named — its return value (and ordinal) is gone.
+    sessions: HashMap<tokio::task::Id, SessionId>,
+    /// The coordinator that launched this scan, for the pass `settle` runs
+    /// after every candidate has been decided (see
+    /// [`ResumeCoordinator::adjudicate_orphaned_tasks`]).
+    me: Arc<ResumeCoordinator>,
+    report: ResumeReport,
+}
+
+impl ResumeLaunch {
+    /// Wait for every candidate task and fold its part into one report, then
+    /// adjudicate the task rows the scan could not see (§8.2(b)).
+    pub async fn settle(mut self) -> ResumeReport {
+        let mut parts = Vec::new();
+        while let Some(joined) = self.tasks.join_next().await {
+            match joined {
+                Ok(part) => parts.push(part),
+                // A candidate whose task panicked (or was cancelled) has an
+                // UNKNOWN verdict: its session is left exactly as the crash
+                // left it, and it is counted nowhere — the report has no arm
+                // for "the scan itself failed on this one", and inventing a
+                // count here would read the panic as a decision.
+                Err(e) => tracing::warn!(
+                    session = ?self.sessions.get(&e.id()),
+                    error = %e,
+                    "resume: candidate task did not complete; its verdict is unknown"
+                ),
+            }
+        }
+        // Candidate order, so `refused` reads like the scan walked.
+        parts.sort_by_key(|(ordinal, _)| *ordinal);
+        for (_, part) in parts {
+            self.report.absorb(part);
+        }
+        // After every candidate, on purpose: a row whose session the scan
+        // just resumed or abandoned reads as "open" or "seeded" here, so the
+        // resume arm's verdict is the one the user hears and this pass only
+        // stamps the row. Not gated on `walked` — this pass reads each row's
+        // own log, not the marker slice the scan may have failed to load.
+        self.me.adjudicate_orphaned_tasks(&mut self.report).await;
+        if self.walked {
+            tracing::info!(
+                scanned = self.report.scanned,
+                resumed = self.report.resumed,
+                abandoned = self.report.abandoned,
+                skipped = self.report.skipped,
+                delegated = self.report.delegated,
+                // The scan fans out but claims one slot per session, so two
+                // candidates never collide; a non-zero value is an on-demand
+                // `agent.resume` racing the boot scan, which is the collision
+                // `in_flight` exists to make harmless and which is worth
+                // seeing in the log rather than inferring.
+                busy = self.report.busy,
+                notified = self.report.notified,
+                "resume scan complete"
+            );
+        }
+        self.report
+    }
 }
 
 /// Why one candidate was not resumed.
@@ -162,8 +312,10 @@ pub struct ResumeReport {
 /// only the cases where something was wrong enough to stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeRefusal {
-    /// The reducer refused the log ([`LogContradiction::rejects`]). "I do not
-    /// know what state this run is in" — never read as clean.
+    /// The log was refused ([`LogContradiction::rejects`]) — by the reducer,
+    /// or by the store's decoder before the reducer ever saw it
+    /// (`UndecodableRecord`). "I do not know what state this run is in" —
+    /// never read as clean.
     LogInconsistent(LogContradiction),
     /// The session's agent is not in the registry, so there is nothing to
     /// re-trigger the run on.
@@ -173,6 +325,16 @@ pub enum ResumeRefusal {
     BoundaryRepairFailed(String),
     /// The repair landed but the run could not be dispatched.
     RetriggerFailed(String),
+    /// The stamp did not land, so the retrigger must not happen: a resume
+    /// without its intent stamp is exactly the unbounded loop §5.1 closes.
+    IntentStampFailed(String),
+    /// The message tail past the last `RunFinished` could not be read, so
+    /// whether the last user message was answered is unknown (§5.2). Not
+    /// [`Self::BoundaryRepairFailed`]: no repair was attempted, and a label
+    /// that says one was is the expensive kind of wrong. The reason word is a
+    /// pass-through string on the wire — no client switches on reason words —
+    /// so it needs no renderer of its own.
+    TailReadFailed(String),
 }
 
 impl ResumeRefusal {
@@ -185,6 +347,8 @@ impl ResumeRefusal {
             Self::AgentMissing => "agent_missing",
             Self::BoundaryRepairFailed(_) => "boundary_repair_failed",
             Self::RetriggerFailed(_) => "retrigger_failed",
+            Self::IntentStampFailed(_) => "intent_stamp_failed",
+            Self::TailReadFailed(_) => "tail_read_failed",
         }
     }
 
@@ -194,7 +358,10 @@ impl ResumeRefusal {
         match self {
             Self::LogInconsistent(c) => c.to_string(),
             Self::AgentMissing => "the session's agent is not registered".to_string(),
-            Self::BoundaryRepairFailed(e) | Self::RetriggerFailed(e) => e.clone(),
+            Self::BoundaryRepairFailed(e)
+            | Self::RetriggerFailed(e)
+            | Self::IntentStampFailed(e)
+            | Self::TailReadFailed(e) => e.clone(),
         }
     }
 }
@@ -249,6 +416,71 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
         SessionId::Task { task_type, .. }
             if task_type == CRON_TASK_TYPE || task_type == HEARTBEAT_TASK_TYPE
     )
+}
+
+/// Sessions the Unanswered arm may retrigger: not a scheduler-owned unit
+/// (they re-run by their own rule) and not a sub-agent child or an ephemeral
+/// side session (A7: children are reported, never re-driven; an ephemeral
+/// session has no user waiting on it).
+#[must_use]
+pub(crate) fn unanswered_eligible(key: &SessionId) -> bool {
+    // Exhaustive on purpose: a retrigger is an LLM run nobody asked for, so a
+    // new session kind must be classified here before it can be eligible —
+    // a `!matches!` would admit it by default.
+    match key {
+        SessionId::Subagent { .. } | SessionId::Ephemeral { .. } => false,
+        SessionId::Main { .. }
+        | SessionId::DirectMessage { .. }
+        | SessionId::Group { .. }
+        | SessionId::Task { .. } => !has_own_scheduler(key),
+    }
+}
+
+/// What [`ResumeCoordinator::abandon`] is giving up on — the subject of the
+/// sentence the user reads. The closer is the same `RunFinished { Abandoned }`
+/// either way; the sentence is not, and a notice that says "an interrupted
+/// run" about a session in which no run ever existed is the expensive kind
+/// of wrong (criterion #17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Abandoned {
+    /// A `RunStarted` with no finish: the run existed and was cut off.
+    InterruptedRun,
+    /// A seeded message no run ever picked up (§5.2): no run existed.
+    UnansweredMessage,
+}
+
+impl Abandoned {
+    /// The one-line sentence the user reads on BOTH faces — the in-band
+    /// `SystemMessage` note and the origin-channel notice — derived once in
+    /// [`ResumeCoordinator::abandon`].
+    fn notice(self, reason: &str) -> String {
+        match self {
+            Self::InterruptedRun => format!(
+                "⚠️ An interrupted run in this conversation could not be resumed \
+                 after a restart ({reason}) and was abandoned."
+            ),
+            Self::UnansweredMessage => format!(
+                "⚠️ Your last message in this conversation was never picked up by a \
+                 run, and after a restart it could not be retried ({reason}); it was \
+                 abandoned — send it again if you still need it."
+            ),
+        }
+    }
+
+    /// The note stored on a blocked goal.
+    fn goal_note(self, reason: &str) -> String {
+        match self {
+            Self::InterruptedRun => format!(
+                "Autonomous pursuit halted: its interrupted run was abandoned at daemon \
+                 restart ({reason}). Re-set the goal to continue."
+            ),
+            Self::UnansweredMessage => format!(
+                "Autonomous pursuit halted: the message that would have driven it was \
+                 never picked up by a run and was abandoned at daemon restart ({reason}). \
+                 Re-set the goal to continue."
+            ),
+        }
+    }
 }
 
 /// What a resume can still do with the model the crashed run was bound to.
@@ -348,7 +580,9 @@ pub(crate) struct ResumePlan {
     pub(crate) model_override: Option<crate::gateway::model_override::ModelOverride>,
     /// Request metadata the resumed run carries: the three replayable knobs
     /// plus the tier CEILING (never the tier request rung — see
-    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]).
+    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]), plus
+    /// the two per-run facts (skill scope, `/btw` stamp) under the keys their
+    /// owning modules spell.
     pub(crate) knobs: HashMap<String, String>,
     /// What the model is told it lost, if anything.
     pub(crate) degrade: Option<crate::session::boundary_repair::DegradeNote>,
@@ -358,6 +592,27 @@ pub(crate) struct ResumePlan {
     /// resume follows today's session and global values.
     pub(crate) unsnapshotted: bool,
 }
+
+/// The per-run FACTS a `RunStarted` envelope freezes alongside the knobs —
+/// the marker's own field names, spelled so the two facts cannot drift from
+/// the metadata keys they are copied from and replayed to: the `/btw` stamp's
+/// field IS the stamp's key (`btw::BTW_METADATA_KEY`), and the skill scope is
+/// named literally because its request-metadata spelling belongs to
+/// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
+/// not the marker's word.
+///
+/// Not knobs: no `custom` twin, no session / global rung, so [`plan_resume`]
+/// below — their only production reader — replays them from the snapshot or
+/// not at all. That is why the array lives here rather than beside
+/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]:
+/// `session_snapshot.rs` is the knob decoder, and `btw` must never appear in
+/// it in any spelling (`btw::guard_tests::btw_is_not_filed_with_the_five_session_knobs`
+/// reads that file for the word). And not in `session::events` beside the
+/// struct, so `session` keeps depending on nothing in `gateway`. The census
+/// `session::events::tests::the_envelope_carries_exactly_the_published_knob_keys`
+/// asserts the envelope's key set == KNOB ∪ FACT.
+pub const RUN_ENVELOPE_FACT_KEYS: [&str; 2] =
+    ["allowed_tools", crate::gateway::btw::BTW_METADATA_KEY];
 
 /// Derive the plan above.
 ///
@@ -426,6 +681,34 @@ pub(crate) fn plan_resume(
         }
     }
 
+    // §6.3 per-run facts: snapshot rung only. Absent = "declared nothing" —
+    // not a degrade, and never a session/global fallback.
+    if let Some(tools) = env.allowed_tools.as_deref() {
+        crate::gateway::execution_engine::slash_skill_scope::stamp_list(&mut plan.knobs, tools);
+    }
+    match env.btw.as_deref() {
+        Some(stamp) if stamp == crate::gateway::btw::PROMOTE_STAMP => {
+            // A promote is served before `admit_run` and is not a run, so a
+            // marker carrying its sentinel is a writer-side oddity. Replaying
+            // it would NOT reach the promote arm — that arm is gated on a
+            // redirect from a MAIN key, and every stamped marker sits on the
+            // side session the resume is addressed to — it would run a full
+            // side-session turn under the read-only ceiling with `promote`
+            // in its metadata: pointless, and not what the sentinel means.
+            tracing::warn!(
+                run_id = %facts.run_id,
+                "resume: marker carries a promote stamp; a promote is not a run and is not replayed"
+            );
+        }
+        Some(stamp) => {
+            plan.knobs.insert(
+                crate::gateway::btw::BTW_METADATA_KEY.to_string(),
+                stamp.to_string(),
+            );
+        }
+        None => {}
+    }
+
     if let Some(model) = env
         .model
         .as_deref()
@@ -454,12 +737,14 @@ pub(crate) fn plan_resume(
             }
         }
     } else {
-        // The envelope is here and the model half is not: the writer could not
-        // name what served this run (a dynamic route whose provider chain had
+        // The envelope is here and the model half is not. Two origins, and
+        // the sentence has to be true for both: a full run whose writer could
+        // not name what served it (a dynamic route whose provider chain had
         // no `serving_model_hint`, or a marker from before that fallback
-        // existed). The resume proceeds on today's chain — but that chain is
-        // free to have moved, and this is the ONLY place that knows it might
-        // have.
+        // existed), and a slash-command fast path, which makes no LLM call and
+        // so served on no model at all. The resume proceeds on today's chain —
+        // but that chain is free to have moved, and this is the ONLY place
+        // that knows it might have.
         //
         // `unsnapshotted` cannot carry this: it means "no envelope was
         // captured", and one was. `degraded` is the field whose definition
@@ -467,8 +752,9 @@ pub(crate) fn plan_resume(
         // on the existing wire instead of a new counter that four faces would
         // then have to learn to render (判据 #9).
         sentences.push(
-            "The model that served this run was not recorded; it resumes on this \
-             session's current model, which may not be the same one."
+            "This run recorded no model — a slash-command fast path serves on none, and a \
+             full run may have failed to name what served it; it resumes on this session's \
+             current model."
                 .to_string(),
         );
         plan.degraded = true;
@@ -482,6 +768,67 @@ pub(crate) fn plan_resume(
 fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repair::DegradeNote> {
     (!sentences.is_empty())
         .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
+}
+
+/// The §8.2(b) sentence: a message the engine accepted (its task row was
+/// written at `created_at_secs`) but never recorded, so the only honest
+/// answer is to ask for it again. Quotes the head of the prompt so the user
+/// can tell which message — by `char`, not byte, so a multibyte prompt cannot
+/// split a code point (P7).
+fn lost_input_notice(created_at_secs: i64, prompt: &str) -> String {
+    let when = chrono::DateTime::from_timestamp(created_at_secs, 0)
+        .map_or_else(|| created_at_secs.to_string(), |t| t.to_rfc3339());
+    let head: String = prompt.chars().take(80).collect();
+    format!("A message you sent at {when} was lost before it was recorded: «{head}». Please re-send it.")
+}
+
+/// The emitter a re-triggered run reports through.
+///
+/// Live frames go on the bus (`base`). The final reply additionally fans out
+/// to the session's bound origin channel — the human who asked. Without that
+/// the resumed run completed into a collect-and-drop emitter: the
+/// crash-recovered answer existed only in the session log and the
+/// Telegram/Slack user never heard back (R5). Mirrors `spawn_continuation_run`;
+/// a Panel-only session (`gui:chat`, no origin route) has no channel to fan out
+/// to and rides the bus alone. Best-effort: the boot scan may outrun a slow
+/// channel connect — the fanout decorator warns-and-drops on send failure,
+/// never fails the resumed run itself.
+///
+/// A resume that replays the `/btw` stamp (`is_side_question`) rides the bus
+/// alone whatever the registry and route say — the same rule
+/// `busy_queue/durable.rs` applies to a reinjected side question: a
+/// re-delivered side answer must not land on the origin conversation unmarked
+/// (`btw::format_side_answer`'s doc carries the census of fan-out sites).
+///
+/// `route` is a future, not a value, so the origin-route lookup is only paid
+/// when it can matter: a stamped resume and a boot with no channel registry
+/// (a Panel-only server) return before polling it.
+///
+/// A free function so the choice is testable with a registry and a route in
+/// hand; `retrigger` is the only production caller.
+async fn retrigger_emitter(
+    base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+    registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
+    route: impl std::future::Future<Output = Option<(String, String)>>,
+    is_side_question: bool,
+) -> Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> {
+    if is_side_question {
+        return base;
+    }
+    let Some(reg) = registry else {
+        return base;
+    };
+    match route.await {
+        Some((channel, conversation)) => Arc::new(
+            crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
+                base,
+                reg,
+                channel,
+                conversation,
+            ),
+        ),
+        None => base,
+    }
 }
 
 /// Build a resumed run's metadata: the resume marker, the original working
@@ -551,13 +898,20 @@ pub(crate) fn resume_metadata(
 /// is then the newest fact the log has about it. Pure, and separate from
 /// [`ResumeCoordinator::handle_interrupted`], so the rule is falsifiable
 /// without a coordinator, a store and an execution adapter.
+///
+/// `run_started` is the record that OPENED the run (`reduction.run_anchor`'s),
+/// never "the last marker": since §5.1 the last marker is usually the newest
+/// `ResumeAttempted`, and a coordinator's intent stamp is not the run being
+/// alive — measured from it, `max_age_secs` would count from the last attempt
+/// instead of the interruption. `progress.last_activity_at` excludes the stamp
+/// for the same reason.
 fn last_alive_at(
     reduction: &crate::session::reduction::RunReduction,
-    last_marker: &SessionEventRecord,
+    run_started: &SessionEventRecord,
 ) -> crate::session::events::Timestamp {
     match reduction.progress.last_activity_at {
-        Some(activity) => activity.max(last_marker.created_at_ms),
-        None => last_marker.created_at_ms,
+        Some(activity) => activity.max(run_started.created_at_ms),
+        None => run_started.created_at_ms,
     }
 }
 
@@ -585,7 +939,16 @@ pub struct ResumeCoordinator {
     /// only key `chat.abort` and `agent.cancel` accept. See
     /// [`ResumeCoordinator::retrigger`].
     event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    /// Bounds the boot resume burst. `max_concurrent` permits.
+    /// Bounds resumes in flight: `[resume] max_concurrent` permits, shared by
+    /// the boot scan's fan-out ([`launch_resume`](Self::launch_resume)) and
+    /// on-demand resumes ([`resume_session`](Self::resume_session)).
+    ///
+    /// One permit spans a candidate's whole resume — boundary repair AND
+    /// re-trigger — and is taken by those two entry points only. `retrigger`
+    /// takes none of its own: nested inside a held permit, a second acquire
+    /// deadlocks as soon as `max_concurrent` candidates each hold a permit
+    /// and wait for a second one (three candidates under a cap of 2 is
+    /// enough; a cap of 1 is only the smallest case).
     semaphore: Arc<Semaphore>,
     /// Session keys with a resume in flight, so one session is never resumed
     /// twice at once. See [`ResumeReport::busy`] for what the second winner
@@ -596,6 +959,12 @@ pub struct ResumeCoordinator {
     /// slot itself is an RAII guard so an early return or a panic mid-resume
     /// cannot leave a session permanently unresumable.
     in_flight: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The `agent_tasks` table, for the §8.2(b) pass: a Main-lane row the
+    /// engine wrote before it seeded the session is the only trace of a
+    /// message that died between the two writes. `None` on a deployment
+    /// without the resilience database — then no such row exists to
+    /// adjudicate, and the pass is a no-op for the honest reason.
+    state_database: Option<Arc<crate::resilience::StateDatabase>>,
 }
 
 /// RAII claim on one session's resume slot.
@@ -635,7 +1004,16 @@ impl ResumeCoordinator {
             event_bus,
             semaphore: Arc::new(Semaphore::new(permits)),
             in_flight: std::sync::Mutex::new(std::collections::HashSet::new()),
+            state_database: None,
         }
+    }
+
+    /// Hand the coordinator the `agent_tasks` table so the boot scan can
+    /// adjudicate the rows whose seed never reached the log (§8.2(b)).
+    #[must_use]
+    pub fn with_state_database(mut self, db: Arc<crate::resilience::StateDatabase>) -> Self {
+        self.state_database = Some(db);
+        self
     }
 
     /// Take this session's resume slot, or `None` if a resume is already in
@@ -648,7 +1026,7 @@ impl ResumeCoordinator {
     /// admits against. An adapter with no run registry answers with an empty
     /// set, which is honest for it (a `SimpleExecutionEngine` runs nothing
     /// concurrently) and is why this is not a fail-closed predicate the way
-    /// `marker_balance::close_open_run_after_retire`'s is: that one closes the
+    /// `marker_balance::retire_from_and_close_run`'s is: that one closes the
     /// marker of a run the *user* just cut, this one only ever declines to
     /// touch a log.
     fn is_running(&self, session_id: &SessionId) -> bool {
@@ -669,47 +1047,164 @@ impl ResumeCoordinator {
         })
     }
 
-    /// Scan for interrupted runs and re-trigger each. Best-effort: any
-    /// failure is logged and skipped; never panics, never blocks boot.
-    /// A no-op when `config.enabled` is false — this self-guard is what
-    /// makes the disabled path directly testable (the boot wiring also
-    /// skips spawning the coordinator, so the two guards are defensive
-    /// duplicates, both cheap).
-    pub async fn resume_interrupted_runs(&self) -> ResumeReport {
-        let mut report = ResumeReport::default();
+    /// Start the boot scan: classify every candidate and act on it in its own
+    /// task, `[resume] max_concurrent` at a time, without waiting for any of
+    /// them. The caller reads [`ResumeLaunch::pending`] to hold back queued
+    /// input for the sessions the scan will visit, then
+    /// [`ResumeLaunch::settle`]s for the report — or calls
+    /// [`resume_interrupted_runs`](Self::resume_interrupted_runs) for both at
+    /// once.
+    ///
+    /// Fanned out because one slow candidate (a resumed run's `execute` is the
+    /// whole run) used to hold every later candidate behind it. Each task
+    /// holds one permit across its candidate's repair AND re-trigger, so the
+    /// cap bounds runs in flight, not just dispatches.
+    ///
+    /// Best-effort: any failure is logged and skipped; never panics, never
+    /// blocks boot. When `config.enabled` is false the scan itself is
+    /// skipped — no candidate is visited, `walked` stays false — but the
+    /// launch is still returned, because [`ResumeLaunch::settle`] has one
+    /// job that flag does not govern: a message lost before it was recorded
+    /// (§8.2(b)) is not a run to resume, so boot settles a disabled launch
+    /// too.
+    pub async fn launch_resume(self: &Arc<Self>) -> ResumeLaunch {
+        let mut launch = ResumeLaunch {
+            pending: std::collections::HashSet::new(),
+            walked: false,
+            tasks: tokio::task::JoinSet::new(),
+            sessions: HashMap::new(),
+            me: Arc::clone(self),
+            report: ResumeReport::default(),
+        };
 
         if !self.config.enabled {
             tracing::debug!("resume disabled ([resume] enabled = false); skipping scan");
-            return report;
+            return launch;
         }
 
         let marker_groups = match self.event_store.load_run_markers().await {
             Ok(g) => g,
             Err(e) => {
                 tracing::warn!(error = %e, "resume scan failed; skipping resume");
-                return report;
+                return launch;
             }
         };
+        launch.walked = true;
 
-        for (session_id, markers) in marker_groups {
-            self.resume_from_markers(&session_id, &markers, &mut report)
-                .await;
+        // `pending` is deliberately OVER-inclusive: every session the scan will
+        // VISIT (not only the ones a marker-only slice already calls
+        // Interrupted). An `Unanswered` verdict is invisible to a marker slice
+        // (the task reads it from a bounded tail), so a narrower set would
+        // release a survivor into a session the scan is about to act on.
+        let mut seen: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
+        let group_count = marker_groups.len();
+        for (ordinal, (session_id, slice)) in marker_groups.into_iter().enumerate() {
+            seen.insert(session_id.clone());
+            if !has_own_scheduler(&session_id) {
+                launch.pending.insert(session_id.to_key_string());
+            }
+            let me = Arc::clone(self);
+            let semaphore = Arc::clone(&self.semaphore);
+            let named = session_id.clone();
+            let task = launch.tasks.spawn(async move {
+                let mut part = ResumeReport::default();
+                match semaphore.acquire_owned().await {
+                    Ok(_permit) => {
+                        me.resume_from_markers(&session_id, &slice, &mut part).await;
+                    }
+                    Err(e) => part.refused.push((
+                        session_id,
+                        ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}")),
+                    )),
+                }
+                (ordinal, part)
+            });
+            launch.sessions.insert(task.id(), named);
         }
 
-        tracing::info!(
-            scanned = report.scanned,
-            resumed = report.resumed,
-            abandoned = report.abandoned,
-            skipped = report.skipped,
-            delegated = report.delegated,
-            // Expected to be 0 here — the scan is sequential. A non-zero value
-            // means an on-demand `agent.resume` raced the boot scan, which is
-            // the collision `in_flight` exists to make harmless and which is
-            // worth seeing in the log rather than inferring.
-            busy = report.busy,
-            "resume scan complete"
-        );
-        report
+        // §5.2: a session that crashed between its seed and its first
+        // `RunStarted` has NO marker, so the tasks above never visit it. The
+        // activity window (the same one `ProjectionReconciler::candidates`
+        // walks) is where such a session shows up: `execute()` stamps the row's
+        // `last_active_at` before seeding. Sessions the marker scan already
+        // visited are skipped — their Clean arm asks this question itself —
+        // and so are sessions the Unanswered arm may never retrigger, so
+        // `pending` does not hold their queued input for nothing.
+        //
+        // Round UP so a sub-minute horizon still admits something: the filter
+        // is minute-granular and `0` would mean "nothing is recent".
+        let active_minutes =
+            u32::try_from(self.config.max_age_secs.div_ceil(60).max(1)).unwrap_or(u32::MAX);
+        match self
+            .session_store
+            .list_sessions(crate::gateway::session_store::types::SessionFilter {
+                active_minutes: Some(active_minutes),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(rows) => {
+                for (offset, meta) in rows.into_iter().enumerate() {
+                    let Some(id) = SessionId::from_key_string(&meta.key) else {
+                        // A stored key this process cannot parse is a session
+                        // nothing can be asked of — say so rather than dropping
+                        // it in silence (the reconciler twin does the same).
+                        // Not a report counter: every counter on this report
+                        // reaches the wire, and this row has no session to
+                        // name there.
+                        tracing::warn!(
+                            key = %meta.key,
+                            "resume: unparseable session key in the activity window; not scanned for an unanswered message"
+                        );
+                        continue;
+                    };
+                    if seen.contains(&id) || !unanswered_eligible(&id) {
+                        continue;
+                    }
+                    launch.pending.insert(id.to_key_string());
+                    let me = Arc::clone(self);
+                    let semaphore = Arc::clone(&self.semaphore);
+                    // After every marker group, so the settled report lists
+                    // marker candidates first and window candidates after.
+                    let ordinal = group_count + offset;
+                    let named = id.clone();
+                    let task = launch.tasks.spawn(async move {
+                        let mut part = ResumeReport::default();
+                        match semaphore.acquire_owned().await {
+                            Ok(_permit) => {
+                                let Some(_slot) = me.try_claim_resume(&id) else {
+                                    part.busy += 1;
+                                    return (ordinal, part);
+                                };
+                                if me.check_unanswered(&id, &[], &mut part).await {
+                                    part.scanned += 1;
+                                }
+                            }
+                            Err(e) => part.refused.push((
+                                id,
+                                ResumeRefusal::RetriggerFailed(format!(
+                                    "resume semaphore closed: {e}"
+                                )),
+                            )),
+                        }
+                        (ordinal, part)
+                    });
+                    launch.sessions.insert(task.id(), named);
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "resume: activity-window listing failed; marker-less unanswered sessions not scanned"
+            ),
+        }
+
+        launch
+    }
+
+    /// Scan for interrupted runs and re-trigger each, waiting for all of them:
+    /// [`launch_resume`](Self::launch_resume) + [`ResumeLaunch::settle`].
+    pub async fn resume_interrupted_runs(self: &Arc<Self>) -> ResumeReport {
+        self.launch_resume().await.settle().await
     }
 
     /// Hand a session back to the scheduler that owns it: answer the calls its
@@ -759,7 +1254,7 @@ impl ResumeCoordinator {
     async fn resume_from_markers(
         &self,
         session_id: &SessionId,
-        markers: &[SessionEventRecord],
+        slice: &MarkerSlice,
         report: &mut ResumeReport,
     ) {
         // Claimed before anything reads the log. `repair_boundary` is a
@@ -768,10 +1263,10 @@ impl ResumeCoordinator {
         // two `ToolError`s. `harness::agent::prompt` downgrades the second one
         // to a plain user note rather than sending an invalid pair, so the cost
         // is duplicated prose the model must reconcile, not an API rejection.
-        // The boot scan never exposed this (it walks sessions in a sequential
-        // loop); the on-demand face does, including against the boot scan
-        // itself, which is spawned while the gateway is already accepting
-        // requests.
+        // The boot scan fans out but claims one slot per session, so two of
+        // its candidates never collide; `busy` still counts an on-demand
+        // resume racing the scan, which is spawned while the gateway is
+        // already accepting requests.
         let Some(_slot) = self.try_claim_resume(session_id) else {
             tracing::info!(
                 session = ?session_id,
@@ -781,9 +1276,32 @@ impl ResumeCoordinator {
             return;
         };
         report.scanned += 1;
+        // The slice before the markers: one the store could not decode is
+        // refused here, under its own kind, BEFORE any arm reads it as a
+        // list. `Err` is "I do not know what this session holds" — never
+        // "it holds no markers" (criterion #8).
+        let markers = match slice {
+            Ok(markers) => markers,
+            Err(undecodable) => {
+                self.refuse_log(session_id, LogContradiction::from(undecodable), report);
+                return;
+            }
+        };
         match reduce_disposition(markers) {
-            Ok(RunDisposition::Clean) => {
-                report.skipped += 1;
+            // No run is open. The markers cannot say whether the LAST user
+            // message was ever answered — that lives in the message tail
+            // (§5.2) — so `Clean` is only half the verdict here, and the
+            // other half is asked before the session is filed as skipped.
+            //
+            // `Unanswered` is unreachable from a marker-only slice (the
+            // list face's honest ceiling). It shares the arm rather than
+            // being filed under `skipped`: if a caller ever hands a wider
+            // slice, the answer is re-derived from the tail read and acted
+            // on, so the word cannot be wrong in the confident direction.
+            Ok(RunDisposition::Clean | RunDisposition::Unanswered { .. }) => {
+                if !self.check_unanswered(session_id, markers, report).await {
+                    report.skipped += 1;
+                }
             }
             // Not ours to resume: the team dispatcher / cron / heartbeat
             // each recover their own interrupted work, and a second driver
@@ -828,26 +1346,36 @@ impl ResumeCoordinator {
                 }
                 report.delegated += 1;
             }
-            Ok(RunDisposition::Interrupted { trailing_starts }) => {
-                self.handle_interrupted(session_id, markers, trailing_starts, report)
-                    .await;
+            Ok(RunDisposition::Interrupted { attempts }) => {
+                self.handle_interrupted(session_id, attempts, report).await;
             }
-            // A refused slice is "I do not know", not "clean": it is
-            // deliberately NOT counted as `skipped` (which `status_of` renders
-            // `already_finished`). It goes in the `refused` bucket, which
-            // `status_of` reads BEFORE every counter that could be mistaken
-            // for a verdict.
-            Err(c) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    contradiction = %c,
-                    "resume: session log refused by the reducer; not resuming"
-                );
-                report
-                    .refused
-                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
-            }
+            Err(c) => self.refuse_log(session_id, c, report),
         }
+    }
+
+    /// File a session under `refused` for a log the reducer (or the store's
+    /// decoder) would not read.
+    ///
+    /// A refused log is "I do not know", not "clean": it is deliberately NOT
+    /// counted as `skipped` (which `status_of` renders `already_finished`).
+    /// It goes in the `refused` bucket, which `status_of` reads BEFORE every
+    /// counter that could be mistaken for a verdict.
+    fn refuse_log(
+        &self,
+        session_id: &SessionId,
+        contradiction: LogContradiction,
+        report: &mut ResumeReport,
+    ) {
+        tracing::warn!(
+            session = ?session_id,
+            kind = contradiction.tag(),
+            contradiction = %contradiction,
+            "resume: session log refused; not resuming"
+        );
+        report.refused.push((
+            session_id.clone(),
+            ResumeRefusal::LogInconsistent(contradiction),
+        ));
     }
 
     /// Resume one session on demand.
@@ -874,20 +1402,37 @@ impl ResumeCoordinator {
     /// is an operator action measured in ones per hour, and one query with one
     /// grouping rule cannot drift from itself.
     ///
-    /// A session with no run markers at all returns a zero report
-    /// (`scanned == 0`), which the caller renders as "nothing to resume" — not
-    /// an error, because "this session never ran anything" is a legitimate
-    /// answer to the question.
+    /// A session with no run markers at all is still asked the §5.2 question
+    /// — did its last user message go unanswered? — under a claimed slot.
+    /// When the answer is no, the zero report (`scanned == 0`) is what the
+    /// caller renders as "nothing to resume" — not an error, because "this
+    /// session never ran anything" is a legitimate answer to the question.
     pub async fn resume_session(
         &self,
         session_id: &SessionId,
     ) -> Result<ResumeReport, crate::session::service::SessionError> {
         let mut report = ResumeReport::default();
         let groups = self.event_store.load_run_markers().await?;
-        let Some((_, markers)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
+        // The same `max_concurrent` permit the boot scan's tasks hold, taken
+        // here for the same span: repair + re-trigger, on either arm below.
+        // `retrigger` takes none of its own (see `semaphore`).
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
+        let Some((_, slice)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
+            let Some(_slot) = self.try_claim_resume(session_id) else {
+                report.busy += 1;
+                return Ok(report);
+            };
+            if self.check_unanswered(session_id, &[], &mut report).await {
+                report.scanned += 1;
+            }
             return Ok(report);
         };
-        self.resume_from_markers(session_id, &markers, &mut report)
+        self.resume_from_markers(session_id, &slice, &mut report)
             .await;
         tracing::info!(
             session = ?session_id,
@@ -900,28 +1445,35 @@ impl ResumeCoordinator {
     }
 
     /// Handle one interrupted candidate: **one** reduction over the log, then
-    /// the recency filter, the cap check, the crash-boundary repair and the
-    /// re-trigger — every one of them reading that same reduction.
+    /// the recency filter, the cap check, the crash-boundary repair, the
+    /// intent stamp and the re-trigger — every one of them reading that same
+    /// reduction.
     ///
     /// The repair used to re-read and re-reduce the log itself, so "what state
     /// is this candidate in" was answered twice per candidate, at two moments,
     /// with an append in between. Two derivations of one fact is the shape
     /// this round exists to remove.
+    ///
+    /// `attempts` is the number of `ResumeAttempted` stamps this coordinator
+    /// (or a previous boot's) already wrote for the open run — the §5.1
+    /// ratchet. It is compared against `max_attempts` BEFORE this boot writes
+    /// its own stamp, so the cap is "this many tries have been made", not
+    /// "this many tries plus the one about to happen".
     async fn handle_interrupted(
         &self,
         session_id: &SessionId,
-        markers: &[SessionEventRecord],
-        trailing_starts: usize,
+        attempts: u32,
         report: &mut ResumeReport,
     ) {
-        // The dangling RunStarted is the last marker (reduce_disposition
-        // guarantees `markers` is non-empty here).
-        let Some(last) = markers.last() else {
-            return;
-        };
-
         let events = match self.event_store.load_all_events(session_id).await {
             Ok(events) => events,
+            // A row this build cannot decode is the log refusing to be read,
+            // under the same kind the marker scan names — not a failed repair,
+            // which is what the arm below says.
+            Err(SessionError::UndecodableRecord(u)) => {
+                self.refuse_log(session_id, LogContradiction::from(&u), report);
+                return;
+            }
             Err(e) => {
                 tracing::warn!(
                     session = ?session_id,
@@ -938,18 +1490,29 @@ impl ResumeCoordinator {
         let reduction = match reduce_run(&events) {
             Ok(reduction) => reduction,
             Err(c) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    contradiction = %c,
-                    "resume: candidate log refused by the reducer; not resuming"
-                );
-                report
-                    .refused
-                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                self.refuse_log(session_id, c, report);
                 return;
             }
         };
         report.contradictions += reduction.contradictions.len();
+
+        // The run being resumed: the last `RunStarted`, read off the SAME
+        // reduction everything below reads — not "the last marker", which
+        // since §5.1 is usually the newest `ResumeAttempted` stamp. Its record
+        // dates the run (`last_alive_at`) and its seq is the stamp's target.
+        // The disposition guarantees a `RunStarted` after the last finish, so
+        // this cannot miss; if the two reads of the log ever disagree, refuse
+        // rather than resume a run whose anchor nobody can name.
+        let Some(run_started) = reduction
+            .run_anchor
+            .and_then(|seq| events.iter().find(|r| r.seq == seq))
+        else {
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed("interrupted run has no RunStarted anchor".into()),
+            ));
+            return;
+        };
 
         // A clock anomaly makes the age unknown, and BOTH remaining verdicts
         // are decisions taken on an age: resuming says "recent enough",
@@ -968,8 +1531,10 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Recency filter — abandon runs interrupted too long ago.
-        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, last));
+        // Recency filter — abandon runs interrupted too long ago. Dated by the
+        // run's own activity and its `RunStarted`; this boot's predecessors'
+        // stamps do not keep it young.
+        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, run_started));
         if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
             tracing::info!(
                 session = ?session_id,
@@ -978,6 +1543,7 @@ impl ResumeCoordinator {
             );
             self.abandon(
                 session_id,
+                Abandoned::InterruptedRun,
                 "the interrupted run was too old to resume safely",
             )
             .await;
@@ -985,16 +1551,22 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Cap check — abandon crash-looped runs.
-        if trailing_starts as u32 >= self.config.max_attempts {
+        // Cap check — abandon crash-looped runs. Counted off the intent
+        // stamps, so a resume that died before its run's own `RunStarted`
+        // still spent one of these.
+        if attempts >= self.config.max_attempts {
             tracing::warn!(
                 session = ?session_id,
-                trailing_starts,
+                attempts,
                 max_attempts = self.config.max_attempts,
                 "resume: crash-loop cap reached; abandoning"
             );
-            self.abandon(session_id, "it kept crashing on every resume attempt")
-                .await;
+            self.abandon(
+                session_id,
+                Abandoned::InterruptedRun,
+                "it kept crashing on every resume attempt",
+            )
+            .await;
             report.abandoned += 1;
             return;
         }
@@ -1051,6 +1623,29 @@ impl ResumeCoordinator {
             }
         }
 
+        // §5.1: stamp the intent BEFORE the retrigger. The stamp is what the
+        // next boot counts, so a crash anywhere between here and the resumed
+        // run's own `RunStarted` (admit / hook / seed) still moves the
+        // ratchet. A stamp that did not land is a refusal, not a warning: a
+        // retrigger without its stamp is the unbounded loop this closes.
+        // `saturating_add`: the ordinal must not depend on the cap check
+        // above having run first.
+        if let Err(e) = self
+            .stamp_resume_attempt(session_id, run_started.seq, attempts.saturating_add(1))
+            .await
+        {
+            tracing::warn!(
+                session = ?session_id,
+                error = %e,
+                "resume: intent stamp failed; not retriggering"
+            );
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed(e.to_string()),
+            ));
+            return;
+        }
+
         // Re-trigger, carrying the plan. `RunRequest.model_override` is the
         // carrier for the model because it never writes back to the session
         // row — the crash-time pin governs THIS run and the `select_model`
@@ -1069,40 +1664,233 @@ impl ResumeCoordinator {
         }
     }
 
+    /// The Clean arm's second question, and the whole question for a session
+    /// with no markers: is there a user message nobody answered (§5.2)?
+    ///
+    /// One bounded read past the last `RunFinished` the markers carry (the
+    /// whole log when they carry none) — past the last FINISH, not the last
+    /// marker: a previous boot's stamp is a marker too, and a read that began
+    /// after it would never see the message it stamped, so the seed would
+    /// hide behind its own stamp on every later boot. The markers before that
+    /// finish plus the tail, filtered to what `reduce_disposition` accepts,
+    /// are handed to the reducer so the derivation stays its own.
+    ///
+    /// Returns whether an unanswered tail was found (and acted on, or refused
+    /// for a reason the report names) — `false` means "answered, or nothing
+    /// there", which the caller files under `skipped` or not at all.
+    async fn check_unanswered(
+        &self,
+        session_id: &SessionId,
+        markers: &[SessionEventRecord],
+        report: &mut ResumeReport,
+    ) -> bool {
+        if !unanswered_eligible(session_id) {
+            return false;
+        }
+        let from = markers
+            .iter()
+            .rev()
+            .find(|m| matches!(m.event, SessionEvent::RunFinished { .. }))
+            .map(|m| m.seq + 1);
+        let tail = match self
+            .event_store
+            .load_events_range(session_id, from, None)
+            .await
+        {
+            Ok(tail) => tail,
+            // A row this build cannot decode: the log refused to be read,
+            // under the same kind every other face names for it.
+            Err(SessionError::UndecodableRecord(u)) => {
+                self.refuse_log(session_id, LogContradiction::from(&u), report);
+                return true;
+            }
+            // Not `BoundaryRepairFailed`: no repair was attempted. The answer
+            // is "I cannot tell whether the last message was answered", and
+            // the refusal says exactly that.
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: tail read failed; cannot tell whether the last message was answered"
+                );
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::TailReadFailed(e.to_string()),
+                ));
+                return true;
+            }
+        };
+        // The markers before the re-read window, then the window itself:
+        // disjoint by seq, so no record is counted twice. With no finish in
+        // the markers the window is the whole log and the prefix is empty.
+        let mut bearing: Vec<SessionEventRecord> = markers
+            .iter()
+            .filter(|m| from.is_some_and(|f| m.seq < f))
+            .cloned()
+            .collect();
+        bearing.extend(
+            tail.into_iter()
+                .filter(|r| is_disposition_bearing(&r.event)),
+        );
+        match reduce_disposition(&bearing) {
+            Ok(RunDisposition::Unanswered { user_seq, attempts }) => {
+                // The message's own recording time dates it. A record this
+                // reducer named but the slice does not hold, or one recorded
+                // at 0, is an unknown age — not "now" and not "forever ago".
+                let user_at = bearing
+                    .iter()
+                    .find(|r| r.seq == user_seq)
+                    .map(|r| r.created_at_ms)
+                    .filter(|&at| at > 0);
+                self.handle_unanswered(session_id, user_seq, user_at, attempts, report)
+                    .await;
+                true
+            }
+            Ok(RunDisposition::Clean) => false,
+            // Unreachable by construction: every caller reaches here with a
+            // marker slice that reduced `Clean`, and the tail past the last
+            // finish holds no `RunStarted`. Spelled out rather than folded
+            // into "answered": a slice that says otherwise is worth a line.
+            Ok(RunDisposition::Interrupted { .. }) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    "resume: the message tail reads as interrupted after the marker slice read clean; leaving it to the marker scan"
+                );
+                false
+            }
+            Err(c) => {
+                self.refuse_log(session_id, c, report);
+                true
+            }
+        }
+    }
+
+    /// `Interrupted` minus the boundary repair: nothing dangled, so nothing is
+    /// owed a receipt; recency is the message's own recording time; the plan
+    /// is empty because no `RunStarted` ever froze an envelope — which is NOT
+    /// `unsnapshotted` (that counter is about markers that exist). The stamp
+    /// names the message and is written BEFORE the retrigger, and the cap
+    /// reads the stamps written after the message, exactly as the interrupted
+    /// arm reads its own.
+    async fn handle_unanswered(
+        &self,
+        session_id: &SessionId,
+        user_seq: EventSeq,
+        user_at: Option<Timestamp>,
+        attempts: u32,
+        report: &mut ResumeReport,
+    ) {
+        let Some(user_at) = user_at else {
+            tracing::warn!(
+                session = ?session_id,
+                user_seq,
+                "resume: unanswered message has no usable recording time; its age is unknown, leaving it alone"
+            );
+            report.skipped_unknown_age += 1;
+            return;
+        };
+        let age_ms = now_ms().saturating_sub(user_at);
+        if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
+            tracing::info!(
+                session = ?session_id,
+                age_ms,
+                "resume: unanswered message too old; abandoning"
+            );
+            self.abandon(
+                session_id,
+                Abandoned::UnansweredMessage,
+                "the unanswered message was too old to retry safely",
+            )
+            .await;
+            report.abandoned += 1;
+            return;
+        }
+        if attempts >= self.config.max_attempts {
+            tracing::warn!(
+                session = ?session_id,
+                attempts,
+                max_attempts = self.config.max_attempts,
+                "resume: unanswered message hit the crash-loop cap; abandoning"
+            );
+            self.abandon(
+                session_id,
+                Abandoned::UnansweredMessage,
+                "it kept crashing before the run could start",
+            )
+            .await;
+            report.abandoned += 1;
+            return;
+        }
+        if let Err(e) = self
+            .stamp_resume_attempt(session_id, user_seq, attempts.saturating_add(1))
+            .await
+        {
+            tracing::warn!(
+                session = ?session_id,
+                error = %e,
+                "resume: intent stamp failed; not retriggering the unanswered message"
+            );
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed(e.to_string()),
+            ));
+            return;
+        }
+        match self.retrigger(session_id, &ResumePlan::default()).await {
+            Ok(()) => report.resumed += 1,
+            Err(refusal) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %refusal,
+                    "resume: re-trigger of the unanswered message failed"
+                );
+                report.refused.push((session_id.clone(), refusal));
+            }
+        }
+    }
+
     /// Terminate an abandoned candidate honestly: emit `RunFinished {
     /// Abandoned }` so the run is not re-scanned on the next boot, block any
     /// active goal in the session (its crash recovery hangs ENTIRELY on this
     /// coordinator's retrigger→post_run chain — abandoning severs it, so an
-    /// Active goal would otherwise lie in `goal(list)` forever), and drop a
-    /// one-line notice on the origin channel. Every step is best-effort and
-    /// independent — a failed marker append must not silence the user notice.
+    /// Active goal would otherwise lie in `goal(list)` forever), and say so
+    /// to the user — in-band, after the closer, and on the origin channel.
+    /// Every step is best-effort and independent — except the in-band note,
+    /// which waits for its closer (below); a failed marker append must not
+    /// silence the channel notice.
     ///
     /// Deliberately does NOT touch loop state: loops are process-memory and
     /// the registry is empty at boot; "stopping" one here could only misfire
     /// against a loop the user started while the scan was still running.
-    async fn abandon(&self, session_id: &SessionId, reason: &str) {
+    ///
+    /// `what` names the thing being given up on — the two arms write the
+    /// same closer but must not say the same sentence to the user.
+    async fn abandon(&self, session_id: &SessionId, what: Abandoned, reason: &str) {
         let ev = SessionEvent::RunFinished {
             run_id: format!("abandoned-{}", uuid::Uuid::new_v4()),
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
-                    .await
-                {
+        let closed = match self.next_seq(session_id).await {
+            Ok(seq) => match self
+                .event_store
+                .append(session_id, seq, &ev, now_ms())
+                .await
+            {
+                Ok(()) => true,
+                Err(e) => {
                     tracing::warn!(session = ?session_id, error = %e, "resume: abandon marker append failed");
+                    false
                 }
-            }
+            },
             Err(e) => {
                 // Don't fabricate seq 1 on a read error — that would append the
                 // abandon marker at the head and overwrite the genuine first
                 // event. Skip the best-effort marker; the next boot re-abandons.
                 tracing::warn!(session = ?session_id, error = %e, "resume: abandon seq allocation failed; skipping marker");
+                false
             }
-        }
+        };
 
         // Scope the block to goals whose recovery actually hung on THIS
         // crashed run: Active-pursuit, not parked on a task barrier (those are
@@ -1111,26 +1899,32 @@ impl ResumeCoordinator {
         // be collateral-blocked by an unrelated abandoned run.
         let goal_blocked = crate::gateway::continuation_lifecycle::block_abandonable_session_goal(
             &session_id.to_key_string(),
-            &format!(
-                "Autonomous pursuit halted: its interrupted run was abandoned at daemon \
-                 restart ({reason}). Re-set the goal to continue."
-            ),
+            &what.goal_note(reason),
         );
+
+        // One sentence, derived once, for both faces it reaches.
+        let mut text = what.notice(reason);
+        if goal_blocked {
+            text.push_str(" Its standing goal was blocked — re-set it to continue.");
+        }
+
+        // In-band, and only behind a closer that landed: the note must read
+        // AFTER the verdict it is about, and a note written without its
+        // closer would be written again by the next boot's re-abandon.
+        if closed {
+            if let Err(e) = self.system_note(session_id, text.clone()).await {
+                tracing::warn!(session = ?session_id, error = %e, "resume: abandon note append failed");
+            }
+        }
 
         // One-line origin notice, mirroring `retrigger`'s fanout resolution.
         // Panel-only sessions (`gui:chat`) have no origin route and rely on
-        // the stored blocked note; a missing agent cannot be routed for at
-        // all (same documented limitation as the engine's agent-miss branch).
+        // the in-band note and the stored blocked note; a missing agent cannot
+        // be routed for at all (same documented limitation as the engine's
+        // agent-miss branch).
         if let Some(reg) = crate::gateway::event_emitter::origin_fanout::channel_registry() {
             if let Some(agent) = self.agent_registry.get(session_id.agent_id()).await {
                 if let Some((channel, conversation)) = agent.origin_route(session_id).await {
-                    let mut text = format!(
-                        "⚠️ An interrupted run in this conversation could not be resumed \
-                         after a restart ({reason}) and was abandoned."
-                    );
-                    if goal_blocked {
-                        text.push_str(" Its standing goal was blocked — re-set it to continue.");
-                    }
                     let msg = crate::gateway::channel::OutboundMessage::text(conversation, text);
                     if let Err(e) = reg
                         .send(&crate::gateway::channel::ChannelId::new(channel), msg)
@@ -1156,6 +1950,30 @@ impl ResumeCoordinator {
         Ok(self.event_store.load_head_seq(session_id).await? + 1)
     }
 
+    /// §5.1: write the intent BEFORE the action. `append` (A1) makes this a
+    /// Barrier commit, so a crash one instruction later still counts.
+    ///
+    /// `target` is the seq of the `RunStarted` being resumed, or of the
+    /// unanswered `UserMessage` being retried (§5.2); `attempt` is this
+    /// stamp's ordinal for that target (the reducer counts the stamps, not
+    /// this number — the number is for the operator reading the log).
+    async fn stamp_resume_attempt(
+        &self,
+        session_id: &SessionId,
+        target: EventSeq,
+        attempt: u32,
+    ) -> Result<(), crate::session::service::SessionError> {
+        let seq = self.next_seq(session_id).await?;
+        self.event_store
+            .append(
+                session_id,
+                seq,
+                &SessionEvent::ResumeAttempted { target, attempt },
+                now_ms(),
+            )
+            .await
+    }
+
     /// Tell the model what this resume gave up, when there was no dangling
     /// call for the note to ride on.
     ///
@@ -1167,25 +1985,147 @@ impl ResumeCoordinator {
         session_id: &SessionId,
         note: &crate::session::boundary_repair::DegradeNote,
     ) {
+        if let Err(e) = self.system_note(session_id, note.sentence.clone()).await {
+            tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+        }
+    }
+
+    /// The one way this coordinator says something in-band: a `SystemMessage`
+    /// appended at the head of the session's log, then the projector asked to
+    /// paint it now rather than at the next boot's reconcile. Never a direct
+    /// write into `messages` — that table has one writer, the projector, and
+    /// a second one is how a boot notice used to reach the transcript without
+    /// ever reaching the log.
+    ///
+    /// A fresh turn id: whatever turn was open when the process died is over,
+    /// and this sentence is about what happens next, not about that turn.
+    ///
+    /// `Err` means the event did not land — the caller decides what that
+    /// costs. A repaint that could not be delivered is only logged: the event
+    /// is durable, and the transcript catches up at the next reconcile.
+    async fn system_note(
+        &self,
+        session_id: &SessionId,
+        content: String,
+    ) -> Result<(), SessionError> {
+        let seq = self.next_seq(session_id).await?;
         let ev = SessionEvent::SystemMessage {
-            // A fresh turn id: the crashed turn is over, and this sentence is
-            // about the run that is starting, not about that one.
             turn_id: crate::session::events::TurnId::new_v4(),
-            content: note.sentence.clone(),
+            content,
             at: now_ms(),
         };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
+        self.event_store
+            .append(session_id, seq, &ev, now_ms())
+            .await?;
+        if let Some(projector) = crate::gateway::session_projector::global_message_projector() {
+            let repaint = projector.request_repair(session_id).await;
+            // A whole-session pass: it also stamps and bills every finished
+            // run on this session whose meta never landed (a run this
+            // coordinator closes as `Abandoned` is one), and that happens
+            // after the reconciler's boot line was printed, so it is said
+            // here.
+            if repaint.stamps_synthesized > 0 {
+                tracing::info!(
+                    session = ?session_id,
+                    seq,
+                    stamps_synthesized = repaint.stamps_synthesized,
+                    usage_rebilled = repaint.usage_rebilled,
+                    "resume: repaint stamped finished runs whose meta never landed"
+                );
+            }
+            if repaint.errored || repaint.legacy {
+                tracing::warn!(
+                    session = ?session_id,
+                    seq,
+                    errored = repaint.errored,
+                    legacy = repaint.legacy,
+                    stamps_synthesized = repaint.stamps_synthesized,
+                    "resume: system note appended but not painted into the transcript yet"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// §8.2(b): examine every Main-lane task row the engine wrote before a
+    /// seed that may never have reached the log, and stamp each one so it is
+    /// examined exactly once.
+    ///
+    /// The row's `id` is the gateway `run_id`, which is NOT the `RunStarted`
+    /// run id, so "no events for this task" is derived by TIME: a
+    /// `UserMessage` recorded at or after the row's `created_at` means the
+    /// seed landed. Three arms, one stamp:
+    ///
+    /// * the session has an open run, or the seed landed — the resume arm
+    ///   owns it; nothing to say;
+    /// * neither, and the row carries a prompt — the message is gone, and the
+    ///   user is told to re-send it, once;
+    /// * neither, and the prompt is empty — a resume re-trigger's own row
+    ///   (`retrigger` sends `input: ""`); there is no message to re-send.
+    ///
+    /// A log this build cannot read or the reducer refuses is NOT stamped:
+    /// the doctor is its exit, and the age window bounds how often it is
+    /// re-asked.
+    async fn adjudicate_orphaned_tasks(&self, report: &mut ResumeReport) {
+        let Some(db) = self.state_database.as_ref() else {
+            return;
+        };
+        let window = i64::try_from(self.config.max_age_secs).unwrap_or(i64::MAX);
+        let since = (now_ms() / 1000).saturating_sub(window);
+        let rows = match db.unadjudicated_interrupted_tasks(since).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "resume: orphaned task rows unreadable");
+                return;
+            }
+        };
+        for task in rows {
+            // `from_key_string`, not `parse`: this is a key somebody else
+            // PERSISTED, so it must accept every spelling the store ever
+            // wrote — `parse` alone rejects the legacy form, and the oldest
+            // conversations are exactly the ones that carry it.
+            let Some(key) = SessionId::from_key_string(&task.parent_session_id) else {
+                tracing::warn!(
+                    task_id = %task.id,
+                    session = %task.parent_session_id,
+                    "resume: orphaned task has an unparseable session key"
+                );
+                continue;
+            };
+            let Ok(events) = self.event_store.load_all_events(&key).await else {
+                continue;
+            };
+            let Ok(reduction) = reduce_run(&events) else {
+                continue;
+            };
+            let open = !matches!(reduction.disposition, RunDisposition::Clean);
+            let seed_floor_ms = task.created_at.saturating_mul(1000);
+            let seeded = events.iter().any(|r| {
+                matches!(r.event, SessionEvent::UserMessage { .. })
+                    && r.created_at_ms >= seed_floor_ms
+            });
+            if !open && !seeded && !task.task_prompt.trim().is_empty() {
+                match self
+                    .system_note(&key, lost_input_notice(task.created_at, &task.task_prompt))
                     .await
                 {
-                    tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+                    Ok(()) => {
+                        tracing::info!(
+                            task_id = %task.id,
+                            session = ?key,
+                            "resume: a message was lost before it was recorded; the user was asked to re-send it"
+                        );
+                        report.notified += 1;
+                    }
+                    Err(e) => {
+                        // Not stamped: the next boot tries again, within the window.
+                        tracing::warn!(task_id = %task.id, session = ?key, error = %e, "resume: lost-input notice append failed");
+                        continue;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice seq allocation failed");
+            if let Err(e) = db.mark_task_adjudicated(&task.id, now_ms()).await {
+                tracing::warn!(task_id = %task.id, error = %e, "resume: adjudicated stamp failed");
             }
         }
     }
@@ -1194,18 +2134,18 @@ impl ResumeCoordinator {
     /// key, builds a `RunRequest` with `metadata["resume"] = "true"` (the
     /// engine→orchestrator boundary converts that into `FlowInput::Resume`,
     /// which skips re-seeding), and dispatches it through the same
-    /// `ExecutionAdapter` cron / heartbeat use. A `max_concurrent`
-    /// semaphore bounds the boot burst.
+    /// `ExecutionAdapter` cron / heartbeat use.
+    ///
+    /// Takes no `max_concurrent` permit of its own: the caller already holds
+    /// one for the whole resume (see `semaphore`), and a nested acquire here
+    /// deadlocks as soon as `max_concurrent` candidates each hold a permit
+    /// and wait for a second.
     async fn retrigger(
         &self,
         session_id: &SessionId,
         plan: &ResumePlan,
     ) -> Result<(), ResumeRefusal> {
         let workspace_override = plan.workspace.clone();
-        let permit =
-            self.semaphore.clone().acquire_owned().await.map_err(|e| {
-                ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}"))
-            })?;
 
         let agent_id = session_id.agent_id().to_string();
         // A missing agent is its own refusal, not a generic failure: the run
@@ -1230,6 +2170,10 @@ impl ResumeCoordinator {
         // this ordering keeps that true by construction rather than by
         // inspection.
         metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // A replayed `/btw` stamp makes this resume a side question. Read
+        // here, before `metadata` moves into the request, because the
+        // emitter choice below depends on it.
+        let is_side_question = metadata.contains_key(crate::gateway::btw::BTW_METADATA_KEY);
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -1264,42 +2208,20 @@ impl ResumeCoordinator {
         let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = Arc::new(
             crate::gateway::event_emitter::GatewayEventEmitter::new(Arc::clone(&self.event_bus)),
         );
-        // Fan the recovered run's final reply out to the session's bound
-        // origin channel — the human who asked. Without this the resumed run
-        // completed into a collect-and-drop emitter: the crash-recovered
-        // answer existed only in the session log and the Telegram/Slack user
-        // never heard back (R5). Mirrors `spawn_continuation_run`; a Panel-
-        // only session (`gui:chat`, no origin route) has no channel to fan out
-        // to and rides the bus alone.
-        // Best-effort: the boot scan may outrun a slow channel connect — the
-        // fanout decorator warns-and-drops on send failure, never fails the
-        // resumed run itself.
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-                Some(reg) => match agent.origin_route(session_id).await {
-                    Some((channel, conversation)) => Arc::new(
-                        crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
-                            base,
-                            reg,
-                            channel,
-                            conversation,
-                        ),
-                    ),
-                    None => base,
-                },
-                None => base,
-            };
+        let emitter = retrigger_emitter(
+            base,
+            crate::gateway::event_emitter::origin_fanout::channel_registry(),
+            agent.origin_route(session_id),
+            is_side_question,
+        )
+        .await;
 
         tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
 
-        let result = self
-            .execution_adapter
+        self.execution_adapter
             .execute(request, agent, emitter)
             .await
-            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")));
-
-        drop(permit);
-        result
+            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")))
     }
 
     /// The resumed session's durable row, or `None` when it cannot be read.
@@ -1390,6 +2312,85 @@ mod tests {
         assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
     }
 
+    /// Every counter the report carries is SUMMED by `absorb`, and `refused`
+    /// is appended — a counter it forgot would undercount the boot line for
+    /// every fanned-out scan and nothing else would notice (criterion #6).
+    ///
+    /// Every field is 1 so a forgotten one reads 0, not a default that
+    /// happens to match; the second absorb tells a sum from an overwrite.
+    #[test]
+    fn absorb_sums_every_counter_and_appends_every_refusal() {
+        let one = ResumeReport {
+            scanned: 1,
+            resumed: 1,
+            abandoned: 1,
+            skipped: 1,
+            delegated: 1,
+            busy: 1,
+            refused: vec![(SessionId::main("absorbed"), ResumeRefusal::AgentMissing)],
+            skipped_unknown_age: 1,
+            contradictions: 1,
+            degraded: 1,
+            unsnapshotted: 1,
+            notified: 1,
+        };
+        let mut total = ResumeReport::default();
+        total.absorb(one.clone());
+        assert_eq!(total, one, "absorbing into an empty report yields the part");
+        total.absorb(one.clone());
+        // Exhaustive destructure (no `..`): a new counter must be asserted here.
+        let ResumeReport {
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            delegated,
+            busy,
+            refused,
+            skipped_unknown_age,
+            contradictions,
+            degraded,
+            unsnapshotted,
+            notified,
+        } = total;
+        assert_eq!(
+            [
+                scanned,
+                resumed,
+                abandoned,
+                skipped,
+                delegated,
+                busy,
+                skipped_unknown_age,
+                contradictions,
+                degraded,
+                unsnapshotted,
+                notified,
+            ],
+            [2; 11],
+            "every counter is a sum, not the last part's value"
+        );
+        assert_eq!(refused, [one.refused[0].clone(), one.refused[0].clone()]);
+    }
+
+    /// The notice quotes the head of the prompt by `char`, so a multibyte
+    /// prompt longer than the head is cut between code points, not inside
+    /// one — and it dates the loss from the row, not from now.
+    #[test]
+    fn the_lost_input_notice_quotes_a_char_bounded_head_and_the_rows_time() {
+        let prompt: String = "买".repeat(100);
+        let note = lost_input_notice(1_700_000_000, &prompt);
+        let quoted = note
+            .split('«')
+            .nth(1)
+            .and_then(|s| s.split('»').next())
+            .expect("the quoted head");
+        assert_eq!(quoted.chars().count(), 80);
+        assert!(quoted.chars().all(|c| c == '买'), "{quoted}");
+        assert!(note.contains("2023-11-14T22:13:20+00:00"), "{note}");
+        assert!(note.contains("lost before it was recorded") && note.contains("re-send"));
+    }
+
     fn rec(seq: u64, event: SessionEvent, created_at_ms: i64) -> SessionEventRecord {
         SessionEventRecord {
             seq,
@@ -1452,13 +2453,30 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
+    /// §5.1: the cap counts the coordinator's own `ResumeAttempted` stamps
+    /// since the last finish — what was TRIED — not the `RunStarted` markers
+    /// those tries happened to leave behind. A stamp with no `RunStarted`
+    /// after it is a resume that died before its run opened, and it counts.
     #[test]
-    fn classify_counts_consecutive_trailing_starts() {
-        // Three crash-loops after the last finish.
+    fn classify_counts_stamps_since_last_finish() {
+        let stamp = |target: u64, attempt: u32| SessionEvent::ResumeAttempted { target, attempt };
+        // Three boots that each stamped intent and crashed before RunStarted.
+        let markers = vec![
+            rec(1, run_finished(10), 10),
+            rec(2, run_started(20), 20),
+            rec(3, stamp(2, 1), 30),
+            rec(4, stamp(2, 2), 40),
+            rec(5, stamp(2, 3), 50),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 3 })
+        );
+        // Three bare RunStarted: three crashes, zero resumes tried.
         let markers = vec![
             rec(1, run_finished(10), 10),
             rec(2, run_started(20), 20),
@@ -1467,7 +2485,18 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 3 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+        // A finish resets the ratchet.
+        let markers = vec![
+            rec(1, run_started(10), 10),
+            rec(2, stamp(1, 1), 20),
+            rec(3, run_finished(30), 30),
+            rec(4, run_started(40), 40),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
@@ -1476,7 +2505,7 @@ mod tests {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
@@ -1525,6 +2554,47 @@ mod tests {
         assert_eq!(last_alive_at(&reduction, &events[0]), 3_000);
     }
 
+    /// The coordinator's own stamp is not activity: a run interrupted long ago
+    /// and stamped a moment ago is still dated by its last real event. Read
+    /// against the `RunStarted` record (what `handle_interrupted` passes), not
+    /// against "the last marker" — since §5.1 the last marker is usually the
+    /// newest stamp, which is exactly the record that must not count.
+    #[test]
+    fn recency_is_not_refreshed_by_an_intent_stamp() {
+        let events = vec![
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 2_000),
+            rec(
+                3,
+                SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                900_000,
+            ),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(last_alive_at(&reduction, &events[0]), 2_000);
+
+        let only_stamped = vec![
+            rec(1, run_started(10), 1_000),
+            rec(
+                2,
+                SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                900_000,
+            ),
+        ];
+        let reduction = reduce_run(&only_stamped).expect("legal log");
+        assert_eq!(
+            last_alive_at(&reduction, &only_stamped[0]),
+            1_000,
+            "nothing happened inside the run; the marker that opened it dates it"
+        );
+    }
+
     /// Every refusal carries a word of its own. A new variant that fans into
     /// an existing word would make two different answers read alike in the
     /// receipt, the CLI and the doctor at once.
@@ -1535,6 +2605,8 @@ mod tests {
             ResumeRefusal::AgentMissing,
             ResumeRefusal::BoundaryRepairFailed("append failed".into()),
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
+            ResumeRefusal::IntentStampFailed("stamp append failed".into()),
+            ResumeRefusal::TailReadFailed("range read failed".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");
@@ -1577,6 +2649,8 @@ mod tests {
             memory_mode: Some("off".to_string()),
             model: model.map(str::to_string),
             model_provider: provider.map(str::to_string),
+            allowed_tools: None,
+            btw: None,
         }
     }
 
@@ -1592,6 +2666,12 @@ mod tests {
     /// sat unresumed, that chain answers with a different model. `unsnapshotted`
     /// cannot report it — the envelope is right here — so before this the fact
     /// had no carrier at all and every face showed a clean recovery.
+    ///
+    /// The sentence has two origins and must be true for both: a full run
+    /// whose chain could not name what served it, and a slash-command fast
+    /// path that served on NO model at all. "The model … was not recorded"
+    /// asserted a model existed and was lost, which is false for the second
+    /// origin — so the wording is pinned here, positively and negatively.
     #[test]
     fn an_envelope_that_never_named_the_model_resumes_degraded_and_says_so() {
         let plan = plan_resume(
@@ -1612,13 +2692,214 @@ mod tests {
             .as_ref()
             .expect("a degrade must carry the sentence the model reads");
         assert!(
-            note.sentence.contains("was not recorded"),
-            "the note must say the model is unknown, not invent one: {}",
+            note.sentence.contains("This run recorded no model")
+                && note.sentence.contains("fast path serves on none")
+                && note
+                    .sentence
+                    .contains("resumes on this session's current model"),
+            "the note must say no model was recorded, name both origins, and \
+             say what it resumes on: {}",
+            note.sentence
+        );
+        assert!(
+            !note.sentence.contains("was not recorded"),
+            "the old wording asserted a model existed and was lost, which is \
+             false for a fast-path run: {}",
             note.sentence
         );
         assert!(
             plan.model_override.is_none(),
             "nothing was recorded, so there is nothing to pin"
+        );
+    }
+
+    /// §6.3 the skill scope is a per-run FACT with one rung: the snapshot.
+    /// Present ⇒ it reaches the resumed request under the same key the run
+    /// loop decodes; absent ⇒ nothing is stamped (full surface) and nothing
+    /// degrades — "declared nothing" is the normal case, not a loss.
+    #[test]
+    fn a_snapshot_scope_reaches_the_request_and_an_absent_one_stamps_nothing() {
+        use crate::gateway::execution_engine::slash_skill_scope::from_metadata;
+        let mut env = envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"));
+        env.allowed_tools = Some(vec!["file_read".to_string()]);
+        let plan = plan_resume(
+            Some(&facts(None, Some(env))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            from_metadata(&plan.knobs),
+            Some(["file_read".to_string()].into_iter().collect())
+        );
+        assert!(!plan.degraded && !plan.unsnapshotted);
+
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"))),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            from_metadata(&plan.knobs),
+            None,
+            "no declaration ⇒ full surface"
+        );
+        assert!(!plan.degraded, "an optional fact never degrades a resume");
+    }
+
+    /// The `/btw` stamp is replayed verbatim so the resumed side question
+    /// keeps its read-only ceiling — except the promote sentinel: a promote
+    /// is not a run. A replayed sentinel would not reach the promote arm
+    /// (the resume is addressed to the side session, and that arm only
+    /// serves a redirect from a main key); it would run a pointless
+    /// side-session turn, so it is refused instead.
+    #[test]
+    fn a_btw_question_is_replayed_but_a_promote_sentinel_is_not() {
+        use crate::gateway::btw::{BTW_METADATA_KEY, PROMOTE_STAMP};
+        let mut env = envelope_with(Some("m"), Some("openai"), Some("ask"));
+        env.btw = Some("is it green?".into());
+        let plan = plan_resume(
+            Some(&facts(None, Some(env.clone()))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs.get(BTW_METADATA_KEY).map(String::as_str),
+            Some("is it green?")
+        );
+
+        env.btw = Some(PROMOTE_STAMP.into());
+        let plan = plan_resume(
+            Some(&facts(None, Some(env))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs.get(BTW_METADATA_KEY),
+            None,
+            "a promote is not a run; replayed on the side session it would be a \
+             pointless read-only turn, never the promote arm"
+        );
+    }
+
+    /// The mirror of `busy_queue/durable.rs`'s rule: a re-triggered run that
+    /// carries the side-question stamp rides the bus alone. With a channel
+    /// registry AND a bound origin route in hand, the stamped run's final
+    /// reply must still reach no channel — a re-delivered side answer must
+    /// not land on the origin conversation unmarked — and the route lookup
+    /// is never even polled for it; the unstamped twin, same registry, same
+    /// route, fans out.
+    #[tokio::test]
+    async fn a_stamped_resume_skips_the_origin_fan_out_and_an_unstamped_one_takes_it() {
+        use crate::gateway::channel::{
+            Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
+            ChannelStatus, MessageId, OutboundMessage, SendResult,
+        };
+        use crate::gateway::channel_registry::ChannelRegistry;
+        use crate::gateway::event_emitter::{CollectingEventEmitter, RunSummary, StreamEvent};
+
+        struct Seen {
+            info: ChannelInfo,
+            state: ChannelState,
+            seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Channel for Seen {
+            fn info(&self) -> &ChannelInfo {
+                &self.info
+            }
+            fn state(&self) -> &ChannelState {
+                &self.state
+            }
+            async fn start(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn stop(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+                self.seen.lock().await.push(message.text.clone());
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
+            }
+        }
+
+        let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = Arc::new(ChannelRegistry::new());
+        registry
+            .register(Box::new(Seen {
+                info: ChannelInfo {
+                    id: ChannelId::new("origin"),
+                    name: "origin".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                seen: seen.clone(),
+            }))
+            .await;
+        // The route lookup, instrumented: `looked_up` flips only if the
+        // future is polled, which is the cost a stamped resume must not pay.
+        let looked_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let route = |flag: Arc<std::sync::atomic::AtomicBool>| async move {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Some(("origin".to_string(), "conv-1".to_string()))
+        };
+
+        let reply = |text: &str| StreamEvent::RunComplete {
+            run_id: "r".to_string(),
+            seq: 0,
+            summary: RunSummary {
+                final_response: Some(text.to_string()),
+                ..Default::default()
+            },
+            total_duration_ms: 0,
+        };
+
+        let bus = Arc::new(CollectingEventEmitter::new());
+        retrigger_emitter(
+            bus.clone(),
+            Some(registry.clone()),
+            route(looked_up.clone()),
+            true,
+        )
+        .await
+        .emit(reply("side answer"))
+        .await
+        .unwrap();
+        assert_eq!(
+            bus.events().await.len(),
+            1,
+            "the bus still carries the stamped run's frames"
+        );
+        assert!(
+            seen.lock().await.is_empty(),
+            "a stamped resume must not fan its answer out to the origin channel"
+        );
+        assert!(
+            !looked_up.load(std::sync::atomic::Ordering::SeqCst),
+            "a stamped resume must not pay for the origin-route lookup"
+        );
+
+        retrigger_emitter(bus, Some(registry), route(looked_up.clone()), false)
+            .await
+            .emit(reply("ordinary answer"))
+            .await
+            .unwrap();
+        assert!(
+            looked_up.load(std::sync::atomic::Ordering::SeqCst),
+            "the unstamped twin looks the route up"
+        );
+        assert_eq!(
+            seen.lock().await.as_slice(),
+            ["ordinary answer".to_string()],
+            "the unstamped twin, same registry and route, fans out"
         );
     }
 
@@ -1921,6 +3202,71 @@ mod tests {
                 key.to_key_string()
             );
         }
+    }
+
+    /// The Unanswered arm retriggers a conversation somebody is waiting on:
+    /// not a unit that re-runs by its own rule, and not a sub-agent child or
+    /// an ephemeral side session (A7: children are reported, never re-driven;
+    /// nobody waits on an ephemeral session).
+    #[test]
+    fn unanswered_eligibility_excludes_scheduled_child_and_ephemeral_sessions() {
+        use crate::routing::session_key::DmScope;
+
+        for key in [
+            SessionId::main("alice"),
+            SessionId::dm("alice", "telegram", "u1", DmScope::PerPeer),
+            SessionId::task("main", "webhook", "hook-1"),
+        ] {
+            assert!(
+                unanswered_eligible(&key),
+                "{} is a conversation with a user waiting on it",
+                key.to_key_string()
+            );
+        }
+        for key in [
+            SessionId::task("main", CRON_TASK_TYPE, "daily-summary"),
+            SessionId::task("main", HEARTBEAT_TASK_TYPE, "hb-1"),
+            SessionId::subagent(SessionId::main("alice"), "child-1"),
+            SessionId::ephemeral("alice"),
+        ] {
+            assert!(
+                !unanswered_eligible(&key),
+                "{} must not be retriggered for an unanswered seed",
+                key.to_key_string()
+            );
+        }
+    }
+
+    /// The two things `abandon` gives up on get two true sentences. The
+    /// unanswered arm must never tell the user an "interrupted run" was
+    /// abandoned in a session where no run existed (criterion #17: the wrong
+    /// label is dearer than the missing one), and both must carry the reason.
+    #[test]
+    fn the_abandon_sentences_name_the_thing_that_was_abandoned() {
+        let run = Abandoned::InterruptedRun.notice("too old");
+        let message = Abandoned::UnansweredMessage.notice("too old");
+        assert!(
+            run.contains("interrupted run") && run.contains("too old"),
+            "{run}"
+        );
+        assert!(
+            !message.contains("interrupted run") && message.contains("never picked up"),
+            "{message}"
+        );
+        assert!(message.contains("too old"), "{message}");
+        assert_ne!(run, message);
+
+        let run_goal = Abandoned::InterruptedRun.goal_note("capped");
+        let message_goal = Abandoned::UnansweredMessage.goal_note("capped");
+        assert!(run_goal.contains("interrupted run") && run_goal.contains("capped"));
+        assert!(
+            !message_goal.contains("interrupted run") && message_goal.contains("capped"),
+            "{message_goal}"
+        );
+        assert!(
+            run_goal.contains("Re-set the goal") && message_goal.contains("Re-set the goal"),
+            "both tell the user what to do next"
+        );
     }
 
     /// `CRON_TASK_TYPE` / `HEARTBEAT_TASK_TYPE` are re-declared here because

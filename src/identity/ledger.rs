@@ -570,7 +570,11 @@ pub fn global() -> Option<Arc<AgentLedger>> {
 /// the chokepoint must never fail a tool call because accounting is not wired.
 pub async fn record(new: NewRecord) {
     let Some(tx) = WRITER.get() else {
-        tracing::error!(
+        // `debug` not `error`: every hot-path tool call would page an operator
+        // when the ledger isn't installed (pre-boot, unit tests, embedded
+        // uses); the sibling dropped-record path (`tx.send().await` failure)
+        // is correctly `warn!` — match it.
+        tracing::debug!(
             agent_id = %new.agent_id,
             action = ?new.action,
             "agent ledger writer not installed; record dropped"

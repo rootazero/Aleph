@@ -32,6 +32,7 @@ async fn tool_events_preserve_order() {
                 result: Some(serde_json::json!({ "hits": 3 })),
                 error: None,
                 duration_ms: 12,
+                presentation: None,
             });
 
             // Give the drain task a moment to observe before Complete.

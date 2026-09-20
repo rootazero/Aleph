@@ -18,11 +18,10 @@ use leptos_router::hooks::{use_location, use_navigate};
 /// advanced-features zone, below "project management". The `Extensions` arms in
 /// `label_of`/`icon_of` are still needed for the trigger button, which
 /// mirrors the current section whenever the route is `/extensions`.
-const ALL_MODES: [PanelMode; 9] = [
+const ALL_MODES: [PanelMode; 8] = [
     PanelMode::Chat,
     PanelMode::Dashboard,
     PanelMode::Memory,
-    PanelMode::Canvas,
     PanelMode::Agents,
     PanelMode::Teams,
     PanelMode::Projects,
@@ -36,7 +35,6 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
         PanelMode::Chat => t_string!(i18n, nav.chat).to_string(),
         PanelMode::Dashboard => t_string!(i18n, nav.dashboard).to_string(),
         PanelMode::Memory => t_string!(i18n, nav.memory).to_string(),
-        PanelMode::Canvas => t_string!(i18n, nav.canvas).to_string(),
         PanelMode::Agents => t_string!(i18n, nav.agents).to_string(),
         PanelMode::Teams => t_string!(i18n, nav.teams).to_string(),
         PanelMode::Projects => t_string!(i18n, nav.projects).to_string(),
@@ -58,9 +56,6 @@ const fn icon_of(mode: PanelMode) -> &'static str {
         }
         PanelMode::Memory => {
             r#"<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/><circle cx="8" cy="8" r="1.5"/><circle cx="16" cy="8" r="1.5"/><circle cx="8" cy="16" r="1.5"/><circle cx="16" cy="16" r="1.5"/>"#
-        }
-        PanelMode::Canvas => {
-            r#"<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3"/><circle cx="8" cy="7.5" r="0.5"/>"#
         }
         PanelMode::Agents => {
             r#"<circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><line x1="12" y1="2" x2="12" y2="4"/>"#

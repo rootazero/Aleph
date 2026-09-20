@@ -94,6 +94,12 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         SessionEvent::Error { kind, message, .. } => {
             let label = match kind {
                 ErrorKind::Guardrail => "Input blocked",
+                // §5.4: a pre-seed hook seam stopped the run before it started
+                // (the set of seams is derived by `run_loop::hook_stop_tests::
+                // every_pre_seed_hook_exit_journals_the_stop`); the message is
+                // the hook's own stop/deny text. On the prevent_continuation
+                // arm this row is the only thing the user ever sees of it.
+                ErrorKind::HookStop => "Stopped by hook",
             };
             Some(plain("system", format!("{label}: {message}")))
         }
@@ -276,6 +282,24 @@ mod tests {
         .expect("a refusal receipt must be visible to the user");
         assert_eq!(row.role, "system");
         assert_eq!(row.text, "Input blocked: blocked by pii guardrail");
+    }
+
+    /// The hook-stop receipt (§5.4) is the second `ErrorKind` and picks its
+    /// own label: a reader must be able to tell "a hook stopped this" from
+    /// "the input was screened out", because the fix is different (edit the
+    /// hook vs. rephrase the message).
+    #[test]
+    fn project_row_labels_a_hook_stop_receipt() {
+        let row = project_row(&SessionEvent::Error {
+            turn_id: None,
+            kind: ErrorKind::HookStop,
+            message: "halted".into(),
+            recoverable: false,
+            at: 0,
+        })
+        .expect("a hook-stop receipt must be visible to the user");
+        assert_eq!(row.role, "system");
+        assert_eq!(row.text, "Stopped by hook: halted");
     }
 }
 

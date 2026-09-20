@@ -15,7 +15,8 @@
 //! replies use (headings, emphasis, inline code, fenced code, lists, block
 //! quotes, rules, links, tables) rather than every edge of the spec.
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use shared_ui_logic::transcript::markdown_options;
 
 use super::theme::use_color;
 
@@ -32,12 +33,8 @@ pub fn render(markdown: &str) -> String {
 /// this seam to exercise both the coloured (OSC-8 hyperlinks, SGR) and plain
 /// (`text (url)`) paths deterministically without depending on a TTY.
 pub fn render_with_color(markdown: &str, color: bool) -> String {
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TABLES);
-
     let mut renderer = Renderer::new(color);
-    for event in Parser::new_ext(markdown, opts) {
+    for event in Parser::new_ext(markdown, markdown_options()) {
         renderer.handle(event);
     }
     renderer.finish()
@@ -548,6 +545,38 @@ mod tests {
         assert!(out.contains("\x1b]8;;https://a.io\x1b\\"), "open: {out:?}");
         assert!(out.contains("\x1b]8;;\x1b\\"), "close: {out:?}");
         assert!(out.contains("docs"), "label: {out:?}");
+    }
+
+    /// A GFM task list paints its checkbox.
+    ///
+    /// # Why this was not already covered
+    ///
+    /// `Event::TaskListMarker` had an arm in this renderer from the day it was
+    /// written, but `ENABLE_TASKLISTS` was never in the option set, so the
+    /// parser never emitted one and the arm was unreachable — both ends built,
+    /// no wire between them (判据 §7). What the user actually saw was the
+    /// literal text `[ ]`, because an unparsed marker survives as `Event::Text`
+    /// and *reads like it worked*.
+    ///
+    /// # When this goes red
+    ///
+    /// Dropping `ENABLE_TASKLISTS` from
+    /// `shared_ui_logic::transcript::markdown_options`, or removing the
+    /// `Event::TaskListMarker` arm.
+    ///
+    /// The input uses an **uppercase** `[X]` on purpose. Asserting on `[x]`
+    /// and `[ ]` from a lowercase source would pass either way — that is the
+    /// whole hazard here, that the unpainted path renders byte-identical
+    /// literal text. `[X]` only becomes `[x]` by going through the marker
+    /// event, so this separates the two paths instead of agreeing with both.
+    #[test]
+    fn task_list_markers_are_painted_not_passed_through() {
+        let out = strip_ansi(&render_with_color("- [ ] open\n- [X] closed", false));
+        assert!(out.contains("[ ] open"), "unchecked: {out:?}");
+        assert!(
+            out.contains("[x] closed"),
+            "not normalised — parsed as text: {out:?}"
+        );
     }
 
     #[test]

@@ -1071,7 +1071,7 @@ async fn sync_batch_reclamps_each_child_to_its_wave_share() {
     // W27 — read the permit count off the tool's own semaphore rather than the
     // compile-time default: the cap is configurable now, and production divides
     // by what the semaphore actually holds.
-    let permits = tool.subagent_semaphore.available_permits();
+    let permits = tool.background.subagent_semaphore.available_permits();
     let rows = permits + 1;
     let expected_cap = wave_aware_child_timeout_cap(rows, permits, 0);
     assert!(
@@ -1130,9 +1130,9 @@ async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
     .with_parent_session_id(root);
 
     // Starve the fan-out: every concurrency permit is held for the whole call.
-    let permits = u32::try_from(tool.subagent_semaphore.available_permits()).unwrap();
+    let permits = u32::try_from(tool.background.subagent_semaphore.available_permits()).unwrap();
     let _held = tool
-        .subagent_semaphore
+        .background.subagent_semaphore
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -3061,7 +3061,7 @@ fn a_new_tool_fans_out_at_the_configured_concurrency() {
     // Deliberately not the default, so "it happens to be 4" cannot pass.
     let widened = set_max_concurrent_subagents(9);
     let tool = make_tool();
-    let observed = tool.subagent_semaphore.available_permits();
+    let observed = tool.background.subagent_semaphore.available_permits();
     set_max_concurrent_subagents(restore);
 
     assert_eq!(

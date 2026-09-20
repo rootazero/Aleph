@@ -231,7 +231,11 @@ impl TeamDispatcher {
     /// ever dispatched, so there is no session), a process with no event store
     /// wired, an unreadable log — each leaves the reclaim itself untouched,
     /// because resetting the row to `Pending` is the part that must happen.
-    /// Every give-up is logged; none of them is silent.
+    /// The two failures (an unreadable log, a stamp that would not write) are
+    /// logged; the three "nothing to do" returns — no owner, no event store
+    /// wired, an attempt that left nothing behind — are silent, so a
+    /// deployment without an event store reclaims quietly (and is listed as
+    /// such in `session::store::SESSION_EVENT_STORE_READERS`).
     async fn repair_and_stamp_orphan(self: &Arc<Self>, task: &CoordTask) {
         let Some(owner) = task.owner.as_deref() else {
             return; // no owner ⇒ no member session key ⇒ nothing was dispatched

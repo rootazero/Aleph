@@ -47,20 +47,20 @@ const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// the session row. The Panel re-projects the occupancy onto its gauge when a
 /// session is reloaded from history — the gauge no longer depends on a live
 /// `run_complete` event surviving in memory.
+///
+/// No token counters: the session's `input_tokens` / `output_tokens` are folded
+/// from the run's own `AssistantMessage.usage` (`session::usage_fold`) when the
+/// projector lands the stamp this becomes. What rides here is only what that
+/// fold cannot give — the occupancy snapshot, the priced cost, the model.
 #[derive(Debug, Clone)]
 pub struct RunContextOccupancy {
-    /// Current window occupancy (provider-reported prompt tokens of the last call).
+    /// Current window occupancy (provider-reported prompt tokens of the last
+    /// call) — a SNAPSHOT of the last call, not a sum.
     pub context_tokens: u32,
     /// The model's authoritative context window (core's lookup, honoring overrides).
     pub context_window: u32,
     /// Run-cumulative token total — rides along for the gauge tooltip.
     pub total_tokens: u64,
-    /// Prompt tokens this run actually spent, for the session's cumulative
-    /// counters. Distinct from `context_tokens`, which is an occupancy SNAPSHOT
-    /// of the last call, not a sum.
-    pub input_tokens: u32,
-    /// Completion tokens this run actually spent.
-    pub output_tokens: u32,
     /// This run's cost in USD, or `None` when the price table could not produce
     /// one (unknown provider/model). `None` is NOT zero: the session's cumulative
     /// total accumulates only what it can actually price, so an unpriced run
@@ -74,6 +74,83 @@ pub struct RunContextOccupancy {
     pub model: Option<String>,
     /// Provider id behind [`model`](Self::model).
     pub model_provider: Option<String>,
+}
+
+/// Emit the post-run `AssistantRunMeta` for `run_id` — the stamp the projector
+/// lands on the run's last assistant row (run_id join, context gauge, priced
+/// cost, serving model) and bills the session from. Best-effort, returns `()`:
+/// the harness already emitted the `AssistantMessage` row, so a lost stamp
+/// costs this run its gauge on reload and its bill on the session row, never
+/// the reply. A refused append is `warn!`ed, not swallowed: a meta that never
+/// landed is a run the session row under-counts, and that has to be visible
+/// somewhere.
+///
+/// Emitted for EVERY completed run. `None` occupancy means the run resolved
+/// no gauge: no usage was reported and no window was known — a provider that
+/// reports no usage, a hook that stopped the run before its first Think, a
+/// loop that returned before it. The assistant row may well exist (the
+/// usage-less provider wrote one), so the meta still goes out with the three
+/// gauge fields `None` and the run_id join lands on whatever row the run
+/// produced; the projector stamps the gauge only when it is there, and a
+/// meta for a run with no row at all is finalised there, not retried. The
+/// all-zeros meta that used to stand in for `None` is gone: a fabricated 0
+/// read as a measurement on the Panel gauge.
+pub(super) async fn stamp_run_meta(
+    svc: Option<&dyn crate::session::service::SessionService>,
+    session_key: &crate::routing::session_key::SessionKey,
+    run_id: &str,
+    occupancy: Option<RunContextOccupancy>,
+) {
+    let Some(svc) = svc else {
+        // Degraded, not missing: the harness holds its own service handle and
+        // already emitted the AssistantMessage row, so no content is lost —
+        // only this stamp (Panel context gauge + workspace trace + this run's
+        // bill) is. Same condition, same level as the hook-stop journal
+        // (`run_loop::journal_hook_stop_with`).
+        warn!(
+            session_key = %session_key.to_key_string(),
+            run_id,
+            "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
+        );
+        return;
+    };
+    let (gauge, cost_usd, model, model_provider) = match occupancy {
+        Some(occ) => (
+            (
+                Some(occ.context_tokens),
+                Some(occ.context_window),
+                Some(occ.total_tokens),
+            ),
+            occ.cost_usd,
+            occ.model,
+            occ.model_provider,
+        ),
+        None => ((None, None, None), None, None, None),
+    };
+    if let Err(e) = svc
+        .emit_event(
+            session_key,
+            crate::session::events::SessionEvent::AssistantRunMeta {
+                turn_id: uuid::Uuid::new_v4(),
+                run_id: run_id.to_string(),
+                context_tokens: gauge.0,
+                context_window: gauge.1,
+                total_tokens: gauge.2,
+                cost_usd,
+                model,
+                model_provider,
+                at: crate::session::events::now_ms(),
+            },
+        )
+        .await
+    {
+        warn!(
+            session_key = %session_key.to_key_string(),
+            run_id,
+            error = %e,
+            "run meta append failed; session not billed for this run"
+        );
+    }
 }
 
 /// Convert a `Vec<UnifiedMessage>` loop-history into an `orchestrator::FlowInput::History`.
@@ -391,11 +468,13 @@ pub async fn run_dispatch_and_drain_classified(
 
     // Capture what this run is worth remembering: the authoritative
     // context-window occupancy (so the gauge survives a session reload) and the
-    // tokens + USD it spent (so the session's cumulative counters are real).
+    // USD it spent + the model that served it (so the session row's cost and
+    // model are real). The session's TOKEN counters are not captured here —
+    // the projector folds them from the run's own `AssistantMessage.usage`.
     //
-    // The gauge fields require a real LLM call AND a resolved window; the spend
-    // fields only require that tokens moved. A run that spent tokens without a
-    // usable window still records its spend — otherwise the session cost would
+    // The gauge fields require a real LLM call AND a resolved window; the cost
+    // and model only require that tokens moved. A run that spent tokens without
+    // a usable window still records its cost — otherwise the session cost would
     // quietly skip it. A run that did nothing at all leaves the slot untouched,
     // so the gauge stays hidden. On a provider-fallback retry the last
     // successful attempt overwrites the slot.
@@ -406,8 +485,6 @@ pub async fn run_dispatch_and_drain_classified(
                 context_tokens: outcome.context_tokens,
                 context_window: outcome.context_window,
                 total_tokens: u64::from(outcome.total_tokens),
-                input_tokens: outcome.token_breakdown.input,
-                output_tokens: outcome.token_breakdown.output,
                 // `CostStatus::Unknown` ⇒ no estimate exists. Record `None`, not
                 // 0.0 — see the field doc.
                 cost_usd: outcome
@@ -1094,5 +1171,111 @@ mod dropped_completion_tests {
              `FlowOutcome::default()` carries `Completed` and four renderers read that \
              as 'nothing worth saying'"
         );
+    }
+}
+
+#[cfg(test)]
+mod stamp_run_meta_tests {
+    use super::*;
+    use crate::routing::session_key::SessionKey;
+    use crate::session::service::SessionService;
+    use crate::session::store::event_type_tag;
+
+    fn occupancy() -> RunContextOccupancy {
+        RunContextOccupancy {
+            context_tokens: 10,
+            context_window: 20,
+            total_tokens: 30,
+            cost_usd: Some(0.5),
+            model: Some("claude".into()),
+            model_provider: Some("anthropic".into()),
+        }
+    }
+
+    /// The effect, read back from the log: a run that produced an assistant
+    /// message emits exactly one meta naming the run. `SessionKey::ephemeral`
+    /// mints a fresh id: the shared test service is one store, and tests keep
+    /// to their own keys.
+    #[tokio::test]
+    async fn a_run_with_occupancy_emits_one_meta_naming_the_run() {
+        let svc = crate::session::in_process::install_test_session_service();
+        let key = SessionKey::ephemeral("stamp-some");
+        stamp_run_meta(Some(&*svc), &key, "run-7", Some(occupancy())).await;
+
+        let records = svc
+            .get_events(&key, None, None)
+            .await
+            .expect("the log reads back");
+        let tags: Vec<&'static str> = records.iter().map(|r| event_type_tag(&r.event)).collect();
+        assert_eq!(tags, ["assistant_run_meta"]);
+        match &records[0].event {
+            crate::session::events::SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                cost_usd,
+                model,
+                ..
+            } => {
+                assert_eq!(run_id, "run-7");
+                assert_eq!(*context_tokens, Some(10));
+                assert_eq!(*cost_usd, Some(0.5));
+                assert_eq!(model.as_deref(), Some("claude"));
+            }
+            other => panic!("expected the run meta, got {other:?}"),
+        }
+    }
+
+    /// A run that resolved no gauge (no usage reported, no window known) still
+    /// emits its meta — the run_id join must reach whatever row the run wrote
+    /// — but with the three gauge fields ABSENT, not 0: a fabricated 0 reads
+    /// as a measurement on the Panel gauge. The log is read back, so both an
+    /// all-zeros emit and no emit at all are red.
+    #[tokio::test]
+    async fn a_run_without_occupancy_emits_a_meta_with_no_gauge() {
+        let svc = crate::session::in_process::install_test_session_service();
+        let key = SessionKey::ephemeral("stamp-none");
+        stamp_run_meta(Some(&*svc), &key, "run-8", None).await;
+
+        let records = svc
+            .get_events(&key, None, None)
+            .await
+            .expect("the log reads back");
+        let tags: Vec<&'static str> = records.iter().map(|r| event_type_tag(&r.event)).collect();
+        assert_eq!(tags, ["assistant_run_meta"], "one meta, gauge or not");
+        match &records[0].event {
+            crate::session::events::SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                context_window,
+                total_tokens,
+                cost_usd,
+                model,
+                model_provider,
+                ..
+            } => {
+                assert_eq!(run_id, "run-8");
+                assert_eq!(
+                    (*context_tokens, *context_window, *total_tokens),
+                    (None, None, None),
+                    "no gauge was resolved, so none may be stamped — not even 0"
+                );
+                assert_eq!(
+                    (*cost_usd, model.as_deref(), model_provider.as_deref()),
+                    (None, None, None)
+                );
+            }
+            other => panic!("expected the run meta, got {other:?}"),
+        }
+    }
+
+    /// Best-effort as behaviour: a refused append and an absent service both
+    /// come back normally — the caller's post-run sequence continues either
+    /// way. This goes red the day someone `expect`s the append result inside.
+    #[tokio::test]
+    async fn a_refused_or_absent_service_returns_normally() {
+        let refusing = super::super::tests::RefusingSessionService;
+        let key = SessionKey::ephemeral("stamp-refused");
+        stamp_run_meta(Some(&refusing), &key, "run-9", Some(occupancy())).await;
+        stamp_run_meta(None, &key, "run-9", Some(occupancy())).await;
     }
 }

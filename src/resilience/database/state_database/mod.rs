@@ -136,6 +136,8 @@ impl StateDatabase {
         migration::migrate_add_paired_users(conn)?;
         migration::migrate_add_sticker_descriptions(conn)?;
         migration::migrate_add_group_chat_owner(conn)?;
+        migration::migrate_add_agent_tasks_adjudicated_at(conn)?;
+        migration::migrate_add_agent_tasks_interrupted_by_restart(conn)?;
         Ok(())
     }
 
@@ -199,6 +201,8 @@ impl StateDatabase {
         migration::migrate_add_paired_users(&conn)?;
         migration::migrate_add_sticker_descriptions(&conn)?;
         migration::migrate_add_group_chat_owner(&conn)?;
+        migration::migrate_add_agent_tasks_adjudicated_at(&conn)?;
+        migration::migrate_add_agent_tasks_interrupted_by_restart(&conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

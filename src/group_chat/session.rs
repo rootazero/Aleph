@@ -68,6 +68,17 @@ pub struct GroupChatSession {
     /// out. `execute_round` enforces this bound as soon as
     /// `current_round + 1 > max_rounds`.
     pub max_rounds: Option<u32>,
+    /// Count of consecutive no-commit attempts (rounds where the coordinator
+    /// returned a valid plan with `respondents: []` and no turn was committed
+    /// to history). Without an outer bound on this counter, a hostile or
+    /// misconfigured coordinator could indefinitely loop `execute_round` —
+    /// each call still invokes the coordinator LLM and burns tokens — without
+    /// ever advancing `current_round` enough to trip the `max_rounds` gate
+    /// (which only counts COMMITTED rounds). `execute_round` consults this
+    /// counter alongside `max_rounds` and rejects a new attempt once it
+    /// exceeds `max_no_commit_attempts` (currently `max_rounds.unwrap_or(8)`,
+    /// capped at 16 in production).
+    pub no_commit_attempts: u32,
     /// Cancellation handle for the in-flight round. `execute_round`
     /// `select!`s on this token at every provider call, so a hung or
     /// slow round can be interrupted instead of blocking the session
@@ -105,6 +116,7 @@ impl GroupChatSession {
             source_session_key,
             owner_user_id: crate::scope::current_scope().map(|attr| attr.owner_user_id),
             max_rounds: None,
+            no_commit_attempts: 0,
             cancel_token: CancellationToken::new(),
         }
     }
@@ -115,6 +127,30 @@ impl GroupChatSession {
     pub fn with_max_rounds(mut self, max_rounds: Option<u32>) -> Self {
         self.max_rounds = max_rounds;
         self
+    }
+
+    /// Bound on consecutive no-commit attempts before `execute_round` refuses
+    /// further coordinator invocations.
+    ///
+    /// `max_rounds` alone is insufficient: an empty coordinator plan
+    /// (`respondents: []`) skips the commit phase, so `current_round` never
+    /// advances and the round gate is never tripped. This function returns
+    /// the upper bound on how many such no-op rounds we tolerate in a row
+    /// before declaring the session uncooperative and ending it.
+    ///
+    /// The bound is `max(4, min(max_rounds.unwrap_or(8), 16))`: at least 4
+    /// empty plans are tolerated to allow a real coordinator to skip a round
+    /// (e.g. when every mentioned persona is currently rate-limited), capped
+    /// at 16 in production so a misconfigured coordinator cannot loop more
+    /// than that many times. Sessions with `max_rounds = None` (test-only
+    /// opt-out) get the same hard 16-cap because we still need to bound
+    /// LLM-billed work.
+    #[must_use]
+    pub fn max_no_commit_attempts(&self) -> u32 {
+        const MIN: u32 = 4;
+        const HARD_CAP: u32 = 16;
+        let from_rounds = self.max_rounds.map_or(8, |c| c);
+        from_rounds.clamp(MIN, HARD_CAP)
     }
 
     /// Record a new turn in the conversation history.

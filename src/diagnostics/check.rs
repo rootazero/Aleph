@@ -280,8 +280,8 @@ fn unreadable_path_finding(
         ),
     )
     .with_fix_hint(format!(
-        "Check ownership and permissions on {display} and every directory above it: \
-         ls -ld \"{display}\""
+        "Check ownership and permissions on {display} and every directory above it. \
+         Run `ls -ld` on the path (or any parent) to see ownership and mode bits."
     ))
 }
 

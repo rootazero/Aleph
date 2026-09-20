@@ -635,7 +635,22 @@ pub fn maybe_register_node(
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
+        .map_or_else(
+            |_| {
+                // Host clock is before 1970-01-01 (RTC dead, NTP unsynced, VM
+                // clock skew on resume). Returning 0 would silently stamp every
+                // freshly-registered NodeSession as "connected at the epoch"
+                // and mislead any operator inspecting the fleet. Surface the
+                // anomaly once via tracing and pick `i64::MIN` so downstream
+                // readers can distinguish a bogus stamp from a real 1970 one.
+                tracing::warn!(
+                    "now_unix: host clock is before UNIX_EPOCH; connected_at \
+                     values will be inaccurate until the system clock is fixed"
+                );
+                i64::MIN
+            },
+            |d| d.as_secs() as i64,
+        )
 }
 
 #[cfg(test)]

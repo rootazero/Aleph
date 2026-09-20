@@ -59,6 +59,7 @@ use super::hash::{compute_hash, Preimage};
 use super::keystore::{AgentKeystore, KeyError};
 use super::record::{LedgerAction, LedgerRecord};
 use crate::gateway::security::crypto::verify_signature;
+use crate::security::secret_equal_bytes;
 
 /// One thing wrong with a chain. Every variant names the sequence it concerns
 /// so an operator can go straight to the row.
@@ -352,7 +353,12 @@ pub(super) fn walk_chain(
             }
         }
 
-        if compute_hash(&preimage_of(r)).as_slice() != r.hash.as_slice() {
+        // Compare per-row SHA-256 digests with the workspace's single
+        // constant-time primitive rather than `!=`. The expected hash is
+        // wire-stored (not secret) so the timing channel is small here, but
+        // crypto-adjacent code must use the same primitive throughout the
+        // security crate for a uniform audit story.
+        if !secret_equal_bytes(&compute_hash(&preimage_of(r)), &r.hash) {
             faults.push(ChainFault::HashMismatch { seq: r.seq });
         }
 

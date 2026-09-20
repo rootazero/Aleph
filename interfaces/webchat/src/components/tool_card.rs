@@ -480,6 +480,10 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
     let kind = ToolKind::from_name(&tool_name);
+    // L3 reachability: a `canvas` row in the transcript is a way back to the
+    // board it touched. Same spelling as the auto-reveal and the AI message
+    // templates — one constant, not a literal per surface.
+    let is_canvas_tool = tool_name == crate::views::canvas::CANVAS_TOOL;
 
     let tid_for_status = tool_id.clone();
     let tid_for_expand = tool_id.clone();
@@ -569,6 +573,20 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
         let (_lines, added, removed) = diff_lines(old, new);
         Some((added, removed))
     };
+
+    // The canvas this row touched, if it is a canvas row that touched one.
+    // `None` for every other tool, for a `list`, and for a refusal — the
+    // affordance is absent rather than dead, because a button that opens
+    // nothing reads as a broken button.
+    let canvas_target = Memo::new(move |_| {
+        if !is_canvas_tool {
+            return None;
+        }
+        let result = payload.get().and_then(|p| p.result)?;
+        crate::views::canvas::canvas_id_from_tool_result(&result)
+    });
+    let dash = use_context::<crate::context::DashboardState>();
+    let canvas_state = use_context::<crate::state::canvas::CanvasState>();
 
     let icon = tool_icon(&tool_name, kind);
 
@@ -674,6 +692,39 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
                     {move || if expanded.get() { "▾" } else { "▸" }}
                 </span>
             </button>
+            // "Open in canvas" — the same reveal path the auto-reveal takes,
+            // so a row the user scrolled back to lands on the same board the
+            // pane would have popped open at the time.
+            {move || {
+                let (Some(id), Some(dash), Some(canvas_state), Some(ws)) =
+                    (canvas_target.get(), dash, canvas_state, workspace)
+                else {
+                    return None;
+                };
+                Some(view! {
+                    <div class="pl-7 pr-2 pb-1">
+                        <button
+                            type="button"
+                            class="text-[11px] text-primary hover:underline"
+                            on:click=move |_| {
+                                // `true`: a click IS the request to open the
+                                // pane. Only the automatic path has a reason
+                                // to leave the layout alone.
+                                crate::views::chat::events::reveal_canvas(
+                                    dash,
+                                    canvas_state,
+                                    ws,
+                                    i18n,
+                                    id.clone(),
+                                    true,
+                                );
+                            }
+                        >
+                            {t_string!(i18n, canvas.open_in_canvas).to_string()}
+                        </button>
+                    </div>
+                })
+            }}
             <Show when=move || expanded.get()>
                 <div class="pl-7 pr-2 pb-2">
                     {

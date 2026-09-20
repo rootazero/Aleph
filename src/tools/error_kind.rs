@@ -150,11 +150,18 @@ pub fn classify_error_str(s: &str) -> ToolErrorKind {
     if has_status(&lower, 401) || has_status(&lower, 403) || lower.contains("unauthorized") {
         return ToolErrorKind::Unauthorized;
     }
+    // Word-boundary anchored matches for rate-limit phrases. A bare
+    // `lower.contains("rate limit")` would false-positive on prose like
+    // "the response includes the new rate limit header but the call
+    // succeeded" and reclassify a successful run as transient — the
+    // model-facing routing hint (switch tool / source / args) then
+    // pushes the model off a working path. Word boundaries keep the
+    // match load-bearing on the actual signal.
     if has_status(&lower, 429)
-        || lower.contains("rate limit")
-        || lower.contains("rate-limit")
-        || lower.contains("quota exceeded")
-        || lower.contains("too many requests")
+        || contains_word(&lower, "rate limit")
+        || contains_word(&lower, "rate-limit")
+        || contains_word(&lower, "quota exceeded")
+        || contains_word(&lower, "too many requests")
     {
         return ToolErrorKind::RateLimited;
     }
@@ -214,6 +221,36 @@ fn has_status(lower: &str, code: u16) -> bool {
         i = end;
     }
     false
+}
+
+/// True iff `haystack` contains `needle` with non-alphanumeric ASCII on
+/// each side. Reduces substring-match false positives like
+/// "rate limited by design" firing `RateLimited` when the prose was
+/// describing a configuration choice, not an upstream rejection.
+///
+/// Hyphens, slashes, dots, and underscores are accepted on either side
+/// (so "rate-limit" and "rate_limit" still match "rate limit") but a
+/// letter/digit adjacent to the needle is not — "rating-limit" will not
+/// match "rate limit".
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut i = 0;
+    while let Some(found) = haystack[i..].find(needle) {
+        let start = i + found;
+        let end = start + needle_bytes.len();
+        let before_ok = start == 0 || !is_word_char(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word_char(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        i = end;
+    }
+    false
+}
+
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Classify a `ToolError` directly — preferred over `classify_error_str`

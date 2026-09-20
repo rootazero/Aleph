@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{ApprovalState, DialogState};
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// The answer buffer as it should appear on screen.
 ///
@@ -72,7 +72,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.warning))
+        .border_style(Style::default().fg(theme().warning))
         .title(" Agent needs your input ");
 
     let inner = block.inner(dialog_rect);
@@ -101,7 +101,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     // Render question
     let question = Paragraph::new(Line::from(Span::styled(
         dialog.question.clone(),
-        Style::default().fg(DEFAULT_THEME.primary),
+        Style::default().fg(theme().primary),
     )))
     .wrap(Wrap { trim: true });
     frame.render_widget(question, question_area);
@@ -115,10 +115,10 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
             let is_selected = i == dialog.selected;
             let style = if is_selected {
                 Style::default()
-                    .fg(DEFAULT_THEME.primary)
+                    .fg(theme().primary)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
-                Style::default().fg(DEFAULT_THEME.muted)
+                Style::default().fg(theme().muted)
             };
             Line::from(Span::styled(format!("  [{}] {}", i + 1, opt), style))
         })
@@ -135,9 +135,9 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     let room = usize::from(input_area.width).saturating_sub(prefix.len() + caret.len());
     let typed = input_display(&dialog.input, dialog.secret, room);
     let input_style = if dialog.typing {
-        Style::default().fg(DEFAULT_THEME.primary)
+        Style::default().fg(theme().primary)
     } else {
-        Style::default().fg(DEFAULT_THEME.muted)
+        Style::default().fg(theme().muted)
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -150,7 +150,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     // Render hint
     let hint = Paragraph::new(Line::from(Span::styled(
         hint_for(dialog),
-        Style::default().fg(DEFAULT_THEME.muted),
+        Style::default().fg(theme().muted),
     )));
     frame.render_widget(hint, hint_area);
 }
@@ -171,7 +171,7 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.error))
+        .border_style(Style::default().fg(theme().error))
         .title(" \u{26a0} Tool approval required ");
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -196,12 +196,12 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
     // Command being gated, plus the server's reason (dim) when present.
     let mut question_lines = vec![Line::from(Span::styled(
         approval.command.clone(),
-        Style::default().fg(DEFAULT_THEME.primary),
+        Style::default().fg(theme().primary),
     ))];
     if let Some(reason) = &approval.reason {
         question_lines.push(Line::from(Span::styled(
             format!("Reason: {reason}"),
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         )));
     }
     frame.render_widget(
@@ -216,10 +216,10 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
         .map(|(i, (label, _decision))| {
             let style = if i == approval.selected {
                 Style::default()
-                    .fg(DEFAULT_THEME.primary)
+                    .fg(theme().primary)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
-                Style::default().fg(DEFAULT_THEME.muted)
+                Style::default().fg(theme().muted)
             };
             Line::from(Span::styled(format!("  [{}] {}", i + 1, label), style))
         })
@@ -229,7 +229,7 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "Number key or ↑↓ + Enter to decide".to_string(),
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         hint_area,
     );

@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 
-use crate::media::cache::CachedMedia;
+use crate::media::cache::{CachedMedia, MediaCache};
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
 use crate::media::transcription::TranscriptionService;
@@ -76,6 +76,20 @@ impl MediaProvider for AudioMediaProvider {
                 message: "audio transcription requires a local file path".into(),
             });
         };
+
+        // SECURITY (P1 MED-03): defense-in-depth. The tool layer now runs
+        // `check_and_resolve_path` on the model-supplied path, but a future
+        // caller could invoke the pipeline directly. Re-check that the path
+        // is inside the media trust root (Aleph's private temp dir, or a
+        // temp_dir() file owned by this process) before opening it.
+        let path_str = path.to_str().ok_or_else(|| MediaError::Refused(
+            "path is not valid UTF-8".into(),
+        ))?;
+        if MediaCache::safe_local_media_path(path_str).await.is_none() {
+            return Err(MediaError::Refused(
+                "path outside media trust root".into(),
+            ));
+        }
 
         let size = tokio::fs::metadata(path)
             .await

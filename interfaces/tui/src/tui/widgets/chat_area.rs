@@ -5,20 +5,40 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::tui::app::{AppState, ChatMessage, Focus};
+use shared_ui_logic::transcript::{
+    turn_summary_text, Modality, RowBody, RowStatus, ToolRow, TranscriptEntry,
+};
+
+use crate::tui::app::{AppState, Focus};
 use crate::tui::markdown::{
     markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix,
 };
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::regions::RegionKind;
+use crate::tui::theme::theme;
 
-use super::tool_block::render_tool_block;
+use super::header::{self, header_line};
+#[cfg(test)]
+use super::tool_row::KEY_MODALITY;
+use super::tool_row::{render_tool_group, render_tool_row};
+
+/// A click target the current frame actually painted, in rows from the top of
+/// the visible window.
+///
+/// Row indices rather than `Rect`s because this is produced by the line
+/// builder, which knows nothing about where on the screen the window lands —
+/// that translation happens once, in `render_chat_area`.
+struct VisibleToggle {
+    out_row: usize,
+    row_id: String,
+}
 
 /// Per-message rendered-line cache, owned by `AppState` across frames (see
 /// `render_chat_area`'s caller in `render.rs` for where it's threaded
@@ -55,17 +75,34 @@ struct CachedEntry {
     /// (e.g. a peer message inserted before the tail shifting indices).
     fingerprint: u64,
     width: u16,
+    /// Which syntax-highlighting generation these lines were built with.
+    ///
+    /// Not derivable from the message: `syntect` loads on a background
+    /// thread, so the same content at the same width renders plain before the
+    /// load lands and coloured after. Without this key the transcript keeps
+    /// whichever state each message happened to be rendered in, and a reader
+    /// gets a mix of highlighted and plain code blocks that never converges.
+    highlight_generation: u64,
     lines: Vec<Line<'static>>,
+    /// Offsets into `lines` that toggle this entry's fold, from the renderer
+    /// that emitted them. Cached beside the lines because they are only true
+    /// of *these* lines: a cache hit that re-derived them would be re-deriving
+    /// them from content that is no longer what was drawn.
+    toggles: Vec<usize>,
 }
 
-/// Cheap discriminant for `ChatMessage`, used only to invalidate the cache
-/// safely across `messages.insert(at, ...)` (peer messages can be inserted
-/// before the streaming tail, shifting its index — see
+/// Cheap discriminant for a `TranscriptEntry`, used only to invalidate the
+/// cache safely across `messages.insert(at, ...)` (peer messages can be
+/// inserted before the streaming tail, shifting its index — see
 /// `app/events.rs::StreamEvent::...` peer-message handling).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessageKind {
     User,
     Assistant,
+    Reasoning,
+    Tool,
+    ToolGroup,
+    TurnSummary,
     System,
 }
 
@@ -84,21 +121,95 @@ fn content_fingerprint(content: &str) -> u64 {
     h.finish()
 }
 
-fn message_kind_and_fingerprint(message: &ChatMessage) -> (MessageKind, u64) {
-    match message {
-        ChatMessage::User { content, .. } => (MessageKind::User, content_fingerprint(content)),
-        ChatMessage::Assistant { content, .. } => {
-            (MessageKind::Assistant, content_fingerprint(content))
+/// A tool row's rendered appearance changes without its text changing — the
+/// status settles, a duration arrives, a body is replaced by a diff — so its
+/// fingerprint has to cover those, not just a string.
+fn tool_fingerprint(row: &ToolRow) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    row.id.hash(&mut h);
+    row.summary.display_name.hash(&mut h);
+    row.summary.args_text.hash(&mut h);
+    row.expanded.hash(&mut h);
+    match &row.status {
+        RowStatus::Pending => 0u8.hash(&mut h),
+        RowStatus::Running { .. } => 1u8.hash(&mut h),
+        RowStatus::Ok { duration_ms } => {
+            2u8.hash(&mut h);
+            duration_ms.hash(&mut h);
         }
-        ChatMessage::System { content } => (MessageKind::System, content_fingerprint(content)),
+        RowStatus::Err {
+            duration_ms,
+            message,
+        } => {
+            3u8.hash(&mut h);
+            duration_ms.hash(&mut h);
+            message.hash(&mut h);
+        }
+    }
+    match &row.body {
+        RowBody::None => 0u8.hash(&mut h),
+        RowBody::Text(t) => {
+            1u8.hash(&mut h);
+            content_fingerprint(t).hash(&mut h);
+        }
+        RowBody::FileChanges(c) => {
+            2u8.hash(&mut h);
+            c.len().hash(&mut h);
+            for change in c {
+                change.path.hash(&mut h);
+                change.added.hash(&mut h);
+                change.removed.hash(&mut h);
+                change.hunks.len().hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+fn message_kind_and_fingerprint(message: &TranscriptEntry) -> (MessageKind, u64) {
+    match message {
+        TranscriptEntry::UserText { text, .. } => (MessageKind::User, content_fingerprint(text)),
+        TranscriptEntry::AssistantText { markdown, .. } => {
+            (MessageKind::Assistant, content_fingerprint(markdown))
+        }
+        TranscriptEntry::Reasoning { text, .. } => {
+            (MessageKind::Reasoning, content_fingerprint(text))
+        }
+        // A RUNNING row is deliberately never cached by the caller (its
+        // spinner is a function of the clock), so this fingerprint only has to
+        // be right for settled ones.
+        TranscriptEntry::Tool(row) => (MessageKind::Tool, tool_fingerprint(row)),
+        TranscriptEntry::ToolGroup(g) => {
+            let mut acc = 0u64;
+            for r in &g.rows {
+                acc = acc.rotate_left(7) ^ tool_fingerprint(r);
+            }
+            (MessageKind::ToolGroup, acc)
+        }
+        TranscriptEntry::TurnSummary(s) => (
+            MessageKind::TurnSummary,
+            content_fingerprint(&turn_summary_text(s)),
+        ),
+        TranscriptEntry::SystemNotice { text, .. } => {
+            (MessageKind::System, content_fingerprint(text))
+        }
     }
 }
+
+/// The docked control that undoes a scroll-up, and the key that does the same.
+///
+/// One string so the button and the key binding cannot drift apart — the
+/// label is the only place a reader is told which key this is (判据 §1).
+pub(crate) const BACK_TO_BOTTOM: &str = " \u{2193} Back to bottom \u{b7} ctrl+end ";
+/// Its wording when rows landed below the reader while they were scrolled up.
+const BACK_TO_BOTTOM_UNSEEN: &str = " \u{2193} New output \u{b7} ctrl+end ";
 
 /// Render the chat area with all messages, handling scrolling.
 pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let border_color = match state.focus {
-        Focus::Chat => DEFAULT_THEME.border_focused,
-        _ => DEFAULT_THEME.border,
+        Focus::Chat => theme().border_focused,
+        _ => theme().border,
     };
 
     let block = Block::default()
@@ -108,6 +219,11 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // Rebuilt from scratch every frame, because the transcript reflows every
+    // frame — see `regions.rs` for why a maintained table would be the copy
+    // that lies.
+    state.regions.clear();
 
     if inner.height == 0 || inner.width == 0 {
         return;
@@ -123,19 +239,220 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // assembled the FULL transcript (`entry.lines.clone()` per message,
     // then `visible_lines.to_vec()` on top) on every frame — O(transcript)
     // deep copies per draw, 20x/s while a spinner runs.
-    let (_total_lines, visible) = build_visible_lines(
+    let modality = state.modality();
+    let verbose = state.verbose;
+    let scroll_offset = state.scroll_offset;
+    // Built before the cache is borrowed mutably, and owned, so nothing of
+    // `state` stays borrowed across the call.
+    let header = vec![header_line(
+        header::VERSION,
+        &state.model_name,
+        state.project_root(),
+        state.project_branch.as_deref(),
+    )];
+    let (total_lines, visible, hits) = build_visible_lines(
+        &header,
         &state.messages,
-        state.verbose,
-        state.spinner_frame,
+        verbose,
+        now_ms(),
         content_width,
         &mut state.chat_line_cache,
-        state.auto_scroll,
-        state.scroll_offset,
+        modality,
+        scroll_offset,
         visible_height,
     );
+    // Write the offset back clamped to what the transcript can actually
+    // reach. `visible_window` already clamps for its own arithmetic, so the
+    // frame would look right either way; what this buys is the NEXT
+    // keystroke. `Home` maps to `usize::MAX / 2`, and without this an
+    // unreachable offset makes every following `scroll_down` a no-op the
+    // reader sees nothing change from, and gives the scrollbar a position
+    // nobody is at.
+    //
+    // Once, here, from the heights this frame measured. A pre-pass clamp
+    // against the cache's last-known heights was written first and deleted:
+    // a mutation run left it green with the guard removed, which is the
+    // tell for a second derivation that can never be the one that fires
+    // (判据 §2, §12).
+    state.scroll_offset = state
+        .scroll_offset
+        .min(total_lines.saturating_sub(visible_height));
 
-    let paragraph = Paragraph::new(visible).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, inner);
+    // One row per line, no wrapping. `build_visible_lines` counts logical
+    // lines and sized this window in them, so a line that wrapped to two rows
+    // would push the newest content off the bottom and shift every click
+    // target below it by one.
+    let rows: Vec<Line<'static>> = visible
+        .into_iter()
+        .map(|line| clip_to_width(line, content_width))
+        .collect();
+    frame.render_widget(Paragraph::new(rows), inner);
+
+    for hit in hits {
+        let Ok(dy) = u16::try_from(hit.out_row) else {
+            continue;
+        };
+        if dy >= inner.height {
+            continue;
+        }
+        state.regions.push(
+            Rect {
+                x: inner.x,
+                y: inner.y + dy,
+                width: inner.width,
+                height: 1,
+            },
+            RegionKind::ToggleRow,
+            hit.row_id,
+        );
+    }
+
+    render_scrollbar(
+        frame,
+        area,
+        total_lines,
+        visible_height,
+        state.scroll_offset,
+    );
+    render_back_to_bottom(frame, state, inner);
+}
+
+/// Truncate a line to `width` columns, marking the cut with `…`.
+///
+/// # Why every row is clipped, rather than each producer wrapping
+///
+/// This widget counts *logical* lines to size its scroll window and paints
+/// one row per line. A line wider than the pane would wrap to two rows, and
+/// then the count and the paint disagree: the transcript's newest row falls
+/// off the bottom, and every click target below the wrap sits one row from
+/// where it was drawn.
+///
+/// Most producers already wrap to width on their own — markdown,
+/// `render_system_message`, `render_reasoning`. Three do not, for reasons
+/// that are theirs rather than oversights: a tool header is one unbreakable
+/// `Bash(cargo test …)`, a diff row would have to re-emit its gutter on a
+/// continuation to stay readable, and a turn summary is a single sentence
+/// that simply gets long. Rather than ask each of them to remember, the
+/// invariant is enforced once, here, at the only place that knows both the
+/// line and the pane it is about to be painted into (判据 §12). For the
+/// producers that already fit, this is a measurement and nothing else.
+fn clip_to_width(line: Line<'static>, width: u16) -> Line<'static> {
+    let budget = width as usize;
+    if budget == 0 {
+        return Line::default();
+    }
+    let total: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    if total <= budget {
+        return line;
+    }
+    // One column goes to the ellipsis that says a cut happened: a reader who
+    // cannot see the cut reads a truncated path as the whole path.
+    let keep = budget - 1;
+    let mut used = 0usize;
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 1);
+    for span in line.spans {
+        let w = UnicodeWidthStr::width(span.content.as_ref());
+        if used + w <= keep {
+            used += w;
+            spans.push(span);
+            continue;
+        }
+        // Split inside this span, by accumulated COLUMNS and on a char
+        // boundary — a byte split would panic on the first CJK row, and a
+        // char count would under-fill a line of them by half.
+        let mut text = String::new();
+        for ch in span.content.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + cw > keep {
+                break;
+            }
+            used += cw;
+            text.push(ch);
+        }
+        if !text.is_empty() {
+            spans.push(Span::styled(text, span.style));
+        }
+        break;
+    }
+    spans.push(Span::styled(
+        "\u{2026}".to_string(),
+        Style::default().fg(theme().muted),
+    ));
+    Line::from(spans)
+}
+
+/// The vertical scrollbar, on the block's right border, only when there is
+/// something to scroll.
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    total_lines: usize,
+    visible_height: usize,
+    scroll_offset: usize,
+) {
+    if total_lines <= visible_height {
+        return;
+    }
+    // `position` counts from the TOP, `scroll_offset` from the bottom.
+    let max_offset = total_lines - visible_height;
+    let position = max_offset - scroll_offset.min(max_offset);
+    let mut scroll_state = ScrollbarState::new(max_offset).position(position);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .style(Style::default().fg(theme().border)),
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scroll_state,
+    );
+}
+
+/// The docked `[ ↓ Back to bottom ]` control, shown only while the reader is
+/// somewhere else.
+///
+/// Painted over the transcript's last row rather than in a reserved row of
+/// its own: a row reserved for it would change the transcript's height every
+/// time the user scrolled, reflowing the thing they are trying to read.
+fn render_back_to_bottom(frame: &mut Frame, state: &mut AppState, inner: Rect) {
+    if state.scroll_offset == 0 {
+        return;
+    }
+    let label = if state.unseen_below {
+        BACK_TO_BOTTOM_UNSEEN
+    } else {
+        BACK_TO_BOTTOM
+    };
+    let Ok(label_width) = u16::try_from(UnicodeWidthStr::width(label)) else {
+        return;
+    };
+    if label_width > inner.width || inner.height == 0 {
+        return;
+    }
+    let rect = Rect {
+        x: inner.x + inner.width - label_width,
+        y: inner.y + inner.height - 1,
+        width: label_width,
+        height: 1,
+    };
+    let style = if state.unseen_below {
+        Style::default()
+            .fg(theme().primary)
+            .bg(theme().status_bg)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme().status_fg).bg(theme().status_bg)
+    };
+    frame.render_widget(Paragraph::new(Line::from(Span::styled(label, style))), rect);
+    state
+        .regions
+        .push(rect, RegionKind::BackToBottom, String::new());
 }
 
 /// Build all rendered lines from the message history.
@@ -147,38 +464,36 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
 /// dead-code warnings.
 #[cfg(test)]
 fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    build_all_lines_at(state, width, 0)
+}
 
+#[cfg(test)]
+fn build_all_lines_at(state: &AppState, width: u16, now_ms: u64) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
     for message in &state.messages {
-        match message {
-            ChatMessage::User { content, timestamp } => {
-                render_user_message(content, timestamp, width, &mut lines);
+        render_settled_message(
+            message,
+            state.verbose,
+            now_ms,
+            width,
+            KEY_MODALITY,
+            &mut lines,
+        );
+        // The streaming cursor is the one thing the settled path does not
+        // draw, because the cached path never renders a streaming entry
+        // through it.
+        if matches!(
+            message,
+            TranscriptEntry::AssistantText {
+                streaming: true,
+                ..
             }
-            ChatMessage::Assistant {
-                content,
-                tools,
-                reasoning,
-                is_streaming,
-            } => {
-                render_assistant_message(
-                    content,
-                    tools,
-                    reasoning.as_deref(),
-                    *is_streaming,
-                    state.verbose,
-                    state.spinner_frame,
-                    width,
-                    &mut lines,
-                );
-            }
-            ChatMessage::System { content } => {
-                render_system_message(content, width, &mut lines);
-            }
+        ) {
+            lines.push(streaming_cursor_line());
         }
         // Add a blank line between messages
         lines.push(Line::default());
     }
-
     lines
 }
 
@@ -187,19 +502,20 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
 /// transcript, exercising the same cache machinery the production path uses.
 #[cfg(test)]
 fn build_all_lines_cached(
-    messages: &[ChatMessage],
+    messages: &[TranscriptEntry],
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
-    let (_total, lines) = build_visible_lines(
+    let (_total, lines, _) = build_visible_lines(
+        &[],
         messages,
         verbose,
-        spinner_frame,
+        now_ms,
         width,
         cache,
-        true,
+        KEY_MODALITY,
         0,
         usize::MAX,
     );
@@ -222,20 +538,31 @@ fn build_all_lines_cached(
 /// height so window arithmetic stays exact.
 #[allow(clippy::too_many_arguments)]
 fn build_visible_lines(
-    messages: &[ChatMessage],
+    header: &[Line<'static>],
+    messages: &[TranscriptEntry],
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
     cache: &mut LineCache,
-    auto_scroll: bool,
+    modality: Modality,
     scroll_offset: usize,
     visible_height: usize,
-) -> (usize, Vec<Line<'static>>) {
+) -> (usize, Vec<Line<'static>>, Vec<VisibleToggle>) {
+    // The header is a transcript entry in every way that matters here — it
+    // occupies rows at the top, it scrolls away, and everything below it is
+    // offset by its height — but it is not IN `messages`: it is derived from
+    // the state it describes on every frame, so a `/session` switch or a model
+    // change moves it instead of leaving a stale first row (判据 §1).
+    let header_height = if header.is_empty() {
+        0
+    } else {
+        header.len() + 1
+    };
     let streaming_idx = messages.iter().position(|m| {
         matches!(
             m,
-            ChatMessage::Assistant {
-                is_streaming: true,
+            TranscriptEntry::AssistantText {
+                streaming: true,
                 ..
             }
         )
@@ -248,33 +575,18 @@ fn build_visible_lines(
     // Pass 1: ensure lines exist, record heights (rendered lines + 1 blank
     // separator per message).
     let mut heights: Vec<usize> = Vec::with_capacity(messages.len());
-    let mut streaming_head: Vec<Line<'static>> = Vec::new();
     let mut streaming_content: Option<StreamLines> = None;
     for (idx, message) in messages.iter().enumerate() {
         if Some(idx) == streaming_idx {
-            // A streaming message's spinner/tool-block content can change
-            // every tick without its text changing, so it is never cached in
-            // `entries` — it would serve stale tool-block state. Its markdown
-            // content still gets the incremental prefix cache.
+            // The streaming entry's text grows every tick, so it is never in
+            // `entries`; its markdown still gets the incremental prefix cache.
+            // It no longer carries a "head" — reasoning and tool rows are
+            // their own entries, each cached or re-rendered on its own terms.
             cache.entries.remove(&idx);
-            if let ChatMessage::Assistant {
-                content,
-                tools,
-                reasoning,
-                ..
-            } = message
-            {
-                render_assistant_head(
-                    reasoning.as_deref(),
-                    tools,
-                    verbose,
-                    spinner_frame,
-                    width,
-                    &mut streaming_head,
-                );
-                if !content.is_empty() {
+            if let TranscriptEntry::AssistantText { markdown, .. } = message {
+                if !markdown.is_empty() {
                     streaming_content = Some(markdown_to_lines_incremental(
-                        content,
+                        markdown,
                         width.saturating_sub(2),
                         &mut cache.streaming_markdown_cache,
                     ));
@@ -283,19 +595,33 @@ fn build_visible_lines(
                     .as_ref()
                     .map_or(0, StreamLines::line_count);
                 // +1 streaming cursor, +1 blank separator.
-                heights.push(streaming_head.len() + content_rows + 2);
+                heights.push(content_rows + 2);
             }
         } else {
+            // A running row's glyph is a function of the clock, so its cached
+            // lines are stale the moment they are stored — drop the entry and
+            // let the miss below re-render it. Settled rows cache normally,
+            // which is what keeps a long tool-heavy transcript cheap.
+            if matches!(
+                message,
+                TranscriptEntry::Tool(row) if matches!(row.status, RowStatus::Running { .. })
+            ) {
+                cache.entries.remove(&idx);
+            }
             let (kind, fingerprint) = message_kind_and_fingerprint(message);
-            let hit = cache
-                .entries
-                .get(&idx)
-                .filter(|e| e.kind == kind && e.fingerprint == fingerprint && e.width == width);
+            let generation = crate::tui::highlight::generation();
+            let hit = cache.entries.get(&idx).filter(|e| {
+                e.kind == kind
+                    && e.fingerprint == fingerprint
+                    && e.width == width
+                    && e.highlight_generation == generation
+            });
             match hit {
                 Some(entry) => heights.push(entry.lines.len() + 1),
                 None => {
                     let mut buf = Vec::new();
-                    render_settled_message(message, verbose, spinner_frame, width, &mut buf);
+                    let toggles =
+                        render_settled_message(message, verbose, now_ms, width, modality, &mut buf);
                     heights.push(buf.len() + 1);
                     cache.entries.insert(
                         idx,
@@ -303,7 +629,9 @@ fn build_visible_lines(
                             kind,
                             fingerprint,
                             width,
+                            highlight_generation: generation,
                             lines: buf,
+                            toggles,
                         },
                     );
                 }
@@ -314,13 +642,28 @@ fn build_visible_lines(
     // conversation switch or `.clear()` shrinks the vec).
     cache.entries.retain(|idx, _| *idx < messages.len());
 
-    let total_lines: usize = heights.iter().sum();
-    let (start, end) = visible_window(total_lines, visible_height, auto_scroll, scroll_offset);
+    let total_lines: usize = header_height + heights.iter().sum::<usize>();
+    let (start, end) = visible_window(total_lines, visible_height, scroll_offset);
 
     // Pass 2: clone out only the intersecting rows.
     let mut out: Vec<Line<'static>> = Vec::new();
+    let mut hits: Vec<VisibleToggle> = Vec::new();
     let mut pos = 0usize;
-    for (idx, _) in messages.iter().enumerate() {
+    // Same slice arithmetic as the message loop below, on a block that starts
+    // at row 0: body rows occupy [0, header_height-1), the blank separator
+    // sits at header_height-1.
+    if header_height > start && end > 0 {
+        let hi = end.min(header_height);
+        let body_hi = hi.min(header_height - 1);
+        if start < body_hi {
+            out.extend(header[start..body_hi].iter().cloned());
+        }
+        if hi == header_height {
+            out.push(Line::default());
+        }
+    }
+    pos += header_height;
+    for (idx, message) in messages.iter().enumerate() {
         let height = heights[idx];
         let mstart = pos;
         pos += height;
@@ -334,69 +677,70 @@ fn build_visible_lines(
         let body_hi = hi.min(height - 1);
         if lo < body_hi {
             if Some(idx) == streaming_idx {
-                copy_streaming_slice(
-                    &streaming_head,
-                    streaming_content.as_ref(),
-                    lo,
-                    body_hi,
-                    &mut out,
-                );
+                copy_streaming_slice(streaming_content.as_ref(), lo, body_hi, &mut out);
             } else if let Some(entry) = cache.entries.get(&idx) {
                 out.extend(entry.lines[lo..body_hi].iter().cloned());
+                // Rows [lo, body_hi) of this message land at out-indices
+                // `mstart + i - start`; a toggle outside that slice is
+                // scrolled off and has no cell to be clicked in.
+                if let TranscriptEntry::Tool(row) = message {
+                    for &t in &entry.toggles {
+                        if t >= lo && t < body_hi {
+                            hits.push(VisibleToggle {
+                                out_row: mstart + t - start,
+                                row_id: row.id.clone(),
+                            });
+                        }
+                    }
+                }
             }
         }
         if hi == height {
             out.push(Line::default());
         }
     }
-    (total_lines, out)
+    (total_lines, out, hits)
 }
 
-/// The `[start, end)` row range the viewport shows — the exact arithmetic
-/// the old `render_chat_area` did on a fully-materialized `Vec`, preserved
-/// verbatim so scroll behavior is unchanged.
+/// The `[start, end)` row range the viewport shows.
+///
+/// One branch, not two: the old `auto_scroll == true` branch computed exactly
+/// `(total - height, total)`, which is what the offset branch already yields
+/// at `scroll_offset == 0` — the bool was a weakened second spelling of
+/// "parked at the bottom" (判据 §1), and it is gone.
 fn visible_window(
     total_lines: usize,
     visible_height: usize,
-    auto_scroll: bool,
     scroll_offset: usize,
 ) -> (usize, usize) {
-    if auto_scroll {
-        (total_lines.saturating_sub(visible_height), total_lines)
-    } else {
-        // Clamp a large offset (Home maps to usize::MAX/2, or held PageUp)
-        // so it can never push the whole window off-screen and blank the
-        // chat.
-        let max_offset = total_lines.saturating_sub(visible_height);
-        let offset = scroll_offset.min(max_offset);
-        let end = total_lines.saturating_sub(offset);
-        (end.saturating_sub(visible_height), end)
-    }
+    // Clamp a large offset (a held PageUp, or a stale offset after the
+    // transcript shrank) so it can never push the whole window off-screen and
+    // blank the chat.
+    let max_offset = total_lines.saturating_sub(visible_height);
+    let offset = scroll_offset.min(max_offset);
+    let end = total_lines.saturating_sub(offset);
+    (end.saturating_sub(visible_height), end)
 }
 
-/// Copy the `[lo, hi)` slice of the streaming message's rows into `out`,
+/// Copy the `[lo, hi)` slice of the streaming entry's rows into `out`,
 /// applying the assistant prefix bar to content rows (deferred to here so
-/// off-window rows never pay for it). Row layout: head (header + reasoning
-/// + tool blocks) | content | cursor.
+/// off-window rows never pay for it). Row layout: content | cursor.
+///
+/// There is no "head" any more: reasoning and tool rows used to be rendered
+/// above the streaming message because they lived inside it, and they are
+/// separate entries now — each windowed, cached and invalidated on its own.
 fn copy_streaming_slice(
-    head: &[Line<'static>],
     content: Option<&StreamLines>,
     lo: usize,
     hi: usize,
     out: &mut Vec<Line<'static>>,
 ) {
-    let head_len = head.len();
     let content_len = content.map_or(0, StreamLines::line_count);
 
-    let head_hi = hi.min(head_len);
-    if lo < head_hi {
-        out.extend(head[lo..head_hi].iter().cloned());
-    }
-
-    let c_lo = lo.saturating_sub(head_len).min(content_len);
-    let c_hi = hi.saturating_sub(head_len).min(content_len);
+    let c_lo = lo.min(content_len);
+    let c_hi = hi.min(content_len);
     if let Some(sl) = content {
-        let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+        let prefix_style = Style::default().fg(theme().assistant);
         for i in c_lo..c_hi {
             if let Some(line) = sl.get(i) {
                 let mut spans = Vec::with_capacity(line.spans.len() + 1);
@@ -407,58 +751,83 @@ fn copy_streaming_slice(
         }
     }
 
-    let cursor_idx = head_len + content_len;
-    if lo <= cursor_idx && cursor_idx < hi {
+    if lo <= content_len && content_len < hi {
         out.push(streaming_cursor_line());
     }
 }
 
-/// Render a settled (non-streaming) message into `out`.
+/// Wall clock in unix ms — the unit the shared spinner and duration helpers
+/// take. A pre-1970 clock yields 0 rather than a panic.
+fn now_ms() -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
+}
+
+/// Render a settled (non-streaming) entry into `out`.
+///
+/// Tool rows are NOT prefixed with the assistant `┃ ` bar: they are peers of
+/// the text now, not decoration inside a message, and indenting them under a
+/// bar would put back the visual nesting the model change removed.
 fn render_settled_message(
-    message: &ChatMessage,
+    message: &TranscriptEntry,
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
+    modality: Modality,
     out: &mut Vec<Line<'static>>,
-) {
+) -> Vec<usize> {
+    let base = out.len();
     match message {
-        ChatMessage::User { content, timestamp } => {
-            render_user_message(content, timestamp, width, out);
+        TranscriptEntry::UserText { text, at_ms, .. } => {
+            render_user_message(text, *at_ms, width, out);
         }
-        ChatMessage::Assistant {
-            content,
-            tools,
-            reasoning,
-            ..
-        } => {
-            render_assistant_head(
-                reasoning.as_deref(),
-                tools,
-                verbose,
-                spinner_frame,
-                width,
-                out,
-            );
-            if !content.is_empty() {
-                let md_lines = markdown_to_lines(content, width.saturating_sub(2));
+        TranscriptEntry::AssistantText { markdown, .. } => {
+            if !markdown.is_empty() {
+                let md_lines = markdown_to_lines(markdown, width.saturating_sub(2));
                 push_prefixed_content(out, md_lines);
             }
         }
-        ChatMessage::System { content } => {
-            render_system_message(content, width, out);
+        TranscriptEntry::Reasoning { text, .. } => {
+            if verbose {
+                render_reasoning(text, width, out);
+            }
+        }
+        TranscriptEntry::Tool(row) => {
+            let rendered = render_tool_row(row, now_ms, width, modality);
+            out.extend(rendered.lines);
+            return rendered.toggles.into_iter().map(|t| base + t).collect();
+        }
+        TranscriptEntry::ToolGroup(group) => {
+            out.extend(render_tool_group(group, now_ms, width, modality));
+        }
+        TranscriptEntry::TurnSummary(summary) => {
+            out.push(Line::from(Span::styled(
+                turn_summary_text(summary),
+                Style::default().fg(theme().muted),
+            )));
+        }
+        TranscriptEntry::SystemNotice { text, .. } => {
+            render_system_message(text, width, out);
         }
     }
+    Vec::new()
 }
 
 /// Render a user message with blue prefix bar.
 fn render_user_message(
     content: &str,
-    timestamp: &chrono::DateTime<chrono::Utc>,
+    at_ms: Option<u64>,
     width: u16,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.user);
-    let time_str = timestamp.format("%H:%M").to_string();
+    let prefix_style = Style::default().fg(theme().user);
+    // No clock for a message this client was never told a time for. Falling
+    // back to `now` would date a restored message to the moment it was
+    // restored, which is a fact the header would be stating and getting wrong.
+    let time_str = at_ms
+        .and_then(|ms| i64::try_from(ms).ok())
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|t| format!("  {}", t.format("%H:%M")))
+        .unwrap_or_default();
 
     // Header: ┃ You  12:34
     lines.push(Line::from(vec![
@@ -466,13 +835,10 @@ fn render_user_message(
         Span::styled(
             "You".to_string(),
             Style::default()
-                .fg(DEFAULT_THEME.user)
+                .fg(theme().user)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  {time_str}"),
-            Style::default().fg(DEFAULT_THEME.muted),
-        ),
+        Span::styled(time_str, Style::default().fg(theme().muted)),
     ]));
 
     // Content lines with prefix
@@ -485,97 +851,30 @@ fn render_user_message(
     }
 }
 
-/// Render an assistant message with green prefix bar, reasoning, tools, and
-/// content. Test-only reference path (see `build_all_lines`): the production
-/// path renders settled messages through `render_settled_message` and the
-/// streaming message through `render_assistant_head` +
-/// `markdown_to_lines_incremental` + `copy_streaming_slice`.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn render_assistant_message(
-    content: &str,
-    tools: &[crate::tui::app::ToolExecution],
-    reasoning: Option<&str>,
-    is_streaming: bool,
-    verbose: bool,
-    spinner_frame: usize,
-    width: u16,
-    lines: &mut Vec<Line<'static>>,
-) {
-    render_assistant_head(reasoning, tools, verbose, spinner_frame, width, lines);
-    if !content.is_empty() {
-        let md_lines = markdown_to_lines(content, width.saturating_sub(2));
-        push_prefixed_content(lines, md_lines);
-    }
-    if is_streaming {
-        lines.push(streaming_cursor_line());
-    }
-}
+/// A reasoning entry, shown only under `/verbose`.
+///
+/// Its own entry now rather than a field on the assistant message, so it
+/// renders where it happened instead of always above the whole turn.
+fn render_reasoning(text: &str, width: u16, lines: &mut Vec<Line<'static>>) {
+    let prefix_style = Style::default().fg(theme().assistant);
+    let reasoning_style = Style::default().fg(theme().reasoning);
+    let reasoning_prefix = Style::default().fg(theme().muted);
+    let content_width = width.saturating_sub(4); // account for "┃ ┊ " prefix
 
-/// Everything above an assistant message's markdown content: the `┃ Aleph`
-/// header, verbose reasoning, and tool blocks. Shared by the settled path
-/// and the streaming path so both lay out identically.
-fn render_assistant_head(
-    reasoning: Option<&str>,
-    tools: &[crate::tui::app::ToolExecution],
-    verbose: bool,
-    spinner_frame: usize,
-    width: u16,
-    lines: &mut Vec<Line<'static>>,
-) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
-
-    // Header: ┃ Aleph
-    lines.push(Line::from(vec![
-        Span::styled("\u{2503} ", prefix_style),
-        Span::styled(
-            "Aleph".to_string(),
-            Style::default()
-                .fg(DEFAULT_THEME.assistant)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-
-    // Reasoning (only if verbose mode)
-    if verbose {
-        if let Some(reasoning_text) = reasoning {
-            let reasoning_style = Style::default().fg(DEFAULT_THEME.reasoning);
-            let reasoning_prefix = Style::default().fg(DEFAULT_THEME.muted);
-            let content_width = width.saturating_sub(4); // account for "┃ ┊ " prefix
-
-            for reason_line in reasoning_text.lines() {
-                if reason_line.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("\u{2503} ", prefix_style),
-                        Span::styled("\u{250a} ", reasoning_prefix),
-                    ]));
-                    continue;
-                }
-
-                // Simple wrapping for reasoning text
-                let wrapped = textwrap::wrap(reason_line, content_width as usize);
-                for wrapped_line in wrapped {
-                    lines.push(Line::from(vec![
-                        Span::styled("\u{2503} ", prefix_style),
-                        Span::styled("\u{250a} ", reasoning_prefix),
-                        Span::styled(wrapped_line.into_owned(), reasoning_style),
-                    ]));
-                }
-            }
-
-            // Blank line after reasoning
-            lines.push(Line::from(vec![Span::styled("\u{2503} ", prefix_style)]));
+    for reason_line in text.lines() {
+        if reason_line.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("\u{2503} ", prefix_style),
+                Span::styled("\u{250a} ", reasoning_prefix),
+            ]));
+            continue;
         }
-    }
-
-    // Tool blocks
-    let tool_width = width.saturating_sub(2); // account for "┃ " prefix
-    for tool in tools {
-        let tool_lines = render_tool_block(tool, spinner_frame, tool_width);
-        for tool_line in tool_lines {
-            let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
-            spans.extend(tool_line.spans);
-            lines.push(Line::from(spans));
+        for wrapped_line in textwrap::wrap(reason_line, content_width as usize) {
+            lines.push(Line::from(vec![
+                Span::styled("\u{2503} ", prefix_style),
+                Span::styled("\u{250a} ", reasoning_prefix),
+                Span::styled(wrapped_line.into_owned(), reasoning_style),
+            ]));
         }
     }
 }
@@ -583,7 +882,7 @@ fn render_assistant_head(
 /// Append markdown-rendered content lines, each prefixed with the assistant
 /// `┃ ` bar.
 fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'static>>) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    let prefix_style = Style::default().fg(theme().assistant);
     for md_line in md_lines {
         let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
         spans.extend(md_line.spans);
@@ -593,12 +892,12 @@ fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'sta
 
 /// The `┃ ▍` line shown under a still-streaming assistant message.
 fn streaming_cursor_line() -> Line<'static> {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    let prefix_style = Style::default().fg(theme().assistant);
     Line::from(vec![
         Span::styled("\u{2503} ", prefix_style),
         Span::styled(
             "\u{258d}".to_string(), // ▍
-            Style::default().fg(DEFAULT_THEME.assistant),
+            Style::default().fg(theme().assistant),
         ),
     ])
 }
@@ -614,7 +913,7 @@ fn streaming_cursor_line() -> Line<'static> {
 /// and wrap each physical line to the content width so every emitted `Line` is
 /// `<= width` and the logical-line window matches the rendered rows.
 fn render_system_message(content: &str, width: u16, lines: &mut Vec<Line<'static>>) {
-    let style = Style::default().fg(DEFAULT_THEME.system);
+    let style = Style::default().fg(theme().system);
     let content_width = (width.saturating_sub(2)).max(1) as usize; // account for "  " indent
     for raw_line in content.split('\n') {
         if raw_line.is_empty() {
@@ -636,10 +935,13 @@ mod tests {
 
     #[test]
     fn build_lines_with_system_message() {
-        let state = AppState::new("test".into(), "claude".into());
+        let mut state = AppState::new("test".into(), "claude".into());
+        // A fresh state's transcript is empty now (the header is derived, not
+        // stored), so this supplies the notice it used to get for free.
+        state.add_system_message("a notice".into());
         let lines = build_all_lines(&state, 80);
-        // Should have at least the welcome system message + blank line
-        assert!(lines.len() >= 2);
+        // The notice plus its blank separator.
+        assert!(lines.len() >= 2, "{lines:?}");
     }
 
     #[test]
@@ -647,16 +949,16 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("Hi there!");
         }
 
         let lines = build_all_lines(&state, 80);
-        // Should have lines for: system + blank + user header + user content + blank
-        // + assistant header + assistant content + blank
         assert!(lines.len() >= 6);
 
-        // Check that user header contains "You"
         let has_you = lines.iter().any(|line| {
             line.spans
                 .iter()
@@ -664,13 +966,50 @@ mod tests {
         });
         assert!(has_you, "Should contain 'You' header");
 
-        // Check that assistant header contains "Aleph"
-        let has_aleph = lines.iter().any(|line| {
+        let has_reply = lines.iter().any(|line| {
             line.spans
                 .iter()
-                .any(|s| s.content.as_ref().contains("Aleph"))
+                .any(|s| s.content.as_ref().contains("Hi there!"))
         });
-        assert!(has_aleph, "Should contain 'Aleph' header");
+        assert!(has_reply, "the assistant's text must be rendered");
+    }
+
+    /// The whole point of the model change: a tool row sits where it ran.
+    ///
+    /// # When this goes red
+    ///
+    /// It could not even be written before — tools lived inside
+    /// `ChatMessage::Assistant`, so every one of a turn's calls rendered above
+    /// all of that turn's text and this ordering was unrepresentable. Put the
+    /// rows back under the message and the second text lands above the tool.
+    #[test]
+    fn a_tool_row_renders_between_the_texts_that_surround_it() {
+        use serde_json::json;
+        let mut state = AppState::new("test".into(), "claude".into());
+        state.messages.clear();
+
+        state.append_assistant_content("before the call");
+        state.start_tool_execution("c1".into(), "file_read".into(), &json!({"path": "a.rs"}));
+        state.append_assistant_content("after the call");
+
+        let rendered: Vec<String> = build_all_lines(&state, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let idx = |needle: &str| {
+            rendered
+                .iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} not rendered: {rendered:?}"))
+        };
+        assert!(
+            idx("before the call") < idx("Read(a.rs)"),
+            "text that preceded the call must render above it: {rendered:?}"
+        );
+        assert!(
+            idx("Read(a.rs)") < idx("after the call"),
+            "text that followed the call must render below it: {rendered:?}"
+        );
     }
 
     #[test]
@@ -692,7 +1031,11 @@ mod tests {
     fn non_streaming_message_no_cursor() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { is_streaming, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } = state.current_assistant_mut()
+        {
             *is_streaming = false;
         }
 
@@ -746,10 +1089,11 @@ mod tests {
     #[test]
     fn reasoning_shown_only_in_verbose() {
         let mut state = AppState::new("test".into(), "claude".into());
-        state.ensure_assistant_message();
-        if let ChatMessage::Assistant { reasoning, .. } = state.current_assistant_mut() {
-            *reasoning = Some("thinking...".to_string());
-        }
+        state.messages.push(TranscriptEntry::Reasoning {
+            id: "r1".into(),
+            text: "thinking...".into(),
+            collapsed: true,
+        });
 
         // Non-verbose: reasoning should not appear
         let lines = build_all_lines(&state, 80);
@@ -779,31 +1123,19 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant {
-            content,
-            is_streaming,
+        if let TranscriptEntry::AssistantText {
+            markdown,
+            streaming,
             ..
         } = state.current_assistant_mut()
         {
-            content.push_str("Hi there!");
-            *is_streaming = false;
+            markdown.push_str("Hi there!");
+            *streaming = false;
         }
 
         let mut cache = LineCache::default();
-        let first = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
-        let second = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let first = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
+        let second = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         assert_eq!(first, second);
         // Cache must actually have been populated, not silently bypassed.
         assert!(!cache.entries.is_empty());
@@ -813,7 +1145,11 @@ mod tests {
     fn build_all_lines_invalidates_on_content_change() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { is_streaming, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } = state.current_assistant_mut()
+        {
             // Must be non-streaming: `build_all_lines_cached` never caches a
             // streaming message (its spinner/tool content can change every
             // tick without `content_len` changing), so a still-streaming
@@ -823,27 +1159,18 @@ mod tests {
             *is_streaming = false;
         }
         let mut cache = LineCache::default();
-        let _first = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let _first = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         assert!(
             !cache.entries.is_empty(),
             "the message must actually be cached before we test invalidation"
         );
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("new text");
         }
-        let updated = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let updated = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         let has_new_text = updated.iter().any(|line| {
             line.spans
                 .iter()
@@ -860,20 +1187,8 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_system_message("x".repeat(60));
         let mut cache = LineCache::default();
-        let wide = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
-        let narrow = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            20,
-            &mut cache,
-        );
+        let wide = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
+        let narrow = build_all_lines_cached(&state.messages, state.verbose, 0, 20, &mut cache);
         assert_ne!(
             wide.len(),
             narrow.len(),
@@ -886,17 +1201,14 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("Hi there!");
         }
         let mut cache = LineCache::default();
-        let cached = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let cached = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         let uncached = build_all_lines(&state, 80);
         assert_eq!(cached, uncached, "caching must not change what's rendered");
     }
@@ -911,42 +1223,44 @@ mod tests {
         for i in 0..6 {
             state.add_user_message(format!("question {i}"));
             state.ensure_assistant_message();
-            if let ChatMessage::Assistant {
-                content,
-                is_streaming,
+            if let TranscriptEntry::AssistantText {
+                markdown,
+                streaming,
                 ..
             } = state.current_assistant_mut()
             {
-                content.push_str(&format!("answer {i}\nwith a second line"));
-                *is_streaming = i == 5; // only the last one stays streaming
+                markdown.push_str(&format!("answer {i}\nwith a second line"));
+                *streaming = i == 5; // only the last one stays streaming
             }
         }
         let full = build_all_lines(&state, 80);
         let mut cache = LineCache::default();
 
-        // Auto-scroll bottom window.
+        // Bottom window (offset 0).
         let height = 7;
-        let (total, visible) = build_visible_lines(
+        let (total, visible, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
-            true,
+            KEY_MODALITY,
             0,
             height,
         );
         assert_eq!(total, full.len());
         assert_eq!(visible, full[full.len() - height..].to_vec());
 
-        // Scrolled-up window (auto_scroll off, offset from the bottom).
-        let (_total, visible) = build_visible_lines(
+        // Scrolled-up window (offset from the bottom).
+        let (_total, visible, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
-            false,
+            KEY_MODALITY,
             10,
             height,
         );
@@ -955,16 +1269,601 @@ mod tests {
 
         // A second call with unchanged state must serve the same window from
         // cache (this is the per-frame steady state).
-        let (_total, visible2) = build_visible_lines(
+        let (_total, visible2, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
-            false,
+            KEY_MODALITY,
             10,
             height,
         );
         assert_eq!(visible, visible2);
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+    use crate::tui::regions::RegionKind;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use serde_json::json;
+    use shared_ui_logic::transcript::ToolRow;
+
+    const W: u16 = 60;
+    const H: u16 = 24;
+
+    /// A state holding one finished shell call with far more output than a
+    /// folded row shows — i.e. a row that has a hint.
+    fn state_with_a_folded_call() -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.messages.clear();
+        let mut row = ToolRow::new("c1", "bash", &json!({ "command": "ls" }));
+        row.start(0);
+        row.finish(
+            &aleph_protocol::ToolResult::success("line of output\n".repeat(40)),
+            10,
+            10,
+        );
+        state.messages.push(TranscriptEntry::Tool(row));
+        state
+    }
+
+    fn draw(state: &mut AppState) -> Vec<String> {
+        let backend = TestBackend::new(W, H);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_chat_area(f, state, f.area())).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..H)
+            .map(|y| {
+                (0..W)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()).to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn row_containing(rows: &[String], needle: &str) -> u16 {
+        let idx = rows
+            .iter()
+            .position(|r| r.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} never painted:\n{}", rows.join("\n")));
+        u16::try_from(idx).expect("a screen row fits u16")
+    }
+
+    /// The wire: the row a hint is *painted* on is the row a click on it is
+    /// *hit-tested* to.
+    ///
+    /// # When this goes red
+    ///
+    /// Any drift between the line builder's offsets and the painter — a
+    /// re-introduced `Wrap`, an off-by-one in the window→screen translation,
+    /// a cache hit that serves lines without their toggles. Each of those is
+    /// invisible to a test that only checks the region table's own arithmetic,
+    /// because both halves would agree with each other and disagree with the
+    /// screen (判据 §10).
+    #[test]
+    fn the_hint_a_frame_painted_is_the_row_a_click_lands_on() {
+        let mut state = state_with_a_folded_call();
+        state.mouse = true;
+        let rows = draw(&mut state);
+
+        let hint_y = row_containing(&rows, "to expand");
+        let hit = state
+            .regions
+            .hit(6, hint_y)
+            .unwrap_or_else(|| panic!("no region on the hint row:\n{}", rows.join("\n")));
+        assert_eq!(hit.kind, RegionKind::ToggleRow);
+        assert_eq!(hit.row_id, "c1");
+
+        // And the header, which is what makes folding again reachable.
+        let header_y = row_containing(&rows, "Bash(ls)");
+        let hit = state.regions.hit(2, header_y).expect("no region on header");
+        assert_eq!(hit.row_id, "c1");
+    }
+
+    /// Clicking that hint really unfolds the row, and the gesture that undoes
+    /// it is reachable from where the unfolding left the reader.
+    #[test]
+    fn clicking_the_hint_unfolds_and_the_closing_hint_folds_again() {
+        let mut state = state_with_a_folded_call();
+        state.mouse = true;
+        let rows = draw(&mut state);
+        let hint_y = row_containing(&rows, "to expand");
+        let id = state.regions.hit(6, hint_y).unwrap().row_id.clone();
+
+        state.toggle_tool_expanded(&id);
+        let rows = draw(&mut state);
+        assert!(
+            !rows.iter().any(|r| r.contains("to expand")),
+            "still folded:\n{}",
+            rows.join("\n")
+        );
+
+        // The way back is on screen without scrolling — the header is off the
+        // top by now, which is the whole reason the closing hint exists.
+        assert!(
+            !rows.iter().any(|r| r.contains("Bash(ls)")),
+            "this fixture is supposed to overflow the viewport:\n{}",
+            rows.join("\n")
+        );
+        let collapse_y = row_containing(&rows, "to collapse");
+        let id = state
+            .regions
+            .hit(6, collapse_y)
+            .expect("no target on the collapse row")
+            .row_id
+            .clone();
+        state.toggle_tool_expanded(&id);
+        let rows = draw(&mut state);
+        assert!(
+            rows.iter().any(|r| r.contains("to expand")),
+            "never refolded"
+        );
+    }
+
+    /// The guard the plan names: with capture off, the hint has to say
+    /// `ctrl+o`, because nothing is listening for a click.
+    ///
+    /// This is the fail-closed branch of spec §8, otherwise reachable only on
+    /// a terminal nobody tests on.
+    #[test]
+    fn with_mouse_capture_off_the_hint_names_the_key() {
+        let mut off = state_with_a_folded_call();
+        off.mouse = false;
+        let rows = draw(&mut off);
+        let hint = rows[row_containing(&rows, "to expand") as usize].clone();
+        assert!(hint.contains("ctrl+o to expand"), "{hint:?}");
+
+        let mut on = state_with_a_folded_call();
+        on.mouse = true;
+        let rows = draw(&mut on);
+        let hint = rows[row_containing(&rows, "to expand") as usize].clone();
+        assert!(hint.contains("click to expand"), "{hint:?}");
+    }
+
+    /// Ctrl+O reaches every folded row, not just one — which is what makes
+    /// the hint on *every* row true.
+    #[test]
+    fn the_expand_all_toggle_unfolds_then_refolds_every_row() {
+        let mut state = state_with_a_folded_call();
+        let mut second = ToolRow::new("c2", "bash", &json!({ "command": "pwd" }));
+        second.start(0);
+        second.finish(
+            &aleph_protocol::ToolResult::success("more\n".repeat(40)),
+            10,
+            10,
+        );
+        state.messages.push(TranscriptEntry::Tool(second));
+
+        let hints = |s: &mut AppState| draw(s).iter().filter(|r| r.contains("to expand")).count();
+        assert_eq!(hints(&mut state), 2);
+        state.toggle_expand_all();
+        assert_eq!(hints(&mut state), 0);
+        state.toggle_expand_all();
+        assert_eq!(hints(&mut state), 2);
+    }
+
+    /// The docked control appears only while the reader is somewhere else,
+    /// and it wins the transcript row it covers.
+    #[test]
+    fn the_back_to_bottom_control_is_docked_only_while_scrolled_up() {
+        let mut state = state_with_a_folded_call();
+        // Enough rows that there is something to scroll.
+        for i in 0..30 {
+            state.add_system_message(format!("row {i}"));
+        }
+        let rows = draw(&mut state);
+        assert!(
+            !rows.iter().any(|r| r.contains("Back to bottom")),
+            "docked while already at the bottom:\n{}",
+            rows.join("\n")
+        );
+
+        state.scroll_up(5);
+        let rows = draw(&mut state);
+        let y = row_containing(&rows, "Back to bottom");
+        let hit = state
+            .regions
+            .hit(W - 3, y)
+            .expect("the docked control has no click target");
+        assert_eq!(hit.kind, RegionKind::BackToBottom);
+    }
+
+    /// Rows that landed below the reader change its wording — otherwise
+    /// `unseen_below` is a field nothing renders (判据 §17).
+    #[test]
+    fn unseen_rows_change_the_docked_wording() {
+        let mut state = state_with_a_folded_call();
+        for i in 0..30 {
+            state.add_system_message(format!("row {i}"));
+        }
+        state.scroll_up(5);
+        state.unseen_below = true;
+        let rows = draw(&mut state);
+        assert!(
+            rows.iter().any(|r| r.contains("New output")),
+            "unseen rows read the same as none:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// A wild offset (`Home` maps to `usize::MAX / 2`) is clamped to
+    /// something the transcript can actually reach, so the next `scroll_down`
+    /// moves the screen instead of spending 10^18 keypresses.
+    #[test]
+    fn an_unreachable_scroll_offset_is_clamped_by_the_frame_that_paints_it() {
+        let mut state = state_with_a_folded_call();
+        for i in 0..30 {
+            state.add_system_message(format!("row {i}"));
+        }
+        draw(&mut state);
+        state.scroll_up(usize::MAX / 2);
+        draw(&mut state);
+        assert!(
+            state.scroll_offset < 1_000,
+            "offset left at {}",
+            state.scroll_offset
+        );
+
+        let before = state.scroll_offset;
+        state.scroll_down(1);
+        draw(&mut state);
+        assert_eq!(state.scroll_offset, before - 1);
+    }
+
+    /// The table describes the LAST painted frame and nothing else: a frame
+    /// with no transcript leaves no stale targets behind.
+    #[test]
+    fn a_repaint_replaces_the_targets_rather_than_adding_to_them() {
+        let mut state = state_with_a_folded_call();
+        state.mouse = true;
+        let rows = draw(&mut state);
+        let hint_y = row_containing(&rows, "to expand");
+        assert!(state.regions.hit(6, hint_y).is_some());
+
+        state.messages.clear();
+        draw(&mut state);
+        assert!(
+            state.regions.hit(6, hint_y).is_none(),
+            "a target survived the row it described"
+        );
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+    use aleph_protocol::file_change::{FileChange, FileChangeKind, Hunk, HunkLine, LineTag};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use serde_json::json;
+    use shared_ui_logic::transcript::{ToolRow, TurnSummaryEntry};
+
+    /// Every producer this widget paints, in one transcript, each with content
+    /// wider than any reasonable pane.
+    ///
+    /// Named rather than sampled: the list is the set of `TranscriptEntry`
+    /// variants `render_settled_message` matches on, so a variant added
+    /// without a wrap or a clip is a variant missing from here — and the
+    /// `match` it is added to is the reminder.
+    fn a_transcript_of_over_wide_rows() -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.messages.clear();
+        state.verbose = true;
+        let long = "verylongunbreakabletoken".repeat(20);
+
+        state.add_user_message(long.clone());
+        state.messages.push(TranscriptEntry::AssistantText {
+            id: "a1".into(),
+            markdown: long.clone(),
+            streaming: false,
+        });
+        state.messages.push(TranscriptEntry::Reasoning {
+            id: "r1".into(),
+            text: long.clone(),
+            collapsed: false,
+        });
+        state.add_system_message(long.clone());
+
+        let mut header_heavy = ToolRow::new("c1", "bash", &json!({ "command": long.clone() }));
+        header_heavy.start(0);
+        header_heavy.finish(&aleph_protocol::ToolResult::success("ok\n"), 10, 10);
+        state.messages.push(TranscriptEntry::Tool(header_heavy));
+
+        let mut diff_row = ToolRow::new("c2", "apply_patch", &json!({}));
+        diff_row.start(0);
+        diff_row.finish(&aleph_protocol::ToolResult::success("done"), 10, 10);
+        diff_row.body = RowBody::FileChanges(vec![FileChange {
+            path: format!("src/deeply/nested{}/name.rs", "/x".repeat(40)),
+            kind: FileChangeKind::Modified,
+            added: 1,
+            removed: 1,
+            hunks: vec![Hunk {
+                old_start: 1,
+                new_start: 1,
+                lines: vec![
+                    HunkLine {
+                        tag: LineTag::Del,
+                        text: "y".repeat(300),
+                    },
+                    HunkLine {
+                        tag: LineTag::Add,
+                        text: "z".repeat(300),
+                    },
+                ],
+            }],
+            unavailable: None,
+        }]);
+        state.messages.push(TranscriptEntry::Tool(diff_row));
+
+        state
+            .messages
+            .push(TranscriptEntry::TurnSummary(TurnSummaryEntry {
+                commands: 12,
+                reads: 30,
+                edits: 8,
+                writes: 3,
+                others: 5,
+                failed: 2,
+                duration_ms: 80_000,
+            }));
+        state
+    }
+
+    /// An over-wide row above a tool row does not move that row's click
+    /// target — i.e. one logical line still occupies exactly one screen row.
+    ///
+    /// # When this goes red
+    ///
+    /// Losing BOTH halves of the invariant: [`clip_to_width`] at the paint
+    /// site and the absence of `Wrap` on the paragraph. Either alone still
+    /// holds the line — a clipped line has nothing left to wrap, and an
+    /// unwrapped paragraph truncates rather than reflows — so the mutation
+    /// that reddens this is removing the clip AND putting `Wrap` back, which
+    /// is what was measured. Stated this way rather than as "don't re-add
+    /// `Wrap`" because an assertion whose named cause does not actually
+    /// redden it is worse than no assertion (判据 §2, §3).
+    ///
+    /// Nothing else catches it: the buffer is exactly `width` columns wide
+    /// either way, and the region table would agree with the line builder
+    /// while both disagreed with the screen (判据 §10).
+    ///
+    /// The over-wide row goes ABOVE the tool row on purpose — a wrap below it
+    /// would move nothing this test can see. It is also a tool HEADER: the
+    /// first fixture used a system message, which wraps itself, and stayed
+    /// green under both mutations.
+    #[test]
+    fn an_over_wide_row_above_a_tool_row_does_not_shift_its_click_target() {
+        const W: u16 = 40;
+        const H: u16 = 20;
+        let mut state = AppState::new("s".into(), "m".into());
+        state.messages.clear();
+        state.mouse = true;
+        // A tool HEADER, because it is one of the producers that does not
+        // wrap on its own — a system message or a markdown paragraph would
+        // have wrapped itself and proved nothing.
+        let mut wide = ToolRow::new("c0", "bash", &json!({ "command": "w".repeat(200) }));
+        wide.start(0);
+        wide.finish(&aleph_protocol::ToolResult::success("ok\n"), 10, 10);
+        state.messages.push(TranscriptEntry::Tool(wide));
+
+        let mut row = ToolRow::new("c1", "bash", &json!({ "command": "ls" }));
+        row.start(0);
+        row.finish(
+            &aleph_protocol::ToolResult::success("out\n".repeat(40)),
+            10,
+            10,
+        );
+        state.messages.push(TranscriptEntry::Tool(row));
+
+        let backend = TestBackend::new(W, H);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_chat_area(f, &mut state, f.area()))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows: Vec<String> = (0..H)
+            .map(|y| {
+                (0..W)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()).to_string())
+                    .collect()
+            })
+            .collect();
+
+        let hint_y = rows
+            .iter()
+            .position(|r| r.contains("to expand"))
+            .unwrap_or_else(|| panic!("no hint painted:\n{}", rows.join("\n")));
+        let hint_y = u16::try_from(hint_y).expect("a screen row fits u16");
+        let hit = state.regions.hit(6, hint_y).unwrap_or_else(|| {
+            panic!(
+                "the hint painted at row {hint_y} has no click target there:\n{}",
+                rows.join("\n")
+            )
+        });
+        assert_eq!(hit.row_id, "c1");
+    }
+
+    /// A cut is marked, because a truncated path that looks whole reads as a
+    /// whole path.
+    #[test]
+    fn a_clipped_row_says_it_was_clipped() {
+        let backend = TestBackend::new(30, 12);
+        let mut term = Terminal::new(backend).unwrap();
+        let mut state = a_transcript_of_over_wide_rows();
+        term.draw(|f| render_chat_area(f, &mut state, f.area()))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows: Vec<String> = (0..12)
+            .map(|y| {
+                (0..30)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()).to_string())
+                    .collect()
+            })
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains('\u{2026}')),
+            "nothing said it had been cut:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    /// The clip splits by COLUMNS on a char boundary. A byte split would
+    /// panic on the first CJK row; a char count would leave a line of them
+    /// half empty.
+    #[test]
+    fn clipping_is_column_correct_on_wide_characters() {
+        let line = Line::from(Span::raw("宽宽宽宽宽宽宽宽"));
+        let clipped = clip_to_width(line, 7);
+        let text: String = clipped.spans.iter().map(|s| s.content.as_ref()).collect();
+        // 6 columns of CJK (3 chars) + the ellipsis = 7.
+        assert_eq!(text, "宽宽宽\u{2026}");
+        assert_eq!(UnicodeWidthStr::width(text.as_str()), 7);
+    }
+}
+
+/// The header entry: it is painted, it is first, and everything below it
+/// knows how many rows it took.
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use serde_json::json;
+    use shared_ui_logic::transcript::ToolRow;
+
+    const W: u16 = 60;
+    const H: u16 = 20;
+
+    fn draw(state: &mut AppState) -> Vec<String> {
+        let mut term = Terminal::new(TestBackend::new(W, H)).expect("backend");
+        term.draw(|f| render_chat_area(f, state, f.area()))
+            .expect("draw");
+        let buf = term.backend().buffer().clone();
+        (0..H)
+            .map(|y| {
+                (0..W)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()).to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn short_state() -> AppState {
+        let mut state = AppState::new("s".into(), "claude-opus-5".into());
+        let mut row = ToolRow::new("c1", "bash", &json!({ "command": "ls" }));
+        row.start(0);
+        row.finish(&aleph_protocol::ToolResult::success("out"), 10, 10);
+        state.messages.push(TranscriptEntry::Tool(row));
+        state
+    }
+
+    /// The transcript opens on it, and it carries the model this screen is
+    /// actually captioned with — not a string frozen at construction.
+    #[test]
+    fn the_header_is_the_first_row_of_the_transcript() {
+        let mut state = short_state();
+        let rows = draw(&mut state);
+        // Row 0 is the block's top border; row 1 is the first content row.
+        assert!(rows[1].contains("\u{2135} Aleph"), "{:?}", &rows[..3]);
+        assert!(rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+
+        // It follows the model, because it is derived rather than stored.
+        state.model_name = "gpt-5".into();
+        let rows = draw(&mut state);
+        assert!(rows[1].contains("gpt-5"), "{:?}", &rows[..3]);
+        assert!(!rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+    }
+
+    /// The folder and branch appear only when the server said there is one.
+    /// A conversation scoped to nothing must not borrow this terminal's cwd.
+    #[test]
+    fn the_folder_appears_only_when_the_conversation_has_one() {
+        let mut state = short_state();
+        assert!(state.project_root().is_none());
+        let rows = draw(&mut state);
+        assert!(!rows[1].contains('('), "no folder, no branch: {}", rows[1]);
+
+        state.apply_session_snapshot(aleph_protocol::SessionSnapshot {
+            session_key: "s".into(),
+            project_root: Some("/w/proj".into()),
+            ..Default::default()
+        });
+        let rows = draw(&mut state);
+        assert!(rows[1].contains("/w/proj"), "{}", rows[1]);
+    }
+
+    /// **The rows it takes are rows everything below it moved by.**
+    ///
+    /// The same transcript, built with and without the header at a width and
+    /// height that show all of it: the tool row lands exactly
+    /// `header + blank separator` = 2 rows lower.
+    ///
+    /// # When this goes red
+    ///
+    /// Counting the header in `total_lines` but not emitting it (the paint
+    /// loses two rows at the top and every click target below slides up), or
+    /// emitting it without counting it (the window arithmetic overruns and
+    /// the transcript's newest row falls off the bottom). Both were run.
+    #[test]
+    fn everything_below_the_header_moves_down_by_its_height() {
+        let mut state = short_state();
+        let painted = draw(&mut state);
+        let with_header = painted
+            .iter()
+            .position(|r| r.contains("Bash("))
+            .expect("the tool row is painted");
+
+        let mut cache = LineCache::default();
+        let (_total, headerless, _) = build_visible_lines(
+            &[],
+            &state.messages,
+            state.verbose,
+            0,
+            W - 2, // the block's borders
+            &mut cache,
+            KEY_MODALITY,
+            0,
+            H as usize - 2,
+        );
+        let without_header = headerless
+            .iter()
+            .position(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .contains("Bash(")
+            })
+            .expect("the tool row is built");
+
+        // +1 for the block's top border, +2 for the header and its separator.
+        assert_eq!(with_header, without_header + 1 + 2);
+    }
+
+    /// It scrolls away like any other entry — it is a transcript row, not a
+    /// pinned banner.
+    #[test]
+    fn the_header_scrolls_off_the_top() {
+        let mut state = short_state();
+        for i in 0..40 {
+            state.add_system_message(format!("line {i}"));
+        }
+        let rows = draw(&mut state);
+        assert!(
+            !rows.iter().any(|r| r.contains("\u{2135} Aleph")),
+            "parked at the bottom of a long transcript, the header is above the window"
+        );
+
+        state.scroll_offset = usize::MAX / 2; // Home
+        let rows = draw(&mut state);
+        assert!(
+            rows[1].contains("\u{2135} Aleph"),
+            "scrolled to the top it is the first row again: {:?}",
+            &rows[..3]
+        );
     }
 }

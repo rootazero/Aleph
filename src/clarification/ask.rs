@@ -378,6 +378,25 @@ pub async fn ask(
         "ask: question delivered — awaiting reply"
     );
 
+    // §6.1: the park is a fact BEFORE the park. Written only once delivery is
+    // proven — an undeliverable question fails fast above and never parks.
+    // The stamp names no tool: `ask` cannot know whether `ask_user` or the
+    // scratchpad plan gate called it, and the dispatch it pairs with (by the
+    // ambient `CallIdentity`) owns the name. Best-effort: the wait below does
+    // not depend on the write — a lost stamp reads "outcome unknown", U3's
+    // safe direction.
+    crate::session::call_log::emit_for_ambient_call(
+        &turn.session_key,
+        "clarification::ask",
+        "clarification park",
+        |turn_id, call_id| crate::session::events::SessionEvent::ToolCallParked {
+            turn_id,
+            call_id,
+            reason: crate::session::events::ParkReason::Clarification,
+        },
+    )
+    .await;
+
     // Block until the user replies, the request is superseded, or the timeout
     // fires. The explicit timeout guarantees the tool never hangs even if no
     // cleanup pass reaps the registry entry. Cancellation of the run drops this

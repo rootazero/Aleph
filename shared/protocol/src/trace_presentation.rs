@@ -828,6 +828,7 @@ mod tests {
                 tool_name: "read_file".into(),
                 input: json!({}),
                 duration_ms: 42,
+                presentation: None,
             },
             result: AgentTraceToolResult::Success {
                 output: json!("file contents"),
@@ -849,6 +850,7 @@ mod tests {
                 tool_name: "run".into(),
                 input: json!({}),
                 duration_ms: 5,
+                presentation: None,
             },
             result: AgentTraceToolResult::Error {
                 error: "not found".into(),

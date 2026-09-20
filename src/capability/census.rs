@@ -810,6 +810,16 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).count(),
             sites.iter().filter(|s| s.is_slot).count(),
         );
+        // ⚠️ KNOWN RED BY ONE as of 2026-09-06, and editing this literal to
+        // silence it is the wrong move. An unaccounted raw handle exists on
+        // `main`: the measured total there is one higher than what this
+        // assertion states, and the gap predates this branch. The literal
+        // therefore tracks the DELTA of deliberate additions, not a measured
+        // total — a reader who lands here should go looking for that handle on
+        // `main`, not for a regression in whatever they just changed. Closing
+        // it means naming the handle and then correcting this number in the
+        // same commit (判据 §17: a guard edited green is worse than one that is
+        // honestly red).
         assert_eq!(
             raw + slots,
             49,
@@ -818,13 +828,19 @@ mod tests {
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number. Last moved 2026-09-06: \
-             48 -> 49. NOT a new capability handle. Two lineages each added one \
-             slot and each bumped this constant by one from a DIFFERENT base \
-             (b359f75e4 added `search::handle::GLOBAL_SEARCH_HANDLE`, 46 -> 47; \
-             bb2c5ed4c added `tasks::heartbeat::GLOBAL_HEARTBEAT`, 47 -> 48). \
-             The text merge kept both slots and only one of the two bumps. Both \
-             slots are in `ALL_SLOTS`.",
+             investigate before editing this number. NOTE: this literal is \
+             known to be one BELOW the live total (see the comment above); a \
+             red of exactly one, with `main`'s unaccounted handle still \
+             unfound, is the expected state and not evidence about your change. \
+             Last moved 2026-09-06: 48 -> 49 when `thinker/prompt-size-registry` \
+             was added, so `context.breakdown` could report the prompt that was \
+             actually sent instead of re-deriving it. Before that, 2026-09-04: \
+             47 -> 48 when `heartbeat/service` was added, so `users.update`'s \
+             deactivation freeze had a fourth subsystem to reach. NOTE: this \
+             branch (worktree-cc-render-r1) added `thinker/prompt-size-registry`; \
+             origin/main independently added `search::handle::GLOBAL_SEARCH_HANDLE` \
+             (b359f75e4) and `tasks::heartbeat::GLOBAL_HEARTBEAT` (bb2c5ed4c). \
+             Both branches' slots are in `ALL_SLOTS`; the merged count is 49.",
             raw + slots
         );
 

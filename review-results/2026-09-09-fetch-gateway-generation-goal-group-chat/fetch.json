@@ -1,0 +1,62 @@
+{
+  "module": "src/fetch",
+  "scan": {
+    "files_scanned": ["src/fetch/mod.rs", "src/fetch/provider.rs", "src/fetch/providers/*"],
+    "lines_total": 365,
+    "rust_doctor_diagnostics_in_module": 0
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "Firecrawl response size-cap error mislabels transport failures as size refusals",
+      "file": "src/fetch/providers/firecrawl.rs",
+      "line": 123,
+      "category": "error",
+      "description": "bytes_with_limit distinguishes Ok(None) (size-cap refusal) from Err(_). The pre-fix code folded both into 'firecrawl response exceeded N bytes', misattributing TCP resets to a size policy.",
+      "trigger": "Firecrawl backend resets the TCP connection while serving a within-cap response.",
+      "suggested_fix": "Split: pass Result<Option<Vec<u8>>> through ?, map only Ok(None) to size-cap message. The Err arm goes through AlephError::network with the original error text.",
+      "confidence": "high",
+      "fixed_in_commit": "d8a12aee7"
+    },
+    {
+      "severity": "P2",
+      "title": "Firecrawl test success never persists verified=true",
+      "file": "src/gateway/handlers/fetch_config.rs",
+      "line": 474,
+      "category": "wiring",
+      "description": "handle_test writes verified=true only when backends.get_mut(name) succeeds. Per Strategy V firecrawl never lands in fetch.backends (filtered at handle_update:252), so the write silently no-ops and the Panel always shows verified=false for firecrawl even after a successful test.",
+      "trigger": "Operator runs fetch_config.test with provider_type=firecrawl after a successful connection.",
+      "suggested_fix": "Add FetchConfigInternal::verified_shared: HashMap<String, bool>. handle_test writes to backends[name].verified when present, else to verified_shared[name]. synth_firecrawl_dto reads verified_shared.",
+      "confidence": "high",
+      "fixed_in_commit": "d8a12aee7"
+    },
+    {
+      "severity": "P3",
+      "title": "Magic number 60 duplicated across fetch providers, builtin crawl4ai, and web_fetch policy",
+      "file": "src/fetch/providers/crawl4ai.rs",
+      "line": 24,
+      "category": "performance",
+      "description": "Three independent 60-second defaults: Crawl4aiFetchProvider::from_backend unwrap_or(60), Crawl4aiBackend::default_timeout() const fn → 60, WebFetchPolicy::default_crawl4ai_timeout() const fn → 60. Changing one leaves the others stale.",
+      "trigger": "Future change to crawl4ai default timeout in one location only.",
+      "suggested_fix": "Re-export a single pub(crate) const DEFAULT_CRAWL4AI_TIMEOUT_SECS: u64 = 60; and reference that from all three sites.",
+      "confidence": "high",
+      "fixed_in_commit": null,
+      "deferred_reason": "Low-impact hygiene; three-call-site refactor outside the immediate review scope."
+    },
+    {
+      "severity": "P3",
+      "title": "Secret redaction gap: firecrawl serde_json parse error can echo upstream body containing api_key",
+      "file": "src/fetch/providers/firecrawl.rs",
+      "line": 133,
+      "category": "security",
+      "description": "The send() funnel redacts the bearer token on reqwest failures and body excerpts; the JSON parse step is outside that funnel. A misbehaving firecrawl server echoing the auth header in a non-JSON body would land the api_key in the operator-facing error.",
+      "trigger": "Captive portal / debug page returns non-JSON containing the Authorization header.",
+      "suggested_fix": "Apply a redact_secret helper at parse time. Either expose search/providers/base.rs::redact via pub(crate) or duplicate the two-line helper.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "Low-probability leak vector; existing redaction elsewhere covers the more likely paths."
+    }
+  ],
+  "severities_summary": {"P0": 0, "P1": 0, "P2": 2, "P3": 2},
+  "notes": "Module is in a deliberately reduced state (commit ae8cc6497 dropped the inert [fetch] provider chain). Post-DNS-pin reduction removed most prior wiring surface. Two P2s fixed (size-error fold; verified persistence for firecrawl). Two P3s deferred as hygiene."
+}

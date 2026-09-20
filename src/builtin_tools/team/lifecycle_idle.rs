@@ -80,6 +80,14 @@ impl AlephTool for LifecycleIdleTool {
     type Output = LifecycleIdleOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any team read or message send. The
+        // team-existence + leader-self checks below are not membership
+        // checks — a non-member could satisfy both and still send
+        // arbitrary `summary` / `last_task_id` text to the leader's
+        // inbox and the team event log. Mirrors the gate the sibling
+        // lifecycle_resolve_shutdown uses.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         let team = self
             .team_store
             .get_team(&args.team_id)
@@ -175,6 +183,23 @@ mod tests {
     #[tokio::test]
     async fn worker_idle_message_lands_in_leader_inbox() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // The 2026-09-08 audit (39a99baf9) gated this tool with
+        // `require_team_auth`, which rejects callers that are neither
+        // leader nor member. The fixture creates the team with a leader
+        // only — tests that pretend to be a worker must explicitly add
+        // themselves, or the membership check answers NotFound.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleIdleTool::new(router, team_store, "worker-1".into());
 
         let out = tool
@@ -241,6 +266,21 @@ mod tests {
     #[tokio::test]
     async fn idle_default_summary_is_filled_in() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // See `worker_idle_message_lands_in_leader_inbox` for why we add
+        // the worker to the team — `require_team_auth` was added in
+        // audit 39a99baf9 and rejects non-members.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleIdleTool::new(router, team_store, "worker-1".into());
 
         tool.call(LifecycleIdleArgs {

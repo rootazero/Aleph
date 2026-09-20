@@ -366,6 +366,24 @@ impl AgentHarness {
         canonical: Option<&[String]>,
         claims: Option<&[crate::tools::concurrency::ConcurrencyClaim]>,
     ) -> Result<usize, HarnessError> {
+        // Cross-length invariant: `canonical` and `claims` (when provided)
+        // are pre-computed by the parallel-admission probe in `act()` to
+        // match `tool_calls.len()` element-for-element. The `start..end`
+        // slicing below trusts that alignment; pin it locally so a future
+        // edit to the probe surfaces here instead of in an
+        // out-of-bounds panic at the call site.
+        if let (Some(c), Some(cl)) = (canonical, claims) {
+            debug_assert_eq!(
+                c.len(),
+                tool_calls.len(),
+                "canonical slice length must match tool_calls"
+            );
+            debug_assert_eq!(
+                cl.len(),
+                tool_calls.len(),
+                "claims slice length must match tool_calls"
+            );
+        }
         let mut executed_count: usize = 0;
 
         // Within-batch idempotency memo. Scoped to this single dispatch group:
@@ -534,7 +552,7 @@ impl AgentHarness {
                 executed_count = executed_count.saturating_add(1);
                 let mut output = cached.clone();
                 output.metadata.latency_ms = 0;
-                let output_value = output.value.clone();
+                let memo_output = output.clone();
                 let result_event = SessionEvent::ToolResult {
                     turn_id,
                     call_id: call.id.clone(),
@@ -549,7 +567,7 @@ impl AgentHarness {
                 // model observed a result). Keeps the broadcast stream's
                 // ToolStart↔ToolEnd symmetry intact for deduplicated calls.
                 // 0 ms — nothing was executed (mirrors the trace event below).
-                callback.on_tool_call_done(&call.id, Some(&output_value), None, 0);
+                callback.on_tool_call_done(&call.id, Some(&memo_output), None, 0);
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
@@ -560,7 +578,7 @@ impl AgentHarness {
                             duration_ms: 0,
                         },
                         result: crate::tools::runtime::ToolResult::Success {
-                            output: output_value,
+                            output: memo_output.value,
                         },
                     },
                 );
@@ -632,7 +650,7 @@ impl AgentHarness {
                     // Live "done" event — mirror of `on_tool_call_start`, fired
                     // before the transcript persists (same order as the
                     // parallel path's completion-time firing).
-                    callback.on_tool_call_done(&call.id, Some(&output.value), None, dur_ms);
+                    callback.on_tool_call_done(&call.id, Some(&output), None, dur_ms);
                     self.persist_tool_success(
                         session_id, turn_id, &call, output, dur_ms, iteration,
                     )
@@ -960,7 +978,7 @@ impl AgentHarness {
                 let call = &tool_calls[idx];
                 let outcome = match exec {
                     Ok(output) => {
-                        callback.on_tool_call_done(&call.id, Some(&output.value), None, dur_ms);
+                        callback.on_tool_call_done(&call.id, Some(&output), None, dur_ms);
                         Ok(output)
                     }
                     Err(e) => {

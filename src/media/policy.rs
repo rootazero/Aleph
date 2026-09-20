@@ -34,13 +34,15 @@ pub struct MediaPolicy {
     pub max_document_pages: u32,
 
     /// Maximum file size in bytes for media whose type could not be detected
-    /// (default: 100 MB).
+    /// (default: 20 MB, matching the image cap).
     ///
-    /// The default preserves the constant this field replaced. Note it is
-    /// still higher than the image (20 MB) and document (50 MB) caps, so a
-    /// caller declaring `MediaType::Unknown` can claim a larger quota than a
-    /// declared image — closing that gap is an operator decision, made by
-    /// lowering this value in config.
+    /// The previous default was 100 MB, which was *higher* than the image
+    /// (20 MB) and document (50 MB) per-type caps. A caller declaring
+    /// `MediaType::Unknown` could therefore claim a larger quota than a
+    /// declared image — closing that gap is a default-policy decision, not
+    /// an operator one. Operators can still raise the value explicitly via
+    /// config; the `debug_assert!` in `MediaPolicy::new` pins the invariant
+    /// that the unknown cap must not exceed the smallest per-type cap.
     #[serde(default = "default_max_unknown_bytes")]
     pub max_unknown_bytes: u64,
 }
@@ -64,7 +66,12 @@ const fn default_max_document_pages() -> u32 {
     200
 }
 const fn default_max_unknown_bytes() -> u64 {
-    100 * 1024 * 1024
+    // MED-08: lower the default from 100 MB to 20 MB so a caller declaring
+    // `MediaType::Unknown` cannot claim a larger quota than a declared image
+    // (which is also 20 MB). The image cap is the smallest per-type cap and
+    // a sensible lower bound for "we have no idea what this is, refuse
+    // anything we'd also refuse for an image".
+    20 * 1024 * 1024
 }
 
 impl Default for MediaPolicy {
@@ -82,6 +89,41 @@ impl Default for MediaPolicy {
 }
 
 impl MediaPolicy {
+    /// Construct a `MediaPolicy` and assert that the unknown-type cap is no
+    /// wider than the smallest per-type cap. `MediaType::Unknown` is the
+    /// escape hatch for "we don't know what it is", and the safe default is
+    /// that not-knowing cannot grant more quota than the most restrictive
+    /// known type. This constructor is the supported way to build a
+    /// non-default policy; `Default::default` already passes the assertion
+    /// in tree, so existing callers are unaffected.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        max_image_bytes: u64,
+        max_audio_bytes: u64,
+        max_video_duration: u64,
+        max_video_bytes: u64,
+        max_document_bytes: u64,
+        max_document_pages: u32,
+        max_unknown_bytes: u64,
+    ) -> Self {
+        debug_assert!(
+            max_unknown_bytes <= max_image_bytes,
+            "max_unknown_bytes ({max_unknown_bytes}) must be <= \
+             max_image_bytes ({max_image_bytes}); otherwise a caller declaring \
+             MediaType::Unknown can claim a larger quota than a declared image",
+        );
+        Self {
+            max_image_bytes,
+            max_audio_bytes,
+            max_video_duration,
+            max_video_bytes,
+            max_document_bytes,
+            max_document_pages,
+            max_unknown_bytes,
+        }
+    }
+
     /// Validate file size against policy for the given media type.
     pub fn check_size(
         &self,
@@ -119,7 +161,13 @@ impl MediaPolicy {
                     });
                 }
                 if let Some(dur) = duration_secs {
-                    if !dur.is_finite() || *dur > self.max_video_duration as f64 {
+                    // SECURITY (P1 MED-06): the previous predicate allowed
+                    // negative finite values to slip through (only NaN and
+                    // +inf were rejected alongside the upper bound). A
+                    // hostile caller could declare `duration_secs: -3600.0`
+                    // and bypass the duration cap. Reject any non-positive
+                    // finite duration up front.
+                    if *dur < 0.0 || !dur.is_finite() || *dur > self.max_video_duration as f64 {
                         return Err(MediaError::SizeLimitExceeded {
                             message: format!(
                                 "Video duration {:.0}s exceeds limit of {}s",
@@ -222,6 +270,24 @@ mod tests {
             duration_secs: Some(2000.0),
         };
         assert!(p.check_size(&mt, 1024).is_err());
+    }
+
+    /// Regression test for MED-06: a negative finite `duration_secs` was
+    /// previously accepted because the predicate only rejected non-finite
+    /// values and values above `max_video_duration`. -1.0 is finite and
+    /// below the upper bound, but it is not a valid duration and must be
+    /// rejected.
+    #[test]
+    fn check_size_video_negative_duration_rejected() {
+        let p = MediaPolicy::default();
+        let mt = MediaType::Video {
+            format: VideoFormat::Mp4,
+            duration_secs: Some(-1.0),
+        };
+        assert!(
+            p.check_size(&mt, 1024).is_err(),
+            "negative duration must be rejected"
+        );
     }
 
     #[test]

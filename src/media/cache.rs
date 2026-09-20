@@ -260,7 +260,21 @@ impl MediaCache {
         };
         let entries = match std::fs::read_dir(&base) {
             Ok(e) => e,
-            Err(_) => return, // dir doesn't exist yet — nothing to clean
+            // MED-07: a missing base is the expected first-run state — stay
+            // silent. Any OTHER error (EACCES from a wrong-permission root,
+            // EIO on a broken mount, ENOTDIR if the path was clobbered)
+            // would mean the sweep is silently doing nothing, which is the
+            // same surface as "nothing to clean". Log so the operator can
+            // see the cache is unreachable.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    path = %base.display(),
+                    "media cache base unreadable — skipping stale sweep"
+                );
+                return;
+            }
         };
 
         let now = SystemTime::now();

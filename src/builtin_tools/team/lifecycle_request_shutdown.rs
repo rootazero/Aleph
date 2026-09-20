@@ -69,6 +69,15 @@ impl AlephTool for LifecycleRequestShutdownTool {
     type Output = LifecycleRequestShutdownOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any team read or message send. The
+        // team-existence + leader-self checks below do not verify the
+        // caller is a team member — a non-member could pass both and
+        // still fire a ShutdownRequest to the leader with arbitrary
+        // `reason` text. The leader's lifecycle_resolve_shutdown is
+        // gated; this inbound half must be too, or the inbox and event
+        // log can be spammed from outside the team.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         let team = self
             .team_store
             .get_team(&args.team_id)
@@ -161,6 +170,20 @@ mod tests {
     #[tokio::test]
     async fn worker_shutdown_request_reaches_leader_inbox() {
         let (router, msg_store, team_store, team_id) = make_fixture("leader-1").await;
+        // Audit 39a99baf9 added `require_team_auth` to this tool — same
+        // membership registration the sibling lifecycle_idle tests need.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleRequestShutdownTool::new(router, team_store, "worker-1".into());
 
         let out = tool
@@ -200,6 +223,19 @@ mod tests {
     #[tokio::test]
     async fn empty_reason_rejected() {
         let (router, _, team_store, team_id) = make_fixture("leader-1").await;
+        // Audit 39a99baf9 — same membership requirement as above.
+        team_store
+            .add_member(crate::teams::types::NewTeamMember {
+                team_id: team_id.clone(),
+                agent_id: "worker-1".to_string(),
+                role: "member".to_string(),
+                kind: crate::teams::types::TeamMemberKind::Agent,
+                acp_harness_id: None,
+                acp_cwd: None,
+                acp_session_name: None,
+            })
+            .await
+            .unwrap();
         let tool = LifecycleRequestShutdownTool::new(router, team_store, "worker-1".into());
 
         let err = tool

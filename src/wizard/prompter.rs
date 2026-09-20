@@ -143,19 +143,24 @@ impl RpcPrompter {
                 "Answer channel closed unexpectedly (flow may have panicked)".to_string(),
             )),
             Err(_) => {
-                // Reclaim our sender so it cannot outlive the prompt. If it is
-                // already gone, an `answer()` raced the deadline — accept the
-                // value if it landed rather than discarding a real answer.
-                let reclaimed = {
+                // Reclaim our sender so it cannot outlive the prompt.
+                // The old code branched on whether the reclaim returned `Some`
+                // (the entry was still here) and only fell through to
+                // `rx.try_recv()` in the `None` branch — but `Some` means an
+                // `answer()` raced ahead of us, consumed the sender with
+                // `send()`, and dropped it; the value is therefore already in
+                // `rx`, exactly the case we must not drop. Always attempt
+                // `try_recv()` first; only declare timeout if nothing came
+                // through.
+                {
                     let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
-                    answers.remove(&step_id)
-                };
-                let raced_answer = if reclaimed.is_none() {
-                    rx.try_recv().ok()
-                } else {
-                    None
-                };
-                if let Some(value) = raced_answer {
+                    answers.remove(&step_id);
+                }
+                if let Ok(value) = rx.try_recv() {
+                    debug!(
+                        step_id = %step_id,
+                        "Late wizard answer recovered at timeout boundary"
+                    );
                     return Ok(value);
                 }
                 warn!(step_id = %step_id, "Timed out waiting for wizard answer");

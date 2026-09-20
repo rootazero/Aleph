@@ -2,6 +2,7 @@
 
 use crate::harness::trait_def::HarnessError;
 use crate::orchestrator::errors::FlowError;
+use crate::session::service::SessionError;
 
 /// Classify a non-cancelled `HarnessError` as either a provider-transient
 /// failure (retryable by Gateway's outer fallback loop) or an internal error.
@@ -30,7 +31,19 @@ use crate::orchestrator::errors::FlowError;
 ///
 /// TODO(phase6c): replace with structural matching once `HarnessError`
 /// surfaces a `Transient(AlephError)` variant directly.
+///
+/// One arm IS structural, and comes first: a session row this build cannot
+/// decode ([`SessionError::UndecodableRecord`]) is never re-dispatched — the
+/// re-dispatch would read the same row — whatever its rendered text happens
+/// to contain (the row's `type` tag and serde's reason are in that text, and
+/// either can spell a network marker). The refusal names the one exit.
 pub(super) fn classify_harness_error(err: HarnessError, provider: &str) -> FlowError {
+    if let HarnessError::Session(SessionError::UndecodableRecord(u)) = &err {
+        return FlowError::Internal(format!(
+            "this session's log holds a record this build cannot read ({u}). Run the doctor \
+             (`core/session-log`, fix=true) to retire that one record."
+        ));
+    }
     let msg = err.to_string();
     if is_transient_harness_message(&msg) {
         FlowError::Transient {
@@ -197,6 +210,33 @@ mod tests {
             matches!(flow, FlowError::Transient { .. }),
             "a blank screen must keep its re-dispatch, got {flow:?}"
         );
+    }
+
+    /// The structural arm is a gate, not a restatement of the message matcher:
+    /// this row's `type` tag spells `connection`, which the matcher reads as a
+    /// network failure — so on the message path alone the harness would have
+    /// re-dispatched the run, re-read the same row, and failed again. The
+    /// refusal must name the row and the doctor's exit instead.
+    #[test]
+    fn an_undecodable_record_is_named_and_never_re_dispatched() {
+        let record = crate::session::store::UndecodableRecord {
+            seq: 9,
+            kind_tag: Some("connection_opened".into()),
+            error: "unknown variant `connection_opened`".into(),
+        };
+        let err = HarnessError::Session(SessionError::UndecodableRecord(record));
+        assert!(
+            is_transient_harness_message(&err.to_string()),
+            "the premise: by wording alone this would have been re-dispatched"
+        );
+
+        match classify_harness_error(err, "p") {
+            FlowError::Internal(msg) => {
+                assert!(msg.contains("seq 9"), "{msg}");
+                assert!(msg.contains("core/session-log"), "{msg}");
+            }
+            other => panic!("an unreadable row must not be transient, got {other:?}"),
+        }
     }
 
     #[test]

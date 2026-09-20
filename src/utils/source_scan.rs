@@ -155,7 +155,12 @@ pub fn test_text(path: &std::path::Path, src: &str) -> String {
 /// two fixes to that function. An earlier sentence here said 104 and 19,
 /// counted by grepping `#[cfg(test)] mod X;` declaration LINES across five
 /// trees — a different population, and a smaller one precisely because the
-/// grep shared the bug the guard then found (判据 §18).
+/// grep shared the bug the guard then found (判据 §18). On the 2026-09-13
+/// tree the same guard prints 106 / 29: the direct-declaration population
+/// is derived from item HEADS now (`cfg_test_item_heads`), which no longer
+/// admits a production file through a `mod x;` nested in an inline block.
+/// The ancestor-declared population (children of those modules) is counted
+/// separately by `ancestor_declared_test_modules_are_recognised`.
 ///
 /// A parent that cannot be read answers "not a test module", so the file is
 /// scanned as an ordinary one — the pre-existing behaviour, not a new claim.
@@ -167,7 +172,9 @@ pub fn production_text(path: &std::path::Path, src: &str) -> String {
     production_prefix(src)
 }
 
-/// Whether `path`'s parent module declares it with `#[cfg(test)] mod <stem>;`.
+/// Whether `path` is test code by DECLARATION: its parent module declares it
+/// with `#[cfg(test)] mod <stem>;`, or some ancestor directory is itself a
+/// module declared under `#[cfg(test)]` (see [`directory_is_a_test_module`]).
 ///
 /// Both spellings of a parent are tried — `dir/mod.rs` for `dir/child.rs`,
 /// and `dir.rs` for `dir/child.rs` (the 2018-edition form this repo uses for
@@ -177,7 +184,7 @@ pub fn production_text(path: &std::path::Path, src: &str) -> String {
 /// `false`: the file is then scanned as an ordinary one, which is the
 /// pre-existing behaviour rather than a new claim.
 ///
-/// # Three shapes, and this recognised one of them
+/// # Five shapes, and this recognised one of them
 ///
 /// A whole-file test module can be `mod x;` (a file), `pub mod x;` (any
 /// visibility), or `mod x;` where `x/` is a DIRECTORY with a `mod.rs`. The
@@ -189,6 +196,23 @@ pub fn production_text(path: &std::path::Path, src: &str) -> String {
 /// `src/config/tests/mod.rs` (a directory) — 判据 §3: what a guard
 /// recognises, not what its author had in mind.
 ///
+/// The fourth and fifth shapes share a cause the first three do not have: the
+/// file's test-ness is stated by an ANCESTOR, not by the module that names it.
+/// `#[cfg(test)] mod tests { mod act; … }` in `src/harness/mod.rs` is an
+/// inline block whose children live in `src/harness/tests/` with no `mod.rs`
+/// at all, so the direct-parent lookup found no parent to ask; and
+/// `src/config/tests/basic.rs` is declared by a plain `mod basic;` in
+/// `src/config/tests/mod.rs`, which carries no attribute of its own because
+/// the `#[cfg(test)]` sits one level up on `mod tests;`. Both came back as
+/// 100% production from [`production_text`] — 50 files under `src/` on the
+/// 2026-09-13 tree (the count is what
+/// `ancestor_declared_test_modules_are_recognised` prints, not a hand count:
+/// the hand count that preceded the test said 44), scanned as shipped code
+/// by every census built on it. `session::reduction` carried a local walk
+/// for the inline shape until this function learned it; the directory shape
+/// was found while teaching it (判据 §16: a fix to one twin is carried to
+/// the other), and both are pinned on the real tree by that test.
+///
 /// # The visibility prefix is part of the declaration
 ///
 /// The first version compared the trimmed line to the literal
@@ -199,7 +223,23 @@ pub fn production_text(path: &std::path::Path, src: &str) -> String {
 /// genuinely holds a mid-file `#[cfg(test)] pub(crate) mod census;`"), so the
 /// spelling was known here and the matcher still did not accept it —
 /// 判据 §3: what a guard recognises, not what its author had in mind.
-fn declared_as_a_test_module(path: &std::path::Path) -> bool {
+/// `pub(crate)` for the censuses, not just for [`production_text`]: a walk
+/// that wants to COUNT what it skipped needs the predicate itself, and the
+/// alternative is each census hand-rolling a proxy from the marker text —
+/// which is the second reading of `#[cfg(test)]` that
+/// [`no_module_hand_rolls_the_cfg_test_prefix_cut`] exists to reject.
+/// `tools::presentation_census` reaches for it that way. Do not re-privatise
+/// without giving those callers somewhere else to ask.
+///
+/// What this visibility does NOT protect against, stated so a caller reads it
+/// here rather than discovering it: hand-rolling the OTHER half — writing
+/// `if declared_as_a_test_module(p) { skip } else { production_prefix(src) }`
+/// instead of calling [`production_text`]. That spells no `#[cfg(test)]`
+/// literal, so [`no_module_hand_rolls_the_cfg_test_prefix_cut`] cannot see it,
+/// and it is a second answer to "what is this file's production half" free to
+/// drift from the first. Call [`production_text`]; use this predicate only to
+/// COUNT what that skipped.
+pub(crate) fn declared_as_a_test_module(path: &std::path::Path) -> bool {
     let absolute;
     let path = if path.is_absolute() {
         path
@@ -228,14 +268,119 @@ fn declared_as_a_test_module(path: &std::path::Path) -> bool {
         }
     };
     let declaration = format!("mod {};", stem.to_string_lossy());
+    module_file_declares_under_cfg_test(dir, &declaration) || directory_is_a_test_module(dir)
+}
+
+/// Whether the module file of `dir` — `dir/mod.rs` or `dir.rs`, both tried —
+/// has a `#[cfg(test)]`-attributed item whose HEAD line, visibility stripped,
+/// is `line`. The one reading of "declared under `#[cfg(test)]`" that both the
+/// direct-parent lookup and the ancestor climb share, so they cannot disagree
+/// about what a declaration looks like.
+///
+/// Head line, not any line: see [`cfg_test_item_heads`] for the production
+/// file this hid.
+fn module_file_declares_under_cfg_test(dir: &std::path::Path, line: &str) -> bool {
     [dir.join("mod.rs"), dir.with_extension("rs")]
         .iter()
         .filter_map(|parent| std::fs::read_to_string(parent).ok())
         .any(|text| {
-            cfg_test_portion(&text)
-                .lines()
-                .any(|line| strip_visibility(line.trim()) == declaration)
+            cfg_test_item_heads(&text)
+                .iter()
+                .any(|head| strip_visibility(head) == line)
         })
+}
+
+/// The first line of every `#[cfg(test)]`-attributed item in `src`, trimmed
+/// — `mod tests;`, `mod tests {`, `pub(crate) mod census;`, `fn helper() {`
+/// — and nothing nested inside one.
+///
+/// # Why the head line and not every line of the test portion
+///
+/// The first version of the parent lookup asked `cfg_test_portion(parent)`
+/// for ANY line equal to `mod <stem>;`. The portion of `src/harness/mod.rs`
+/// is one inline block, `#[cfg(test)] mod tests { mod act; mod agent; … }`,
+/// and the nested `mod agent;` in it declares `harness::tests::agent` — yet
+/// it matched the stem of `src/harness/agent.rs`, so the harness's own
+/// driver file answered "I am a test module" and `production_text` returned
+/// nothing for it. Same for `src/guardrails/registry.rs` under
+/// `guardrails/mod.rs`'s block. Every census built on `production_text` was
+/// blind to both, and green (判据 §3: a guard's green covers the shapes it
+/// recognises — here it mis-recognised one). Pinned by
+/// `a_nested_declaration_inside_an_inline_test_block_names_no_sibling`.
+///
+/// Attribute lines between the `#[cfg(test)]` and the item (`#[allow(…)]`)
+/// are skipped. A one-line `#[cfg(test)] mod x;` is NOT a shape: the
+/// partition this reads takes the line AFTER the attribute as the item, so
+/// such a line would already be mis-cut there, and the tree has none.
+///
+/// Two more head shapes the equality compare in
+/// [`module_file_declares_under_cfg_test`] does not see, both absent from
+/// the tree (grep, 2026-09-13) and stated so the count of recognised shapes
+/// reads as "five", not "all": a head with a trailing comment (`mod tests {
+/// // …`) is returned with the comment still on it, and a `#[cfg(test)]
+/// mod tests { mod y; }` nested inside a PRODUCTION inline `mod foo { … }`
+/// declares `foo::tests::y` in a directory `foo/` that has no `mod.rs` or
+/// `foo.rs` to ask, so the climb finds no declarer for it.
+fn cfg_test_item_heads(src: &str) -> Vec<String> {
+    let portion = cfg_test_portion(src);
+    let lines: Vec<&str> = portion.lines().collect();
+    let mut heads = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        if !lines[i].trim().starts_with("#[cfg(test)]") {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < lines.len() && (lines[j].trim().is_empty() || lines[j].trim().starts_with("#[")) {
+            j += 1;
+        }
+        if j < lines.len() {
+            heads.push(lines[j].trim().to_owned());
+        }
+        // Resume AFTER the item, so a `#[cfg(test)]` nested inside it (a
+        // test-only accessor inside an inline `mod tests {`) is not read as a
+        // second top-level item — `end_of_item` is the same brace matcher the
+        // partition itself trusts.
+        i = if j < lines.len() {
+            end_of_item(&lines, j)
+        } else {
+            lines.len()
+        };
+    }
+    heads
+}
+
+/// Whether `dir` is, or sits under, a module some ancestor declares under
+/// `#[cfg(test)]` — as a file module (`#[cfg(test)] mod tests;` resolving to
+/// `tests/mod.rs`, whose children carry no attribute of their own) or as an
+/// inline block (`#[cfg(test)] mod tests { mod act; … }`, whose children live
+/// in `tests/` with no `mod.rs` at all). Climbs one directory at a time.
+///
+/// The stop is `dir == <CARGO_MANIFEST_DIR>/src`, which every path
+/// [`declared_as_a_test_module`] hands in reaches because that caller
+/// absolutises relative paths under the manifest dir first. A path OUTSIDE
+/// the crate (an absolute tempdir, as in the fixture tests) never equals it:
+/// the climb then asks for a `mod.rs` / `<name>.rs` at every ancestor up to
+/// the filesystem root — each read fails, each answer is `false` — and ends
+/// when `parent()` is `None`. Harmless, but the crate boundary is this
+/// function's caller's fact, not its own.
+fn directory_is_a_test_module(dir: &std::path::Path) -> bool {
+    let crate_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut dir = dir;
+    while dir != crate_src {
+        let (Some(name), Some(up)) = (dir.file_name(), dir.parent()) else {
+            return false;
+        };
+        let name = name.to_string_lossy();
+        if module_file_declares_under_cfg_test(up, &format!("mod {name};"))
+            || module_file_declares_under_cfg_test(up, &format!("mod {name} {{"))
+        {
+            return true;
+        }
+        dir = up;
+    }
+    false
 }
 
 /// A leading `pub`, `pub(crate)`, `pub(super)` or `pub(in path)`, removed.
@@ -880,6 +1025,94 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
             std::fs::read_to_string(&file).ok().map(|text| (rel, text))
         })
         .collect()
+}
+
+/// Every file under `root` whose production code READS the identifier
+/// `ident` — the walk the two capability-handle reader censuses share
+/// (`session::service::SESSION_SERVICE_READERS`,
+/// `session::store::SESSION_EVENT_STORE_READERS`), so "who reads this
+/// handle" has one derivation and not one per handle.
+///
+/// # What "production code" means here, stated so a census's doc can quote it
+///
+/// [`production_text`] (a file its ancestors declare under `#[cfg(test)]`
+/// contributes nothing; each `#[cfg(test)]`-attributed item is removed) and
+/// then [`code_text`] (comment text and every literal payload removed — a
+/// warn message or a doc line that names the identifier is not a read). The
+/// scan recognises the literal `#[cfg(test)]` attribute ONLY: code gated by
+/// `#[cfg(any(test, feature = "test-helpers"))]` or by a feature alone is
+/// scanned as production, and a reader under such a gate would be listed
+/// here as one. None of the listed readers is; a census that starts to see
+/// one must say so in its own doc rather than list it as shipped.
+///
+/// # Which spellings of a read it sees
+///
+/// The bare identifier at word boundaries — the character before and after
+/// it is not `[A-Za-z0-9_]` — on a line that is neither its definition
+/// (`fn <ident>`) nor an import (`use …;`, including the continuation lines
+/// of a multi-line `use {…};`). So `crate::x::handle()`, a bare `handle()`
+/// after an import, and a function POINTER `.or_else(crate::x::handle)` are
+/// all reads; `set_handle(`, `handle_slot()`, `decline_handle(` are not.
+///
+/// The first version matched the literal `"<ident>()"` — the CALL spelling
+/// only — and was green with `gateway/session_projector.rs` absent from the
+/// store table: `resolve_events` reads the handle as a pointer, no `()`, so
+/// the census could not see it while the table's doc restated the census's
+/// verdict as a fact about the tree (判据 §3, §9: one verb, several faces).
+/// Pinned by the `pointer.rs` case of
+/// `files_whose_production_code_reads_counts_every_spelling_of_a_read`.
+///
+/// A definition line is skipped rather than the defining file excluded, so
+/// the defining file is not excluded wholesale: `session/store.rs` defines
+/// `global_session_event_store` AND reads it in `retire_live_events`, and
+/// excluding the file would have hidden that reader — the blind spot a
+/// hand-written exclusion list would have carried.
+#[cfg(test)]
+pub(crate) fn files_whose_production_code_reads(
+    root: &std::path::Path,
+    ident: &str,
+) -> std::collections::BTreeSet<String> {
+    let definition = format!("fn {ident}");
+    rust_sources_under(root)
+        .into_iter()
+        .filter(|(rel, text)| {
+            let code = code_text(&production_text(std::path::Path::new(rel), text));
+            let mut inside_use = false;
+            code.lines().any(|line| {
+                let line = strip_visibility(line.trim());
+                if inside_use {
+                    inside_use = !line.contains(';');
+                    return false;
+                }
+                if line.starts_with("use ") {
+                    inside_use = !line.contains(';');
+                    return false;
+                }
+                !line.contains(&definition) && mentions_identifier(line, ident)
+            })
+        })
+        .map(|(rel, _)| rel)
+        .collect()
+}
+
+/// Whether `line` contains `ident` as a whole word: not preceded and not
+/// followed by an identifier character. `find` returns char-boundary byte
+/// offsets, and `ident` is ASCII, so the `get` slices cannot split a char.
+#[cfg(test)]
+fn mentions_identifier(line: &str, ident: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut from = 0usize;
+    while let Some(at) = line.get(from..).and_then(|rest| rest.find(ident)) {
+        let start = from + at;
+        let end = start + ident.len();
+        let before = line.get(..start).and_then(|s| s.chars().next_back());
+        let after = line.get(end..).and_then(|s| s.chars().next());
+        if !before.is_some_and(is_ident) && !after.is_some_and(is_ident) {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 /// One `#[test]` / `#[tokio::test]` function found by [`scan_test_bodies`].
@@ -1791,13 +2024,12 @@ pub fn after() {}
             } else {
                 format!("{parent}/{}", leaf.trim_end_matches(".rs"))
             };
-            for line in cfg_test_portion(text).lines() {
-                let t = line.trim_start();
-                let t = t
-                    .strip_prefix("pub(crate) ")
-                    .or_else(|| t.strip_prefix("pub(super) "))
-                    .or_else(|| t.strip_prefix("pub "))
-                    .unwrap_or(t);
+            // Item HEADS, not every line of the test portion: a `mod agent;`
+            // nested inside an inline `mod tests { … }` block declares
+            // `tests::agent`, not a sibling of the block — see
+            // `cfg_test_item_heads`.
+            for head in cfg_test_item_heads(text) {
+                let t = strip_visibility(&head);
                 let Some(rest) = t.strip_prefix("mod ") else {
                     continue;
                 };
@@ -1881,6 +2113,211 @@ pub fn after() {}
                 "expected repo-relative path starting with src/, got {rel}"
             );
         }
+    }
+
+    /// The two ancestor-declared shapes, on the real tree: a child of an
+    /// inline `#[cfg(test)] mod tests { mod act; … }` block (no `mod.rs` to
+    /// ask), a grandchild of one (`task10_wiring/extras.rs`), and a child of
+    /// a directory module the grandparent declares `#[cfg(test)] mod tests;`
+    /// (`config/tests/basic.rs`, whose own parent carries no attribute).
+    /// Each must read as test code end to end, and the negative arm — the
+    /// production file beside each — must not, or "everything is a test
+    /// module" would pass the positive half.
+    ///
+    /// The population is then derived, not listed: every file under `src/`
+    /// that the predicate resolves ONLY through an ancestor (its direct
+    /// parent does not declare it under `#[cfg(test)]`). The floor is loose
+    /// on purpose — it says the shape is still present in the tree, not how
+    /// many files have it — and the count is printed with its commit so the
+    /// next reader re-measures instead of inheriting `44`.
+    ///
+    /// Every positive example is ancestor-declared; a directly declared
+    /// `tests/mod.rs` would also pass the assertions (through the first
+    /// three shapes) but would say nothing about the climb, which is why
+    /// none is listed.
+    #[test]
+    fn ancestor_declared_test_modules_are_recognised() {
+        for rel in [
+            "src/harness/tests/act.rs",
+            "src/harness/tests/task10_wiring/extras.rs",
+            "src/guardrails/tests/input.rs",
+            "src/config/tests/basic.rs",
+            "src/orchestrator/tests/loader.rs",
+        ] {
+            let path = std::path::Path::new(rel);
+            assert!(
+                declared_as_a_test_module(path),
+                "{rel} is declared test code by an ancestor and must resolve as such"
+            );
+            assert!(
+                production_text(path, "pub fn shipped() {}").is_empty(),
+                "{rel}: production_text must contribute nothing for an ancestor-declared test module"
+            );
+        }
+        for rel in [
+            "src/harness/agent.rs",
+            "src/guardrails/registry.rs",
+            "src/config/mod.rs",
+            "src/utils/source_scan.rs",
+        ] {
+            let path = std::path::Path::new(rel);
+            assert!(
+                !declared_as_a_test_module(path),
+                "{rel} is production and must not be reclassified by the ancestor climb"
+            );
+            assert!(
+                production_text(path, "pub fn shipped() {}").contains("shipped"),
+                "{rel}: an ordinary file keeps its production code"
+            );
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut only_through_an_ancestor: Vec<String> = Vec::new();
+        for (rel, _) in rust_sources_under(&root) {
+            let path = std::path::Path::new(&rel);
+            // A `mod.rs` is named by its directory; its direct declaration is
+            // one level up and is what the first three shapes already cover.
+            // Leaving it out undercounts the inline shape by its one
+            // directory child (`task10_wiring/mod.rs`) — the floor is loose
+            // enough not to care, and the positive arm above pins that file's
+            // sibling explicitly.
+            if path.file_name().is_some_and(|n| n == "mod.rs") {
+                continue;
+            }
+            let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
+                continue;
+            };
+            let stem = stem.to_string_lossy();
+            let direct = module_file_declares_under_cfg_test(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir),
+                &format!("mod {stem};"),
+            );
+            if !direct && declared_as_a_test_module(path) {
+                only_through_an_ancestor.push(rel);
+            }
+        }
+        assert!(
+            only_through_an_ancestor.len() >= 20,
+            "only {} files under src/ resolve as test code through an ancestor alone — \
+             the shape left the tree, or the climb stopped seeing it: {only_through_an_ancestor:?}",
+            only_through_an_ancestor.len()
+        );
+        eprintln!(
+            "declared_as_a_test_module: {} files under src/ are test code only by an \
+             ancestor's declaration (measured on this checkout, e.g. {:?})",
+            only_through_an_ancestor.len(),
+            &only_through_an_ancestor[..only_through_an_ancestor.len().min(4)]
+        );
+    }
+
+    /// [`cfg_test_item_heads`] yields the head line of each attributed item
+    /// and nothing nested: the `mod agent;` inside an inline `mod tests { … }`
+    /// block is not a declaration of a sibling `agent` module. Fixture first
+    /// (every shape in one string), then the two production files the nested
+    /// reading hid on the real tree — the harness driver and the guardrail
+    /// registry — which must read as production, with their code intact.
+    #[test]
+    fn a_nested_declaration_inside_an_inline_test_block_names_no_sibling() {
+        let src = "pub mod agent;\n\
+                   #[cfg(test)]\n\
+                   mod tests {\n    mod act;\n    mod agent;\n    #[cfg(test)]\n    fn nested() {}\n}\n\
+                   #[cfg(test)]\n\
+                   #[allow(dead_code)]\n\
+                   pub(crate) mod census;\n\
+                   pub fn shipped() {}\n";
+        assert_eq!(
+            cfg_test_item_heads(src),
+            vec![
+                "mod tests {".to_string(),
+                "pub(crate) mod census;".to_string()
+            ]
+        );
+
+        for rel in ["src/harness/agent.rs", "src/guardrails/registry.rs"] {
+            let path = std::path::Path::new(rel);
+            assert!(
+                !declared_as_a_test_module(path),
+                "{rel} is a production file whose stem also appears NESTED in its parent's \
+                 inline test block; it must not read as a test module"
+            );
+            let text =
+                std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel))
+                    .expect(rel);
+            assert!(
+                production_text(path, &text).contains("pub fn ")
+                    || production_text(path, &text).contains("pub(crate) fn "),
+                "{rel}: production_text must return its code"
+            );
+        }
+    }
+
+    /// [`files_whose_production_code_reads`] on a fixture tree: a call and a
+    /// function POINTER are hits; the definition line, a one-line and a
+    /// multi-line import, a comment, a string literal, a call inside a
+    /// `#[cfg(test)]` item, and the identifier as a prefix / suffix of a
+    /// longer one (`set_handle(`, `handle_slot()`) are not. The pointer case
+    /// is the one the first version missed on the real tree
+    /// (`gateway/session_projector.rs::resolve_events`). Then two lines on
+    /// the real tree: `session/store.rs` both defines and reads
+    /// `global_session_event_store` and must be seen as a reader (why
+    /// definitions are skipped per line, not per file), and the projector's
+    /// pointer read must be seen.
+    #[test]
+    fn files_whose_production_code_reads_counts_every_spelling_of_a_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, text: &str| std::fs::write(dir.path().join(name), text).unwrap();
+        write(
+            "defines.rs",
+            "pub fn handle() -> Option<u8> {\n    None\n}\n",
+        );
+        write("reads.rs", "fn go() {\n    let _ = crate::handle();\n}\n");
+        write(
+            "pointer.rs",
+            "fn go() {\n    let _ = None::<u8>.or_else(crate::handle);\n}\n",
+        );
+        write("imports.rs", "use crate::handle;\nfn go() {}\n");
+        write(
+            "multiline_import.rs",
+            "pub use crate::{\n    handle,\n    other,\n};\nfn go() {}\n",
+        );
+        write(
+            "siblings.rs",
+            "fn go() {\n    set_handle(1);\n    let _ = handle_slot();\n    handles();\n}\n",
+        );
+        write(
+            "mentions.rs",
+            "// handle() is discussed here\nconst S: &str = \"handle()\";\nfn go() {}\n",
+        );
+        write(
+            "tests_only.rs",
+            "fn go() {}\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = crate::handle();\n    }\n}\n",
+        );
+        let found = files_whose_production_code_reads(dir.path(), "handle");
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec!["pointer.rs".to_string(), "reads.rs".to_string()],
+            "found: {found:?}"
+        );
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let store_readers = files_whose_production_code_reads(&root, "global_session_event_store");
+        assert!(
+            store_readers.contains("src/session/store.rs"),
+            "the defining file's own reader (`retire_live_events`) must be seen: {store_readers:?}"
+        );
+        assert!(
+            store_readers.contains("src/gateway/session_projector.rs"),
+            "the projector's fn-pointer read (`resolve_events`) must be seen: {store_readers:?}"
+        );
     }
 
     /// Every `.rs` file under `src/`, as `(repo-relative path, text)` — shared

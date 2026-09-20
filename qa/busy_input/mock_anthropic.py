@@ -40,7 +40,12 @@ capture WHAT THE MODEL SAW coming back:
               `tool` turn emits, instead of the default `file_read` probe. A
               JSON *list* of those is also accepted: turn N emits entry N,
               cycling, for claims that need two different calls in one
-              conversation.
+              conversation. N counts every request this mock answers, and
+              on a conversation's FIRST message the server makes a
+              side-channel planning call before the run's own turn — it
+              takes turn 1 and drops its tool_use — so there the mapping is
+              off by one (entry 1 is never a real tool call). Count results
+              in `request_log` rather than trusting index = turn.
   request_log path to append each incoming request body to, one JSON object
               per line. Turn N+1's `messages` carry turn N's `tool_result`
               verbatim, so this file is the only oracle for what a tool

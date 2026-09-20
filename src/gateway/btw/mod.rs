@@ -27,6 +27,12 @@
 //! sanctions exactly the one read. An earlier wording of this paragraph said
 //! `btw` appears in no `turn_*.rs` at all, which was already false about the
 //! ceiling when it was written.
+//!
+//! The one place the stamp IS persisted is the run's own `RunStarted`
+//! envelope (`session::events::RunEnvelopeSnapshot::btw`, §6.3) — a per-run
+//! fact, not a session value: it is read back only by
+//! `resume_coordinator::plan_resume`, for that run's resume, so the recovered
+//! side question keeps its ceiling. The session row never sees it.
 
 pub(crate) mod promote;
 pub(crate) mod seed;
@@ -45,9 +51,11 @@ pub const BTW_METADATA_KEY: &str = "btw";
 ///
 /// The stamp is a single string field holding two different things — the
 /// question's text, or this sentinel — so it needs an owner rather than a
-/// literal at each end. [`is_promote`] is the only reader of the sentinel and
-/// `stamp_btw` is the only writer; a second spelling of `"promote"` anywhere
-/// is a second answer to "which kind of side turn is this".
+/// literal at each end. [`is_promote`] reads the sentinel to dispatch, and
+/// `resume_coordinator::plan_resume` reads it to refuse replaying a promote
+/// from a `RunStarted` envelope; `stamp_btw` is the only writer. A second
+/// spelling of `"promote"` anywhere is a second answer to "which kind of side
+/// turn is this".
 ///
 /// The two cannot collide: [`BtwTurn::resolve`] routes a body that reads
 /// `promote` (in any case) to the promote arm, so a stamp carrying a question
@@ -56,12 +64,17 @@ pub(crate) const PROMOTE_STAMP: &str = "promote";
 
 /// Does this stamped request ask to **promote** rather than to ask?
 ///
-/// The first reader of the stamp's *value*. The other three
-/// ([`execution_session`], `resolve_turn_permissions`'s read-only ceiling and
-/// `steering::carries_more_than_text`) ask `contains_key`, which is right for
-/// them — a promote is still a side turn for the purpose of which lane it uses,
-/// what tier it runs at, and whether it may be folded into a running sibling.
-/// It is only the *dispatch* that differs, and only this predicate decides it.
+/// The one reader that *interprets* the stamp's value. The `contains_key`
+/// readers ([`execution_session`], `resolve_turn_permissions`'s read-only
+/// ceiling, `steering::carries_more_than_text`, and
+/// `ResumeCoordinator::retrigger` deciding its fan-out opt-out) are right to
+/// ask only that — a promote is still a side turn for the purpose of which
+/// lane it uses, what tier it runs at, and whether it may be folded into a
+/// running sibling. The two envelope writers (`run_loop`'s `TurnEnvelope`,
+/// the slash fast path) copy the value verbatim without reading it;
+/// `plan_resume` compares it against [`PROMOTE_STAMP`] only to refuse
+/// replaying a promote. It is only the *dispatch* that differs, and only
+/// this predicate decides it.
 ///
 /// False for an unstamped request by construction, so a surface that forgot to
 /// stamp gets an ordinary turn rather than an unasked-for crossing.
@@ -288,17 +301,15 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 /// # Where it is deliberately NOT applied, and why
 ///
 /// [`crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter`] also
-/// delivers a run's final reply to a channel, and it has five construction
-/// sites. The first four **cannot carry a side question**, each for its own
+/// delivers a run's final reply to a channel. Every construction site answers
+/// the same question — can a `/btw` run reach it? — and there are two kinds
+/// of answer. These sites **cannot carry a side question**, each for its own
 /// reason, so none of them marks:
 ///
 /// * `announce_delivery.rs` — both halves are machine-authored. `input` is a
 ///   `[system] …` literal (`subagent_announce.rs`, `process_announce.rs`) and
 ///   the metadata map is built fresh from one key, so nothing inherits the
 ///   stamp and `stamp_btw` resolves the input to `None`.
-/// * `resume_coordinator.rs` — `input` is `String::new()` (`FlowInput::Resume`
-///   ignores it), which `resolve` rejects, and `resume_metadata` never writes
-///   `BTW_METADATA_KEY`.
 /// * `execute.rs`'s `spawn_continuation_run` — `continuation_metadata` starts
 ///   from `carry_policy_metadata`, a four-key allowlist that does not include
 ///   `BTW_METADATA_KEY`, and the prompt is a goal AUDIT contract or loop tick
@@ -310,14 +321,21 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 ///   side-session redirect, no read-only ceiling — so on that adapter a
 ///   `/btw …` is not a side question anywhere in the system.
 ///
-/// The fifth site, `busy_queue/durable.rs`'s boot reinjection, CAN receive a
-/// journaled `/btw` record, and answers by rule instead of by marker: a
-/// survivor whose lane key differs from its addressed key (i.e. it executes
-/// on a derived side session) skips the fan-out entirely and rides the bus
-/// alone — a re-delivered side answer must not land on the origin channel
-/// unmarked.
+/// These sites CAN receive one, and answer by rule instead of by marker —
+/// a stamped run skips the fan-out entirely and rides the bus alone, because
+/// a re-delivered side answer must not land on the origin channel unmarked:
 ///
-/// A fifth fan-out site owes the same question before it inherits that answer.
+/// * `busy_queue/durable.rs`'s boot reinjection — a journaled `/btw` record
+///   is a survivor whose lane key differs from its addressed key (it executes
+///   on a derived side session), and that inequality is the rule's input.
+/// * `resume_coordinator.rs` — `input` is `String::new()` (`FlowInput::Resume`
+///   ignores it) and `resume_metadata` never writes `BTW_METADATA_KEY`, but
+///   the stamp is replayed from the crashed run's `RunStarted` envelope
+///   (§6.3, `plan_resume`); `retrigger` reads the replayed key and hands the
+///   answer to `retrigger_emitter`, which then skips the fan-out.
+///
+/// A new fan-out site owes the same question before it inherits either
+/// answer; `origin_fanout`'s census of construction sites is what asks it.
 #[must_use]
 pub(crate) fn format_side_answer(text: &str) -> String {
     format!("💬 {text}")

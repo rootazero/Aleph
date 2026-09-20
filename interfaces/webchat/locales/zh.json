@@ -7,7 +7,6 @@
     "teams": "团队",
     "extensions": "Aleph Hub",
     "settings": "设置",
-    "canvas": "画布",
     "projects": "项目",
     "terminal": "终端"
   },
@@ -305,6 +304,7 @@
     "run_badge_interrupted": "中断",
     "run_badge_log_inconsistent": "日志异常",
     "run_badge_unknown": "未知",
+    "run_badge_unanswered": "未回答",
     "new_chat": "新对话",
     "new_group_chat": "新群聊",
     "confirm_delete": "确认删除？",
@@ -446,12 +446,9 @@
     "title_empty": "画布标题不能为空",
     "title_too_long": "标题太长了（最多 200 字节）",
     "title_control": "标题不能包含换行或控制字符",
-    "select_hint": "在左侧选择一张画布，或新建一张",
     "rename_busy": "重命名没能落地——此刻有人正在写这张画布，请再试一次。",
     "empty": "还没有画布——新建一个开始",
     "shapes": "个形状",
-    "back_to_library": "画布库",
-    "phone_read_only": "手机端仅可查看——请在桌面端编辑",
     "html_frame": "HTML 框",
     "ai_status_draft": "草稿",
     "ai_status_pending": "生成中…",
@@ -474,6 +471,19 @@
     "tool_note": "便签",
     "tool_text": "文本",
     "tool_frame": "框架",
+    "tool_diamond": "菱形",
+    "tool_triangle": "三角形",
+    "tool_hexagon": "六边形",
+    "tool_pill": "胶囊",
+    "style_color": "颜色",
+    "style_hex": "自定义颜色",
+    "style_size": "大小",
+    "style_fill": "填充",
+    "style_stroke": "描边",
+    "export_svg": "导出动画 SVG",
+    "reveal_play": "播放",
+    "reveal_pause": "暂停",
+    "reveal_resume": "继续",
     "decks_button": "幻灯片",
     "decks_title": "幻灯片组",
     "decks_empty": "还没有幻灯片组——选中框架后创建",
@@ -483,7 +493,10 @@
     "deck_frames": "帧",
     "deck_play": "播放",
     "deck_missing_frame": "框架已删除",
-    "present_exit": "退出 (Esc)"
+    "present_exit": "退出 (Esc)",
+    "library": "画布库",
+    "close_canvas": "关闭画布",
+    "open_in_canvas": "在画布中打开"
   },
   "memory": {
     "batch_clear": "清除",
@@ -2668,7 +2681,8 @@
   },
   "layout_toggle": {
     "open_pane": "打开工作区面板",
-    "close_pane": "关闭工作区面板"
+    "close_pane": "关闭工作区面板",
+    "resize_pane": "拖动调整宽度 · 双击恢复默认"
   },
   "dashboard_cron": {
     "gateway_disconnected": "网关已断开",
@@ -2705,7 +2719,9 @@
     "last_run_interrupted_plain": "上一轮运行被中断",
     "last_run_log_inconsistent": "会话日志不一致（{{ tags }}）— 恢复已拒绝，请运行 aleph doctor",
     "last_run_unknown_state": "上一轮运行状态未知（{{ word }}）— 本客户端无法判断",
-    "last_run_dangling": "上一轮留下 {{ count }} 次未回执的工具调用 — 结果未知"
+    "last_run_dangling": "上一轮留下 {{ count }} 次未回执的工具调用 — 结果未知",
+    "last_run_parked": "上一轮有 {{ parked }} 次工具调用未完成 — 服务停止时它们还在等审批 / 等回答，或已被拒绝",
+    "last_run_unanswered": "上一条消息没有得到回答 — 运行在开始前就中断了，恢复会重试"
   },
   "appearance": {
     "mode": {

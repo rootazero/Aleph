@@ -94,7 +94,18 @@ impl TeamNotifier {
             Ok(Some(team)) => team.leader_id,
             Ok(None) => return,
             Err(e) => {
-                tracing::debug!(team_id, error = %e, "TeamNotifier: get_team failed");
+                // `Err` is a transient store failure, distinct from
+                // `Ok(None)` (the team really does not exist). The original
+                // code demoted this to debug and returned silently so the
+                // task failure the notifier was supposed to surface never
+                // reached the leader. Promote to warn so a sustained
+                // degradation is observable (TEAMS-004, high) — but the
+                // P7 fail-soft contract for `Ok(None)` is unchanged.
+                tracing::warn!(
+                    team_id,
+                    error = %e,
+                    "TeamNotifier: get_team failed; leader notification dropped (transient store error)"
+                );
                 return;
             }
         };

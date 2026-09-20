@@ -67,6 +67,13 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "slider",
 ];
 
+/// Server-prefixes we accept as DevTools-flavoured when computing the bare
+/// tool name. A user tool literally named `take_snapshot` (no MCP prefix) is
+/// *not* a browser-automation tool — routing it through DevTools-specific
+/// compression (interactive-node filter / 500-char cap / network-request
+/// parser) silently mangles non-shape payloads.
+const DEVTOOLS_SERVER_PREFIXES: &[&str] = &["chrome_devtools", "chrome-devtools", "devtools"];
+
 /// The bare `DevTools` tool name behind `name`, or `None` when this isn't one.
 ///
 /// **MCP tools register server-qualified as `{server}__{tool}`** (see
@@ -75,13 +82,19 @@ const INTERACTIVE_ROLES: &[&str] = &[
 /// production, silently, for every one of these tools. Stripping the prefix is
 /// the whole fix.
 ///
-/// It also widens the match from "the Chrome DevTools MCP" to "any MCP server
-/// exposing these names", which is correct: all seven are browser-automation
-/// verbs, and the compression each one gets (base64 → marker, interactive-node
-/// filtering, entry caps) follows from the *shape* of that output, not from which
-/// server produced it.
+/// The match is gated on a known DevTools-server prefix. Without that gate, a
+/// non-DevTools MCP server whose tool happens to be named `take_snapshot` or
+/// `click` would be routed through DevTools-specific compression and have its
+/// (possibly non-shape-matching) output mangled by the interactive-node
+/// filter, 500-char cap, and network-request parser.
 fn devtools_tool_name(name: &str) -> Option<&str> {
-    let bare = name.rsplit("__").next().unwrap_or(name);
+    let (server, bare) = name.split_once("__")?;
+    if !DEVTOOLS_SERVER_PREFIXES
+        .iter()
+        .any(|p| server.eq_ignore_ascii_case(p))
+    {
+        return None;
+    }
     DEVTOOLS_TOOLS.contains(&bare).then_some(bare)
 }
 
@@ -229,7 +242,14 @@ fn compress_screenshot(output: &str) -> String {
             .filter(|b| *b == b'+' || *b == b'/')
             .count()
     };
-    let looks_like_base64 = base64_marker_count() >= 2 || has_base64_padding();
+    // Real base64 is always 4-byte aligned (len % 4 in {0, 1} for a payload
+    // that ends mid-padding). A 100+ char string that ends in `=` but has
+    // length % 4 == 2 is just an alphanumeric token that happened to have
+    // an `=` at the tail (CSV cell, hex dump tail) — not a screenshot.
+    let length_aligned_to_base64 = || matches!(output.len() % 4, 0 | 1);
+    let looks_like_base64 = base64_marker_count() >= 2
+        && length_aligned_to_base64()
+        && (base64_marker_count() >= 2 || has_base64_padding());
     if starts_with_data_image
         || (output.len() > 100 && prefix_is_base64_chars() && looks_like_base64)
     {
@@ -445,14 +465,26 @@ mod tests {
 
     #[test]
     fn test_is_devtools_tool() {
-        assert_eq!(devtools_tool_name("take_snapshot"), Some("take_snapshot"));
-        assert_eq!(devtools_tool_name("click"), Some("click"));
+        // Bare names without a server prefix must NOT match — a user tool
+        // literally named `take_snapshot` is not a browser-automation tool.
+        assert_eq!(devtools_tool_name("take_snapshot"), None);
+        assert_eq!(devtools_tool_name("click"), None);
+        // Server-qualified names match the prefix gate.
         assert_eq!(
-            devtools_tool_name("lighthouse_audit"),
+            devtools_tool_name("chrome_devtools__take_snapshot"),
+            Some("take_snapshot")
+        );
+        assert_eq!(devtools_tool_name("chrome-devtools__click"), Some("click"));
+        assert_eq!(
+            devtools_tool_name("chrome_devtools__lighthouse_audit"),
             Some("lighthouse_audit")
         );
-        assert_eq!(devtools_tool_name("bash"), None);
-        assert_eq!(devtools_tool_name("web_search"), None);
+        // Unknown server with a DevTools-shaped tool name: refuse.
+        assert_eq!(devtools_tool_name("acme__take_snapshot"), None);
+        // Known server but unknown tool: refuse.
+        assert_eq!(devtools_tool_name("chrome_devtools__bash"), None);
+        assert_eq!(devtools_tool_name("chrome_devtools__web_search"), None);
+        // Empty / non-prefixed inputs: refuse.
         assert_eq!(devtools_tool_name(""), None);
     }
 
@@ -471,8 +503,20 @@ mod tests {
         assert_eq!(devtools_tool_name("some_server__bash"), None);
 
         // …and the compression actually runs for a qualified name now.
-        let base64 = format!("{}+/{}=", "iVBORw0KGgo".repeat(200), "A".repeat(100));
+        // The audit (086450ee1) tightened the base64 heuristic with TWO
+        // extra gates: `len % 4 in {0,1}` and `marker_count(first 128) >= 2`.
+        // The prior input (iVBORw0KGgo × 200, then `+/` at byte ~2200) put
+        // the markers past the first-128-byte scan window, so the gate
+        // refused it. Put the `+/` early — 4 * 30 = 120 chars, then `+/`
+        // sits at bytes 120–121, well inside the scan window — and pad to a
+        // 4-byte-aligned length so the alignment gate also passes.
+        let base64 = format!("iVBORw0KGgo{}+/{}=", "AB".repeat(10), "A".repeat(99));
         let compressed = compress_tool_output("chrome_devtools__take_screenshot", &base64);
+        assert!(
+            compressed.len() < 200,
+            "qualified screenshot must be compressed, got {} chars",
+            compressed.len()
+        );
         assert!(
             compressed.len() < 200,
             "qualified screenshot must be compressed, got {} chars",
@@ -500,15 +544,21 @@ mod tests {
     #[test]
     fn test_compress_screenshot_replaces_base64_data_uri() {
         let base64_data = format!("data:image/png;base64,{}", "A".repeat(50_000));
-        let result = compress_tool_output("take_screenshot", &base64_data);
+        let result = compress_tool_output("chrome_devtools__take_screenshot", &base64_data);
         assert_eq!(result, "[Screenshot captured successfully]");
     }
 
     #[test]
     fn test_compress_screenshot_replaces_raw_base64() {
-        // Must include at least one base64-specific char (+, /, =) to be recognised
-        let raw_b64 = format!("{}=", "A".repeat(50_000));
-        let result = compress_tool_output("take_screenshot", &raw_b64);
+        // The audit's tightened base64 heuristic (086450ee1) requires
+        // TWO extra gates: `>= 2` markers in the FIRST 128 bytes AND
+        // `len % 4 in {0,1}`. The original input ("A".repeat(50_000) + "=")
+        // satisfied the alignment (50001 % 4 == 1) but had zero markers in
+        // the first 128 bytes — only `has_padding()` rescued it under the
+        // old rule. Put `+/` early AND pad to a 4-byte-aligned length
+        // (5+N+M ≡ 0 mod 4): N+M=103 gives length 108.
+        let raw_b64 = format!("AB+/{}{}=", "A".repeat(52), "B".repeat(51));
+        let result = compress_tool_output("chrome_devtools__take_screenshot", &raw_b64);
         assert_eq!(result, "[Screenshot captured successfully]");
     }
 
@@ -516,7 +566,7 @@ mod tests {
     fn test_compress_screenshot_short_text_not_treated_as_base64() {
         // Short ASCII text should NOT be detected as base64
         let output = "OK";
-        let result = compress_tool_output("take_screenshot", output);
+        let result = compress_tool_output("chrome_devtools__take_screenshot", output);
         assert_eq!(result, "OK");
     }
 
@@ -525,7 +575,7 @@ mod tests {
         // Long pure-alphanumeric text (e.g. hex dump, log) should NOT be
         // mistaken for base64 — it lacks +, /, or = and does not end with =.
         let output = "A".repeat(50_000);
-        let result = compress_tool_output("take_screenshot", &output);
+        let result = compress_tool_output("chrome_devtools__take_screenshot", &output);
         // Must NOT be replaced with the base64 placeholder
         assert!(!result.contains("Screenshot captured successfully"));
         // Single-line input without newlines is preserved as-is (1 line <= 5)
@@ -540,7 +590,7 @@ mod tests {
         let mut output = "A".repeat(120);
         output.push('+');
         output.push_str(&"A".repeat(50));
-        let result = compress_tool_output("take_screenshot", &output);
+        let result = compress_tool_output("chrome_devtools__take_screenshot", &output);
         assert!(
             !result.contains("Screenshot captured successfully"),
             "single-`+` text must not be treated as base64; got: {result:?}"
@@ -549,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_compress_screenshot_empty_string() {
-        let result = compress_tool_output("take_screenshot", "");
+        let result = compress_tool_output("chrome_devtools__take_screenshot", "");
         assert_eq!(result, "");
     }
 
@@ -557,7 +607,7 @@ mod tests {
     fn test_compress_screenshot_keeps_metadata() {
         let output =
             "width: 1920\nheight: 1080\nformat: png\nsome extra info\nmore info\nbase64 data here";
-        let result = compress_tool_output("take_screenshot", output);
+        let result = compress_tool_output("chrome_devtools__take_screenshot", output);
         assert!(result.contains("width: 1920"));
         assert!(result.contains("format: png"));
         assert!(result.contains("1 more line omitted"));
@@ -583,7 +633,7 @@ mod tests {
         // Ensure it's > 4KB
         assert!(input.len() > 4 * 1024, "Test input must be > 4KB");
 
-        let result = compress_tool_output("take_snapshot", &input);
+        let result = compress_tool_output("chrome_devtools__take_snapshot", &input);
 
         // Interactive elements should be kept
         assert!(result.contains("button \"Submit\""));
@@ -624,7 +674,7 @@ mod tests {
         let input = lines.join("\n");
         assert!(input.len() > 4 * 1024);
 
-        let result = compress_tool_output("take_snapshot", &input);
+        let result = compress_tool_output("chrome_devtools__take_snapshot", &input);
 
         assert!(result.contains("button \"Apply 7\""), "controls kept");
         assert!(result.contains("textbox \"filter 7\""));
@@ -663,7 +713,7 @@ mod tests {
         let input = lines.join("\n");
         assert!(input.len() > 4 * 1024);
 
-        let result = compress_tool_output("take_snapshot", &input);
+        let result = compress_tool_output("chrome_devtools__take_snapshot", &input);
         assert!(result.contains("paragraph \"Content line 0\""));
         assert!(result.contains("paragraph \"Content line 19\""));
         assert!(!result.contains("paragraph \"Content line 20\""));
@@ -678,7 +728,7 @@ mod tests {
         let input = lines.join("\n");
         assert!(input.len() > 4 * 1024);
 
-        let result = compress_tool_output("take_snapshot", &input);
+        let result = compress_tool_output("chrome_devtools__take_snapshot", &input);
         assert!(result.contains("kept first 20 of 21 lines"));
         assert!(!result.contains("kept first 20 of 21 line\""));
     }
@@ -692,7 +742,7 @@ mod tests {
         let input = lines.join("\n");
         assert!(input.len() > 4 * 1024);
 
-        let result = compress_tool_output("take_snapshot", &input);
+        let result = compress_tool_output("chrome_devtools__take_snapshot", &input);
         assert!(result.contains("kept 1 interactive elements out of 201 total nodes"));
     }
 
@@ -701,7 +751,7 @@ mod tests {
     #[test]
     fn test_compress_evaluate_script_truncates_large() {
         let output = "x".repeat(20 * 1024);
-        let result = compress_tool_output("evaluate_script", &output);
+        let result = compress_tool_output("chrome_devtools__evaluate_script", &output);
         // Should be truncated to ~8KB + notice
         assert!(result.len() < 9 * 1024);
         assert!(result.contains("output truncated"));
@@ -728,7 +778,7 @@ mod tests {
             .collect();
         let input = serde_json::to_string(&entries).unwrap();
 
-        let result = compress_tool_output("list_network_requests", &input);
+        let result = compress_tool_output("chrome_devtools__list_network_requests", &input);
 
         assert!(result.contains("showing 30 of 100"));
         assert!(result.contains("https://example.com/api/0"));
@@ -738,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_compress_network_requests_empty_array() {
-        let result = compress_tool_output("list_network_requests", "[]");
+        let result = compress_tool_output("chrome_devtools__list_network_requests", "[]");
         assert_eq!(result, "[No network requests captured]");
     }
 
@@ -761,7 +811,7 @@ mod tests {
         let lines: Vec<String> = (0..200).map(|i| format!("console line {}", i)).collect();
         let input = lines.join("\n");
 
-        let result = compress_tool_output("list_console_messages", &input);
+        let result = compress_tool_output("chrome_devtools__list_console_messages", &input);
 
         assert!(result.contains("showing last 50 of 200"));
         // Old lines should be dropped
@@ -779,7 +829,7 @@ mod tests {
         let output = "y".repeat(20 * 1024);
         // "click" maps to compress_generic(_, 10*1024) for unknown-ish tools —
         // but click IS in the list and falls through to the _ arm.
-        let result = compress_tool_output("click", &output);
+        let result = compress_tool_output("chrome_devtools__click", &output);
         assert!(result.len() < 11 * 1024);
         assert!(result.contains("output truncated"));
     }
@@ -850,7 +900,7 @@ mod tests {
         let fenced = wrap_external_content(&lines.join("\n"), ContentSource::BrowserContent);
 
         let mut value = serde_json::json!({ "text": fenced });
-        assert!(compress_result_value("take_snapshot", &mut value, None));
+        assert!(compress_result_value("chrome_devtools__take_snapshot", &mut value, None));
 
         let text = value["text"].as_str().expect("stays a string");
         let split = crate::security::content_sanitizer::split_external_fence(text)
@@ -900,7 +950,7 @@ mod tests {
             tight.len()
         );
         // …and the default budget reproduces the shipped 8 KB cap.
-        let default_budget = compress_tool_output("evaluate_script", &output);
+        let default_budget = compress_tool_output("chrome_devtools__evaluate_script", &output);
         assert_eq!(wide.len(), default_budget.len());
 
         // Console lines (50 → fewer, floor 10).

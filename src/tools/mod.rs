@@ -57,6 +57,18 @@ pub mod turn_budget;
 mod types;
 pub mod usage;
 
+// Source-level + registry census: content-mutating builtins must attach a UI
+// presentation, and every name it can reach must render a non-blank row label
+// — via a curated `DISPLAY_NAMES` entry or via `humanize`, which is an honest
+// default rather than something needing a per-tool ruling. Test-only, so it is
+// gated here
+// rather than carrying a `#[cfg(test)]` inside the file — an attribute above
+// a `mod` gates whatever item follows it, and inserting a new one between the
+// attribute and its intended target is a documented way to silently move the
+// gate.
+#[cfg(test)]
+mod presentation_census;
+
 // Markdown skill system
 pub mod markdown_skill;
 

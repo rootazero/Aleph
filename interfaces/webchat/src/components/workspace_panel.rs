@@ -1,28 +1,132 @@
 //! Workspace pane — the right-side surface that opens when
 //! [`LayoutMode::Split`] is active.
 //!
-//! In team mode the body is the deliverables/tasks tabs. The single-agent body
-//! is [`crate::components::artifacts::ArtifactsSurface`] — what this session
-//! produced (images, files, exports), read from `artifacts.list`.
+//! # A pane of bodies, not a pane of modes
+//!
+//! What fills it is a [`WorkspaceBody`], and which bodies a session offers is
+//! [`WorkspaceBody::available`]'s answer: a single-agent conversation gets
+//! artifacts + canvas, a team gets deliverables + tasks + canvas. The header
+//! is a tab strip over that slice, so the browser live view (spec'd as another
+//! body of this same pane) costs one variant and one arm here.
+//!
+//! # Why the canvas body is CSS-hidden and the others are not
+//!
+//! [`crate::views::canvas::CanvasView`] owns three liveness wires — the
+//! `is_connected`-gated loader, the `canvas.updated` topic subscription, and
+//! the frame reconciler — plus the editor's camera, undo stack and in-flight
+//! batch. `CANVAS.md` §6 pins them to a container that is **mounted once**:
+//! unmounting it on every tab switch would refetch the library, churn the
+//! subscription, and throw away the board the user is drawing on. So the
+//! canvas body hangs off a `style:display` toggle that never unmounts, while
+//! the other three keep their existing mount/unmount behaviour (they are
+//! fetch-on-mount lists with nothing to lose).
+//!
+//! # The resizer writes one token, and three readers follow it
+//!
+//! `--aleph-workspace-w` sizes this pane (`w-[…]`), pads the chat surface
+//! (`views/chat/view.rs`'s `pr-[…]`) and offsets the band chrome
+//! (`app.rs`'s `right-[calc(… + 8px)]`). The band chrome is NOT inside
+//! `ChatView`, so the only element whose scope reaches all three is the
+//! document root — where `:root`'s 40% default lives. The publisher below
+//! *removes* the property to go back to that default rather than writing a
+//! second copy of the number.
 
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
-use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::i18n::{t, t_string, use_i18n};
+use crate::state::layout::{clamp_width, coerce_body, LayoutMode, WorkspaceBody, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 
-/// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
-///
-/// In team mode (`chat.team_id` is Some) shows deliverable/task tabs instead of
-/// the single-agent artifacts surface.
+/// Localized label for a body tab.
+fn body_label(body: WorkspaceBody, i18n: crate::i18n::I18nCtx) -> String {
+    match body {
+        WorkspaceBody::Artifacts => t_string!(i18n, common.artifacts_title).to_string(),
+        WorkspaceBody::Deliverables => t_string!(i18n, common.team_deliverables).to_string(),
+        WorkspaceBody::Tasks => t_string!(i18n, common.team_tasks).to_string(),
+        WorkspaceBody::Canvas => t_string!(i18n, canvas.title).to_string(),
+    }
+}
+
+/// Workspace pane root — always mounted, CSS-collapsed outside
+/// [`LayoutMode::Split`].
 #[component]
 #[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
-    let active_tab = RwSignal::new(0u8); // 0 = deliverables, 1 = tasks
     let i18n = use_i18n();
+
+    let is_team = Memo::new(move |_| chat.team_id.get().is_some());
+    // The body actually shown. Derived, not written back: leaving the stored
+    // body alone means a user who was on `Tasks`, visited a single-agent
+    // conversation and came back finds `Tasks` again — and nothing has to
+    // race a team_id that arrives one frame after the session switch.
+    let active = Memo::new(move |_| coerce_body(workspace.body.get(), is_team.get()));
+
+    let pane_ref = NodeRef::<leptos::html::Aside>::new();
+    let dragging = RwSignal::new(false);
+
+    // The single writer of `--aleph-workspace-w` (see the module doc). `None`
+    // removes the override so `:root`'s default takes over again.
+    Effect::new(move |_| {
+        let width = workspace.width_px.get();
+        let Some(root) = document_root() else { return };
+        match width {
+            Some(px) => {
+                let _ = root
+                    .style()
+                    .set_property("--aleph-workspace-w", &format!("{px}px"));
+            }
+            None => {
+                let _ = root.style().remove_property("--aleph-workspace-w");
+            }
+        }
+    });
+
+    // Pointer-driven resize. The width is measured from the pane's own right
+    // edge rather than the window's so it stays correct if the shell ever
+    // grows chrome to the right of `<main>`.
+    let on_pointer_down = move |ev: web_sys::PointerEvent| {
+        let Some(target) = ev
+            .current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        else {
+            return;
+        };
+        let _ = target.set_pointer_capture(ev.pointer_id());
+        dragging.set(true);
+        ev.prevent_default();
+    };
+    let on_pointer_move = move |ev: web_sys::PointerEvent| {
+        if !dragging.get_untracked() {
+            return;
+        }
+        let Some(px) = width_from_pointer(pane_ref, ev.client_x()) else {
+            return;
+        };
+        // Live preview writes the signal only; `set_width` (and its
+        // `localStorage` round trip) runs once, when the drag ends.
+        workspace.width_px.set(Some(px));
+    };
+    let on_pointer_up = move |ev: web_sys::PointerEvent| {
+        if !dragging.get_untracked() {
+            return;
+        }
+        dragging.set(false);
+        if let Some(target) = ev
+            .current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = target.release_pointer_capture(ev.pointer_id());
+        }
+        if let Some(px) = width_from_pointer(pane_ref, ev.client_x()) {
+            workspace.set_width(px);
+        } else if let Some(px) = workspace.width_px.get_untracked() {
+            workspace.set_width(px);
+        }
+    };
 
     view! {
         // Always mounted so collapse/expand can EASE via a CSS transition.
@@ -36,59 +140,117 @@ pub fn WorkspacePanel() -> impl IntoView {
         // Width still reads `--aleph-workspace-w` so the band chrome
         // (label + LayoutToggle in app.rs) stays glued to its leading edge.
         <aside
+            node_ref=pane_ref
             class="aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col
                    glass border-l border-border bg-surface-overlay/95 shadow-xl
                    min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden"
             class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
         >
-            <Show
-                    when=move || chat.team_id.get().is_some()
-                    fallback=move || view! {
+            // Left-edge resize handle. Absolutely positioned so it costs the
+            // flex column no space; pointer capture is what keeps the drag
+            // alive once the cursor leaves the 6px strip.
+            <div
+                class="aleph-workspace-resizer"
+                class:is-dragging=move || dragging.get()
+                title=move || t_string!(i18n, layout_toggle.resize_pane).to_string()
+                on:pointerdown=on_pointer_down
+                on:pointermove=on_pointer_move
+                on:pointerup=on_pointer_up
+                on:pointercancel=on_pointer_up
+                on:dblclick=move |_| workspace.clear_width()
+            />
+
+            // Body tab strip. `aleph-pane-top` (not `aleph-content-top`):
+            // these are real buttons, and on web the smaller content inset
+            // would park them under the NotificationCenter bell — the same
+            // reason `ArtifactsSurface` used to carry it.
+            <div class="aleph-pane-top flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
+                // A plain map, not a keyed `<For>`: the slice is two or three
+                // static variants and only changes when team-ness does, so
+                // there is nothing for keying to save. Each button's `class`
+                // closure reads `active` at the leaf, so selecting a tab
+                // repaints two class attributes and rebuilds nothing.
+                {move || {
+                    WorkspaceBody::available(is_team.get())
+                        .iter()
+                        .copied()
+                        .map(|body| view! {
+                            <button
+                                class=move || {
+                                    if active.get() == body {
+                                        "px-2 py-1 rounded bg-primary text-white"
+                                    } else {
+                                        "px-2 py-1 rounded text-text-secondary hover:text-text-primary"
+                                    }
+                                }
+                                on:click=move |_| workspace.body.set(body)
+                            >{body_label(body, i18n)}</button>
+                        })
+                        .collect_view()
+                }}
+            </div>
+
+            // The three mount-on-demand bodies.
+            <div
+                class="flex-1 min-h-0 flex flex-col"
+                style:display=move || if active.get() == WorkspaceBody::Canvas { "none" } else { "flex" }
+            >
+                {move || match active.get() {
+                    WorkspaceBody::Artifacts => view! {
                         <crate::components::artifacts::ArtifactsSurface />
-                    }
-                >
-                    // Team-mode tab header. `aleph-content-top` clears the
-                    // macOS overlay-titlebar drag band (30px) so the tabs
-                    // aren't jammed under the traffic lights / band (their top
-                    // would otherwise be unclickable); on web/Win/Linux the
-                    // token is the smaller sidebar-logo inset, aligning the
-                    // header with the brand row. Single-agent path already
-                    // applies the same token to its scroll container.
-                    <div class="aleph-content-top flex gap-1 px-3 py-2 border-b border-border text-xs shrink-0">
-                        <button
-                            class=move || {
-                                if active_tab.get() == 0 {
-                                    "px-2 py-1 rounded bg-primary text-white"
-                                } else {
-                                    "px-2 py-1 rounded text-text-secondary hover:text-text-primary"
-                                }
-                            }
-                            on:click=move |_| active_tab.set(0)
-                        >{t!(i18n, common.team_deliverables)}</button>
-                        <button
-                            class=move || {
-                                if active_tab.get() == 1 {
-                                    "px-2 py-1 rounded bg-primary text-white"
-                                } else {
-                                    "px-2 py-1 rounded text-text-secondary hover:text-text-primary"
-                                }
-                            }
-                            on:click=move |_| active_tab.set(1)
-                        >{t!(i18n, common.team_tasks)}</button>
-                    </div>
-                    // Team-mode tab body
-                    <div class="flex-1 overflow-y-auto px-3 py-2">
-                        {move || {
-                            if active_tab.get() == 0 {
-                                view! { <TeamDeliverablesView /> }.into_any()
-                            } else {
-                                view! { <TeamTasksView /> }.into_any()
-                            }
-                        }}
-                    </div>
-                </Show>
-            </aside>
+                    }.into_any(),
+                    WorkspaceBody::Deliverables => view! {
+                        <div class="flex-1 overflow-y-auto px-3 py-2">
+                            <TeamDeliverablesView />
+                        </div>
+                    }.into_any(),
+                    WorkspaceBody::Tasks => view! {
+                        <div class="flex-1 overflow-y-auto px-3 py-2">
+                            <TeamTasksView />
+                        </div>
+                    }.into_any(),
+                    // Rendered by the keep-alive container below, never here.
+                    WorkspaceBody::Canvas => ().into_any(),
+                }}
+            </div>
+
+            // Canvas body — mounted once for the life of the app and hidden
+            // with CSS, never unmounted (CANVAS.md §6: the three liveness
+            // wires, the camera and the undo stack all live in there).
+            <div
+                class="flex-1 min-h-0 flex flex-col"
+                style:display=move || if active.get() == WorkspaceBody::Canvas { "flex" } else { "none" }
+            >
+                <crate::views::canvas::CanvasView />
+            </div>
+        </aside>
     }
+}
+
+/// The `<html>` element, as the `HtmlElement` whose inline style carries the
+/// `:root` custom-property overrides (same lookup as `team_participants.rs`).
+fn document_root() -> Option<web_sys::HtmlElement> {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+}
+
+/// Pane width implied by a pointer at `client_x`, clamped to the live
+/// viewport. `None` when the pane is not laid out yet.
+fn width_from_pointer(pane: NodeRef<leptos::html::Aside>, client_x: i32) -> Option<u32> {
+    let el = pane.get_untracked()?;
+    let right = el.get_bounding_client_rect().right();
+    let raw = right - f64::from(client_x);
+    let viewport = web_sys::window()
+        .and_then(|w| w.inner_width().ok())
+        .and_then(|v| v.as_f64())
+        .unwrap_or(right);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(clamp_width(
+        raw.max(0.0) as u32,
+        viewport.max(0.0) as u32,
+    ))
 }
 
 /// Deliverables tab — artifacts produced by the team, via teams.chat.thread.

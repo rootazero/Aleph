@@ -398,12 +398,20 @@ impl PluginManifest {
         // drive-relative `C:x`, yet `PathBuf::join` resolves both *outside*
         // `root_dir` — a rooted or prefixed component discards what came before
         // it. Test the components directly so the guard means the same thing on
-        // every platform.
-        let escapes_root = self
-            .entry
-            .components()
-            .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir));
-        if escapes_root || entry_str.contains("..") {
+        // every platform. The previous substring `..` check rejected legitimate
+        // filenames like `lib..so`; the component-based check below only fires
+        // on an actual `ParentDir` segment.
+        // review(extension): added `Component::ParentDir` to the component
+        // check and dropped the redundant substring `..` test — the component
+        // check covers the real traversal case, while the substring form
+        // rejected every filename with two adjacent dots.
+        let escapes_root = self.entry.components().any(|c| {
+            matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir
+            )
+        });
+        if escapes_root {
             return Err(ExtensionError::Runtime(format!(
                 "Path traversal not allowed in plugin entry: {entry_str}"
             )));

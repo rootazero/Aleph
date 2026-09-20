@@ -30,6 +30,17 @@ pub struct FetchConfigInternal {
     /// Backend configurations, keyed by provider name.
     #[serde(default)]
     pub backends: HashMap<String, FetchBackendConfig>,
+
+    /// Verified flag for shared (search-backed) providers that DO NOT land
+    /// in `backends` (currently just firecrawl, which shares the
+    /// `[search].backends.firecrawl` config and `search:firecrawl` vault
+    /// key per Strategy V). Without this side-channel, a successful
+    /// `fetch_config.test` for firecrawl would never persist `verified`,
+    /// and the DTO returned by `handle_get` would always report
+    /// `verified: false` for firecrawl even after a confirmed-good test.
+    /// Keyed by provider name; empty by default.
+    #[serde(default)]
+    pub verified_shared: HashMap<String, bool>,
 }
 
 // =============================================================================
@@ -109,6 +120,7 @@ mod tests {
             default_provider: "crawl4ai".into(),
             fallback_providers: None,
             backends,
+            verified_shared: HashMap::new(),
         };
         let toml = toml::to_string(&cfg).unwrap();
         let back: FetchConfigInternal = toml::from_str(&toml).unwrap();

@@ -305,34 +305,6 @@ impl StateDatabase {
         .await
     }
 
-    /// Mark all running tasks as interrupted (for graceful shutdown)
-    pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
-        let now = chrono::Utc::now().timestamp();
-        self.with_conn(move |conn| {
-            // `Connection::execute` returns `Result<usize>` (rows changed),
-            // not i64. Cast to i64 via try_from so an unexpected
-            // `usize > i64::MAX` (impossible per SQLite's row-count cap)
-            // is surfaced as a typed error rather than a silent truncation.
-            let count: usize = conn
-                .execute(
-                    r#"
-                    UPDATE agent_tasks
-                    SET status = 'interrupted', updated_at = ?1
-                    WHERE status = 'running'
-                    "#,
-                    params![now],
-                )
-                .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
-            let count_i64 = i64::try_from(count).map_err(|_| {
-                AlephError::config(format!(
-                    "mark_running_as_interrupted: row count {count} exceeds i64::MAX"
-                ))
-            })?;
-            super::i64_to_u64_count(count_i64, "marked_tasks")
-        })
-        .await
-    }
-
     /// Reconcile tasks orphaned by a crash or hard restart.
     ///
     /// Finds tasks still marked `running` (see `get_recoverable_tasks`) — the
@@ -340,6 +312,13 @@ impl StateDatabase {
     /// and returns them so the caller can report each one. Orphans are not
     /// resumed; `interrupted` is a terminal state. Idempotent: a second call
     /// immediately after the first finds nothing.
+    ///
+    /// The same UPDATE stamps `interrupted_by_restart_at_ms`: the engine's
+    /// cancel arm writes the same `interrupted` word for a deliberate cancel,
+    /// and [`unadjudicated_interrupted_tasks`](Self::unadjudicated_interrupted_tasks)
+    /// must select only the rows THIS flip wrote — a cancelled-before-seed run
+    /// has no lost message to tell anyone about. One statement, so no row can
+    /// read `interrupted` with the stamp still owed.
     ///
     /// The SELECT and UPDATE run inside a single SQLite statement
     /// (`UPDATE … RETURNING`) so a task that transitions to `running`
@@ -351,13 +330,16 @@ impl StateDatabase {
     /// `interrupted` without ever appearing in the returned list — the
     /// user's restart receipt would silently drop the task.
     pub async fn reconcile_orphaned_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now();
+        let now_secs = now.timestamp();
+        let now_ms = now.timestamp_millis();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
                     UPDATE agent_tasks
-                       SET status = 'interrupted', updated_at = ?1
+                       SET status = 'interrupted', updated_at = ?1,
+                           interrupted_by_restart_at_ms = ?2
                      WHERE status = 'running'
                     RETURNING id, parent_session_id, agent_id, task_prompt, status,
                               risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
@@ -368,7 +350,7 @@ impl StateDatabase {
                 .map_err(|e| AlephError::config(format!("Failed to prepare reconcile: {e}")))?;
 
             let rows = stmt
-                .query_map(params![now], agent_task_from_row)
+                .query_map(params![now_secs, now_ms], agent_task_from_row)
                 .map_err(|e| AlephError::config(format!("Failed to run reconcile: {e}")))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
@@ -376,6 +358,75 @@ impl StateDatabase {
                 })?;
 
             Ok(rows)
+        })
+        .await
+    }
+
+    /// Main-lane rows a restart's reconcile flipped to `interrupted`
+    /// (`interrupted_by_restart_at_ms IS NOT NULL`) that the resume
+    /// coordinator has not yet adjudicated, created at or after `since_secs`
+    /// (unix seconds), oldest first.
+    ///
+    /// Selected by the restart stamp, not by `status`: the engine's cancel arm
+    /// also writes `interrupted`, and a run the user cancelled before its seed
+    /// landed has no lost message — telling them "please re-send" would be a
+    /// false sentence (final review M1). The stamp is written in the same
+    /// UPDATE as the flip ([`reconcile_orphaned_tasks`](Self::reconcile_orphaned_tasks)),
+    /// so it is the one derivation of "who wrote `interrupted`".
+    ///
+    /// Main lane only: a subagent row has no user conversation to tell
+    /// anything to. The window is the caller's `[resume] max_age_secs`, so a
+    /// row older than what the coordinator would act on is never examined —
+    /// and, unstamped, is never re-examined either: the age window and the
+    /// stamp together bound the work to one look per row within the window.
+    pub async fn unadjudicated_interrupted_tasks(
+        &self,
+        since_secs: i64,
+    ) -> Result<Vec<AgentTask>, AlephError> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, parent_session_id, agent_id, task_prompt, status,
+                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                           recursion_depth, parent_task_id, created_at, updated_at,
+                           started_at, completed_at, metadata_json
+                    FROM agent_tasks
+                    WHERE interrupted_by_restart_at_ms IS NOT NULL AND lane = 'main'
+                      AND adjudicated_at_ms IS NULL AND created_at >= ?1
+                    ORDER BY created_at ASC
+                    "#,
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to prepare unadjudicated query: {e}"))
+                })?;
+
+            let rows = stmt
+                .query_map(params![since_secs], agent_task_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to run unadjudicated query: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to collect unadjudicated rows: {e}"))
+                })?;
+
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Stamp when the resume coordinator decided about this row — whatever it
+    /// decided. A stamped row drops out of
+    /// [`unadjudicated_interrupted_tasks`](Self::unadjudicated_interrupted_tasks)
+    /// for good.
+    pub async fn mark_task_adjudicated(&self, task_id: &str, at_ms: i64) -> Result<(), AlephError> {
+        let id = task_id.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE agent_tasks SET adjudicated_at_ms = ?1 WHERE id = ?2",
+                params![at_ms, id],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to stamp adjudicated_at_ms: {e}")))?;
+            Ok(())
         })
         .await
     }
@@ -407,30 +458,6 @@ mod tests {
         let recoverable = db.get_recoverable_tasks().await.unwrap();
         let ids: Vec<&str> = recoverable.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["run-1"]);
-    }
-
-    /// After marking running rows interrupted, they must not resurface as
-    /// recoverable — otherwise every restart re-reports the same tasks.
-    #[tokio::test]
-    async fn mark_running_as_interrupted_then_recoverable_is_empty() {
-        let db = StateDatabase::in_memory().unwrap();
-        insert_with_status(&db, "run-1", TaskStatus::Running).await;
-
-        let marked = db.mark_running_as_interrupted().await.unwrap();
-        assert_eq!(marked, 1);
-
-        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
-    }
-
-    /// Reconciliation run twice in a row: the second pass is a no-op.
-    #[tokio::test]
-    async fn reconcile_is_idempotent_across_two_runs() {
-        let db = StateDatabase::in_memory().unwrap();
-        insert_with_status(&db, "run-1", TaskStatus::Running).await;
-
-        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 1);
-        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 0);
-        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
     }
 
     /// reconcile_orphaned_tasks returns the orphans and marks them
@@ -467,5 +494,127 @@ mod tests {
 
         assert_eq!(db.reconcile_orphaned_tasks().await.unwrap().len(), 1);
         assert!(db.reconcile_orphaned_tasks().await.unwrap().is_empty());
+    }
+
+    /// A Main-lane orphan is listed until it is stamped, and only inside the
+    /// window: the resume coordinator adjudicates each row ONCE per lifetime,
+    /// not once per boot.
+    #[tokio::test]
+    async fn unadjudicated_interrupted_tasks_are_listed_once() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+        db.reconcile_orphaned_tasks().await.unwrap();
+        // `task()` builds lane Subagent; flip one to Main the way the engine does
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            db.unadjudicated_interrupted_tasks(0).await.unwrap().len(),
+            1
+        );
+        db.mark_task_adjudicated("run-1", 5).await.unwrap();
+        assert!(
+            db.unadjudicated_interrupted_tasks(0)
+                .await
+                .unwrap()
+                .is_empty(),
+            "stamped rows drop out"
+        );
+        assert!(
+            db.unadjudicated_interrupted_tasks(i64::MAX)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the window bounds it"
+        );
+    }
+
+    /// The lane filter discriminates: a subagent-lane orphan has no user
+    /// conversation to write into, so it never reaches the coordinator's
+    /// list — only the Main-lane row does. (The pin the deleted
+    /// `orphan_notice` module carried, moved to the query that replaced it.)
+    #[tokio::test]
+    async fn a_subagent_lane_orphan_is_never_listed_for_adjudication() {
+        let db = StateDatabase::in_memory().unwrap();
+        // `task()` builds lane Subagent; only `main-1` is flipped.
+        insert_with_status(&db, "sub-1", TaskStatus::Running).await;
+        insert_with_status(&db, "main-1", TaskStatus::Running).await;
+        db.reconcile_orphaned_tasks().await.unwrap();
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main' WHERE id='main-1'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        let ids: Vec<String> = db
+            .unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["main-1"]);
+    }
+
+    /// `interrupted` has two writers and only one of them is a restart
+    /// (final review M1): a row the engine's cancel arm marked `Interrupted`
+    /// through `update_task_status` (the path `persist_run_task_status`
+    /// takes on `ExecutionError::Cancelled`) is NOT a lost-input candidate —
+    /// the user stopped it — while the row a reconcile flipped from `running`
+    /// IS. Both read `interrupted` on the kanban / Panel face; only the
+    /// reconcile's row carries the restart stamp. Reddens if the adjudication
+    /// query goes back to selecting by `status`.
+    #[tokio::test]
+    async fn a_cancel_written_interrupted_row_is_not_adjudicated_but_a_restart_flipped_one_is() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "cancelled-1", TaskStatus::Running).await;
+        insert_with_status(&db, "crashed-1", TaskStatus::Running).await;
+        // The cancel arm's write, then the restart's reconcile of the other.
+        db.update_task_status("cancelled-1", TaskStatus::Interrupted)
+            .await
+            .unwrap();
+        let flipped: Vec<String> = db
+            .reconcile_orphaned_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(
+            flipped,
+            ["crashed-1"],
+            "reconcile flips only the running row"
+        );
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        for id in ["cancelled-1", "crashed-1"] {
+            assert_eq!(
+                db.get_agent_task(id).await.unwrap().unwrap().status,
+                TaskStatus::Interrupted,
+                "{id}: both rows read `interrupted` on the status face"
+            );
+        }
+        let ids: Vec<String> = db
+            .unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["crashed-1"],
+            "only the restart-flipped row is a lost-input candidate"
+        );
     }
 }

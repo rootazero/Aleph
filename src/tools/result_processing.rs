@@ -24,7 +24,7 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
-use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
+use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
@@ -337,7 +337,7 @@ pub(crate) fn recovery_footer(
 ) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
     let marker = store.persist_if_large(tool_call_id, tool_name, full, threshold)?;
-    let path = extract_persisted_ref(&marker).and_then(parse_marker_path);
+    let path = extract_persisted_path(&marker).map(PathBuf::from);
     // Index the offloaded blob so the model can BM25-retrieve only the relevant
     // slices via `ctx_search` instead of re-reading the whole file (which would
     // defeat the offload). Best-effort: on failure the bare persist marker still
@@ -382,6 +382,24 @@ pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
     let mut images = Vec::new();
     hoist_walk(value, &mut images, 0);
     images
+}
+
+/// Lift the UI presentation a tool attached under
+/// [`aleph_protocol::PRESENTATION_KEY`] out of its JSON and REMOVE the key,
+/// so the model-facing text (built from `value` right after) never carries
+/// it. Only a top-level object key is honoured — a nested one is a tool bug
+/// the census (`presentation_census`) will name.
+#[must_use]
+pub fn hoist_presentation(value: &mut serde_json::Value) -> Option<aleph_protocol::Presentation> {
+    let obj = value.as_object_mut()?;
+    let raw = obj.remove(aleph_protocol::PRESENTATION_KEY)?;
+    match serde_json::from_value::<aleph_protocol::Presentation>(raw) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(error = %e, "tool attached a `_presentation` that is not a Presentation; dropped");
+            None
+        }
+    }
 }
 
 /// Recursion bound for [`hoist_walk`]. Tool results are serialized from Rust
@@ -660,15 +678,6 @@ fn char_byte_offset(text: &str, n: usize) -> usize {
     text.char_indices()
         .nth(n)
         .map_or(text.len(), |(byte_idx, _)| byte_idx)
-}
-
-fn parse_marker_path(line: &str) -> Option<PathBuf> {
-    // Marker format: "[Full output persisted: <path> (<n> tokens, <tool>)]".
-    let prefix = "[Full output persisted: ";
-    let start = line.find(prefix)? + prefix.len();
-    let rest = &line[start..];
-    let end = rest.find(" (")?;
-    Some(PathBuf::from(rest[..end].to_string()))
 }
 
 #[cfg(test)]
@@ -971,6 +980,31 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // hoist_presentation — the UI diff side-channel
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hoist_presentation_removes_the_key_and_returns_the_typed_value() {
+        let p = aleph_protocol::Presentation::FileChanges { changes: vec![] };
+        let mut v = serde_json::json!({"success": true, "_presentation": serde_json::to_value(&p).unwrap()});
+        assert_eq!(hoist_presentation(&mut v), Some(p));
+        assert!(v.get("_presentation").is_none());
+        assert_eq!(v["success"], true);
+    }
+
+    #[test]
+    fn hoist_presentation_is_none_for_strings_and_for_a_malformed_payload() {
+        let mut s = serde_json::json!("plain text");
+        assert!(hoist_presentation(&mut s).is_none());
+        let mut bad = serde_json::json!({"_presentation": {"kind": "nope"}});
+        assert!(hoist_presentation(&mut bad).is_none());
+        assert!(
+            bad.get("_presentation").is_none(),
+            "a malformed payload is still removed from the model text"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // resolve_result_budget
     // ---------------------------------------------------------------
 
@@ -1179,10 +1213,16 @@ mod tests {
         );
     }
 
+    /// The parse itself now lives beside the writer
+    /// (`result_store::extract_persisted_path`); this keeps the assertion that
+    /// THIS module's `recovery_footer` still gets a path back out of the marker
+    /// it just produced, which is the part `recovery_footer`'s callers rely on.
     #[test]
     fn parse_marker_path_roundtrip() {
         let marker = "[Full output persisted: /tmp/aleph/x.txt (1234 tokens, bash)]";
-        let path = parse_marker_path(marker).expect("parse");
+        let path = extract_persisted_path(marker)
+            .map(PathBuf::from)
+            .expect("parse");
         assert_eq!(path, PathBuf::from("/tmp/aleph/x.txt"));
     }
 

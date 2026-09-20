@@ -1139,6 +1139,7 @@ impl BuiltinToolRegistry {
             session_turn_tool,
             session_read_tool,
             google_meet_tool,
+            media_send_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
@@ -1410,6 +1411,7 @@ impl BuiltinToolRegistry {
             session_turn_tool,
             session_read_tool,
             google_meet_tool,
+            media_send_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
@@ -1546,6 +1548,7 @@ mod tests {
             default_provider: default_provider.into(),
             fallback_providers: None,
             backends,
+            verified_shared: HashMap::new(),
         }
     }
 

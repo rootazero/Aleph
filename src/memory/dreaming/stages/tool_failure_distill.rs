@@ -520,40 +520,9 @@ fn fence_safe(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::insights::{ToolFailureEvidence, ToolUsageReport};
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
-
-    fn digest_with(failures: Vec<ToolFailureEvidence>) -> ToolFailureDigest {
-        let failed = failures.iter().map(|f| f.failed).sum();
-        let total = failures.iter().map(|f| f.attempts).sum();
-        ToolFailureDigest {
-            report: ToolUsageReport {
-                window_seconds: 86_400,
-                total,
-                succeeded: total - failed,
-                failed,
-                success_rate: 0.0,
-                avg_duration_ms: 0,
-                distinct_tools: failures.len(),
-                distinct_sessions: 1,
-                tools: Vec::new(),
-                truncated: false,
-            },
-            failures,
-            newest_created_at: 999,
-        }
-    }
-
-    fn evidence(tool: &str, failed: u64, attempts: u64, samples: &[&str]) -> ToolFailureEvidence {
-        ToolFailureEvidence {
-            tool: tool.into(),
-            failed,
-            attempts,
-            samples: samples.iter().map(|s| (*s).to_string()).collect(),
-        }
-    }
 
     #[test]
     fn stage_name_is_stable() {

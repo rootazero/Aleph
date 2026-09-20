@@ -135,12 +135,16 @@ pub fn compute_next_cron(
             .next()
             .map(|t| t.with_timezone(&Utc).timestamp_millis()))
     } else {
-        // Default to system local timezone, not UTC — users think in local time
-        let local_now = from.with_timezone(&chrono::Local);
+        // Default to UTC (NOT the host's local zone) so the same cron
+        // expression triggers at the same wall-clock instant regardless of
+        // where the daemon runs. Mirrors active_hours.rs' deliberate choice
+        // to avoid openclaw's containerisation regression — see that file's
+        // module-level comment. Operators who want host-local behaviour
+        // pass an explicit `tz` (e.g. `"America/New_York"`).
         Ok(schedule
-            .after(&local_now)
+            .after(&from)
             .next()
-            .map(|t| t.with_timezone(&Utc).timestamp_millis()))
+            .map(|t| t.timestamp_millis()))
     }
 }
 

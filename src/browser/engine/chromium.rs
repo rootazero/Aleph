@@ -295,6 +295,7 @@ impl ChromiumChild {
     /// "where does an endpoint come from". **Task 6's reaper tests consume this
     /// same seam**; do not add a second one.
     #[cfg(test)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn from_parts(
         child: Child,
         endpoint: CdpEndpoint,

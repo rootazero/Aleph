@@ -73,6 +73,21 @@ pub struct FileOutcome {
     pub op: &'static str,
     pub success: bool,
     pub message: String,
+    /// UI side-channel transport from `Planned::commit()` to `run()`, where
+    /// every committed file's changes are collected into one `_presentation`.
+    /// Internal only — never serialized as part of the model-facing output
+    /// (the top-level `_presentation` key is what gets hoisted; this field
+    /// would otherwise leak a second, per-file copy into the same JSON).
+    ///
+    /// **Boxed on purpose.** `FileOutcome` is the `Err` variant of
+    /// `Planned::plan_*`, and an inline `FileChange` (`String` + `Vec` + two
+    /// `u32`s + two small enums) put the struct at 136 bytes — over clippy's
+    /// `result_large_err` threshold, so every planning `?` moved that much on
+    /// the error path. `Option<Box<_>>` is one pointer and changes no
+    /// signature; the alternative (`Box<FileOutcome>` at the `Result`) would
+    /// have spread through every call site to hide the same growth.
+    #[serde(skip)]
+    pub change: Option<Box<aleph_protocol::FileChange>>,
 }
 
 /// Aggregate output for one `apply_patch` invocation.
@@ -82,6 +97,9 @@ pub struct ApplyPatchOutput {
     pub message: String,
     pub files_changed: usize,
     pub files: Vec<FileOutcome>,
+    /// UI side-channel; hoisted out before the model sees this output.
+    #[serde(rename = "_presentation", skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<aleph_protocol::Presentation>,
 }
 
 /// Hard upper bound on the patch envelope (UTF-8 bytes). The whole envelope is
@@ -207,11 +225,18 @@ make several coordinated edits at once."#;
             format!("applied {applied}/{total} operations; a write failed partway")
         };
 
+        let changes: Vec<aleph_protocol::FileChange> = outcomes
+            .iter()
+            .filter_map(|o| o.change.as_deref().cloned())
+            .collect();
+        let presentation = (!changes.is_empty()).then(|| super::diff::presentation_for(changes));
+
         let out = ApplyPatchOutput {
             success: all_ok,
             message: message.clone(),
             files_changed: applied,
             files: outcomes,
+            presentation,
         };
         notify_tool_result(Self::NAME, &message, all_ok);
         Ok(out)
@@ -317,7 +342,7 @@ make several coordinated edits at once."#;
     ) -> std::result::Result<Planned, FileOutcome> {
         match op {
             PatchOp::Add { path, lines } => self.plan_add(path, lines, output_dir, pending),
-            PatchOp::Delete { path } => self.plan_delete(path, output_dir, pending),
+            PatchOp::Delete { path } => self.plan_delete(path, output_dir, pending).await,
             PatchOp::Update {
                 path,
                 move_to,
@@ -398,7 +423,7 @@ make several coordinated edits at once."#;
         })
     }
 
-    fn plan_delete(
+    async fn plan_delete(
         &self,
         path: &str,
         output_dir: Option<&Path>,
@@ -418,10 +443,28 @@ make several coordinated edits at once."#;
                 format!("{} does not exist", resolved.display()),
             ));
         }
+        // Best-effort pre-image for the diff side-channel, read under the
+        // envelope-wide path lock `execute()` already holds. Unlike the
+        // delete itself, a failure to read it must NOT fail the operation —
+        // `commit()` reports the carried reason instead. Shares
+        // `diff::read_pre_image` with `execute_write`, so "why couldn't we
+        // read it" has one derivation rather than a copy per tool.
+        //
+        // `Ok(None)` (confirmed absent) is a race against the existence check
+        // three lines up; the delete will report its own failure, and there
+        // is no pre-image either way, so it maps to the I/O reason.
+        let old = match super::diff::read_pre_image(&resolved).await {
+            Ok(Some(text)) => Ok(text),
+            Ok(None) => Err(aleph_protocol::Unavailable::PreImageUnavailable),
+            Err(why) => Err(why),
+        };
         pending.insert(resolved.clone(), None);
         Ok(Planned {
             src: path.to_string(),
-            effect: Effect::Delete { path: resolved },
+            effect: Effect::Delete {
+                path: resolved,
+                old,
+            },
         })
     }
 
@@ -467,6 +510,9 @@ make several coordinated edits at once."#;
             }
             None => read_text(&resolved, path).await?,
         };
+        // Snapshot for the diff side-channel BEFORE the hunk loop below
+        // mutates `content` in place.
+        let old = content.clone();
 
         let mut hunks_applied = 0;
         let mut skipped_context_less = 0usize;
@@ -609,6 +655,7 @@ make several coordinated edits at once."#;
                 content,
                 rename,
                 hunks_applied,
+                old,
             },
         })
     }
@@ -673,6 +720,10 @@ impl AlephTool for ApplyPatchTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.run(args).await.map_err(Into::into)
     }
+
+    fn mutates_file_content(&self) -> bool {
+        true
+    }
 }
 
 // =============================================================================
@@ -709,6 +760,12 @@ enum Effect {
     },
     Delete {
         path: PathBuf,
+        /// Pre-image for the diff side-channel, best-effort (see
+        /// `diff::read_pre_image`). `Err` carries WHICH cause stopped it
+        /// (over the diff byte cap, binary/non-UTF-8, or an I/O error) — the
+        /// delete still proceeds; the presentation reports that reason, never
+        /// an empty/zero change.
+        old: std::result::Result<String, aleph_protocol::Unavailable>,
     },
     Update {
         write_to: PathBuf,
@@ -717,6 +774,9 @@ enum Effect {
         /// without following a final-component symlink.
         rename: Option<(PathBuf, PathBuf)>,
         hunks_applied: usize,
+        /// The file's content before this update's hunks were applied —
+        /// snapshotted in `plan_update` before the hunk loop mutates it.
+        old: String,
     },
 }
 
@@ -727,11 +787,18 @@ impl Planned {
             Effect::Add { path, body } => {
                 if let Some(parent) = path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return fail(
-                            "add",
-                            &src,
-                            format!("failed to create parent {}: {}", parent.display(), e),
-                        );
+                        return FileOutcome {
+                            change: Some(Box::new(aleph_protocol::FileChange::unavailable(
+                                path.to_string_lossy(),
+                                aleph_protocol::FileChangeKind::Created,
+                                aleph_protocol::Unavailable::ToolFailed,
+                            ))),
+                            ..fail(
+                                "add",
+                                &src,
+                                format!("failed to create parent {}: {}", parent.display(), e),
+                            )
+                        };
                     }
                 }
                 // Atomic write-back (stage to temp + fsync + rename), matching
@@ -739,71 +806,142 @@ impl Planned {
                 // mid-write must never leave the file truncated.
                 let byte_count = body.len();
                 match crate::utils::atomic_write::atomic_write_file(&path, &body).await {
-                    Ok(()) => FileOutcome {
-                        path: path.display().to_string(),
-                        op: "add",
-                        success: true,
-                        message: format!("created ({byte_count} bytes)"),
+                    Ok(()) => {
+                        let change = super::diff::compute_file_change(
+                            &path.to_string_lossy(),
+                            None,
+                            Some(&body),
+                        );
+                        FileOutcome {
+                            path: path.display().to_string(),
+                            op: "add",
+                            success: true,
+                            message: format!("created ({byte_count} bytes)"),
+                            change: Some(Box::new(change)),
+                        }
+                    }
+                    Err(e) => FileOutcome {
+                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
+                            path.to_string_lossy(),
+                            aleph_protocol::FileChangeKind::Created,
+                            aleph_protocol::Unavailable::ToolFailed,
+                        ))),
+                        ..fail("add", &src, format!("write failed: {e}"))
                     },
-                    Err(e) => fail("add", &src, format!("write failed: {e}")),
                 }
             }
-            Effect::Delete { path } => match tokio::fs::remove_file(&path).await {
-                Ok(()) => FileOutcome {
-                    path: path.display().to_string(),
-                    op: "delete",
-                    success: true,
-                    message: "deleted".into(),
+            Effect::Delete { path, old } => match tokio::fs::remove_file(&path).await {
+                Ok(()) => {
+                    let change = match &old {
+                        Ok(text) => super::diff::compute_file_change(
+                            &path.to_string_lossy(),
+                            Some(text),
+                            None,
+                        ),
+                        // The pre-image could not be read — report the gap
+                        // with the reason the read itself established, rather
+                        // than an empty change (which would misread as "0
+                        // lines removed") or one label for every cause.
+                        Err(why) => aleph_protocol::FileChange::unavailable(
+                            path.to_string_lossy(),
+                            aleph_protocol::FileChangeKind::Deleted,
+                            *why,
+                        ),
+                    };
+                    FileOutcome {
+                        path: path.display().to_string(),
+                        op: "delete",
+                        success: true,
+                        message: "deleted".into(),
+                        change: Some(Box::new(change)),
+                    }
+                }
+                Err(e) => FileOutcome {
+                    change: Some(Box::new(aleph_protocol::FileChange::unavailable(
+                        path.to_string_lossy(),
+                        aleph_protocol::FileChangeKind::Deleted,
+                        aleph_protocol::Unavailable::ToolFailed,
+                    ))),
+                    ..fail("delete", &src, format!("delete failed: {e}"))
                 },
-                Err(e) => fail("delete", &src, format!("delete failed: {e}")),
             },
             Effect::Update {
                 write_to,
                 content,
                 rename,
                 hunks_applied,
+                old,
             } => {
                 if let Err(e) =
                     crate::utils::atomic_write::atomic_write_file(&write_to, &content).await
                 {
-                    return fail("update", &src, format!("write-back failed: {e}"));
+                    return FileOutcome {
+                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
+                            write_to.to_string_lossy(),
+                            aleph_protocol::FileChangeKind::Modified,
+                            aleph_protocol::Unavailable::ToolFailed,
+                        ))),
+                        ..fail("update", &src, format!("write-back failed: {e}"))
+                    };
                 }
                 let final_path = match rename {
                     Some((from, to)) => {
                         if let Some(parent) = to.parent() {
                             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                                return fail(
-                                    "update",
-                                    &src,
-                                    format!(
-                                        "failed to create move-to parent {}: {}",
-                                        parent.display(),
-                                        e
-                                    ),
-                                );
+                                return FileOutcome {
+                                    change: Some(Box::new(
+                                        aleph_protocol::FileChange::unavailable(
+                                            to.to_string_lossy(),
+                                            aleph_protocol::FileChangeKind::Modified,
+                                            aleph_protocol::Unavailable::ToolFailed,
+                                        ),
+                                    )),
+                                    ..fail(
+                                        "update",
+                                        &src,
+                                        format!(
+                                            "failed to create move-to parent {}: {}",
+                                            parent.display(),
+                                            e
+                                        ),
+                                    )
+                                };
                             }
                         }
                         if let Err(e) = tokio::fs::rename(&from, &to).await {
-                            return fail(
-                                "update",
-                                &src,
-                                format!(
-                                    "rename {} → {} failed: {}",
-                                    from.display(),
-                                    to.display(),
-                                    e
-                                ),
-                            );
+                            return FileOutcome {
+                                change: Some(Box::new(aleph_protocol::FileChange::unavailable(
+                                    to.to_string_lossy(),
+                                    aleph_protocol::FileChangeKind::Modified,
+                                    aleph_protocol::Unavailable::ToolFailed,
+                                ))),
+                                ..fail(
+                                    "update",
+                                    &src,
+                                    format!(
+                                        "rename {} → {} failed: {}",
+                                        from.display(),
+                                        to.display(),
+                                        e
+                                    ),
+                                )
+                            };
                         }
                         to
                     }
                     None => write_to,
                 };
+                let change = super::diff::compute_file_change(
+                    &final_path.to_string_lossy(),
+                    Some(&old),
+                    Some(&content),
+                );
                 FileOutcome {
                     path: final_path.display().to_string(),
                     op: "update",
                     success: true,
                     message: format!("applied {hunks_applied} hunk(s)"),
+                    change: Some(Box::new(change)),
                 }
             }
         }
@@ -1154,6 +1292,7 @@ fn fail(op: &'static str, path: &str, message: impl Into<String>) -> FileOutcome
         op,
         success: false,
         message: message.into(),
+        change: None,
     }
 }
 
@@ -1756,5 +1895,76 @@ mod tests {
         assert!(outcome.success, "{:?}", outcome);
         let updated = tokio::fs::read_to_string(&f).await.unwrap();
         assert_eq!(updated, "end \nmiddle\nFIN\n");
+    }
+
+    // ========================================================================
+    // `_presentation` side-channel — one `FileChange` per committed file.
+    // ========================================================================
+
+    /// An envelope with one Update and one Add commits two `FileOutcome`s,
+    /// each carrying its own `FileChange` (Modified / Created respectively).
+    #[tokio::test]
+    async fn commit_attaches_a_file_change_for_update_and_add() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(dir.path().join("existing.txt"), "one\ntwo\n")
+            .await
+            .unwrap();
+
+        let ops = vec![
+            PatchOp::Update {
+                path: "existing.txt".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Context("one".into()),
+                        HunkLine::Remove("two".into()),
+                        HunkLine::Add("TWO".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+            },
+            PatchOp::Add {
+                path: "fresh.txt".to_string(),
+                lines: vec!["hello".to_string()],
+            },
+        ];
+        let (ok, outcomes) = ApplyPatchTool::new().execute(&ops, Some(dir.path())).await;
+        assert!(ok, "{outcomes:?}");
+        assert_eq!(outcomes.len(), 2);
+
+        let update_change = outcomes[0]
+            .change
+            .as_ref()
+            .expect("update commit carries a FileChange");
+        assert_eq!(update_change.kind, aleph_protocol::FileChangeKind::Modified);
+
+        let add_change = outcomes[1]
+            .change
+            .as_ref()
+            .expect("add commit carries a FileChange");
+        assert_eq!(add_change.kind, aleph_protocol::FileChangeKind::Created);
+    }
+
+    /// A Delete commit's `FileChange` reports the pre-image's line count as
+    /// `removed`, read best-effort before the file is unlinked.
+    #[tokio::test]
+    async fn commit_reports_a_delete_with_the_removed_line_count() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(dir.path().join("gone.txt"), "a\nb\nc\n")
+            .await
+            .unwrap();
+
+        let ops = vec![PatchOp::Delete {
+            path: "gone.txt".to_string(),
+        }];
+        let (ok, outcomes) = ApplyPatchTool::new().execute(&ops, Some(dir.path())).await;
+        assert!(ok, "{outcomes:?}");
+        let change = outcomes[0]
+            .change
+            .as_ref()
+            .expect("delete commit carries a FileChange");
+        assert_eq!(change.kind, aleph_protocol::FileChangeKind::Deleted);
+        assert_eq!(change.removed, 3);
     }
 }

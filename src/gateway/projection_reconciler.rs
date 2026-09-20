@@ -8,8 +8,9 @@
 //! short a row, and the Panel display loses it. The in-process record of which
 //! seqs went missing dies with the process, so somebody has to ASK at boot.
 //!
-//! This is that somebody, and it is now a driver and nothing else: it picks the
-//! sessions worth asking about and calls
+//! This is that somebody, and for the projection it is a driver and nothing
+//! else (the one non-projection duty it carries is the split-epoch heal, last
+//! section below): it picks the sessions worth asking about and calls
 //! [`MessageProjector::request_repair`](crate::gateway::session_projector::MessageProjector::request_repair)
 //! on each. The repair itself runs inside the projector's drain task, which is
 //! the single writer for a session — so a boot repair cannot interleave with a
@@ -27,8 +28,11 @@
 //!   the failure condition is "the projection has a gap", and the two are not
 //!   the same set.
 //! * sessions that emit no run markers at all — background sub-agent sessions
-//!   (`sub-bg-*`), cron and heartbeat sessions. They never appeared in
-//!   `load_run_markers`, so no amount of marker reduction could reach them.
+//!   (`sub-bg-*`). They never appear in `load_run_markers`, so no amount of
+//!   marker reduction could reach them. (Cron and heartbeat sessions DO emit
+//!   markers: the bridge writes `RunStarted` unconditionally,
+//!   `harness_bridge/runner_impl.rs`, and `resume_coordinator::has_own_scheduler`
+//!   is what closes theirs on the way out of the resume pass.)
 //!
 //! The candidate set is therefore **the activity window** (`[resume]
 //! max_age_secs`, the same horizon resume uses) UNION **every session whose
@@ -41,15 +45,29 @@
 //! written; see `docs/superpowers/specs/2026-09-02-crash-recovery-r2-design.md`
 //! A6 for why (a persisted watermark is a second statement of a fact the row
 //! ids already carry).
+//!
+//! # The one thing it does besides driving: heal split epochs
+//!
+//! Since 2026-09-13 the scan also carries [`ProjectionReconciler::heal_split_epochs`]:
+//! a compaction split writes its routing epoch AFTER its two log batches (a
+//! different connection), so a crash in between leaves a forked child the
+//! routing table never learned. The heal registers it at boot, before the
+//! disposition loop and therefore before the resume pass that follows this
+//! scan in the same task. It lives here rather than in `ResumeCoordinator`
+//! because it must run even when `[resume] enabled = false` — routing being
+//! wrong is not a resume concern — and this scan is the one boot pass that
+//! runs unconditionally over the marker groups.
 
 use std::collections::HashSet;
 
 use crate::gateway::session_projector::MessageProjector;
 use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
-use crate::session::reduction::{reduce_disposition, RunDisposition};
+use crate::session::epoch_registrar::SessionEpochRegistrar;
+use crate::session::events::SessionEvent;
+use crate::session::reduction::{reduce_marker_slice, RunDisposition};
 use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::store::{MarkerSlice, SessionEventStore};
 use crate::sync_primitives::Arc;
 
 /// Summary of one boot pass — for the boot log and tests.
@@ -61,7 +79,17 @@ pub struct ReconcileReport {
     pub holes_filled: usize,
     /// `AssistantRunMeta` stamps re-applied to a row that had none.
     pub stamps_reapplied: usize,
-    /// Of those stamps, how many also accumulated the run's spend.
+    /// Stamps synthesized for a finished run whose `AssistantRunMeta` never
+    /// reached the log — an errored or cancelled run, a slash-command
+    /// fast-path turn, a run the resume coordinator closed as `Abandoned`, a
+    /// split parent, or a crash between `RunFinished` and the meta (the list
+    /// lives on `RepairReport::stamps_synthesized`; at boot the routine
+    /// shapes outnumber the crash, so this number is not a crash count): the
+    /// `run_id` join alone, billed from the run's own messages. Idempotent
+    /// through the stamp, like a re-applied one.
+    pub stamps_synthesized: usize,
+    /// Of the stamps above (re-applied or synthesized), how many also
+    /// accumulated the run's spend.
     pub usage_rebilled: usize,
     /// Candidates that turned out to be whole.
     pub skipped_up_to_date: usize,
@@ -74,10 +102,22 @@ pub struct ReconcileReport {
     /// apart from every "skipped" bucket on purpose: a refusal means "I do not
     /// know", and folding it into a skip would read it as "nothing to do".
     pub errored: usize,
+    /// Forked children (a `SessionForked` at seq 1, in the activity window)
+    /// whose epoch the routing table had never learned — the split committed
+    /// its two batches and the process died before `register_epoch` — and
+    /// are now registered. Logged by name at boot.
+    pub epochs_healed: usize,
+    /// Such children found on a deployment with no epoch registrar (the file
+    /// backend). Counted, not faked as healed and not folded into `errored`:
+    /// the heal was not possible here, which is a different sentence from "it
+    /// failed". Logged by name at boot.
+    pub epoch_heal_skipped: usize,
 }
 
 /// Boot-time driver. Constructed with the durable event store, the projection
-/// target, the projector that owns the write path, and the activity horizon.
+/// target, the projector that owns the write path, the activity horizon, and
+/// — where the deployment has one — the epoch registrar the split heal writes
+/// through.
 pub struct ProjectionReconciler {
     event_store: Arc<dyn SessionEventStore>,
     session_store: Arc<dyn SessionStore>,
@@ -86,6 +126,9 @@ pub struct ProjectionReconciler {
     /// resume on purpose: "recent enough that a crashed run would still be
     /// resumed" is exactly "recent enough that a lost row still matters".
     max_age_secs: u64,
+    /// `None` on the file backend, which has no registrar; the split heal
+    /// then counts `epoch_heal_skipped` instead of registering.
+    epoch_registrar: Option<Arc<dyn SessionEpochRegistrar>>,
 }
 
 impl ProjectionReconciler {
@@ -94,12 +137,14 @@ impl ProjectionReconciler {
         session_store: Arc<dyn SessionStore>,
         projector: Arc<MessageProjector>,
         max_age_secs: u64,
+        epoch_registrar: Option<Arc<dyn SessionEpochRegistrar>>,
     ) -> Self {
         Self {
             event_store,
             session_store,
             projector,
             max_age_secs,
+            epoch_registrar,
         }
     }
 
@@ -114,6 +159,7 @@ impl ProjectionReconciler {
             let repair = self.projector.request_repair(&id).await;
             report.holes_filled += repair.holes_filled;
             report.stamps_reapplied += repair.stamps_reapplied;
+            report.stamps_synthesized += repair.stamps_synthesized;
             report.usage_rebilled += repair.usage_rebilled;
             if repair.errored {
                 report.errored += 1;
@@ -128,10 +174,13 @@ impl ProjectionReconciler {
             scanned = report.scanned,
             holes_filled = report.holes_filled,
             stamps_reapplied = report.stamps_reapplied,
+            stamps_synthesized = report.stamps_synthesized,
             usage_rebilled = report.usage_rebilled,
             skipped_up_to_date = report.skipped_up_to_date,
             skipped_legacy = report.skipped_legacy,
             errored = report.errored,
+            epochs_healed = report.epochs_healed,
+            epoch_heal_skipped = report.epoch_heal_skipped,
             "projection reconcile scan complete"
         );
         report
@@ -145,21 +194,33 @@ impl ProjectionReconciler {
 
         match self.event_store.load_run_markers().await {
             Ok(groups) => {
-                for (session_id, markers) in groups {
-                    match reduce_disposition(&markers) {
-                        Ok(RunDisposition::Interrupted { .. }) => {}
+                // Routing first, then dispositions: a forked child the
+                // routing table never learned must be registered before
+                // anything reads its `Interrupted` as the run to resume —
+                // the resume pass follows this scan in the same boot task.
+                self.heal_split_epochs(&groups, report).await;
+                for (session_id, slice) in groups {
+                    match reduce_marker_slice(&slice) {
+                        // A seed no run answered is a candidate too: its
+                        // projection may be a hole exactly like an interrupted
+                        // run's (unreachable from a marker slice today, but a
+                        // wider slice must not fall through to `continue`).
+                        Ok(
+                            RunDisposition::Interrupted { .. } | RunDisposition::Unanswered { .. },
+                        ) => {}
                         Ok(RunDisposition::Clean) => continue,
                         Err(c) => {
-                            // A refused slice is "I cannot tell you whether this
-                            // session was interrupted" — which is not "it was
-                            // fine". Repairing it is idempotent, so ask anyway,
-                            // and count the refusal so the boot log does not
-                            // read as a clean scan.
+                            // A refused slice — the reducer's, or a marker row
+                            // this build could not decode — is "I cannot tell
+                            // you whether this session was interrupted", which
+                            // is not "it was fine". Repairing it is idempotent,
+                            // so ask anyway, and count the refusal so the boot
+                            // log does not read as a clean scan.
                             tracing::warn!(
                                 session = ?session_id,
+                                kind = c.tag(),
                                 contradiction = %c,
-                                "projection reconcile: reducer refused the marker slice; \
-                                 repairing anyway"
+                                "projection reconcile: marker slice refused; repairing anyway"
                             );
                             report.errored += 1;
                         }
@@ -212,11 +273,223 @@ impl ProjectionReconciler {
 
         out
     }
+
+    /// Register every forked child the routing table never learned.
+    ///
+    /// A compaction split commits the parent's closer, then the child's seed
+    /// (`SessionForked` at seq 1 … `RunStarted` last), and only THEN writes
+    /// the child's epoch to the routing table — a different connection, so it
+    /// cannot ride either transaction (`session_split.rs`, steps 3–5). A crash
+    /// between the child batch and that write leaves the log saying "split"
+    /// while `get_current_epoch` still answers the parent's epoch: inbound
+    /// messages land on a session whose run is closed, and the child's open
+    /// run is the one resume should pick up. This is the other half of that
+    /// contract: the log leads, routing follows at the next boot.
+    ///
+    /// Detection reads the marker groups because the child's seed always ends
+    /// in a `RunStarted` marker, so every forked child is in
+    /// `load_run_markers`; `SessionForked` itself is not a marker and is read
+    /// with one targeted range read of seq 1. A child whose seq 1 has since
+    /// been retired reads as "not `SessionForked`" — unhealable, counted in
+    /// `errored` and named in the warn — rather than guessed at. Only sessions
+    /// inside the activity window are considered: the same `max_age_secs` the
+    /// resume pass uses, but dated differently — here by the LAST marker's
+    /// `created_at_ms`, `ResumeAttempted` stamps included, where resume dates a
+    /// run by `last_alive_at` (its opening marker or in-run activity, stamps
+    /// excluded). A split whose only recent marker is a resume stamp is
+    /// therefore in scope here and out of scope there; sharing the predicate
+    /// would need the full `RunReduction` this loop does not build.
+    ///
+    /// Runs BEFORE the disposition loop so the resume pass (which follows this
+    /// scan in the same boot task) sees routing and log agree.
+    async fn heal_split_epochs(
+        &self,
+        groups: &[(SessionId, MarkerSlice)],
+        report: &mut ReconcileReport,
+    ) {
+        let horizon = crate::session::events::now_ms().saturating_sub(
+            i64::try_from(self.max_age_secs.saturating_mul(1000)).unwrap_or(i64::MAX),
+        );
+        for (id, slice) in groups {
+            // A slice this build could not decode is not "no markers": no
+            // heal is derived from it. The caller's disposition loop, which
+            // walks these same groups next, is where it is counted and named.
+            let Ok(markers) = slice else {
+                continue;
+            };
+            // Epoch 0 is never a fork; a fork whose last marker is older than
+            // the window is out of scope, as it is for resume.
+            if id.epoch() == 0 || markers.last().is_none_or(|m| m.created_at_ms < horizon) {
+                continue;
+            }
+            let current = match self
+                .session_store
+                .get_current_epoch(&id.base_key_pattern())
+                .await
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(
+                        session = ?id,
+                        error = %e,
+                        "epoch heal: get_current_epoch failed"
+                    );
+                    report.errored += 1;
+                    continue;
+                }
+            };
+            if current >= id.epoch() {
+                continue;
+            }
+            // Routing is behind the log. The one shape this heal knows is a
+            // split's child: seq 1 is `SessionForked`. Anything else at a
+            // higher epoch than routing is "I cannot tell you what this is",
+            // which is an error, not a skip.
+            let head = match self
+                .event_store
+                .load_events_range(id, Some(1), Some(2))
+                .await
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(session = ?id, error = %e, "epoch heal: could not read seq 1");
+                    report.errored += 1;
+                    continue;
+                }
+            };
+            let Some(SessionEvent::SessionForked {
+                parent_session_id, ..
+            }) = head.first().map(|r| &r.event)
+            else {
+                tracing::warn!(
+                    session = ?id,
+                    current,
+                    "epoch heal: log at a higher epoch than routing, but seq 1 is not \
+                     SessionForked; left alone"
+                );
+                report.errored += 1;
+                continue;
+            };
+            // The file backend has no registrar: count that the heal could
+            // not run here rather than pretend it did or fold it into errors.
+            // Says nothing about where routing ends up — on the file backend
+            // `get_current_epoch` reads the directory tree, and the projection
+            // repair later in this same scan may create the child's directory
+            // (pinned in `without_a_registrar_the_heal_is_counted_not_faked`).
+            let Some(registrar) = &self.epoch_registrar else {
+                tracing::warn!(
+                    session = ?id,
+                    current,
+                    "epoch heal: forked child unregistered, and this deployment has no \
+                     epoch registrar to register it through"
+                );
+                report.epoch_heal_skipped += 1;
+                continue;
+            };
+            // This is the boot-side replay of the split's step 5
+            // (`session_split.rs`), so it does BOTH halves of that step, the
+            // same way and in the same order: register, then retire what
+            // belonged to the superseded epoch.
+            //
+            // Register under the PARENT's persisted attribution. The in-process
+            // split registers inside the harness task, where the scope
+            // task-local is live and `get_or_create` stamps the child row from
+            // it; a boot task has no such scope, so without this the two
+            // producers of the same row disagree — and the resume pass that
+            // follows reads the child's own columns to scope the resumed run
+            // (`resume_coordinator::resume_metadata`), so an unstamped child
+            // would resume UNSCOPED and write its memory to the base partition.
+            // A legacy (pre-P1) parent has no attribution and stamps nothing,
+            // the same carve-out resume takes.
+            let parent = self.forked_parent(id, parent_session_id);
+            let inherited = match &parent {
+                Some(parent) => self.persisted_attribution(id, parent).await,
+                None => None,
+            };
+            match crate::scope::with_scope(inherited, registrar.register_epoch(id)).await {
+                Ok(()) => {
+                    tracing::info!(
+                        session = ?id,
+                        from = current,
+                        "epoch heal: registered a forked child the routing table never learned"
+                    );
+                    report.epochs_healed += 1;
+                    // Routing now resolves past the parent's epoch, so the
+                    // `/btw` side session keyed to it is no longer derivable
+                    // by any surface — retire it, exactly as the in-process
+                    // split does after ITS registration. Only after a
+                    // successful one: a failed registration leaves the
+                    // parent live, and its side session with it.
+                    if let Some(parent) = &parent {
+                        registrar.retire_superseded(parent).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(session = ?id, error = %e, "epoch heal: register_epoch failed");
+                    report.errored += 1;
+                }
+            }
+        }
+    }
+
+    /// The parent a child's `SessionForked` names, parsed. `None` — logged —
+    /// when the string does not parse as a session key: the child is still
+    /// registered (the log says it exists), but nothing can be inherited from
+    /// or retired on a parent this process cannot name.
+    fn forked_parent(&self, child: &SessionId, parent_key: &str) -> Option<SessionId> {
+        let parsed = SessionId::from_key_string(parent_key);
+        if parsed.is_none() {
+            tracing::warn!(
+                session = ?child,
+                parent = %parent_key,
+                "epoch heal: SessionForked names an unparseable parent; child registered \
+                 without attribution and nothing retired"
+            );
+        }
+        parsed
+    }
+
+    /// The owner/scope the parent's session row carries, for the child to
+    /// inherit — `None` when the row cannot be read or is a legacy row with no
+    /// attribution (both columns are required; same fail-closed derivation as
+    /// `ScopeAttribution::from_persisted` everywhere else). Logged when the
+    /// parent should have been there and was not, so a child that ends up
+    /// unattributed is a child somebody can find in the boot log.
+    async fn persisted_attribution(
+        &self,
+        child: &SessionId,
+        parent: &SessionId,
+    ) -> Option<crate::scope::ScopeAttribution> {
+        match self.session_store.get_metadata(parent).await {
+            Ok(Some(meta)) => crate::scope::ScopeAttribution::from_persisted(
+                meta.owner_user_id.as_deref(),
+                meta.scope_id.as_deref(),
+            ),
+            Ok(None) => {
+                tracing::warn!(
+                    session = ?child,
+                    parent = ?parent,
+                    "epoch heal: parent row not found; child registered without attribution"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session = ?child,
+                    parent = ?parent,
+                    error = %e,
+                    "epoch heal: parent row unreadable; child registered without attribution"
+                );
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use crate::gateway::session_store::types::MessageRecord;
     use crate::routing::session_key::SessionKey;
@@ -268,6 +541,66 @@ mod tests {
         }
     }
 
+    /// An assistant message whose provider reported no usage — absent, not
+    /// zero.
+    fn assistant_unpriced(tid: TurnId, at: i64) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: tid,
+            content: mc("hello"),
+            usage: None,
+            at,
+        }
+    }
+
+    /// A finished run — `RunStarted`, one turn, the given assistant message,
+    /// `RunFinished` — and NO `AssistantRunMeta`: the log a crash between the
+    /// closer and the meta leaves behind.
+    fn finished_run_without_meta(
+        tid: TurnId,
+        assistant_message: SessionEvent,
+    ) -> Vec<(u64, SessionEvent)> {
+        vec![
+            (
+                1,
+                SessionEvent::RunStarted {
+                    run_id: "r1".into(),
+                    at: 1,
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+            (
+                2,
+                SessionEvent::TurnStarted {
+                    turn_id: tid,
+                    trigger: TurnTrigger::UserMessage,
+                    at: 2,
+                },
+            ),
+            (3, assistant_message),
+            (
+                4,
+                SessionEvent::RunFinished {
+                    run_id: "r1".into(),
+                    outcome: RunOutcome::Completed,
+                    at: 4,
+                },
+            ),
+        ]
+    }
+
+    /// The SQLite backend as the projection target — the one whose
+    /// `stamp_assistant_metadata_in_range` is a `source_seq`-ranged query.
+    fn temp_sqlite_store(name: &str) -> (Arc<dyn SessionStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: dir.path().join(name),
+            ..Default::default()
+        })
+        .unwrap();
+        (Arc::new(manager), dir)
+    }
+
     /// A minimal interrupted-run log: TurnStarted, UserMessage, RunStarted,
     /// AssistantMessage(tin,tout) — and NO RunFinished.
     fn interrupted_turn(tid: TurnId, tin: u32, tout: u32) -> Vec<(u64, SessionEvent)> {
@@ -313,6 +646,26 @@ mod tests {
         }
     }
 
+    /// `append_all` dated at `now`. The projected row carries the record's
+    /// `created_at_ms`, and `sessions.last_active_at` follows the row — so a
+    /// log dated at `seq` (1970) drops its session out of the activity window
+    /// the moment the first pass writes a row, and a second
+    /// `reconcile_candidates` scans nothing. A test whose second pass must
+    /// reach the projector dates its log here.
+    async fn append_all_now(
+        store: &Arc<dyn SessionEventStore>,
+        id: &SessionId,
+        evs: &[(u64, SessionEvent)],
+    ) {
+        let now = crate::session::events::now_ms();
+        for (seq, ev) in evs {
+            store.append(id, *seq, ev, now).await.unwrap();
+        }
+    }
+
+    /// A reconciler with NO epoch registrar — the file backend's shape. The
+    /// heal tests below build their own so they can hand in the SQLite
+    /// `SessionManager` as both store and registrar.
     fn reconciler(
         event_store: &Arc<dyn SessionEventStore>,
         session_store: &Arc<dyn SessionStore>,
@@ -326,7 +679,399 @@ mod tests {
                 Some(event_store.clone()),
             ),
             86_400,
+            None,
         )
+    }
+
+    /// The child log a split leaves behind when the process dies between the
+    /// child batch and `register_epoch`: seq 1 `SessionForked`, the summary,
+    /// and the open `RunStarted` — and NO row for it in the routing table.
+    async fn seed_unregistered_fork(
+        event_store: &Arc<dyn SessionEventStore>,
+        parent: &SessionKey,
+    ) -> SessionKey {
+        let child = parent.with_next_epoch();
+        let now = crate::session::events::now_ms();
+        for (seq, ev) in [
+            (
+                1,
+                SessionEvent::SessionForked {
+                    parent_session_id: parent.to_key_string(),
+                    at: now,
+                },
+            ),
+            (
+                2,
+                SessionEvent::SystemMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: "[Context Summary]".into(),
+                    at: now,
+                },
+            ),
+            (
+                3,
+                SessionEvent::RunStarted {
+                    run_id: "split".into(),
+                    at: now,
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+        ] {
+            event_store.append(&child, seq, &ev, now).await.unwrap();
+        }
+        child
+    }
+
+    /// Torn state (ii) of the split: both batches committed, the epoch never
+    /// registered. Routing still says "epoch 0" while the log says "split".
+    /// The boot heal registers the child BEFORE the resume pass, so resume
+    /// finds one interrupted session (the child) and routing agrees with it.
+    #[tokio::test]
+    async fn a_forked_child_the_routing_table_never_learned_is_registered_at_boot() {
+        let event_store = own_event_store();
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("heal.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let parent = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "k".into(),
+            epoch: 0,
+        };
+        manager.get_or_create(&parent).await.unwrap();
+        let child = seed_unregistered_fork(&event_store, &parent).await;
+        assert_eq!(child.epoch(), 1);
+
+        let session_store: Arc<dyn SessionStore> = manager.clone();
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "precondition: routing still says epoch 0"
+        );
+
+        let reconciler = ProjectionReconciler::new(
+            event_store.clone(),
+            session_store.clone(),
+            MessageProjector::with_event_store(
+                session_store.clone(),
+                None,
+                Some(event_store.clone()),
+            ),
+            86_400,
+            Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
+        );
+
+        let report = reconciler.reconcile_candidates().await;
+        assert_eq!(report.epochs_healed, 1, "{report:?}");
+        assert_eq!(report.epoch_heal_skipped, 0, "{report:?}");
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            1,
+            "routing now resolves to the child"
+        );
+
+        // Idempotent: a second boot has nothing to heal and does not pretend
+        // otherwise.
+        let again = reconciler.reconcile_candidates().await;
+        assert_eq!(again.epochs_healed, 0, "idempotent: {again:?}");
+        assert_eq!(again.epoch_heal_skipped, 0, "{again:?}");
+    }
+
+    /// The same torn split, plus a marker row of the child's that this build
+    /// cannot decode. The child's slice is then `Err`, and `Err` is "I cannot
+    /// tell you what this session's markers say" — so no epoch is healed from
+    /// it (a heal derived from an unreadable slice would register a routing
+    /// change nobody can vouch for), it is NOT read as a session with no
+    /// markers (which would fall silently out of the scan), and the boot
+    /// report counts it under `errored` by name.
+    #[tokio::test]
+    async fn a_child_whose_marker_slice_did_not_decode_gets_no_epoch_heal_and_is_counted() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let concrete = Arc::new(SqliteEventStore::new(conn));
+        let event_store: Arc<dyn SessionEventStore> = concrete.clone();
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("heal-undecodable.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let parent = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "k".into(),
+            epoch: 0,
+        };
+        manager.get_or_create(&parent).await.unwrap();
+        let child = seed_unregistered_fork(&event_store, &parent).await;
+        concrete
+            .insert_raw_row_for_test(
+                &child,
+                4,
+                "run_finished",
+                r#"{"type":"run_finished","run_id":"split","outcome":"from_the_future","at":1}"#,
+            )
+            .await;
+        let session_store: Arc<dyn SessionStore> = manager.clone();
+
+        let reconciler = ProjectionReconciler::new(
+            event_store.clone(),
+            session_store.clone(),
+            MessageProjector::with_event_store(
+                session_store.clone(),
+                None,
+                Some(event_store.clone()),
+            ),
+            86_400,
+            Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
+        );
+
+        let report = reconciler.reconcile_candidates().await;
+        assert_eq!(
+            (report.epochs_healed, report.epoch_heal_skipped),
+            (0, 0),
+            "no heal is derived from a slice this build could not read: {report:?}"
+        );
+        assert!(report.errored >= 1, "counted, not dropped: {report:?}");
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "routing was left exactly as it was"
+        );
+    }
+
+    /// The heal is the boot-side replay of the split's step 5, so it must do
+    /// both halves the in-process split does after a registration:
+    ///
+    /// * the healed child's row carries the PARENT's owner/scope — the
+    ///   in-process split registers inside the harness task where the scope
+    ///   task-local is live; the boot task has none, and the resume pass that
+    ///   follows scopes the resumed run from the child's own columns, so an
+    ///   unattributed child resumes unscoped;
+    /// * the parent's `/btw` side session is retired — routing now resolves
+    ///   past the parent's epoch, so that side session is unaddressable and
+    ///   nothing else would ever delete it.
+    #[tokio::test]
+    async fn the_healed_child_inherits_attribution_and_the_parents_side_session_is_retired() {
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let event_store = own_event_store();
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("heal-attr.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let parent = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "owned".into(),
+            epoch: 0,
+        };
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            manager.get_or_create(&parent),
+        )
+        .await
+        .unwrap();
+        let parent_meta = manager.get_metadata(&parent).await.unwrap().unwrap();
+        assert_eq!(
+            parent_meta.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "precondition: the parent row is attributed"
+        );
+        // The parent asked a `/btw` side question at some point: its side
+        // session row exists and is keyed to the parent's exact epoch.
+        let side = crate::gateway::btw::side_session_of(&parent).expect("a main key has a side");
+        manager.get_or_create(&side).await.unwrap();
+        assert!(
+            manager.get_metadata(&side).await.unwrap().is_some(),
+            "precondition: the side session row exists"
+        );
+        let child = seed_unregistered_fork(&event_store, &parent).await;
+
+        let session_store: Arc<dyn SessionStore> = manager.clone();
+        let reconciler = ProjectionReconciler::new(
+            event_store.clone(),
+            session_store.clone(),
+            MessageProjector::with_event_store(
+                session_store.clone(),
+                None,
+                Some(event_store.clone()),
+            ),
+            86_400,
+            Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
+        );
+        let report = reconciler.reconcile_candidates().await;
+        assert_eq!(report.epochs_healed, 1, "{report:?}");
+
+        let child_meta = manager
+            .get_metadata(&child)
+            .await
+            .unwrap()
+            .expect("the heal created the child row");
+        assert_eq!(
+            child_meta.owner_user_id, parent_meta.owner_user_id,
+            "the child is owned by whoever owned the parent"
+        );
+        assert_eq!(
+            child_meta.scope_id, parent_meta.scope_id,
+            "the child lives in the parent's scope"
+        );
+        assert!(
+            child_meta.owner_user_id.is_some(),
+            "and that is a real attribution, not two Nones agreeing"
+        );
+        assert!(
+            manager.get_metadata(&side).await.unwrap().is_none(),
+            "the parent's side session was retired with the registration, as the \
+             in-process split retires it"
+        );
+        assert!(
+            manager.get_metadata(&parent).await.unwrap().is_some(),
+            "the parent itself is NOT deleted — retirement is the side session only"
+        );
+    }
+
+    /// The same torn log on the FILE backend, where no registrar exists. The
+    /// heal must say it could not run — `epoch_heal_skipped` — rather than
+    /// count a registration that never happened or stay silent.
+    #[tokio::test]
+    async fn without_a_registrar_the_heal_is_counted_not_faked() {
+        let event_store = own_event_store();
+        let (session_store, _dir) = temp_file_store();
+        let parent = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "k".into(),
+            epoch: 0,
+        };
+        session_store.get_or_create(&parent).await.unwrap();
+        let child = seed_unregistered_fork(&event_store, &parent).await;
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "precondition: routing still says epoch 0"
+        );
+
+        let report = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+
+        assert_eq!(report.epoch_heal_skipped, 1, "{report:?}");
+        assert_eq!(report.epochs_healed, 0, "{report:?}");
+        // Observed, not contracted — and named so nobody reads the counter
+        // above as "routing is still wrong": on the file backend
+        // `get_current_epoch` reads the directory tree, and the projection
+        // repair in the SAME scan created the child's directory while
+        // back-filling its summary row. Routing resolves to the child here by
+        // that side effect of the other boot pass, not by this heal, which
+        // truthfully reports it could not run.
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            1,
+            "file backend: the projection repair's directory for {child:?} is what \
+             routing reads; the heal itself registered nothing"
+        );
+    }
+
+    /// A child whose epoch routing already knows is not "healed" again, and a
+    /// higher-epoch session whose seq 1 is NOT a fork marker is left alone and
+    /// counted as an error — the heal only knows one shape and says so.
+    #[tokio::test]
+    async fn the_heal_touches_only_an_unregistered_fork() {
+        let event_store = own_event_store();
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("heal2.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let session_store: Arc<dyn SessionStore> = manager.clone();
+
+        // (a) A registered fork: routing already at epoch 1.
+        let known = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "known".into(),
+            epoch: 0,
+        };
+        manager.get_or_create(&known).await.unwrap();
+        let known_child = seed_unregistered_fork(&event_store, &known).await;
+        manager.get_or_create(&known_child).await.unwrap();
+
+        // (b) Epoch 2 in the log, routing at 0, but seq 1 is a plain run —
+        // not the shape a split leaves. Stamped NOW so it is inside the
+        // activity window (`append_all` stamps `created_at_ms = seq`, which
+        // is 1970 and would make this session invisible to the heal).
+        let odd = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "odd".into(),
+            epoch: 0,
+        };
+        manager.get_or_create(&odd).await.unwrap();
+        let odd_child = odd.with_epoch(2);
+        let now = crate::session::events::now_ms();
+        for (seq, ev) in interrupted_turn(uuid::Uuid::new_v4(), 1, 1) {
+            event_store.append(&odd_child, seq, &ev, now).await.unwrap();
+        }
+
+        let reconciler = ProjectionReconciler::new(
+            event_store.clone(),
+            session_store.clone(),
+            MessageProjector::with_event_store(
+                session_store.clone(),
+                None,
+                Some(event_store.clone()),
+            ),
+            86_400,
+            Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
+        );
+        let report = reconciler.reconcile_candidates().await;
+
+        assert_eq!(report.epochs_healed, 0, "{report:?}");
+        assert_eq!(report.epoch_heal_skipped, 0, "{report:?}");
+        assert!(
+            report.errored >= 1,
+            "the not-a-fork mismatch is an error, not a skip: {report:?}"
+        );
+        assert_eq!(
+            session_store
+                .get_current_epoch(&odd.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "a log the heal does not recognise is left alone"
+        );
+        assert_eq!(
+            session_store
+                .get_current_epoch(&known.base_key_pattern())
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -404,7 +1149,7 @@ mod tests {
         append_all(&event_store, &id, &evs).await;
         assert!(
             matches!(
-                reduce_disposition(
+                reduce_marker_slice(
                     &event_store
                         .load_run_markers()
                         .await
@@ -426,6 +1171,14 @@ mod tests {
         assert_eq!(
             report.holes_filled, 2,
             "a clean session's dropped rows must still be filled: {report:?}"
+        );
+        // This fixture is also a finished run with no meta, on the FILE
+        // backend — the cheapest pin that the synthesized stamp lands there
+        // too (the dedicated synthesized-stamp tests in this module are all
+        // SQLite).
+        assert_eq!(
+            report.stamps_synthesized, 1,
+            "a finished run with a row and no meta is stamped: {report:?}"
         );
         let hist = session_store.get_history(&id, None).await.unwrap();
         assert_eq!(hist.len(), 2);
@@ -599,9 +1352,13 @@ mod tests {
         session_store.get_or_create(&id).await.unwrap();
         append_all(&event_store, &id, &two_call_turn(uuid::Uuid::new_v4())).await;
 
-        reconciler(&event_store, &session_store)
+        let report = reconciler(&event_store, &session_store)
             .reconcile_candidates()
             .await;
+        assert_eq!(
+            report.stamps_synthesized, 0,
+            "the run is still open (no RunFinished): its meta may still come"
+        );
 
         let hist = session_store.get_history(&id, None).await.unwrap();
         assert_eq!(hist.len(), 5, "user + assistant + 2 tool rows + assistant");
@@ -609,6 +1366,109 @@ mod tests {
         assert_eq!(asst.len(), 2, "one row per LLM call");
         assert_eq!((asst[0].input_tokens, asst[0].output_tokens), (10, 20));
         assert_eq!((asst[1].input_tokens, asst[1].output_tokens), (5, 7));
+    }
+
+    /// #11: the run finished, the process died before `AssistantRunMeta` — the
+    /// session's counters under-counted forever. Boot folds the run's own messages.
+    #[tokio::test]
+    async fn a_finished_run_with_no_meta_is_billed_from_its_messages_at_boot() {
+        let event_store = own_event_store();
+        let (session_store, _dir) = temp_sqlite_store("nometa.db");
+        let id = SessionKey::ephemeral("nometa");
+        session_store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        append_all_now(
+            &event_store,
+            &id,
+            &finished_run_without_meta(tid, assistant(tid, 300, 40, 3)),
+        )
+        .await;
+        let r = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        assert_eq!((r.stamps_synthesized, r.usage_rebilled), (1, 1), "{r:?}");
+        let meta = session_store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (300, 40));
+        let row = session_store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .unwrap();
+        let stamp = row.metadata.unwrap();
+        assert_eq!(
+            stamp.get("run_id").and_then(|v| v.as_str()),
+            Some("r1"),
+            "the run_id join is what the crash cost the row"
+        );
+        assert_eq!(
+            stamp.as_object().map(serde_json::Map::len),
+            Some(1),
+            "the run_id alone: the gauge is unknown and must not be written as zeros"
+        );
+        let again = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        // The second pass must have ASKED: with no candidate, the counters
+        // below are zero for the wrong reason and prove nothing.
+        assert_eq!(again.scanned, 1, "{again:?}");
+        assert_eq!(
+            (again.stamps_synthesized, again.usage_rebilled),
+            (0, 0),
+            "the stamp is the idempotence guard"
+        );
+        assert_eq!(
+            session_store
+                .get_metadata(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .input_tokens,
+            300
+        );
+    }
+
+    /// The same crash on a run whose provider reported no usage: the row's
+    /// `run_id` join is still owed, but there is nothing to bill — `usage: None`
+    /// is absent, not zero, and the fold gives `input == output == 0`.
+    #[tokio::test]
+    async fn a_finished_run_with_no_usage_is_stamped_but_not_billed() {
+        let event_store = own_event_store();
+        let (session_store, _dir) = temp_sqlite_store("nousage.db");
+        let id = SessionKey::ephemeral("nousage");
+        session_store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        append_all_now(
+            &event_store,
+            &id,
+            &finished_run_without_meta(tid, assistant_unpriced(tid, 3)),
+        )
+        .await;
+        let r = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        assert_eq!(
+            (r.stamps_synthesized, r.usage_rebilled, r.errored),
+            (1, 0, 0),
+            "stamped, not billed, not an error: {r:?}"
+        );
+        let meta = session_store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (0, 0));
+        let row = session_store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .unwrap();
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("r1")
+        );
     }
 
     #[tokio::test]

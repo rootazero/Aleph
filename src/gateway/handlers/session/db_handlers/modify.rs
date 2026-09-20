@@ -713,7 +713,7 @@ pub async fn handle_truncate_db(
     // from `keep_count`: `messages` is not a 1:1 image of the live event log
     // (boot-time orphan notices and other writers append rows with no source
     // event), so a count is an ordinal in the projection's index space, while
-    // `retire_live_events` wants a seq in the log's. Taking the MINIMUM source
+    // `retire_events_and_balance` wants a seq in the log's. Taking the MINIMUM source
     // seq over every dropped row keeps the two halves describing the same cut
     // even when the dropped range straddles rows that carry no seq.
     let cut_seq = match manager.get_history(&key, None).await {
@@ -737,20 +737,22 @@ pub async fn handle_truncate_db(
         // Fail the RPC rather than truncating half of it: a projection cut with
         // a surviving event log is precisely the state this handler shipped in,
         // and it reads to the user as a successful undo.
-        if let Err(e) = crate::session::store::retire_live_events(&key, seq).await {
+        //
+        // The twin of `chat.rewind`: a cut that removed a `RunFinished` and
+        // left its `RunStarted` makes the log say a run is still open, and the
+        // boot scan then resumes a turn the user undid on every later boot.
+        // Same helper — retire and closer in ONE batch — so the rule cannot
+        // exist on one verb and not the other.
+        if let Err(e) =
+            crate::gateway::handlers::retire_events_and_balance(&key, seq, run_manager.as_ref())
+                .await
+        {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to retire session event log: {e}"),
             );
         }
-        // The twin of `chat.rewind`'s balance: a cut that removed a
-        // `RunFinished` and left its `RunStarted` makes the log say a run is
-        // still open, and the boot scan then resumes a turn the user undid on
-        // every later boot. Same helper, so the rule cannot exist on one verb
-        // and not the other.
-        crate::gateway::handlers::balance_run_markers_after_retire(&key, run_manager.as_ref())
-            .await;
     }
 
     match manager.truncate_messages(&key, keep_count).await {
@@ -1088,6 +1090,9 @@ mod tests {
     #[tokio::test]
     async fn truncate_retires_the_event_log_not_just_the_projection() {
         let events = crate::session::store::install_test_event_store();
+        // The retire now goes through the service (one batch with its closer),
+        // so the process-wide service must be the one over THIS store.
+        let _svc = crate::session::in_process::install_test_session_service();
         let temp = tempdir().unwrap();
         let manager = SessionManager::new(SessionManagerConfig {
             db_path: temp.path().join("truncate_ssot.db"),
@@ -1135,10 +1140,10 @@ mod tests {
         };
         // `None` run manager = "I cannot tell whether a run is live", which the
         // marker balance must read as "leave it alone" (see
-        // `handlers::balance_run_markers_after_retire`). Nothing here opens a
-        // run marker, so the balance is a no-op either way — the assertion
-        // below still counts the surviving events, which would catch a
-        // fail-open balance appending a closer.
+        // `handlers::retire_events_and_balance`). Nothing here opens a run
+        // marker, so the balance is a no-op either way — the assertion below
+        // still counts the surviving events, which would catch a fail-open
+        // balance appending a closer.
         let response = handle_truncate_db(request, store.clone(), None).await;
         assert!(response.error.is_none(), "{:?}", response.error);
 
@@ -1150,8 +1155,22 @@ mod tests {
              a turn the user was told was undone (surviving seqs: {:?})",
             surviving.iter().map(|e| e.seq).collect::<Vec<_>>()
         );
-        // And the two halves must describe the SAME cut.
-        assert_eq!(store.get_history(&key, None).await.unwrap().len(), 2);
+        // And the two halves must describe the SAME cut: the projection is
+        // realigned by `truncate_messages` (a projector-side write, not the
+        // observer — a retire-only batch fires no `on_appended`), so assert
+        // the rows it left, by source seq, against the log it must mirror.
+        let projected: Vec<u64> = store
+            .get_history(&key, None)
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|m| crate::session::projection::parse_source_seq(&m.id, &key_str))
+            .collect();
+        assert_eq!(
+            projected,
+            surviving.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            "the Panel's rows and the model's log must name the same surviving seqs"
+        );
     }
 
     /// Deleting a conversation must also stop the autonomous chains keyed to

@@ -61,10 +61,17 @@ impl A2AClient {
         // admin endpoint). Rejecting redirects forces every hop through
         // the higher-level SSRF gate (`security::ssrf::validate_url_async`)
         // when callers opt into it.
+        //
+        // Builder config is fully static (a redirect policy toggle) — the
+        // only way `build()` can fail is a reqwest/TLS-backend bug. Silently
+        // falling back to a default client would DEFEAT this no-redirect
+        // policy and turn the security control into a `tracing`-silent
+        // downgrade. Panic loudly: misconfiguration is a process-startup
+        // invariant, not a runtime decision.
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::limited(0))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .expect("reqwest ClientBuilder configuration is static and must succeed");
         Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),

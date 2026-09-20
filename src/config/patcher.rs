@@ -46,6 +46,33 @@ fn cached_config_schema() -> &'static serde_json::Value {
     })
 }
 
+/// Cached compiled `jsonschema::Validator` for [`cached_config_schema`].
+///
+/// `validate_schema` ran `validator_for(&schema_json)` on every patch — i.e.
+/// twice per `ConfigPatcher::apply` (preview + commit). Compiling a validator
+/// walks the entire schema graph allocating per-node state, so two calls per
+/// patch is two redundant compiles for a process-global constant. The schema
+/// itself is already cached; the validator — the actual work product — was
+/// not. `validate_candidate` is the only caller; the validator is `Send +
+/// Sync` (`jsonschema::validator::Validate` requires both), so a `&'static`
+/// reference is sound for the whole process.
+fn cached_config_validator() -> &'static jsonschema::Validator {
+    static VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
+    VALIDATOR.get_or_init(|| {
+        // Compilation here is the cost we are amortising; failing it is the
+        // same `unreachable!` argument as [`cached_config_schema`], since the
+        // schema is derived from the same `Config` type the validator
+        // consumes.
+        jsonschema::validator_for(cached_config_schema()).unwrap_or_else(|e| {
+            unreachable!(
+                "Config schema validator compilation failed — the schema is generated \
+                 from the same `Config` struct the validator consumes, so this is a \
+                 type-system soundness failure, not a recoverable error: {e}"
+            );
+        })
+    })
+}
+
 // =============================================================================
 // Request / Response Types
 // =============================================================================
@@ -513,10 +540,7 @@ impl ConfigPatcher {
 
     /// Validate a JSON value against the Config JSON Schema.
     pub(crate) fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
-        let schema_json = cached_config_schema();
-
-        let validator = jsonschema::validator_for(schema_json)
-            .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {e}")))?;
+        let validator = cached_config_validator();
 
         let errors: Vec<String> = validator
             .iter_errors(config_json)

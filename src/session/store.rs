@@ -15,6 +15,20 @@
 //!
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md` §7.
 //!
+//! # Payload envelope
+//!
+//! `payload_json` is the event's own serde object plus two keys the store
+//! adds: `v`, the [`SESSION_EVENT_SCHEMA_VERSION`] the row was written under,
+//! and `ignorable: true` on the rows [`crate::session::events::ignorable`]
+//! says an older build may skip unread. [`encode_row`] is the one writer of
+//! that envelope and [`decode_row`] the one reader: a row this build cannot
+//! turn into a [`SessionEvent`] is a [`DecodedRow::Undecodable`] value, so it
+//! refuses the session that holds it and no other. The envelope goes through
+//! `serde_json::Value` (no `preserve_order` in this workspace), so a row's
+//! keys are written in alphabetical order — `"at", …, "type", "v"` — where
+//! the pre-envelope rows led with `"type"`; decoding is order-independent
+//! and no SQL reads `payload_json` textually, so the two shapes coexist.
+//!
 //! # Async model
 //!
 //! Consistent with sibling stores in `src/teams/`, `src/gateway/`, etc. the
@@ -32,19 +46,52 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use crate::error::AlephError;
-use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::events::{
+    durability_of, Durability, EventSeq, Retire, SessionEvent, SessionEventRecord,
+};
 use crate::session::service::{SessionError, SessionId};
 
 #[async_trait]
 pub trait SessionEventStore: Send + Sync + 'static {
-    /// Append a single event at the given seq. Fails if (`session_id`, seq) already exists.
+    /// Append `events` at consecutive seqs starting from `first_seq`, in ONE
+    /// transaction, optionally retiring a range in that same transaction.
+    ///
+    /// This is the only write path: a multi-step durable operation either
+    /// lands whole or not at all — manual `/compact` is its summary row, its
+    /// checkpoint row and `Retire::Through(cut)` in one call; `chat.rewind` /
+    /// `session.truncate` are `Retire::From(seq)` plus the `RunFinished`
+    /// closer the cut would otherwise leave owed. Fails — with nothing written
+    /// and nothing retired — if any `(session_id, seq)` already exists.
+    /// `retire` runs BEFORE the inserts so the batch's own rows stay live.
+    /// `durability` decides whether the commit fsyncs the WAL
+    /// ([`Durability::Barrier`]) or rides the store's resting level.
+    ///
+    /// An empty `events` with no `retire` is refused: a "batch" that could do
+    /// nothing would report success for nothing. An empty `events` WITH a
+    /// `retire` is a retire-only batch and is legal.
+    async fn append_batch(
+        &self,
+        session_id: &SessionId,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError>;
+
+    /// Single append = a batch of one. Kept for direct-store writers and tests.
+    ///
+    /// Fails if (`session_id`, seq) already exists.
     async fn append(
         &self,
         session_id: &SessionId,
         seq: EventSeq,
         event: &SessionEvent,
         created_at_ms: i64,
-    ) -> Result<(), SessionError>;
+    ) -> Result<(), SessionError> {
+        let one = [(event.clone(), created_at_ms)];
+        self.append_batch(session_id, seq, &one, None, durability_of(event))
+            .await
+    }
 
     /// Load all events for a session, ordered by seq ascending.
     async fn load_all_events(
@@ -68,50 +115,37 @@ pub trait SessionEventStore: Send + Sync + 'static {
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError>;
 
     /// Retire every event with `seq >= from_seq`, removing it from the live
-    /// conversation. Returns how many events this call newly retired.
+    /// conversation, as a transaction of its own. Returns how many events this
+    /// call newly retired.
+    ///
+    /// The standalone retire: `chat.clear` / `sessions.reset` /
+    /// `sessions.delete` (`retire_live_events`) come through here because they
+    /// retire from 1 and append nothing. A retire that must land WITH new rows
+    /// (`chat.rewind` / `session.truncate` and their `RunFinished` closer,
+    /// manual `/compact` and its summary) is not a second call after
+    /// [`append_batch`] — it is the `retire` argument OF that batch
+    /// ([`Retire::From`] / [`Retire::Through`]); the head-side `Through` has no
+    /// standalone method at all. Same SQL either way (`retire_in_txn`).
     ///
     /// Soft delete: the rows survive, so the append-only log stays intact and
     /// seq allocation is unaffected. All readers of the live conversation
-    /// (`load_all_events`, `load_events_range`, `load_run_markers`,
-    /// `search_events`) skip retired events, so the model stops replaying them.
+    /// (`load_all_events`, `load_events_range`, `load_rows`,
+    /// `load_run_markers`, `search_events`) skip retired events, so the model
+    /// stops replaying them.
+    /// The BM25 mirror rows for the range are deleted too — see
+    /// [`Retire::From`] for why the two sides differ.
     ///
     /// Idempotent: already-retired events keep their original retirement
     /// timestamp and are not counted again.
+    ///
+    /// [`append_batch`]: SessionEventStore::append_batch
+    /// [`Retire::From`]: crate::session::events::Retire::From
+    /// [`Retire::Through`]: crate::session::events::Retire::Through
     async fn retire_from(
         &self,
         session_id: &SessionId,
         from_seq: EventSeq,
     ) -> Result<usize, SessionError>;
-
-    /// Retire every event with `seq <= through_seq` — the head-side mirror of
-    /// [`retire_from`], and the primitive behind manual `/compact`.
-    ///
-    /// Two deliberate differences from [`retire_from`]:
-    ///
-    /// 1. **The BM25 mirror is kept.** `retire_from` backs `chat.clear` /
-    ///    `chat.rewind`, where leaving the content searchable would hand the
-    ///    model the very turns the user just erased. Compaction is the
-    ///    opposite intent: the turns leave the *live prompt* but must stay
-    ///    recallable, so `recall_events` can still surface a detail the
-    ///    summary abstracted away. Deleting the FTS rows here would make the
-    ///    "compaction is not a net loss" contract false.
-    /// 2. **No default `Ok(0)`.** A store that cannot retire must say so
-    ///    rather than silently report a compaction that did not happen — the
-    ///    caller appends its summary first and treats this error as
-    ///    "summary recorded, context unchanged".
-    ///
-    /// Idempotent, like its mirror: already-retired events keep their original
-    /// timestamp and are not counted again.
-    async fn retire_through(
-        &self,
-        session_id: &SessionId,
-        through_seq: EventSeq,
-    ) -> Result<usize, SessionError> {
-        let _ = (session_id, through_seq);
-        Err(SessionError::Storage(
-            "this event store does not support head-side retirement (manual compaction)".into(),
-        ))
-    }
 
     /// True when the event at `seq` exists and has been retired.
     ///
@@ -130,13 +164,85 @@ pub trait SessionEventStore: Send + Sync + 'static {
         Ok(false)
     }
 
+    /// This session's RETIRED `RunStarted` / `AssistantRunMeta` rows —
+    /// `seq` and kind only, in `seq` order.
+    ///
+    /// The one reader that looks past `retired_at`, and it exposes nothing
+    /// the live conversation would replay: a retired row is a fact about the
+    /// past, and the fact the whole-session heal needs is "did this run's
+    /// meta ever land?". A `chat.rewind` / `session.truncate` / `/undo` whose
+    /// cut falls inside a finished, already-billed run retires the run's meta
+    /// and closes the run again with a `Cancelled` closer; read from live rows
+    /// alone that run is finished-without-meta, and the heal would synthesize
+    /// a stamp and bill the surviving tokens a second time
+    /// (`session_projector::collect_run_spans` consumes this to see the meta
+    /// where it landed). Kinds come from the `event_type` column, never the
+    /// payload, so a retired row this build cannot decode (the doctor's
+    /// `retire_record` exit) cannot refuse the read.
+    ///
+    /// Default `Ok(vec![])`, for the same reason as [`is_retired`](Self::is_retired):
+    /// a store with no soft delete has retired nothing. A store that DOES
+    /// soft-delete must override it, or its heal reads every rewound run as
+    /// never billed.
+    async fn load_retired_run_anchors(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+        let _ = session_id;
+        Ok(Vec::new())
+    }
+
     /// Cross-session scan for resume detection. Returns, per session, that
-    /// session's `RunStarted` / `RunFinished` events in `seq` order.
+    /// session's run-marker events — the `MARKER_EVENT_TYPES` set, which is
+    /// pinned equal to the reducer's `is_marker` — in `seq` order.
     /// Sessions with no run markers are omitted. Served by the existing
     /// `(session_id, event_type)` index.
-    async fn load_run_markers(
+    ///
+    /// Decoded per session: a marker row this build cannot read makes THAT
+    /// session's slice `Err` ([`MarkerSlice`]) and leaves every other
+    /// session's slice whole. The outer `Err` is the query itself failing.
+    async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError>;
+
+    /// Every live row of one session, decoded one at a time, in `seq` order.
+    ///
+    /// The doctor's read: a row this build cannot decode is a
+    /// [`DecodedRow::Undecodable`] VALUE here, not the read's failure, so the
+    /// rows around it can still be named and the bad one retired
+    /// ([`retire_record`](Self::retire_record)). The model-facing readers
+    /// (`load_all_events`, `load_events_range`) fold the same rows strictly
+    /// and refuse the session instead.
+    ///
+    /// Default is a refusal: a store that cannot expose its rows must say so
+    /// rather than answer "no rows".
+    async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+        let _ = session_id;
+        Err(SessionError::Storage(
+            "this event store cannot expose raw rows".into(),
+        ))
+    }
+
+    /// Retire exactly the row at `seq` — the doctor's `fix=true` exit for an
+    /// undecodable record. Soft delete like [`retire_from`](Self::retire_from):
+    /// the row survives, seq allocation is unaffected, every live-conversation
+    /// reader skips it from now on. The BM25 mirror row, if the writing build
+    /// indexed one, is left where it is — the record is one this build cannot
+    /// read, and its snippet is text that build rendered.
+    ///
+    /// `Ok(true)` when this call retired it; `Ok(false)` when it was already
+    /// retired or no such row exists — idempotent, and the two cases are
+    /// deliberately one answer: the caller has just read the row it names.
+    ///
+    /// Default is a refusal, for the same reason as [`load_rows`](Self::load_rows).
+    async fn retire_record(
         &self,
-    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError>;
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let _ = (session_id, seq);
+        Err(SessionError::Storage(
+            "this event store cannot retire a single record".into(),
+        ))
+    }
 
     /// BM25 search over this session's content-bearing events (messages, tool
     /// calls / results / errors). Returns up to `limit` hits, most relevant
@@ -245,7 +351,7 @@ fn add_retired_at_column(conn: &Connection) -> Result<(), rusqlite::Error> {
 ///
 /// This is the BM25-searchable companion to `session_events`: every
 /// content-bearing event is mirrored here on append (see
-/// [`SqliteEventStore::append`]) so that, after compaction evicts old turns
+/// [`SessionEventStore::append_batch`]) so that, after compaction evicts old turns
 /// from the context window, the model can retrieve the relevant slices via the
 /// `session_search` tool instead of re-importing the whole history.
 ///
@@ -294,50 +400,375 @@ impl SqliteEventStore {
             conn: Arc::new(Mutex::new(conn)),
         }
     }
-}
 
-#[async_trait]
-impl SessionEventStore for SqliteEventStore {
-    async fn append(
+    /// Insert one `session_events` row exactly as another build would have
+    /// written it — past [`encode_row`], which is the point: a reader must
+    /// cope with what is on disk, not with what this build would have put
+    /// there. The ONE fixture for every "a row this build cannot read" test,
+    /// in-crate and in `tests/` (`test-helpers`), here because `conn` is
+    /// private.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn insert_raw_row_for_test(
         &self,
-        session_id: &SessionId,
-        seq: EventSeq,
-        event: &SessionEvent,
-        created_at_ms: i64,
-    ) -> Result<(), SessionError> {
-        let payload = serde_json::to_string(event)?;
-        let session_key = session_id_to_string(session_id)?;
-        let turn_id = extract_turn_id(event).map(|u| u.to_string());
-        let event_type = event_type_tag(event);
-        let seq_i64 = i64::try_from(seq)
-            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
-
+        sid: &SessionId,
+        seq: i64,
+        event_type: &str,
+        json: &str,
+    ) {
         let conn = self.conn.lock().await;
         conn.execute(
+            "INSERT INTO session_events (session_id, seq, event_type, payload_json, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 1)",
+            params![session_id_to_string(sid).unwrap(), seq, event_type, json],
+        )
+        .unwrap();
+    }
+}
+
+/// One `session_events` row, shaped and encoded before the connection lock is
+/// taken so the transaction holds the lock only for the SQL itself.
+struct EncodedRow {
+    seq: i64,
+    turn_id: Option<String>,
+    event_type: &'static str,
+    payload: String,
+    created_at: i64,
+    fts_body: Option<String>,
+}
+
+/// The schema version stamped on every row as `"v"`. Bumped when the payload
+/// envelope itself changes shape — not when a variant is added, which the
+/// `type` tag already names.
+pub const SESSION_EVENT_SCHEMA_VERSION: u16 = 1;
+
+/// The prefix of serde's rendered message for an unknown variant of ANY enum
+/// at any depth — an unknown `type` tag and an unknown word inside a known
+/// event's body render the same way. [`names_unknown_outer_variant`] appends
+/// the row's own tag, which is what tells the two apart. Serde's wording,
+/// not ours — pinned by
+/// `tests::the_unknown_variant_guard_keys_on_serdes_own_wording`.
+const UNKNOWN_VARIANT_PREFIX: &str = "unknown variant";
+
+/// True iff serde's message says the row's `type` tag ITSELF is the unknown
+/// variant: `unknown variant `<kind_tag>``. A known `type` whose body holds an
+/// unknown inner word (`"outcome":"from_the_future"`) renders `unknown
+/// variant `from_the_future`` and does not match — it is corruption to this
+/// build, never a row a newer build could have marked skippable.
+fn names_unknown_outer_variant(err: &str, kind_tag: &str) -> bool {
+    err.starts_with(&format!("{UNKNOWN_VARIANT_PREFIX} `{kind_tag}`"))
+}
+
+/// A `session_events` row this build could not turn into a [`SessionEvent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndecodableRecord {
+    pub seq: EventSeq,
+    /// The row's `type` tag, when the payload was at least JSON.
+    pub kind_tag: Option<String>,
+    /// serde's rendered reason.
+    pub error: String,
+}
+
+impl std::fmt::Display for UndecodableRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "seq {} (type `{}`) could not be decoded by this build: {}",
+            self.seq,
+            self.kind_tag.as_deref().unwrap_or("?"),
+            self.error
+        )
+    }
+}
+
+/// One row, as [`decode_row`] read it.
+// Not boxed: `query_rows` / `load_run_markers` build one per row and `fold_strict`
+// moves it out at once; nearly every row is `Event`, so `Box` = one alloc per event.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum DecodedRow {
+    Event(SessionEventRecord),
+    /// A `type` this build does not know, on a row whose writer — a build that
+    /// does know it — marked `ignorable: true`: skipped unread, by that
+    /// writer's own policy.
+    Skipped {
+        seq: EventSeq,
+        kind_tag: String,
+    },
+    Undecodable(UndecodableRecord),
+}
+
+/// One session's run markers as [`SessionEventStore::load_run_markers`]
+/// hands them over: the decoded slice, or the first row of it this build
+/// could not decode.
+pub type MarkerSlice = Result<Vec<SessionEventRecord>, UndecodableRecord>;
+
+/// Which of the two run anchors a retired row is — the two event kinds the
+/// positional meta join reads (`session_projector::collect_run_spans`): an
+/// opener moves the anchor, a meta marks the span the anchor names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetiredAnchorKind {
+    RunStarted,
+    RunMeta,
+}
+
+/// One retired `RunStarted` / `AssistantRunMeta` row as
+/// [`SessionEventStore::load_retired_run_anchors`] hands it over: its
+/// position and its kind, nothing of its payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredRunAnchor {
+    pub seq: EventSeq,
+    pub kind: RetiredAnchorKind,
+}
+
+/// The one encoder: `v` on every row, `ignorable` only when the policy table
+/// says so (absent otherwise — never a literal `false`).
+pub fn encode_row(event: &SessionEvent) -> Result<String, SessionError> {
+    let mut v = serde_json::to_value(event)?;
+    let serde_json::Value::Object(m) = &mut v else {
+        return Err(SessionError::Storage(
+            "event did not serialize to an object".into(),
+        ));
+    };
+    m.insert("v".into(), SESSION_EVENT_SCHEMA_VERSION.into());
+    if crate::session::events::ignorable(event) {
+        m.insert("ignorable".into(), true.into());
+    }
+    Ok(v.to_string())
+}
+
+/// The one decoder. A `type` this build does not know AND `"ignorable": true`
+/// on the row ⇒ [`DecodedRow::Skipped`]; a missing key reads as false; a known
+/// `type` whose body will not parse is corruption, not skippable; anything
+/// else ⇒ [`DecodedRow::Undecodable`].
+pub fn decode_row(seq: EventSeq, created_at_ms: i64, json: &str) -> DecodedRow {
+    let err = match serde_json::from_str::<SessionEvent>(json) {
+        Ok(event) => {
+            return DecodedRow::Event(SessionEventRecord {
+                seq,
+                event,
+                created_at_ms,
+            })
+        }
+        Err(e) => e,
+    };
+    let raw: Option<serde_json::Value> = serde_json::from_str(json).ok();
+    let kind_tag = raw
+        .as_ref()
+        .and_then(|v| v["type"].as_str())
+        .map(str::to_string);
+    let error = err.to_string();
+    let ignorable = raw
+        .as_ref()
+        .is_some_and(|v| v["ignorable"] == serde_json::Value::Bool(true));
+    match kind_tag {
+        Some(kind_tag) if ignorable && names_unknown_outer_variant(&error, &kind_tag) => {
+            DecodedRow::Skipped { seq, kind_tag }
+        }
+        kind_tag => DecodedRow::Undecodable(UndecodableRecord {
+            seq,
+            kind_tag,
+            error,
+        }),
+    }
+}
+
+/// The strict fold for the model-facing readers: `Skipped` rows are dropped
+/// (debug-traced), and the first `Undecodable` refuses the whole slice.
+pub fn fold_strict(rows: Vec<DecodedRow>) -> Result<Vec<SessionEventRecord>, UndecodableRecord> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row {
+            DecodedRow::Event(r) => out.push(r),
+            DecodedRow::Skipped { seq, kind_tag } => {
+                tracing::debug!(seq, kind_tag, "session_events: ignorable row skipped");
+            }
+            DecodedRow::Undecodable(u) => return Err(u),
+        }
+    }
+    Ok(out)
+}
+
+/// Retire a range inside an already-open transaction. Returns how many rows
+/// this newly retired.
+///
+/// Takes the `Transaction` itself, not a `Connection`: "inside the
+/// transaction" is then a type invariant — a caller that wants to retire in
+/// autocommit mode (and so let a failed batch keep its retirement) has no
+/// value of this type to hand over.
+///
+/// `retired_at IS NULL` makes both arms idempotent: a second retire of the
+/// same range matches nothing and reports 0. An out-of-range seq saturates to
+/// `i64::MAX`, which is exact in both arms: `From` then matches no row (it
+/// must not widen downward and retire events the caller never named), and
+/// `Through` matches every row, which IS "everything at or below a bound no
+/// stored seq can exceed".
+///
+/// `From` also drops the retired rows from the BM25 mirror, or `recall_events`
+/// would hand the model the very content `chat.clear` / `chat.rewind` just
+/// erased. The FTS table is a derived index, not the log, so a physical
+/// delete there does not break the append-only guarantee. `Through` keeps
+/// the mirror: compaction evicts turns from the prompt but they must stay
+/// recallable, so `recall_events` can still surface a detail the summary
+/// abstracted away — deleting the FTS rows would make the "compaction is not
+/// a net loss" contract false. `Through` is reached only as the `retire`
+/// argument of [`SessionEventStore::append_batch`]; `From` also has the
+/// standalone [`SessionEventStore::retire_from`].
+fn retire_in_txn(
+    tx: &rusqlite::Transaction<'_>,
+    session_key: &str,
+    retire: Retire,
+    at: i64,
+) -> rusqlite::Result<usize> {
+    match retire {
+        Retire::From(from_seq) => {
+            let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
+            let n = tx.execute(
+                "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
+                params![session_key, from_val, at],
+            )?;
+            tx.execute(
+                "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
+                params![session_key, from_val],
+            )?;
+            Ok(n)
+        }
+        Retire::Through(through_seq) => {
+            let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
+            tx.execute(
+                "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
+                params![session_key, through_val, at],
+            )
+        }
+    }
+}
+
+/// Run `f` with `PRAGMA synchronous=FULL` in force, then put the connection
+/// back at NORMAL — on every exit path. `f` returns a plain value, so no `?`
+/// inside it can skip the restore; the only early return here is a raise that
+/// never took effect. A failed restore is logged, not propagated: stuck at
+/// FULL is slower, never less durable.
+///
+/// This is what [`Durability::Barrier`] means at the SQLite level: the
+/// commit inside `f` fsyncs the WAL, the commits after it ride NORMAL again.
+fn with_synchronous_full<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&mut Connection) -> T,
+) -> Result<T, SessionError> {
+    conn.execute_batch("PRAGMA synchronous=FULL")
+        .map_err(|e| SessionError::Storage(format!("PRAGMA synchronous=FULL: {e}")))?;
+    let out = f(conn);
+    if let Err(e) = conn.execute_batch("PRAGMA synchronous=NORMAL") {
+        tracing::warn!(
+            error = %e,
+            "append_batch: could not restore PRAGMA synchronous=NORMAL"
+        );
+    }
+    Ok(out)
+}
+
+/// The transaction itself: `BEGIN IMMEDIATE`, retire, insert every row,
+/// `COMMIT`. Any error returns before `commit`, and dropping the
+/// `Transaction` uncommitted rolls it back (rusqlite's default
+/// `DropBehavior::Rollback`) — so a batch whose third row collides leaves rows
+/// one and two behind with it, and leaves the retired range live.
+fn write_batch(
+    conn: &mut Connection,
+    session_key: &str,
+    rows: &[EncodedRow],
+    retire: Option<Retire>,
+    at: i64,
+) -> Result<(), SessionError> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| SessionError::Storage(format!("append_batch BEGIN IMMEDIATE failed: {e}")))?;
+    // Retire FIRST so the batch's own rows, appended after, stay live.
+    if let Some(r) = retire {
+        retire_in_txn(&tx, session_key, r, at).map_err(|e| SessionError::Storage(e.to_string()))?;
+    }
+    for row in rows {
+        tx.execute(
             "INSERT INTO session_events
              (session_id, seq, turn_id, event_type, payload_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_key,
-                seq_i64,
-                turn_id,
-                event_type,
-                payload,
-                created_at_ms,
+                row.seq,
+                row.turn_id,
+                row.event_type,
+                row.payload,
+                row.created_at,
             ],
         )
         .map_err(|e| SessionError::Storage(e.to_string()))?;
+    }
+    tx.commit()
+        .map_err(|e| SessionError::Storage(format!("append_batch COMMIT failed: {e}")))
+}
+
+#[async_trait]
+impl SessionEventStore for SqliteEventStore {
+    async fn append_batch(
+        &self,
+        session_id: &SessionId,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError> {
+        if events.is_empty() && retire.is_none() {
+            return Err(SessionError::Other(
+                "append_batch: empty batch with nothing to retire".into(),
+            ));
+        }
+        let session_key = session_id_to_string(session_id)?;
+        let mut rows = Vec::with_capacity(events.len());
+        for (i, (event, at)) in events.iter().enumerate() {
+            let seq = first_seq
+                .checked_add(i as u64)
+                .ok_or_else(|| SessionError::Storage("seq overflow".into()))?;
+            let seq = i64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+            rows.push(EncodedRow {
+                seq,
+                turn_id: extract_turn_id(event).map(|u| u.to_string()),
+                event_type: event_type_tag(event),
+                payload: encode_row(event)?,
+                created_at: *at,
+                fts_body: render_event_text(event),
+            });
+        }
+        let at = crate::session::events::now_ms();
+
+        let mut conn = self.conn.lock().await;
+        // A Barrier fsyncs the WAL at THIS commit only; a Normal batch never
+        // touches the pragma, so whatever level the connection was opened at
+        // is exactly what it commits under.
+        match durability {
+            Durability::Barrier => with_synchronous_full(&mut conn, |c| {
+                write_batch(c, &session_key, &rows, retire, at)
+            })??,
+            Durability::Normal => write_batch(&mut conn, &session_key, &rows, retire, at)?,
+        }
 
         // Mirror content-bearing events into the FTS index so prior turns stay
         // BM25-searchable after compaction evicts them from context. Strictly
-        // best-effort: an indexing failure must never block the authoritative
-        // append above (continuity of the log outranks searchability).
-        if let Some(body) = render_event_text(event) {
+        // best-effort and outside the transaction: an indexing failure must
+        // never block the authoritative append above (continuity of the log
+        // outranks searchability).
+        for row in rows.iter().filter(|r| r.fts_body.is_some()) {
             if let Err(e) = conn.execute(
                 "INSERT INTO session_events_fts
                  (body, session_id, seq, event_type, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![body, session_key, seq_i64, event_type, created_at_ms],
+                params![
+                    row.fts_body,
+                    session_key,
+                    row.seq,
+                    row.event_type,
+                    row.created_at
+                ],
             ) {
                 tracing::debug!(
                     error = %e,
@@ -370,39 +801,37 @@ impl SessionEventStore for SqliteEventStore {
         let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                "SELECT seq, payload_json, created_at
-                 FROM session_events
-                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
-                   AND retired_at IS NULL
-                 ORDER BY seq ASC",
+        fold_strict(query_rows(&conn, &session_key, from_val, to_val)?)
+            .map_err(SessionError::UndecodableRecord)
+    }
+
+    async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let conn = self.conn.lock().await;
+        query_rows(&conn, &session_key, 0, i64::MAX)
+    }
+
+    async fn retire_record(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let seq_i64 = i64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+        let at = crate::session::events::now_ms();
+
+        let conn = self.conn.lock().await;
+        // `retired_at IS NULL` is what makes a second call answer `false`
+        // instead of re-stamping the row.
+        let changed = conn
+            .execute(
+                "UPDATE session_events SET retired_at = ?1
+                 WHERE session_id = ?2 AND seq = ?3 AND retired_at IS NULL",
+                params![at, session_key, seq_i64],
             )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-
-        let rows = stmt
-            .query_map(params![session_key, from_val, to_val], |row| {
-                let seq: i64 = row.get(0)?;
-                let payload: String = row.get(1)?;
-                let created_at: i64 = row.get(2)?;
-                Ok((seq, payload, created_at))
-            })
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            let (seq, payload, created_at) =
-                row.map_err(|e| SessionError::Storage(e.to_string()))?;
-            let event: SessionEvent = serde_json::from_str(&payload)?;
-            let seq = u64::try_from(seq)
-                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
-            out.push(SessionEventRecord {
-                seq,
-                event,
-                created_at_ms: created_at,
-            });
-        }
-        Ok(out)
+            .map_err(|e| SessionError::Storage(format!("retire_record failed: {e}")))?;
+        Ok(changed == 1)
     }
 
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError> {
@@ -433,80 +862,22 @@ impl SessionEventStore for SqliteEventStore {
         from_seq: EventSeq,
     ) -> Result<usize, SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        // An out-of-range `from_seq` must not widen the range and retire events
-        // the caller never asked for — saturate high so it matches no rows.
-        let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
         let at = crate::session::events::now_ms();
 
-        let conn = self.conn.lock().await;
-        // `retired_at IS NULL` makes this idempotent: a second retire of the
-        // same range matches nothing and reports 0 newly-retired events.
-        //
-        // Both the UPDATE and the FTS DELETE must run in the same transaction
-        // or a partial failure (e.g. disk-full mid-statement) leaves the rows
-        // marked retired while their content stays in the BM25 mirror — exactly
-        // the leak this method exists to prevent.
-        conn.execute_batch("BEGIN IMMEDIATE")
+        let mut conn = self.conn.lock().await;
+        // The UPDATE and the FTS DELETE in `retire_in_txn` must share one
+        // transaction or a partial failure (e.g. disk-full mid-statement)
+        // leaves rows marked retired while their content stays in the BM25
+        // mirror — exactly the leak this method exists to prevent. Dropping
+        // the `Transaction` on the error path rolls back.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| SessionError::Storage(format!("retire_from BEGIN failed: {e}")))?;
-
-        let retired = match conn.execute(
-            "UPDATE session_events SET retired_at = ?3
-                 WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
-            params![session_key, from_val, at],
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(SessionError::Storage(e.to_string()));
-            }
-        };
-
-        // Drop the retired events from the BM25 mirror as well, or `recall_events`
-        // would hand the model the very content the user just cleared. The FTS
-        // table is a derived index, not the log, so a physical delete here does
-        // not violate the append-only guarantee. Unlike the best-effort insert in
-        // `append`, this failure is propagated: a half-retire that leaves cleared
-        // content searchable is exactly the leak this method exists to prevent.
-        if let Err(e) = conn.execute(
-            "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
-            params![session_key, from_val],
-        ) {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(SessionError::Storage(e.to_string()));
-        }
-
-        conn.execute_batch("COMMIT")
+        let n = retire_in_txn(&tx, &session_key, Retire::From(from_seq), at)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        tx.commit()
             .map_err(|e| SessionError::Storage(format!("retire_from COMMIT failed: {e}")))?;
-        Ok(retired)
-    }
-
-    async fn retire_through(
-        &self,
-        session_id: &SessionId,
-        through_seq: EventSeq,
-    ) -> Result<usize, SessionError> {
-        let session_key = session_id_to_string(session_id)?;
-        // An out-of-range `through_seq` must not widen the range past what the
-        // caller asked for. Unlike `retire_from`'s lower bound, saturating an
-        // upper bound HIGH is the widening direction, so clamp to i64::MAX only
-        // because no stored seq can exceed it — the range is still exactly
-        // "everything at or below the requested boundary".
-        let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
-        let at = crate::session::events::now_ms();
-
-        let conn = self.conn.lock().await;
-        // Single statement, so no explicit transaction: unlike `retire_from`
-        // there is no paired FTS delete to keep atomic — the BM25 mirror is
-        // deliberately preserved (see the trait doc).
-        //
-        // `retired_at IS NULL` makes this idempotent: re-compacting the same
-        // prefix matches nothing and reports 0 newly-retired events.
-        conn.execute(
-            "UPDATE session_events SET retired_at = ?3
-                 WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
-            params![session_key, through_val, at],
-        )
-        .map_err(|e| SessionError::Storage(e.to_string()))
+        Ok(n)
     }
 
     async fn is_retired(
@@ -534,18 +905,78 @@ impl SessionEventStore for SqliteEventStore {
         Ok(retired.unwrap_or(false))
     }
 
-    async fn load_run_markers(
+    async fn load_retired_run_anchors(
         &self,
-    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+        session_id: &SessionId,
+    ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        // Same discipline as `load_run_markers`: the IN-list is rendered from
+        // the constant the census pins, never spelled inline, and the column
+        // is decoded through the same constant — one table, two directions.
+        let in_list = RUN_ANCHOR_EVENT_TYPES
+            .iter()
+            .map(|(t, _)| format!("'{t}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT seq, event_type
+             FROM session_events
+             WHERE session_id = ?1 AND retired_at IS NOT NULL
+               AND event_type IN ({in_list})
+             ORDER BY seq ASC"
+        );
         let conn = self.conn.lock().await;
         let mut stmt = conn
-            .prepare(
-                "SELECT session_id, seq, payload_json, created_at
-                 FROM session_events
-                 WHERE event_type IN ('run_started', 'run_finished')
-                   AND retired_at IS NULL
-                 ORDER BY session_id, seq ASC",
-            )
+            .prepare(&sql)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![session_key], |row| {
+                let seq: i64 = row.get(0)?;
+                let event_type: String = row.get(1)?;
+                Ok((seq, event_type))
+            })
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, event_type) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+            // The IN-list admits exactly these tags, so a miss here is the
+            // constant disagreeing with itself — refuse rather than guess.
+            let kind = RUN_ANCHOR_EVENT_TYPES
+                .iter()
+                .find(|(t, _)| *t == event_type)
+                .map(|(_, k)| *k)
+                .ok_or_else(|| {
+                    SessionError::Storage(format!(
+                        "retired anchor row {seq} has event_type {event_type:?}, outside the anchor set"
+                    ))
+                })?;
+            out.push(RetiredRunAnchor { seq, kind });
+        }
+        Ok(out)
+    }
+
+    async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
+        let conn = self.conn.lock().await;
+        // The IN-list is rendered from `MARKER_EVENT_TYPES`, never spelled
+        // inline: the tags are `event_type_tag` literals this module owns (no
+        // user input reaches this string), and the constant is what the
+        // equality census against `reduction::is_marker` reads.
+        let in_list = MARKER_EVENT_TYPES
+            .iter()
+            .map(|t| format!("'{t}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT session_id, seq, payload_json, created_at
+             FROM session_events
+             WHERE event_type IN ({in_list})
+               AND retired_at IS NULL
+             ORDER BY session_id, seq ASC"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
             .map_err(|e| SessionError::Storage(e.to_string()))?;
 
         let rows = stmt
@@ -560,28 +991,28 @@ impl SessionEventStore for SqliteEventStore {
 
         // Group consecutive rows by session_id. The SQL `ORDER BY
         // session_id, seq` guarantees all of one session's markers are
-        // contiguous, so a running group key is enough — no HashMap.
-        let mut grouped: Vec<(SessionId, Vec<SessionEventRecord>)> = Vec::new();
+        // contiguous, so a running group key is enough — no HashMap. Rows
+        // are grouped DECODED-PER-ROW and folded per group, so a marker this
+        // build cannot read refuses its own session's slice and no other's.
+        let mut grouped: Vec<(SessionId, Vec<DecodedRow>)> = Vec::new();
         for row in rows {
             let (session_id_str, seq, payload, created_at) =
                 row.map_err(|e| SessionError::Storage(e.to_string()))?;
             let session_id: SessionId = serde_json::from_str(&session_id_str)?;
-            let event: SessionEvent = serde_json::from_str(&payload)?;
             let seq = u64::try_from(seq)
                 .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
-            let record = SessionEventRecord {
-                seq,
-                event,
-                created_at_ms: created_at,
-            };
+            let decoded = decode_row(seq, created_at, &payload);
             match grouped.last_mut() {
                 Some((sid, records)) if *sid == session_id => {
-                    records.push(record);
+                    records.push(decoded);
                 }
-                _ => grouped.push((session_id, vec![record])),
+                _ => grouped.push((session_id, vec![decoded])),
             }
         }
-        Ok(grouped)
+        Ok(grouped
+            .into_iter()
+            .map(|(sid, rows)| (sid, fold_strict(rows)))
+            .collect())
     }
 
     async fn search_events(
@@ -640,6 +1071,45 @@ impl SessionEventStore for SqliteEventStore {
 // Row-shaping helpers
 // ---------------------------------------------------------------------------
 
+/// One session's live rows with `seq` in `[from, to)`, each through
+/// [`decode_row`]. The one SELECT behind `load_events_range`, `load_rows` and
+/// (via `load_all_events`) every model-facing read; the callers differ only
+/// in what they do with a row that did not decode.
+fn query_rows(
+    conn: &Connection,
+    session_key: &str,
+    from: i64,
+    to: i64,
+) -> Result<Vec<DecodedRow>, SessionError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT seq, payload_json, created_at
+             FROM session_events
+             WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
+               AND retired_at IS NULL
+             ORDER BY seq ASC",
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let rows = stmt
+        .query_map(params![session_key, from, to], |row| {
+            let seq: i64 = row.get(0)?;
+            let payload: String = row.get(1)?;
+            let created_at: i64 = row.get(2)?;
+            Ok((seq, payload, created_at))
+        })
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (seq, payload, created_at) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+        let seq = u64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+        out.push(decode_row(seq, created_at, &payload));
+    }
+    Ok(out)
+}
+
 /// Canonical string form of a `SessionId` for the `session_id` column.
 ///
 /// Uses `serde_json::to_string` so the persisted form round-trips losslessly
@@ -661,6 +1131,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::ToolCallRequested { turn_id, .. }
         | SessionEvent::ToolCallApproved { turn_id, .. }
         | SessionEvent::ToolCallDenied { turn_id, .. }
+        | SessionEvent::ToolCallParked { turn_id, .. }
         | SessionEvent::ToolResult { turn_id, .. }
         | SessionEvent::ToolError { turn_id, .. }
         | SessionEvent::SubagentSpawned { turn_id, .. }
@@ -671,20 +1142,37 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::SessionForked { .. }
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
+        | SessionEvent::ResumeAttempted { .. }
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
+
+/// The `event_type_tag` of every variant `reduction::is_marker` accepts —
+/// the one list `load_run_markers` selects by. Pinned equal by test
+/// (`tests::marker_event_types_are_exactly_the_reducers_marker_set`).
+pub(crate) const MARKER_EVENT_TYPES: [&str; 3] =
+    ["run_started", "run_finished", "resume_attempted"];
+
+/// The `event_type_tag` of each [`RetiredAnchorKind`], in the enum's order —
+/// the list `load_retired_run_anchors` selects by and the map it decodes the
+/// column with. Pinned against `event_type_tag` over the real variants by
+/// `tests::retired_anchor_event_types_are_the_two_anchor_kinds_tags`.
+pub(crate) const RUN_ANCHOR_EVENT_TYPES: [(&str, RetiredAnchorKind); 2] = [
+    ("run_started", RetiredAnchorKind::RunStarted),
+    ("assistant_run_meta", RetiredAnchorKind::RunMeta),
+];
 
 /// Static discriminant string for the `event_type` column.
 ///
 /// Kept as a `&'static str` to avoid per-append allocation and to give the
 /// storage layer a stable taxonomy independent of serde rename decisions.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
-const fn event_type_tag(event: &SessionEvent) -> &'static str {
+pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::SessionWoken { .. } => "session_woken",
         SessionEvent::RunStarted { .. } => "run_started",
         SessionEvent::RunFinished { .. } => "run_finished",
+        SessionEvent::ResumeAttempted { .. } => "resume_attempted",
         SessionEvent::TurnStarted { .. } => "turn_started",
         SessionEvent::UserMessage { .. } => "user_message",
         SessionEvent::AssistantMessage { .. } => "assistant_message",
@@ -693,6 +1181,7 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::ToolCallRequested { .. } => "tool_call_requested",
         SessionEvent::ToolCallApproved { .. } => "tool_call_approved",
         SessionEvent::ToolCallDenied { .. } => "tool_call_denied",
+        SessionEvent::ToolCallParked { .. } => "tool_call_parked",
         SessionEvent::ToolResult { .. } => "tool_result",
         SessionEvent::ToolError { .. } => "tool_error",
         SessionEvent::SubagentSpawned { .. } => "subagent_spawned",
@@ -764,23 +1253,91 @@ fn cap_chars(s: &str, max: usize) -> String {
 // Process-wide accessor
 // ---------------------------------------------------------------------------
 
+/// Every production reader of [`global_session_event_store`], and what an
+/// uninstalled handle reads as THERE — one row per file, the second column
+/// taken from the code at that site.
+///
+/// Not a hand-list: the table this replaces named four readers while the
+/// tree held more than twice that many files that do, this one included.
+/// The first column is pinned to the tree by
+/// `the_event_store_reader_census_matches_the_tree`, through the same walk
+/// `session::service::SESSION_SERVICE_READERS` uses — its scope, and which
+/// spellings of a read it sees, are stated on
+/// [`crate::utils::source_scan::files_whose_production_code_reads`]. The
+/// second column is prose and is NOT pinned; whoever changes a site's `None`
+/// arm owes this table the new sentence.
+///
+/// The census's first version saw only the CALL spelling, and the first
+/// version of this doc restated its verdict as a fact — "`session_projector.rs`
+/// never read the handle at all". It does: `resolve_events` falls back to it
+/// as a function POINTER (`.or_else(global_session_event_store)`), the
+/// spelling that census could not see. The row is below; the sentence was
+/// the instrument's blind spot written down as the tree's shape (判据 §3).
+///
+/// `#[cfg(test)]` because the census is its only reader: the table is
+/// documentation the tree can contradict, not runtime data.
+#[cfg(test)]
+pub(crate) const SESSION_EVENT_STORE_READERS: &[(&str, &str)] = &[
+    (
+        "src/builtin_tools/recall_events.rs",
+        "`Ok(empty)` plus a note to the model (\"not available in this deployment\")",
+    ),
+    (
+        "src/diagnostics/mod.rs",
+        "`core/projection-holes` and `core/session-log` are registered with `None` and report \
+         UNKNOWN (two builder sites)",
+    ),
+    (
+        "src/gateway/execution_engine/run_loop/inner.rs",
+        "the legacy `messages`→`session_events` backfill is skipped in silence (the read is \
+         paired with the service handle; no `else` arm)",
+    ),
+    (
+        "src/gateway/handlers/chat.rs",
+        "`chat.history`'s snapshot carries `last_run: None` — \"we did not find out\", never a \
+         clean answer",
+    ),
+    (
+        "src/gateway/handlers/session/db_handlers/query.rs",
+        "`sessions.list` leaves every row's `last_run` at `None` — \"we did not find out\"",
+    ),
+    (
+        "src/gateway/handlers/tool_output.rs",
+        "`trace.tool_output` answers `SERVICE_UNAVAILABLE` (\"session event log not available\")",
+    ),
+    (
+        "src/gateway/handlers/trace_replay.rs",
+        "`trace.by_runs` replays with an empty presentation map — holes show nothing, never \
+         \"no diff\"",
+    ),
+    (
+        "src/gateway/session_projector.rs",
+        "`resolve_events` falls back to the handle as a fn pointer when no store is pinned, at \
+         two sites: the drain treats every seq as live (`event_retired` → `Ok(false)`, so a \
+         retired row still projects); a heal pass puts its claim back and reports `errored`",
+    ),
+    (
+        "src/session/store.rs",
+        "`retire_live_events` answers `Ok(0)` — \"retired nothing\", indistinguishable from \
+         nothing to retire",
+    ),
+    (
+        "src/teams/dispatcher/schedule/reclaim.rs",
+        "the crashed attempt's member-session repair is skipped with no log line; the reclaim \
+         to `Pending` itself still happens",
+    ),
+];
+
 /// `ConsumerDecides`, and this handle is the sharper case of the pair in this
-/// batch: five production reads produce five *different* answers, two of which
-/// are reported to the caller as success.
+/// batch: the production reads produce *different* answers, some of which
+/// are reported to the caller as success — see `SESSION_EVENT_STORE_READERS`
+/// (above; `#[cfg(test)]`, because the tree is its reader) for each one's
+/// reading, and for how that list is kept honest.
 ///
-/// | reader | an uninstalled read becomes |
-/// |---|---|
-/// | `builtin_tools/recall_events.rs` | `Ok(empty)` plus a note to the model |
-/// | `builtin_tools/sessions/compact_tool.rs` | an `AlephError` |
-/// | [`retire_live_events`] | `Ok(0)` — "retired nothing", indistinguishable from "there was nothing to retire" |
-/// | `gateway/session_projector.rs` | reads `is_retired` on its own store handle (no process-wide accessor needed) |
-/// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
-///
-/// Each arm is individually defensible (all five doc-comment their reasoning),
+/// Each arm is individually defensible (all doc-comment their reasoning),
 /// which is exactly why no `IndistinguishableDefault { reads_as }` sentence
 /// could be written for this slot: there is no single thing a missing handle
-/// reads as. Task 15 adjudicates the arms; this variant records that there are
-/// five of them.
+/// reads as. This variant records that there is more than one of them.
 static GLOBAL_EVENT_STORE: CapabilitySlot<Arc<dyn SessionEventStore>> =
     CapabilitySlot::new("session/event-store", MissingSemantics::ConsumerDecides);
 
@@ -797,12 +1354,13 @@ pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
 /// Record that boot reached this slot and had nothing to install.
 ///
 /// The `else` half of [`set_global_session_event_store`]: boot's install is
-/// conditional, and without this the five consumers named on the static above
-/// cannot tell "this deployment has no session-event log" from "boot died
-/// before it reached `build_sqlite_session_service`'s call site in
-/// `start_server`". Named rather than numbered on purpose — a line coordinate
-/// in this file would be a carried number for a file that has no reason to
-/// track `start/mod.rs`. `because` is quoted verbatim to an operator.
+/// conditional, and without this the readers named in
+/// `SESSION_EVENT_STORE_READERS` cannot tell "this deployment has no
+/// session-event log" from "boot died before it reached
+/// `build_sqlite_session_service`'s call site in `start_server`". Named rather
+/// than numbered on purpose — a line coordinate in this file would be a
+/// carried number for a file that has no reason to track `start/mod.rs`.
+/// `because` is quoted verbatim to an operator.
 #[inline]
 pub fn decline_global_session_event_store(because: &'static str) {
     GLOBAL_EVENT_STORE.decline(because);
@@ -874,6 +1432,130 @@ pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
 // row" contract was unwired. If a future caller needs the global accessor,
 // re-introduce it together with a real call site — the half-wired slot was
 // worse than either end state.
+
+/// Test instrument for "this operation is ONE store transaction".
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A real SQLite store that counts its write entry points, so a test can
+    /// assert "one transaction" as a NUMBER instead of trusting the caller.
+    ///
+    /// The two counted methods are the two ways a caller can change the live
+    /// log (`append_batch`, which carries the batch's retire, and the
+    /// standalone `retire_from`). `append` is deliberately NOT overridden: the
+    /// trait default routes it through `self.append_batch`, so a single-row
+    /// write is counted too — every write that reaches this store is a batch
+    /// it counted. "One transaction" therefore reads as
+    /// `append_batches == 1 && retire_froms == 0`.
+    pub(crate) struct CountingStore {
+        pub inner: Arc<SqliteEventStore>,
+        pub append_batches: AtomicUsize,
+        pub retire_froms: AtomicUsize,
+    }
+
+    impl CountingStore {
+        /// A fresh in-memory store, migrated, with every counter at zero.
+        pub(crate) fn in_memory() -> Arc<Self> {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite");
+            migrate_add_session_events(&conn).expect("migrate session_events");
+            Arc::new(Self {
+                inner: Arc::new(SqliteEventStore::new(conn)),
+                append_batches: AtomicUsize::new(0),
+                retire_froms: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SessionEventStore for CountingStore {
+        async fn append_batch(
+            &self,
+            session_id: &SessionId,
+            first_seq: EventSeq,
+            events: &[(SessionEvent, i64)],
+            retire: Option<Retire>,
+            durability: Durability,
+        ) -> Result<(), SessionError> {
+            self.append_batches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner
+                .append_batch(session_id, first_seq, events, retire, durability)
+                .await
+        }
+
+        async fn load_all_events(
+            &self,
+            session_id: &SessionId,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            self.inner.load_all_events(session_id).await
+        }
+
+        async fn load_events_range(
+            &self,
+            session_id: &SessionId,
+            from: Option<EventSeq>,
+            to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            self.inner.load_events_range(session_id, from, to).await
+        }
+
+        async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError> {
+            self.inner.load_head_seq(session_id).await
+        }
+
+        async fn retire_from(
+            &self,
+            session_id: &SessionId,
+            from_seq: EventSeq,
+        ) -> Result<usize, SessionError> {
+            self.retire_froms
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.retire_from(session_id, from_seq).await
+        }
+
+        async fn is_retired(
+            &self,
+            session_id: &SessionId,
+            seq: EventSeq,
+        ) -> Result<bool, SessionError> {
+            self.inner.is_retired(session_id, seq).await
+        }
+
+        async fn load_retired_run_anchors(
+            &self,
+            session_id: &SessionId,
+        ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+            self.inner.load_retired_run_anchors(session_id).await
+        }
+
+        async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
+            self.inner.load_run_markers().await
+        }
+
+        async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+            self.inner.load_rows(session_id).await
+        }
+
+        async fn retire_record(
+            &self,
+            session_id: &SessionId,
+            seq: EventSeq,
+        ) -> Result<bool, SessionError> {
+            self.inner.retire_record(session_id, seq).await
+        }
+
+        async fn search_events(
+            &self,
+            session_id: &SessionId,
+            query: &str,
+            limit: usize,
+        ) -> Result<Vec<SessionEventHit>, SessionError> {
+            self.inner.search_events(session_id, query, limit).await
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1146,8 +1828,9 @@ mod tests {
 
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 1, "exactly one session has markers");
-        let (got_sid, records) = &markers[0];
+        let (got_sid, slice) = &markers[0];
         assert_eq!(*got_sid, sid);
+        let records = slice.as_ref().unwrap();
         assert_eq!(records.len(), 3, "3 markers, non-marker excluded");
         assert_eq!(records[0].seq, 1);
         assert_eq!(records[1].seq, 3);
@@ -1173,6 +1856,188 @@ mod tests {
             .unwrap();
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 2);
+    }
+
+    /// §5.1: the intent stamp is a marker — the resume ratchet is counted off
+    /// the same query the boot scan classifies from, so a stamp the query did
+    /// not return would be a stamp that never capped anything.
+    #[tokio::test]
+    async fn load_run_markers_returns_resume_attempted_as_a_marker() {
+        let store = make_store();
+        let sid = SessionKey::main("m");
+        let at = 1_700_000_000_000;
+        store
+            .append(&sid, 1, &run_started("r1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                2,
+                &SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                at + 1,
+            )
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                3,
+                &SessionEvent::SystemMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: "x".into(),
+                    at,
+                },
+                at + 2,
+            )
+            .await
+            .unwrap();
+        let groups = store.load_run_markers().await.unwrap();
+        let markers = groups[0].1.as_ref().unwrap();
+        let seqs: Vec<u64> = markers.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2]);
+        assert!(matches!(
+            markers[1].event,
+            SessionEvent::ResumeAttempted {
+                target: 1,
+                attempt: 1
+            }
+        ));
+    }
+
+    /// The SQL IN-list and the reducer's `is_marker` are two spellings of one set.
+    #[test]
+    fn marker_event_types_are_exactly_the_reducers_marker_set() {
+        // ONE sampler for the whole enum: T1's `events::fixtures::sample_of_every_kind()`,
+        // whose completeness is pinned against the enum source there. A second
+        // sampler here would be the same list twice (criterion #1).
+        let all: Vec<SessionEvent> = crate::session::events::fixtures::sample_of_every_kind()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let derived: std::collections::BTreeSet<&str> = all
+            .iter()
+            .filter(|e| crate::session::reduction::is_marker(e))
+            .map(|e| event_type_tag(e))
+            .collect();
+        let declared: std::collections::BTreeSet<&str> =
+            MARKER_EVENT_TYPES.iter().copied().collect();
+        assert_eq!(derived, declared);
+    }
+
+    /// The anchor IN-list is `event_type_tag` over the two variants the
+    /// positional join reads — derived through the one sampler, so a renamed
+    /// tag cannot leave the retired read selecting nothing.
+    #[test]
+    fn retired_anchor_event_types_are_the_two_anchor_kinds_tags() {
+        let all: Vec<SessionEvent> = crate::session::events::fixtures::sample_of_every_kind()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let tag_of = |pick: fn(&SessionEvent) -> bool| -> &'static str {
+            let tags: std::collections::BTreeSet<&str> = all
+                .iter()
+                .filter(|e| pick(e))
+                .map(|e| event_type_tag(e))
+                .collect();
+            assert_eq!(tags.len(), 1, "one variant, one tag: {tags:?}");
+            tags.into_iter().next().unwrap()
+        };
+        let derived = [
+            (
+                tag_of(|e| matches!(e, SessionEvent::RunStarted { .. })),
+                RetiredAnchorKind::RunStarted,
+            ),
+            (
+                tag_of(|e| matches!(e, SessionEvent::AssistantRunMeta { .. })),
+                RetiredAnchorKind::RunMeta,
+            ),
+        ];
+        assert_eq!(derived, RUN_ANCHOR_EVENT_TYPES);
+    }
+
+    /// The retired read sees ONLY retired rows, only the two anchor kinds, by
+    /// kind and position — and a live meta stays invisible to it. This is the
+    /// store half of the rewind re-bill pin
+    /// (`session_projector::tests::a_rewind_inside_a_billed_run_does_not_bill_it_again`).
+    #[tokio::test]
+    async fn retired_run_anchors_are_the_retired_openers_and_metas_only() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        let meta = |run: &str| SessionEvent::AssistantRunMeta {
+            turn_id: tid,
+            run_id: run.into(),
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
+            cost_usd: None,
+            model: None,
+            model_provider: None,
+            at,
+        };
+        let log = [
+            run_started("a", at),
+            turn_started(tid, at),
+            run_finished("a", at),
+            meta("a"),
+            run_started("b", at),
+            run_finished("b", at),
+            meta("b"),
+        ];
+        for (i, e) in log.iter().enumerate() {
+            store.append(&sid, i as EventSeq + 1, e, at).await.unwrap();
+        }
+        assert!(
+            store
+                .load_retired_run_anchors(&sid)
+                .await
+                .unwrap()
+                .is_empty(),
+            "nothing retired, nothing to see — a live meta is not an anchor here"
+        );
+        // A rewind that cuts inside run b: rows 6.. retired, the closer
+        // appended in the same batch.
+        store
+            .append_batch(
+                &sid,
+                8,
+                &[(run_finished("b", at), at)],
+                Some(Retire::From(6)),
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_retired_run_anchors(&sid).await.unwrap(),
+            vec![RetiredRunAnchor {
+                seq: 7,
+                kind: RetiredAnchorKind::RunMeta,
+            }],
+            "run b's retired meta, not its live opener, not the retired closer"
+        );
+        store.retire_from(&sid, 1).await.unwrap();
+        let kinds: Vec<(EventSeq, RetiredAnchorKind)> = store
+            .load_retired_run_anchors(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.seq, a.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (1, RetiredAnchorKind::RunStarted),
+                (4, RetiredAnchorKind::RunMeta),
+                (5, RetiredAnchorKind::RunStarted),
+                (7, RetiredAnchorKind::RunMeta),
+            ],
+            "everything retired: both openers and both metas, in seq order, no turn / finish rows"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1436,6 +2301,34 @@ mod tests {
         assert_eq!(live[0].seq, 2);
     }
 
+    /// `Retire::Through` has no standalone method: it is reached only as the
+    /// `retire` argument of `append_batch`, so a retire-only batch is how the
+    /// head-side bound is driven here.
+    async fn retire_through_batch(store: &SqliteEventStore, sid: &SessionId, through: EventSeq) {
+        let next = store.load_head_seq(sid).await.unwrap() + 1;
+        store
+            .append_batch(
+                sid,
+                next,
+                &[],
+                Some(Retire::Through(through)),
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// `retired_at` of one row, read off the private connection.
+    async fn retired_at(store: &SqliteEventStore, sid: &SessionId, seq: EventSeq) -> Option<i64> {
+        let conn = store.conn.lock().await;
+        conn.query_row(
+            "SELECT retired_at FROM session_events WHERE session_id = ?1 AND seq = ?2",
+            params![session_id_to_string(sid).unwrap(), seq as i64],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn retire_through_drops_the_prefix_and_keeps_the_tail() {
         let store = make_store();
@@ -1449,24 +2342,47 @@ mod tests {
                 .unwrap();
         }
 
-        let retired = store.retire_through(&sid, 2).await.unwrap();
-        assert_eq!(retired, 2);
+        retire_through_batch(&store, &sid, 2).await;
 
         let live = store.load_all_events(&sid).await.unwrap();
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].seq, 3, "only the tail survives the head retirement");
-        // Idempotent, exactly like its `retire_from` mirror.
-        assert_eq!(store.retire_through(&sid, 2).await.unwrap(), 0);
+        assert!(retired_at(&store, &sid, 1).await.is_some());
+        assert!(
+            retired_at(&store, &sid, 2).await.is_some(),
+            "the bound is inclusive"
+        );
+        assert!(retired_at(&store, &sid, 3).await.is_none());
+
+        // Idempotent, exactly like its `retire_from` mirror: an already-retired
+        // row keeps its ORIGINAL retirement timestamp. Pinned with a sentinel
+        // rather than by counting, since a batch reports no count — and a
+        // sentinel is not vacuous when the two calls share a millisecond.
+        {
+            let conn = store.conn.lock().await;
+            conn.execute(
+                "UPDATE session_events SET retired_at = 4242 WHERE session_id = ?1 AND seq = 1",
+                params![session_id_to_string(&sid).unwrap()],
+            )
+            .unwrap();
+        }
+        retire_through_batch(&store, &sid, 2).await;
+        assert_eq!(
+            retired_at(&store, &sid, 1).await,
+            Some(4242),
+            "retiring the same range twice must not re-stamp the rows"
+        );
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
         // Seq allocation is unaffected — the rows are still there.
         assert_eq!(store.load_head_seq(&sid).await.unwrap(), 3);
     }
 
     #[tokio::test]
     async fn retire_through_keeps_the_search_index_unlike_clear() {
-        // The one deliberate asymmetry with `retire_from`: `chat.clear` must
-        // erase content from the BM25 mirror, compaction must NOT — the turns
-        // leave the live prompt but stay recallable. Losing this makes the
-        // "compaction is not a net loss" contract false.
+        // The one deliberate asymmetry between the two `Retire` arms:
+        // `chat.clear` must erase content from the BM25 mirror, compaction
+        // must NOT — the turns leave the live prompt but stay recallable.
+        // Losing this makes the "compaction is not a net loss" contract false.
         let store = make_store();
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
@@ -1480,7 +2396,7 @@ mod tests {
             .await
             .unwrap();
 
-        store.retire_through(&sid, 1).await.unwrap();
+        retire_through_batch(&store, &sid, 1).await;
         assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
         assert!(
             !store
@@ -1519,7 +2435,7 @@ mod tests {
             .await
             .unwrap();
 
-        store.retire_through(&sid_b, 1).await.unwrap();
+        retire_through_batch(&store, &sid_b, 1).await;
 
         assert_eq!(store.load_all_events(&sid_a).await.unwrap().len(), 1);
         assert!(store.load_all_events(&sid_b).await.unwrap().is_empty());
@@ -1626,5 +2542,496 @@ mod tests {
             .unwrap();
         let hits = store.search_events(&sid, "()[]{}!!!", 5).await.unwrap();
         assert!(hits.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // append_batch — one transaction per batch, retire inside it, Barrier
+    // durability restored either way
+    // -----------------------------------------------------------------------
+
+    /// Atomicity without an injected failure: pre-seed seq 3, then batch
+    /// [1, 2, 3]. Row 3 collides on the primary key, and rows 1 and 2 —
+    /// already INSERTed inside the same transaction — must roll back with it.
+    #[tokio::test]
+    async fn a_batch_whose_third_row_collides_leaves_nothing_behind() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 3, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+        let batch = vec![
+            (turn_started(tid, at), at),
+            (user_message(tid, "x", at), at),
+            (turn_started(tid, at), at),
+        ];
+        let err = store
+            .append_batch(&sid, 1, &batch, None, Durability::Normal)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Storage(_)), "{err:?}");
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(
+            live,
+            vec![3],
+            "rows 1 and 2 must have rolled back with row 3"
+        );
+    }
+
+    #[tokio::test]
+    async fn retire_and_insert_are_one_transaction() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for seq in 1..=3 {
+            store
+                .append(&sid, seq, &user_message(tid, "old", at), at)
+                .await
+                .unwrap();
+        }
+        // Makes seq 5 collide below.
+        store
+            .append(&sid, 5, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+        let batch = vec![(run_finished("r", at), at), (turn_started(tid, at), at)];
+        store
+            .append_batch(&sid, 4, &batch, Some(Retire::From(2)), Durability::Normal)
+            .await
+            .unwrap_err();
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(
+            live,
+            vec![1, 2, 3, 5],
+            "a failed batch must not have retired anything either"
+        );
+        // And the successful shape: the batch's own rows are live, the retired
+        // range is not.
+        let batch = vec![(run_finished("r", at), at)];
+        store
+            .append_batch(&sid, 6, &batch, Some(Retire::From(2)), Durability::Normal)
+            .await
+            .unwrap();
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(live, vec![1, 6]);
+        // Seq 1 is live and still says "old", so it MUST still hit; seqs 2 and
+        // 3 were retired and must be gone from the mirror as well.
+        let mut hits: Vec<_> = store
+            .search_events(&sid, "old", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.seq)
+            .collect();
+        hits.sort_unstable();
+        assert_eq!(
+            hits,
+            vec![1],
+            "From deletes the BM25 mirror for the retired range like retire_from"
+        );
+    }
+
+    /// The connection's CURRENT `PRAGMA synchronous` (OFF = 0, NORMAL = 1,
+    /// FULL = 2), read off the same connection the batch wrote through.
+    fn pragma_synchronous(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    }
+
+    /// Put the connection at production's resting level (`open_sqlite_safe`
+    /// sets NORMAL; a bare in-memory connection defaults to FULL, which would
+    /// make "raised to FULL" indistinguishable from "never raised").
+    fn rest_at_normal(conn: &Connection) {
+        conn.execute_batch("PRAGMA synchronous=NORMAL").unwrap();
+        assert_eq!(pragma_synchronous(conn), 1);
+    }
+
+    #[tokio::test]
+    async fn barrier_restores_normal_after_success_and_after_failure() {
+        async fn sync(s: &SqliteEventStore) -> i64 {
+            let conn = s.conn.lock().await;
+            pragma_synchronous(&conn)
+        }
+        let store = make_store();
+        let sid = sample_session_id();
+        let at = now_ms();
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "NORMAL restored after a Barrier commit"
+        );
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "NORMAL restored after a Barrier rollback"
+        );
+    }
+
+    /// The raise itself, observed from INSIDE the window: while the closure
+    /// runs — and it runs a real `write_batch` — `PRAGMA synchronous` reads
+    /// FULL, and after it returns the connection is back at NORMAL. Starting
+    /// from NORMAL is what makes this a guard: on a fresh in-memory connection
+    /// (default FULL) a deleted raise would still read 2.
+    #[tokio::test]
+    async fn barrier_raises_full_for_the_transaction_and_only_for_it() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let session_key = session_id_to_string(&sid).unwrap();
+        let at = now_ms();
+        let rows = vec![EncodedRow {
+            seq: 1,
+            turn_id: None,
+            event_type: event_type_tag(&run_started("r", at)),
+            payload: encode_row(&run_started("r", at)).unwrap(),
+            created_at: at,
+            fts_body: None,
+        }];
+        let mut conn = store.conn.lock().await;
+        rest_at_normal(&conn);
+        let (inside, written) = with_synchronous_full(&mut conn, |c| {
+            let inside = pragma_synchronous(c);
+            (inside, write_batch(c, &session_key, &rows, None, at))
+        })
+        .unwrap();
+        written.unwrap();
+        assert_eq!(inside, 2, "the transaction ran under FULL");
+        assert_eq!(pragma_synchronous(&conn), 1, "back to NORMAL after it");
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_events WHERE session_id = ?1",
+                params![session_key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(live, 1, "the row written inside the window is committed");
+    }
+
+    /// A `Normal` batch does not touch the pragma at all — whatever level the
+    /// connection was opened at survives it — while a `Barrier` batch lands
+    /// on NORMAL (the store's resting level), not on "whatever it was before".
+    #[tokio::test]
+    async fn a_normal_batch_leaves_the_pragma_alone() {
+        async fn sync(s: &SqliteEventStore) -> i64 {
+            let conn = s.conn.lock().await;
+            pragma_synchronous(&conn)
+        }
+        let store = make_store();
+        let sid = sample_session_id();
+        let at = now_ms();
+        store
+            .conn
+            .lock()
+            .await
+            .execute_batch("PRAGMA synchronous=OFF")
+            .unwrap();
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            0,
+            "a Normal batch must not raise or restore anything"
+        );
+        store
+            .append_batch(
+                &sid,
+                2,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "a Barrier batch restores NORMAL, not the previous OFF"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_batch_with_nothing_to_retire_is_refused() {
+        let store = make_store();
+        let err = store
+            .append_batch(&sample_session_id(), 1, &[], None, Durability::Normal)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Other(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-row decode: the envelope, the three row verdicts, and the isolation
+    // of one bad row to the session that holds it
+    // -----------------------------------------------------------------------
+
+    /// A row exactly as another build would have written it — see
+    /// [`SqliteEventStore::insert_raw_row_for_test`].
+    async fn raw_insert(
+        store: &SqliteEventStore,
+        sid: &SessionId,
+        seq: i64,
+        event_type: &str,
+        json: &str,
+    ) {
+        store
+            .insert_raw_row_for_test(sid, seq, event_type, json)
+            .await;
+    }
+
+    #[test]
+    fn every_row_carries_the_schema_version_and_omits_ignorable_when_false() {
+        let json = encode_row(&user_message(uuid::Uuid::new_v4(), "hi", 1)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["v"], SESSION_EVENT_SCHEMA_VERSION);
+        assert!(
+            v.get("ignorable").is_none(),
+            "absent, never `false`: {json}"
+        );
+        assert!(matches!(decode_row(1, 1, &json), DecodedRow::Event(_)));
+    }
+
+    #[test]
+    fn an_unknown_variant_is_undecodable_unless_the_row_says_ignorable() {
+        assert!(matches!(
+            decode_row(7, 1, r#"{"type":"from_the_future","v":9}"#),
+            DecodedRow::Undecodable(UndecodableRecord { seq: 7, kind_tag: Some(t), .. }) if t == "from_the_future"
+        ));
+        assert!(matches!(
+            decode_row(8, 1, r#"{"type":"from_the_future","ignorable":true}"#),
+            DecodedRow::Skipped { seq: 8, kind_tag } if kind_tag == "from_the_future"
+        ));
+        // A missing key reads as false; a KNOWN variant that will not parse is
+        // corruption, not skippable.
+        assert!(matches!(
+            decode_row(9, 1, r#"{"type":"from_the_future","ignorable":"yes"}"#),
+            DecodedRow::Undecodable(_)
+        ));
+        assert!(matches!(
+            decode_row(10, 1, r#"{"type":"tool_call_requested","ignorable":true}"#),
+            DecodedRow::Undecodable(_)
+        ));
+        assert!(matches!(
+            decode_row(11, 1, "{not json"),
+            DecodedRow::Undecodable(UndecodableRecord { kind_tag: None, .. })
+        ));
+        // A KNOWN type whose body holds an unknown word of an INNER enum:
+        // serde says `unknown variant` for that too, but the row's own tag is
+        // not the unknown one — corruption, never skippable.
+        assert!(matches!(
+            decode_row(
+                12,
+                1,
+                r#"{"type":"run_finished","run_id":"r","outcome":"from_the_future","at":1,"ignorable":true}"#
+            ),
+            DecodedRow::Undecodable(UndecodableRecord { seq: 12, kind_tag: Some(t), .. }) if t == "run_finished"
+        ));
+    }
+
+    /// `decode_row` tells "a `type` this build does not know" from "a `type` it
+    /// knows whose body will not parse" by serde's rendered wording. That
+    /// wording is serde's, not ours, so the shape the guard keys on —
+    /// `unknown variant `<the row's own tag>`` — is pinned against REAL
+    /// errors: a serde release that rewords it turns this red, instead of
+    /// silently turning every row a newer build marked ignorable into
+    /// corruption. The inner-enum case is the one the prefix alone cannot
+    /// tell apart: it carries the same prefix with a different name after it.
+    #[test]
+    fn the_unknown_variant_guard_keys_on_serdes_own_wording() {
+        let unknown =
+            serde_json::from_str::<SessionEvent>(r#"{"type":"from_the_future"}"#).unwrap_err();
+        assert!(
+            names_unknown_outer_variant(&unknown.to_string(), "from_the_future"),
+            "serde no longer says `{UNKNOWN_VARIANT_PREFIX} `<tag>``: {unknown}"
+        );
+        let known =
+            serde_json::from_str::<SessionEvent>(r#"{"type":"tool_call_requested"}"#).unwrap_err();
+        assert!(
+            !known.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
+            "a known variant with a broken body must not read as unknown: {known}"
+        );
+        let inner = serde_json::from_str::<SessionEvent>(
+            r#"{"type":"run_finished","run_id":"r","outcome":"from_the_future","at":1}"#,
+        )
+        .unwrap_err();
+        assert!(
+            inner.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
+            "the premise: an inner unknown word renders the same prefix: {inner}"
+        );
+        assert!(
+            !names_unknown_outer_variant(&inner.to_string(), "run_finished"),
+            "the guard must not read the inner word as the row's own tag: {inner}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_bad_row_refuses_only_its_own_session() {
+        let store = make_store();
+        let (a, b) = (SessionKey::main("a"), SessionKey::main("b"));
+        for sid in [&a, &b] {
+            store.append(sid, 1, &run_started("r", 1), 1).await.unwrap();
+        }
+        raw_insert(
+            &store,
+            &a,
+            2,
+            "from_the_future",
+            r#"{"type":"from_the_future"}"#,
+        )
+        .await;
+        let err = store.load_all_events(&a).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionError::UndecodableRecord(UndecodableRecord { seq: 2, .. })
+            ),
+            "{err}"
+        );
+        assert_eq!(store.load_all_events(&b).await.unwrap().len(), 1);
+        // The marker scan: a bad MARKER row refuses only that session's slice.
+        raw_insert(
+            &store,
+            &a,
+            3,
+            "run_finished",
+            r#"{"type":"run_finished","outcome":"???"}"#,
+        )
+        .await;
+        let groups = store.load_run_markers().await.unwrap();
+        assert!(matches!(
+            &groups.iter().find(|(s, _)| *s == a).unwrap().1,
+            Err(u) if u.seq == 3
+        ));
+        assert!(matches!(
+            &groups.iter().find(|(s, _)| *s == b).unwrap().1,
+            Ok(m) if m.len() == 1
+        ));
+        // `retire_record` is the single-record exit doctor --fix takes.
+        assert!(store.retire_record(&a, 2).await.unwrap());
+        assert!(!store.retire_record(&a, 2).await.unwrap(), "idempotent");
+    }
+
+    #[tokio::test]
+    async fn an_ignorable_row_is_skipped_by_readers_and_counted_by_load_rows() {
+        let store = make_store();
+        let sid = sample_session_id();
+        store
+            .append(&sid, 1, &run_started("r", 1), 1)
+            .await
+            .unwrap();
+        raw_insert(
+            &store,
+            &sid,
+            2,
+            "from_the_future",
+            r#"{"type":"from_the_future","ignorable":true}"#,
+        )
+        .await;
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
+        let rows = store.load_rows(&sid).await.unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, DecodedRow::Skipped { .. }))
+                .count(),
+            1
+        );
+    }
+
+    /// The schema evolves by adding columns and never by gating on a version
+    /// number: a gate that refuses to open an older or newer file is fail-dead
+    /// for every session at once, while an added column reads as NULL on the
+    /// rows written before it (spec 7.4).
+    #[test]
+    fn the_event_table_migration_only_ever_adds_columns() {
+        let src = crate::utils::source_scan::production_code_lines(include_str!("store.rs"));
+        let alters: Vec<&str> = src
+            .lines()
+            .filter(|l| l.contains("ALTER TABLE session_events"))
+            .collect();
+        assert!(
+            !alters.is_empty() && alters.iter().all(|l| l.contains("ADD COLUMN")),
+            "{alters:?}"
+        );
+        assert!(
+            !src.contains("user_version"),
+            "a schema gate is fail-dead (spec 7.4)"
+        );
+    }
+
+    /// [`SESSION_EVENT_STORE_READERS`]'s first column equals the set of files
+    /// whose production code reads the handle — equality, both directions,
+    /// derived from the tree by the walk the table's doc names. This file is
+    /// in the set on its own merits (`retire_live_events`), not by exclusion.
+    /// Mutation (T17): comment out one row ⇒ red naming that file.
+    #[test]
+    fn the_event_store_reader_census_matches_the_tree() {
+        use crate::utils::source_scan::files_whose_production_code_reads;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found = files_whose_production_code_reads(&root, "global_session_event_store");
+        let listed: std::collections::BTreeSet<String> = SESSION_EVENT_STORE_READERS
+            .iter()
+            .map(|(file, _)| (*file).to_string())
+            .collect();
+        assert_eq!(
+            SESSION_EVENT_STORE_READERS.len(),
+            listed.len(),
+            "a file is listed twice in SESSION_EVENT_STORE_READERS"
+        );
+        assert!(
+            !found.is_empty(),
+            "self-protection: the walk found no reader at all — blind, not clean"
+        );
+        assert_eq!(
+            found, listed,
+            "a reader of the session-event-store handle appeared or vanished; update \
+             SESSION_EVENT_STORE_READERS with what a missing handle reads as there"
+        );
     }
 }

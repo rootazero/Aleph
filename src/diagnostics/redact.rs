@@ -44,6 +44,21 @@ fn vendor_patterns() -> &'static Regex {
             |   sk_live_[A-Za-z0-9]+
             |   AKIA[0-9A-Z]{16}
             |   AIza[0-9A-Za-z_-]{35,}
+                # Google OAuth 2.0 access tokens (`ya29.…`) and client
+                # secrets (`GOCSPX-…`). Neither overlaps the `AIza…` server
+                # key prefix; both are issued alongside API access for any
+                # Google integration and both leak through `/oauth2/v1/…`
+                # error bodies, so a diagnostic that masks the server key
+                # but lets the OAuth token through would still ship a
+                # usable credential.
+            |   ya29\.[A-Za-z0-9_-]{20,}
+            |   GOCSPX-[A-Za-z0-9_-]{20,}
+                # GitHub classic PATs (`ghp_`, `gho_`, `ghu_`, `ghs_`,
+                # `ghr_`) — covered by `gh[psoru]_`. GitHub fine-grained
+                # PATs use the `github_pat_<11 chars>_<82 chars>` shape
+                # which the legacy prefix class does NOT catch (the third
+                # char is `t`, not in `[psoru]`). Adding it explicitly.
+            |   github_pat_[A-Za-z0-9_]{40,}
             |   gh[psoru]_[A-Za-z0-9]{36,}
             |   xox[baprs]-[A-Za-z0-9-]+
                 # OpenAI-style keys.
@@ -138,6 +153,50 @@ mod tests {
     fn redacts_google_api_keys() {
         let out = redact_secrets("key=AIzaSyA-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456");
         assert_eq!(out, "key=***");
+    }
+
+    /// GitHub fine-grained PATs use a `github_pat_` prefix (11 chars +
+    /// underscore) that the legacy `gh[psoru]_` branch does NOT match —
+    /// the third char is `t`, not in `[psoru]`. A diagnostic that lets
+    /// these through ships a credential that authenticates `repo`,
+    /// `workflow`, `admin:org` (per the fine-grained PAT scope).
+    #[test]
+    fn redacts_github_fine_grained_personal_access_tokens() {
+        let pat = concat!(
+            "github_pat_",
+            "11ABCXYZ01_",
+            "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AB_CdEfGhIjKlMnOpQrStUvWxYz0123456789",
+        );
+        let out = redact_secrets(&format!("token {pat} leaked"));
+        assert_eq!(out, "token *** leaked");
+        assert!(!out.contains("github_pat_"));
+    }
+
+    /// Google OAuth 2.0 access tokens (`ya29.…`) — distinct from the
+    /// `AIza…` server-key prefix, common in Drive / Gmail / Cloud
+    /// API error bodies. A diagnostic that masks `AIza` but not `ya29`
+    /// still ships a credential that authorizes Drive/Gmail access.
+    #[test]
+    fn redacts_google_oauth_access_tokens() {
+        let out = redact_secrets(
+            "oauth refresh returned ya29.a0ARrdaM-AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789",
+        );
+        assert_eq!(out, "oauth refresh returned ***");
+        assert!(!out.contains("ya29."));
+    }
+
+    /// Google OAuth 2.0 client secrets (`GOCSPX-…`) — public-client
+    /// secrets stored in OAuth client configurations, distinct from
+    /// `AIza` server keys. These authenticate the *application*, not
+    /// the user, and a leaked one lets the holder impersonate the
+    /// application against Google's APIs.
+    #[test]
+    fn redacts_google_oauth_client_secrets() {
+        let out = redact_secrets(
+            "config dump: client_secret=GOCSPX-AbCdEfGhIjKlMnOpQrStUvWx rejected",
+        );
+        assert_eq!(out, "config dump: *** rejected");
+        assert!(!out.contains("GOCSPX-"));
     }
 
     #[test]

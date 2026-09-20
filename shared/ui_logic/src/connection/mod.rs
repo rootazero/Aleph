@@ -10,6 +10,3 @@ pub use failure::{
     classify, stage_for_connect_error, ConnectionFailure, FailureStage, OriginLiveness,
 };
 pub use reconnect::ReconnectStrategy;
-
-#[cfg(feature = "wasm")]
-pub use wasm::WasmConnector as DefaultConnector;

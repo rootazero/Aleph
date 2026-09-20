@@ -531,7 +531,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
-        let (system_prompt, system_prompt_parts, recall_context) = match self
+        let (system_prompt, system_prompt_parts, recall_context, prompt_layout) = match self
             .build_system_prompt(
                 &spec.agent,
                 &session_id,
@@ -549,8 +549,15 @@ impl HarnessRunner for AgentHarnessRunner {
             )
             .await
         {
-            Some((s, parts, recall)) => (Some(s), Some(parts), recall),
-            None => (None, None, None),
+            // The measured layout is CARRIED, not published here: the tool
+            // schema sizes for the same turn are not known until the tool
+            // service is resolved below, and `context.breakdown` publishes one
+            // whole turn at a time (see `prompt_size_registry`'s module doc —
+            // two writes at two moments produced records that mixed turns).
+            // `None` here is a fact about the turn, not a missing measurement:
+            // this turn built no system prompt at all.
+            Some((s, parts, recall, layout)) => (Some(s), Some(parts), recall, Some(layout)),
+            None => (None, None, None, None),
         };
 
         // Merge the gateway's ephemeral per-turn reminders (working directory,
@@ -575,6 +582,39 @@ impl HarnessRunner for AgentHarnessRunner {
         // default when the caller supplies None.
         // rust-doctor-disable-next-line excessive-clone
         let tools = tool_service_override.unwrap_or_else(|| self.tool_service.clone());
+        // Publish this turn's whole measurement for `context.breakdown`: the
+        // layout carried down from the prompt build above, plus the tool bytes
+        // read here. ONE write, so the record can never carry one turn's
+        // layers beside another turn's tools.
+        //
+        // Tool bytes are taken here and not as a prompt layer: production
+        // assembles the system prompt with an EMPTY tools slice because schemas
+        // travel as native `tool_use` (`prompt_build.rs`'s note at `:577`), so a
+        // layer could never see them and the two figures cannot double-count.
+        //
+        // `tools` is the same `Arc<dyn ToolService>` this function later moves
+        // into `HarnessDeps.tools` (the `tools,` field init in the deps literal
+        // near the end of `run`), and `metadata_schema()` is the same call
+        // `harness/agent/think.rs` makes to build the request's tool list —
+        // one producer, read twice, not a second derivation. (The assembly
+        // itself happens inside `src/harness/`, which R10 locks; asking the
+        // service here is how the bridge observes it without reaching in.)
+        // The trait contract says implementations cache and return an `Arc`
+        // for O(1) per-turn cloning, so the extra call is a clone.
+        if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+            let tool_sizes = tools
+                .metadata_schema()
+                .iter()
+                .map(|t| {
+                    (
+                        t.name.clone(),
+                        serde_json::to_string(&t.parameters).map_or(0, |s| s.len() as u64),
+                        t.description.len() as u64,
+                    )
+                })
+                .collect();
+            reg.record_turn(&session_id.to_key_string(), prompt_layout, tool_sizes);
+        }
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
         // rust-doctor-disable-next-line excessive-clone
@@ -1360,7 +1400,12 @@ impl HarnessRunner for AgentHarnessRunner {
                     &crate::thinker::TurnEnvelope::none(),
                 )
                 .await
-                .map(|(s, _parts, _recall)| s)
+                // `_layout` is dropped, not recorded: this prompt is built with
+                // an empty envelope and no history to price a cacheable
+                // per-(agent, model) overhead. It is NOT the session's prompt,
+                // and reporting it as one would hand `context.breakdown` a
+                // weakened copy of the real layout.
+                .map(|(s, _parts, _recall, _layout)| s)
                 .unwrap_or_default();
             let sp_tokens =
                 crate::context::budget::pressure::estimate_tokens_aware(&system_prompt, ratio);
@@ -1529,19 +1574,6 @@ fn acting_provider_id(
         .to_string()
 }
 
-/// ④ Freeze the knob envelope a run is executing under, for its `RunStarted`
-/// marker.
-///
-/// Every field is read from a value the turn is ALREADY using — `envelope` is
-/// what the prompt renders, `think_level` is what wraps the provider, and
-/// `model` is the `(provider, model)` directive the run is bound to, captured
-/// after the unconfigured-provider filter rather than the hint it was asked
-/// for. Nothing here re-derives: a resume must replay what happened, and a
-/// second derivation is exactly how it would come back on something else.
-///
-/// Extracted from the emit site so that agreement is testable. Inline, the
-/// only way to check that `think_level` (and not, say, `envelope`'s absent
-/// notion of it) reaches the marker was to read the call.
 /// The ④ snapshot's model half: the pair a resume replays, or `None` when this
 /// run cannot be said to have served on any nameable model.
 ///
@@ -1569,18 +1601,39 @@ fn snapshot_model_pair(
     })
 }
 
+/// ④ Freeze the envelope a run is executing under, for its `RunStarted`
+/// marker.
+///
+/// Every field is read from a value the turn is ALREADY using — `envelope` is
+/// what the prompt renders (and, for the two per-run facts, what the run loop
+/// narrowed the tool surface with and what the tier ceiling read),
+/// `think_level` is what wraps the provider, and `model` is the
+/// `(provider, model)` directive the run is bound to, captured after the
+/// unconfigured-provider filter rather than the hint it was asked for. Nothing
+/// here re-derives: a resume must replay what happened, and a second
+/// derivation is exactly how it would come back on something else.
+///
+/// The knob half is spelled by `RunEnvelopeSnapshot::from_knobs`, shared with
+/// the slash-command fast path, so the two writers cannot drift on the `id()`
+/// vocabulary. Extracted from the emit site so that agreement is testable.
+/// Inline, the only way to check that `think_level` (and not, say,
+/// `envelope`'s absent notion of it) reaches the marker was to read the call.
 fn run_envelope_snapshot(
     envelope: &crate::thinker::TurnEnvelope,
     think_level: Option<crate::agents::thinking::ThinkLevel>,
     model: Option<&(Option<String>, String)>,
 ) -> crate::session::events::RunEnvelopeSnapshot {
     crate::session::events::RunEnvelopeSnapshot {
-        exec_tier: envelope.exec_tier.map(|t| t.id().to_string()),
-        session_mode: envelope.session_mode.map(|m| m.id().to_string()),
-        think_level: think_level.map(|l| l.id().to_string()),
-        memory_mode: envelope.memory_mode.map(|m| m.id().to_string()),
         model: model.map(|(_, m)| m.clone()),
         model_provider: model.and_then(|(p, _)| p.clone()),
+        allowed_tools: envelope.allowed_tools.clone(),
+        btw: envelope.btw.clone(),
+        ..crate::session::events::RunEnvelopeSnapshot::from_knobs(
+            envelope.exec_tier,
+            envelope.session_mode,
+            think_level,
+            envelope.memory_mode,
+        )
     }
 }
 
@@ -1621,9 +1674,10 @@ mod run_envelope_snapshot_tests {
     }
 
     /// The remaining `None`. It must stay reachable: this is the input that
-    /// makes `plan_resume` say "the model was not recorded" instead of
+    /// makes `plan_resume` say "this run recorded no model" instead of
     /// substituting one in silence, and a fallback that always produced a pair
-    /// would delete that sentence's only trigger.
+    /// would delete that sentence's full-run trigger (the fast path is its
+    /// other one).
     #[test]
     fn a_run_whose_chain_cannot_name_a_model_records_none() {
         assert_eq!(snapshot_model_pair(None, None), None);
@@ -1655,6 +1709,24 @@ mod run_envelope_snapshot_tests {
         assert_eq!(snap.memory_mode.as_deref(), Some(MemoryMode::Off.id()));
         assert_eq!(snap.model.as_deref(), Some("gpt-5.6"));
         assert_eq!(snap.model_provider.as_deref(), Some("openai"));
+    }
+
+    /// The two per-run facts ride the same envelope the knobs do: the skill
+    /// scope the surface was narrowed with and the `/btw` stamp the tier
+    /// ceiling read, exactly as the turn carried them.
+    #[test]
+    fn the_marker_records_the_per_run_facts_the_turn_is_running_under() {
+        let env = TurnEnvelope {
+            allowed_tools: Some(vec!["file_read".into()]),
+            btw: Some("why?".into()),
+            ..TurnEnvelope::default()
+        };
+        let snap = run_envelope_snapshot(&env, None, None);
+        assert_eq!(
+            snap.allowed_tools.as_deref(),
+            Some(&["file_read".to_string()][..])
+        );
+        assert_eq!(snap.btw.as_deref(), Some("why?"));
     }
 
     /// A dispatch path that resolved nothing writes an EMPTY snapshot, not a

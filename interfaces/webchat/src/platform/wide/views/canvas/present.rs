@@ -1,32 +1,49 @@
-//! Fullscreen deck playback — the presentation overlay and the pure camera
-//! fit math under it.
+//! Deck playback — the presentation overlay and the pure camera fit math
+//! under it.
 //!
 //! A slide is a live [`Shape::Frame`] on the canvas (`Deck.frame_ids` — the
 //! frames ARE the slides, playing copies nothing). The overlay renders the
 //! *whole document* through the same `ShapeView` / `HtmlFrameOverlay` layers
 //! as the editor, under a camera that fits the current frame's bbox to the
-//! window ([`present_camera_for_frame`]), and clips everything outside the
+//! stage ([`present_camera_for_frame`]), and clips everything outside the
 //! frame away with a screen-space `clip-path` ([`clip_inset`]) — so a slide
 //! shows exactly the canvas region its frame covers, letterboxed on the
 //! unfitted axis.
+//!
+//! The stage is the editor surface, not the window (spec D0: the canvas is
+//! a body of the chat's right pane; losing full-screen is accepted). It is
+//! `absolute inset-0` over the surface and **measures itself** — a
+//! `ResizeObserver` on the stage feeds `viewport_size`, so the pane resizer,
+//! a window resize and any other layout change re-fit the slide; the window
+//! size is only the pre-layout seed ([`stage_viewport`]). Fitting to
+//! `window.innerWidth/Height` while drawing inside a ~500 px pane was the
+//! defect this replaced: the letterbox and the clip were computed for a
+//! surface the stage never had.
 //!
 //! Navigation: →/↓/Space/PageDown and click advance, ←/↑/PageUp go back,
 //! Esc (or the exit button) closes, the progress dots jump. While the
 //! overlay is mounted the editor's own window key handler stands down (its
 //! `presenting` guard) — otherwise an arrow key would nudge the selection
 //! under the show.
+//!
+//! Reveal playback (`reveal.rs`) is per slide: the bottom bar's Play
+//! button replays the current frame's reveals from t=0, and changing slides
+//! drops back to static rendering. It only appears when the document has
+//! something to play.
 
 use aleph_protocol::canvas::{Deck, Shape};
 use leptos::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use super::interaction::Bbox;
 use super::shape_view::{HtmlFrameOverlay, ShapeView};
-use super::viewport;
+use super::{reveal, viewport};
 use crate::i18n::{t, use_i18n};
 use crate::state::canvas::{Camera, CanvasState};
 
 /// Degenerate-input floor, world units / CSS px: a zero-size frame or a
-/// zero-size window must yield a finite camera, not NaN (which CSS would
+/// zero-size stage must yield a finite camera, not NaN (which CSS would
 /// silently drop, rendering the whole stage untransformed).
 const MIN_EXTENT: f64 = 1.0;
 
@@ -34,10 +51,28 @@ const MIN_EXTENT: f64 = 1.0;
 // Pure fit math — unit-tested, zero DOM.
 // ---------------------------------------------------------------------------
 
+/// The viewport the fit math should use after the stage reports `measured`
+/// (its bounding rect, CSS px) while the signal holds `current`. A laid-out
+/// stage wins; a degenerate measurement (0×0 before layout, or while the
+/// keep-alive canvas body is `display: none` under another tab; NaN from a
+/// detached node) keeps `current`. `current` starts as the window size —
+/// the only extent readable before layout — so the window is the seed and
+/// never overrides a measured stage. Order matters: flipped, the pane-sized
+/// stage would be fitted for the window again, which is the defect.
+#[must_use]
+pub(super) fn stage_viewport(measured: (f64, f64), current: (f64, f64)) -> (f64, f64) {
+    let laid_out = |v: f64| v.is_finite() && v > 0.0;
+    if laid_out(measured.0) && laid_out(measured.1) {
+        measured
+    } else {
+        current
+    }
+}
+
 /// The camera that fits `frame` inside `viewport` (CSS px), centered:
 /// `zoom = min(vw/fw, vh/fh)` (contain, never crop), the frame's world
 /// center on the viewport's center. Deliberately NOT clamped to the editor's
-/// `MIN_ZOOM`/`MAX_ZOOM` — a small frame blown up to fullscreen is the
+/// `MIN_ZOOM`/`MAX_ZOOM` — a small frame blown up to the whole stage is the
 /// point of presenting, not a runaway gesture.
 #[must_use]
 pub(super) fn present_camera_for_frame(frame: Bbox, viewport: (f64, f64)) -> Camera {
@@ -115,7 +150,9 @@ pub(super) fn step_index(len: usize, current: usize, forward: bool) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Window inner size in CSS px, with the shell's SSR-safe fallback
-/// (`state/viewport.rs` idiom — unreadable ⇒ a sane desktop size).
+/// (`state/viewport.rs` idiom — unreadable ⇒ a sane desktop size). Only the
+/// pre-layout seed of `viewport_size`; the stage measures itself once it is
+/// in the DOM ([`stage_viewport`]).
 fn window_size() -> (f64, f64) {
     let Some(win) = web_sys::window() else {
         return (1280.0, 800.0);
@@ -133,9 +170,10 @@ fn window_size() -> (f64, f64) {
     (w, h)
 }
 
-/// Fullscreen deck playback (module doc). Mounted by the editor while its
-/// `presenting` signal holds this deck's id; every keyboard/click surface
-/// stops propagation so nothing reaches the editor's input plane below.
+/// Deck playback over the editor surface (module doc). Mounted by the
+/// editor while its `presenting` signal holds this deck's id; every
+/// keyboard/click surface stops propagation so nothing reaches the editor's
+/// input plane below.
 #[component]
 pub(super) fn PresentOverlay(
     /// The deck to play, by id — resolved against the live document every
@@ -147,9 +185,44 @@ pub(super) fn PresentOverlay(
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
 
+    // The stage's own box, CSS px — what the fit and the clip are computed
+    // against. Seeded with the window (nothing else is readable before
+    // layout), then owned by the stage's `ResizeObserver` below: the pane
+    // resizer, a window resize, the roster bar growing — anything that
+    // changes the stage's box lands here through one path. A window
+    // `resize` listener would be a second, wrong-sized source.
     let viewport_size = RwSignal::new(window_size());
-    let resize_handle = window_event_listener(leptos::ev::resize, move |_| {
-        viewport_size.set(window_size());
+    let stage_ref = NodeRef::<leptos::html::Div>::new();
+    let measure = move |el: &web_sys::Element| {
+        let rect = el.get_bounding_client_rect();
+        let next = stage_viewport((rect.width(), rect.height()), viewport_size.get_untracked());
+        if next != viewport_size.get_untracked() {
+            viewport_size.set(next);
+        }
+    };
+    // Observer + closure kept in a local slot so cleanup can disconnect them
+    // instead of leaking via `forget()` (the composer's clearance idiom).
+    let observer_slot: StoredValue<
+        Option<(web_sys::ResizeObserver, Closure<dyn FnMut(js_sys::Array)>)>,
+        LocalStorage,
+    > = StoredValue::new_local(None);
+    Effect::new(move |_| {
+        let Some(el) = stage_ref.get() else { return };
+        if let Some((old, _)) = observer_slot.try_update_value(|slot| slot.take()).flatten() {
+            old.disconnect();
+        }
+        // Measure now — the observer's first delivery is a task away, and
+        // the first paint must not fit a pane-sized stage to the window.
+        measure(&el);
+        let cb: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
+            if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
+                measure(&entry.target());
+            }
+        });
+        if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
+            observer.observe(&el);
+            observer_slot.set_value(Some((observer, cb)));
+        }
     });
 
     let deck_key = StoredValue::new(deck_id);
@@ -196,6 +269,19 @@ pub(super) fn PresentOverlay(
         index.update(|i| *i = step_index(len, *i, forward));
     };
 
+    // Reveal playback runs per slide: changing slides stops it (static
+    // rendering of the new frame), and Play starts the new frame's reveals
+    // from t=0. The stage is clipped to the frame, so only that frame's
+    // shapes are ever seen animating.
+    let playback: RwSignal<reveal::Playback> = RwSignal::new(reveal::Playback::Idle);
+    Effect::new(move |prev: Option<usize>| {
+        let i = index.get();
+        if prev.is_some_and(|p| p != i) {
+            playback.set(reveal::Playback::Idle);
+        }
+        i
+    });
+
     let key_handle = window_event_listener(
         leptos::ev::keydown,
         move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
@@ -216,7 +302,10 @@ pub(super) fn PresentOverlay(
     );
     on_cleanup(move || {
         key_handle.remove();
-        resize_handle.remove();
+        if let Some((observer, _cb)) = observer_slot.try_update_value(|slot| slot.take()).flatten()
+        {
+            observer.disconnect();
+        }
     });
 
     // The same layer structure as the editor: SVG shapes under one world
@@ -248,8 +337,15 @@ pub(super) fn PresentOverlay(
     };
 
     view! {
+        // `absolute`, not `fixed`: the containing block is the editor surface
+        // (`relative`), which is what the stage measures and what the show
+        // honestly covers. `fixed` used to cover the same box only by
+        // accident — the pane's `backdrop-filter` makes it the containing
+        // block for fixed descendants — while the math still assumed the
+        // window.
         <div
-            class="fixed inset-0 z-50 bg-black overflow-hidden select-none cursor-pointer"
+            node_ref=stage_ref
+            class="absolute inset-0 z-50 bg-black overflow-hidden select-none cursor-pointer"
             style="touch-action: none"
             on:pointerdown=|ev: web_sys::PointerEvent| ev.stop_propagation()
             on:pointermove=|ev: web_sys::PointerEvent| ev.stop_propagation()
@@ -261,7 +357,11 @@ pub(super) fn PresentOverlay(
                 advance(true);
             }
         >
-            <div class="absolute inset-0 bg-surface" style=stage_style>
+            <div
+                class=move || format!("absolute inset-0 bg-surface {}", playback.get().root_class())
+                style=stage_style
+            >
+                <reveal::PlaybackStyle doc=canvas.doc playback=playback />
                 <svg class="absolute inset-0 w-full h-full block">
                     <g transform=move || {
                         viewport::svg_transform(camera.get().unwrap_or_default())
@@ -301,6 +401,12 @@ pub(super) fn PresentOverlay(
                        px-3.5 py-2 rounded-full bg-black/50 cursor-default"
                 on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()
             >
+                <reveal::PlaybackButton
+                    doc=canvas.doc
+                    playback=playback
+                    class="px-2 py-0.5 rounded-full text-[11px] font-medium text-white/80 \
+                           hover:text-white hover:bg-white/10 transition-colors"
+                />
                 <span class="text-[11px] text-white/70 tabular-nums">
                     {move || {
                         let n = slides.get().len();
@@ -396,6 +502,41 @@ mod tests {
         );
     }
 
+    /// The stage's measured rect is the viewport; the seed (window size) is
+    /// only ever the answer while the stage has no box. Red if the fallback
+    /// order flips (window over stage — the pane-sized-stage-fitted-for-the-
+    /// window defect) and red if a 0×0 / NaN measurement were let through
+    /// (the camera would fit the slide to nothing).
+    #[test]
+    fn a_measured_stage_wins_over_the_window_seed_unless_degenerate() {
+        let window = (1920.0, 1080.0);
+        let pane = (470.0, 900.0);
+        assert_eq!(
+            stage_viewport(pane, window),
+            pane,
+            "a laid-out stage replaces the window seed"
+        );
+        assert_eq!(
+            stage_viewport((1120.0, 640.0), pane),
+            (1120.0, 640.0),
+            "and every later measurement replaces the previous one"
+        );
+        for degenerate in [
+            (0.0, 0.0),
+            (0.0, 900.0),
+            (470.0, 0.0),
+            (-1.0, 900.0),
+            (f64::NAN, 900.0),
+            (470.0, f64::INFINITY),
+        ] {
+            assert_eq!(
+                stage_viewport(degenerate, pane),
+                pane,
+                "{degenerate:?} is not a laid-out stage; keep what we had"
+            );
+        }
+    }
+
     /// Zero-size frames and zero-size viewports produce a finite camera and
     /// non-negative insets — never NaN, never a negative CSS inset.
     #[test]
@@ -432,6 +573,7 @@ mod tests {
             h: 90.0,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         };
         let shapes = vec![
             Shape::Frame {

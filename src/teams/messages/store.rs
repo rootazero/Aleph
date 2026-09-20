@@ -251,7 +251,7 @@ impl SqliteMessageStore {
         input: NewMessage,
         ttl: Duration,
     ) -> crate::error::Result<TeamMessage> {
-        let conn = self.conn.lock().await;
+        let mut conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -274,8 +274,16 @@ impl SqliteMessageStore {
 
         // All three INSERT groups must commit atomically: a failure partway
         // through (e.g. a malformed recipient/attachment) must not leave an
-        // orphaned `team_messages` row with partial recipients.
-        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        // orphaned `team_messages` row with partial recipients. Use
+        // `transaction_with_behavior(Immediate)` to acquire the write lock at
+        // BEGIN time (matches `try_send_first_system_notification_impl`)
+        // rather than `unchecked_transaction` which defers the lock to the
+        // first write — the deferred path can leave the message row
+        // committed while recipients/attachments are partial if a SQLite
+        // upgrade-time busy happens between INSERTs (TEAMS-005, high).
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
 
         tx.execute(
             r#"
@@ -362,13 +370,18 @@ impl SqliteMessageStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_err)?;
 
+        // Dedup "once-only within a thread" — the function comment's intent.
+// The predicate used to also filter on `from_agent`, but the only caller
+// hardcodes `from_agent = "system"`, so the filter was a no-op that hid
+// the real risk: a future caller using a different from_agent would
+// silently pass the dedup and double-send (TEAMS-006, high). Match the
+// documented intent.
         let exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM team_messages \
                  WHERE team_id = ?1 AND thread_id = ?2 \
-                   AND msg_type = 'system_notification' \
-                   AND from_agent = ?3)",
-                params![team_id, thread_id, input.from_agent],
+                   AND msg_type = 'system_notification')",
+                params![team_id, thread_id],
                 |row| row.get(0),
             )
             .map_err(db_err)?;

@@ -117,6 +117,7 @@ static INDEX: LazyLock<Mutex<HashMap<String, PersistedRun>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Lifecycle phase of a persisted background run.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunPhase {

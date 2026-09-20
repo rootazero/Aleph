@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::error::Result;
 use crate::media::detect::detect_from_path;
@@ -93,7 +93,23 @@ Example:
     type Output = DocumentExtractOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let path = PathBuf::from(&args.file_path);
+        // SECURITY (P0 MED-02): the model-supplied `file_path` was previously
+        // forwarded to `MediaPipeline::process` as-is. Mirror the gate
+        // `media_understand` uses — `check_and_resolve_path` from `file_ops`,
+        // same denied-paths list `file_read` enforces — so a model cannot
+        // hand the tool `/etc/shadow` or a path outside the workspace.
+        let path = match crate::builtin_tools::file_ops::check_and_resolve_path(
+            Path::new(&args.file_path),
+            &crate::builtin_tools::file_ops::get_denied_paths(),
+            None,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(DocumentExtractOutput::err(format!(
+                    "path rejected: {e}"
+                )));
+            }
+        };
         let mt = match detect_from_path(&path).await {
             Ok(mt) => mt,
             Err(e) => {

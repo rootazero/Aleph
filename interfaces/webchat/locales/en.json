@@ -7,7 +7,6 @@
     "teams": "Teams",
     "extensions": "Aleph Hub",
     "settings": "Settings",
-    "canvas": "Canvas",
     "projects": "Projects",
     "terminal": "Terminal"
   },
@@ -305,6 +304,7 @@
     "run_badge_interrupted": "interrupted",
     "run_badge_log_inconsistent": "log inconsistent",
     "run_badge_unknown": "unknown",
+    "run_badge_unanswered": "unanswered",
     "new_chat": "New Chat",
     "new_group_chat": "New group chat",
     "confirm_delete": "Confirm delete?",
@@ -446,12 +446,9 @@
     "title_empty": "A canvas needs a title",
     "title_too_long": "Title is too long (200 bytes max)",
     "title_control": "Title cannot contain line breaks or control characters",
-    "select_hint": "Pick a canvas on the left, or create a new one",
     "rename_busy": "Rename did not land — someone else is writing to this canvas right now. Try again.",
     "empty": "No canvases yet — create one to start",
     "shapes": "shapes",
-    "back_to_library": "Library",
-    "phone_read_only": "Read-only on phone — open Aleph on a desktop to edit",
     "html_frame": "HTML frame",
     "ai_status_draft": "Draft",
     "ai_status_pending": "Generating…",
@@ -474,6 +471,19 @@
     "tool_note": "Sticky note",
     "tool_text": "Text",
     "tool_frame": "Frame",
+    "tool_diamond": "Diamond",
+    "tool_triangle": "Triangle",
+    "tool_hexagon": "Hexagon",
+    "tool_pill": "Pill",
+    "style_color": "Color",
+    "style_hex": "Custom color",
+    "style_size": "Size",
+    "style_fill": "Fill",
+    "style_stroke": "Stroke",
+    "export_svg": "Export animated SVG",
+    "reveal_play": "Play",
+    "reveal_pause": "Pause",
+    "reveal_resume": "Resume",
     "decks_button": "Slides",
     "decks_title": "Slide decks",
     "decks_empty": "No decks yet — select frames and create one",
@@ -483,7 +493,10 @@
     "deck_frames": "frames",
     "deck_play": "Play",
     "deck_missing_frame": "Missing frame",
-    "present_exit": "Exit (Esc)"
+    "present_exit": "Exit (Esc)",
+    "library": "Library",
+    "close_canvas": "Close canvas",
+    "open_in_canvas": "Open in canvas"
   },
   "memory": {
     "batch_clear": "Clear",
@@ -2668,7 +2681,8 @@
   },
   "layout_toggle": {
     "open_pane": "Open workspace pane",
-    "close_pane": "Close workspace pane"
+    "close_pane": "Close workspace pane",
+    "resize_pane": "Drag to resize · double-click to reset"
   },
   "dashboard_cron": {
     "gateway_disconnected": "Gateway disconnected",
@@ -2705,7 +2719,9 @@
     "last_run_interrupted_plain": "The previous run was interrupted",
     "last_run_log_inconsistent": "This conversation's log is inconsistent ({{ tags }}) — recovery refused it; run aleph doctor",
     "last_run_unknown_state": "The previous run's state is a word this client does not know ({{ word }}) — it cannot vouch for it",
-    "last_run_dangling": "The previous run left {{ count }} tool calls with no receipt — their outcomes are unknown"
+    "last_run_dangling": "The previous run left {{ count }} tool calls with no receipt — their outcomes are unknown",
+    "last_run_parked": "{{ parked }} of the previous run's tool calls never completed — they were waiting for approval or for your answer when the server stopped, or were denied",
+    "last_run_unanswered": "Your last message was not answered — the run stopped before it could start; recovery will retry it"
   },
   "appearance": {
     "mode": {

@@ -300,10 +300,11 @@ pub fn ArtifactsSurface() -> impl IntoView {
     view! {
         // `relative` anchors the lightbox overlay to the pane, so an image
         // preview covers this column and leaves the chat streaming beside it.
-        // `aleph-pane-top` (not `aleph-content-top`): the header below carries
-        // a real button, and on web the smaller content inset would park it on
-        // the NotificationCenter bell.
-        <div class="relative flex-1 min-h-0 flex flex-col aleph-pane-top">
+        // No top inset here: the pane's body tab strip (`workspace_panel.rs`)
+        // is above every body now and carries `aleph-pane-top` for all of
+        // them. Keeping a second one would push this header a whole traffic-
+        // light row further down than the tabs that select it.
+        <div class="relative flex-1 min-h-0 flex flex-col">
             <div class="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
                 <span class="text-xs font-semibold">{t!(i18n, common.artifacts_title)}</span>
                 <span class="text-[11px] text-text-tertiary">

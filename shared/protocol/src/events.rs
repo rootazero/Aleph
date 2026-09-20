@@ -283,6 +283,16 @@ pub struct ModelInfo {
     /// Original model requested, if different from `model`.
     #[serde(default)]
     pub original_model: Option<String>,
+    // NO `context_window` here, deliberately. The gauge denominator has two
+    // homes that a producer actually fills — `ContextBreakdown.context_window`
+    // (`context.breakdown`) and `RunSummary.context_window` (`run_complete`,
+    // pinned by `run_summary_carries_the_gauge_fields_the_gateway_twin_sends`).
+    // A third copy on this frame was added and cut in the same branch: the
+    // gateway twin above never grew the field, so `stream.model_resolved`
+    // never carried the key, and `skip_serializing_if` meant it was not even
+    // a `null` a client could notice — a `/context` gauge wired to it would
+    // read `None` forever with no error anywhere (判据 §1 + §7). Wire it on
+    // BOTH sides in one change, or read one of the two homes that work.
 }
 
 /// Suggested action for handling AI uncertainty
@@ -382,6 +392,10 @@ pub struct AgentTraceToolCallEnd {
     pub tool_name: String,
     pub input: Value,
     pub duration_ms: u64,
+    /// Same side-channel as `ToolResult.presentation`, so `trace.by_runs`
+    /// replays the diff a live `tool_end` carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::file_change::Presentation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -739,8 +753,10 @@ pub struct ToolResult {
     pub success: bool,
     pub output: Option<String>,
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
+    /// UI side-channel (structured diff etc.). Never part of the model text.
+    /// `default` so an older server's frame still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::file_change::Presentation>,
 }
 
 impl ToolResult {
@@ -749,7 +765,7 @@ impl ToolResult {
             success: true,
             output: Some(output.into()),
             error: None,
-            metadata: None,
+            presentation: None,
         }
     }
 
@@ -758,8 +774,14 @@ impl ToolResult {
             success: false,
             output: None,
             error: Some(error.into()),
-            metadata: None,
+            presentation: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_presentation(mut self, p: Option<crate::file_change::Presentation>) -> Self {
+        self.presentation = p;
+        self
     }
 }
 
@@ -809,6 +831,12 @@ pub struct RunSummary {
     /// `total_tokens`; surfaces cache hit ratio + reasoning spend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_breakdown: Option<TokenBreakdownView>,
+    /// Context-window occupancy after the latest turn (gauge numerator).
+    #[serde(default)]
+    pub context_tokens: u32,
+    /// Per-model context window (gauge denominator). 0 = unknown.
+    #[serde(default)]
+    pub context_window: u32,
     /// Best-effort USD estimate. `None` when the pricing module had no
     /// rate for this provider/model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -982,6 +1010,41 @@ mod tests {
         assert_eq!(result.error, Some("something went wrong".to_string()));
     }
 
+    /// The POPULATED wire shape of the `presentation` side-channel — the half
+    /// `tool_result_presentation_is_optional_and_elided_when_none` (below)
+    /// cannot see, because eliding a key proves nothing about the key's
+    /// contents. A client keyed on `result.presentation.kind` is reading these
+    /// literals, so they are fixed here rather than at whichever renderer
+    /// happens to read them first.
+    #[test]
+    fn a_populated_tool_result_presentation_serializes_as_a_tagged_file_changes() {
+        use crate::file_change::{FileChange, FileChangeKind, Presentation};
+
+        let with = ToolResult::success("Edited src/a.rs").with_presentation(Some(
+            Presentation::FileChanges {
+                changes: vec![FileChange {
+                    path: "src/a.rs".to_string(),
+                    kind: FileChangeKind::Modified,
+                    hunks: Vec::new(),
+                    added: 2,
+                    removed: 1,
+                    unavailable: None,
+                }],
+            },
+        ));
+        let json = serde_json::to_value(&with).expect("serializes");
+        assert_eq!(json["presentation"]["kind"], "file_changes");
+        assert_eq!(json["presentation"]["changes"][0]["path"], "src/a.rs");
+        assert_eq!(json["presentation"]["changes"][0]["kind"], "modified");
+        assert_eq!(
+            json["output"], "Edited src/a.rs",
+            "the model-facing text is untouched by the side-channel"
+        );
+
+        let back: ToolResult = serde_json::from_value(json).expect("round-trips");
+        assert_eq!(back.presentation, with.presentation);
+    }
+
     #[test]
     fn run_retrying_deserializes_from_gateway_frame_shape() {
         // Wire-compat guard: this is the exact params shape the gateway's
@@ -1102,6 +1165,7 @@ mod tests {
                     tool_name: "read_file".to_string(),
                     input: serde_json::json!({"path": "README.md"}),
                     duration_ms: 12,
+                    presentation: None,
                 },
                 result: AgentTraceToolResult::Success {
                     output: serde_json::json!({"ok": true}),
@@ -1169,5 +1233,35 @@ mod tests {
         ] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
+    }
+
+    #[test]
+    fn run_summary_carries_the_gauge_fields_the_gateway_twin_sends() {
+        // Wire-compat: the gateway struct serializes these two; before this
+        // field existed the protocol copy silently dropped them.
+        let v = serde_json::json!({
+            "total_tokens": 1, "tool_calls": 0, "loops": 1,
+            "context_tokens": 12_345, "context_window": 200_000
+        });
+        let s: RunSummary = serde_json::from_value(v).unwrap();
+        assert_eq!(s.context_tokens, 12_345);
+        assert_eq!(s.context_window, 200_000);
+        let legacy: RunSummary = serde_json::from_value(
+            serde_json::json!({"total_tokens": 1, "tool_calls": 0, "loops": 1}),
+        )
+        .unwrap();
+        assert_eq!(legacy.context_window, 0);
+    }
+
+    #[test]
+    fn tool_result_presentation_is_optional_and_elided_when_none() {
+        let r = ToolResult::success("ok");
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("presentation").is_none());
+        let legacy: ToolResult = serde_json::from_value(
+            serde_json::json!({"success": true, "output": "x", "error": null}),
+        )
+        .unwrap();
+        assert!(legacy.presentation.is_none());
     }
 }

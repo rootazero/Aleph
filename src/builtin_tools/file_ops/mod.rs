@@ -5,6 +5,7 @@
 
 mod apply_patch;
 mod batch;
+pub(crate) mod diff;
 pub(crate) mod edit;
 mod edit_match;
 mod image_read;

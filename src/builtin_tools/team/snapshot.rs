@@ -171,7 +171,20 @@ impl AlephTool for TeamSnapshotTool {
                 TeamSnapshotOutput::Create(out)
             }
             SnapshotAction::List => {
-                let snapshots = self.snapshot_store.list(args.team_id.as_deref()).await?;
+                // BT-D-R4-23: gate before any read. An attacker who
+                // knows another team's `team_id` must not be able to
+                // enumerate its snapshot_ids (the next step would be to
+                // call Delete on each one).
+                let team_id = args.team_id.as_deref().ok_or_else(|| {
+                    AlephError::other("team_snapshot(list): team_id is required")
+                })?;
+                crate::builtin_tools::team::require_team_auth(
+                    &*self.team_store,
+                    team_id,
+                    &self.actor(),
+                )
+                .await?;
+                let snapshots = self.snapshot_store.list(Some(team_id)).await?;
                 TeamSnapshotOutput::List { snapshots }
             }
             SnapshotAction::Get => {
@@ -227,6 +240,25 @@ impl AlephTool for TeamSnapshotTool {
                 let snapshot_id = args.snapshot_id.as_deref().ok_or_else(|| {
                     AlephError::other("team_snapshot(delete): snapshot_id is required")
                 })?;
+                // BT-D-R4-23: gate using the snapshot's own team_id — the
+                // caller did not have to supply one, so we look it up
+                // before mutating. Mirrors the Get / Restore arms so
+                // Delete cannot be used to destroy another team's
+                // snapshot chain.
+                let meta = self
+                    .snapshot_store
+                    .get(snapshot_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
+                    })?
+                    .0;
+                crate::builtin_tools::team::require_team_auth(
+                    &*self.team_store,
+                    &meta.team_id,
+                    &self.actor(),
+                )
+                .await?;
                 let existed = self.snapshot_store.delete(snapshot_id).await?;
                 TeamSnapshotOutput::Delete {
                     snapshot_id: snapshot_id.to_string(),

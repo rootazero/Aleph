@@ -15,10 +15,7 @@ use ratatui::{
 };
 
 use crate::tui::btw_overlay::BtwOverlay;
-use crate::tui::theme::DEFAULT_THEME;
-
-/// Spinner frames, matching the status bar's cadence.
-const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+use crate::tui::theme::{spinner_at, theme};
 
 /// The title line: which page of the side thread is on screen.
 ///
@@ -63,7 +60,7 @@ fn legend(overlay: &BtwOverlay) -> &'static str {
 /// it is whichever settled exchange they paged to.
 fn body(overlay: &BtwOverlay, spinner_frame: usize) -> (String, String, String) {
     if let Some(active) = &overlay.active {
-        let spin = SPINNER[spinner_frame % SPINNER.len()];
+        let spin = spinner_at(spinner_frame);
         let status = match &active.tool_name {
             Some(tool) => format!("{spin} {tool}"),
             None => format!("{spin} thinking"),
@@ -106,7 +103,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(title(overlay));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -130,7 +127,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
         Paragraph::new(Line::from(Span::styled(
             question,
             Style::default()
-                .fg(DEFAULT_THEME.user)
+                .fg(theme().user)
                 .add_modifier(Modifier::BOLD),
         )))
         .wrap(Wrap { trim: true }),
@@ -140,7 +137,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             status,
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         chunks.get(1).copied().unwrap_or_default(),
     );
@@ -156,9 +153,9 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     );
 
     let composer_style = if overlay.composing {
-        Style::default().fg(DEFAULT_THEME.primary)
+        Style::default().fg(theme().primary)
     } else {
-        Style::default().fg(DEFAULT_THEME.muted)
+        Style::default().fg(theme().muted)
     };
     let composer = if overlay.composing {
         format!("> {}\u{2588}", overlay.composer)
@@ -173,7 +170,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             legend(overlay),
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         chunks.get(4).copied().unwrap_or_default(),
     );
@@ -217,6 +214,30 @@ mod tests {
         assert_eq!(question, "new q");
         assert_eq!(answer, "partial");
         assert!(status.contains("thinking"), "got: {status}");
+    }
+
+    /// The status glyph is the shared spinner, not a second table.
+    ///
+    /// This panel used to hold its own four ASCII frames under a comment
+    /// claiming they matched the status bar's cadence — they did not: every
+    /// other spinner on this screen is the braille sequence owned by
+    /// `shared-ui-logic`. That is 判据 §1's fourth shape, where the copy that
+    /// lies is the comment. Asserting against `spinner_at` rather than a
+    /// literal frame is the point: a re-introduced local table goes red here
+    /// however plausible its glyphs look. The ticks run past the table's
+    /// length so a table of a different SIZE fails too.
+    #[test]
+    fn the_status_glyph_comes_from_the_shared_table() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "q", "r1");
+        for tick in [0usize, 3, 7, 11] {
+            let (_, _, status) = body(&o, tick);
+            assert!(
+                status.starts_with(spinner_at(tick)),
+                "tick {tick}: {status:?} is not the shared frame {:?}",
+                spinner_at(tick)
+            );
+        }
     }
 
     /// The status line names the running tool while one is running — a side

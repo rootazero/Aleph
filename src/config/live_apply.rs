@@ -355,28 +355,30 @@ mod tests {
         // Idempotent by contract; only this test installs this slot.
         let _ = crate::search::install_global_search_handle(handle.clone());
 
-        let mut cfg = Config::default();
-        cfg.search = Some(SearchConfigInternal {
-            enabled: true,
-            default_provider: "ddg".to_string(),
-            fallback_providers: None,
-            max_results: 9,
-            timeout_seconds: 10,
-            backends: std::collections::HashMap::from([(
-                "ddg".to_string(),
-                SearchBackendConfig {
-                    provider_type: "duckduckgo".to_string(),
-                    api_key: None,
-                    base_url: None,
-                    engine_id: None,
-                    engines: None,
-                    min_request_interval_ms: None,
-                    verified: false,
-                    allow_private_upstream: false,
-                },
-            )]),
-            ..Default::default()
-        });
+        let cfg = Config {
+            search: Some(SearchConfigInternal {
+                enabled: true,
+                default_provider: "ddg".to_string(),
+                fallback_providers: None,
+                max_results: 9,
+                timeout_seconds: 10,
+                backends: std::collections::HashMap::from([(
+                    "ddg".to_string(),
+                    SearchBackendConfig {
+                        provider_type: "duckduckgo".to_string(),
+                        api_key: None,
+                        base_url: None,
+                        engine_id: None,
+                        engines: None,
+                        min_request_interval_ms: None,
+                        verified: false,
+                        allow_private_upstream: false,
+                    },
+                )]),
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
 
         let applied = apply_live_sections(&cfg, &["search"]);
         assert_eq!(applied, vec!["search"]);

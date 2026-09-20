@@ -50,6 +50,7 @@ pub const THINK_LEVEL_SESSION_KEY: &str = "think_level";
 /// Six levels from no thinking to extended deep reasoning. Not every model
 /// accepts every level; the per-protocol adapters clamp to the nearest value
 /// the target model's family actually supports.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkLevel {

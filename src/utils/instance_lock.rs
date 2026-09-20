@@ -7,15 +7,28 @@
 //! of the locked file itself fails with os error 33 on Windows, where `fs2`
 //! uses `LockFileEx` and an exclusive lock blocks reads from all other handles.
 //! The lock is automatically released by the OS when the holder process exits
-//! (graceful, panic, SIGKILL — all release).
+//! (graceful, panic, SIGKILL — all release). The sidecar is removed on a clean
+//! release (`Drop`) and by the server's forced-exit failsafe
+//! ([`remove_held_holder_records_before_exit`]); only a crash or SIGKILL
+//! leaves it behind, which is what `aleph doctor`'s stale-lock finding is for.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::atomic_io::write_atomic;
+use super::atomic_io::{is_lock_contended, write_atomic};
 use super::process_alive::{process_matches, process_start_time};
+use crate::sync_primitives::Mutex;
+
+/// Holder sidecars written by the `InstanceLock`s alive in this process —
+/// registered on acquire, deregistered on `Drop`. It exists for the exit
+/// paths that bypass destructors (`std::process::exit`): they can ask for
+/// exactly the records this process is entitled to remove, and nothing
+/// else. Production holds at most one; a test binary holds several at once
+/// (one per tempdir), which is why the removal below is parameterised by
+/// registry rather than always draining this static.
+static HELD_HOLDER_RECORDS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 const LOCK_FILENAME: &str = "aleph.lock";
 /// Sidecar that records the current holder's PID (+ start time). Kept separate
@@ -50,20 +63,122 @@ impl InstanceLock {
     }
 }
 
-// Drop releases the OS-level fs2 lock automatically when `file` is dropped.
+impl Drop for InstanceLock {
+    /// Take the holder record down with the lock on a clean release.
+    ///
+    /// This body runs while `file` — and therefore the OS lock — is still
+    /// held: Rust drops fields *after* `drop` returns. So no successor can
+    /// have acquired the lock and written its own sidecar yet, and the only
+    /// record this can remove is ours (a successor writes a fresh one once
+    /// it wins the lock). Do not move the removal after the release.
+    ///
+    /// Without this the sidecar outlived every clean exit naming a dead PID,
+    /// and `aleph doctor` reported "Stale lock file … a crashed daemon left
+    /// it behind" after every `aleph stop`. A crash, SIGKILL, or the forced
+    /// `std::process::exit` paths still skip this — which is exactly the case
+    /// that finding exists for. The fork parents in `daemonize` also exit via
+    /// `process::exit`, so only the daemonized grandchild ever runs this; the
+    /// server's own forced-exit failsafe calls
+    /// [`remove_held_holder_records_before_exit`] instead.
+    fn drop(&mut self) {
+        HELD_HOLDER_RECORDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p != &self.holder_path);
+        remove_holder_record(&self.holder_path);
+        // `file` drops after this returns and releases the OS-level fs2 lock.
+    }
+}
 
+/// Unlink one holder sidecar. `NotFound` is not an error — an operator or
+/// `aleph doctor --fix` may already have cleared it.
+fn unlink_holder_record(holder_path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(holder_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// [`unlink_holder_record`] for the release paths, which cannot return an
+/// error: anything but success is warned, because the next `aleph doctor`
+/// will report the leftover as a crashed daemon's.
+fn remove_holder_record(holder_path: &Path) {
+    if let Err(e) = unlink_holder_record(holder_path) {
+        tracing::warn!(
+            holder = %holder_path.display(),
+            error = %e,
+            "instance lock released but its holder sidecar could not be removed; \
+             `aleph doctor` will report it as stale until it is cleared"
+        );
+    }
+}
+
+/// For exit paths that bypass destructors (`std::process::exit`): remove the
+/// holder record of every `InstanceLock` alive in this process, exactly as
+/// `Drop` would have. Call it immediately before `process::exit`, while the
+/// lock is still held — the OS releases the lock only at exit, so no
+/// successor can have written a record of its own yet. A process holding no
+/// lock (a CLI, a test) removes nothing and returns 0.
+pub fn remove_held_holder_records_before_exit() -> usize {
+    remove_registered_holder_records(&HELD_HOLDER_RECORDS)
+}
+
+/// Drain `registry` and unlink each record it named. Split from the public
+/// entry point so a test can exercise it on a registry of its own instead
+/// of draining the process-wide one out from under every other test that
+/// holds a lock in the same binary.
+fn remove_registered_holder_records(registry: &Mutex<Vec<PathBuf>>) -> usize {
+    let records: Vec<PathBuf> =
+        std::mem::take(&mut *registry.lock().unwrap_or_else(|e| e.into_inner()));
+    for holder_path in &records {
+        remove_holder_record(holder_path);
+    }
+    records.len()
+}
+
+/// What `try_acquire` found. Every `Held*` arm means the OS reported the
+/// lock as **contended — some live process holds it right now** (the OS
+/// releases it the moment the holder exits). The arms differ only in what
+/// the unlocked holder sidecar says about who. None of them is ever "the
+/// lock file is stale, remove it": removing a held lock file on Unix creates
+/// a fresh inode for the next starter, which then runs alongside the holder
+/// — the double-instance condition that corrupts the vault.
 #[derive(Debug)]
 pub enum AcquireOutcome {
     Acquired(InstanceLock),
-    HeldByLive { pid: i32, lock_path: PathBuf },
-    HeldByOrphaned { pid: i32, lock_path: PathBuf },
+    /// The sidecar names a running process with a matching start time.
+    HeldByLive {
+        pid: i32,
+        lock_path: PathBuf,
+    },
+    /// The sidecar names a PID that is not running (or a different process
+    /// than recorded): the holder's record is stale. The usual cause is a
+    /// daemonized holder whose `rewrite_holder_pid` did not run; the lock is
+    /// still held by someone.
+    HeldByOrphaned {
+        pid: i32,
+        lock_path: PathBuf,
+    },
+    /// The sidecar is missing, empty, or unreadable, so the holder's PID is
+    /// unknown — never `HeldByLive { pid: 0 }`: 0 is not a process and each
+    /// consumer used to decode it differently (one printed `kill 0`, one
+    /// said "no live server" about a lock that was being held).
+    HeldByUnknown {
+        lock_path: PathBuf,
+        holder_path: PathBuf,
+    },
 }
 
+/// What the holder sidecar says, for `aleph doctor`. `process_alive` is
+/// about the *recorded* PID only — whether the lock itself is held is a
+/// separate question, answered by [`is_lock_held`]; a stale record can sit
+/// next to a held lock (a daemon whose PID was never rewritten).
 #[derive(Debug)]
 pub struct HolderDiagnostic {
     pub pid: i32,
     pub process_alive: bool,
     pub lock_path: PathBuf,
+    pub holder_path: PathBuf,
 }
 
 /// Attempt to acquire the singleton lock for `data_dir`. Caller must
@@ -75,47 +190,7 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
     }
     let lock_path = data_dir.join(LOCK_FILENAME);
     let holder_path = data_dir.join(HOLDER_FILENAME);
-
-    // Refuse a symlink at `lock_path`. The path is fixed (`<data_dir>/aleph.lock`)
-    // and only this process should ever create the file, so a symlink there is
-    // either an attacker-planted redirect or a previous failed install — both
-    // of which must NOT be silently followed. Following the symlink would
-    // (a) lock an attacker-controlled file (DoS: lock against the real
-    // aleph.lock becomes a lock against their file), or (b) let the sidecar
-    // rename target an unexpected inode. `O_NOFOLLOW` is POSIX; Windows has
-    // no portable equivalent, so non-Unix falls back to the previous behavior.
-    #[cfg(unix)]
-    let file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&lock_path)
-        {
-            Ok(f) => f,
-            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "refusing to use lock file at {}: a symlink is present \
-                         where a regular file is required (possible tampering)",
-                        lock_path.display()
-                    ),
-                ));
-            }
-            Err(e) => return Err(e),
-        }
-    };
-    #[cfg(not(unix))]
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
+    let file = open_lock_file(&lock_path, LockFileOpen::CreateForHolding)?;
 
     match file.try_lock_exclusive() {
         Ok(()) => {
@@ -124,26 +199,175 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             // every platform.
             let pid = std::process::id();
             write_holder(&holder_path, pid)?;
+            HELD_HOLDER_RECORDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(holder_path.clone());
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
                 holder_path,
                 holder_pid: pid,
             }))
         }
-        Err(_) => {
-            // Lock is held by someone else. Read the holder from the unlocked
-            // sidecar (reading the locked file itself would fail with os error
-            // 33 on Windows, where the exclusive lock blocks all other reads).
-            let (pid, expected_start) = read_holder(&holder_path);
-            if pid > 0 && process_matches(pid, expected_start) {
-                Ok(AcquireOutcome::HeldByLive { pid, lock_path })
-            } else if pid > 0 {
-                Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
-            } else {
-                Ok(AcquireOutcome::HeldByLive { pid: 0, lock_path })
-            }
+        Err(e) => classify_lock_failure(e, &holder_path, lock_path),
+    }
+}
+
+/// `try_lock_exclusive` failed: decide whether that is a peer holding the
+/// lock (which the sidecar can explain) or something else.
+///
+/// Only fs2's contention error means "held by a peer". Anything else —
+/// `ENOLCK` on a network mount without a lock daemon, `ERROR_NOT_SUPPORTED`
+/// from a filesystem with no byte-range locks, `EBADF` — means the
+/// filesystem never granted us a lock at all, so nothing is known about
+/// exclusivity and the only honest answer is that OS error. Reading the
+/// sidecar in that case is worse than useless: the sidecar is never removed
+/// on a clean exit, so it names the *previous* holder, and the caller would
+/// print "stale lock (PID N not running) — you may safely rm aleph.lock":
+/// advice that cannot help, repeats on every restart, and with a recycled
+/// PID tells the operator to `kill` a live unrelated process instead.
+fn classify_lock_failure(
+    err: std::io::Error,
+    holder_path: &Path,
+    lock_path: PathBuf,
+) -> std::io::Result<AcquireOutcome> {
+    if !is_lock_contended(&err) {
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!(
+                "could not take the singleton lock on {}: {err}. No other Aleph \
+                 instance holds it — the filesystem refused the lock, so removing \
+                 the lock file will not help (a network or FUSE mount without \
+                 advisory-lock support is the usual cause; point ALEPH_HOME at a \
+                 local filesystem)",
+                lock_path.display(),
+            ),
+        ));
+    }
+    // Lock is held by someone else. Read the holder from the unlocked
+    // sidecar (reading the locked file itself would fail with os error
+    // 33 on Windows, where the exclusive lock blocks all other reads).
+    let (pid, expected_start) = read_holder(holder_path);
+    if pid > 0 && process_matches(pid, expected_start) {
+        Ok(AcquireOutcome::HeldByLive { pid, lock_path })
+    } else if pid > 0 {
+        Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
+    } else {
+        Ok(AcquireOutcome::HeldByUnknown {
+            lock_path,
+            holder_path: holder_path.to_path_buf(),
+        })
+    }
+}
+
+/// How [`open_lock_file`] opens `aleph.lock`.
+#[derive(Clone, Copy)]
+enum LockFileOpen {
+    /// `try_acquire`: read+write, created if absent — this process intends
+    /// to hold the lock.
+    CreateForHolding,
+    /// A probe: read-only, never created, so `NotFound` is the answer "there
+    /// is no lock file, hence nothing to hold".
+    ProbeExisting,
+}
+
+/// Open the lock file itself, refusing a symlink at `lock_path`.
+///
+/// The path is fixed (`<data_dir>/aleph.lock`) and only this process should
+/// ever create the file, so a symlink there is either an attacker-planted
+/// redirect or a previous failed install — both of which must NOT be
+/// silently followed. Following the symlink would (a) lock an
+/// attacker-controlled file (DoS: lock against the real aleph.lock becomes a
+/// lock against their file), or (b) let the sidecar rename target an
+/// unexpected inode. `O_NOFOLLOW` is POSIX; Windows has no portable
+/// equivalent, so non-Unix falls back to a plain open.
+fn open_lock_file(lock_path: &Path, mode: LockFileOpen) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    if let LockFileOpen::CreateForHolding = mode {
+        options.create(true).write(true).truncate(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+        match options.open(lock_path) {
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to use lock file at {}: a symlink is present \
+                     where a regular file is required (possible tampering)",
+                    lock_path.display()
+                ),
+            )),
+            other => other,
         }
     }
+    #[cfg(not(unix))]
+    {
+        options.open(lock_path)
+    }
+}
+
+/// Probe whether the singleton lock for `data_dir` is held right now.
+///
+/// There is no portable "is this file locked" query, so the probe takes the
+/// lock non-blockingly and releases it at once when it is free. Nothing is
+/// written — no sidecar, no registry entry — which is what separates this
+/// from `try_acquire`. The price is a microsecond window in which a starter
+/// racing the probe sees one spurious contention.
+///
+/// `Ok(false)` when there is no lock file. Errors that are neither
+/// contention nor `NotFound` propagate: an unknown answer is not "free",
+/// and the doctor's stale-record repair deletes on "free".
+pub fn is_lock_held(data_dir: &Path) -> std::io::Result<bool> {
+    let file = match open_lock_file(&data_dir.join(LOCK_FILENAME), LockFileOpen::ProbeExisting) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(false), // released when `file` drops
+        Err(e) if is_lock_contended(&e) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// What [`remove_holder_record_if_lock_free`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleRecordRepair {
+    /// The lock was free; the holder record is gone.
+    Removed,
+    /// The lock is held by a running process; nothing was touched.
+    LockHeld,
+}
+
+/// Remove a stale holder record — but only while holding the lock, so that
+/// no running holder can be behind it.
+///
+/// Deleting on a mere liveness check of the recorded PID is the double-
+/// instance hazard in miniature: a daemon whose record was never rewritten
+/// after forking is alive and holding the lock while its record names a dead
+/// PID, and removing its files would let the next starter run alongside it.
+/// Here the lock itself is the witness: it is taken (non-blocking) for the
+/// duration of the unlink, exactly as `InstanceLock::drop` removes a record
+/// while still holding the lock, and released afterwards. Contention means
+/// `LockHeld` and no change. A missing lock file means nothing can hold it,
+/// so the record is simply removed.
+pub fn remove_holder_record_if_lock_free(data_dir: &Path) -> std::io::Result<StaleRecordRepair> {
+    let holder_path = data_dir.join(HOLDER_FILENAME);
+    let _held_for_unlink =
+        match open_lock_file(&data_dir.join(LOCK_FILENAME), LockFileOpen::ProbeExisting) {
+            Ok(file) => match file.try_lock_exclusive() {
+                Ok(()) => Some(file),
+                Err(e) if is_lock_contended(&e) => return Ok(StaleRecordRepair::LockHeld),
+                Err(e) => return Err(e),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+    unlink_holder_record(&holder_path)?;
+    Ok(StaleRecordRepair::Removed)
 }
 
 /// Read holder metadata from the sidecar WITHOUT competing for the lock.
@@ -174,6 +398,7 @@ pub fn diagnose_holder(data_dir: &Path) -> std::io::Result<Option<HolderDiagnost
         pid,
         process_alive: process_matches(pid, expected_start),
         lock_path: data_dir.join(LOCK_FILENAME),
+        holder_path,
     }))
 }
 
@@ -271,6 +496,93 @@ mod tests {
         }
     }
 
+    /// The other half of the "stale sidecar" loop: a clean release must take
+    /// its holder record with it. Otherwise `diagnose_holder` — and so
+    /// `aleph doctor` — reports "Stale lock file … a crashed daemon left it
+    /// behind" after every clean `aleph stop`.
+    #[test]
+    fn releasing_the_lock_removes_the_holder_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let lock = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(
+            holder.exists(),
+            "the holder is recorded while the lock is held"
+        );
+
+        drop(lock);
+
+        assert!(
+            !holder.exists(),
+            "a clean release must remove its holder record"
+        );
+        assert!(
+            matches!(diagnose_holder(dir.path()), Ok(None)),
+            "after a clean release the doctor must see a free singleton, not a stale holder"
+        );
+    }
+
+    /// The registry the forced-exit path reads must follow acquire and
+    /// release — otherwise that path removes nothing (a no-op reported as
+    /// 0) or, worse, keeps a released path and removes a successor's record.
+    /// Read-only on the process-wide registry: other tests in this binary
+    /// hold locks of their own at the same time.
+    #[test]
+    fn held_records_follow_acquire_and_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let registered = || {
+            HELD_HOLDER_RECORDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&holder)
+        };
+        let lock = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(registered(), "an acquired lock registers its holder record");
+
+        drop(lock);
+
+        assert!(
+            !registered(),
+            "a released lock deregisters its holder record"
+        );
+    }
+
+    /// The forced-exit removal unlinks every record it was given and only
+    /// those: a neighbouring file no lock wrote stays, and the registry is
+    /// drained so a second call has nothing left to do.
+    #[test]
+    fn forced_exit_removal_unlinks_registered_records_only() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let record_a = a.path().join(HOLDER_FILENAME);
+        let record_b = b.path().join(HOLDER_FILENAME);
+        let bystander = a.path().join("not-a-holder-record");
+        for p in [&record_a, &record_b, &bystander] {
+            std::fs::write(p, "1\n").unwrap();
+        }
+        let registry = Mutex::new(vec![record_a.clone(), record_b.clone()]);
+
+        assert_eq!(remove_registered_holder_records(&registry), 2);
+
+        assert!(
+            !record_a.exists() && !record_b.exists(),
+            "every registered record is removed"
+        );
+        assert!(bystander.exists(), "a file no lock wrote is left alone");
+        assert_eq!(
+            remove_registered_holder_records(&registry),
+            0,
+            "the registry is drained by the removal"
+        );
+    }
+
     #[test]
     fn release_then_reacquire_succeeds() {
         let dir = tempfile::tempdir().unwrap();
@@ -333,6 +645,178 @@ mod tests {
                 "an unreadable sidecar must surface as Err, not Ok({opt:?}); \
                  folding into the absent path is the bug"
             ),
+        }
+    }
+
+    /// Our own PID with an impossible start time: `process_matches` sees a
+    /// live process whose start time does not match, i.e. exactly what a
+    /// recycled PID in a stale sidecar looks like.
+    fn write_stale_sidecar(dir: &Path) -> PathBuf {
+        let holder = dir.join(HOLDER_FILENAME);
+        std::fs::write(&holder, format!("{}\n1\n", std::process::id())).unwrap();
+        holder
+    }
+
+    /// An error `try_lock_exclusive` returns when the filesystem refuses to
+    /// lock at all (a network / FUSE mount without advisory-lock support).
+    fn lock_refused_error() -> std::io::Error {
+        #[cfg(windows)]
+        let code = 50; // ERROR_NOT_SUPPORTED
+        #[cfg(unix)]
+        let code = libc::ENOLCK;
+        std::io::Error::from_raw_os_error(code)
+    }
+
+    /// The negative half of the lock gate, twin of `atomic_io`'s: only fs2's
+    /// contention error means "a peer holds it". A filesystem that refuses the
+    /// lock outright must surface as that OS error. The old `Err(_)` arm read
+    /// the stale sidecar here and answered "orphaned — you may safely rm
+    /// aleph.lock", advice that cannot help and repeats on every restart.
+    #[test]
+    fn a_refused_lock_is_an_error_not_a_stale_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = write_stale_sidecar(dir.path());
+        let lock_path = dir.path().join(LOCK_FILENAME);
+
+        match classify_lock_failure(lock_refused_error(), &holder, lock_path.clone()) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains(&lock_path.display().to_string()),
+                    "the error must name the lock it could not take, got: {msg}"
+                );
+                assert!(
+                    msg.contains(&lock_refused_error().to_string()),
+                    "the error must carry the OS's own reason, got: {msg}"
+                );
+            }
+            Ok(outcome) => panic!("a refused lock must not be read as a peer, got {outcome:?}"),
+        }
+    }
+
+    /// The positive half through the same classifier: real contention plus a
+    /// sidecar naming a process that is not the holder is `HeldByOrphaned`
+    /// (the case the `rm` advice is actually for).
+    #[test]
+    fn a_contended_lock_with_a_stale_sidecar_is_orphaned() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = write_stale_sidecar(dir.path());
+        let lock_path = dir.path().join(LOCK_FILENAME);
+
+        match classify_lock_failure(fs2::lock_contended_error(), &holder, lock_path) {
+            Ok(AcquireOutcome::HeldByOrphaned { pid, .. }) => {
+                assert_eq!(pid as u32, std::process::id());
+            }
+            other => panic!("expected HeldByOrphaned, got {other:?}"),
+        }
+    }
+
+    /// Contention with no sidecar (or an unparseable one) is a held lock
+    /// whose holder cannot be named — its own arm, not `HeldByLive { pid: 0 }`
+    /// for each consumer to decode.
+    #[test]
+    fn a_contended_lock_with_no_sidecar_is_held_by_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let lock_path = dir.path().join(LOCK_FILENAME);
+        for garbage in [None, Some(""), Some("not-a-pid\n")] {
+            match garbage {
+                None => {
+                    let _ = std::fs::remove_file(&holder);
+                }
+                Some(text) => std::fs::write(&holder, text).unwrap(),
+            }
+            match classify_lock_failure(fs2::lock_contended_error(), &holder, lock_path.clone()) {
+                Ok(AcquireOutcome::HeldByUnknown {
+                    lock_path: l,
+                    holder_path: h,
+                }) => {
+                    assert_eq!((l, h), (lock_path.clone(), holder.clone()));
+                }
+                other => panic!("sidecar {garbage:?}: expected HeldByUnknown, got {other:?}"),
+            }
+        }
+    }
+
+    /// The probe must answer both ways from the lock itself, and must not
+    /// leave a record behind when it briefly takes a free lock.
+    #[test]
+    fn is_lock_held_answers_from_the_lock_not_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !is_lock_held(dir.path()).unwrap(),
+            "no lock file: nothing holds it"
+        );
+
+        let hold = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(
+            is_lock_held(dir.path()).unwrap(),
+            "held while the guard lives"
+        );
+
+        drop(hold);
+        assert!(!is_lock_held(dir.path()).unwrap(), "free once released");
+        assert!(
+            !dir.path().join(HOLDER_FILENAME).exists(),
+            "a probe of a free lock writes no holder record"
+        );
+    }
+
+    /// The repair's whole point: a record that names a dead PID next to a
+    /// lock that is HELD must be left alone — that is a live holder whose
+    /// record was never rewritten, and deleting its files is how a second
+    /// instance gets to run beside it.
+    #[test]
+    fn stale_record_is_not_removed_while_the_lock_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let _hold = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        let holder = write_stale_sidecar(dir.path());
+        assert!(
+            !diagnose_holder(dir.path()).unwrap().unwrap().process_alive,
+            "precondition: the record reads as dead"
+        );
+
+        assert_eq!(
+            remove_holder_record_if_lock_free(dir.path()).unwrap(),
+            StaleRecordRepair::LockHeld
+        );
+        assert!(holder.exists(), "a held lock's record is not removed");
+        assert!(
+            dir.path().join(LOCK_FILENAME).exists(),
+            "the lock file is never removed"
+        );
+    }
+
+    /// And with the lock free, the same record goes — with or without a lock
+    /// file present.
+    #[test]
+    fn stale_record_is_removed_when_the_lock_is_free() {
+        for with_lock_file in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            if with_lock_file {
+                std::fs::write(dir.path().join(LOCK_FILENAME), b"").unwrap();
+            }
+            let holder = write_stale_sidecar(dir.path());
+
+            assert_eq!(
+                remove_holder_record_if_lock_free(dir.path()).unwrap(),
+                StaleRecordRepair::Removed,
+                "with_lock_file={with_lock_file}"
+            );
+            assert!(
+                !holder.exists(),
+                "with_lock_file={with_lock_file}: record removed"
+            );
+            assert!(
+                !is_lock_held(dir.path()).unwrap(),
+                "with_lock_file={with_lock_file}: the repair releases the lock it took"
+            );
         }
     }
 

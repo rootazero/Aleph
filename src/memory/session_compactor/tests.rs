@@ -43,7 +43,7 @@ fn compress_result_default_is_zero() {
 /// project-scoped recall silently empty.
 #[tokio::test]
 async fn post_turn_compress_scopes_writes_by_the_explicit_project_root() {
-    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, MessageRole};
+    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::memory::store::raw_memory::RawMemoryStore;
     use crate::memory::store::MemoryBackend;
@@ -65,19 +65,25 @@ async fn post_turn_compress_scopes_writes_by_the_explicit_project_root() {
             agent_dir: temp.path().join("agent"),
             ..Default::default()
         },
-        session_store,
+        session_store.clone(),
     )
     .unwrap();
 
-    // Seed more messages than the fresh tail so a compressible head exists.
+    // Seed more messages than the fresh tail so a compressible head exists —
+    // straight into the store the agent reads from, the way the projector
+    // would (the `AgentInstance` writer this used to seed through is gone; it
+    // had no production caller).
     let key = SessionKey::main("alice");
+    session_store.get_or_create(&key).await.unwrap();
     for i in 0..4 {
-        agent
-            .add_message(&key, MessageRole::User, &format!("user turn {i}"))
-            .await;
-        agent
-            .add_message(&key, MessageRole::Assistant, &format!("assistant turn {i}"))
-            .await;
+        session_store
+            .add_message(&key, "user", &format!("user turn {i}"))
+            .await
+            .unwrap();
+        session_store
+            .add_message(&key, "assistant", &format!("assistant turn {i}"))
+            .await
+            .unwrap();
     }
 
     let database: MemoryBackend =

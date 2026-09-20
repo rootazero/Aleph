@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Origin of an `AgentDef`. Set by `crate::agents::loader` based on load source;
 /// hardcoded `builtin_agents()` entries default to `Builtin`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -22,6 +23,7 @@ pub enum AgentSource {
 }
 
 /// Mode of an agent
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentMode {
     /// Main agent that responds directly to user
@@ -43,6 +45,7 @@ impl std::fmt::Display for AgentMode {
 ///
 /// `Worktree` runs the subagent in a fresh git worktree under `$TMPDIR`
 /// with a separate `target/` dir; cleanup is guaranteed on every exit path.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IsolationMode {
@@ -68,6 +71,7 @@ pub struct McpInlineConfig {
 /// Name-conflict detection (Inline name vs global) happens at spawn
 /// time (`McpScope::provision`), not at loader time — see design § 3
 /// Q2 for the rationale.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpServerSpec {
@@ -81,6 +85,7 @@ pub enum McpServerSpec {
 }
 
 /// Context mode for sub-agents
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ContextMode {
     /// Start with a fresh context (no parent history)
@@ -118,6 +123,7 @@ impl std::fmt::Display for ContextMode {
 /// channel, and from a nested child, where there is nothing worth forking. A
 /// variant with no producer is the abstraction R10's YAGNI clause says to leave
 /// unbuilt.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnContext {
     /// Clean room. The child sees its task and nothing else — not the parent's

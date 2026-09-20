@@ -145,9 +145,15 @@ impl ChannelApprovalBridge {
                     id = %record_id,
                     "Approval delivery failed — failing closed (the card never reached anyone)"
                 );
-                // Retire the just-registered entry so a later session-FIFO
-                // "/approve" cannot consume it.
-                approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
+                // Retire the just-registered entry WITHOUT stamping a Deny:
+                // resolve(Deny) would cascade a fake refusal to every other
+                // live pending card in this session with the same grant_key,
+                // and that cascade's Deny outcomes flow into the
+                // brute-force breaker as `UserRejected` (a delivery hiccup
+                // would count as the user declining). `retire_pending` is
+                // the same "remove from pending" without the cascade and
+                // without the record stamp.
+                approval_manager.retire_pending(&record_id);
                 // `Unavailable`: the prompt did not arrive, so nobody refused
                 // it. Returning `Denied` here made a transient Telegram failure
                 // stick to the intent for the rest of the session and count
@@ -162,7 +168,7 @@ impl ChannelApprovalBridge {
                     id = %record_id,
                     "No channel capability for approval delivery — failing closed"
                 );
-                approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
+                approval_manager.retire_pending(&record_id);
                 return ApprovalOutcome::Unavailable.into();
             }
         }

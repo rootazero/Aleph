@@ -94,7 +94,17 @@ pub fn tick_delay_ms(state: &LoopState, now_ms: u64) -> u64 {
     match &state.cadence {
         Cadence::Fixed { interval_ms } => *interval_ms,
         Cadence::ModelPaced { fallback_ms } => match state.next_wake_ms {
-            Some(wake) => wake.saturating_sub(now_ms),
+            // `now_ms == 0` means the clock is unavailable — `wake.saturating_sub(0)`
+            // would return the raw epoch (~54 years) when `wake` is a real epoch
+            // and now is a sentinel. Fall back to the cadence default in that case,
+            // matching the module-wide fail-open discipline.
+            Some(wake) => {
+                if now_ms == 0 {
+                    *fallback_ms
+                } else {
+                    wake.saturating_sub(now_ms)
+                }
+            }
             None => *fallback_ms,
         },
     }

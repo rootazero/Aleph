@@ -9,10 +9,6 @@ use crate::sync_primitives::{Arc, RwLock};
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-/// Re-exported alias kept for source compatibility — the canonical constant
-/// lives in `crate::pii::rules` so it stays coupled with `build_rules`.
-const BUILTIN_RULE_COUNT: usize = BUILTIN_COUNT;
-
 /// Emit the single operator-facing "partial custom-rule load" summary when
 /// some configured custom patterns failed to compile. Shared by [`PiiEngine::new`]
 /// (boot) and [`PiiEngine::reload`] (hot-reload) so both paths surface the same

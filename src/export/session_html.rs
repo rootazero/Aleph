@@ -139,6 +139,12 @@ mod tests {
         assert!(!html.contains("onmouseover=\"x\""), "{html}");
         assert_eq!(role_slug("user\" onmouseover=\"x"), "useronmouseoverx");
         assert_eq!(role_slug("***"), "other");
+        // review(export): pin the documented `.take(24)` cap so a future refactor
+        // can't quietly drop it and start emitting arbitrarily large `class=`
+        // attributes from attacker-controlled role strings.
+        let long = "a".repeat(64);
+        let slug = role_slug(&long);
+        assert_eq!(slug.len(), 24, "role_slug should cap at 24 chars: {slug}");
     }
 
     #[test]

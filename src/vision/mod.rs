@@ -159,6 +159,7 @@ mod tests {
         async fn ocr(&self, _image: &ImageInput) -> Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: format!("[{}] recognized text", self.tag),
+                lines: Vec::new(),
             })
         }
 
@@ -393,6 +394,7 @@ mod tests {
         // OcrResult
         let ocr = OcrResult {
             full_text: "Hello World".to_string(),
+            lines: Vec::new(),
         };
         let json = serde_json::to_value(&ocr).unwrap();
         let round_trip: OcrResult = serde_json::from_value(json).unwrap();

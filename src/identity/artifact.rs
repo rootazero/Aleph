@@ -180,9 +180,17 @@ pub fn envelope_path(artifact: &Path) -> PathBuf {
 /// every envelope ever written.
 fn preimage(agent: &str, sha256: &[u8; 32]) -> Vec<u8> {
     let agent = agent.as_bytes();
+    // Fail loud if the agent id ever exceeds u32::MAX bytes: `unwrap_or(u32::MAX)`
+    // would write a 4 GiB length prefix but emit the full agent, so the
+    // signature preimage would no longer be the bytes the length prefix
+    // claims. Real-world ids are short; the panic surfaces the invariant
+    // break instead of shipping a preimage that round-trips only on the
+    // signing machine.
+    let agent_len = u32::try_from(agent.len())
+        .expect("agent id exceeds u32 length in signature preimage");
     let mut p = Vec::with_capacity(DOMAIN.len() + 4 + agent.len() + 32);
     p.extend_from_slice(DOMAIN);
-    p.extend_from_slice(&u32::try_from(agent.len()).unwrap_or(u32::MAX).to_be_bytes());
+    p.extend_from_slice(&agent_len.to_be_bytes());
     p.extend_from_slice(agent);
     p.extend_from_slice(sha256);
     p

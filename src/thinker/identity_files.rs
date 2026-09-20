@@ -322,6 +322,15 @@ fn validate_identity_write(file_name: &str, content: &str) -> Result<(), String>
 ///
 /// This is the single low-level write used by both the `self_config` tool and
 /// the `identity.*` handlers so the two paths cannot drift.
+///
+/// **Safe to call from any context** (sync CLI subcommand, integration test
+/// using a `current_thread` runtime, etc.). The backup is performed inline
+/// because the snapshot is a small blocking copy (≤ 1 MB identity file); a
+/// previous version of this function used `tokio::task::block_in_place`,
+/// which panics if the calling thread is not part of a multi-threaded tokio
+/// runtime — a foot-gun for any future sync caller (THINK-003, critical).
+/// Async call sites should prefer [`write_identity_file_async`], which moves
+/// both the backup and the write onto the blocking pool.
 pub fn write_identity_file(
     agent_dir: &Path,
     file_name: &str,
@@ -333,12 +342,12 @@ pub fn write_identity_file(
         .map_err(|e| format!("Failed to create agent directory: {e}"))?;
 
     let path = agent_dir.join(file_name);
-    // Snapshotting uses blocking I/O — push it onto the blocking pool so a
-    // large prior file (up to 1 MB) doesn't stall the runtime. The follow-up
-    // `std::fs::write` stays on the current thread because by then the
-    // blocking work is done and the write itself is on the agent's hot path.
-    let backup_path =
-        tokio::task::block_in_place(|| backup_identity_file(agent_dir, file_name, &path));
+    // Inline blocking I/O — safe in any runtime context. The snapshot is a
+    // single `std::fs::copy` of a ≤ 1 MB file; stalling the current thread
+    // briefly is acceptable for an admin write that the caller already
+    // chose to make synchronously. See the doc-comment above for why this
+    // is the right knob (and why the previous `block_in_place` was wrong).
+    let backup_path = backup_identity_file(agent_dir, file_name, &path);
 
     std::fs::write(&path, content).map_err(|e| format!("Failed to write {file_name}: {e}"))?;
 

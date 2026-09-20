@@ -42,7 +42,7 @@ pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOption
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    MessageMeta, OutboundMessage, SendResult, UserId,
+    MessageMeta, OutboundMessage, SendResult, UserId, CB_MESSAGE_ID_PREFIX,
 };
 use crate::sync_primitives::{Arc, Ordering};
 use access::AccessDecision;
@@ -555,7 +555,7 @@ impl Channel for TelegramChannel {
                             let decision = access.check_message(user_id_val, raw_chat_id, is_group);
                             if decision == AccessDecision::Allowed {
                                 let inbound = InboundMessage {
-                                    id: MessageId::new(format!("cb_{}", q.id)),
+                                    id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", q.id)),
                                     channel_id: channel_id.clone(),
                                     conversation_id: ConversationId::new(conv_id_str),
                                     sender_id: UserId::new(q.from.id.to_string()),

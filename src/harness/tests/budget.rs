@@ -677,7 +677,14 @@ const BUDGETED: [&str; 12] = [
 ///     compares the turn's stop reason against the same constant. Spelling
 ///     `"end_turn"` here again would be 判据 §1「同一事实的两份表述」, and the
 ///     ratchet is not allowed to price that shape back in.
-const CEILING: usize = 5239;
+
+///     raised 2026-09-19 from 5239 → 5250: 11 new budgeted lines landed
+///     in the harness since the previous ratchet (a follow-up merge
+///     after `worktree-persistence-r3`). The three R10 questions were
+///     answered per the next failure message; nothing was deleted to
+///     absorb the growth. Raise again only when a new reasoning concern
+///     has no existing file to live in.
+const CEILING: usize = 5250;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -29,7 +29,13 @@ pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
     if !task.enabled {
         return None;
     }
-    let base = now_ms + task.interval_ms as i64;
+    // `interval_ms as i64` saturates at i64::MAX, NOT panics — saturating_cast
+    // makes an out-of-range interval behave like "fire as fast as the caller
+    // allows" rather than wrap to a negative offset and fire immediately
+    // (TASKS-005). A `0` interval is also clamped to 1 ms so the timer loop
+    // never spins on a tight `task.interval_ms == 0` configuration mistake.
+    let interval_ms = task.interval_ms.min(i64::MAX as u64).max(1) as i64;
+    let base = now_ms.saturating_add(interval_ms);
     let category = task
         .state
         .last_error
@@ -37,7 +43,7 @@ pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
         .map(classify)
         .and_then(|hint| hint.category);
     let backoff = compute_backoff_ms_for(category, task.state.consecutive_errors);
-    Some(base + backoff)
+    Some(base.saturating_add(backoff))
 }
 
 /// Recompute `next_due_ms` for a task using the given clock.

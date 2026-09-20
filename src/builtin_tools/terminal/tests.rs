@@ -232,8 +232,10 @@ async fn non_operator_caller_is_refused() {
     assert!(out.message.contains("operator"), "{}", out.message);
     // A refusal that still carried session data would be a gate that
     // reports "no" and means "yes" (task-11 review F10) — discarding
-    // the `data: None` in the two arms of `TerminalTool::call` and
-    // keeping only the label check would leave this test green.
+    // the `data: None` in `TerminalTool::call`'s plain-refusal arms (the
+    // operator gate and `TerminalRefusal::Message`; the tombstone arm
+    // deliberately carries data, and is pinned on its own) and keeping
+    // only the label check would leave this test green.
     assert!(out.data.is_none(), "a refusal must not carry session data");
 }
 
@@ -301,7 +303,7 @@ fn read_of_someone_elses_session_is_refused_like_unknown() {
 
     assert_eq!(
         result,
-        Err(pty::no_such_session(&id)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&id))),
         "an unowned session and a nonexistent one must produce byte-identical \
          refusals, or `read` becomes an id-enumeration oracle"
     );
@@ -407,18 +409,18 @@ async fn an_actorless_caller_sees_only_unowned_sessions() {
     );
     assert_eq!(
         anon_read_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "an owned session must read as nonexistent to an actor-less caller"
     );
     assert_eq!(
         anon_wait_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "`wait` is addressed by session id too — the same refusal, byte for byte, or it \
          becomes the oracle `read` refuses to be"
     );
     assert_eq!(
         anon_explain_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "…and `explain`, which hands back the screen's title and tail: every face has to \
          answer the actor-less caller the same way, or the newest one is the hole"
     );
@@ -793,7 +795,11 @@ async fn wait_refuses_an_empty_until_instead_of_stalling() {
 
     let _ = pty::manager().close(&unowned);
 
-    let message = out.expect_err("an empty `until` is refused, not waited out");
+    let TerminalRefusal::Message(message) =
+        out.expect_err("an empty `until` is refused, not waited out")
+    else {
+        panic!("an empty `until` is a plain refusal, not a tombstone");
+    };
     assert!(
         message.contains("at least one state"),
         "the refusal must be the empty-`until` one and not the ownership gate's, or this \
@@ -981,6 +987,144 @@ fn explain_of_someone_elses_session_is_refused_like_unknown() {
 
     let _ = pty::manager().close(&id);
 
-    assert_eq!(stranger, Err(pty::no_such_session(&id)));
-    assert_eq!(unknown, Err(pty::no_such_session("does-not-exist")));
+    assert_eq!(
+        stranger,
+        Err(TerminalRefusal::Message(pty::no_such_session(&id)))
+    );
+    assert_eq!(
+        unknown,
+        Err(TerminalRefusal::Message(pty::no_such_session(
+            "does-not-exist"
+        )))
+    );
+}
+
+/// A session the PREVIOUS server owned answers its owner with what became of
+/// its shell, and answers everyone else exactly as an id that never existed
+/// — the journal fallback runs under the same predicate the live path uses,
+/// so the tombstone cannot become the id-enumeration oracle `no_such_session`
+/// exists to close. The whole face is driven through `call()` for the owner:
+/// `lost_with_restart: true` on the wire, the pid and stop command as data,
+/// the sentence plus its output clause as the message. `lost_with_restart:
+/// false` is skipped on the wire, so every pre-existing envelope stays
+/// byte-identical.
+#[tokio::test]
+#[serial_test::parallel(pty_global_manager)]
+async fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
+    use crate::builtin_tools::process_journal as j;
+    let _g = j::test_gate();
+    let tmp = tempfile::tempdir().unwrap();
+    j::enable_for_test(tmp.path().to_path_buf());
+    j::record_pty_spawn("t-1", "pwsh", "", Some("alice"));
+    j::record_pty_child("t-1", 777);
+    j::disable_for_test();
+    j::init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| j::Liveness::StillRunning);
+
+    let report = match owned_session_id(Some("t-1"), Some("alice"), "read") {
+        Err(TerminalRefusal::LostWithRestart(r)) => {
+            assert!(r.text.contains("pid 777"), "{}", r.text);
+            r
+        }
+        o => panic!("{o:?}"),
+    };
+    // The face itself, as the owner: the arm of `call()` that renders the
+    // report, not only the resolver behind it.
+    let out = crate::gateway::caller_identity::CALLER_USER
+        .scope(
+            Some("alice".to_string()),
+            TerminalTool.call(TerminalArgs {
+                action: TerminalAction::Read,
+                session_id: Some("t-1".to_string()),
+                until: None,
+                timeout_ms: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        wire["lost_with_restart"],
+        serde_json::json!(true),
+        "the flag a reader keys on: {wire}"
+    );
+    assert_eq!(
+        wire["data"]["stop_command"],
+        serde_json::json!(report.stop_command),
+        "{wire}"
+    );
+    assert!(
+        !out.success && out.message.contains("pid 777"),
+        "{}",
+        out.message
+    );
+    assert_eq!(
+        out.message,
+        report.text_with_output(),
+        "this envelope has no slot for the recorded output, so the clause rides the message"
+    );
+    assert!(
+        out.message
+            .ends_with("no output was recorded before the restart"),
+        "{}",
+        out.message
+    );
+    assert!(
+        matches!(
+            owned_session_id(Some("t-1"), Some("bob"), "read"),
+            Err(TerminalRefusal::Message(m)) if m == pty::no_such_session("t-1")
+        ),
+        "a stranger must read the tombstoned id as one that never existed"
+    );
+    assert!(
+        matches!(
+            owned_session_id(Some("t-1"), None, "read"),
+            Err(TerminalRefusal::Message(_))
+        ),
+        "actor-less sees nothing"
+    );
+    let out = serde_json::to_value(TerminalOutput {
+        success: false,
+        message: "x".into(),
+        data: None,
+        lost_with_restart: false,
+    })
+    .unwrap();
+    assert!(
+        out.get("lost_with_restart").is_none(),
+        "false is skipped: existing envelopes byte-identical"
+    );
+    j::disable_for_test();
+}
+
+/// The tombstone envelope carries the report's recorded output IN the
+/// message — this face has no `recorded_output` key the way the bash face
+/// does, so the clause must ride the prose or the bytes reach nobody. Pure:
+/// a PTY row has no live-tail twin today, so a real interrupted terminal
+/// always reports "no output was recorded"; this pins the composition for
+/// the report shape, not for a disk state production cannot produce.
+#[test]
+fn the_tombstone_envelope_carries_the_output_clause_in_its_message() {
+    let report = crate::builtin_tools::process_journal::TombstoneReport {
+        kind: "exited_during_restart",
+        text: "Terminal t-9 (`pwsh`) was started by a previous server process.".to_string(),
+        pid: Some(5),
+        stop_command: None,
+        output_clause: "last recorded output (as of 5): built 3 crates".to_string(),
+    };
+    let out = lost_with_restart_output(report.clone());
+    assert!(
+        out.message.starts_with(&report.text) && out.message.contains("built 3 crates"),
+        "{}",
+        out.message
+    );
+    assert!(out.lost_with_restart && !out.success);
+    let data = out.data.expect("pid and stop command ride as data");
+    assert_eq!(
+        (&data["tombstone"], &data["pid"], &data["stop_command"]),
+        (
+            &serde_json::json!("exited_during_restart"),
+            &serde_json::json!(5),
+            &serde_json::Value::Null
+        )
+    );
 }

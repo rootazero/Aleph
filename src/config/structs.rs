@@ -466,6 +466,7 @@ impl Config {
             default_provider: "crawl4ai".into(),
             fallback_providers: None,
             backends,
+            verified_shared: std::collections::HashMap::new(),
         });
     }
 }

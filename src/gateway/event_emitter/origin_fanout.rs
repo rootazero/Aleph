@@ -332,21 +332,22 @@ mod tests {
         }
     }
 
-    /// The four construction sites are still the four that cannot carry a side
-    /// question.
+    /// Every construction site is one `btw::format_side_answer`'s doc has
+    /// answered.
     ///
-    /// `btw::format_side_answer`'s doc answers each of them by name — why an
-    /// announce, a resume, a goal/loop continuation and the Simulated-fallback
-    /// `start_run` can never be a `/btw` turn, and therefore why this decorator
-    /// applies no side-answer marker. That answer is a paragraph, and a
-    /// paragraph does not notice a fifth site. This does.
+    /// That doc answers each of them by name — which sites can never be a
+    /// `/btw` turn (an announce, a goal/loop continuation, the
+    /// Simulated-fallback `start_run`) and which can but skip the fan-out by
+    /// rule (the boot reinjection, the resume), and therefore why this
+    /// decorator applies no side-answer marker. That answer is a paragraph,
+    /// and a paragraph does not notice a new site. This does.
     ///
     /// Source-level and by name, not a count: a bare number tells the next
     /// author that something moved, not what to go read. Comment lines are
     /// stripped first — a scanner judges code, and the doc that explains a
     /// name is the most likely thing to mention it.
     #[test]
-    fn the_fan_out_construction_sites_are_still_the_four_that_cannot_carry_a_side_question() {
+    fn every_fan_out_construction_site_is_answered_in_format_side_answers_doc() {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -407,11 +408,13 @@ mod tests {
         assert_eq!(
             found, expected,
             "the set of files constructing an `OriginFanoutEmitter` changed. A \
-             new site must answer the question the other four answer in \
+             new site must answer the question every other site answers in \
              `gateway::btw::format_side_answer`'s doc — can a `/btw` run reach \
-             it? If it can, it needs the marker; if it cannot, say why there \
-             and add it here. A site that disappeared should be dropped from \
-             that paragraph in the same edit."
+             it? If it can, it skips the fan-out for a stamped run (the rule \
+             the reinjection and the resume apply) or needs the marker; if it \
+             cannot, say why there — and add it here either way. A site that \
+             disappeared should be dropped from that paragraph in the same \
+             edit."
         );
     }
 }

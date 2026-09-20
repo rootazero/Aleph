@@ -16,7 +16,7 @@ use ratatui::{
 };
 
 use crate::tui::app::agent_display_order;
-use crate::tui::theme::{DEFAULT_THEME, SPINNER_FRAMES};
+use crate::tui::theme::{spinner_at, theme};
 
 /// Cap on agent rows in the dock (the overlay shows everything).
 const MAX_AGENT_ROWS: usize = 5;
@@ -35,12 +35,10 @@ pub(crate) fn lifecycle_glyph(lifecycle: NodeLifecycle) -> &'static str {
 
 pub(crate) fn lifecycle_style(lifecycle: NodeLifecycle) -> Style {
     match lifecycle {
-        NodeLifecycle::Running => Style::default().fg(DEFAULT_THEME.tool_running),
-        NodeLifecycle::Completed => Style::default().fg(DEFAULT_THEME.tool_success),
-        NodeLifecycle::Failed | NodeLifecycle::TimedOut => {
-            Style::default().fg(DEFAULT_THEME.tool_failed)
-        }
-        NodeLifecycle::Cancelled => Style::default().fg(DEFAULT_THEME.muted),
+        NodeLifecycle::Running => Style::default().fg(theme().tool_running),
+        NodeLifecycle::Completed => Style::default().fg(theme().tool_success),
+        NodeLifecycle::Failed | NodeLifecycle::TimedOut => Style::default().fg(theme().tool_failed),
+        NodeLifecycle::Cancelled => Style::default().fg(theme().muted),
     }
 }
 
@@ -134,7 +132,7 @@ pub fn render_agents_panel(
         return;
     }
     let width = area.width as usize;
-    let muted = Style::default().fg(DEFAULT_THEME.muted);
+    let muted = Style::default().fg(theme().muted);
     let ordered = agent_display_order(agents);
     let running = ordered
         .iter()
@@ -151,17 +149,14 @@ pub fn render_agents_panel(
     lines.push(Line::from(Span::styled(
         clamp_chars(&header, width),
         Style::default()
-            .fg(DEFAULT_THEME.primary)
+            .fg(theme().primary)
             .add_modifier(Modifier::BOLD),
     )));
 
-    let spinner = SPINNER_FRAMES
-        .get(spinner_frame % SPINNER_FRAMES.len())
-        .copied()
-        .unwrap_or("\u{25cf}");
+    let spinner = spinner_at(spinner_frame).to_string();
     for node in ordered.iter().take(MAX_AGENT_ROWS) {
         let (glyph, style) = if node.lifecycle == NodeLifecycle::Running {
-            (spinner, lifecycle_style(NodeLifecycle::Running))
+            (spinner.as_str(), lifecycle_style(NodeLifecycle::Running))
         } else {
             (lifecycle_glyph(node.lifecycle), muted)
         };

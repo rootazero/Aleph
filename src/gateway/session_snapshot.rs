@@ -30,6 +30,7 @@ use crate::session::events::SessionEventRecord;
 use crate::session::reduction::{
     reduce_run, DanglingProvenance, LogContradiction, RunDisposition, RunProgress,
 };
+use crate::session::store::UndecodableRecord;
 
 /// `identity_meta.custom` key holding a session's user-chosen working
 /// directory. Written by `sessions.set_project_root` and by
@@ -46,10 +47,12 @@ pub const PROJECT_ROOT_SESSION_KEY: &str = "project_root";
 /// constant to borrow: nothing else keys a bag by them.
 ///
 /// It exists so the two shapes cannot drift: a census test in
-/// [`crate::session::events`] asserts this array equals
-/// [`crate::session::events::RunEnvelopeSnapshot`]'s serialised key set. A
-/// seventh knob therefore has to be added in both places before the build is
-/// green.
+/// [`crate::session::events`] asserts this array plus
+/// [`crate::gateway::resume_coordinator::RUN_ENVELOPE_FACT_KEYS`] (the
+/// envelope's two per-run facts, which are not knobs and are deliberately not
+/// filed here) equals [`crate::session::events::RunEnvelopeSnapshot`]'s key
+/// set. A new envelope field therefore has to be filed as a knob here or as a
+/// fact there before the build is green.
 ///
 /// What it does **not** catch, said out loud: a knob added to
 /// [`SessionSnapshot`] and to neither of those two. `SessionSnapshot` carries
@@ -139,14 +142,7 @@ pub fn snapshot_from_metadata(meta: &SessionMetadata) -> SessionSnapshot {
 pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     let reduction = match reduce_run(events) {
         Ok(r) => r,
-        Err(contradiction) => {
-            return LastRunState {
-                disposition: LastRunState::LOG_INCONSISTENT.to_string(),
-                contradictions: vec![contradiction.tag().to_string()],
-                inspected: true,
-                ..LastRunState::default()
-            }
-        }
+        Err(contradiction) => return last_run_refused(&contradiction),
     };
 
     // "This session has never run anything" is not the same answer as "its
@@ -161,11 +157,12 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
             .iter()
             .any(|c| matches!(c, LogContradiction::FinishWithoutStart { .. }));
 
-    let (disposition, trailing_starts) = match reduction.disposition {
-        RunDisposition::Interrupted { trailing_starts } => (
-            LastRunState::INTERRUPTED,
-            u32::try_from(trailing_starts).unwrap_or(u32::MAX),
-        ),
+    // `trailing_starts` is the wire key's historical spelling; its value is
+    // the reducer's `attempts` (the `ResumeAttempted` count since the last
+    // finish) — see `LastRunState::trailing_starts`.
+    let (disposition, attempts) = match reduction.disposition {
+        RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
+        RunDisposition::Unanswered { attempts, .. } => (LastRunState::UNANSWERED, attempts),
         RunDisposition::Clean if has_marker => (LastRunState::CLEAN, 0),
         RunDisposition::Clean => (LastRunState::NEVER_RAN, 0),
     };
@@ -173,7 +170,7 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     LastRunState {
         disposition: disposition.to_string(),
         run_id: reduction.run_id.clone(),
-        trailing_starts,
+        trailing_starts: attempts,
         dangling: reduction.dangling.iter().map(dangling_view).collect(),
         // A run that recorded nothing says so with `None`; `inspected` is what
         // separates that from "this face does not carry progress".
@@ -188,23 +185,49 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     }
 }
 
+/// The attach face's refusal: the log was opened and would not be read.
+///
+/// [`LastRunState::LOG_INCONSISTENT`] carrying the contradiction's tag,
+/// `inspected: true` — this face looked, and what it found is that it cannot
+/// say. Shared by [`last_run_from_events`] (the reducer refused) and the
+/// `chat.history` handler (the store refused to decode a row), so one refusal
+/// has one shape on the wire.
+#[must_use]
+pub fn last_run_refused(contradiction: &LogContradiction) -> LastRunState {
+    LastRunState {
+        disposition: LastRunState::LOG_INCONSISTENT.to_string(),
+        contradictions: vec![contradiction.tag().to_string()],
+        inspected: true,
+        ..LastRunState::default()
+    }
+}
+
 /// The list face's answer, from one session's run markers alone.
 ///
 /// Cheap enough to run for every row of `sessions.list`, and it can answer
 /// exactly one question: the disposition word plus the two facts markers carry.
 /// [`LastRunState::inspected`] is `false`, so a reader cannot mistake the empty
 /// `dangling` list for "no tool calls were lost".
+///
+/// `markers` is what `load_run_markers` said for this session: `Ok(&[])` is a
+/// session with no markers (`never_ran`); `Err` is a marker row this build
+/// could not decode, which lists as `log_inconsistent` under the
+/// undecodable-record tag — never as `never_ran` (criterion #8).
 #[must_use]
-pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
-    if markers.is_empty() {
-        return LastRunState::from_markers(LastRunState::NEVER_RAN, None, 0);
-    }
+pub fn last_run_from_markers(
+    markers: Result<&[SessionEventRecord], &UndecodableRecord>,
+) -> LastRunState {
     // `reduce_run` over a marker slice is the same derivation the attach face
     // uses, so the two faces cannot disagree about the word. It is fed markers
     // rather than a full log on purpose: `load_run_markers` is one indexed
     // query for every session, and reducing every session's whole log to paint
     // a list would be a different kind of wrong.
-    let reduction = match reduce_run(markers) {
+    let verdict = match markers {
+        Ok([]) => return LastRunState::from_markers(LastRunState::NEVER_RAN, None, 0),
+        Ok(markers) => reduce_run(markers),
+        Err(undecodable) => Err(LogContradiction::from(undecodable)),
+    };
+    let reduction = match verdict {
         Ok(r) => r,
         Err(contradiction) => {
             let mut state = LastRunState::from_markers(LastRunState::LOG_INCONSISTENT, None, 0);
@@ -212,15 +235,16 @@ pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
             return state;
         }
     };
-    let (disposition, trailing_starts) = match reduction.disposition {
-        RunDisposition::Interrupted { trailing_starts } => (
-            LastRunState::INTERRUPTED,
-            u32::try_from(trailing_starts).unwrap_or(u32::MAX),
-        ),
+    let (disposition, attempts) = match reduction.disposition {
+        RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
+        // Unreachable from a marker slice — the message tail is what carries
+        // the unanswered seed, and this face never reads it (`inspected:
+        // false` is its own admission). Rendered anyway rather than folded
+        // into `clean`: a wider slice must not come out as the reassuring word.
+        RunDisposition::Unanswered { attempts, .. } => (LastRunState::UNANSWERED, attempts),
         RunDisposition::Clean => (LastRunState::CLEAN, 0),
     };
-    let mut state =
-        LastRunState::from_markers(disposition, reduction.run_id.clone(), trailing_starts);
+    let mut state = LastRunState::from_markers(disposition, reduction.run_id.clone(), attempts);
     state.contradictions = reduction
         .contradictions
         .iter()
@@ -239,6 +263,9 @@ fn dangling_view(call: &crate::session::reduction::DanglingCall) -> DanglingCall
         }
         .to_string(),
         denied: call.denied,
+        // The wire word is the event's serde word (`ParkReason::as_str`), so a
+        // client reads the same spelling off `chat.history` as off the log.
+        parked: call.parked.map(|r| r.as_str().to_string()),
     }
 }
 
@@ -254,7 +281,7 @@ fn progress_view(progress: &RunProgress) -> RunProgressView {
 #[cfg(test)]
 mod last_run_tests {
     use super::*;
-    use crate::session::events::{RunOutcome, SessionEvent, ToolOutput, TurnId};
+    use crate::session::events::{ParkReason, RunOutcome, SessionEvent, ToolOutput, TurnId};
     use aleph_protocol::LastRunDisposition;
 
     fn rec(seq: u64, event: SessionEvent) -> SessionEventRecord {
@@ -292,6 +319,29 @@ mod last_run_tests {
         }
     }
 
+    fn turn_started() -> SessionEvent {
+        SessionEvent::TurnStarted {
+            turn_id: TurnId::new_v4(),
+            trigger: crate::session::events::TurnTrigger::UserMessage,
+            at: 3,
+        }
+    }
+
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: TurnId::new_v4(),
+            content: crate::session::events::MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 3,
+            synthetic: false,
+            author_user_id: None,
+        }
+    }
+
     fn result_for(call: &str) -> SessionEvent {
         SessionEvent::ToolResult {
             turn_id: TurnId::new_v4(),
@@ -301,6 +351,46 @@ mod last_run_tests {
                 metadata: Default::default(),
             },
             at: 4,
+        }
+    }
+
+    fn parked(call: &str, reason: ParkReason) -> SessionEvent {
+        SessionEvent::ToolCallParked {
+            turn_id: TurnId::new_v4(),
+            call_id: call.to_string(),
+            reason,
+        }
+    }
+
+    /// §6.1 on the attach face: a call parked at a gate when the log ended
+    /// carries the park's reason, and the string on the wire IS the event's
+    /// serde word — pinned through the view for every reason the core can
+    /// stamp, not through a literal this test would have written itself.
+    #[test]
+    fn a_parked_dangling_call_carries_the_reasons_wire_word() {
+        for reason in ParkReason::ALL {
+            let events = vec![
+                rec(1, started("run-a")),
+                rec(2, requested("c1")),
+                rec(3, parked("c1", reason)),
+            ];
+            let view = last_run_from_events(&events);
+            let dangling = view.dangling().expect("this face looked");
+            assert_eq!(dangling.len(), 1, "{reason:?}");
+            assert_eq!(
+                dangling[0].parked.as_deref(),
+                Some(reason.as_str()),
+                "{reason:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(reason).unwrap(),
+                serde_json::json!(dangling[0].parked),
+                "the wire word is the serde word: {reason:?}"
+            );
+            assert!(
+                dangling[0].never_completed() && !dangling[0].denied,
+                "{reason:?}"
+            );
         }
     }
 
@@ -320,7 +410,9 @@ mod last_run_tests {
 
         assert_eq!(view.disposition(), LastRunDisposition::Interrupted);
         assert_eq!(view.run_id.as_deref(), Some("run-a"));
-        assert_eq!(view.trailing_starts, 1);
+        // The wire key keeps its historical spelling; its value is the resume
+        // attempt count, and nobody has stamped an attempt on this run.
+        assert_eq!(view.trailing_starts, 0);
         assert!(view.inspected);
 
         let dangling = view.dangling().expect("this face looked");
@@ -376,6 +468,43 @@ mod last_run_tests {
         );
     }
 
+    /// §5.2: a user message the log holds and no run ever answered is its own
+    /// word on the attach face. `trailing_starts` is the unanswered ratchet
+    /// (no stamp yet), and this face looked.
+    #[test]
+    fn an_unanswered_log_is_reported_as_such() {
+        let events = vec![
+            rec(1, started("run-a")),
+            rec(2, finished("run-a")),
+            rec(3, user("still there?")),
+        ];
+        let view = last_run_from_events(&events);
+        assert_eq!(view.disposition(), LastRunDisposition::Unanswered);
+        assert_eq!(view.trailing_starts, 0);
+        assert!(view.inspected);
+        assert_ne!(view.disposition(), LastRunDisposition::Clean);
+    }
+
+    /// The production order — seed, then the run's marker, then the crash —
+    /// is `interrupted` on this face too, never `unanswered`: the run picked
+    /// the message up, and the lost call is named. Pinned here because the
+    /// interrupted fixture above omits the seed.
+    #[test]
+    fn a_seed_a_run_picked_up_is_interrupted_on_the_attach_face() {
+        let events = vec![
+            rec(1, turn_started()),
+            rec(2, user("hi")),
+            rec(3, started("run-a")),
+            rec(4, requested("call-1")),
+        ];
+        let view = last_run_from_events(&events);
+        assert_eq!(view.disposition(), LastRunDisposition::Interrupted);
+        assert_eq!(view.run_id.as_deref(), Some("run-a"));
+        let dangling = view.dangling().expect("this face looked");
+        assert_eq!(dangling.len(), 1);
+        assert_eq!(dangling[0].call_id, "call-1");
+    }
+
     /// A `RunFinished` whose start is not in this log is still a marker, so the
     /// session HAS run — reading it as `never_ran` would be a fresh lie built
     /// on the reducer's `Clean`.
@@ -421,10 +550,10 @@ mod last_run_tests {
             rec(2, finished("run-a")),
             rec(3, started("run-b")),
         ];
-        let listed = last_run_from_markers(&markers);
+        let listed = last_run_from_markers(Ok(&markers));
         assert_eq!(listed.disposition(), LastRunDisposition::Interrupted);
         assert_eq!(listed.run_id.as_deref(), Some("run-b"));
-        assert_eq!(listed.trailing_starts, 1);
+        assert_eq!(listed.trailing_starts, 0, "no ResumeAttempted stamp yet");
         assert!(!listed.inspected);
         assert_eq!(listed.dangling(), None);
         assert_eq!(listed.progress, None);
@@ -434,9 +563,37 @@ mod last_run_tests {
     /// `never_ran` — not `clean`, and not an absent answer.
     #[test]
     fn a_session_with_no_markers_lists_as_never_ran() {
-        let listed = last_run_from_markers(&[]);
+        let listed = last_run_from_markers(Ok(&[]));
         assert_eq!(listed.disposition(), LastRunDisposition::NeverRan);
         assert!(!listed.inspected);
+    }
+
+    /// A session whose marker slice did not decode is the list face's refusal:
+    /// `log_inconsistent` under the undecodable-record tag. Not `never_ran` —
+    /// which is what reading `Err` as "no markers" would have painted — and
+    /// still `inspected: false`, because this face looked at markers alone.
+    #[test]
+    fn an_undecodable_marker_slice_lists_as_log_inconsistent_not_never_ran() {
+        let bad = UndecodableRecord {
+            seq: 4,
+            kind_tag: Some("run_finished".into()),
+            error: "unknown variant".into(),
+        };
+        let listed = last_run_from_markers(Err(&bad));
+        assert_eq!(listed.disposition(), LastRunDisposition::LogInconsistent);
+        assert_eq!(
+            listed.contradictions,
+            vec![LogContradiction::UndecodableRecord { seq: 4 }
+                .tag()
+                .to_string()]
+        );
+        assert!(!listed.inspected);
+        // And the attach face's refusal for the same row carries the same tag,
+        // with `inspected: true` — it opened the log.
+        let attached = last_run_refused(&LogContradiction::from(&bad));
+        assert_eq!(attached.disposition(), LastRunDisposition::LogInconsistent);
+        assert_eq!(attached.contradictions, listed.contradictions);
+        assert!(attached.inspected);
     }
 
     /// Both faces reduce through the same function, so they cannot disagree
@@ -456,7 +613,7 @@ mod last_run_tests {
         ] {
             assert_eq!(
                 last_run_from_events(&log).disposition(),
-                last_run_from_markers(&markers).disposition(),
+                last_run_from_markers(Ok(&markers)).disposition(),
                 "the attach face and the list face gave one session two words"
             );
         }

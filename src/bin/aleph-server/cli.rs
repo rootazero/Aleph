@@ -79,9 +79,11 @@ pub enum Command {
     },
     /// Self-diagnose runtime health and optionally apply mechanical repairs.
     ///
-    /// Inspects the data directory, instance lock, config file, and
-    /// shell-hook consent registry. Read-only by default; `--fix` applies
-    /// deterministic repairs (recreate data dir, clear a stale lock).
+    /// Runs the cold-process check registry (`DiagnosticEngine::default_registry`;
+    /// each finding names its check id, which `--only` / `--skip` take).
+    /// Read-only by default; `--fix` applies the mechanical repair each
+    /// repairable finding names and re-verifies it — the finding is the list
+    /// of what can be repaired, not this text.
     Doctor {
         /// Apply mechanical repairs for repairable findings.
         #[arg(long)]

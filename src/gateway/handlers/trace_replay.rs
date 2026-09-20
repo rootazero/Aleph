@@ -25,6 +25,12 @@
 //!   back open for members and owner-scoped HERE instead, see
 //!   [`handle_by_runs`].
 //!
+//! The family has a fourth member that does NOT live in this file and reads no
+//! trace table: [`trace.tool_output`](super::tool_output) serves one call's
+//! untruncated output out of `session_events`. It is the family's second
+//! member-open carve-out and is KeyChecked by the same predicate; its ruling is
+//! recorded beside its entry in `method_admin.rs`.
+//!
 //! ## The operator's half is ratified, and audited (human ruling, 2026-08-07)
 //!
 //! Admin-gating `trace.list`/`trace.get` decides WHO may read; it says nothing
@@ -173,13 +179,54 @@ pub async fn handle_by_runs(
         }
     };
 
+    // Structured file diffs are NOT in the trace rows: `LoopTraceEvent` carries
+    // no presentation, so `trace_protocol.rs`'s conversion stores `None` and a
+    // replayed transcript used to render every edit as a bare tool call while
+    // the live `tool_end` frame had shown the diff. The same struct IS
+    // persisted, one table over, under the same id — see
+    // [`presentations_for_session`].
+    //
+    // Read lazily: a request whose runs are all unowned (or whose `run_ids` is
+    // empty) answers `[]` regardless, and the read is the whole session event
+    // log. Indexed once per REQUEST and reused across runs — call ids are
+    // unique within a session, so this must not become a read per run.
+    let presentations = if params
+        .run_ids
+        .iter()
+        .take(MAX_RUNS)
+        .any(|r| owned_runs.contains(r))
+    {
+        presentations_for_session(&session_key, key_str).await
+    } else {
+        HashMap::new()
+    };
+
     let mut runs = serde_json::Map::new();
     for run_id in params.run_ids.into_iter().take(MAX_RUNS) {
         let events: Vec<Value> = if owned_runs.contains(&run_id) {
             match db.get_traces_by_task(&run_id).await {
                 Ok(traces) => traces
                     .into_iter()
-                    .map(|t| serde_json::to_value(&t.event).unwrap_or(Value::Null))
+                    .map(|t| {
+                        // `event` goes out UNMASKED on purpose: a trace row was
+                        // masked at write. Only the value coming out of
+                        // `presentations` was masked at serve — the seam is
+                        // spelled out at that call site, in
+                        // [`presentations_for_session`].
+                        let mut event = t.event;
+                        // Only ever FILLS a hole. If a future writer starts
+                        // putting a presentation on the trace row itself, that
+                        // one is already inside the write-time masking
+                        // invariant and wins.
+                        if let aleph_protocol::AgentTraceEvent::ToolCallCompleted { call, .. } =
+                            &mut event
+                        {
+                            if call.presentation.is_none() {
+                                call.presentation = presentations.get(&call.tool_id).cloned();
+                            }
+                        }
+                        serde_json::to_value(&event).unwrap_or(Value::Null)
+                    })
                     .collect(),
                 Err(e) => {
                     tracing::warn!(run_id = %run_id, error = %e, "trace.by_runs: load failed");
@@ -192,6 +239,142 @@ pub async fn handle_by_runs(
         runs.insert(run_id, Value::Array(events));
     }
     JsonRpcResponse::success(request.id, json!({ "runs": runs }))
+}
+
+/// This session's persisted tool presentations, indexed by call id, **masked**.
+///
+/// # Why the event log answers this
+///
+/// `apply_layer_two` hoists the tool's `_presentation` onto
+/// `ToolOutputMetadata.presentation` before the value is flattened for the
+/// model, and that metadata rides `SessionEvent::ToolResult` into
+/// `session_events`. The trace row for the same call carries `presentation:
+/// None` (see `gateway::trace_protocol`), so this is the only durable copy.
+///
+/// The join key is genuinely shared, which is the part worth checking rather
+/// than assuming: `SessionEvent::ToolResult.call_id` and
+/// `AgentTraceToolCallEnd.tool_id` are both `call.id.clone()` in
+/// `harness/agent/act.rs` — the `ToolResult` producers at :329, :540, :1118 and
+/// the trace producers at :461, :557, :795, :1130, :1247. (A test that seeds
+/// both sides itself cannot establish this; the fact lives at those lines.)
+///
+/// # Which side of the seam this is masked on
+///
+/// `handle_by_runs`'s two sources are masked on OPPOSITE sides, and that is
+/// coherent rather than an inconsistency to tidy up:
+///
+/// | source | masked where | why |
+/// |---|---|---|
+/// | `task_traces` rows (everything else the handler emits) | **at write**, by `execution_engine::unattended_redacting_sink::mask_trace_event` | those rows also go to channels and the WS `agent_trace` mirror; masking once at the producer covers every consumer |
+/// | `session_events` (this map, and only this map) | **at serve**, here | the event log is the MODEL's context and is unmasked by design — masking it at write would corrupt what the model reads back |
+///
+/// So the handler having no masker of its own is CORRECT, for a reason
+/// invisible from inside `trace_replay.rs`: masking belongs here **only** for
+/// the bytes this function newly introduces. A handler that masked everything
+/// it emits would be the same defect wearing the opposite sign — double-masking
+/// already-masked text, and papering over which producer owns the guarantee.
+/// Do not "fix" the asymmetry in either direction.
+///
+/// What makes this half non-optional: `HunkLine.text` is file content verbatim,
+/// so a `file_write` into a `.env` is exactly the credential the live
+/// [`RedactingEmitter`] strips off the `tool_end` frame. Same masker, same
+/// walk, one source: [`mask_presentation`](crate::exec::masker::mask_presentation).
+///
+/// **There is a third face, and it is not on this seam.** `tools.invoke`
+/// returns the registry's raw tool value, so it carries the un-hoisted
+/// `_presentation` and masks it in its own handler
+/// (`handlers::tools_invoke::mask_presentation_in_place`) — same function,
+/// same walk. It is listed here because "the two legs" was the sentence that
+/// made the door easy to miss; the census is the call sites of
+/// `mask_presentation`, not this paragraph.
+///
+/// # The asymmetry this leaves on ATTENDED runs, and why it stays
+///
+/// Both write-time legs are installed under `if unattended` —
+/// `mask_trace_event` at `run_loop/inner.rs:1006` and [`RedactingEmitter`] at
+/// `:647`. So the table's left column holds for unattended runs only, and on an
+/// **attended** run:
+///
+/// * the live `tool_end` frame showed the diff AND `result.output` in the clear;
+/// * the replayed event's `result.output` is still in the clear;
+/// * but the replayed presentation — this map — is masked.
+///
+/// That is deliberate and it is not a bug to tidy away. **Cause: replay has no
+/// attended/unattended signal.** Nothing on a `task_traces` row, and nothing
+/// reachable from `handle_by_runs`, records which kind of run wrote it, so
+/// "mask exactly when the write path would have" is not implementable here.
+/// Fail-closed is the only option actually available, and it is the right one:
+/// a leak is unrecoverable and a redaction is not.
+///
+/// **Do not resolve the inconsistency by deleting this masking.** The masker
+/// only matches credential-shaped strings, so the cost is `***REDACTED***`
+/// exactly where a credential sits in the user's own diff — not a redacted
+/// diff — while the alternative is putting a live credential on a
+/// client-facing RPC with no masker anywhere downstream. The real fix is to
+/// record attendedness on the trace row so replay can match write-time; that
+/// is a schema plus write-path change and is parked, not forgotten.
+///
+/// [`RedactingEmitter`]: crate::gateway::event_emitter::RedactingEmitter
+///
+/// # What an empty map means
+///
+/// "We did not find out" — no store published, or the read failed. Never "this
+/// call had no diff": the caller fills holes with it and shows nothing where it
+/// has nothing, rather than asserting an absence it cannot support.
+async fn presentations_for_session(
+    session_key: &SessionKey,
+    key_str: &str,
+) -> HashMap<String, aleph_protocol::Presentation> {
+    let Some(store) = crate::session::store::global_session_event_store() else {
+        return HashMap::new();
+    };
+    let events = match store.load_all_events(session_key).await {
+        Ok(events) => events,
+        Err(e) => {
+            tracing::warn!(
+                session_key = %key_str,
+                error = %e,
+                "trace.by_runs: event log read failed; replaying without presentations"
+            );
+            return HashMap::new();
+        }
+    };
+
+    let masker = crate::exec::masker::SecretMasker::new();
+    events
+        .into_iter()
+        .filter_map(|rec| match rec.event {
+            crate::session::events::SessionEvent::ToolResult {
+                call_id, output, ..
+            } => output.metadata.presentation.map(|mut p| {
+                // THE ONLY masking `trace.by_runs` does, and deliberately so —
+                // both halves of the seam, named here so the next reader does
+                // not have to derive it from two files:
+                //
+                //  * `task_traces` content (every other byte `handle_by_runs`
+                //    emits) arrives ALREADY MASKED, at write, by
+                //    `unattended_redacting_sink::mask_trace_event`. It must NOT
+                //    be masked again on the way out — that is redundant work
+                //    that hides which producer owns the guarantee.
+                //  * THIS presentation arrives UNMASKED from `session_events`,
+                //    which is unmasked by design because it is the model's own
+                //    context. It has no masker anywhere downstream, so it must
+                //    be masked here.
+                //
+                // Masked at index time, not at serve time, so no code path can
+                // hand out an unmasked entry.
+                //
+                // On an ATTENDED run this leaves the neighbouring
+                // `result.output` in the clear while this is masked. That is
+                // deliberate — replay records no attended/unattended signal, so
+                // fail-closed is the only option available. Do not delete this
+                // call to make the two agree; see this function's doc.
+                crate::exec::masker::mask_presentation(&masker, &mut p);
+                (call_id, p)
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The session a persisted run belongs to, or `None` when that cannot be
@@ -1155,6 +1338,225 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "a page of your own runs is not a cross-user read"
+        );
+    }
+
+    // ========================================================================
+    // Replayed presentations (the `tool_end` diff, served from the event log)
+    // ========================================================================
+
+    /// A `tool_call_completed` trace row, shaped the way `trace_protocol.rs`
+    /// writes one: `presentation: None`, always. The diff is what this section
+    /// is about, and it is never in this table.
+    fn tool_call_trace(run_id: &str, step: u32, call_id: &str) -> TaskTrace {
+        TaskTrace::new(
+            run_id,
+            step,
+            AgentTraceEvent::ToolCallCompleted {
+                iteration: 0,
+                call: aleph_protocol::AgentTraceToolCallEnd {
+                    tool_id: call_id.to_string(),
+                    tool_name: "file_edit".into(),
+                    input: json!({}),
+                    duration_ms: 3,
+                    presentation: None,
+                },
+                result: aleph_protocol::AgentTraceToolResult::Success {
+                    output: json!("ok"),
+                },
+            },
+        )
+    }
+
+    /// Append one `ToolResult` carrying `presentation` under `call_id`, the way
+    /// `apply_layer_two` + the harness do.
+    ///
+    /// Uses the crate's shared test event store: the process-global slot is
+    /// install-once, so every test in this binary observes the SAME instance
+    /// and each keeps to its own session key.
+    async fn seed_presentation(
+        key: &SessionKey,
+        seq: u64,
+        call_id: &str,
+        presentation: aleph_protocol::Presentation,
+    ) {
+        use crate::session::store::SessionEventStore;
+        let events = crate::session::store::install_test_event_store();
+        events
+            .append(
+                key,
+                seq,
+                &crate::session::events::SessionEvent::ToolResult {
+                    turn_id: uuid::Uuid::new_v4(),
+                    call_id: call_id.to_string(),
+                    output: crate::session::events::ToolOutput {
+                        value: json!("ok"),
+                        metadata: crate::session::events::ToolOutputMetadata {
+                            presentation: Some(presentation),
+                            ..Default::default()
+                        },
+                    },
+                    at: seq as i64,
+                },
+                seq as i64,
+            )
+            .await
+            .unwrap();
+    }
+
+    fn one_change(path: &str, line: &str) -> aleph_protocol::Presentation {
+        aleph_protocol::Presentation::FileChanges {
+            changes: vec![aleph_protocol::FileChange {
+                path: path.into(),
+                kind: aleph_protocol::FileChangeKind::Modified,
+                hunks: vec![aleph_protocol::Hunk {
+                    old_start: 1,
+                    new_start: 1,
+                    lines: vec![aleph_protocol::HunkLine {
+                        tag: aleph_protocol::LineTag::Add,
+                        text: line.into(),
+                    }],
+                }],
+                added: 1,
+                removed: 0,
+                unavailable: None,
+            }],
+        }
+    }
+
+    /// The wire this task exists to weld: a trace row stores no presentation,
+    /// so a replayed edit rendered as a bare tool call while the live
+    /// `tool_end` frame had shown the diff. The event log holds it under the
+    /// same id.
+    ///
+    /// The negative half matters as much: a call id the event log does not know
+    /// stays absent, rather than borrowing the neighbouring call's diff.
+    #[tokio::test]
+    async fn by_runs_replays_the_persisted_presentation() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&AgentTask::new(
+            "run-pres",
+            "s",
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+        db.insert_trace(&tool_call_trace("run-pres", 0, "call-known"))
+            .await
+            .unwrap();
+        db.insert_trace(&tool_call_trace("run-pres", 1, "call-unknown"))
+            .await
+            .unwrap();
+
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-presentation");
+        seed_session(&sessions, &key, "u-alice", &["run-pres"]).await;
+        seed_presentation(&key, 1, "call-known", one_change("src/a.rs", "let x = 1;")).await;
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_by_runs(
+                    req(json!({
+                        "session_key": key.to_key_string(),
+                        "run_ids": ["run-pres"],
+                    })),
+                    db,
+                    sessions,
+                ),
+            )
+            .await;
+
+        let result = resp.result.expect("success");
+        let events = result
+            .get("runs")
+            .and_then(|r| r.get("run-pres"))
+            .and_then(Value::as_array)
+            .expect("run present")
+            .clone();
+        assert_eq!(events.len(), 2);
+
+        let known = &events[0];
+        assert_eq!(known["kind"], "tool_call_completed");
+        assert_eq!(
+            known["call"]["presentation"]["kind"], "file_changes",
+            "the replayed call must carry the diff the event log holds: {known}"
+        );
+        assert_eq!(
+            known["call"]["presentation"]["changes"][0]["path"], "src/a.rs",
+            "{known}"
+        );
+
+        let unknown = &events[1];
+        assert!(
+            unknown["call"].get("presentation").is_none()
+                || unknown["call"]["presentation"].is_null(),
+            "a call id the event log does not know must stay diff-less: {unknown}"
+        );
+    }
+
+    /// `session_events` is unmasked by design — it is the model's own context.
+    /// `HunkLine.text` is file content verbatim, so a `file_write` into a
+    /// `.env` puts the credential there in plaintext, and the live `tool_end`
+    /// frame masks exactly that (Task 15). Replay must not be the second door.
+    ///
+    /// Asserts the REDACTION MARKER is present in the served response, not
+    /// merely that the secret is absent — "does not contain" passes on any
+    /// string that never had it. The secret is the codebase's own example key,
+    /// so `SecretMasker`'s pattern decides rather than this fixture.
+    #[tokio::test]
+    async fn by_runs_masks_the_replayed_presentation() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&AgentTask::new(
+            "run-secret",
+            "s",
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+        db.insert_trace(&tool_call_trace("run-secret", 0, "call-env"))
+            .await
+            .unwrap();
+
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-presentation-secret");
+        seed_session(&sessions, &key, "u-alice", &["run-secret"]).await;
+        seed_presentation(
+            &key,
+            1,
+            "call-env",
+            one_change(".env", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"),
+        )
+        .await;
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_by_runs(
+                    req(json!({
+                        "session_key": key.to_key_string(),
+                        "run_ids": ["run-secret"],
+                    })),
+                    db,
+                    sessions,
+                ),
+            )
+            .await;
+
+        let served = serde_json::to_string(&resp.result.expect("success")).unwrap();
+        assert!(
+            served.contains("REDACTED"),
+            "the served diff must carry the redaction marker: {served}"
+        );
+        assert!(
+            !served.contains("AKIAIOSFODNN7EXAMPLE"),
+            "and the credential itself must be gone: {served}"
         );
     }
 }

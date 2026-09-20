@@ -67,112 +67,111 @@ use crate::tools::service::ToolService;
 // SubagentTool struct
 // =============================================================================
 
-/// A `LoopTool` that delegates tasks to a temporary `AgentLoop`.
-pub struct SubagentTool {
+/// Role-grouped sub-config — default provider + `provider_hint` override map.
+pub(super) struct ProviderRouting {
     pub(super) provider: Arc<dyn AiProvider>,
-    pub(super) chain: crate::harness::chain_context::ChainContext,
+    pub(super) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+}
+
+/// Role-grouped sub-config — registry, plugin-registry handle, teammate /
+/// messaging plumbing, parent agent identity.
+pub(super) struct AgentResolution {
     pub(super) agent_registry: Arc<AgentRegistry>,
-    pub(super) background_tracker: Arc<BackgroundAgentTracker>,
-    /// Shared session actor threaded to child `AgentRuntime` instances.
-    pub(super) session: Arc<dyn SessionService>,
-    /// Parent tool service; the harness decorates it with an allowlist.
-    pub(super) parent_tools: Arc<dyn ToolService>,
-    /// Optional teammate manager — resolves `team_name` → team id (creating
-    /// on first use) for the `send_message` / `read_inbox` faces.
     pub(super) teammate_manager: Option<Arc<TeammateManager>>,
-    /// Optional message router for `send_message` actions.
     pub(super) message_router: Option<Arc<MessageRouter>>,
-    /// Optional inbox for `read_inbox` actions.
     pub(super) inbox: Option<Arc<Inbox>>,
-    /// Identifies the calling agent (default: "primary").
     pub(super) parent_agent_id: String,
-    /// Spec 1 G2 — threaded into child `AgentRuntime`s so the spawner emits
-    /// `RawMemory(Delegation)` after each successful local subagent run.
-    pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
-    /// Optional capture-filter registry threaded with the writer.
-    pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
-    /// Parent session id stamped onto emitted Delegation rows. `None` leaves
-    /// the row untagged for session-level lookups.
-    pub(super) parent_session_id: Option<String>,
-    /// Stage F (P2) — parent trace sink threaded into background subagent
-    /// runtimes wrapped by `ForwardingTraceSink` for progress observation.
-    /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
-    pub(super) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
-    /// A2 — shared concurrency cap; one per tool instance (= per agent run).
-    pub(super) subagent_semaphore: Arc<tokio::sync::Semaphore>,
-    /// A3 — parent run's cancellation token. Each spawn path derives a
-    /// `child_token()` so a cancelled parent stops its subagents.
-    pub(super) parent_cancel: Option<CancellationToken>,
-    /// B2 — shared plugin-registry handle, threaded into each `AgentRuntime`.
-    /// `Arc<RwLock<..>>` (not an owned snapshot) so `McpScope::provision` reads
-    /// the live registry under its own guard at spawn time.
     pub(super) plugin_registry:
         Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
-    /// B3 — stall watchdog config inherited by subagents.
-    pub(super) stall_config: Option<crate::harness::StallConfig>,
-    /// B3 — consecutive-failure cap inherited by subagents.
-    pub(super) consecutive_failure_cap: Option<usize>,
-    /// B3 — per-turn wall-clock timeout inherited by subagents.
-    pub(super) turn_timeout: Option<std::time::Duration>,
-    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
-    /// map (the `new()` default) means every subagent uses `provider`.
-    pub(super) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
-    /// Stage 5a (#9) — the main harness's guardrail registry, threaded into
-    /// every child `AgentRuntime` so subagents enforce the same
-    /// Input/Output/ToolCall checks as the spawning harness. `None` (the
-    /// `new()` default) keeps subagents unguarded, matching a main harness
-    /// that has no registry configured.
+}
+
+/// Role-grouped sub-config — background tracker, shared concurrency cap,
+/// parent run's cancellation token.
+pub(super) struct BackgroundConfig {
+    pub(super) background_tracker: Arc<BackgroundAgentTracker>,
+    pub(super) subagent_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(super) parent_cancel: Option<CancellationToken>,
+}
+
+/// Role-grouped sub-config — Delegation hook emit (RawMemory + capture
+/// filter) and parent session id stamped onto emitted rows.
+pub(super) struct MemoryCapture {
+    pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    pub(super) parent_session_id: Option<String>,
+}
+
+/// Role-grouped sub-config — session actor, parent tool service, chain depth.
+/// Held together because the spawner reads them as a unit when constructing
+/// the child `AgentRuntime`.
+pub(super) struct ToolingContext {
+    pub(super) session: Arc<dyn SessionService>,
+    pub(super) parent_tools: Arc<dyn ToolService>,
+    pub(super) chain: crate::harness::chain_context::ChainContext,
+}
+
+/// Role-grouped sub-config — guardrails, resilience knobs (stall /
+/// consecutive-failure / per-turn timeout), and run-style inheritance
+/// (strategy body, session mode).
+pub(super) struct PolicyInheritance {
     pub(super) guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Welded strategy `<strategy>` body for the parent run. Threaded into
-    /// every child `AgentRuntime` via `build_runtime` so spawned subagents
-    /// share the run-global strategy. `None` (the `new()` default) keeps
-    /// subagents strategy-free, byte-identical to the pre-strategy build.
     pub(super) strategy: Option<String>,
-    /// Parent run's usage mode (chat / work / code), threaded into every
-    /// spawn so the child prompt names its inherited partition. `None` (the
-    /// `new()` default, and the Work identity partition the wiring site
-    /// skips) keeps child prompts byte-identical.
     pub(super) session_mode: Option<crate::config::types::policies::SessionMode>,
-    /// VESR v1.1 (b) — routing store threaded into every child `AgentRuntime`
-    /// so spawned subagents capture their own routing experience. `None` (the
-    /// `new()` default) keeps subagents capture-free.
-    pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
-    /// B15 — the parent runner's boot-time `[execution] max_iterations`,
-    /// inherited by children that declare no cap of their own. `None` (the
-    /// `new()` default) still yields a capped child — the spawner falls back to
-    /// `FALLBACK_MAX_ITERATIONS` — it just isn't the operator's configured value.
+    pub(super) stall_config: Option<crate::harness::StallConfig>,
+    pub(super) consecutive_failure_cap: Option<usize>,
+    pub(super) turn_timeout: Option<std::time::Duration>,
+}
+
+/// Role-grouped sub-config — iteration cap, parallel-tool cap,
+/// `[context_budget]` config + per-run refiner + cheap-tier summarizer,
+/// and verifier chain.
+pub(super) struct BudgetInheritance {
     pub(super) default_max_iterations: Option<usize>,
-    /// The parent runner's `[tool_service] parallel_tool_concurrency`,
-    /// inherited so a child's Act-phase cap (including 0/1 = disabled)
-    /// matches the operator's configured value. `None` (the `new()` default)
-    /// leaves the spawner on the config default.
     pub(super) parallel_tool_concurrency: Option<usize>,
-    /// The parent runner's `[context_budget]` config, inherited so a spawned
-    /// child builds its own budget / compactor / preflight pipeline. `None`
-    /// (the `new()` default, or `[context_budget]` disabled) leaves the child
-    /// context-unmanaged, matching the main harness under the same config.
     pub(super) context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
-    /// The parent runner's per-run budget refiner + its configured
-    /// context-window override, inherited so a spawned child's **prompt**
-    /// budget is re-keyed onto the model the child will actually run on
-    /// rather than the chain minimum. `None` (the `new()` default) keeps the
-    /// unrefined chain-minimum derivation.
     pub(super) context_budget_refiner:
         Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
-    /// See [`Self::context_budget_refiner`] — travels with it.
     pub(super) primary_context_window: Option<u32>,
-    /// The parent runner's cheap-tier summarization provider, inherited so the
-    /// child's compactor bills its side-channel to the same flash sibling
-    /// rather than the main reasoning model. `None` (the `new()` default, or no
-    /// cheap tier resolved) summarizes on the main LLM, as before.
     pub(super) cheap_summary_provider: Option<Arc<dyn AiProvider>>,
-    /// The parent runner's verifier chain, inherited so spawned subagents
-    /// are caught by the same structural watchdogs (ToolLoopVerifier,
-    /// StopHookVerifier, ScratchpadGoalVerifier, MutationEvidenceVerifier)
-    /// as the parent run. `None` (the `new()` default) leaves the child on
-    /// the no-verifier path — the legacy behaviour, but explicitly opted-in
-    /// rather than the silent default that AGENTS-R4-01 fixed.
     pub(super) verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
+}
+
+/// Role-grouped sub-config — routing-experience store threaded into every
+/// child `AgentRuntime`.
+pub(super) struct RoutingExperience {
+    pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+}
+
+/// Role-grouped sub-config — parent trace sink threaded into background
+/// subagents via `ForwardingTraceSink` for progress observation.
+pub(super) struct TraceContext {
+    pub(super) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+}
+
+/// A `LoopTool` that delegates tasks to a temporary `AgentLoop`.
+///
+/// Decomposed into role-grouped sub-configs so each concern lives in exactly
+/// one place. The full field set (33 fields) was previously a flat struct;
+/// now grouped by responsibility:
+///   * `providers`             — default provider + `provider_hint` overrides
+///   * `agent_resolution`      — registry, plugin-registry, teammate/messaging, parent id
+///   * `background`            — tracker, shared concurrency cap, parent cancel
+///   * `memory`                — Delegation hook emit + parent session
+///   * `tools`                 — session actor, parent tool service, chain depth
+///   * `policy_inheritance`    — guardrails + resilience + run-style
+///   * `budget_inheritance`    — iteration/parallel/context-budget/verifier
+///   * `routing`               — routing-experience store
+///   * `trace`                 — trace sink
+pub struct SubagentTool {
+    pub(super) providers: ProviderRouting,
+    pub(super) agent_resolution: AgentResolution,
+    pub(super) background: BackgroundConfig,
+    pub(super) memory: MemoryCapture,
+    pub(super) tools: ToolingContext,
+    pub(super) policy_inheritance: PolicyInheritance,
+    pub(super) budget_inheritance: BudgetInheritance,
+    pub(super) routing: RoutingExperience,
+    pub(super) trace: TraceContext,
 }
 
 impl SubagentTool {
@@ -192,43 +191,57 @@ impl SubagentTool {
         parent_tools: Arc<dyn ToolService>,
     ) -> Self {
         Self {
-            provider,
-            chain,
-            agent_registry,
-            background_tracker,
-            session,
-            parent_tools,
-            teammate_manager: None,
-            message_router: None,
-            inbox: None,
-            parent_agent_id: "primary".to_string(),
-            raw_memory_writer: None,
-            capture_registry: None,
-            parent_session_id: None,
-            trace_sink: None,
-            // W27 — the operator's `[execution] max_concurrent_subagents`,
-            // falling back to `DEFAULT_MAX_CONCURRENT_SUBAGENTS` in any process
-            // that never installed one (CLI, tests). Private until a session is
-            // named: `with_parent_session_id` swaps in that session's shared
-            // semaphore, because background children outlive the run.
-            subagent_semaphore: types::subagent_semaphore_for(None),
-            parent_cancel: None,
-            plugin_registry: None,
-            stall_config: None,
-            consecutive_failure_cap: None,
-            turn_timeout: None,
-            provider_overrides: HashMap::new(),
-            guardrails: None,
-            strategy: None,
-            session_mode: None,
-            routing_store: None,
-            default_max_iterations: None,
-            parallel_tool_concurrency: None,
-            context_budget_config: None,
-            context_budget_refiner: None,
-            primary_context_window: None,
-            cheap_summary_provider: None,
-            verifier_chain: None,
+            providers: ProviderRouting {
+                provider,
+                provider_overrides: HashMap::new(),
+            },
+            agent_resolution: AgentResolution {
+                agent_registry,
+                teammate_manager: None,
+                message_router: None,
+                inbox: None,
+                parent_agent_id: "primary".to_string(),
+                plugin_registry: None,
+            },
+            background: BackgroundConfig {
+                background_tracker,
+                // W27 — the operator's `[execution] max_concurrent_subagents`,
+                // falling back to `DEFAULT_MAX_CONCURRENT_SUBAGENTS` in any process
+                // that never installed one (CLI, tests). Private until a session is
+                // named: `with_parent_session_id` swaps in that session's shared
+                // semaphore, because background children outlive the run.
+                subagent_semaphore: types::subagent_semaphore_for(None),
+                parent_cancel: None,
+            },
+            memory: MemoryCapture {
+                raw_memory_writer: None,
+                capture_registry: None,
+                parent_session_id: None,
+            },
+            tools: ToolingContext {
+                session,
+                parent_tools,
+                chain,
+            },
+            policy_inheritance: PolicyInheritance {
+                guardrails: None,
+                strategy: None,
+                session_mode: None,
+                stall_config: None,
+                consecutive_failure_cap: None,
+                turn_timeout: None,
+            },
+            budget_inheritance: BudgetInheritance {
+                default_max_iterations: None,
+                parallel_tool_concurrency: None,
+                context_budget_config: None,
+                context_budget_refiner: None,
+                primary_context_window: None,
+                cheap_summary_provider: None,
+                verifier_chain: None,
+            },
+            routing: RoutingExperience { routing_store: None },
+            trace: TraceContext { trace_sink: None },
         }
     }
 
@@ -240,7 +253,7 @@ impl SubagentTool {
         mut self,
         cfg: crate::context::budget::ContextBudgetConfig,
     ) -> Self {
-        self.context_budget_config = Some(cfg);
+        self.budget_inheritance.context_budget_config = Some(cfg);
         self
     }
 
@@ -256,8 +269,8 @@ impl SubagentTool {
         refiner: crate::orchestrator::deps_builder::ContextBudgetRefiner,
         primary_context_window: Option<u32>,
     ) -> Self {
-        self.context_budget_refiner = Some(refiner);
-        self.primary_context_window = primary_context_window;
+        self.budget_inheritance.context_budget_refiner = Some(refiner);
+        self.budget_inheritance.primary_context_window = primary_context_window;
         self
     }
 
@@ -267,7 +280,7 @@ impl SubagentTool {
     /// compactor at all, this one stops it billing the main model to run it.
     #[must_use]
     pub fn with_cheap_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
-        self.cheap_summary_provider = Some(provider);
+        self.budget_inheritance.cheap_summary_provider = Some(provider);
         self
     }
 
@@ -281,7 +294,7 @@ impl SubagentTool {
     /// matching pre-2026-09 behaviour but explicitly opted-in.
     #[must_use]
     pub fn with_verifier_chain(mut self, chain: Arc<crate::verification::VerifierChain>) -> Self {
-        self.verifier_chain = Some(chain);
+        self.budget_inheritance.verifier_chain = Some(chain);
         self
     }
 
@@ -289,7 +302,7 @@ impl SubagentTool {
     /// child with no declared `max_iterations` inherits it.
     #[must_use]
     pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
-        self.default_max_iterations = Some(max_iterations);
+        self.budget_inheritance.default_max_iterations = Some(max_iterations);
         self
     }
 
@@ -298,13 +311,13 @@ impl SubagentTool {
     /// value instead of the hardcoded default.
     #[must_use]
     pub const fn with_parallel_tool_concurrency(mut self, cap: usize) -> Self {
-        self.parallel_tool_concurrency = Some(cap);
+        self.budget_inheritance.parallel_tool_concurrency = Some(cap);
         self
     }
 
     /// Stage 5a (#9) — wire the guardrail registry inherited by subagents.
     pub fn with_guardrails(mut self, registry: Arc<crate::guardrails::GuardrailRegistry>) -> Self {
-        self.guardrails = Some(registry);
+        self.policy_inheritance.guardrails = Some(registry);
         self
     }
 
@@ -315,7 +328,7 @@ impl SubagentTool {
         mut self,
         overrides: HashMap<String, Arc<dyn AiProvider>>,
     ) -> Self {
-        self.provider_overrides = overrides;
+        self.providers.provider_overrides = overrides;
         self
     }
 
@@ -325,28 +338,28 @@ impl SubagentTool {
         mut self,
         registry: Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>,
     ) -> Self {
-        self.plugin_registry = Some(registry);
+        self.agent_resolution.plugin_registry = Some(registry);
         self
     }
 
     /// B3 — wire the stall watchdog config inherited by subagents.
     #[must_use]
     pub const fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
-        self.stall_config = Some(config);
+        self.policy_inheritance.stall_config = Some(config);
         self
     }
 
     /// B3 — wire the consecutive-failure cap inherited by subagents.
     #[must_use]
     pub const fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
-        self.consecutive_failure_cap = Some(cap);
+        self.policy_inheritance.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
     #[must_use]
     pub const fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.turn_timeout = Some(timeout);
+        self.policy_inheritance.turn_timeout = Some(timeout);
         self
     }
 
@@ -354,27 +367,27 @@ impl SubagentTool {
     /// messaging faces).
     #[must_use]
     pub fn with_teammate_manager(mut self, mgr: Arc<TeammateManager>) -> Self {
-        self.teammate_manager = Some(mgr);
+        self.agent_resolution.teammate_manager = Some(mgr);
         self
     }
 
     /// Set the message router for `send_message` actions.
     #[must_use]
     pub fn with_message_router(mut self, router: Arc<MessageRouter>) -> Self {
-        self.message_router = Some(router);
+        self.agent_resolution.message_router = Some(router);
         self
     }
 
     /// Set the inbox for `read_inbox` actions.
     #[must_use]
     pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Self {
-        self.inbox = Some(inbox);
+        self.agent_resolution.inbox = Some(inbox);
         self
     }
 
     /// Set the parent agent id (identifies the calling agent).
     pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
-        self.parent_agent_id = id.into();
+        self.agent_resolution.parent_agent_id = id.into();
         self
     }
 
@@ -383,7 +396,7 @@ impl SubagentTool {
         mut self,
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
-        self.raw_memory_writer = Some(writer);
+        self.memory.raw_memory_writer = Some(writer);
         self
     }
 
@@ -392,7 +405,7 @@ impl SubagentTool {
         mut self,
         registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
-        self.capture_registry = Some(registry);
+        self.memory.capture_registry = Some(registry);
         self
     }
 
@@ -404,15 +417,15 @@ impl SubagentTool {
         // there — and the cap has to be shared across a session's runs because
         // background children outlive the run that spawned them. See
         // `types::subagent_semaphore_for`.
-        self.subagent_semaphore = types::subagent_semaphore_for(Some(&sid));
-        self.parent_session_id = Some(sid);
+        self.background.subagent_semaphore = types::subagent_semaphore_for(Some(&sid));
+        self.memory.parent_session_id = Some(sid);
         self
     }
 
     /// Stage F (P2) — thread the parent trace sink so background subagents can
     /// be observed via `ForwardingTraceSink`. Only wired on the background path.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
-        self.trace_sink = Some(sink);
+        self.trace.trace_sink = Some(sink);
         self
     }
 
@@ -423,7 +436,7 @@ impl SubagentTool {
         mut self,
         store: Arc<crate::routing::RoutingExperienceStore>,
     ) -> Self {
-        self.routing_store = Some(store);
+        self.routing.routing_store = Some(store);
         self
     }
 
@@ -431,7 +444,7 @@ impl SubagentTool {
     /// stop when the parent is cancelled.
     #[must_use]
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
-        self.parent_cancel = Some(token);
+        self.background.parent_cancel = Some(token);
         self
     }
 
@@ -440,7 +453,7 @@ impl SubagentTool {
     /// strategy-free.
     #[must_use]
     pub fn with_strategy(mut self, strategy: String) -> Self {
-        self.strategy = Some(strategy);
+        self.policy_inheritance.strategy = Some(strategy);
         self
     }
 
@@ -451,7 +464,7 @@ impl SubagentTool {
         mut self,
         mode: crate::config::types::policies::SessionMode,
     ) -> Self {
-        self.session_mode = Some(mode);
+        self.policy_inheritance.session_mode = Some(mode);
         self
     }
 }

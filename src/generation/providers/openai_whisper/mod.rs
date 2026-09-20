@@ -384,7 +384,15 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> 
             Some("file_path".to_string()),
         ));
     }
-    // Resolve symlinks to defeat TOCTOU; reject canonical paths that escape.
+    // Resolve symlinks to defeat TOCTOU; reject canonical paths that escape
+    // the working directory via either `..` components OR absolute paths.
+    //
+    // The pre-fix check only rejected `Component::ParentDir` AFTER canonicalize.
+    // A symlink whose target is an absolute path (e.g. `look.mp3 → /etc/passwd`)
+    // canonicalizes to `/etc/passwd` — a Normal+Root-prefixed path with NO
+    // ParentDir components — and would pass the old check. The upstream
+    // check above rejects absolute INPUT paths, but does NOT cover absolute
+    // SYMLINK TARGETS, which is the gap a hostile caller exploits.
     let canonical = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
         GenerationError::invalid_parameters(
             format!(
@@ -395,9 +403,18 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> 
             Some("file_path".to_string()),
         )
     })?;
+    // Resolve the current working directory once for the descendant check.
+    // If CWD itself cannot be canonicalized, fall back to rejecting any
+    // absolute canonical path (a defense-in-depth posture).
+    let cwd_canonical = tokio::fs::canonicalize(".").await.ok();
+    let escapes_cwd = match &cwd_canonical {
+        Some(cwd) => !canonical.starts_with(cwd),
+        None => canonical.is_absolute(),
+    };
     if canonical
         .components()
         .any(|c| matches!(c, Component::ParentDir))
+        || escapes_cwd
     {
         return Err(GenerationError::invalid_parameters(
             format!(

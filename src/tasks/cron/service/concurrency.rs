@@ -272,12 +272,15 @@ pub async fn phase3_writeback<C: Clock>(
             output_summary: None,
             delivery_status: result
                 .delivery_status
-                // delivery_status is stored as an opaque label string. The
-                // Debug-derived lowercase form below is the legacy wire format;
-                // migrations to `DeliveryStatus::label()` (PascalCase) require
-                // a separate cross-version migration because existing rows are
-                // not parsed back through the enum.
-                .map(|s| format!("{s:?}").to_lowercase()),
+                // Use the same PascalCase label `DeliveryStatus::from_label`
+                // accepts — the previous `format!("{s:?}").to_lowercase()`
+                // wrote `"delivered"` / `"notdelivered"` / `"notrequested"`
+                // that no caller could ever round-trip back through the enum
+                // (TASKS-002). Pre-existing rows keep the lowercase legacy
+                // form and are not silently re-labeled; from_label returns
+                // `None` for them, which is the right signal that the row is
+                // from before the wire-format fix.
+                .map(|s| s.label().to_string()),
             created_at: clock.now_ms(),
             retry_category,
             retryable,

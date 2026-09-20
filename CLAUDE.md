@@ -97,7 +97,7 @@
 16. **孪生子系统 / 第 N 次复发** — 一边修好的判据要**主动搬过去**，别等它在另一边被重新发现（改动一个时问：它的孪生怎么回答同一问题）。⚠️ 一条注释里写着数目（"两个孪生"/"三处"）就是一张会腐烂的名单——把那一问挂到**已经知道集合是什么的那张表**上。
 17. **一份"展示用"的东西，提交前必须能指出渲染它的那一行代码** — 指不出就是 CUT，不是"以后再接"。**错的标签比缺的贵**；不认识的状态词一律读作「我无法担保」；`X::default()` 当占位会替每个字段说出一个具体的谎。
 18. **量具会骗人** — 数字要带着它测的**谓词**和它测于哪个 **commit**；一次扫描只为**它枚举过的那些形状**背书（结论的作用域是**方法**，不是目录）；变异之后**先看红的名单是不是预期的那一份**，再看条数；**别人的仪器你重复测量，自己的仪器你先怀疑它** → [附录 C](docs/reference/FEATURE_LOCATOR.md)
-19. **一次加宽，把每一处「这里只会有一个」同时变成缺陷点** — 一个事实的**键或推导**，比这次变更刚造出来的那个世界更粗。写「现在可以有两个 X 了」的那一笔不会去动任何一处假设只有一个 X 的地方，而那些地方**全都继续编译、继续通过、继续给出一个看起来合法的答案**。任何一次加宽之后都问一遍：**这一笔刚刚把什么变成了复数，而什么还在按单数计数？** 候选是键、路径、目录名、map 的键类型、叫「当前那个」的字段、每一条 `if let Some(x) = the_one_x`。与 §12 的区别是**粒度**（三处缺陷各自都只有一个作者，它们只是都在数「一个」），与 §16 的区别是这里讲的是**第二个实例刚出生**的那一刻 → [附录 D.0.181](docs/reference/FEATURE_LOCATOR.md)
+19. **一次加宽，把每一处「这里只会有一个」同时变成缺陷点** — 一个事实的**键或推导**，比这次变更刚造出来的那个世界更粗。写「现在可以有两个 X 了」的那一笔不会去动任何一处假设只有一个 X 的地方，而那些地方**全都继续编译、继续通过、继续给出一个看起来合法的答案**。任何一次加宽之后都问一遍：**这一笔刚刚把什么变成了复数，而什么还在按单数计数？** 候选是键、路径、目录名、map 的键类型、叫「当前那个」的字段、每一条 `if let Some(x) = the_one_x`。与 §12 的区别是**粒度**（三处缺陷各自都只有一个作者，它们只是都在数「一个」），与 §16 的区别是这里讲的是**第二个实例刚出生**的那一刻 → [附录 D.0.189](docs/reference/FEATURE_LOCATOR.md)
 
 ---
 ## 📍 子系统路由 (Read Before Editing)
@@ -111,7 +111,7 @@
 | `src/tool_output/` | FL §2.7 §3.14 | E.2 | — |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · FL §3.2–§3.14 | E.3 | — |
 | `src/builtin_tools/file_search/` | FL §3.4 | E.0 E.3 | `qa/file_search/run.sh {floor,page,reach,steer}` · `cargo bench --bench file_search_scan` |
-| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` · `qa/resume_boundary/run.sh {crash,attribute,claims,denied,rewind,knobs,holes}` |
+| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` · `qa/resume_boundary/run.sh {claims,denied,rewind,knobs,holes,parked,unanswered,ratchet,parallel,undecodable,attribute,tombstone}` |
 | `src/gateway/btw/` | FL §4.14 的机制图 · [SECURITY.md](docs/reference/SECURITY.md) 只读地板 | E.4 | `qa/btw_tui/run.sh {frames,promote}` |
 | `src/gateway/session_store/` `session_manager/` | FL §6.9 | E.0 | `qa/session_order/run.sh` |
 | `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FL §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量） | E.0 | — |
@@ -129,6 +129,7 @@
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · FL §4.7 §6.8 §6.9 | E.7 | `qa/picker_nav/run.sh` |
 | `src/canvas/` + Panel canvas 视图 | [CANVAS.md](docs/reference/CANVAS.md) · FL §6.10 | E.7 | `qa/canvas/run.sh` |
 | `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | FL §5.4 §5.11 §5.13 §5.23 | E.0（跨 crate wire 契约） | `qa/agents_viz/run.sh claims`（无过滤连接 = TUI 的形状；没有 pty，不启动 `aleph-tui`） |
+| `shared/ui_logic/` + 呈现侧信道（`protocol/src/{file_change,context_breakdown}.rs` · `exec/masker.rs` · `handlers/{tool_output,context_breakdown}.rs`） | [TRANSCRIPT_RENDERING.md](docs/reference/TRANSCRIPT_RENDERING.md) · FL §6.13 | E.0 E.1 E.3 E.4 E.7 | — （Phase B 起 TUI 是 `transcript/` 与 `context.breakdown` 的客户端；**`trace.tool_output` 仍零客户端**）|
 
 > **对照表已做完，别重做**：openclaw · codex · hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz · deepseek-harness。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 
@@ -240,3 +241,21 @@ cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders�
 
 - **长期记忆**：走全局 `~/.claude/projects/.../memory/`（跨会话、Git 不追踪）。**不在项目内另造 MEMORY.md**——避免与全局记忆双源冲突。
 - **质量门 (Hooks)**：当前**未挂** `.claude/hooks/`。本文件的规则目前靠模型遵守；未来如需强制执行层（如 PostToolUse → `cargo fmt`），在 `.claude/hooks/` 配置即可。
+
+---
+## Agent skills
+
+> 本段由 `/setup-matt-pocock-skills` 生成，**只放指针**；详情在 `docs/agents/`（Tier 2）。
+> **消费者**＝ `mattpocock-skills` plugin（`/to-issues` `/triage` `/to-prd` `/diagnose` `/tdd` `/grill-with-docs` `/code-review` 等）。它**不随本仓库分发**——代码装在各机器的 `~/.claude/plugins/`，启用声明在仓库的 `.claude/settings.json` → `enabledPlugins`。**新机器若未安装，下面三份配置零消费者、静默不生效**（判据 §7），跑 `/plugin` 装上即可。
+
+### Issue tracker
+
+Issues 在 GitHub（`rootazero/Aleph`），经 `gh` CLI 读写。见 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)。
+
+### Triage labels
+
+五个规范角色直接用同名标签字符串（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）；除 `wontfix` 外远端尚未创建，首次用到时 `gh label create`。见 [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)。
+
+### Domain docs
+
+Single-context 布局。领域真源是 `docs/reference/GLOSSARY.md` + `FEATURE_LOCATOR.md`；`CONTEXT.md` 与 `docs/adr/` **尚未创建且这是预期状态**，由 `/grill-with-docs` 懒创建。见 [`docs/agents/domain.md`](docs/agents/domain.md)。

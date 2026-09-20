@@ -5,13 +5,18 @@
 // The two projection paths live in sibling modules: `events` (StreamEvent ->
 // state) and `trace` (AgentTraceEvent -> state).
 
+mod context_view;
+mod cost;
 mod events;
 mod trace;
 
 #[cfg(test)]
 mod tests;
 
-use std::time::{Duration, Instant};
+pub use context_view::ContextView;
+pub use cost::{CostTally, CostView};
+
+use std::time::Instant;
 
 use aleph_protocol::plan::PlanSnapshot;
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
@@ -19,10 +24,12 @@ use aleph_protocol::runtime::RuntimeAgentEntry;
 use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
+use shared_ui_logic::state::{scroll_action, ListCursor, ScrollAction};
+use shared_ui_logic::transcript::Modality;
 
 use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
-use super::slash::{LocalCommand, ToolProgressMode};
+use super::slash::{LocalCommand, SessionKnob, ToolProgressMode};
 
 // ---------------------------------------------------------------------------
 // Action
@@ -57,8 +64,12 @@ pub enum Action {
     ScrollDown(usize),
     /// Jump to the bottom of the chat
     ScrollToBottom,
-    /// Scroll to bottom only if `auto_scroll` is enabled
-    ScrollToBottomIfAutoScroll,
+
+    // -- Folding --
+    /// Fold or unfold one tool row, by tool call id.
+    ToggleRow(String),
+    /// Unfold every tool row, or fold them all if none is folded.
+    ToggleExpandAll,
 
     // -- Focus --
     /// Focus the input textarea
@@ -145,62 +156,49 @@ pub enum Focus {
     Btw,
     /// The `/agents` overlay (sub-agent list + per-agent run view).
     Agents,
+    /// The `/context` overlay (measured prompt layout of the last turn).
+    Context,
 }
 
 // ---------------------------------------------------------------------------
-// Tool execution tracking
+// Transcript
 // ---------------------------------------------------------------------------
 
-/// Current status of a tool execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolStatus {
-    Running,
-    Success,
-    Failed,
-    /// The run ended without a terminal result ever reaching this row.
-    ///
-    /// Live tool frames ride the deliberately-lossy `agent_trace` mirror
-    /// (bounded mpsc + `try_send`), so a busy run can drop a
-    /// `ToolCallCompleted`. `RunComplete` reconciles against the authoritative
-    /// `summary.tool_summaries`; anything still `Running` after that had no
-    /// authoritative record either. Render it as unknown rather than guessing
-    /// success — a spinner that never stops reads as "still working", which is
-    /// the one thing it definitely is not.
-    Unknown,
-}
+/// The transcript is a flat, chronological list of
+/// [`shared_ui_logic::transcript::TranscriptEntry`].
+///
+/// # What replaced what, and why the shape had to change
+///
+/// This crate used to hold `ChatMessage::{User, Assistant, System}` with the
+/// turn's tool calls nested inside `Assistant { tools: Vec<ToolExecution> }`.
+/// Nesting is what made interleaving impossible: a tool could only ever be
+/// drawn with its assistant message, so every tool call in a turn rendered
+/// above all of that turn's text no matter when it actually ran. Tool rows are
+/// peers here, appended when they happen.
+///
+/// `ToolExecution` / `ToolStatus` are gone with it, replaced by the shared
+/// `ToolRow` / `RowStatus` the Panel will paint from too. The one piece of
+/// `ToolStatus` worth restating is its `Unknown`: live tool frames ride the
+/// deliberately-lossy `agent_trace` mirror (bounded mpsc + `try_send`), so a
+/// busy run can drop a `ToolCallCompleted`; `RunComplete` reconciles against
+/// the authoritative `summary.tool_summaries`, and anything still `Running`
+/// after that had no authoritative record either. That is now
+/// `RowStatus::Pending` by way of [`ToolRow::settle_resumed`], which carries
+/// the same rule — never a spinner that turns forever, never a fabricated
+/// success.
+///
+/// `ToolExecution::progress` has no separate home: a progress line IS the body
+/// of a running row, and the result replaces it on `finish`.
+///
+/// `RowStatus` is deliberately NOT re-exported here: nothing outside the tests
+/// names it through this module, and a facade that lists a type no caller
+/// reaches is the kind of always-true claim this repo pays for later. The
+/// tests import it from `shared_ui_logic` like every other consumer does.
+pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry};
 
-/// State of a single tool execution within an assistant message.
-#[derive(Debug, Clone)]
-pub struct ToolExecution {
-    pub id: String,
-    pub name: String,
-    pub params: String,
-    pub status: ToolStatus,
-    pub duration: Option<Duration>,
-    pub progress: Option<String>,
-    pub error: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Chat messages
-// ---------------------------------------------------------------------------
-
-/// A single message in the chat history.
-#[derive(Debug, Clone)]
-pub enum ChatMessage {
-    User {
-        content: String,
-        timestamp: DateTime<Utc>,
-    },
-    Assistant {
-        content: String,
-        tools: Vec<ToolExecution>,
-        reasoning: Option<String>,
-        is_streaming: bool,
-    },
-    System {
-        content: String,
-    },
+/// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
+fn as_ms(t: DateTime<Utc>) -> Option<u64> {
+    u64::try_from(t.timestamp_millis()).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -630,20 +628,19 @@ pub fn provider_picker_rows(
 // AppState
 // ---------------------------------------------------------------------------
 
-/// Central application state. Owned by the main loop, mutated through
-/// methods that enforce invariants (e.g. `auto_scroll` toggling).
-/// Which per-session knob a local command just wrote.
-///
-/// One enum rather than five setters so the status bar and the write paths
-/// enumerate the same list — a knob added here without a renderer is a compile
-/// error in the `match`, not a silently invisible setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionKnob {
-    Mode,
-    ExecTier,
-    ThinkLevel,
-    MemoryMode,
-}
+// There used to be a second `SessionKnob` enum here, naming the same four
+// knobs the parser's `slash::SessionKnob` names, plus a four-arm identity
+// mapping in `commands.rs` to get between them. Its doc argued that the status
+// bar enumerates *this* list — it does not, and never did: it enumerates
+// `slash::SessionKnob::ALL`. So the second enum had one producer (the
+// mapping), one consumer (`record_local_knob`), and a comment that was the
+// only place the split was justified (判据 §1 — the copy in the comment is the
+// expensive one). Adding a fifth knob meant editing two closed sets, and
+// forgetting one of them is silent in exactly one direction.
+//
+// It also stole `AppState`'s doc comment: the enum was inserted under the
+// banner and the `///` lines above it came along, so the struct they describe
+// has been undocumented ever since. They are back on it below.
 
 /// The four session knobs as the status bar reads them. Borrowed from the
 /// snapshot so the renderer cannot hold a stale copy across an attach.
@@ -695,26 +692,14 @@ pub enum AgentPanelData {
     Loading,
     /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
     /// "no agents running" — nothing upstream needs to guess.
-    #[allow(
-        dead_code,
-        reason = "the entries are the whole point of this variant and are read by Task 8b's widget, not by anything in Task 8a's scope (mod.rs/app/mod.rs/app/events.rs) — see R8-3's scope fence"
-    )]
     Ready(Vec<RuntimeAgentEntry>),
     /// The operator gate said no (`runtime.agents.list` returned
     /// [`aleph_protocol::jsonrpc::AUTH_REQUIRED`]) — distinguished from
     /// [`Self::Unavailable`] by the JSON-RPC error CODE, never by matching
     /// words in the message (P8).
-    #[allow(
-        dead_code,
-        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
-    )]
     Refused(String),
     /// Every other failure: transport, timeout, decode. Not the operator
     /// gate specifically — see [`Self::Refused`].
-    #[allow(
-        dead_code,
-        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
-    )]
     Unavailable(String),
 }
 
@@ -734,12 +719,51 @@ pub(super) fn row_timestamp(raw: Option<&str>) -> DateTime<Utc> {
         .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc))
 }
 
+/// Central application state. Owned by the main loop, mutated through
+/// methods that enforce invariants (e.g. the scroll/fold decisions).
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
-    pub messages: Vec<ChatMessage>,
+    pub messages: Vec<TranscriptEntry>,
+    /// Monotonic source of ids for text entries (tool rows use their call id).
+    entry_seq: u64,
+    /// Rows the viewport is above the bottom of the transcript. `0` is
+    /// "parked at the bottom, following the stream".
+    ///
+    /// There is no companion `auto_scroll` flag: it used to exist and the
+    /// window arithmetic proved it redundant — its `true` branch computed
+    /// exactly what the offset branch computes at `0` (判据 §1, the weakened
+    /// second copy). "Am I following?" is `scroll_offset == 0`, and
+    /// `shared_ui_logic::state::chat_scroll` decides what may override it.
     pub scroll_offset: usize,
-    pub auto_scroll: bool,
+    /// Whether mouse capture is on, i.e. whether a click can reach this
+    /// screen at all.
+    ///
+    /// Written once in `tui::run` before the first draw and never again: the
+    /// rendered-line cache bakes the hint wording in, and a value that
+    /// changed mid-session would leave every already-cached row advertising
+    /// the affordance the terminal no longer has.
+    pub mouse: bool,
+    /// The clickable regions of the last painted frame — see
+    /// `crate::tui::regions`.
+    pub regions: crate::tui::regions::RegionTable,
+    /// Rows landed below the reader while they were scrolled up.
+    ///
+    /// Set by `chat_scroll`'s `MarkUnseen`, cleared the moment the viewport
+    /// returns to the bottom. Its only consumer is the docked back-to-bottom
+    /// control's wording — a flag nothing renders would be a fact with no
+    /// reader (判据 §17).
+    pub unseen_below: bool,
+    /// The previous observation of the transcript, for `chat_scroll`.
+    prev_cursor: ListCursor,
+    /// How many messages **this viewer** has sent in this conversation.
+    ///
+    /// Counted rather than derived from the transcript: in a shared project
+    /// room a peer's message is a user row too, and "the number of user rows
+    /// grew" would read their send as mine and yank my viewport to the bottom
+    /// while I am reading back. `chat_scroll`'s module doc is the long form of
+    /// this; the counter is the predicate it asks for, stated directly.
+    sends: u64,
 
     // -- Input history --
     pub send_history: Vec<String>,
@@ -767,6 +791,20 @@ pub struct AppState {
     /// one fact with one producer, and six copies of it are six chances for a
     /// `switch_session` to reset five of them.
     pub session_snapshot: Option<SessionSnapshot>,
+    /// Priced spend on this conversation: the server's number at the last
+    /// attach plus the runs watched since. See [`CostTally`] for why the base
+    /// and the accumulator are one type.
+    pub cost: CostTally,
+    /// The git branch of [`Self::project_root`], as read from THIS machine's
+    /// filesystem when that path resolves here — see
+    /// `widgets::header::git_branch_of` for when it can be wrong and how it
+    /// fails when it cannot answer.
+    ///
+    /// Computed once per attach rather than per frame: the header is painted
+    /// twenty times a second and a `.git/HEAD` read per frame would be twenty
+    /// syscalls a second for a string that changes when someone runs
+    /// `git switch`.
+    pub project_branch: Option<String>,
     /// Live context-window occupancy `(used_tokens, window_tokens)` from the
     /// latest `ContextGauge` event. `None` until the session's first gauge
     /// arrives. The pair always travels together (one event), so a single
@@ -855,7 +893,6 @@ pub struct AppState {
     /// that turn's age and not this screen's attachment. Cleared on any
     /// run-end. Drives the status-bar working indicator's elapsed timer.
     pub run_started_at: Option<Instant>,
-    pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
     /// True while [`Self::load_trace_replay`] is projecting a persisted trace
@@ -925,6 +962,10 @@ pub struct AppState {
     pub agents: Vec<SubagentNode>,
     /// The `/agents` overlay, when open.
     pub agents_overlay: Option<AgentsOverlayState>,
+    /// The `/context` overlay, when open: one `context.breakdown` snapshot
+    /// reconciled against the gauge. Not refreshed while it is up — see
+    /// [`ContextView`].
+    pub context_overlay: Option<ContextView>,
 
     // -- UI state --
     pub focus: Focus,
@@ -995,23 +1036,27 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create a new `AppState` with a welcome system message.
+    /// Create an `AppState` on an empty transcript.
+    ///
+    /// There is no welcome entry any more. It used to open every session with
+    /// `Welcome to Aleph CLI. Session: … | Model: … Type /help for commands.`,
+    /// and B6 took all three of its facts away from it: the model and the
+    /// folder are the header line (`widgets::header`, derived per frame from
+    /// this state, so a `/session` switch moves them), the session key is on
+    /// the status bar, and `/help` is on the hint line. Keeping the entry
+    /// would have made it the stale second copy of each (判据 §1) — it is a
+    /// frozen string, and the model it names is only correct until the first
+    /// snapshot arrives.
     pub fn new(session_key: String, model_name: String) -> Self {
-        // An empty key is not a key — it means "the gateway has not routed this
-        // conversation yet". Printing it verbatim renders `Session:  |`, which
-        // reads like a bug; naming the state reads like the truth.
-        let session_line = if session_key.is_empty() {
-            "Session: new (the gateway names it on your first message)".to_string()
-        } else {
-            format!("Session: {session_key}")
-        };
-        let welcome = format!(
-            "Welcome to Aleph CLI. {session_line} | Model: {model_name}. Type /help for commands."
-        );
         Self {
-            messages: vec![ChatMessage::System { content: welcome }],
+            messages: Vec::new(),
+            entry_seq: 0,
             scroll_offset: 0,
-            auto_scroll: true,
+            mouse: false,
+            regions: crate::tui::regions::RegionTable::default(),
+            unseen_below: false,
+            prev_cursor: ListCursor::default(),
+            sends: 0,
 
             send_history: Vec::new(),
             history_index: None,
@@ -1021,6 +1066,8 @@ impl AppState {
             model_name,
             total_tokens: 0,
             session_snapshot: None,
+            cost: CostTally::default(),
+            project_branch: None,
             context_gauge: None,
             cache_stat: None,
             cache_stat_agent: None,
@@ -1032,7 +1079,6 @@ impl AppState {
 
             current_run: None,
             run_started_at: None,
-            last_run_duration: None,
             current_run_uses_agent_trace: false,
             replaying_trace: false,
             turn_streamed_len: 0,
@@ -1047,6 +1093,7 @@ impl AppState {
             tasks_panel_visible: true,
             agents: Vec::new(),
             agents_overlay: None,
+            context_overlay: None,
 
             focus: Focus::Input,
             dialog: None,
@@ -1070,52 +1117,72 @@ impl AppState {
 
     // -- Message helpers ------------------------------------------------
 
-    /// Add a user message to the chat history.
+    /// Wall clock in unix ms, the unit every shared transcript stamp uses.
+    ///
+    /// `ToolRow` timestamps are durations-in-waiting: `start` records one and
+    /// `finish` is handed the pair, so the two must come from the same clock.
+    /// A pre-1970 clock (or one far enough forward to overflow) yields 0
+    /// rather than a panic — a zero duration is wrong, a crashed TUI is worse,
+    /// and `fmt_duration_ms` renders it as `0.0s` rather than inventing one.
+    pub(super) fn now_ms(&self) -> u64 {
+        u64::try_from(Utc::now().timestamp_millis()).unwrap_or(0)
+    }
+
+    /// A fresh id for a text entry. Tool rows use their `tool_call_id`
+    /// instead, which is what [`Self::find_tool_mut`] addresses them by.
+    pub(super) fn next_entry_id(&mut self) -> String {
+        self.entry_seq += 1;
+        format!("e{}", self.entry_seq)
+    }
+
+    /// Add a message **this viewer** just sent to the chat history.
+    ///
+    /// Bumps `sends`, which is the whole reason this is not the same function
+    /// as the peer path: a room peer's message is a user row too, and only
+    /// one of the two means "I am done reading back".
     pub fn add_user_message(&mut self, content: String) {
-        self.messages.push(ChatMessage::User {
-            content,
-            timestamp: Utc::now(),
+        let id = self.next_entry_id();
+        self.messages.push(TranscriptEntry::UserText {
+            id,
+            text: content,
+            at_ms: as_ms(Utc::now()),
         });
-        if self.auto_scroll {
-            self.scroll_offset = 0;
-        }
+        self.sends = self.sends.saturating_add(1);
     }
 
     /// Add a system message to the chat history.
     pub fn add_system_message(&mut self, content: String) {
-        self.messages.push(ChatMessage::System { content });
-        if self.auto_scroll {
-            self.scroll_offset = 0;
-        }
+        let id = self.next_entry_id();
+        self.messages
+            .push(TranscriptEntry::SystemNotice { id, text: content });
     }
 
-    /// Ensure the last message is an assistant message. If the last message
-    /// is not an assistant message (or there are no messages), appends a new
-    /// empty assistant message. This is idempotent: calling it twice in a row
-    /// will not create a second empty assistant message.
+    /// Ensure the **last** entry is assistant text, appending an empty one if
+    /// it is not.
+    ///
+    /// "Last", not "last assistant entry anywhere": that distinction is the
+    /// whole interleaving change. Text, then a tool, then more text has to
+    /// become three entries in that order — resuming the pre-tool block would
+    /// put the second half of the turn above the tool that produced it.
     pub fn ensure_assistant_message(&mut self) {
-        if !matches!(self.messages.last(), Some(ChatMessage::Assistant { .. })) {
-            self.messages.push(ChatMessage::Assistant {
-                content: String::new(),
-                tools: Vec::new(),
-                reasoning: None,
-                is_streaming: true,
+        if !matches!(
+            self.messages.last(),
+            Some(TranscriptEntry::AssistantText { .. })
+        ) {
+            let id = self.next_entry_id();
+            self.messages.push(TranscriptEntry::AssistantText {
+                id,
+                markdown: String::new(),
+                streaming: true,
             });
         }
     }
 
-    /// Return a mutable reference to the last assistant message.
-    /// If none exists, defensively creates one first.
-    pub fn current_assistant_mut(&mut self) -> &mut ChatMessage {
+    /// The trailing assistant-text entry, created if the tail is something
+    /// else.
+    pub fn current_assistant_mut(&mut self) -> &mut TranscriptEntry {
         self.ensure_assistant_message();
-        // `ensure_assistant_message` guarantees an assistant message exists,
-        // so the search from the end always succeeds. Resolve the index with an
-        // immutable borrow first to avoid a double mutable borrow of `messages`.
-        let idx = self
-            .messages
-            .iter()
-            .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
-            .unwrap_or_else(|| self.messages.len().saturating_sub(1));
+        let idx = self.messages.len().saturating_sub(1);
         &mut self.messages[idx]
     }
 
@@ -1123,49 +1190,140 @@ impl AppState {
     /// Read-only sibling of [`Self::find_tool_mut`], for consumers that need
     /// to identify a tool from a frame that carries only its id (`ToolEnd`).
     pub(super) fn tool_name_of(&self, tool_id: &str) -> Option<String> {
-        for msg in self.messages.iter().rev() {
-            if let ChatMessage::Assistant { tools, .. } = msg {
-                return tools
-                    .iter()
-                    .find(|t| t.id == tool_id)
-                    .map(|t| t.name.clone());
-            }
-        }
-        None
+        self.messages.iter().rev().find_map(|m| match m {
+            TranscriptEntry::Tool(row) if row.id == tool_id => Some(row.tool.clone()),
+            _ => None,
+        })
     }
 
-    /// Find a tool execution by `tool_id` in the last assistant message.
-    /// Returns None if not found or last message is not assistant.
-    pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolExecution> {
-        // Search from the end to find the most recent assistant message
-        for msg in self.messages.iter_mut().rev() {
-            if let ChatMessage::Assistant { tools, .. } = msg {
-                return tools.iter_mut().find(|t| t.id == tool_id);
-            }
-        }
-        None
+    /// Find a tool row by `tool_call_id`, newest first.
+    ///
+    /// Scans the whole transcript rather than one message's tool list: rows are
+    /// peers now, and a late `ToolEnd` for a call from an earlier turn still
+    /// has to land on its own row instead of silently no-opping.
+    pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolRow> {
+        self.messages.iter_mut().rev().find_map(|m| match m {
+            TranscriptEntry::Tool(row) if row.id == tool_id => Some(row),
+            _ => None,
+        })
     }
 
     // -- Scrolling ------------------------------------------------------
 
-    /// Scroll up by `n` lines. Disables `auto_scroll`.
+    /// Scroll up by `n` lines, which by definition stops following the bottom.
+    ///
+    /// The offset is not clamped here: this function does not know the
+    /// transcript's height, which depends on the width it will be painted at.
+    /// `render_chat_area` clamps it against the real total every frame, so a
+    /// `Home` (`usize::MAX / 2`) becomes a reachable offset before anything
+    /// reads it again.
     pub const fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
-        self.auto_scroll = false;
     }
 
-    /// Scroll down by `n` lines. If offset reaches 0, re-enables `auto_scroll`.
+    /// Scroll down by `n` lines; reaching `0` resumes following the bottom.
     pub const fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
-        if self.scroll_offset == 0 {
-            self.auto_scroll = true;
+    }
+
+    /// Jump to the bottom of the chat and resume following it.
+    pub const fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+        self.unseen_below = false;
+    }
+
+    /// Is the reader parked at the bottom, following the stream?
+    #[must_use]
+    pub const fn stuck_to_bottom(&self) -> bool {
+        self.scroll_offset == 0
+    }
+
+    /// This observation of the transcript, as `chat_scroll` reads it.
+    ///
+    /// `conv` is a hash of the session key rather than a counter bumped at
+    /// every switch site, because a counter would be one more thing to
+    /// remember at each of them and the failure would be silent (判据 §6:
+    /// the direction you miscount in is always "one fewer"). Only equality is
+    /// ever asked of it. The empty key a fresh client starts with hashes to
+    /// its own value and is replaced once the gateway names the conversation,
+    /// which reads as a switch — correct, and in any case simultaneous with
+    /// the send that caused it.
+    fn list_cursor(&self) -> ListCursor {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.session_key.hash(&mut h);
+        ListCursor {
+            conv: Some(h.finish()),
+            sends: self.sends,
+            rows: self.messages.len(),
         }
     }
 
-    /// Jump to the bottom of the chat. Re-enables `auto_scroll`.
-    pub const fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+    /// Apply the shared scroll decision for whatever changed since the last
+    /// call.
+    ///
+    /// Called once per main-loop iteration rather than at each of the
+    /// eighteen places that used to return `ScrollToBottomIfAutoScroll`: the
+    /// rule is one fact about the transcript, and eighteen call sites is
+    /// eighteen chances for a new event to forget it (判据 §12). It also
+    /// buys the case the old shape could not express — the viewer sending
+    /// while scrolled up, whose answer used to stream in off-screen.
+    pub fn settle_scroll(&mut self) {
+        let next = self.list_cursor();
+        match scroll_action(self.prev_cursor, next, self.stuck_to_bottom()) {
+            ScrollAction::PinToBottom => self.scroll_to_bottom(),
+            ScrollAction::MarkUnseen => self.unseen_below = true,
+            ScrollAction::Leave => {}
+        }
+        self.prev_cursor = next;
+    }
+
+    // -- Folding --------------------------------------------------------
+
+    /// Fold or unfold one tool row.
+    ///
+    /// The cache notices on its own: `tool_fingerprint` already hashes
+    /// `expanded`, so the row's rendered lines are rebuilt on the next frame
+    /// without anything here knowing the cache exists.
+    pub fn toggle_tool_expanded(&mut self, tool_id: &str) {
+        if let Some(row) = self.find_tool_mut(tool_id) {
+            row.expanded = !row.expanded;
+        }
+    }
+
+    /// Unfold every tool row, or fold every one if none is left folded.
+    ///
+    /// A bulk edit of the per-row flags rather than a second, sticky
+    /// "expand everything" flag. Two holders of "is this row expanded" would
+    /// be two answers to one question (判据 §1), and the row's own flag is
+    /// the one the renderer and the click path already read. The visible
+    /// consequence of choosing this way: a tool row that arrives *after* the
+    /// keystroke arrives folded, wearing a hint that says `ctrl+o to expand`
+    /// — which is true of it.
+    pub fn toggle_expand_all(&mut self) {
+        let any_folded = self
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::Tool(row) if !row.expanded));
+        for message in &mut self.messages {
+            if let TranscriptEntry::Tool(row) = message {
+                row.expanded = any_folded;
+            }
+        }
+    }
+
+    /// How a fold hint should word itself on this terminal.
+    ///
+    /// `Mouse` only once capture is actually on: a hint that says "click" on
+    /// a terminal where nothing is listening for a click is a label for an
+    /// affordance that does not exist (spec §8, 判据 §17).
+    #[must_use]
+    pub const fn modality(&self) -> Modality {
+        if self.mouse {
+            Modality::Mouse
+        } else {
+            crate::tui::widgets::tool_row::KEY_MODALITY
+        }
     }
 
     // -- Overlays -------------------------------------------------------
@@ -1316,7 +1474,8 @@ impl AppState {
     }
 
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker, agents overlay) and return focus to whatever is still on screen.
+    /// picker, agents overlay, context overlay) and return focus to whatever
+    /// is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
@@ -1324,6 +1483,7 @@ impl AppState {
         self.provider_picker = None;
         self.approval = None;
         self.agents_overlay = None;
+        self.context_overlay = None;
         self.focus = self.focus_after_modal();
     }
 
@@ -1406,6 +1566,24 @@ impl AppState {
         if let Ok(Some(plan)) = aleph_protocol::plan::snapshot_from_tool_output(output) {
             self.plan = Some(plan);
         }
+    }
+
+    /// Open the `/context` overlay on a freshly fetched breakdown, reconciled
+    /// against this session's live gauge.
+    pub fn open_context_overlay(&mut self, breakdown: &aleph_protocol::ContextBreakdown) {
+        self.context_overlay = Some(ContextView::new(breakdown, self.context_gauge));
+        self.focus = Focus::Context;
+    }
+
+    /// Scroll the `/context` layer list. `delta` is in rows; the clamp is
+    /// against the row count rather than the screen, because the widget is the
+    /// only thing that knows how tall it got to be.
+    pub fn context_scroll(&mut self, delta: isize) {
+        let Some(view) = &mut self.context_overlay else {
+            return;
+        };
+        let max = view.rows.rows.len().saturating_sub(1);
+        view.scroll = view.scroll.saturating_add_signed(delta).min(max);
     }
 
     /// Open the `/agents` overlay in list mode.
@@ -1715,6 +1893,8 @@ impl AppState {
         // true; keeping them would make it confidently describe someone else's
         // conversation.
         self.session_snapshot = None;
+        self.cost.rebase(None);
+        self.project_branch = None;
     }
 
     /// Restore this conversation's durable settings from the server's snapshot.
@@ -1729,7 +1909,50 @@ impl AppState {
         self.model_name = snapshot
             .effective_model()
             .map_or_else(|| self.default_model_name.clone(), str::to_string);
+        // The snapshot already contains every run before it, including the
+        // ones this screen watched — so this is a rebase, never an add.
+        self.cost.rebase(Some(snapshot.estimated_cost_usd));
+        // One filesystem read per attach, at the only point the folder can
+        // change.
+        self.project_branch = snapshot
+            .project_root
+            .as_deref()
+            .and_then(crate::tui::widgets::header::git_branch_of);
         self.session_snapshot = Some(snapshot);
+    }
+
+    /// The folder this conversation is scoped to, as the SERVER reports it.
+    ///
+    /// `None` means the conversation is scoped to no folder — the agent runs
+    /// in its own `~/.aleph/workspaces/{agent_id}`, a path this client is not
+    /// told. It does NOT mean "use the terminal's own working directory":
+    /// with a remote gateway that is a different machine's filesystem, and
+    /// the header has no way to say which one it meant.
+    #[must_use]
+    pub fn project_root(&self) -> Option<&str> {
+        self.session_snapshot
+            .as_ref()
+            .and_then(|s| s.project_root.as_deref())
+    }
+
+    /// What this conversation has cost, and how sure this screen is.
+    #[must_use]
+    pub fn cost_view(&self) -> CostView {
+        self.cost.view()
+    }
+
+    /// The language the working verb is drawn in.
+    ///
+    /// Derived from the same environment reading `aleph_protocol::terminate`
+    /// uses for halt notices, so one terminal does not get an English verb
+    /// over a Chinese notice. The two enums naming En/Zh are a duplication in
+    /// the shared crates, not something this screen can fix from here.
+    #[must_use]
+    pub fn locale(&self) -> shared_ui_logic::transcript::Locale {
+        match aleph_protocol::terminate::UiLocale::from_env() {
+            aleph_protocol::terminate::UiLocale::Zh => shared_ui_logic::transcript::Locale::Zh,
+            aleph_protocol::terminate::UiLocale::En => shared_ui_logic::transcript::Locale::En,
+        }
     }
 
     /// The conversation's usage mode, exec tier, thinking depth and memory mode
@@ -1767,8 +1990,8 @@ impl AppState {
         match field {
             SessionKnob::Mode => snap.mode = value,
             SessionKnob::ExecTier => snap.exec_tier = value,
-            SessionKnob::ThinkLevel => snap.think_level = value,
-            SessionKnob::MemoryMode => snap.memory_mode = value,
+            SessionKnob::Think => snap.think_level = value,
+            SessionKnob::Memory => snap.memory_mode = value,
         }
     }
 
@@ -1829,6 +2052,10 @@ impl AppState {
         // the incoming snapshot immediately after.
         self.total_tokens = 0;
         self.session_snapshot = None;
+        // Same argument, same sentence, for the money: an unrebased tally
+        // would bill the outgoing conversation's spend to the incoming one.
+        self.cost.rebase(None);
+        self.project_branch = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
         // The cache is keyed by positional index into `messages`, which is
@@ -1923,6 +2150,19 @@ impl AppState {
     }
 
     /// Clear the chat screen (keep session state).
+    /// Throw away every rendered line, keeping the messages.
+    ///
+    /// Rendered `Line`s carry their `Style` — the colour is baked in at build
+    /// time — so anything that changes what a colour MEANS has to drop the
+    /// cache or the transcript keeps the old palette above the switch point
+    /// and the new one below it. `/theme` is the only event that calls this;
+    /// a width change already invalidates through the entry's own `width`,
+    /// and the syntax highlighter finishing its background load through
+    /// `highlight_generation`.
+    pub fn invalidate_rendered_lines(&mut self) {
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+    }
+
     pub fn clear_screen(&mut self) {
         self.messages.clear();
         // The cache is keyed by positional index into `messages`, which is
@@ -1930,8 +2170,7 @@ impl AppState {
         // len, width) happens to match new content at the same index must
         // not survive.
         self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+        self.scroll_to_bottom();
         self.add_system_message("Screen cleared.".to_string());
     }
 

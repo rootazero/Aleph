@@ -245,24 +245,30 @@ fn path_pair_overlap(a: &str, b: &str) -> bool {
 /// that is intentional; comparison falls back to the conservative
 /// absolute/relative mismatch rule above.
 ///
-/// `\` counts as a separator on every platform, not just Windows. Model-written
-/// paths arrive as raw argument strings, so on Windows the same file reaches
-/// this function spelled both ways; splitting on `/` alone left `C:\work\a.rs`
-/// as one opaque component that differed from `C:/work/a.rs` at the first
-/// component, and the two writes parallelized onto the same file. Folding
-/// unconditionally is the safe direction on Unix too: a filename containing a
-/// literal backslash is legal but vanishingly rare there, and the only cost of
-/// splitting it is a spurious serialization — the same trade the read-only
-/// allowlist makes (a miss loses parallelism, never correctness).
+/// Path separator handling is platform-gated. Model-written paths arrive as
+/// raw argument strings, so on Windows the same file can reach this function
+/// spelled with both `/` and `\` separators; splitting on both lets
+/// `C:\work\a.rs` and `C:/work/a.rs` collapse onto the same canonical form.
+/// On Unix, `/` is the only legal separator and a filename containing a
+/// literal `\` is a legitimate distinct file: splitting on it would make
+/// `back\slash.txt` and `back/slash.txt` collide spuriously, forcing
+/// legitimate disjoint writes through a needless serialization. So on Unix
+/// we only split on `/`; callers that need to fold Windows spellings should
+/// canonicalize via the filesystem before reaching this helper (the
+/// `read_only` allowlist is one such upstream).
 #[must_use]
 pub fn normalize_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let absolute = trimmed.starts_with(['/', '\\']);
+    #[cfg(windows)]
+    let separators: &[char] = &['/', '\\'];
+    #[cfg(not(windows))]
+    let separators: &[char] = &['/'];
+    let absolute = trimmed.starts_with('/') || (cfg!(windows) && trimmed.starts_with('\\'));
     let mut stack: Vec<&str> = Vec::new();
-    for comp in trimmed.split(['/', '\\']) {
+    for comp in trimmed.split(separators) {
         match comp {
             "" | "." => {}
             ".." => {

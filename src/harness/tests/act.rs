@@ -1455,7 +1455,7 @@ impl crate::harness::HarnessCallback for DoneOrderCallback {
     fn on_tool_call_done(
         &mut self,
         id: &str,
-        _result: Option<&serde_json::Value>,
+        _result: Option<&crate::session::events::ToolOutput>,
         _error: Option<&str>,
         duration_ms: u64,
     ) {

@@ -166,6 +166,23 @@ impl DenialReason {
         matches!(self, Self::UserRejected)
     }
 
+    /// The one sentence a refusal leaves in the durable trails — the signed
+    /// identity ledger's detail and the session log's `ToolCallDenied.reason`
+    /// — for the `outcome` the requester returned. Names the user only when
+    /// [`is_a_human_decision`](Self::is_a_human_decision): an `Unavailable`
+    /// or a `Timeout` attributed to "the user" would put a decision they
+    /// never made into a non-repudiable record. Shared by the tool confirm
+    /// gate and the sandbox capability-elevation gate so the two trails
+    /// cannot drift on the one point a reader of the log acts on.
+    #[must_use]
+    pub fn refusal_trail(self, outcome: super::gate::ApprovalOutcome) -> String {
+        if self.is_a_human_decision() {
+            format!("user did not approve ({outcome:?})")
+        } else {
+            format!("not authorized — nobody was asked ({outcome:?})")
+        }
+    }
+
     /// Short, model-facing explanation appended to the refusal so the agent
     /// stops re-attempting and changes approach instead of looping.
     #[must_use]
