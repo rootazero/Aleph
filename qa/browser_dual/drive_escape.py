@@ -256,6 +256,23 @@ async def main():
                 want in status,
                 f"want={want!r} status={status!r}",
             )
+            # "It opened" is half the claim. The other half — and the whole
+            # point of the route-2 invocation — is that the browser now running
+            # is the one THIS route resolved, not some other route's answer.
+            #
+            # Cross-checked against the resolver's own reported `path` rather
+            # than against a path the fixture chose: on route 2 there is no
+            # fixture-known file to compare with (discovery picks it), and
+            # hardcoding one would be the fixture asserting its own guess. On
+            # route 1 this is strictly stronger than the pin check above,
+            # because it ties the live process to the resolution rather than to
+            # `$ALEPH_QA_CHROME`.
+            resolved = chromium.get("path")
+            check(
+                "…and the browser actually running is the file that resolution named",
+                bool(resolved) and any(resolved in p[1] for p in chrome),
+                f"resolved={resolved!r} live={chrome}",
+            )
 
         ok, res = await rpc.invoke("doctor", {"only": ["browser/chromium-missing"]})
         report = json.dumps((res or {}).get("report") or {})
