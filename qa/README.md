@@ -53,8 +53,10 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
-                                   # ledger). obscura still opens AND so does a pinned
-                                   # Chrome (needs ALEPH_QA_CHROME)
+                                   # ledger). obscura still opens AND so does a Chrome
+                                   # (needs ALEPH_QA_CHROME). RUN IT TWICE:
+ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, discovery,
+                                   # i.e. the configuration a user actually gets
 ./qa/browser_dual/run.sh switch    # a cookie set on obscura is READABLE ON CHROMIUM after
                                    # browser_session{action:"switch_engine"}, the tab is
                                    # back on its URL, the obscura process is GONE, the
@@ -719,6 +721,25 @@ evidence, and without it they would answer `EngineMismatch`. And it is the only
 real-machine exercise of the approval **inheritance** `ActionType` promises: the
 policy fixture writes `browser_open` and no `browser_switch_engine` key, so a
 switch that runs at all is `inherited_from` doing its job.
+
+**`escape` has two invocations and the second one is the point.** `resolve_binary` has three
+routes and only the third consumes a `playwright-cli`; pinning the browser (`ESCAPE_ROUTE=pin`,
+the default) makes route 1 answer and is the cheapest proof that the escape hatch no longer demands
+a launcher. But it proves it **on a configuration the fixture chose**, and `prefer_system_browser`
+defaults to `true` — route 2 is what most hosts take. `ESCAPE_ROUTE=system` removes the pin and
+leaves that default alone, so discovery has to find the browser itself. Covering only route 1 would
+repeat the mistake that hid this defect for a whole branch: a green covering the shape the fixture
+happens to have (判据 §3), with the conclusion's scope read off the directory instead of the method
+(判据 §18). Each invocation asserts WHICH route answered, against
+`ChromiumSource::label()`'s own strings, so neither one's green can be mistaken for the other's.
+
+⚠️ **Route 2 can be UNRUN, and that is a real outcome rather than a failure.** A host with no
+system Chromium where `discovery::find_chromium_preferred` looks cannot exercise the default route;
+the stage says `[UNRUN]` and declines, the way `spend_budget` does without a real `python3`. The
+discrimination is read from **the resolver's own sentence** (`no system browser (…)` inside
+`tried`) rather than guessed from `$ALEPH_QA_CHROME`'s path — any other failure is a real one and
+is asserted. **Do not install a browser to make this green**: a fixture that arranges its own
+subject has stopped measuring the host.
 
 **`escape` is the one stage whose subject is a host this machine is not.** Every
 other fixture here runs where `playwright-cli` sits on `PATH`, so every

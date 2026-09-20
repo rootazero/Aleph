@@ -58,6 +58,7 @@ ap.add_argument("--page-url", required=True)
 ap.add_argument("--aleph-home", required=True)
 ap.add_argument("--chromium-udd", required=True)
 ap.add_argument("--chrome-bin", required=True)
+ap.add_argument("--route", required=True, choices=["pin", "system"])
 args = ap.parse_args()
 
 led = Ledger()
@@ -140,9 +141,35 @@ async def main():
         ok, res = await rpc.invoke(
             "browser_open", {"url": args.page_url, "profile": "escape"}
         )
+        opened = ok and res.get("success") is True
+
+        # ROUTE 2 ONLY: this host may simply not have a system Chromium where
+        # `discovery::find_chromium_preferred` looks. That is "cannot run", not
+        # "failed" — and the discrimination is read from THE PRODUCT'S OWN
+        # ANSWER rather than guessed from `$ALEPH_QA_CHROME`'s path: the
+        # resolver says `no system browser (...)` inside `tried` when route 2
+        # came up empty. Any other failure is a real one and falls through to
+        # the assertion below.
+        #
+        # Shape borrowed from `spend_budget`'s "needs a real python3" entry in
+        # qa/README.md: a stage that cannot exercise its subject says UNRUN and
+        # declines, instead of passing by having nothing to check. Installing a
+        # browser to make this green would be the fixture arranging its own
+        # subject.
+        if args.route == "system" and not opened:
+            blob = json.dumps(res)
+            if "no system browser" in blob:
+                Ledger.log(
+                    "  [UNRUN] route 2 (prefer_system_browser) — the resolver found no "
+                    f"system Chromium on this host, so this invocation cannot exercise "
+                    f"the default route. Observed: {blob[:300]}"
+                )
+                return led.verdict()
+
         check(
-            "THE ESCAPE HATCH OPENS WITH A PINNED CHROME AND NO PLAYWRIGHT-CLI",
-            ok and res.get("success") is True,
+            "THE ESCAPE HATCH OPENS WITH NO PLAYWRIGHT-CLI, ON ROUTE "
+            + ("1 (a pinned browser)" if args.route == "pin" else "2 (discovery, the default)"),
+            opened,
             json.dumps(res)[:400],
         )
         check(
@@ -154,12 +181,23 @@ async def main():
         # The load-bearing half: a tool that answered `success: true` without a
         # browser would look identical from here (判据 §11).
         chrome = main_processes(f"--user-data-dir={args.chromium_udd}")
-        pinned = [p for p in chrome if args.chrome_bin in p[1]]
-        check(
-            "…and the process running is the PINNED binary, not one discovery found",
-            bool(pinned),
-            f"chrome_bin={args.chrome_bin} live={chrome}",
-        )
+        if args.route == "pin":
+            # The pin names one exact file, so the claim can be exact.
+            check(
+                "…and the process running is the PINNED binary, not one discovery found",
+                any(args.chrome_bin in p[1] for p in chrome),
+                f"chrome_bin={args.chrome_bin} live={chrome}",
+            )
+        else:
+            # Route 2 answers with whatever `find_chromium_preferred` picked, and
+            # naming a specific file here would smuggle the pin's certainty into
+            # a route that does not have it. What IS assertable: a browser is
+            # running for this profile at all.
+            check(
+                "…and a browser discovery chose is running for this profile",
+                bool(chrome),
+                f"live={chrome}",
+            )
 
         ok, res = await rpc.invoke(
             "browser_evaluate", {"profile": "escape", "script": "document.title"}
@@ -205,6 +243,18 @@ async def main():
                 f"status={status!r} path={chromium.get('path')!r} — "
                 f"browser_open{{engine:'chromium'}} succeeded on this same host, "
                 f"so this row is the tool face contradicting the launch face",
+            )
+            # WHICH route answered, so a green here cannot be a green for the
+            # other one. `ChromiumSource::label()` owns these two strings.
+            want = (
+                "pinned by [general.browser.runtime] binary_path"
+                if args.route == "pin"
+                else "a system Chromium-family browser"
+            )
+            check(
+                f"…and it names the route this invocation is about ({args.route})",
+                want in status,
+                f"want={want!r} status={status!r}",
             )
 
         ok, res = await rpc.invoke("doctor", {"only": ["browser/chromium-missing"]})

@@ -178,6 +178,13 @@ MARKER="aleph-qa-dual-${RANDOM}${RANDOM}"
 # control an operator can run without editing a file is one they will actually
 # run.
 STALL_TIMEOUT_SECS="${STALL_TIMEOUT_SECS:-2}"
+# Which `resolve_binary` route `escape` puts in front: `pin` (route 1) or
+# `system` (route 2, the product default). See the config block below.
+ESCAPE_ROUTE="${ESCAPE_ROUTE:-pin}"
+case "$ESCAPE_ROUTE" in
+  pin|system) ;;
+  *) echo "ESCAPE_ROUTE must be 'pin' or 'system', got: $ESCAPE_ROUTE" >&2; exit 64 ;;
+esac
 
 SERVER_PID=""
 PAGE_PID=""
@@ -276,7 +283,7 @@ fi
 if [ "$STAGE" = "stall" ]; then
   BROWSER_CFG_ARGS+=(--cdp-command-timeout-secs "$STALL_TIMEOUT_SECS")
 fi
-if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "escape" ]; then
+if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ]; then
   # A second profile on the OTHER engine. `open` needs it because spec §7.4 says
   # the readiness gate is proven 对两引擎都成立, and a stage that only ever
   # launches obscura says nothing about the other engine's gate or about
@@ -291,6 +298,42 @@ if [ "$STAGE" = "reap" ] || [ "$STAGE" = "open" ] || [ "$STAGE" = "escape" ]; th
     --prefer-system-browser false
   )
 fi
+# `escape` needs the same second profile, but its pin/discovery settings are the
+# AXIS and are therefore chosen per route rather than shared with `open`/`reap`.
+#
+# `resolve_binary` has three routes and only the third consumes a
+# `playwright-cli`. Pinning the browser (route 1) is the cheapest way to prove
+# the escape hatch no longer demands a launcher — but it proves it **on a
+# configuration we chose**, and `prefer_system_browser` defaults to `true`, so
+# route 2 is the one most hosts actually take. Covering only route 1 would
+# repeat the mistake that hid W5 for the whole branch: a green that covers the
+# shape the fixture happens to have (判据 §3), with the conclusion's scope taken
+# from the directory rather than from the method (判据 §18).
+#
+# Two invocations, one hot fixture:
+#   ESCAPE_ROUTE=pin    (default) — route 1 wins, discovery disabled outright
+#   ESCAPE_ROUTE=system           — NO pin, prefer_system_browser left at its
+#                                   product default, so route 2 must find one
+if [ "$STAGE" = "escape" ]; then
+  BROWSER_CFG_ARGS+=(
+    --profile-engine "escape=chromium"
+    --profile-user-data-dir "escape=$CHROMIUM_UDD"
+  )
+  case "$ESCAPE_ROUTE" in
+    pin)
+      BROWSER_CFG_ARGS+=(
+        --runtime-binary-path "$CHROME_BIN"
+        --prefer-system-browser false
+      )
+      ;;
+    system)
+      # No `--runtime-binary-path` AT ALL: a pin would make route 1 answer and
+      # this invocation would silently re-measure the other route.
+      BROWSER_CFG_ARGS+=(--prefer-system-browser true)
+      ;;
+  esac
+fi
+
 # `switch` needs no second profile — it moves the DEFAULT one — but it does need
 # a chromium binary to move it onto, and the same pin for the same reason as
 # above: so the stage never depends on which browsers this machine happens to
@@ -411,6 +454,7 @@ elif [ "$STAGE" = "escape" ]; then
     --page-url "http://127.0.0.1:$PAGE_PORT/index.html" \
     --aleph-home "$ALEPH_HOME" \
     --chromium-udd "$CHROMIUM_UDD" \
+    --route "$ESCAPE_ROUTE" \
     --chrome-bin "$CHROME_BIN" || RC=$?
 elif [ "$STAGE" = "switch" ]; then
   python3 "$HERE/drive_switch.py" \
