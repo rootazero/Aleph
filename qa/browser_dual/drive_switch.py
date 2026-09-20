@@ -510,6 +510,23 @@ async def main():
             f"(measured {PIN_MEASURED_AT})",
         )
 
+        # On a build nobody measured, the two arms below do not get to answer.
+        # `drive.py`'s `dated()` already carries this reasoning for every other
+        # obscura claim in this fixture, and it was not carried here: reporting
+        # PASS for "the gap is still there" on an unmeasured build asserts
+        # something this run did not observe, and reporting FAIL blames a build
+        # for not matching a note. The version claim above has already gone red
+        # and named the reason, so declining here loses nothing (判据 §8).
+        if not pinned_build:
+            log(
+                f"  [UNKNOWN] the two F2 gap arms — this run used obscura "
+                f"{build or 'unreadable'} and the pin is dated to "
+                f"{PIN_OBSCURA_BUILD}. Observed chromium-only "
+                f"[{describe(only_chromium)}], obscura-only "
+                f"[{describe(only_obscura)}]; re-measure before believing either."
+            )
+            return led.verdict()
+
         # Two directions, two sentences. Together they are equality; apart they
         # say WHICH way the world moved, and the closing direction has to be as
         # loud as the growing one or the pin outlives the fact (判据 §5).
@@ -538,9 +555,12 @@ async def main():
             else f"pinned [{describe(PIN_CHROMIUM_ONLY)}] but observed "
             f"[{describe(only_chromium)}]. THE PIN HAS EXPIRED, GO UPDATE IT — this "
             f"is not a breakage: obscura now offers something it did not. Delete the "
-            f"matching entry from PIN_CHROMIUM_ONLY, and if it empties, delete the pin, "
-            f"browser_snapshot's DESCRIPTION clause about JS-listener clickables, and "
-            f"the narrowed interchangeability sentence in FL §3.12 with it",
+            f"matching entry from PIN_CHROMIUM_ONLY; if it empties, the pin goes, and "
+            f"with it browser_snapshot's DESCRIPTION clause about JS-listener "
+            f"clickables, FL §3.12's narrowed interchangeability sentence, and "
+            f"qa/README.md's paragraph under the `switch` entry. Named rather than "
+            f"counted: this text said \"three places\" while there were four, and a "
+            f"comment carrying a number is a list that rots (判据 §16)",
         )
         same = grew and closed and pinned_build
         # Printed whatever the verdict: the comparison's INPUT is the thing a

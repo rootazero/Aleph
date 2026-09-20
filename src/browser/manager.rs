@@ -697,7 +697,9 @@ impl ProfileManager {
     /// Chromium). So a plain `browser_open` on either of them launched a CDP
     /// Chromium that nothing went on to use, and on a default install —
     /// obscura, no playwright chain — it did worse: `ChromiumLauncher::launch`
-    /// demands `managed_cli_path()` before it resolves a binary, so
+    /// demanded `managed_cli_path()` before it resolved a binary (it no longer
+    /// does — W5 moved that lookup into `chromium_resolve::resolve_binary`'s
+    /// third route, whose doc owns the subject), so at the time
     /// `browser_open{profile:"user"}` **failed outright, blaming
     /// playwright-cli**, on a host whose own `existing_session_driver_ready()`
     /// (`find_chromium() && which("npx")`, deliberately WITHOUT
@@ -2855,9 +2857,14 @@ mod tests {
     /// `Chromium` for `Managed`/`ExistingSession` — so a plain `browser_open`
     /// on the auto-injected `user` profile launched a CDP Chromium that nothing
     /// then used. On a default install it did worse: `ChromiumLauncher::launch`
-    /// wants `managed_cli_path()` before it resolves a binary, so the call
+    /// wanted `managed_cli_path()` before it resolved a binary, so the call
     /// failed outright and blamed playwright-cli, on a host whose own
-    /// `existing_session_driver_ready()` calls that driver ready.
+    /// `existing_session_driver_ready()` calls that driver ready. **Past tense
+    /// on purpose**: W5 moved that lookup into
+    /// `chromium_resolve::resolve_binary`'s third route. The regression this
+    /// test pins is unaffected — it is about the driver gate, not the launcher
+    /// — but a present-tense clause here would be a second author for a
+    /// mechanism that now has one.
     ///
     /// **Asserted at this level rather than through `BrowserOpenTool`, and the
     /// reason is not convenience.** The tool-level version would continue into

@@ -892,12 +892,17 @@ mod tests {
     /// is the same instrument for the same reason.
     ///
     /// **A SOURCE pin, and the report says so rather than implying more.**
-    /// `launch` reaches `resolve_binary` only after `managed_cli_path` finds a
-    /// real `playwright-cli`, and `resolve_binary` then walks the filesystem
-    /// for an installed browser — so no unit test can observe the argument
-    /// arriving without a provisioned toolchain and a browser on disk. Same
-    /// shape and the same justification as
+    /// `resolve_binary` walks the filesystem for an installed browser, so no
+    /// unit test can observe the argument arriving without a browser on disk.
+    /// Same shape and the same justification as
     /// `manager.rs`'s `the_boot_hook_still_calls_the_orphan_sweep`.
+    ///
+    /// ⚠️ This used to add "and only after `managed_cli_path` finds a real
+    /// `playwright-cli`". W5 moved that lookup into `resolve_binary`'s third
+    /// route, so the clause was false from that commit onward while reading
+    /// like a current precondition. **Who resolves a CLI and when has exactly
+    /// one author now** — [`crate::browser::chromium_resolve::resolve_binary`]'s
+    /// own doc — and every other mention of it, here included, is a reader.
     ///
     /// What this therefore proves is that the argument EXPRESSION is
     /// `&req.browser`, not that the resolver honoured it. That is exactly the

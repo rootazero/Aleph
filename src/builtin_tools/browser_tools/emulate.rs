@@ -373,8 +373,18 @@ mod tests {
     ///
     /// The one phrase-keyed assertion is `contains("cdp")`, and it buys exactly
     /// one thing: that the sentence still names a driver. It cannot see a
-    /// rewording that keeps the word and changes the claim — the axis loops can,
-    /// which is why they carry the weight.
+    /// rewording that keeps the word and changes the claim.
+    ///
+    /// ⚠️ **Neither can the axis loops, and an earlier version of this doc said
+    /// they could.** They are membership tests: the refused axis must be named
+    /// somewhere in the string and the answered ones must not appear at all.
+    /// A sentence that named `network_condition` and then inverted the polarity
+    /// around it — *"every override reaches the engine EXCEPT the five below"* —
+    /// satisfies both loops and says the opposite thing. What they do cover is
+    /// the failure this DESCRIPTION actually had: an axis moving between the two
+    /// lists without anyone noticing. Claiming more than that would make this
+    /// guard a worse kind of evidence than no guard, because it would be quoted
+    /// (判据 §3).
     ///
     /// Neither loop is vacuous today: at HEAD the split is five answered
     /// (`Emulation.setEmulatedMedia` / `setGeolocationOverride` /

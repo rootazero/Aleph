@@ -59,8 +59,9 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # browser_session{action:"switch_engine"}, the tab is
                                    # back on its URL, the obscura process is GONE, the
                                    # surviving chromium still has an orphan-reap record of
-                                   # its own — and (spec F2) the SAME page offers the same
-                                   # addressable refs on both engines (needs ALEPH_QA_CHROME)
+                                   # its own — and (spec F2) the two engines' addressable
+                                   # refs on the SAME page differ by exactly the pinned,
+                                   # dated gap and nothing else (needs ALEPH_QA_CHROME)
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -775,16 +776,36 @@ The stage also prints both sides in full on a PASS, and dumps both whole trees
 on a FAIL. A green comparison whose inputs are invisible is a number without its
 predicate; a red one that names `generic ''` and not the element is unactionable.
 
-⚠️ **This claim is RED on obscura v0.2.2, deliberately, and `switch` therefore
-reports 17 PASS + 1 FAIL rather than 18 PASS.** Measured 2026-09-20 and
-reproduced 2/2 byte-identically: chromium offers one addressable element obscura
-does not — a `<label for>` — because the sixth of `roles::is_interactive`'s six
-disjuncts (`clickable_hint`, i.e. Chromium's `DOMSnapshot.isClickable`) is the
-only one no obscura capture can fill. The full mechanism, and the controlled
-probe that falsified it rather than merely reading it, are in `drive_switch.py`
-above `_quoted_at`. **It is left red on purpose**: the class it names is every
-element whose only clickability evidence is a JS-attached listener, and whether
-that is acceptable is a ruling rather than a fixture decision.
+**The comparison does NOT come back empty, and the difference is pinned rather
+than tolerated or left red.** Chromium offers addressable elements obscura does
+not, because the sixth of `roles::is_interactive`'s six disjuncts
+(`clickable_hint`, i.e. Chromium's `DOMSnapshot.isClickable`) is the only one no
+obscura capture can fill — so an element whose only clickability evidence is a
+script-attached listener earns no ref there. Falsified rather than merely read:
+giving such an element `cursor: pointer`, a signal both engines report, makes
+the difference vanish.
+
+⚠️ **This paragraph is a READER of the pin, not a second copy of it.** The pin
+itself — which keys, which obscura build, which date — lives in
+`drive_switch.py` beside the reasoning that earned it, and deliberately has no
+second home: a status restated here is a status that drifts, and this file has
+done that before. Do not add the stage's PASS count to this sentence either.
+What is worth knowing from outside the fixture is only the SHAPE:
+
+* the gap **growing or changing shape** is red — a key the pin does not name is
+  a new divergence and is not covered;
+* the gap **closing** is *also* red, and says so in those words: obscura has
+  started offering something it did not, the pin has expired, and its failure
+  text names the three places to delete — the pin, `browser_snapshot`'s
+  DESCRIPTION clause about JS-listener clickables, and FL §3.12's narrowed
+  interchangeability sentence;
+* the obscura build the pin is dated to is **read from the running binary**, so
+  a version bump cannot quietly outlive the measurement.
+
+The class matters more than any instance: it is every element whose only
+clickability evidence is a JS-attached listener, which is why the fixture
+carries a block `<div>` + `addEventListener` as its representative rather than
+the inline `<label>` the first run caught by accident.
 
 **`provision` cannot use a local fixture release, and that is the product's
 trust model rather than an omission.** `ReleaseSource::for_runtime` pins the

@@ -389,8 +389,14 @@ fn is_executable(_path: &Path) -> bool {
 ///   second answer to "which playwright-cli" (判据 §1).
 /// * `None` — the cdp engine path, which has no CLI and needs one only if
 ///   route 3 is reached. The lookup then happens inside that route, and its
-///   failure lands in `tried` beside the other two routes' failures instead of
-///   being reported by a different author three frames up (判据 §17).
+///   failure joins `tried` instead of being reported by a different author
+///   three frames up (判据 §17).
+///
+/// ⚠️ **`tried` does not carry a pin failure**, and an earlier version of this
+/// sentence said it did. Route 1 ends both of its failures with their own
+/// `return Err(engine_unavailable(...))` while `tried` is still empty — which is
+/// correct (a pin that failed is the whole answer, not one line of it), but it
+/// makes "beside the pin's failure" a claim about a string nothing writes.
 pub(crate) async fn resolve_binary(
     runtime: &BrowserRuntimeConfig,
     browser: &BrowserType,
@@ -461,9 +467,10 @@ pub(crate) async fn resolve_binary(
             .unwrap_or(None),
     };
     let Some(cli) = cli_binary.or(cli_owned.as_deref()) else {
-        // Folded into `tried`, not raised by itself: by the time execution is
-        // here, "no pin" / "no system browser" are equally part of the answer,
-        // and an error naming only the launcher would hide the other two.
+        // Folded into `tried`, not raised by itself: execution only reaches
+        // here with NO pin configured — route 1 returns its own error when a
+        // pin exists and fails — so what `tried` already holds is the system
+        // route's answer, and an error naming only the launcher would hide it.
         // `engine_unavailable_no_launcher` (not `engine_unavailable`) because
         // the generic hint's first remedy is `playwright-cli install-browser`,
         // which is a dead end when playwright-cli is the missing thing.

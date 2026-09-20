@@ -320,8 +320,11 @@ pub fn engine_unavailable(engine: Engine, tried: impl fmt::Display) -> BrowserEr
 /// correct when the CLI exists and only the browser is missing, a dead end
 /// when the CLI is the thing that is missing. `engine_unavailable` cannot
 /// tell the two causes apart from a `Display`; only the caller that tried to
-/// locate the CLI knows which one happened (`chromium.rs`'s
-/// `managed_cli_path()` call, currently the only call site).
+/// locate the CLI knows which one happened. **That caller is
+/// [`super::chromium_resolve::resolve_binary`]'s third route**, which is where
+/// the lookup lives and which therefore owns this subject; it was
+/// `chromium.rs`'s eager call until W5 moved it, and this sentence named the
+/// old site for as long as it took someone to read it.
 ///
 /// Chromium only: there is no obscura equivalent — obscura's hint never
 /// mentions `playwright-cli`, so this cause cannot occur for it.
