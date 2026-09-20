@@ -5,4 +5,5 @@
 pub mod api;
 pub mod mcp_registrar;
 
+pub(crate) use api::register_plugin_row;
 pub use api::CapabilityApi;

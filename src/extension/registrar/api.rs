@@ -7,9 +7,11 @@
 use anyhow::{anyhow, Result};
 
 use crate::extension::capability::{CapabilityDeclaration, Tier};
+use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::manifest::PluginPermission;
-use crate::extension::registry::PluginRegistry;
+use crate::extension::registry::{DiagnosticLevel, PluginDiagnostic, PluginRegistry};
 use crate::extension::types::PluginRecord;
+use crate::sync_primitives::Arc;
 
 /// Unified registration API for writing capabilities into `PluginRegistry`.
 ///
@@ -151,6 +153,54 @@ impl<'a> CapabilityApi<'a> {
     }
 }
 
+/// Mount-time registry effect: write the plugin record and every capability
+/// it declares under one write lock, and hand back the disposer that removes
+/// all of it (`PluginRegistry::unregister_plugin`).
+///
+/// A capability the plugin lacks permission for is NOT a mount failure — it
+/// becomes a `Warn` diagnostic on the row (it used to be a `debug!` line in
+/// `load_all`, i.e. invisible on every face). The row itself cannot fail to
+/// register, so this returns `Disposer` rather than `Result<Disposer, _>`.
+///
+/// This is a free function taking the `Arc` handle, not a method on
+/// [`CapabilityApi`]: the api borrows `&mut PluginRegistry` inside the lock
+/// guard and cannot own what its disposer would need.
+pub(crate) async fn register_plugin_row(
+    registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
+    record: PluginRecord,
+    permissions: Vec<PluginPermission>,
+    capabilities: Vec<CapabilityDeclaration>,
+) -> Disposer {
+    let plugin_id = record.id.clone();
+    {
+        let mut reg = registry.write().await;
+        reg.register_plugin(record);
+        let mut refused: Vec<String> = Vec::new();
+        {
+            let mut api = CapabilityApi::new(&mut reg, plugin_id.clone(), permissions);
+            for cap in capabilities {
+                let kind = cap.kind_name();
+                if let Err(e) = api.register_capability(cap) {
+                    refused.push(format!("{kind} capability not registered: {e}"));
+                }
+            }
+        }
+        for message in refused {
+            tracing::warn!(plugin_id = %plugin_id, %message, "capability refused at mount");
+            reg.add_diagnostic(PluginDiagnostic {
+                level: DiagnosticLevel::Warn,
+                message,
+                plugin_id: Some(plugin_id.clone()),
+                source: Some("mount".to_string()),
+            });
+        }
+    }
+    async_disposer(move || async move {
+        registry.write().await.unregister_plugin(&plugin_id);
+        Ok(())
+    })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -203,6 +253,14 @@ mod tests {
             description: "A test skill".to_string(),
             content: "You are a test skill.".to_string(),
             triggers: vec!["test".to_string()],
+            plugin_id: "test-plugin".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn make_agent() -> CapabilityDeclaration {
+        CapabilityDeclaration::Agent(AgentRegistration {
+            name: "helper".to_string(),
             plugin_id: "test-plugin".to_string(),
             ..Default::default()
         })
@@ -371,5 +429,85 @@ mod tests {
         // Skill is P2 but required_permission() returns None
         assert!(api.register_capability(make_skill()).is_ok());
         assert!(api.registry().get_skill("test-skill").is_some());
+    }
+
+    #[tokio::test]
+    async fn register_plugin_row_writes_the_row_and_its_disposer_removes_everything() {
+        use crate::extension::registry::PluginRegistry;
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(PluginRegistry::new()));
+        let record = PluginRecord::new(
+            "test-plugin".to_string(),
+            "Test Plugin".to_string(),
+            crate::extension::types::PluginKind::Static,
+            crate::extension::types::PluginOrigin::Global,
+        );
+
+        let disposer = register_plugin_row(
+            std::sync::Arc::clone(&registry),
+            record,
+            vec![PluginPermission::Background],
+            vec![make_tool(), make_service(), make_skill(), make_agent()],
+        )
+        .await;
+
+        {
+            let reg = registry.read().await;
+            assert!(reg.get_plugin("test-plugin").is_some());
+            assert_eq!(reg.list_tools_for_plugin("test-plugin").len(), 1);
+            assert_eq!(reg.list_services().len(), 1);
+            assert_eq!(reg.list_skills().len(), 1);
+            assert_eq!(reg.list_agents().len(), 1);
+        }
+
+        disposer().await.expect("row disposer cannot fail");
+
+        let reg = registry.read().await;
+        assert!(reg.get_plugin("test-plugin").is_none(), "record removed");
+        assert!(reg.list_tools_for_plugin("test-plugin").is_empty());
+        assert!(reg.list_services().is_empty());
+        assert!(reg.list_skills().is_empty());
+        assert!(reg.list_agents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_capability_refused_for_permissions_becomes_a_diagnostic_not_a_failure() {
+        use crate::extension::registry::{DiagnosticLevel, PluginRegistry};
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(PluginRegistry::new()));
+        let record = PluginRecord::new(
+            "test-plugin".to_string(),
+            "Test Plugin".to_string(),
+            crate::extension::types::PluginKind::Static,
+            crate::extension::types::PluginOrigin::Global,
+        );
+        // No `Background` permission → the service is refused; the tool still lands.
+        let disposer = register_plugin_row(
+            std::sync::Arc::clone(&registry),
+            record,
+            vec![],
+            vec![make_tool(), make_service()],
+        )
+        .await;
+        {
+            let reg = registry.read().await;
+            assert_eq!(reg.list_tools_for_plugin("test-plugin").len(), 1);
+            assert!(reg.list_services().is_empty());
+            let diags: Vec<_> = reg
+                .diagnostics()
+                .iter()
+                .filter(|d| d.plugin_id.as_deref() == Some("test-plugin"))
+                .collect();
+            assert_eq!(diags.len(), 1, "{diags:?}");
+            assert!(matches!(diags[0].level, DiagnosticLevel::Warn));
+            assert!(
+                diags[0].message.contains("background"),
+                "{}",
+                diags[0].message
+            );
+        }
+        disposer().await.unwrap();
+        assert!(
+            registry.read().await.diagnostics().is_empty(),
+            "diagnostics go with the row"
+        );
     }
 }
