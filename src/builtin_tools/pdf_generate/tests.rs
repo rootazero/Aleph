@@ -224,7 +224,7 @@ async fn resolve_output_path_prefers_fs_scope_over_shared_handle() {
             p
         }
     };
-    let expected = strip_unc(run_b.join("output/documents/report.pdf"));
+    let expected = strip_unc(run_b.canonicalize().unwrap_or_else(|_| run_b.clone()).join("output/documents/report.pdf"));
     let actual = strip_unc(resolved);
     assert_eq!(actual, expected);
 }
@@ -257,7 +257,7 @@ async fn resolve_output_path_falls_back_to_shared_handle_without_scope() {
             p
         }
     };
-    let expected = strip_unc(ws.join("output/documents/report.pdf"));
+    let expected = strip_unc(ws.canonicalize().unwrap_or_else(|_| ws.clone()).join("output/documents/report.pdf"));
     let actual = strip_unc(resolved);
     assert_eq!(actual, expected);
 }
