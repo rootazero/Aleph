@@ -31,6 +31,7 @@ pub mod scope;
 pub mod validation;
 
 pub mod capability;
+pub mod effects;
 pub mod registrar;
 
 mod error;
@@ -52,6 +53,9 @@ mod template;
 mod types;
 pub mod watcher;
 
+pub use effects::{
+    async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
+};
 pub use error::*;
 pub use loader::PluginLoader;
 pub use manager_global::{
