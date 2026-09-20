@@ -17,7 +17,7 @@
 Every task's requirements implicitly include this section.
 
 - **Base commit** `3ddc1f2e7` (worktree HEAD `35e5f8bca` adds only the spec). Phase files cite `file:line` at `3ddc1f2e7`; a later phase that anchors on code an earlier phase moved cites the earlier phase's task instead (see "Phase order").
-- **Worktree only:** `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`, branch `worktree-plugin-scope-round`. Never touch `main`; merge (P9) only after the user approves. Submodules are initialised (`include_dir!` fails the build if `skills/` or `plugins/` is missing). The worktree has its own `target/`.
+- **Worktree only:** `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`, branch `worktree-plugin-scope-round`. Never touch `main`; merge (P9) only after the user approves. Submodules are initialised (`include_dir!` fails the build if `skills/` or `plugins/` is missing). Builds share ONE target dir with the main checkout (`/Volumes/TBU4/Workspace/Aleph/.cargo/config.toml`, discovered by parent walk, pins `target-dir`); QA stages build from this worktree immediately before running and nobody else builds meanwhile.
 - **One agent owns the tree at a time.** Parallelism is for read-only reviewers only.
 - **`src/harness/` = 0-line diff in every task** (R10). `git diff --stat 3ddc1f2e7 -- src/harness` must print nothing at every commit.
 - **Redlines R1–R10 and principles P1–P8** of `CLAUDE.md` apply; in particular R7/P8 (no regex on natural language), P7 (`unwrap_or_else(|e| e.into_inner())` on std locks; `char_indices()` / `.get(..n)` on strings), P6 (delete, don't comment out).

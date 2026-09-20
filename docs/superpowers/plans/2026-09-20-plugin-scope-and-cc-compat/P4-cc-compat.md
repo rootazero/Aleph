@@ -1877,7 +1877,7 @@ Today's wire, verified: `commands/<name>.md` → `parse_single_command` (`manife
 
 Where the body is injected: the run loop already delivers per-turn content to the model without persisting it — `transient_blocks` (`run_loop/inner.rs:396-397`, joined at `:510-511`, merged into `HarnessDeps::recall_context` by `harness_bridge/runner_impl.rs:562-578` "appended as a transient user message each Think — delivered to the model but NEVER persisted, so the stored user turn (and the session title) stays equal to the raw input"). The rendered command body rides that channel, wrapped as `<command …>`, pushed FIRST so it precedes the hook reminders. The raw `/name args` stays the persisted user turn. (Open question for the lead: CC persists the *expanded* prompt as the user message; this plan keeps Aleph's raw-input invariant and documents the difference — DEVIATION #16 wording in §10.)
 
-Slash registration / unregistration on plugin mount/unmount is P1's `"slash_command"` effect (`unregister_skills_for_plugin`); nothing here re-does it. P4.7b only changes WHAT the boot-time `SkillInfo` carries; P1 replaces WHEN it is registered.
+Slash registration / unregistration on plugin mount/unmount is P1's `"slash_command"` effect (its disposer calls `ToolCatalog::unregister_skills(&[String])` with the exact ids it registered — R1.8); nothing here re-does it. P4.7b only changes WHAT the boot-time `SkillInfo` carries; P1 replaces WHEN it is registered.
 
 #### Task P4.7a: `SkillTemplate` — CC/pi argument grammar + `` !`cmd` `` with a consent-gated shell
 
