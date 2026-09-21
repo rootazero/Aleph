@@ -54,12 +54,6 @@ impl PluginLoader {
         }
     }
 
-    /// Check if any runtime is currently active.
-    #[must_use]
-    pub const fn is_any_runtime_active(&self) -> bool {
-        self.wasm_runtime.is_some()
-    }
-
     /// Check if a specific plugin is loaded.
     #[must_use]
     pub fn is_loaded(&self, plugin_id: &str) -> bool {
@@ -196,7 +190,8 @@ impl PluginLoader {
 
     /// Call a tool handler on a loaded plugin.
     ///
-    /// For MCP plugins, tool calls should go through the MCP system (`McpManager`).
+    /// Only `Wasm` plugins have a callable in-process runtime; any other
+    /// kind is an error (MCP plugin tools are reached through `McpManager`).
     pub fn call_tool(
         &self,
         plugin_id: &str,
@@ -228,10 +223,7 @@ impl PluginLoader {
                     ))
                 }
             }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugin tool calls must go through McpManager, not PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(format!(
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support tool calls"
             ))),
         }
@@ -273,10 +265,7 @@ impl PluginLoader {
                     ))
                 }
             }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugins do not support hooks via PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(format!(
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support hooks"
             ))),
         }
@@ -318,12 +307,9 @@ impl PluginLoader {
                     ))
                 }
             }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugins do not support direct commands via PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(
-                "Static plugins cannot have direct commands".to_string(),
-            )),
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
+                "Plugin kind {kind:?} does not support direct commands"
+            ))),
         }
     }
 
@@ -435,7 +421,7 @@ pub(crate) fn register_memory_extension_effect(
 
 impl Drop for PluginLoader {
     fn drop(&mut self) {
-        if self.is_any_runtime_active() || !self.loaded_plugins.is_empty() {
+        if self.is_wasm_runtime_active() || !self.loaded_plugins.is_empty() {
             self.shutdown();
         }
     }
@@ -451,7 +437,7 @@ mod tests {
     #[test]
     fn test_plugin_loader_new() {
         let loader = PluginLoader::new();
-        assert!(!loader.is_any_runtime_active());
+        assert!(!loader.is_wasm_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
         assert_eq!(loader.loaded_count(), 0);
     }
@@ -465,7 +451,6 @@ mod tests {
     #[test]
     fn test_plugin_loader_default() {
         let loader = PluginLoader::default();
-        assert!(!loader.is_any_runtime_active());
         assert!(!loader.is_wasm_runtime_active());
     }
 
@@ -636,8 +621,7 @@ mod tests {
         let err = ext
             .call_for_test("noop", serde_json::json!({}))
             .await
-            .err()
-            .expect("no such server on a fresh manager");
+            .expect_err("no such server on a fresh manager");
         assert!(
             !err.to_string().contains("not yet bound"),
             "must be bound: {err}"
@@ -673,14 +657,16 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_loader_mcp_command_rejected() {
+    fn test_plugin_loader_mcp_command_is_not_loaded_into_the_loader() {
         let mut loader = PluginLoader::new();
-        loader
-            .loaded_plugins
-            .insert("mcp-test".to_string(), PluginKind::Mcp);
+        let manifest = make_manifest_no_memory();
+        loader.load_plugin(&manifest).unwrap();
+        assert!(!loader.is_loaded(&manifest.id));
 
-        let result = loader.execute_command("mcp-test", "cmd", serde_json::json!({}));
-        assert!(result.is_err());
+        let err = loader
+            .execute_command(&manifest.id, "cmd", serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::PluginNotFound(_)), "{err}");
     }
 
     #[tokio::test]

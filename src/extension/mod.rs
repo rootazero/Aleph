@@ -1323,7 +1323,7 @@ mod tests {
     async fn test_extension_manager_get_plugin_loader() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let loader = manager.get_plugin_loader().await;
-        assert!(!loader.is_any_runtime_active());
+        assert!(!loader.is_wasm_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
     }
 
