@@ -49,8 +49,11 @@ pub struct MemoryExtensionRegistry {
     /// Typed side-table of MCP-backed extensions, retained at their concrete
     /// type. Binding happens at mount (`register_memory_extension_effect`),
     /// so in production this table is only maintained; the test-only
-    /// `mcp_bindings_snapshot` reads it. Each entry is the SAME `Arc` as the
-    /// corresponding `dyn MemoryExtension` in `extensions`.
+    /// `mcp_bindings_snapshot` reads it — it is the one record of which
+    /// extensions are bound, and the memory-binding guards observe the
+    /// binding target through it, which is why a write-only table is the
+    /// accepted state. Each entry is the SAME `Arc` as the corresponding
+    /// `dyn MemoryExtension` in `extensions`.
     mcp_bindings: RwLock<Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>>>,
 }
 
@@ -905,28 +908,26 @@ mod tests {
     async fn register_mcp_appears_in_both_dispatch_and_snapshot() {
         use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
         let reg = MemoryExtensionRegistry::new();
-        let ext = Arc::new(McpMemoryExtension::new_unbound(
-            "p".to_string(),
-            Some("plugin:p/srv".to_string()),
-        ));
-        reg.register_mcp(ext).unwrap();
+        let ext = Arc::new(McpMemoryExtension::new_unbound("p".to_string()));
+        reg.register_mcp(Arc::clone(&ext)).unwrap();
         // Visible to dispatch (main list).
         assert_eq!(reg.len(), 1);
-        // Visible to the typed side-table for binding.
+        // Visible to the typed side-table, as the SAME `Arc` that dispatch
+        // holds — so whatever caller it carries is what dispatch will call.
         let snap = reg.mcp_bindings_snapshot();
         assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].server_id(), Some("plugin:p/srv"));
+        assert!(
+            Arc::ptr_eq(&snap[0], &ext),
+            "side-table entry must be the registered Arc, not a copy"
+        );
     }
 
     #[tokio::test]
     async fn unregister_removes_from_dispatch_and_from_the_mcp_side_table() {
         use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
         let reg = MemoryExtensionRegistry::new();
-        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound(
-            "p".to_string(),
-            Some("plugin:p/srv".to_string()),
-        )))
-        .unwrap();
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound("p".to_string())))
+            .unwrap();
         reg.register(Arc::new(RecordDelegationExt {
             seen: Arc::new(Mutex::new(Vec::new())),
         }))
@@ -942,11 +943,8 @@ mod tests {
         assert!(!reg.unregister("p"), "second call: nothing to remove");
 
         // The name is free again: re-registering does not hit the dedup error.
-        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound(
-            "p".to_string(),
-            None,
-        )))
-        .unwrap();
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound("p".to_string())))
+            .unwrap();
         assert_eq!(reg.len(), 2);
     }
 }

@@ -23,13 +23,11 @@ pub trait McpCaller: Send + Sync {
 
 pub struct McpMemoryExtension {
     name: String,
-    /// `Some` when created unbound at mount (the `memory_extension` step then
-    /// binds a real `ManagerBackedMcpCaller`). `None` for test-constructed
-    /// extensions that are handed a concrete caller up front.
-    server_id: Option<String>,
     /// Swappable so the `memory_extension` mount step can replace
     /// `UnboundMcpCaller` with the real caller without re-registering.
-    /// Dispatch reads via `.load()`.
+    /// Dispatch reads via `.load()`. Which server the extension routes to is
+    /// the caller's business (`ManagerBackedMcpCaller::server_id`); the
+    /// extension itself does not record it.
     ///
     /// Double-`Arc`: `arc-swap`'s `RefCnt` is only implemented for `Arc<T: Sized>`,
     /// so a trait object must be stored as `ArcSwap<Arc<dyn _>>` (the inner
@@ -39,26 +37,23 @@ pub struct McpMemoryExtension {
 }
 
 impl McpMemoryExtension {
-    /// Construct with a concrete caller (already bound). `server_id` is `None`:
-    /// nothing binds it later.
+    /// Construct with a concrete caller (already bound).
     pub fn new(name: impl Into<String>, caller: Arc<dyn McpCaller>) -> Self {
         Self {
             name: name.into(),
-            server_id: None,
             caller: ArcSwap::from(Arc::new(caller)),
         }
     }
 
     /// Construct unbound: backed by `UnboundMcpCaller` until `rebind` replaces
-    /// it. `server_id` (when `Some`) is the MCP server that the
-    /// `memory_extension` mount step binds this plugin's hook calls to.
+    /// it (the `memory_extension` mount step does so when an MCP handle is
+    /// attached).
     #[must_use]
-    pub fn new_unbound(name: String, server_id: Option<String>) -> Self {
+    pub fn new_unbound(name: String) -> Self {
         // rust-doctor-disable-next-line excessive-clone
         let caller: Arc<dyn McpCaller> = Arc::new(UnboundMcpCaller::new(name.clone()));
         Self {
             name,
-            server_id,
             caller: ArcSwap::from(Arc::new(caller)),
         }
     }
@@ -66,12 +61,6 @@ impl McpMemoryExtension {
     /// Swap the underlying caller. Visible to every subsequent hook dispatch.
     pub fn rebind(&self, caller: Arc<dyn McpCaller>) {
         self.caller.store(Arc::new(caller));
-    }
-
-    /// The MCP server id this extension's hooks route to, if resolved at
-    /// registration. `None` means "leave bound to whatever caller it has".
-    pub fn server_id(&self) -> Option<&str> {
-        self.server_id.as_deref()
     }
 
     /// Test-only: call the current caller directly, to observe whether the
@@ -543,8 +532,7 @@ mod tests {
     async fn rebind_swaps_caller_visible_to_hooks() {
         // Starts unbound → on_capture errors. After rebind to a canned caller
         // that allows, on_capture returns Allow. Proves ArcSwap visibility.
-        let ext =
-            McpMemoryExtension::new_unbound("p".to_string(), Some("plugin:p/srv".to_string()));
+        let ext = McpMemoryExtension::new_unbound("p".to_string());
         let ctx = CaptureCtx {
             agent_id: "a".into(),
             namespace: NamespaceScope::Owner,
@@ -559,7 +547,6 @@ mod tests {
         ext.rebind(caller);
         let d = ext.on_capture(&ctx, &mut r).await.unwrap();
         assert!(matches!(d, CaptureDecision::Allow));
-        assert_eq!(ext.server_id(), Some("plugin:p/srv"));
     }
 
     #[tokio::test]

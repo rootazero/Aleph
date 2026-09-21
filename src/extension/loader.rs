@@ -393,10 +393,7 @@ pub(crate) fn register_memory_extension_effect(
     if manifest.memory_manifest.is_none() {
         return Ok(None);
     }
-    let ext = Arc::new(McpMemoryExtension::new_unbound(
-        manifest.name.clone(),
-        server_id.clone(),
-    ));
+    let ext = Arc::new(McpMemoryExtension::new_unbound(manifest.name.clone()));
     if let (Some(handle), Some(sid)) = (mcp_handle, server_id) {
         ext.rebind(Arc::new(
             crate::memory::extensions::ManagerBackedMcpCaller::new(handle, sid),
@@ -563,7 +560,14 @@ mod tests {
             "Test Memory Plugin",
             "keyed by manifest.name"
         );
-        assert_eq!(snap[0].server_id(), Some("plugin:test/srv"));
+        // No MCP handle was attached, so the step leaves the placeholder
+        // caller in place: a call answers with the "not yet bound" diagnostic
+        // instead of reaching a manager.
+        let err = snap[0]
+            .call_for_test("noop", serde_json::json!({}))
+            .await
+            .expect_err("placeholder caller rejects every call");
+        assert!(err.to_string().contains("not yet bound"), "{err}");
 
         disposer().await.unwrap();
         assert_eq!(registry.len(), 0);
@@ -596,7 +600,10 @@ mod tests {
     }
 
     /// With a live MCP handle the extension is bound at registration — no
-    /// separate boot-time rebind pass over the registry is needed.
+    /// separate boot-time rebind pass over the registry is needed — and it is
+    /// bound to the server id the step was given: the extension records no
+    /// server id of its own, so the only place to read the binding target is
+    /// the caller's own error, which names the server it tried to reach.
     #[tokio::test]
     async fn memory_extension_effect_binds_the_caller_when_a_handle_is_present() {
         let dir = tempfile::tempdir().unwrap();
@@ -617,7 +624,8 @@ mod tests {
         .unwrap();
         let ext = &registry.mcp_bindings_snapshot()[0];
         // `UnboundMcpCaller` answers every call with its diagnostic error;
-        // a bound caller reaches the manager and gets "server not found".
+        // a bound caller reaches the manager and gets "server not running",
+        // naming the server it was bound to.
         let err = ext
             .call_for_test("noop", serde_json::json!({}))
             .await
@@ -625,6 +633,10 @@ mod tests {
         assert!(
             !err.to_string().contains("not yet bound"),
             "must be bound: {err}"
+        );
+        assert!(
+            err.to_string().contains("'plugin:test/srv' not running"),
+            "must be bound to the server id the step was given: {err}"
         );
     }
 
