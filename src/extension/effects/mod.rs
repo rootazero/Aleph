@@ -12,6 +12,8 @@
 //! cascade restart (scan-dsh-cordis.md Top-8 #1; three prior rounds' "不引
 //! fiber" rulings stand, narrowed to this).
 
+#[cfg(test)]
+mod census;
 mod disposer;
 mod scope;
 
