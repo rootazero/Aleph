@@ -24,6 +24,7 @@
 //! ```
 
 pub mod hooks;
+mod lifecycle;
 mod loader;
 pub mod marketplace;
 pub mod runtime;
@@ -58,6 +59,7 @@ pub use effects::{
     async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
 };
 pub use error::*;
+pub use lifecycle::{MountError, ReloadReport, UnmountError};
 pub use loader::PluginLoader;
 pub use manager_global::{
     decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
@@ -222,8 +224,8 @@ pub struct ExtensionManager {
 
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
-    /// is called at server boot — CLI/test paths leave it unset, so plugin MCP
-    /// registration simply no-ops there. Wrapped in `RwLock<Option<_>>` because
+    /// is called at server boot — CLI/test paths leave it unset, and the
+    /// `mcp_server` mount step is recorded as skipped there. Wrapped in `RwLock<Option<_>>` because
     /// the manager is behind an `Arc` by the time the MCP actor materialises,
     /// mirroring the `memory_registry` injection pattern.
     mcp_handle: crate::sync_primitives::RwLock<Option<crate::mcp::McpManagerHandle>>,
@@ -250,6 +252,18 @@ pub struct ExtensionManager {
     /// Exposed via [`Self::reload_count`] — used by integration tests to
     /// assert at-most-once reload behaviour on adjacent watcher events.
     reload_count: AtomicU64,
+
+    /// One [`EffectScope`] per mounted plugin — everything `mount` put into
+    /// the runtime, owned here so `unmount` can take it all back out. A std
+    /// mutex, never held across an `await`: `lifecycle.rs` removes the scope
+    /// under the lock and disposes it after.
+    scopes: StdMutex<HashMap<String, effects::EffectScope>>,
+
+    /// Join handles of the per-plugin server-start watchers
+    /// (`lifecycle.rs::watch_server_starts`), so `activation_settled()` can
+    /// wait for the MCP half of a mount to reach its verdict. Std mutex,
+    /// never held across an `await`.
+    activation_watchers: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 /// Convert a plugin-shipped agent registration into an [`crate::agents::AgentDef`]
@@ -363,6 +377,8 @@ impl ExtensionManager {
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
+            scopes: StdMutex::new(HashMap::new()),
+            activation_watchers: StdMutex::new(Vec::new()),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
@@ -545,259 +561,6 @@ impl ExtensionManager {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /// Load all extensions.
-    pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let mut summary = LoadSummary::default();
-
-        // The loader's copy of every plugin's stored configuration must be
-        // current before anything loads — a plugin started with an empty
-        // config is a plugin the operator configured and cannot tell.
-        self.publish_plugin_settings().await;
-
-        // Collect all plugin directories from discovery
-        let plugin_dirs = self.collect_plugin_dirs()?;
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-
-        // Clear and rebuild registry
-        {
-            let mut registry = self.plugin_registry.write().await;
-            registry.clear();
-            // `registered_plugin_ids` only tracks SUCCESSFUL parses —
-            // shadow resolution gates on the id coming from a parsed
-            // manifest. A parse failure must NOT poison this set: if the
-            // highest-priority copy of a plugin fails to parse, a
-            // lower-priority copy with the same id should still be
-            // allowed to take over. Parse failures are deduped in a
-            // separate set so the error record is only registered once
-            // per id.
-            let mut registered_plugin_ids = std::collections::HashSet::new();
-            let mut failed_plugin_ids = std::collections::HashSet::new();
-
-            for found in plugin_dirs.iter().rev() {
-                let dir_path = &found.path;
-                match self.adapter_registry.parse_dir(dir_path) {
-                    Ok(output) => {
-                        // Shadow resolution: dirs are walked highest-priority
-                        // first, so a repeat id lost. It used to be dropped
-                        // silently — indistinguishable from "not installed",
-                        // and the `Overridden` status written for exactly this
-                        // moment had zero producers. Record the loss on the
-                        // winner (the registry is keyed by id, so the loser
-                        // cannot hold a row of its own).
-                        if !registered_plugin_ids.insert(output.plugin_id.clone()) {
-                            let winner = registry
-                                .get_plugin(&output.plugin_id)
-                                .map(|p| p.root_dir.display().to_string())
-                                .unwrap_or_default();
-                            tracing::info!(
-                                plugin_id = %output.plugin_id,
-                                shadowed = %dir_path.display(),
-                                winner = %winner,
-                                "plugin id already registered from a higher-priority scope"
-                            );
-                            registry.add_diagnostic(PluginDiagnostic {
-                                level: DiagnosticLevel::Warn,
-                                message: format!(
-                                    "{} is shadowed by the copy at {winner}",
-                                    dir_path.display()
-                                ),
-                                plugin_id: Some(output.plugin_id.clone()),
-                                source: Some("discovery".to_string()),
-                            });
-                            summary.shadowed += 1;
-                            continue;
-                        }
-                        // Build plugin record from adapter output
-                        let mut record =
-                            PluginRecord::from_adapter_output(&output, dir_path.clone());
-                        // Overwrite the adapter's hardcoded `Global`. Same
-                        // shape as the `record.kind` override below: the
-                        // adapters answer what a manifest can say, and where
-                        // the plugin was found is not one of those things.
-                        record.origin = found.origin;
-                        if let Ok(manifest) =
-                            manifest::parse_manifest_from_dir_cached_global(dir_path)
-                        {
-                            record.kind = manifest.kind;
-                        }
-                        let plugin_id = output.plugin_id.clone();
-                        // P3.5 — owner trust policy gates the load. When the
-                        // policy is `restrictive`, plugins from `Workspace` or
-                        // `Global` origins are only registered if their id is
-                        // in the policy's allowlist; `Bundled`/`Config`
-                        // plugins always pass. The default is `permissive`
-                        // (matches the legacy "load everything" behaviour).
-                        let trust_allows = self
-                            .owner_trust_policy
-                            .read()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .allows(&plugin_id, record.origin);
-                        if !trust_allows {
-                            tracing::info!(
-                                plugin_id = %plugin_id,
-                                origin = ?record.origin,
-                                "plugin skipped by owner trust policy \
-                                 (not in allowlist)"
-                            );
-                            summary.skipped_by_trust += 1;
-                            // Register it as Blocked rather than dropping it:
-                            // "refused by policy" and "not installed" must not
-                            // render the same, and the operator needs the id to
-                            // put on the allowlist.
-                            let origin = record.origin;
-                            registry.register_plugin(record.inactive(
-                                PluginStatus::Blocked(format!("{origin:?}")),
-                                format!(
-                                    "refused by the owner trust policy ({origin:?} origin is not \
-                                     on the allowlist); add \"{plugin_id}\" to it to load this plugin"
-                                ),
-                            ));
-                            continue;
-                        }
-                        // Durable activation state. `.disabled` markers written
-                        // by older builds are migrated into `plugins.toml` on
-                        // first sight and then removed, so the answer converges
-                        // to one source instead of two (the marker could not
-                        // survive `plugin update`, which swaps the whole tree).
-                        let legacy_marker = dir_path.join(".disabled");
-                        if legacy_marker.exists() {
-                            let mut cfg = self.plugins_config.write().await;
-                            if cfg.set_enabled(&plugin_id, false) {
-                                let path = self.plugins_config_path.clone();
-                                if let Err(e) = cfg.save(&path).await {
-                                    tracing::warn!(error = %e, "failed to persist migrated plugin disable");
-                                }
-                            }
-                            drop(cfg);
-                            match tokio::fs::remove_file(&legacy_marker).await {
-                                Ok(()) => tracing::info!(
-                                    plugin_id = %plugin_id,
-                                    "migrated legacy .disabled marker into plugins.toml"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    plugin_id = %plugin_id, error = %e,
-                                    "legacy .disabled marker migrated but could not be removed"
-                                ),
-                            }
-                        }
-                        let operator_enabled =
-                            self.plugins_config.read().await.is_enabled(&plugin_id);
-                        if !operator_enabled {
-                            // Registered but not active. The record and its
-                            // capabilities are still registered — every
-                            // downstream consumer already filters on
-                            // `status.is_active()` (tool index, hook sync,
-                            // `projection.rs`), so a disabled plugin is invisible
-                            // to the model while staying listable and, crucially,
-                            // **re-enablable without a reload**: skipping
-                            // capability registration here would make
-                            // `set_plugin_enabled(id, true)` flip a status with
-                            // nothing behind it.
-                            record.status = PluginStatus::Disabled;
-                            summary.disabled_by_operator += 1;
-                        }
-
-                        registry.register_plugin(record);
-
-                        // Register all capabilities via CapabilityApi
-                        let mut api = registrar::CapabilityApi::new(
-                            &mut registry,
-                            plugin_id.clone(),
-                            output.permissions,
-                        );
-                        for cap in output.capabilities {
-                            if let Err(e) = api.register_capability(cap) {
-                                tracing::debug!(
-                                    "Failed to register capability for plugin {}: {}",
-                                    plugin_id,
-                                    e
-                                );
-                            }
-                        }
-
-                        summary.plugins_loaded += 1;
-                    }
-                    Err(e) => {
-                        // A plugin whose manifest will not parse used to vanish
-                        // at `debug!` level: on every surface it looked exactly
-                        // like a plugin that was never installed, so the
-                        // operator had nothing to fix. Give it a row, an id
-                        // derived from the directory, and the parse error.
-                        let fallback_id = dir_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| dir_path.display().to_string());
-                        tracing::warn!(
-                            plugin_dir = %dir_path.display(), error = %e,
-                            "plugin manifest could not be parsed; listing it as errored"
-                        );
-                        summary
-                            .errors
-                            .push(format!("{}: {}", dir_path.display(), e));
-                        // Use `failed_plugin_ids` (not `registered_plugin_ids`)
-                        // so a successful lower-priority parse with the same id
-                        // is allowed to take over after a higher-priority parse
-                        // failure. See comment on the set declaration above.
-                        if failed_plugin_ids.insert(fallback_id.clone()) {
-                            let record = PluginRecord::new(
-                                fallback_id,
-                                dir_path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default(),
-                                PluginKind::Static,
-                                PluginOrigin::Global,
-                            )
-                            .with_root_dir(dir_path.clone())
-                            .with_error(e.to_string());
-                            registry.register_plugin(record);
-                        }
-                    }
-                }
-            }
-
-            // Count loaded skills/commands/agents from registry
-            summary.skills_loaded = registry.list_skills().len();
-            summary.agents_loaded = registry.list_agents().len();
-            summary.hooks_loaded = registry.list_hooks().len();
-        }
-
-        // Sync hooks from registry to HookExecutor
-        self.sync_hooks_from_registry().await;
-
-        // Layer in user-level hooks from ~/.aleph/hooks.json and the
-        // project's .aleph/hooks.{json,local.json}. Claude Code parity:
-        // users edit these files directly; no plugin packaging required.
-        self.sync_user_hooks().await;
-
-        // Publish every plugin-owned process-global projection (skill dirs,
-        // sub-agents, tool index) from the ONE derivation that states the
-        // activation predicate — see `projection.rs`. This used to be inlined
-        // here with `list_plugins()` (every status), while `set_plugin_enabled`
-        // used `list_active_plugins()`: two authors, opposite answers, and the
-        // permissive one ran on every boot.
-        let projection = self.republish_plugin_projections().await;
-        tracing::debug!(
-            plugin_skill_dirs = projection.plugin_skill_dirs.len(),
-            plugin_subagents = projection.subagents.len(),
-            "published plugin projections"
-        );
-
-        let mut cache = self.cache_state.write().await;
-        cache.loaded = true;
-
-        tracing::info!(
-            "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
-            summary.skills_loaded,
-            summary.agents_loaded,
-            summary.plugins_loaded,
-            summary.hooks_loaded,
-        );
-
-        Ok(summary)
-    }
-
     /// Ensure extensions are loaded (lazy-loading entry point).
     ///
     /// Uses a Mutex guard to serialize concurrent calls — concurrent callers
@@ -816,48 +579,9 @@ impl ExtensionManager {
             return Ok(());
         }
 
-        // load_all() sets cache_state.loaded = true on success
-        self.load_all().await?;
+        // `load_guard` is held above; `load_all` would take it again.
+        self.load_all_locked().await?;
         Ok(())
-    }
-
-    /// Force reload all extensions
-    pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
-        self.reload_count.fetch_add(1, Ordering::SeqCst);
-
-        // Hold load_guard for the entire reload so a concurrent
-        // `ensure_loaded` cannot interleave its own `load_all` between the
-        // cache reset below and the `load_all` we run at the end. Without
-        // this, two concurrent loads can race: each will see
-        // `loaded = false`, both will execute `load_all`, and the second
-        // will double-initialize `cache_state` / `active_plugin_tools` /
-        // `plugin_tool_revision`.
-        let _guard = self.load_guard.lock().await;
-
-        {
-            let mut state = self.cache_state.write().await;
-            state.loaded = false;
-        }
-
-        // Reset hook executor (registry.clear() is called inside load_all)
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-
-        let summary = self.load_all().await?;
-
-        // Re-register plugin MCP servers after a hot-reload so a plugin
-        // installed/edited at runtime starts its servers without a restart.
-        // No-op when no MCP handle is attached (CLI/test paths).
-        self.sync_mcp_plugin_servers().await;
-
-        // Service lifecycle across hot-reloads: tear down services whose
-        // plugin vanished or was disabled (their registry entries are gone —
-        // the ServiceManager's registration snapshots keep them stoppable),
-        // then autostart services of the now-active plugin set.
-        self.stop_orphaned_services().await;
-        self.sync_plugin_services().await;
-
-        Ok(summary)
     }
 
     /// Record that Aleph itself just wrote `path`. The hot-reload watcher
@@ -976,8 +700,13 @@ impl ExtensionManager {
                             paths = ?effective.changed_paths,
                             "Extension watcher: triggering full reload"
                         );
-                        if let Err(e) = mgr.reload().await {
-                            tracing::warn!(error = %e, "Extension hot reload failed");
+                        match mgr.reload().await {
+                            Ok(report) if !report.failed.is_empty() => tracing::warn!(
+                                failed = ?report.failed.iter().map(|(id, e)| format!("{id}: {e}")).collect::<Vec<_>>(),
+                                "Extension hot reload: some plugins did not mount"
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(error = %e, "Extension hot reload failed"),
                         }
                     });
                 }
@@ -1164,7 +893,7 @@ impl ExtensionManager {
         };
 
         let mut executor = self.hook_executor.write().await;
-        // HookExecutor was already reset (via load_all's clear path or reload).
+        // HookExecutor was already reset by `lifecycle.rs::after_transition`.
         // Convert HookRegistration → HookConfig for the executor, consuming
         // each registration by value so its fields move into the config.
         for hr in hook_regs {
@@ -1312,50 +1041,6 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
-    }
-
-    /// Hot-reload a single plugin by ID.
-    ///
-    /// Unregisters all existing capabilities, re-parses the manifest from disk,
-    /// and re-registers all capabilities declared in the updated manifest.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the plugin is not found, the manifest cannot be parsed,
-    /// or capability registration fails (e.g. missing permissions).
-    pub async fn reload_plugin(&self, plugin_id: &str) -> anyhow::Result<()> {
-        // Find root dir from existing record
-        let root_dir = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .get_plugin(plugin_id)
-                .map(|p| p.root_dir.clone())
-                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {plugin_id}"))?
-        };
-
-        // Re-parse manifest via adapter registry
-        let output = self.adapter_registry.parse_dir(&root_dir)?;
-
-        // Use permissions from adapter output (consistent with load_all path)
-        let permissions = output.permissions.clone();
-
-        // Build updated plugin record
-        let mut record = PluginRecord::from_adapter_output(&output, root_dir.clone());
-        if let Ok(manifest) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
-            record.kind = manifest.kind;
-        }
-
-        // Atomically unregister old capabilities and register new ones
-        let mut registry = self.plugin_registry.write().await;
-        let mut api =
-            registrar::CapabilityApi::new(&mut registry, output.plugin_id.clone(), permissions);
-        api.reload(record, output.capabilities)?;
-        drop(registry);
-
-        self.refresh_active_plugin_tools().await;
-
-        tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
-        Ok(())
     }
 }
 
@@ -1618,10 +1303,10 @@ mod tests {
         );
     }
 
-    /// A disabled plugin is registered *with* its capabilities so a runtime
-    /// re-enable has something behind it; only the active-status filter keeps
-    /// it away from the model. Skipping registration instead would make
-    /// `set_plugin_enabled(id, true)` flip a status pointing at nothing.
+    /// A disabled plugin keeps a listable `Disabled` row (no capability rows),
+    /// and `set_plugin_enabled(id, true)` goes through `mount`, which registers
+    /// the capabilities itself — so a runtime re-enable has something behind
+    /// it without a full reload.
     #[tokio::test]
     async fn re_enabling_needs_no_reload() {
         // `Config::load()` writes a default config when none exists, so an

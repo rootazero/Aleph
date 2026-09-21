@@ -111,8 +111,8 @@ impl ExtensionManager {
     ///
     /// Publish is replace-semantics (not append), so this doubles as the
     /// retraction path: a plugin that stopped being active simply is not in the
-    /// new vector. Call this from every path that can change which plugins are
-    /// active — load, reload, enable, disable, unload.
+    /// new vector. Its only caller is `lifecycle.rs::after_transition`, which
+    /// every transition ends with (load, reload, mount, unmount).
     ///
     /// Returns the projection that was installed, for logging and tests.
     pub(crate) async fn republish_plugin_projections(&self) -> PluginProjection {

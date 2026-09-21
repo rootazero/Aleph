@@ -426,8 +426,8 @@ pub async fn handle_hooks_reload(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
     match mgr.reload().await {
-        Ok(summary) => {
-            let count = summary.plugins_loaded;
+        Ok(report) => {
+            let count = report.mounted.len();
             JsonRpcResponse::success(
                 request.id,
                 json!({

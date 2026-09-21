@@ -240,10 +240,10 @@ aleph plugin enable/disable <name>                 # 启用/禁用（耐久，�
 > **旧标记会被一次性迁移**：开机 `load_all` 见到 `.disabled` 就把 `enabled = false`
 > 写进 `plugins.toml` 并删除标记（保住用户此前的意图，同时收敛到单一源）。
 >
-> 被禁用的插件**仍然注册进 registry（连同它的 capability）**，只是状态为 `disabled`——
-> 下游四个消费者（工具索引 / hook 同步 / MCP transient server / `projection.rs`）
-> 一律按 `status.is_active()` 过滤。跳过 capability 注册会让运行时的重新启用
-> 翻转一个背后什么都没有的状态位。
+> 被禁用的插件**仍然注册进 registry 作为一行 `disabled` 记录（带 manifest 计数，但没有 capability 行）**——
+> 只有被 `mount` 过的插件才有 capability 行（`lifecycle.rs`，effect `registry_row`）；
+> 运行时重新启用走 `set_plugin_enabled(id, true)` → `mount`，由它注册 capability，
+> 所以状态位背后不会是空的。下游的 `status.is_active()` 过滤保留（无害，P2 的 `visible_to` 还要用这些行）。
 
 > **`plugin update` 语义**：以 marketplace 缓存为准，原子换装已安装插件目录（暂存→备份旧→换入新→删备份，失败回滚，绝不损坏现有安装）。仅当版本发生变化时才换装——两端均为 semver 时不降级，CalVer / git SHA / `local` 等非 semver 版本以"不相等即变更"判定（对齐 codex `IfVersionChanged`）；`--force` 强制重装。插件持久化数据目录 `~/.aleph/plugins/data/<id>/` 位于安装树之外，不受换装影响。
 
@@ -572,8 +572,8 @@ agent 循环的执行器。
 MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不落盘）** server 注册到运行中的 `McpManager`，工具经现有 tool bridge 自动注册。
 
 - **transient 通道**：`McpManagerHandle::add_transient_server` / `remove_transient_server`（`src/mcp/manager/`）。与 `add_server` 不同，它只 `start_server_internal`，**不** upsert/持久化到用户 MCP 配置文件——插件 server 由插件生命周期管理，绝不污染用户配置。`server_id` 形如 `plugin:<id>/<name>`。
-- **注册编排**：`ExtensionManager::sync_mcp_plugin_servers()` 把所有启用的 MCP-kind 插件的 server 交给 manager（幂等；无 handle 时 no-op）。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）；tool bridge spawn 之后的后台任务只做过渡期补装（再跑一次幂等的 sync）；`reload()` 末尾再次调用以覆盖热重载安装。
-- **卸载清理**：`unload_runtime_plugin` 在卸载前捕获 server id，卸载后 `remove_transient_server` 拆除，避免残留进程/工具。
+- **注册编排**：每个 MCP-kind 插件的 server 由它自己的 `mount`（`lifecycle.rs`，effect `mcp_server` → `register_transient_servers`）交给 manager，`reload()` = 全部 unmount + 重新 mount，不再另行调用 sync。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）；tool bridge spawn 之后的后台任务只做过渡期补装（再跑一次幂等的 `sync_mcp_plugin_servers()`，无 handle 时 no-op；P1.11 删）。
+- **卸载清理**：`unmount` 按注册的逆序跑 disposer，`mcp_server` 的 disposer 对该插件登记的每个 server 调 `remove_transient_server`，避免残留进程/工具（`unload_runtime_plugin` 是过渡期残留，P1.11 删）。
 - `list_servers` 同时列出 transient client（不止 config），使 `mcp.list` 与 tool bridge 的 lag-recovery `resync_all` 都能感知插件 server。
 
 ### 远程 MCP transport

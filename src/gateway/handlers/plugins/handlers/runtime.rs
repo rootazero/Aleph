@@ -259,9 +259,9 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     match manager.reload_plugin(&params.plugin_id).await {
-        Ok(()) => JsonRpcResponse::success(
+        Ok(status) => JsonRpcResponse::success(
             request.id,
-            json!({ "ok": true, "pluginId": params.plugin_id }),
+            json!({ "ok": true, "pluginId": params.plugin_id, "status": status.label() }),
         ),
         Err(e) => JsonRpcResponse::error(
             request.id,

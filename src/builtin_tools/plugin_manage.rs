@@ -231,13 +231,13 @@ impl AlephTool for PluginManageTool {
             }
             PluginAction::Reload => {
                 let name = Self::require_name(&args)?;
-                manager
+                let status = manager
                     .reload_plugin(name)
                     .await
                     .map_err(|e| AlephError::config(format!("Reload failed: {e}")))?;
                 Ok(PluginManageOutput {
                     summary: format!("Plugin '{name}' reloaded"),
-                    data: serde_json::json!({ "name": name }),
+                    data: serde_json::json!({ "name": name, "status": status.label() }),
                 })
             }
             PluginAction::ConfigGet => {

@@ -608,43 +608,33 @@ impl ExtensionManager {
             changed
         };
 
-        let changed = {
-            let mut registry = self.plugin_registry.write().await;
-            if enabled {
-                registry.enable_plugin(plugin_id)
-            } else {
-                registry.disable_plugin(plugin_id)
-            }
-        };
-
-        if changed {
-            if !enabled {
-                if let Err(e) = self.unload_runtime_plugin(plugin_id).await {
-                    // Non-fatal: the next reload attempt or process restart will
-                    // reap the orphaned runtime. Log so the operator can see
-                    // stale state without grepping logs at debug level.
-                    tracing::warn!(plugin_id = %plugin_id, error = %e, "failed to unload plugin runtime on disable");
+        let changed = if enabled {
+            match self.mount(plugin_id).await {
+                Ok(_) => true,
+                Err(super::MountError::AlreadyMounted(_)) => false,
+                Err(e) => {
+                    // The row already says why (Blocked / Error / Disabled);
+                    // the preference is recorded regardless.
+                    tracing::warn!(plugin_id = %plugin_id, error = %e, "enable: mount failed");
+                    false
                 }
             }
-            *self.hook_executor.write().await = crate::extension::hooks::HookExecutor::empty()
-                .with_consent(crate::extension::hooks::ShellHookConsent::shared());
-            self.sync_hooks_from_registry().await;
-            self.sync_user_hooks().await;
-
-            // One derivation for every plugin-owned process-global surface.
-            // This also refreshes the active-tool index, which is why the
-            // `sync_runtime_snapshots()` call that used to sit above is gone
-            // rather than merely moved — see `projection.rs` for why the
-            // derivation may not be written twice.
-            self.republish_plugin_projections().await;
-            // Re-mirror the durable plugin store into the loader. Without
-            // this, the loader's `plugin_settings` map carries the pre-toggle
-            // view: a plugin disabled via `set_plugin_enabled(_, false)` is
-            // hidden from the active-tool index but its config snapshot
-            // remains in the loader until the next `load_all` or `reload`
-            // re-publishes it.
-            self.publish_plugin_settings().await;
-        }
+        } else {
+            match self.unmount(plugin_id).await {
+                Ok(report) => {
+                    if !report.all_ok() {
+                        tracing::warn!(plugin_id = %plugin_id, ?report, "disable: some effects did not dispose cleanly");
+                    }
+                    true
+                }
+                // A row that was never mounted (Error / Blocked) still takes
+                // the operator's verdict on its status.
+                Err(super::UnmountError::NotMounted(_)) => {
+                    self.plugin_registry.write().await.disable_plugin(plugin_id)
+                }
+                Err(super::UnmountError::NotFound(_)) => false,
+            }
+        };
 
         changed || preference_changed
     }
