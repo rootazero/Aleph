@@ -626,8 +626,9 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # the slash entry AND the server's tool leave and re-enter
                                  # `tools.catalog` each time (polled — the mount enqueues the
                                  # server start). Also greps the log for a mount that ran
-                                 # before its handle was installed. python3 required: UNRUN
-                                 # (exit 2), never PASS, without it.
+                                 # before its handle was installed. Every `plugins` stage
+                                 # needs python3 (the preamble's config patcher is python):
+                                 # without it the script is UNRUN (exit 2), never PASS.
 
 ./qa/memory_curated/run.sh       # the curated hot tier's three verbs, the note window's
                                  # load-more, and the partition contract every enumerating

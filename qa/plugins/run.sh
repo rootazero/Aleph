@@ -36,6 +36,15 @@ set -uo pipefail
 
 SCENARIO="${1:-manifest}"
 
+# Every stage is python-driven from the preamble on (`cargo metadata |
+# python3 -c …` resolves the target dir, `patch_config.py` makes the config
+# inert) and the `scope` stage's mock MCP server is python too. A host without
+# it is UNRUN (exit 2), never PASS — and never a `no binary at …` exit 1 that
+# reads like a build problem. This is the FIRST line that does anything:
+# `command -v` is a builtin, so it answers with an empty PATH, before
+# `dirname` / `mktemp` below would misbehave in silence.
+command -v python3 >/dev/null || { echo "UNRUN: python3 not on PATH (every stage's config patcher and driver is python)"; exit 2; }
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 BUSY="$HERE/../busy_input"
@@ -324,7 +333,6 @@ scope)
   # `load_all`) and the real tool bridge (an MCP server's tools reaching
   # `tools.catalog` and leaving it). The integration test wires the three
   # handles by hand; here the shipped binary has to.
-  command -v python3 >/dev/null || { echo "UNRUN: python3 not on PATH (the mock MCP server is python)"; exit 2; }
   say "plant an MCP plugin whose server is the python mock"
   python3 "$HERE/plant_scope.py" "$INSTALLED" "$HERE/mcp_mock_server.py" || exit 1
 
