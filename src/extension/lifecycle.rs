@@ -1139,7 +1139,7 @@ background = true
 id = "ticker"
 start_handler = "start_ticker"
 stop_handler = "stop_ticker"
-auto_start = false
+auto_start = true
 
 [memory]
 hooks = ["on_retrieve"]
@@ -1322,9 +1322,14 @@ priority = 60
         (manager2, memory, catalog)
     }
 
-    /// G2. Comment out any one `scope.effect(...)` in `mount_parsed` and the
-    /// matching surface stays populated after the disable → this fails by
-    /// naming the surface.
+    /// G2. A dropped `scope.effect(...)` call fails at `scope_steps`, naming
+    /// the step. A neutered disposer (label kept, no-op'd) fails here at
+    /// `after == before`, naming the surface — verified for `wasm_module`,
+    /// `service`, `memory_extension`, `slash_command`. `registry_row` is
+    /// masked here (the Disabled put-back's `register_plugin`
+    /// unregisters-then-inserts, same as a no-op disposer) and is guarded
+    /// instead at the producer, `api.rs::register_plugin_row_writes_the_row_and_its_disposer_removes_everything`.
+    /// `mcp_server` is unobservable in-process — P1.15's integration test covers it.
     #[tokio::test]
     async fn g2_mount_then_unmount_returns_every_surface_to_its_baseline() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
@@ -1394,6 +1399,13 @@ priority = 60
 
         let during = snapshot(&manager, &memory, &catalog).await;
         assert_ne!(during, before);
+        assert_eq!(
+            during.rows,
+            vec![
+                ("qa-mcp".to_string(), "loaded".to_string()),
+                ("qa-wasm".to_string(), "loaded".to_string())
+            ]
+        );
         assert_eq!(during.loaded, vec!["qa-wasm".to_string()]);
         assert_eq!(
             during.memory,
@@ -1404,11 +1416,14 @@ priority = 60
                 && during.slash.contains(&"qa-mcp:ping".to_string())
         );
         assert!(during.hook_view.contains(&"qa-wasm".to_string()));
-        assert_eq!(during.capability_rows.2, 1, "one service row");
-        assert!(
-            during.services.is_empty(),
-            "auto_start = false: registered, not started"
+        assert_eq!(
+            during.capability_rows,
+            (0, 1, 1, 2, 1) // tools, hooks(PreToolUse), services(ticker), skills(hello, ping), agents(helper)
         );
+        // auto_start = true and the empty WASM module has no `start_ticker`
+        // export, so `start_service` records a Failed row — only the
+        // `service` disposer's `forget_plugin` removes it.
+        assert_eq!(during.services, vec!["qa-wasm:ticker".to_string()]);
 
         assert!(manager.set_plugin_enabled("qa-wasm", false).await);
         assert!(manager.set_plugin_enabled("qa-mcp", false).await);
