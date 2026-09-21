@@ -17,15 +17,12 @@ impl ExtensionManager {
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
-        // Manifest-declared services can exist before their plugin runtime is
-        // loaded — load it on demand (no-op when already loaded). A failure
-        // still flows into start_service, which records the Failed state.
-        if let Err(e) = self.ensure_plugin_loaded(plugin_id).await {
-            tracing::warn!(
-                plugin = %plugin_id,
-                error = %e,
-                "start_service: failed to load plugin runtime"
-            );
+        // The service's start handler is guest code in the plugin's module,
+        // which loads at mount (`wasm_module` step) — never on demand here.
+        if !self.plugin_loader.read().await.is_loaded(plugin_id) {
+            return Err(ExtensionError::Runtime(format!(
+                "Plugin '{plugin_id}' has no runtime mounted; enable it first"
+            )));
         }
         let service_manager = self.service_manager.clone().write_owned().await;
         let loader = self.plugin_loader.clone().read_owned().await;

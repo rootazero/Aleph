@@ -203,47 +203,6 @@ pub(super) async fn init_tool_catalog(
                 }
             }
 
-            // Register plugin commands (from CC-format plugins' commands/ directories)
-            {
-                let commands = ext_manager.get_all_commands().await;
-                // Gate on `plugin_id`, the field every production construction
-                // site actually assigns. This filter read `plugin_name` until
-                // 2026-08-19 — a field with zero producers — so it discarded
-                // every plugin command ever parsed and this block registered
-                // nothing. `qualified_name()` is the registry's own key
-                // derivation, so the dispatch id and the lookup key cannot
-                // drift apart again.
-                let command_skill_infos: Vec<alephcore::skill::SkillInfo> = commands
-                    .iter()
-                    .filter(|cmd| !cmd.plugin_id.is_empty())
-                    .map(|cmd| alephcore::skill::SkillInfo {
-                        id: cmd.qualified_name(),
-                        name: cmd.name.clone(),
-                        description: cmd.description.clone(),
-                        // Plugin commands have no SkillManifest behind them;
-                        // System is the manifest default and matches how every
-                        // other slash command behaves. No version to project.
-                        scope: alephcore::domain::skill::PromptScope::System,
-                        version: None,
-                        // Plugin commands carry no SkillManifest, so there is
-                        // no `allowed-tools:` to project. `None` = declares
-                        // nothing = keeps the agent's full tool surface, which
-                        // is what plugin commands have always done.
-                        allowed_tools: None,
-                    })
-                    .collect();
-
-                if !command_skill_infos.is_empty() {
-                    let _ = tool_catalog.register_skills(&command_skill_infos).await;
-                    if !daemon {
-                        println!(
-                            "  Dispatch registry: {} plugin commands registered",
-                            command_skill_infos.len()
-                        );
-                    }
-                }
-            }
-
             // Register plugin tools from discovered manifests
             {
                 let registry = ext_manager.get_plugin_registry().await;

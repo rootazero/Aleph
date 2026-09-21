@@ -11,7 +11,8 @@ use super::ExtensionManager;
 impl ExtensionManager {
     /// Call a tool on a runtime plugin (Node.js or WASM).
     ///
-    /// Auto-loads the plugin if not already loaded (lazy initialization).
+    /// The plugin's module must already be mounted (see
+    /// [`Self::ensure_runtime_mounted`]).
     /// Acquires a write lock on the plugin loader for IPC. The guest call is
     /// CPU-bound untrusted code, so it runs on the blocking pool (bounded by
     /// the Extism manifest timeout) rather than on an async worker thread.
@@ -21,15 +22,7 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
-        self.ensure_plugin_active(plugin_id).await?;
-        // Auto-load plugin if not already loaded
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
+        self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().write_owned().await;
         let plugin_id = plugin_id.to_string();
@@ -47,6 +40,21 @@ impl ExtensionManager {
                 "Plugin '{plugin_id}' is disabled"
             ))),
             None => Err(ExtensionError::PluginNotFound(plugin_id.to_string())),
+        }
+    }
+
+    /// A runtime call needs the plugin's module in the loader. Modules load
+    /// at mount (`lifecycle.rs`, `wasm_module` step), never lazily here: a
+    /// lazily created effect would sit outside the scope's dispose order.
+    async fn ensure_runtime_mounted(&self, plugin_id: &str) -> ExtensionResult<()> {
+        self.ensure_plugin_active(plugin_id).await?;
+        if self.plugin_loader.read().await.is_loaded(plugin_id) {
+            Ok(())
+        } else {
+            Err(ExtensionError::Runtime(format!(
+                "Plugin '{plugin_id}' has no runtime mounted (WASM modules load at mount; \
+                 MCP plugin tools are called through McpManager, not the plugin loader)"
+            )))
         }
     }
 
@@ -107,24 +115,15 @@ impl ExtensionManager {
 
     /// Execute a hook handler on a runtime plugin.
     ///
-    /// Auto-loads the plugin if not already loaded (mirrors
-    /// [`Self::call_plugin_tool`]), so a hook can fire on the first event
-    /// without a prior explicit load.
+    /// The plugin's module must already be mounted (mirrors
+    /// [`Self::call_plugin_tool`]): a hook fires only for a mounted plugin.
     pub async fn execute_plugin_hook(
         &self,
         plugin_id: &str,
         handler: &str,
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
-        self.ensure_plugin_active(plugin_id).await?;
-        // Auto-load plugin if not already loaded
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
+        self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().read_owned().await;
         let plugin_id = plugin_id.to_string();
@@ -141,14 +140,7 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<DirectCommandResult> {
-        self.ensure_plugin_active(plugin_id).await?;
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
+        self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().read_owned().await;
         let plugin_id = plugin_id.to_string();

@@ -1,6 +1,6 @@
 use crate::extension::ExtensionManager;
 use crate::gateway::handlers::plugins::handlers::{
-    handle_call_tool, handle_execute_command, handle_load, handle_unload, init_extension_manager,
+    handle_call_tool, handle_execute_command, init_extension_manager,
     is_extension_manager_initialized,
 };
 use crate::gateway::handlers::plugins::types::*;
@@ -43,20 +43,6 @@ fn test_call_tool_params_default_args() {
     });
     let params: CallToolParams = serde_json::from_value(json).unwrap();
     assert!(params.args.is_null());
-}
-
-#[test]
-fn test_load_plugin_params() {
-    let json = json!({ "path": "/path/to/plugin" });
-    let params: LoadPluginParams = serde_json::from_value(json).unwrap();
-    assert_eq!(params.path, "/path/to/plugin");
-}
-
-#[test]
-fn test_unload_plugin_params() {
-    let json = json!({ "pluginId": "my-plugin" });
-    let params: UnloadPluginParams = serde_json::from_value(json).unwrap();
-    assert_eq!(params.plugin_id, "my-plugin");
 }
 
 #[tokio::test]
@@ -137,114 +123,6 @@ async fn test_handle_call_tool_with_manager_plugin_not_found() {
     // Should return error because plugin doesn't exist
     assert!(response.is_error());
     assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
-}
-
-#[tokio::test]
-async fn test_handle_load_missing_params() {
-    let request = JsonRpcRequest::with_id("plugins.load", None, json!(1));
-    let response = handle_load(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("Missing params"));
-}
-
-#[tokio::test]
-async fn test_handle_load_invalid_params() {
-    let request = JsonRpcRequest::new(
-        "plugins.load",
-        Some(json!({"invalid": "field"})),
-        Some(json!(1)),
-    );
-    let response = handle_load(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-}
-
-#[tokio::test]
-async fn test_handle_load_nonexistent_path() {
-    // Initialize manager if not already done
-    if !is_extension_manager_initialized() {
-        let manager = ExtensionManager::with_defaults().await.unwrap();
-        let _ = init_extension_manager(Arc::new(manager));
-    }
-
-    let request = JsonRpcRequest::new(
-        "plugins.load",
-        Some(json!({"path": "/nonexistent/path/to/plugin"})),
-        Some(json!(1)),
-    );
-    let response = handle_load(request).await;
-
-    // Should fail because path doesn't exist
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("Failed to parse manifest"));
-}
-
-#[tokio::test]
-async fn test_handle_unload_missing_params() {
-    let request = JsonRpcRequest::with_id("plugins.unload", None, json!(1));
-    let response = handle_unload(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("Missing params"));
-}
-
-#[tokio::test]
-async fn test_handle_unload_invalid_params() {
-    let request = JsonRpcRequest::new(
-        "plugins.unload",
-        Some(json!({"invalid": "field"})),
-        Some(json!(1)),
-    );
-    let response = handle_unload(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-}
-
-#[tokio::test]
-async fn test_handle_unload_nonexistent_plugin() {
-    // Initialize manager if not already done
-    if !is_extension_manager_initialized() {
-        let manager = ExtensionManager::with_defaults().await.unwrap();
-        let _ = init_extension_manager(Arc::new(manager));
-    }
-
-    let request = JsonRpcRequest::new(
-        "plugins.unload",
-        Some(json!({"pluginId": "nonexistent-plugin"})),
-        Some(json!(1)),
-    );
-    let response = handle_unload(request).await;
-
-    // Should fail because plugin is not loaded
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("Failed to unload plugin"));
 }
 
 #[test]

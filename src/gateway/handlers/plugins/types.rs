@@ -92,26 +92,6 @@ pub struct InstallFromZipParams {
 // ============================================================================
 
 // ============================================================================
-// Load/Unload Parameters
-// ============================================================================
-
-/// Parameters for plugins.load
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadPluginParams {
-    /// Path to the plugin directory (containing aleph.plugin.json or package.json with aleph field)
-    pub path: String,
-}
-
-/// Parameters for plugins.unload
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnloadPluginParams {
-    /// ID of the plugin to unload
-    pub plugin_id: String,
-}
-
-// ============================================================================
 // Marketplace Parameters — shapes live in `aleph_protocol::plugins`
 // ============================================================================
 

@@ -1,16 +1,14 @@
 use serde_json::json;
 
-use super::super::types::{
-    CallToolParams, ExecuteCommandParams, LoadPluginParams, ReloadPluginParams, UnloadPluginParams,
-};
+use super::super::types::{CallToolParams, ExecuteCommandParams, ReloadPluginParams};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
 /// Call a tool on a loaded runtime plugin
 ///
 /// This handler invokes a tool handler registered by a Node.js or WASM plugin.
-/// The plugin must be loaded first via `plugins.load`.
+/// The plugin must be mounted (enabled) — WASM modules load at mount.
 ///
 /// # Params
 /// - `pluginId`: Plugin that provides the tool
@@ -128,105 +126,6 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
             request.id,
             INTERNAL_ERROR,
             format!("Command execution failed: {e}"),
-        ),
-    }
-}
-
-/// Load a runtime plugin from a path
-///
-/// This handler loads a plugin from a directory containing a valid manifest
-/// (`aleph.plugin.json` or `package.json` with aleph field). The plugin
-/// is loaded into the appropriate runtime (Node.js or WASM) based on its kind.
-///
-/// # Params
-/// - `path`: Path to the plugin directory
-///
-/// # Returns
-/// - `pluginId`: ID of the loaded plugin
-/// - `name`: Human-readable name
-/// - `kind`: Plugin kind (Mcp, Wasm, Static)
-///
-/// # Errors
-/// - `INTERNAL_ERROR`: Extension manager not initialized or loading failed
-/// - `INVALID_PARAMS`: Missing path or invalid manifest
-pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: LoadPluginParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // Get the extension manager from global state
-    let manager = match get_extension_manager() {
-        Ok(m) => m,
-        Err(e) => return e.with_id(request.id),
-    };
-
-    // Parse manifest from path
-    let path = std::path::Path::new(&params.path);
-    let manifest = match crate::extension::manifest::parse_manifest_from_dir(path).await {
-        Ok(m) => m,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Failed to parse manifest: {e}"),
-            );
-        }
-    };
-
-    // Load plugin into runtime
-    if let Err(e) = manager.load_runtime_plugin(&manifest).await {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to load plugin: {e}"),
-        );
-    }
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "pluginId": manifest.id,
-            "name": manifest.name,
-            "kind": format!("{:?}", manifest.kind),
-        }),
-    )
-}
-
-/// Unload a runtime plugin
-///
-/// This handler unloads a previously loaded plugin from its runtime.
-/// The plugin is removed from the loader's tracking but tools/hooks
-/// may still be registered in the registry.
-///
-/// # Params
-/// - `pluginId`: ID of the plugin to unload
-///
-/// # Returns
-/// - `ok`: true if successful
-///
-/// # Errors
-/// - `INTERNAL_ERROR`: Extension manager not initialized or plugin not found
-/// - `INVALID_PARAMS`: Missing pluginId
-pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: UnloadPluginParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // Get the extension manager from global state
-    let manager = match get_extension_manager() {
-        Ok(m) => m,
-        Err(e) => return e.with_id(request.id),
-    };
-
-    // Unload from runtime
-    match manager.unload_runtime_plugin(&params.plugin_id).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to unload plugin: {e}"),
         ),
     }
 }

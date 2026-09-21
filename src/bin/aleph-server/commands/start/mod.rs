@@ -1433,35 +1433,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.tool_catalog.clone(),
         ));
 
-        // Transitional catch-up for MCP-type plugins: hand each plugin's
-        // `.mcp.json` servers to the manager as transient (runtime-only)
-        // servers. Their `ServerStarted` events flow through the tool bridge
-        // just spawned above, registering the plugin's tools. The MCP handle
-        // itself is installed on the `ExtensionManager` in `agent_init`,
-        // before the first extension load, together with the memory registry
-        // and the tool catalog; this task only re-runs the idempotent syncs
-        // until every plugin mounts all of its effects on the first load.
-        // Done on a background task — starting MCP server subprocesses must
-        // never block boot. No-op if no plugins declare MCP servers.
-        if let Some(em) = alephcore::extension::try_extension_manager() {
-            tokio::spawn(async move {
-                let n = em.sync_mcp_plugin_servers().await;
-                // X1: now that both the MCP handle and the memory registry
-                // are set (both from agent_init) and plugins are loaded, bind
-                // every MCP-backed memory extension's caller to the live
-                // manager.
-                em.bind_memory_callers().await;
-                if n > 0 {
-                    tracing::info!(count = n, "plugin MCP servers registered at boot");
-                }
-                // Autostart manifest-declared plugin services now that the
-                // runtime is wired (idempotent; no-op without [[services]]).
-                let running = em.sync_plugin_services().await;
-                if running > 0 {
-                    tracing::info!(count = running, "plugin services autostarted at boot");
-                }
-            });
-        }
+        // Plugin MCP servers, memory extensions and services are mounted by
+        // `load_all` itself (the handles were installed in `agent_init` before the
+        // first load — `boot_order_tests`), so there is no catch-up task here any
+        // more. Servers a mount enqueued before this bridge subscribed are picked
+        // up by its reconcile pass.
         // Sibling publisher: subscribe to the same manager event stream and
         // emit `tools.changed` whenever an MCP server announces a catalog
         // mutation (start / stop / crash / list_changed). Lives next to the

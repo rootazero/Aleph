@@ -478,9 +478,9 @@ aleph plugin list
 
 `plugin.*`（单数）是 CC 兼容方法名，`plugins.*`（复数）保留作为向后兼容别名。
 
-⚠️ **两个命名空间的能力集并不相等**：`callTool` / `executeCommand` / `load` /
-`unload` **只**在复数上，`update` / `reload` / `config.*` / `marketplace.*` **只**在
-单数上。
+⚠️ **两个命名空间的能力集并不相等**：`callTool` / `executeCommand` **只**在复数上，`update` /
+`reload` / `config.*` / `marketplace.*` **只**在单数上（`load` / `unload` 于 2026-09-20 CUT——零客户端，
+且它们绕过 registry 直接对 WASM loader 寻址，与 mount/unmount 生命周期相悖）。
 
 **这一段曾经描述的缺陷已经修完，分两轮**：Panel 的设置页此前只说复数命名空间，于是
 装插件走的是仅支持 git URL 的 `handle_install`，一个 marketplace 名字被当成 git URL

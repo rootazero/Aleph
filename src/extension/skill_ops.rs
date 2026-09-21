@@ -8,8 +8,9 @@
 //! iterators) and the per-request tool service, so the eleven dead methods
 //! were cut from this module on 2026-09-04.
 //!
-//! What remains: [`ExtensionManager::get_all_commands`] (the only list query
-//! still used at boot), [`ExtensionManager::skill_system`] (handle accessor
+//! What remains: [`ExtensionManager::get_all_commands`] (its last caller, the
+//! boot-only slash registration, went on 2026-09-20 — `slash_effect.rs` does
+//! that work at mount), [`ExtensionManager::skill_system`] (handle accessor
 //! used by tool catalog init), [`ExtensionManager::discovery`] (read-only
 //! handle), and [`ExtensionManager::hook_executor_snapshot`] (cheap handle
 //! clone consumed by the hook executor when wiring plugin hooks).

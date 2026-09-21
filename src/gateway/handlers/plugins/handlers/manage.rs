@@ -210,15 +210,15 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
     // gone its service stop handlers can no longer run, which would orphan
     // background services and transient MCP servers for the process lifetime.
     if let Ok(manager) = get_extension_manager() {
-        match manager.unload_runtime_plugin(&params.name).await {
-            Ok(()) => {}
-            // Never loaded into the runtime — nothing to tear down.
-            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
-            Err(e) => tracing::warn!(
-                plugin = %params.name,
-                error = %e,
-                "Failed to unload plugin runtime before uninstall"
+        match manager.unmount(&params.name).await {
+            Ok(report) if !report.all_ok() => tracing::warn!(
+                plugin = %params.name, ?report,
+                "some effects did not dispose cleanly before uninstall"
             ),
+            Ok(_) => {}
+            // Never mounted (disabled / errored / unknown) — nothing to tear down.
+            Err(crate::extension::UnmountError::NotMounted(_))
+            | Err(crate::extension::UnmountError::NotFound(_)) => {}
         }
     }
 
@@ -243,8 +243,7 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 /// Enable a plugin
 ///
 /// Records `enabled = true` in `<data_dir>/plugins.toml` (via
-/// `set_plugin_enabled`, the single durable writer) and brings declared
-/// autostart services up.
+/// `set_plugin_enabled`, the single durable writer), which mounts the plugin.
 pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
@@ -270,14 +269,14 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    // Persist the preference and sync the live registry, then bring declared
-    // autostart services up (no-op for plugins without services; idempotent
-    // otherwise). `set_plugin_enabled` owns the durable write — this handler
-    // deliberately touches no marker file, because the marker it used to write
-    // was never read by anything.
+    // `set_plugin_enabled(_, true)` mounts: MCP servers, services, memory
+    // extension and slash entries all come up inside the mount, so the
+    // `sync_plugin_services` that used to follow here is gone.
+    // `set_plugin_enabled` owns the durable write — this handler deliberately
+    // touches no marker file, because the marker it used to write was never
+    // read by anything.
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, true).await;
-        manager.sync_plugin_services().await;
     }
 
     tracing::info!(plugin = %params.name, "Plugin enabled");
@@ -316,21 +315,12 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    // Persist the preference and sync the registry, then tear down the runtime
-    // — a disabled plugin must not keep background services or transient MCP
+    // `set_plugin_enabled(_, false)` unmounts: the scope's disposers stop
+    // services and remove transient MCP servers, so nothing follows it — a
+    // disabled plugin must not keep background services or transient MCP
     // servers running for the rest of the process lifetime.
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, false).await;
-        match manager.unload_runtime_plugin(&params.name).await {
-            Ok(()) => {}
-            // Never loaded into the runtime — nothing to tear down.
-            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
-            Err(e) => tracing::warn!(
-                plugin = %params.name,
-                error = %e,
-                "Failed to unload plugin runtime on disable"
-            ),
-        }
     }
 
     tracing::info!(plugin = %params.name, "Plugin disabled");
