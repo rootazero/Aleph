@@ -876,19 +876,18 @@ pub fn production_code_lines(src: &str) -> String {
         .join("\n")
 }
 
-/// [`production_code_lines`] (line-preserving, so a census message can
-/// report a `path:line` a reader can open) composed with the whole-file
-/// ancestor-declared-test-module check [`production_text`] already makes,
-/// and with every literal's payload blanked via [`code_text`] so a
-/// census's own message strings and marker constants cannot self-match.
-/// The Dropped-variant twin (no line numbers, literals kept) is
-/// [`production_text`].
+/// [`production_code_lines`]'s question — comments and `#[cfg(test)]` items
+/// gone, line numbers kept — answered in ONE lexer pass, so a block comment
+/// that closes mid-line is not re-lexed from a fresh `LexState` and read as
+/// code. Also blanks every literal's payload, so a census's own message
+/// strings and marker constants cannot self-match. The Dropped-variant twin
+/// (no line numbers, literals kept) is [`production_text`].
 #[must_use]
 pub fn production_code_text(path: &std::path::Path, src: &str) -> String {
     if declared_as_a_test_module(path) {
         return String::new();
     }
-    code_text(&production_code_lines(src))
+    code_text(&partition_on_cfg_test(src, Removed::Blanked).0)
 }
 
 /// `src` reduced to the code a compiler would see: comment text removed,
@@ -1607,6 +1606,31 @@ pub fn after() {}
             kept.lines().nth(5).unwrap(),
             "",
             "#[cfg(test)] line blanked"
+        );
+    }
+
+    /// A block comment that closes MID-LINE, with code after it, used to
+    /// leak the comment's own text into the scanned output:
+    /// `production_code_lines` only blanks comment-ONLY lines, so it
+    /// returned this line's raw text verbatim, and `code_text` then
+    /// re-lexed that raw text from a FRESH `LexState` with no memory of
+    /// still being inside the block comment opened on the previous line.
+    /// One lexer pass (`code_text` over the item-blanked production text
+    /// directly) fixes it, because `code_text` threads one `LexState`
+    /// across every line.
+    #[test]
+    fn production_code_text_lexes_block_comments_in_one_pass() {
+        let path = std::path::Path::new("src/utils/source_scan.rs");
+        let src = "/* a\n  needle( */ const X: u8 = 0;\n";
+        let out = production_code_text(path, src);
+        let second = out.lines().nth(1).unwrap_or_default();
+        assert!(
+            !second.contains("needle("),
+            "the block comment's text leaked into the scanned line: {second:?}"
+        );
+        assert!(
+            second.contains("const X"),
+            "the code after the comment closer must survive: {second:?}"
         );
     }
 

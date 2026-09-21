@@ -4,7 +4,7 @@
 //! looks exactly like one that went through it: both mutate shared state,
 //! and only the next unmount would tell — silently.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::utils::source_scan::{production_code_text, rust_sources_under};
 
@@ -33,21 +33,6 @@ const EXEMPT: [(&str, &str, &str); 1] = [(
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-/// The text either census scans: `production_code_text` (`utils::source_scan`)
-/// — the empty string for a file declared a test module by its parent (this
-/// file included: `effects/mod.rs` declares `#[cfg(test)] mod census;`),
-/// else comments stripped, every `#[cfg(test)]` item blanked (line numbers
-/// kept), and every string/char literal's payload blanked too. Layered
-/// defenses against a census's own message strings and marker constants
-/// self-matching, not one mechanism — see the two `#[test]` fns below for
-/// which layer actually carries each one today. Reads `path` itself; panics
-/// (this is test-only scanning code) if it cannot.
-fn production_text(path: &Path) -> String {
-    let src = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    production_code_text(path, &src)
 }
 
 /// Every crate-visible `fn` declaration in `text` whose name starts with an
@@ -96,7 +81,10 @@ fn every_crate_visible_registration_returns_a_disposer() {
     let mut exempt_seen: Vec<(&str, &str)> = Vec::new();
 
     for rel in CENSUS_FILES {
-        let text = production_text(&root.join(rel));
+        let path = root.join(rel);
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let text = production_code_text(&path, &src);
         for (name, sig) in crate_visible_effect_fns(&text) {
             if let Some((f, n, _)) = EXEMPT.iter().find(|(f, n, _)| *f == rel && *n == name) {
                 exempt_seen.push((f, n));
@@ -147,12 +135,8 @@ fn every_crate_visible_registration_returns_a_disposer() {
 /// `.contains(...)` call below — never reaches the scanned text, because
 /// `census.rs` is itself `declared_as_a_test_module` (its parent,
 /// `effects/mod.rs`, declares `#[cfg(test)] mod census;`), which
-/// `production_code_text` answers before it ever gets to blanking literal
-/// payloads. `code_text`'s literal-blanking is still real defense-in-depth
-/// — it is what protects a needle spelled in live, non-test-declared code
-/// (e.g. a future file that quotes this method name in a log message) — but
-/// it is not what is empirically load-bearing for THIS file today; see the
-/// P1.14 addendum report for the mutation that measured this directly.
+/// `production_code_text` answers before it reaches any literal-payload
+/// blanking.
 #[test]
 fn register_mcp_has_exactly_one_production_caller_and_it_is_the_effect() {
     let root = repo_root().join("src");

@@ -171,11 +171,7 @@ mod tests {
     /// `lifecycle.rs`-owned entries as offenders: it lives inside this
     /// `mod tests`, which is itself `#[cfg(test)]`-attributed, so
     /// `production_code_text`'s item-blanking step alone (before it ever
-    /// gets to literal payloads) already removes the whole block. The
-    /// literal-payload blanking is additional defense-in-depth — it is what
-    /// would catch a needle spelled in a string literal sitting in live,
-    /// non-test-declared code — not what is empirically load-bearing for
-    /// this array today; measured directly in the P1.14 addendum report.
+    /// reaches literal payloads) already removes the whole block.
     ///
     /// (needle, the only file allowed to contain a non-definition line with
     /// it). A module-level const on purpose: P6 appends
@@ -198,49 +194,29 @@ mod tests {
         let mut checked_files = 0usize;
         let mut found: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
 
-        let mut stack = vec![root.clone()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "rs") {
-                    continue;
-                }
-                let Ok(src) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let text = crate::utils::source_scan::production_code_text(&path, &src);
-                checked_files += 1;
-                let file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                for (lineno, line) in text.lines().enumerate() {
-                    let code = line.trim_start();
-                    for &(needle, owner) in G3_PINNED {
-                        if !code.contains(needle) {
-                            continue;
-                        }
-                        // A definition is not a call.
-                        if code.contains(&format!("fn {}", needle.trim_end_matches('('))) {
-                            continue;
-                        }
-                        if file_name == owner {
-                            *found.entry(needle).or_default() += 1;
-                        } else {
-                            offenders.push(format!(
-                                "{}:{} — `{}` (only {owner} may call this)",
-                                path.display(),
-                                lineno + 1,
-                                code.trim()
-                            ));
-                        }
+        for (rel, src) in crate::utils::source_scan::rust_sources_under(&root) {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
+            let text = crate::utils::source_scan::production_code_text(&path, &src);
+            checked_files += 1;
+            let file_name = rel.rsplit('/').next().unwrap_or(&rel);
+            for (lineno, line) in text.lines().enumerate() {
+                let code = line.trim_start();
+                for &(needle, owner) in G3_PINNED {
+                    if !code.contains(needle) {
+                        continue;
+                    }
+                    // A definition is not a call.
+                    if code.contains(&format!("fn {}", needle.trim_end_matches('('))) {
+                        continue;
+                    }
+                    if file_name == owner {
+                        *found.entry(needle).or_default() += 1;
+                    } else {
+                        offenders.push(format!(
+                            "{rel}:{} — `{}` (only {owner} may call this)",
+                            lineno + 1,
+                            code.trim()
+                        ));
                     }
                 }
             }
