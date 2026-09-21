@@ -1593,6 +1593,47 @@ fn adopting_a_different_key_drops_the_stale_settings() {
     assert_eq!(state.session_knobs(), SessionKnobs::default());
 }
 
+/// A pin set by `select_model` flows through the snapshot the same way as
+/// the four settable knobs: the status bar must show it, not the model that
+/// last served (which disagrees for exactly one turn after a pick — the
+/// caption would otherwise name the model the user just switched away from).
+#[test]
+fn session_knobs_includes_model_pin_from_session_snapshot() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(snapshot("agent:main:main:s3"));
+
+    assert_eq!(
+        state.session_knobs().model_pin,
+        Some("claude-opus-5"),
+        "the pin must ride through session_knobs so the status bar can paint it"
+    );
+}
+
+/// A conversation with no pin must NOT report one — the renderer has to know
+/// that "unset" is a real state (the install default is in play), not a
+/// missing field.
+#[test]
+fn session_knobs_with_no_pin_returns_none() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "no-pin".into(),
+        model_pin: None,
+        model_pin_provider: None,
+        // The other knobs stay defaulted; the assertion is only about the pin.
+        ..SessionSnapshot::default()
+    });
+
+    assert!(
+        state.session_knobs().model_pin.is_none(),
+        "an unset pin must not become a guessed default in the status bar"
+    );
+    assert_eq!(
+        state.session_knobs(),
+        SessionKnobs::default(),
+        "no other knob moves just because the pin is unset"
+    );
+}
+
 /// A locally-set knob shows immediately, without waiting for the next attach —
 /// but only through `record_local_knob`, which callers reach only after the
 /// server has accepted the write.
