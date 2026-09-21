@@ -33,109 +33,327 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Drops every line whose trimmed start is `//` — both `//` line comments
-/// and `///` / `//!` doc comments (they all start with `//`). Shared by
-/// `production_text` and `assert_mod_tests_is_last_item` so the cut and the
-/// brace walk agree on one derivation of "what is code": a `// }` inside a
-/// census file's `mod tests` must not desync the walk any more than it
-/// desyncs the disposer-return scan.
+/// Drops every `//…` line comment (doc comments included — `///` and `//!`
+/// both start with `//`) and every `/* … */` block comment, wherever they
+/// occur — not only when a comment is the whole line. A single-pass scan
+/// that also steps over string/char literals (so a `//` inside a URL
+/// string, or a `{`/`}` inside a comment's own prose, is not misread as a
+/// comment start or a real brace, respectively), because comments and
+/// literals are indistinguishable from plain text without that lexing: a
+/// trailing comment on an otherwise-live line — `continue; // \`mod tests
+/// {\` is inline` — desyncs the brace-depth walk below exactly like a full
+/// comment line would.
+///
+/// A comment's own newlines are kept as blank lines (a multi-line `/* … */`
+/// does not collapse the lines after it upward), and any code before or
+/// after a comment on the same line survives — so `text.lines().enumerate()`
+/// on the result still yields the source file's real line numbers, which
+/// `production_text` and its callers rely on.
 fn strip_line_comments(text: &str) -> String {
-    text.lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0usize;
+    while pos < chars.len() {
+        let Some(end) = skip_non_code(&chars, pos) else {
+            out.push(chars[pos]);
+            pos += 1;
+            continue;
+        };
+        if chars[pos] == '/' {
+            // A comment: drop its text, keeping only the newlines it spans
+            // (a `//` comment spans none; a `/* … */` block comment may).
+            out.extend(chars[pos..end].iter().filter(|&&c| c == '\n'));
+        } else {
+            // A string or char literal: kept verbatim.
+            out.extend(&chars[pos..end]);
+        }
+        pos = end;
+    }
+    out
 }
 
-/// The non-test, non-comment text of a source file.
-fn production_text(path: &Path) -> String {
-    let src = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let cut = src.find("#[cfg(test)]\nmod tests").unwrap_or(src.len());
-    strip_line_comments(&src[..cut])
+/// From `chars[pos]`, the index just past a `"…"` string, a raw/byte
+/// string, a char literal, a `//…` line comment (up to but not including
+/// the newline that ends it), or a `/* … */` block comment — or `None` if
+/// `chars[pos]` does not start any of those (an ordinary character, a
+/// lifetime tick, or a `/` that is division/a path separator, not a
+/// comment).
+fn skip_non_code(chars: &[char], pos: usize) -> Option<usize> {
+    match chars[pos] {
+        '"' => Some(skip_quoted_string(chars, pos)),
+        '\'' => {
+            let end = skip_char_literal(chars, pos);
+            (end > pos + 1).then_some(end)
+        }
+        'r' | 'b' => skip_prefixed_string(chars, pos),
+        '/' if chars.get(pos + 1) == Some(&'/') => {
+            let mut p = pos;
+            while p < chars.len() && chars[p] != '\n' {
+                p += 1;
+            }
+            Some(p)
+        }
+        '/' if chars.get(pos + 1) == Some(&'*') => Some(skip_block_comment(chars, pos)),
+        _ => None,
+    }
 }
 
-/// Confirms `mod tests` is the last item in one of [`CENSUS_FILES`]: from
-/// its opening `{`, brace depth must return to zero exactly once, with
-/// nothing but whitespace following the closing `}`. A registration placed
-/// after `mod tests` is production code `production_text`'s cut-at-marker
-/// scan never sees — the census's green only covers the shape it
-/// recognises.
-///
-/// Deliberately a standalone check, NOT folded into `production_text`
-/// itself: `production_text` is also used by
-/// `register_mcp_has_exactly_one_production_caller_and_it_is_the_effect`,
-/// which walks every `.rs` file under `src/`. A dry run of this exact check
-/// against the whole tree found 159 files where `mod tests` is legitimately
-/// *not* the file's last item (a second `#[cfg(test)] mod other_tests {}`,
-/// or `pub use` re-exports placed after the test module — both are common,
-/// correct Rust style outside the five files this census owns). Scoping the
-/// check to `CENSUS_FILES` closes the actual blind spot (a producer slipped
-/// in after `mod tests` in one of the five files this guard answers for)
-/// without making the crate-wide `register_mcp` walk depend on an
-/// assumption that is false almost everywhere else in the crate.
-///
-/// Counts braces outside `"..."` string literals only — braces inside a
-/// test's own assertion/format-string text would otherwise desync the
-/// depth count. Char literals (e.g. `'{'`) are not special-cased (that
-/// needs lookahead to distinguish from a lifetime like `'a`); none of the
-/// five census files' test modules contain one today.
-///
-/// Walks `strip_line_comments`'d text, not the raw file: a `// }` sitting
-/// on its own line inside `mod tests` would otherwise desync the brace
-/// count and make this fire on a file that is fine — a misfiring guard is
-/// worse than a silent one.
-fn assert_mod_tests_is_last_item(path: &Path) {
-    let src = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let Some(marker_start) = src.find("#[cfg(test)]\nmod tests") else {
-        return; // No marker: nothing to verify.
-    };
-    let tail = strip_line_comments(&src[marker_start..]);
-    let Some(brace_start) = tail.find('{') else {
-        panic!(
-            "{}: found `#[cfg(test)]\\nmod tests` with no opening brace",
-            path.display()
-        );
-    };
-    let body = &tail[brace_start..];
-
-    let mut depth: i32 = 0;
-    let mut closed_at: Option<usize> = None;
-    let mut chars = body.char_indices();
-    while let Some((idx, c)) = chars.next() {
-        match c {
-            '"' => {
-                let rest = chars.by_ref();
-                while let Some((_, sc)) = rest.next() {
-                    if sc == '\\' {
-                        rest.next(); // skip the escaped character
-                    } else if sc == '"' {
-                        break;
-                    }
-                }
+/// `chars[pos..]` opens with `/*`. Rust block comments nest (`/* outer /*
+/// inner */ still outer */` is one comment), unlike C, so this tracks
+/// depth rather than stopping at the first `*/`. Returns the index just
+/// past the outermost comment's closing `*/` (or EOF for an unterminated
+/// one — malformed input the compiler would reject anyway).
+fn skip_block_comment(chars: &[char], pos: usize) -> usize {
+    let mut depth = 0i32;
+    let mut p = pos;
+    while p < chars.len() {
+        if chars[p] == '/' && chars.get(p + 1) == Some(&'*') {
+            depth += 1;
+            p += 2;
+        } else if chars[p] == '*' && chars.get(p + 1) == Some(&'/') {
+            depth -= 1;
+            p += 2;
+            if depth == 0 {
+                return p;
             }
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    closed_at = Some(idx + '}'.len_utf8());
-                    break;
-                }
-            }
-            _ => {}
+        } else {
+            p += 1;
         }
     }
-    let Some(end) = closed_at else {
-        panic!(
-            "{}: `mod tests` never closes — unbalanced braces",
-            path.display()
-        );
+    p
+}
+
+/// True if `line`'s trimmed start opens a `mod <name> {` item — optionally
+/// `pub` / `pub(crate)` / `pub(super)` prefixed — the shape a `#[cfg(test)]`
+/// attribute pairs with to mark an *inline* test module. `mod tests;` (a
+/// file-module declaration, e.g. `#[cfg(test)] mod tests;` backed by
+/// `tests.rs`) is deliberately excluded: its body lives in another file, so
+/// there is nothing inline here to blank, and without this check the
+/// forward `{`-search in `production_text` would run past it into some
+/// unrelated later brace. Requiring the `{` on this same line matches how
+/// rustfmt always renders `mod tests {`.
+fn starts_test_mod(line: &str) -> bool {
+    let t = line.trim_start();
+    let after_vis = ["pub(crate) ", "pub(super) ", "pub "]
+        .iter()
+        .find_map(|p| t.strip_prefix(p))
+        .unwrap_or(t);
+    after_vis.starts_with("mod ") && t.trim_end().ends_with('{')
+}
+
+/// Advances past a `"…"` string body starting right after its opening `"`
+/// (`pos` indexes that opening quote), honoring `\` escapes. Returns the
+/// index just past the closing `"` (or past EOF for an unterminated
+/// string — malformed input the compiler would reject anyway; this scanner
+/// only needs to not desync on it).
+fn skip_quoted_string(chars: &[char], pos: usize) -> usize {
+    let mut p = pos + 1;
+    while p < chars.len() {
+        match chars[p] {
+            '\\' => p += 2,
+            '"' => return p + 1,
+            _ => p += 1,
+        }
+    }
+    p
+}
+
+/// Advances past a raw string body — `chars[quote_pos]` is its opening `"`,
+/// already past the `r`/`br` and `hashes` `#` characters. The closer is `"`
+/// followed by the same number of `#`; raw strings have no `\` escapes, so
+/// nothing inside (a `{`/`}` in a raw JSON fixture, for instance) is
+/// special except that exact closing sequence.
+fn skip_raw_string(chars: &[char], quote_pos: usize, hashes: usize) -> usize {
+    let mut p = quote_pos + 1;
+    while p < chars.len() {
+        if chars[p] == '"' && (1..=hashes).all(|h| chars.get(p + h) == Some(&'#')) {
+            return p + 1 + hashes;
+        }
+        p += 1;
+    }
+    p
+}
+
+/// `chars[pos]` is `'r'` or `'b'`. If it actually opens a (possibly raw,
+/// possibly byte-) string literal — `r"…"`, `r#"…"#`, `b"…"`, `br#"…"#`,
+/// … — returns the index just past it. Otherwise `chars[pos]` was just an
+/// ordinary identifier character (e.g. the `r` in `register_`, the `b` in
+/// `bool`) and the caller should advance by exactly one.
+fn skip_prefixed_string(chars: &[char], pos: usize) -> Option<usize> {
+    let mut k = pos;
+    if chars.get(k) == Some(&'b') {
+        k += 1;
+    }
+    if chars.get(k) != Some(&'r') {
+        return None;
+    }
+    k += 1;
+    let mut hashes = 0usize;
+    while chars.get(k) == Some(&'#') {
+        hashes += 1;
+        k += 1;
+    }
+    if chars.get(k) == Some(&'"') {
+        Some(skip_raw_string(chars, k, hashes))
+    } else {
+        None
+    }
+}
+
+/// `chars[pos]` is `'`. A char literal is unambiguous once decoded — unlike
+/// a lifetime tick (`'a`, `'static`), it is immediately followed by exactly
+/// one (possibly escaped) character and a closing `'`. Returns the index
+/// just past that closing `'`, or `pos + 1` if this `'` did not open one
+/// (a lifetime, or a bare `'` — leave it as an ordinary character, matching
+/// how a lifetime tick is otherwise a no-op for brace counting).
+///
+/// Handles the escape shapes that can themselves contain `{`/`}` —
+/// `'\u{7B}'` — plus the single-char escapes (`'\n'`, `'\\'`, `'\''`, …)
+/// and `'\xNN'`, so none of their contents are mistaken for real braces.
+fn skip_char_literal(chars: &[char], pos: usize) -> usize {
+    let Some(&next) = chars.get(pos + 1) else {
+        return pos + 1;
     };
-    assert!(
-        body[end..].trim().is_empty(),
-        "{}: `mod tests` must be the last item in the file — the census does not scan past it",
-        path.display()
-    );
+    if next != '\\' {
+        // A plain single character is a literal only if it is immediately
+        // closed; otherwise this `'` is a lifetime tick.
+        return if chars.get(pos + 2) == Some(&'\'') {
+            pos + 3
+        } else {
+            pos + 1
+        };
+    }
+    // An escape sequence.
+    match chars.get(pos + 2) {
+        Some('u') if chars.get(pos + 3) == Some(&'{') => {
+            let mut p = pos + 4;
+            while chars.get(p).is_some_and(|c| *c != '}') {
+                p += 1;
+            }
+            if chars.get(p) == Some(&'}') {
+                p += 1;
+            }
+            if chars.get(p) == Some(&'\'') {
+                p + 1
+            } else {
+                pos + 1 // malformed — do not special-case
+            }
+        }
+        Some('x') if chars.get(pos + 5) == Some(&'\'') => pos + 6,
+        Some(_) if chars.get(pos + 3) == Some(&'\'') => pos + 4, // \n \t \\ \' \" \0 …
+        _ => pos + 1,
+    }
+}
+
+/// From `chars[start]` (the opening `{` of a `mod … {` block) onward,
+/// returns the index just past its matching `}` — depth-counted across the
+/// rest of the file, stepping over string and char literals (raw, byte,
+/// and escaped forms included) so their contents — a raw JSON fixture, a
+/// `'{'` trim-char, a `'\u{7B}'` escape — cannot desync the count. Not a
+/// full lexer (no handling of e.g. nested doc-comment edge cases, but
+/// comments are already blanked before this runs).
+fn matching_close_index(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut seen_open = false;
+    let mut pos = start;
+    while pos < chars.len() {
+        match chars[pos] {
+            '{' => {
+                depth += 1;
+                seen_open = true;
+                pos += 1;
+            }
+            '}' => {
+                depth -= 1;
+                pos += 1;
+                if seen_open && depth == 0 {
+                    return Some(pos);
+                }
+            }
+            '"' => pos = skip_quoted_string(chars, pos),
+            '\'' => pos = skip_char_literal(chars, pos),
+            'r' | 'b' => pos = skip_prefixed_string(chars, pos).unwrap_or(pos + 1),
+            _ => pos += 1,
+        }
+    }
+    None
+}
+
+/// The non-test, non-comment text of a source file: comment lines and every
+/// `#[cfg(test)]`-attributed `mod … { … }` block are blanked to empty lines
+/// (not deleted, not merely cut-at-first-marker), so a caller keying results
+/// off `text.lines().enumerate()` still gets the file's real line numbers,
+/// and a second test module or trailing `pub use` after the first one is
+/// still scanned rather than silently skipped.
+///
+/// A registration placed after `mod tests` in one of the census files is
+/// therefore production text this function does see — the census's own
+/// scan is the guard against that shape, not a separate last-item check.
+pub(crate) fn production_text(path: &Path) -> String {
+    let src = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let stripped = strip_line_comments(&src);
+    let mut lines: Vec<String> = stripped.lines().map(str::to_string).collect();
+
+    // The brace walk below needs one continuous character stream (a string
+    // or raw string can span a line break), so it runs over `chars`
+    // directly rather than per-line. `line_of[k]` / `line_start_char[j]`
+    // translate between that char-index space and the line-index space
+    // `lines` is blanked in.
+    let chars: Vec<char> = stripped.chars().collect();
+    let mut line_of: Vec<usize> = Vec::with_capacity(chars.len());
+    let mut line_start_char: Vec<usize> = vec![0];
+    {
+        let mut line = 0usize;
+        for &c in &chars {
+            line_of.push(line);
+            if c == '\n' {
+                line += 1;
+                line_start_char.push(line_of.len());
+            }
+        }
+    }
+
+    let mut i = 0usize;
+    while i < lines.len() {
+        if lines[i].trim() != "#[cfg(test)]" {
+            i += 1;
+            continue;
+        }
+        // The next non-blank line must open a `mod <name> {`, or this
+        // `#[cfg(test)]` attaches to something else (a fn, a const, …)
+        // this scan does not need to touch.
+        let mut j = i + 1;
+        while j < lines.len() && lines[j].trim().is_empty() {
+            j += 1;
+        }
+        if j >= lines.len() || !starts_test_mod(&lines[j]) {
+            i += 1;
+            continue;
+        }
+        let line_start = line_start_char[j];
+        let Some(open_pos) = (line_start..chars.len()).find(|&k| chars[k] == '{') else {
+            panic!(
+                "{}: found `#[cfg(test)]` / `{}` with no opening brace",
+                path.display(),
+                lines[j].trim()
+            );
+        };
+        let Some(close_pos) = matching_close_index(&chars, open_pos) else {
+            panic!(
+                "{}: found `#[cfg(test)]` / `{}` with no matching close brace",
+                path.display(),
+                lines[j].trim()
+            );
+        };
+        let end_line = line_of[close_pos - 1];
+        for line in &mut lines[i..=end_line] {
+            line.clear();
+        }
+        i = end_line + 1;
+    }
+
+    lines.join("\n")
 }
 
 /// Every crate-visible `fn` declaration in `text` whose name starts with an
@@ -184,7 +402,6 @@ fn every_crate_visible_registration_returns_a_disposer() {
     let mut exempt_seen: Vec<(&str, &str)> = Vec::new();
 
     for rel in CENSUS_FILES {
-        assert_mod_tests_is_last_item(&root.join(rel));
         let text = production_text(&root.join(rel));
         for (name, sig) in crate_visible_effect_fns(&text) {
             if let Some((f, n, _)) = EXEMPT.iter().find(|(f, n, _)| *f == rel && *n == name) {

@@ -147,25 +147,47 @@ impl ExtensionManager {
 mod tests {
     //! The census below is the guard that keeps this module a chokepoint.
 
-    /// Source-level census: the two process-global publish calls may appear
-    /// **only** in this file.
+    /// Source-level census: five needles are pinned each to exactly one
+    /// owner file — `publish_plugin_skill_dirs(` and
+    /// `publish_plugin_subagents(` may appear only in `projection.rs` (the
+    /// two process-global publish calls); `republish_plugin_projections(`,
+    /// `sync_hooks_from_registry(`, and `after_transition(` may appear only
+    /// in `lifecycle.rs` (after P1.9 the view recomputation has exactly one
+    /// trigger, `after_transition`, and every public primitive ends with it
+    /// — spec §3.2).
     ///
     /// This has to be a source scan, not a runtime assertion: at runtime a
     /// second author looks exactly like the first one running twice. The
     /// failure mode it prevents is the one that shipped — `load_all` and
     /// `set_plugin_enabled` each deriving the set with a different predicate.
     ///
-    /// Comment lines are stripped before matching, because a doc comment that
-    /// *names* the function is documentation, not a call (and the prose above
-    /// names both of them).
+    /// Comment lines and `#[cfg(test)]` module bodies are stripped before
+    /// matching (via `effects::census::production_text`, shared with the G1
+    /// census), because a doc comment or a test fixture that *names* a
+    /// needle is documentation, not a call — and without that shared
+    /// derivation this very `G3_PINNED` array would self-match its own
+    /// `lifecycle.rs`-owned entries as offenders.
+    ///
+    /// (needle, the only file allowed to contain a non-definition line with
+    /// it). A module-level const on purpose: P6 appends
+    /// `("notify_tools_list_changed(", "lifecycle.rs")` when
+    /// `after_transition` gains the MCP-face broadcast — one line here, no
+    /// test-body edit.
+    pub(super) const G3_PINNED: &[(&str, &str)] = &[
+        ("publish_plugin_skill_dirs(", "projection.rs"),
+        ("publish_plugin_subagents(", "projection.rs"),
+        // The view recomputation has one trigger: lifecycle.rs::after_transition.
+        ("republish_plugin_projections(", "lifecycle.rs"),
+        ("sync_hooks_from_registry(", "lifecycle.rs"),
+        ("after_transition(", "lifecycle.rs"),
+    ];
+
     #[test]
     fn publishing_plugin_projections_has_exactly_one_author() {
-        const PUBLISHERS: [&str; 2] = ["publish_plugin_skill_dirs(", "publish_plugin_subagents("];
-
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/extension");
         let mut offenders: Vec<String> = Vec::new();
         let mut checked_files = 0usize;
-        let mut found_here = 0usize;
+        let mut found: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
 
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
@@ -181,25 +203,27 @@ mod tests {
                 if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
-                let Ok(src) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
+                let text = crate::extension::effects::census::production_text(&path);
                 checked_files += 1;
-                let is_this_file = path.file_name().is_some_and(|n| n == "projection.rs");
-                for (lineno, line) in src.lines().enumerate() {
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                for (lineno, line) in text.lines().enumerate() {
                     let code = line.trim_start();
-                    if code.starts_with("//") {
-                        continue;
-                    }
-                    for needle in PUBLISHERS {
+                    for &(needle, owner) in G3_PINNED {
                         if !code.contains(needle) {
                             continue;
                         }
-                        if is_this_file {
-                            found_here += 1;
+                        // A definition is not a call.
+                        if code.contains(&format!("fn {}", needle.trim_end_matches('('))) {
+                            continue;
+                        }
+                        if file_name == owner {
+                            *found.entry(needle).or_default() += 1;
                         } else {
                             offenders.push(format!(
-                                "{}:{} — {}",
+                                "{}:{} — `{}` (only {owner} may call this)",
                                 path.display(),
                                 lineno + 1,
                                 code.trim()
@@ -214,18 +238,19 @@ mod tests {
             checked_files > 10,
             "census scanned only {checked_files} files — it is not looking where it thinks it is"
         );
-        // Self-check: if the calls ever move out of this file the census must
-        // fail loudly rather than pass vacuously.
-        assert!(
-            found_here >= 2,
-            "expected both publish calls inside projection.rs, found {found_here} — \
-             did they move? the census is now blind"
-        );
+        // Self-check: every pinned call must exist in its owner, or the
+        // census is blind to a rename.
+        for &(needle, owner) in G3_PINNED {
+            assert!(
+                found.get(needle).copied().unwrap_or(0) >= 1,
+                "expected `{needle}` inside {owner}, found none — did it move? the census is now blind"
+            );
+        }
         assert!(
             offenders.is_empty(),
-            "plugin process-global publishes must live only in \
-             src/extension/projection.rs (that file states the activation \
-             predicate once). Second author(s) found:\n  {}",
+            "plugin projections are published only from projection.rs and re-derived only \
+             from lifecycle.rs::after_transition (spec §3.2: one trigger after every \
+             transition). Second author(s) found:\n  {}",
             offenders.join("\n  ")
         );
     }
