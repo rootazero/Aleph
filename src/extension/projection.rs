@@ -9,9 +9,9 @@
 //! * **Effects** have one, and live in the plugin's `EffectScope`
 //!   (`effects/scope.rs`): the registry row, the WASM module, transient MCP
 //!   servers, background services, the memory extension, slash entries. Each
-//!   registration returns a `Disposer`; `lifecycle.rs::unmount` runs the
-//!   list in reverse. Guard: `effects::census` (G1) and
-//!   `lifecycle::tests::g2_*` (G2).
+//!   registration returns a `Disposer`; unmount (`lifecycle.rs`) disposes
+//!   the scope, which runs the list in reverse (`effects/scope.rs`). Guard:
+//!   `effects::census` (G1) and `lifecycle::tests::g2_*` (G2).
 //! * **Views** have none but can be recomputed from the registry, and that is
 //!   what this module does:
 //!   - `utils::paths::PLUGIN_SKILL_DIRS` — read by `get_all_skills_dirs`, i.e.
@@ -21,8 +21,10 @@
 //!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
 //!     index.
 //!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
-//!   (The hook executor is the fifth view; `sync_hooks_from_registry` in
-//!   `mod.rs` rebuilds it and is triggered from the same place.)
+//!   (The hook executor is the fifth view; `after_transition` rebuilds it
+//!   with `sync_hooks_from_registry` — registry-defined hooks — then
+//!   `sync_user_hooks` — the user's own layer on top — triggered from the
+//!   same place.)
 //!
 //! **One function derives the whole view set from the registry, and exactly
 //! one trigger calls it: `lifecycle.rs::after_transition`, once at the end of
