@@ -2054,10 +2054,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 #[cfg(test)]
 mod boot_order_tests {
     /// The three runtime handles a plugin mount needs must be injected
-    /// before the first `ensure_loaded()` in this file. Textual, because the
-    /// order is a property of this one function body and a runtime test
-    /// would have to boot the server to observe it. Comment lines are
-    /// stripped so prose naming these calls does not count.
+    /// before BOTH first-load sites in this file: the `ensure_loaded()` in
+    /// the real-execution branch (a boot with an AI provider), and the
+    /// `init_tool_catalog(` call whose body runs its own `ensure_loaded()` —
+    /// the first `load_all` of a Simulated-mode boot, where the
+    /// real-execution branch is skipped entirely. Textual, because the order
+    /// is a property of this one function body and a runtime test would have
+    /// to boot the server (twice) to observe it. Comment lines are stripped
+    /// so prose naming these calls does not count. Every violation is
+    /// reported at once so a misplaced setter names each site it lost to.
     #[test]
     fn handles_are_installed_before_the_first_extension_load() {
         let src = include_str!("mod.rs");
@@ -2071,19 +2076,33 @@ mod boot_order_tests {
                 .unwrap_or_else(|| panic!("`{needle}` not found in agent_init/mod.rs"))
         };
         let load = first("ensure_loaded()");
+        let catalog_init = first("init_tool_catalog(");
+        let mut violations = Vec::new();
         for needle in [
             "set_mcp_handle(",
             "set_memory_registry(",
             "set_tool_catalog(",
         ] {
             let at = first(needle);
-            assert!(
-                at < load,
-                "`{needle}` (line {}) must come before the first `ensure_loaded()` (line {}) — \
-                 otherwise the first mount runs without that handle and records a skip",
-                at + 1,
-                load + 1
-            );
+            if at >= load {
+                violations.push(format!(
+                    "`{needle}` (line {}) must come before the first `ensure_loaded()` (line {}) — \
+                     otherwise the first mount of a real-execution boot runs without that handle \
+                     and records a skip",
+                    at + 1,
+                    load + 1
+                ));
+            }
+            if at >= catalog_init {
+                violations.push(format!(
+                    "`{needle}` (line {}) must come before the `init_tool_catalog(` call (line {}) — \
+                     its body runs the first `load_all` of a Simulated-mode boot, so that mount \
+                     would run without the handle and record a skip",
+                    at + 1,
+                    catalog_init + 1
+                ));
+            }
         }
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
     }
 }
