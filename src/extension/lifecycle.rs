@@ -8,7 +8,7 @@
 //! | [`ExtensionManager::reload_plugin`] | unmount + mount of one id |
 //! | [`ExtensionManager::reload`] | unmount everything, rediscover, mount every admitted plugin |
 //!
-//! Every public primitive ends with exactly one [`ExtensionManager::after_transition`],
+//! Every public primitive ends, on success, with exactly one [`ExtensionManager::after_transition`],
 //! which is the ONLY caller of `republish_plugin_projections` and
 //! `sync_hooks_from_registry` (guarded by
 //! `projection::tests::publishing_plugin_projections_has_exactly_one_author`).
@@ -124,8 +124,8 @@ impl ExtensionManager {
     }
 
     /// Dispose every mounted plugin, rediscover, mount every admitted
-    /// plugin. `stop_orphaned_services` and `sync_mcp_plugin_servers` are
-    /// gone because dispose + mount is what they approximated.
+    /// plugin. The old post-reload orphan-service sweep and MCP server
+    /// re-sync are gone because dispose + mount is what they approximated.
     pub async fn reload(&self) -> ExtensionResult<ReloadReport> {
         self.reload_count
             .fetch_add(1, crate::sync_primitives::Ordering::SeqCst);

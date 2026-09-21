@@ -271,7 +271,7 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // `set_plugin_enabled(_, true)` mounts: MCP servers, services, memory
     // extension and slash entries all come up inside the mount, so the
-    // `sync_plugin_services` that used to follow here is gone.
+    // boot-style service sync that used to follow here is gone.
     // `set_plugin_enabled` owns the durable write — this handler deliberately
     // touches no marker file, because the marker it used to write was never
     // read by anything.

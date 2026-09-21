@@ -49,8 +49,8 @@ impl McpMemoryExtension {
     }
 
     /// Construct unbound: backed by `UnboundMcpCaller` until `rebind` replaces
-    /// it. `server_id` (when `Some`) is the MCP server that
-    /// `bind_memory_callers` will route this plugin's hook calls to.
+    /// it. `server_id` (when `Some`) is the MCP server that the
+    /// `memory_extension` mount step binds this plugin's hook calls to.
     #[must_use]
     pub fn new_unbound(name: String, server_id: Option<String>) -> Self {
         // rust-doctor-disable-next-line excessive-clone
@@ -256,9 +256,9 @@ impl MemoryExtension for McpMemoryExtension {
 /// The dispatch layer's per-extension timeout + warn-and-skip policy degrades
 /// gracefully, so an unbound plugin never panics or stalls the pipeline.
 ///
-/// `ExtensionManager::bind_memory_callers` replaces this with a real binding
-/// at server startup (and on hot-load) by calling `McpMemoryExtension::rebind`
-/// once the `McpManager` handle is available.
+/// `register_memory_extension_effect` replaces this with a real binding when
+/// the MCP handle is attached, by calling `McpMemoryExtension::rebind` at
+/// mount.
 pub struct UnboundMcpCaller {
     plugin_name: String,
 }
@@ -276,7 +276,7 @@ impl McpCaller for UnboundMcpCaller {
     async fn call(&self, method: &str, _args: Value) -> Result<Value, AlephError> {
         Err(AlephError::other(format!(
             "memory plugin '{}' is registered but its MCP client is not yet bound \
-             (method={method}); bind_memory_callers wires the real McpManager",
+             (method={method}); the plugin was mounted without an MCP manager handle",
             self.plugin_name
         )))
     }
@@ -284,8 +284,8 @@ impl McpCaller for UnboundMcpCaller {
 
 /// Real `McpCaller` backed by the live MCP manager. Routes each hook method
 /// call to the plugin's MCP server via `McpManagerHandle::get_client` →
-/// `McpClient::call_tool`. Constructed at boot by `bind_memory_callers` once
-/// the manager handle is available.
+/// `McpClient::call_tool`. Constructed at mount by
+/// `register_memory_extension_effect` when the manager handle is available.
 pub struct ManagerBackedMcpCaller {
     handle: crate::mcp::McpManagerHandle,
     server_id: String,

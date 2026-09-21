@@ -77,7 +77,6 @@ pub use marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
 // Re-export new plugin system types (Phase 1)
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
 pub use manifest::PluginManifest;
-pub use registrar::CapabilityApi;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
@@ -189,9 +188,8 @@ pub struct ExtensionManager {
     load_guard: Mutex<()>,
 
     /// Memory extension registry (Spec 4 Task 11).
-    /// When set, `load_runtime_plugin` / `ensure_plugin_loaded` call
-    /// `load_plugin_with_memory` so that plugins declaring a `[memory]`
-    /// section are auto-registered as `McpMemoryExtension` entries.
+    /// When set, `mount` registers a plugin's `[memory]` section as a
+    /// `McpMemoryExtension` (`memory_extension` step); `None` records a skip.
     /// Wrapped in `RwLock` so it can be injected after construction (the manager
     /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
     memory_registry: crate::sync_primitives::RwLock<
@@ -222,12 +220,12 @@ pub struct ExtensionManager {
     #[cfg(test)]
     extra_plugin_parents: Vec<PathBuf>,
 
-    /// Live MCP manager handle, used to register plugin-owned MCP servers as
-    /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
-    /// is called at server boot — CLI/test paths leave it unset, and the
-    /// `mcp_server` mount step is recorded as skipped there. Wrapped in `RwLock<Option<_>>` because
-    /// the manager is behind an `Arc` by the time the MCP actor materialises,
-    /// mirroring the `memory_registry` injection pattern.
+    /// Live MCP manager handle, used by `mount` to register plugin-owned MCP
+    /// servers as **transient** (runtime-only) servers (`mcp_server` step).
+    /// `None` until [`Self::set_mcp_handle`] at boot; CLI/test paths leave it
+    /// unset and the step is recorded as skipped. Wrapped in `RwLock<Option<_>>`
+    /// because the manager is behind an `Arc` by the time the MCP actor
+    /// materialises, mirroring the `memory_registry` injection pattern.
     mcp_handle: crate::sync_primitives::RwLock<Option<crate::mcp::McpManagerHandle>>,
 
     /// Live tool catalog, so `mount` can register a plugin's `commands/*.md`
@@ -394,9 +392,10 @@ impl ExtensionManager {
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).
     ///
-    /// Safe to call on `&Arc<ExtensionManager>`. Subsequent plugin loads will
-    /// use `load_plugin_with_memory` so that manifests declaring a `[memory]`
-    /// section are auto-registered as `McpMemoryExtension` entries.
+    /// Safe to call on `&Arc<ExtensionManager>`. Subsequent mounts register
+    /// manifests declaring a `[memory]` section as `McpMemoryExtension`
+    /// entries (`memory_extension` step). Call it at boot BEFORE the first
+    /// `load_all` (see `agent_init::boot_order_tests`).
     pub fn set_memory_registry(
         &self,
         registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
@@ -430,15 +429,12 @@ impl ExtensionManager {
             .clone()
     }
 
-    /// Inject the live MCP manager handle after construction.
-    ///
-    /// Safe to call on `&Arc<ExtensionManager>`. Stores the handle so that
-    /// [`Self::sync_mcp_plugin_servers`] can register plugin-owned MCP servers.
-    /// Call it once at server boot, BEFORE the first `load_all` (it is
-    /// installed in `agent_init` next to the memory registry and the tool
-    /// catalog). Servers a plugin starts before the MCP tool bridge is spawned
-    /// are picked up by the bridge's boot-time reconcile against the servers
-    /// already running, so the early install does not lose tool registrations.
+    /// Inject the live MCP manager handle. Call it at boot BEFORE the first
+    /// `load_all` (see `agent_init::boot_order_tests`); a mount that runs
+    /// without it records `mcp_server` as skipped. Servers a plugin starts
+    /// before the MCP tool bridge is spawned are picked up by the bridge's
+    /// boot-time reconcile against the servers already running, so the early
+    /// install does not lose tool registrations.
     pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
         *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
@@ -448,115 +444,6 @@ impl ExtensionManager {
     /// registered by its own mount rather than by a boot-time catch-up.
     pub fn set_tool_catalog(&self, catalog: Arc<crate::tool_metadata::ToolCatalog>) {
         *self.tool_catalog.write().unwrap_or_else(|e| e.into_inner()) = Some(catalog);
-    }
-
-    /// Bind every registered MCP-backed memory extension to the live MCP
-    /// manager. Idempotent: re-binding an already-bound extension just re-stores
-    /// the caller. No-op unless BOTH the MCP handle and the memory registry are
-    /// present (CLI/test paths leave them unset). Call once at boot after
-    /// `set_mcp_handle` + `set_memory_registry` + plugin load, and again after
-    /// hot-loading a plugin.
-    pub async fn bind_memory_callers(&self) {
-        use crate::memory::extensions::ManagerBackedMcpCaller;
-        let handle = {
-            let g = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
-            match g.as_ref() {
-                Some(h) => h.clone(),
-                None => return,
-            }
-        };
-        let registry = {
-            let g = self
-                .memory_registry
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            match g.as_ref() {
-                Some(r) => r.clone(),
-                None => return,
-            }
-        };
-        for ext in registry.mcp_bindings_snapshot() {
-            if let Some(server_id) = ext.server_id() {
-                let caller = crate::sync_primitives::Arc::new(ManagerBackedMcpCaller::new(
-                    handle.clone(),
-                    server_id.to_string(),
-                ));
-                ext.rebind(caller);
-                tracing::info!(server_id = %server_id, "bound memory MCP caller");
-            }
-        }
-    }
-
-    /// Register every enabled MCP-kind plugin's `.mcp.json` servers with the
-    /// attached MCP manager as **transient** (runtime-only) servers.
-    ///
-    /// This is the wiring that makes MCP plugins actually run: `PluginLoader`
-    /// reads each plugin's `.mcp.json` into memory, and this method hands those
-    /// configs to `McpManager::add_transient_server`, whose `ServerStarted`
-    /// events the tool bridge converts into live tool registrations.
-    ///
-    /// Idempotent and non-fatal: a no-op (returns 0) when no handle is attached;
-    /// servers already running are skipped by the manager. Returns the number of
-    /// server configs handed to the manager this call.
-    pub async fn sync_mcp_plugin_servers(&self) -> usize {
-        let handle = {
-            let guard = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
-            match guard.as_ref() {
-                Some(h) => h.clone(),
-                None => return 0,
-            }
-        };
-
-        if let Err(e) = self.ensure_loaded().await {
-            tracing::warn!(error = %e, "sync_mcp_plugin_servers: ensure_loaded failed");
-            return 0;
-        }
-
-        // Snapshot active plugins (id + root_dir). `PluginRecord.kind` is always
-        // `Static` after `load_all` (the adapter doesn't carry runtime kind), so
-        // we re-parse each manifest to find the true MCP-kind plugins.
-        let candidates: Vec<(String, PathBuf)> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_plugins()
-                .into_iter()
-                .filter(|r| r.status.is_active())
-                .map(|r| (r.id.clone(), r.root_dir.clone()))
-                .collect()
-        };
-
-        for (id, root) in &candidates {
-            match manifest::parse_manifest_from_dir_cached_global(root) {
-                Ok(m) if m.kind == PluginKind::Mcp => {
-                    if let Err(e) = self.ensure_plugin_loaded(id).await {
-                        tracing::warn!(plugin = %id, error = %e, "sync_mcp_plugin_servers: failed to load MCP plugin");
-                    }
-                }
-                Ok(_) => {} // non-MCP plugin: nothing to register here
-                Err(e) => {
-                    tracing::debug!(plugin = %id, error = %e, "sync_mcp_plugin_servers: manifest parse failed");
-                }
-            }
-        }
-
-        let configs = self.plugin_loader.read().await.all_mcp_configs_map();
-        let mut registered = 0usize;
-        for (server_id, config) in configs {
-            match handle.add_transient_server(config).await {
-                Ok(()) => registered += 1,
-                Err(e) => {
-                    tracing::warn!(server_id = %server_id, error = %e, "sync_mcp_plugin_servers: add_transient_server failed");
-                }
-            }
-        }
-
-        if registered > 0 {
-            tracing::info!(
-                count = registered,
-                "registered plugin MCP servers (transient)"
-            );
-        }
-        registered
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -1388,15 +1275,6 @@ mod tests {
             !marker.exists(),
             "the marker must be removed once migrated, or it is a second source"
         );
-    }
-
-    #[tokio::test]
-    async fn sync_mcp_plugin_servers_is_noop_without_handle() {
-        // With no MCP manager attached (the default for CLI/test paths), the
-        // sync must short-circuit to 0 *before* touching the loader/registry —
-        // so it never even forces an extension load.
-        let manager = ExtensionManager::with_defaults().await.unwrap();
-        assert_eq!(manager.sync_mcp_plugin_servers().await, 0);
     }
 
     #[tokio::test]

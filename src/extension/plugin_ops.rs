@@ -1,7 +1,6 @@
 //! Plugin execution operations for `ExtensionManager`
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest;
 use crate::extension::registry::PluginRegistry;
 use crate::extension::types::{DirectCommandResult, PluginInfo, PluginRecord};
 use crate::sync_primitives::Arc;
@@ -56,61 +55,6 @@ impl ExtensionManager {
                  MCP plugin tools are called through McpManager, not the plugin loader)"
             )))
         }
-    }
-
-    /// Ensure a plugin is loaded into the runtime.
-    pub(crate) async fn ensure_plugin_loaded(&self, plugin_id: &str) -> ExtensionResult<()> {
-        self.ensure_plugin_active(plugin_id).await?;
-        let registry = self.plugin_registry.read().await;
-        let record = registry
-            .get_plugin(plugin_id)
-            .filter(|record| record.status.is_active())
-            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
-        let root_dir = record.root_dir.clone();
-        drop(registry);
-
-        let manifest = manifest::parse_manifest_from_dir_sync(&root_dir)?;
-
-        let mut loader = self.plugin_loader.write().await;
-        if loader.is_loaded(plugin_id) {
-            return Ok(()); // another task loaded it while we waited
-        }
-        // Re-check status under the loader write lock: a concurrent disable
-        // between the read-lock check above and this point must not be
-        // raced past. Without this re-check, a plugin disabled mid-call is
-        // still loaded into the runtime and stays reachable from MCP / tool
-        // dispatch until the next disable-flush sweep.
-        {
-            let registry = self.plugin_registry.read().await;
-            match registry.get_plugin(plugin_id) {
-                Some(record) if record.status.is_active() => {}
-                _ => {
-                    return Err(ExtensionError::Runtime(format!(
-                        "Plugin '{plugin_id}' was disabled while loading"
-                    )));
-                }
-            }
-        }
-        let mem_reg_snapshot = self
-            .memory_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(&manifest, mem_reg)?;
-        } else {
-            loader.load_plugin(&manifest)?;
-        }
-        tracing::info!(
-            plugin_id = plugin_id,
-            "Auto-loaded plugin for tool execution"
-        );
-        drop(loader);
-
-        // X1: bind the just-loaded plugin's memory caller if the MCP handle is
-        // already live (idempotent for already-bound extensions).
-        self.bind_memory_callers().await;
-        Ok(())
     }
 
     /// Execute a hook handler on a runtime plugin.
@@ -183,112 +127,6 @@ impl ExtensionManager {
         &self,
     ) -> Arc<tokio::sync::RwLock<super::PluginLoader>> {
         self.plugin_loader.clone()
-    }
-
-    /// Load a runtime plugin from a manifest.
-    pub async fn load_runtime_plugin(
-        &self,
-        manifest: &super::PluginManifest,
-    ) -> ExtensionResult<()> {
-        let mut loader = self.plugin_loader.write().await;
-        let mem_reg_snapshot = self
-            .memory_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let result = if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(manifest, mem_reg)
-        } else {
-            loader.load_plugin(manifest)
-        };
-        drop(loader);
-
-        if result.is_ok() {
-            self.sync_runtime_snapshots().await;
-        }
-
-        // X1: bind memory caller for the hot-loaded plugin (idempotent).
-        self.bind_memory_callers().await;
-
-        // Autostart any background services this plugin declared, now that
-        // its runtime is loaded (mirrors MCP servers' auto_start behavior).
-        if result.is_ok() {
-            self.start_autostart_services_transitional(&manifest.id)
-                .await;
-        }
-
-        result
-    }
-
-    /// Unload a runtime plugin.
-    ///
-    /// For MCP plugins, the loader drops the in-memory `.mcp.json` configs on
-    /// unload, so we capture the server IDs *first* and then ask the MCP manager
-    /// to tear down those transient servers — otherwise they would keep running
-    /// (and their tools stay registered) after the plugin is gone.
-    pub async fn unload_runtime_plugin(&self, plugin_id: &str) -> ExtensionResult<()> {
-        let server_ids: Vec<String> = {
-            let loader = self.plugin_loader.read().await;
-            loader
-                .get_mcp_configs(plugin_id)
-                .map(|servers| servers.keys().cloned().collect())
-                .unwrap_or_default()
-        };
-
-        // Stop any background services this plugin registered *before* unloading
-        // it — once the plugin is gone the stop handlers can no longer run, which
-        // would leave their background tasks orphaned (and their tooling still
-        // active) for the lifetime of the process.
-        let service_registrations: Vec<crate::extension::registry::ServiceRegistration> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_services()
-                .into_iter()
-                .filter(|s| s.plugin_id == plugin_id)
-                .cloned()
-                .collect()
-        };
-        if !service_registrations.is_empty() {
-            let service_manager = self.service_manager.clone().write_owned().await;
-            let loader = self.plugin_loader.clone().read_owned().await;
-            let plugin_id_owned = plugin_id.to_string();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let mut service_manager = service_manager;
-                service_manager.stop_plugin_services(
-                    &plugin_id_owned,
-                    &service_registrations,
-                    &loader,
-                );
-            })
-            .await
-            {
-                tracing::warn!(error = %e, "stop_plugin_services task join failed");
-            }
-        }
-
-        let result = self.plugin_loader.write().await.unload_plugin(plugin_id);
-
-        if result.is_ok() && !server_ids.is_empty() {
-            let handle = self
-                .mcp_handle
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            if let Some(handle) = handle {
-                for server_id in server_ids {
-                    if let Err(e) = handle.remove_transient_server(&server_id).await {
-                        tracing::warn!(
-                            plugin_id = plugin_id,
-                            server_id = %server_id,
-                            error = %e,
-                            "failed to remove transient MCP server on plugin unload"
-                        );
-                    }
-                }
-            }
-        }
-
-        result
     }
 
     /// Get all plugin info from `PluginRegistry`.

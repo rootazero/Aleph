@@ -8,33 +8,15 @@
 //! iterators) and the per-request tool service, so the eleven dead methods
 //! were cut from this module on 2026-09-04.
 //!
-//! What remains: [`ExtensionManager::get_all_commands`] (its last caller, the
-//! boot-only slash registration, went on 2026-09-20 — `slash_effect.rs` does
-//! that work at mount), [`ExtensionManager::skill_system`] (handle accessor
-//! used by tool catalog init), [`ExtensionManager::discovery`] (read-only
-//! handle), and [`ExtensionManager::hook_executor_snapshot`] (cheap handle
-//! clone consumed by the hook executor when wiring plugin hooks).
-
-use crate::extension::types::{ExtensionCommand, SkillType};
+//! What remains: [`ExtensionManager::skill_system`] (handle accessor used by
+//! tool catalog init), [`ExtensionManager::discovery`] (read-only handle), and
+//! [`ExtensionManager::hook_executor_snapshot`] (cheap handle clone consumed
+//! by the hook executor when wiring plugin hooks). Plugin `commands/` entries
+//! are registered per mount by `slash_effect.rs`, not listed from here.
 
 use super::ExtensionManager;
 
 impl ExtensionManager {
-    /// Get all commands
-    pub async fn get_all_commands(&self) -> Vec<ExtensionCommand> {
-        // Commands are now stored as skills with SkillType::Command in the registry
-        let reg = self.plugin_registry.read().await;
-        reg.list_skills()
-            .into_iter()
-            .filter(|s| s.skill_type == SkillType::Command)
-            .filter(|skill| {
-                reg.get_plugin(&skill.plugin_id)
-                    .is_some_and(|plugin| plugin.status.is_active())
-            })
-            .cloned()
-            .collect()
-    }
-
     /// Get a stable snapshot of the current hook executor.
     ///
     /// The snapshot is cheap to clone and lets callers execute hooks without

@@ -106,13 +106,6 @@ pub enum SkillType {
 pub type ExtensionSkill = crate::extension::SkillRegistration;
 
 // =============================================================================
-// Command Types (alias for user-triggered skills)
-// =============================================================================
-
-/// Extension command (user-triggered skill)
-pub type ExtensionCommand = ExtensionSkill;
-
-// =============================================================================
 // Frontmatter Types
 // =============================================================================
 

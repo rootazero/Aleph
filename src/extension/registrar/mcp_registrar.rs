@@ -3,8 +3,8 @@
 //!
 //! Historical note: this file used to host a `McpRegistrar` struct for a
 //! two-phase `batch_register` write path, then nothing plugin-shaped at all
-//! while `ExtensionManager::sync_mcp_plugin_servers` did the registration
-//! inline. [`register_transient_servers`] is the plugin path now: it is the
+//! while a boot-time sync on `ExtensionManager` did the registration inline
+//! from the loader's `.mcp.json` mirror. [`register_transient_servers`] is the plugin path now: it is the
 //! `mcp_server` effect `lifecycle.rs::mount` records, and its disposer is what
 //! `unmount` runs. `McpScope` below is the per-agent (sub-agent) scope and is
 //! unrelated to plugin mounting.
@@ -395,9 +395,9 @@ pub type ServerStartReceiver = oneshot::Receiver<Result<(), String>>;
 /// returned to the caller — `lifecycle.rs::watch_server_starts` awaits them
 /// on one task per plugin and logs each outcome; P3 turns that watcher into
 /// the readiness (`Pending`) writer. A failed start is therefore NOT a mount
-/// failure — exactly today's `sync_mcp_plugin_servers` contract
-/// (`mod.rs:503-511`: warn and continue) — but a closed command channel is,
-/// because then nothing can ever start.
+/// failure — the same warn-and-continue contract the boot-time sync it
+/// replaced had — but a closed command channel is, because then nothing can
+/// ever start.
 ///
 /// Partial failure is all-or-none at this step's granularity: if the k-th
 /// enqueue fails, the k−1 already enqueued are removed before returning

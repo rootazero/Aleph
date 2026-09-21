@@ -16,9 +16,10 @@ use crate::sync_primitives::Arc;
 /// Unified registration API for writing capabilities into `PluginRegistry`.
 ///
 /// This struct borrows the registry mutably and provides permission-checked
-/// capability registration. It is the single entry point that all registrars
-/// (MCP, WASM, manifest adapters) use to write into the registry.
-pub struct CapabilityApi<'a> {
+/// capability registration. It is the write path `register_plugin_row` (the
+/// `registry_row` effect) uses; nothing else writes capabilities into the
+/// registry.
+pub(crate) struct CapabilityApi<'a> {
     /// The plugin registry to write into
     registry: &'a mut PluginRegistry,
     /// ID of the plugin performing registration
@@ -29,7 +30,7 @@ pub struct CapabilityApi<'a> {
 
 impl<'a> CapabilityApi<'a> {
     /// Create a new `CapabilityApi` for a specific plugin.
-    pub const fn new(
+    pub(super) const fn new(
         registry: &'a mut PluginRegistry,
         plugin_id: String,
         permissions: Vec<PluginPermission>,
@@ -45,7 +46,7 @@ impl<'a> CapabilityApi<'a> {
     ///
     /// - P0 (Core) and P1 (Important): no permission check
     /// - P2 (Pluggable): permission check if required by the capability
-    pub fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
+    pub(super) fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
         self.validate_owner(&decl)?;
         let tier = decl.tier();
 
@@ -84,33 +85,10 @@ impl<'a> CapabilityApi<'a> {
                 self.registry.register_agent(agent);
             }
             CapabilityDeclaration::McpServer(_) => {
-                // No-op: MCP servers are handled by the loader, not the registry
+                // No-op: MCP servers are mounted by `lifecycle.rs` (the
+                // `mcp_server` step), not written into the registry.
             }
         }
-        Ok(())
-    }
-
-    /// Reload a plugin: unregister all existing capabilities and re-register
-    /// with a new record and capability set.
-    pub fn reload(
-        &mut self,
-        record: PluginRecord,
-        new_caps: Vec<CapabilityDeclaration>,
-    ) -> Result<()> {
-        for cap in &new_caps {
-            self.validate_owner(cap)?;
-            if let Some(perm) = cap.required_permission() {
-                self.require_permission(&perm)?;
-            }
-        }
-
-        self.registry.unregister_plugin(&self.plugin_id);
-        self.registry.register_plugin(record);
-
-        for cap in new_caps {
-            self.dispatch(cap)?;
-        }
-
         Ok(())
     }
 
@@ -147,8 +125,9 @@ impl<'a> CapabilityApi<'a> {
     }
 
     /// Get a reference to the underlying registry (for inspection in tests).
+    #[cfg(test)]
     #[must_use]
-    pub const fn registry(&self) -> &PluginRegistry {
+    pub(super) const fn registry(&self) -> &PluginRegistry {
         self.registry
     }
 }
@@ -330,44 +309,6 @@ mod tests {
 
         assert!(api.register_capability(make_service()).is_ok());
         assert!(api.registry().get_service("test-service").is_some());
-    }
-
-    // ── Reload clears and re-registers ───────────────────────────────────
-
-    #[test]
-    fn test_reload_clears_and_reregisters() {
-        let mut registry = make_registry_and_plugin();
-
-        // First registration
-        {
-            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
-            api.register_capability(make_tool()).unwrap();
-            assert!(api.registry().get_tool("my_tool").is_some());
-        }
-
-        // Reload with different capabilities
-        {
-            let new_record = PluginRecord::new(
-                "test-plugin".to_string(),
-                "Test Plugin v2".to_string(),
-                crate::extension::types::PluginKind::Static,
-                crate::extension::types::PluginOrigin::Global,
-            );
-
-            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
-
-            api.reload(new_record, vec![make_skill()]).unwrap();
-
-            // Old tool should be gone
-            assert!(api.registry().get_tool("my_tool").is_none());
-            // New skill should be present
-            assert!(api.registry().get_skill("test-skill").is_some());
-            // Plugin record updated
-            assert_eq!(
-                api.registry().get_plugin("test-plugin").unwrap().name,
-                "Test Plugin v2"
-            );
-        }
     }
 
     // ── Dispatch routes to correct registry collections ──────────────────

@@ -453,49 +453,6 @@ impl ServiceManager {
         }
         results
     }
-
-    /// Stop running services whose plugin is no longer active.
-    ///
-    /// Called after a hot-reload rebuilt the plugin registry: a plugin that
-    /// was removed or disabled on disk leaves its services running with no
-    /// registry entry to stop them. `is_active` reports whether a `plugin_id`
-    /// is still active after the reload.
-    pub fn stop_orphaned(
-        &mut self,
-        is_active: impl Fn(&str) -> bool,
-        loader: &PluginLoader,
-    ) -> Vec<ServiceInfo> {
-        let to_stop: Vec<ServiceRegistration> = self
-            .services
-            .iter()
-            .filter(|(_, info)| {
-                matches!(info.state, ServiceState::Running | ServiceState::Starting)
-                    && !is_active(&info.plugin_id)
-            })
-            .filter_map(|(key, _)| self.registrations.get(key).cloned())
-            .collect();
-
-        let mut results = Vec::new();
-        for registration in &to_stop {
-            info!(
-                "Stopping orphaned service {}:{} (plugin no longer active)",
-                registration.plugin_id, registration.id
-            );
-            match self.stop_service(registration, loader) {
-                Ok(info) => {
-                    let key = Self::make_key(&registration.plugin_id, &registration.id);
-                    self.services.remove(&key);
-                    self.registrations.remove(&key);
-                    results.push(info);
-                }
-                Err(e) => warn!(
-                    "Failed to stop orphaned service {}:{} - {}",
-                    registration.plugin_id, registration.id, e
-                ),
-            }
-        }
-        results
-    }
 }
 
 impl Default for ServiceManager {
@@ -708,26 +665,6 @@ mod tests {
                 .filter(|info| info.state == ServiceState::Running)
                 .count(),
             0
-        );
-    }
-
-    #[test]
-    fn test_stop_orphaned_only_stops_inactive_plugins() {
-        let mut manager = ServiceManager::new();
-        let loader = PluginLoader::new();
-
-        insert_running(&mut manager, "plugin-active", "s1");
-        insert_running(&mut manager, "plugin-removed", "s1");
-
-        let results = manager.stop_orphaned(|id| id == "plugin-active", &loader);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].plugin_id, "plugin-removed");
-
-        // Orphan is removed from tracking; the active service is untouched.
-        assert!(manager.get_service("plugin-removed", "s1").is_none());
-        assert_eq!(
-            manager.get_service("plugin-active", "s1").unwrap().state,
-            ServiceState::Running
         );
     }
 

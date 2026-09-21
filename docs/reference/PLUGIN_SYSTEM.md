@@ -572,8 +572,8 @@ agent 循环的执行器。
 MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不落盘）** server 注册到运行中的 `McpManager`，工具经现有 tool bridge 自动注册。
 
 - **transient 通道**：`McpManagerHandle::add_transient_server` / `remove_transient_server`（`src/mcp/manager/`）。与 `add_server` 不同，它只 `start_server_internal`，**不** upsert/持久化到用户 MCP 配置文件——插件 server 由插件生命周期管理，绝不污染用户配置。`server_id` 形如 `plugin:<id>/<name>`。
-- **注册编排**：每个 MCP-kind 插件的 server 由它自己的 `mount`（`lifecycle.rs`，effect `mcp_server` → `register_transient_servers`）交给 manager，`reload()` = 全部 unmount + 重新 mount，不再另行调用 sync。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）；tool bridge spawn 之后的后台任务只做过渡期补装（再跑一次幂等的 `sync_mcp_plugin_servers()`，无 handle 时 no-op；P1.11 删）。
-- **卸载清理**：`unmount` 按注册的逆序跑 disposer，`mcp_server` 的 disposer 对该插件登记的每个 server 调 `remove_transient_server`，避免残留进程/工具（`unload_runtime_plugin` 是过渡期残留，P1.11 删）。
+- **注册编排**：每个 MCP-kind 插件的 server 由它自己的 `mount`（`lifecycle.rs`，effect `mcp_server` → `register_transient_servers`）交给 manager，`reload()` = 全部 unmount + 重新 mount，不再另行调用 sync。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）。
+- **卸载清理**：`unmount` 按注册的逆序跑 disposer，`mcp_server` 的 disposer 对该插件登记的每个 server 调 `remove_transient_server`，避免残留进程/工具。
 - `list_servers` 同时列出 transient client（不止 config），使 `mcp.list` 与 tool bridge 的 lag-recovery `resync_all` 都能感知插件 server。
 
 ### 远程 MCP transport
@@ -599,7 +599,7 @@ MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不�
 
 `type` 默认是 `stdio`，所以现有插件无需修改。`McpServerConfig` 现在是 enum：
 `Stdio { command, args, env } | Remote { url, headers, oauth?, timeout_ms? }`，由
-`PluginLoader::load_mcp_plugin` 直接路由到对应的 `McpTransportType`。`McpJsonServerEntry`
+`mcp_config::read_mcp_json`（`mount` 的 `mcp_server` step 读取）直接路由到对应的 `McpTransportType`。`McpJsonServerEntry`
 解析器对缺失字段（stdio 无 `command` / remote 无 `url` / 未知 `type`）做 hard error，
 不让 spawn 进入半配置状态。
 
