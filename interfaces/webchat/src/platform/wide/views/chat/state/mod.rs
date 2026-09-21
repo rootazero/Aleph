@@ -845,6 +845,14 @@ pub struct ChatState {
     /// Active single-chat task plan (scratchpad-driven Todo widget). `None`
     /// hides the panel. Projected by `events.rs` via `scratchpad_plan_update`.
     pub plan: RwSignal<Option<PlanView>>,
+    /// `true` after `reattach_after_connect` gave up retrying
+    /// `gateway.metrics.run_concurrency` and the probe never landed. The
+    /// app-root Effect re-reads this on every `connection_epoch` bump and
+    /// re-fires `reattach_after_connect` while it is set, clearing it on
+    /// success — the "transient RPC failure, socket is fine" recovery path
+    /// (T2.6). Cleared by a successful reattach. Ephemeral, like `retry_pulse`
+    /// — excluded from [`SessionSnapshot`].
+    pub pending_reattach: RwSignal<bool>,
 }
 
 impl Default for ChatState {
@@ -894,6 +902,7 @@ impl ChatState {
             global_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
+            pending_reattach: RwSignal::new(false),
             next_msg_id: RwSignal::new(0),
             sends: RwSignal::new(0),
             team_id: RwSignal::new(None),
