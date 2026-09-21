@@ -21,10 +21,10 @@
 //!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
 //!     index.
 //!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
-//!   (The hook executor is the fifth view; `after_transition` rebuilds it
-//!   with `sync_hooks_from_registry` — registry-defined hooks — then
-//!   `sync_user_hooks` — the user's own layer on top — triggered from the
-//!   same place.)
+//!     (The hook executor is the fifth view; `after_transition` rebuilds it
+//!     with `sync_hooks_from_registry` — registry-defined hooks — then
+//!     `sync_user_hooks` — the user's own layer on top — triggered from the
+//!     same place.)
 //!
 //! **One function derives the whole view set from the registry, and exactly
 //! one trigger calls it: `lifecycle.rs::after_transition`, once at the end of
