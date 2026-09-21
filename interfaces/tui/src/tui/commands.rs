@@ -125,7 +125,7 @@ pub(super) async fn dispatch_gateway_text(
             }
         }
         _ => {
-            state.add_user_message(text.to_string());
+            state.add_user_message(text.to_string(), vec![]);
             send_to_agent(state, client, text, err_label).await;
         }
     }
@@ -887,7 +887,7 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
         Some(app::ProviderPick::Model(id)) => {
             state.close_overlay();
             let command = format!("/model {id}");
-            state.add_user_message(command.clone());
+            state.add_user_message(command.clone(), vec![]);
             send_to_agent(state, client, &command, "Model select error").await;
         }
         // Nothing highlighted (the filter matched nothing) — closing is the
@@ -1190,6 +1190,11 @@ fn history_message_from_json(idx: usize, v: &Value) -> Option<app::TranscriptEnt
                 app::row_timestamp(v.get("timestamp").and_then(Value::as_str)).timestamp_millis(),
             )
             .ok(),
+            // History rows from before the field existed — and history rows
+            // from after it too, since the wire does not yet carry per-row
+            // attachments — render with no chips. The compose send path uses
+            // `add_user_message`, which already wires the real list.
+            attachments: Vec::new(),
         }),
         "assistant" => Some(app::TranscriptEntry::AssistantText {
             id,
@@ -1435,7 +1440,7 @@ async fn execute_retry(state: &mut AppState, client: &AlephClient) {
     }
 
     // Phase 2: re-submit the captured user message via the shared send site
-    state.add_user_message(last_user.clone());
+    state.add_user_message(last_user.clone(), vec![]);
     state.push_send_history(last_user.clone());
     send_to_agent(state, client, &last_user, "Retry send error").await;
 }
@@ -2124,6 +2129,7 @@ mod attach_mode_tests {
             id: "t1".into(),
             text: "prepared by the caller".into(),
             at_ms: None,
+            attachments: Vec::new(),
         });
 
         apply_history(
@@ -2148,6 +2154,7 @@ mod attach_mode_tests {
             id: "t1".into(),
             text: "stale, from before the drop".into(),
             at_ms: None,
+            attachments: Vec::new(),
         });
 
         apply_history(

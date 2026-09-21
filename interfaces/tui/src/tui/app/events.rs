@@ -654,6 +654,11 @@ impl AppState {
                     id,
                     text: content,
                     at_ms: u64::try_from(row_timestamp(Some(&timestamp)).timestamp_millis()).ok(),
+                    // The wire for `session_user_message` does not carry
+                    // attachments yet, so peer messages land with no chips.
+                    // The local composer path goes through `add_user_message`
+                    // and wires the real list.
+                    attachments: Vec::new(),
                 };
                 // Placed BEFORE a bubble that is still streaming. The peer's
                 // run may have opened its assistant message already, and a

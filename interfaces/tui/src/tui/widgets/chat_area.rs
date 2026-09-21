@@ -14,7 +14,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use shared_ui_logic::transcript::{
-    turn_summary_text, Modality, RowBody, RowStatus, ToolRow, TranscriptEntry,
+    turn_summary_text, Modality, RowBody, RowStatus, ToolRow, TranscriptEntry, TuiAttachment,
 };
 
 use crate::tui::app::{AppState, Focus};
@@ -777,8 +777,8 @@ fn render_settled_message(
 ) -> Vec<usize> {
     let base = out.len();
     match message {
-        TranscriptEntry::UserText { text, at_ms, .. } => {
-            render_user_message(text, *at_ms, width, out);
+        TranscriptEntry::UserText { text, at_ms, attachments, .. } => {
+            render_user_message(text, attachments, *at_ms, width, out);
         }
         TranscriptEntry::AssistantText { markdown, .. } => {
             if !markdown.is_empty() {
@@ -815,6 +815,7 @@ fn render_settled_message(
 /// Render a user message with blue prefix bar.
 fn render_user_message(
     content: &str,
+    attachments: &[TuiAttachment],
     at_ms: Option<u64>,
     width: u16,
     lines: &mut Vec<Line<'static>>,
@@ -848,6 +849,30 @@ fn render_user_message(
         let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
         spans.extend(md_line.spans);
         lines.push(Line::from(spans));
+    }
+
+    // Attachment chips: one line per attachment, indented under the message
+    // text. The same `┃ ` prefix as the content so the chip block reads as
+    // part of the same message rather than a separate row. The
+    // paperclip glyph + name + MIME keeps the format scannable in a 4-row
+    // transcript at the default width — long MIME strings clip at the
+    // edge naturally because `format!` does not wrap.
+    for att in attachments {
+        lines.push(Line::from(vec![
+            Span::styled("\u{2503} ", prefix_style),
+            Span::styled(
+                "\u{1F4CE} ".to_string(),
+                Style::default().fg(theme().muted),
+            ),
+            Span::styled(
+                att.name.clone(),
+                Style::default().fg(theme().muted),
+            ),
+            Span::styled(
+                format!(" ({})", att.mime),
+                Style::default().fg(theme().muted),
+            ),
+        ]));
     }
 }
 
@@ -947,7 +972,7 @@ mod tests {
     #[test]
     fn build_lines_with_user_and_assistant() {
         let mut state = AppState::new("test".into(), "claude".into());
-        state.add_user_message("Hello".into());
+        state.add_user_message("Hello".into(), vec![]);
         state.ensure_assistant_message();
         if let TranscriptEntry::AssistantText {
             markdown: content, ..
@@ -1086,6 +1111,59 @@ mod tests {
         assert!(x_rows > 1, "long system line should wrap to > 1 row");
     }
 
+    /// A user message that carries attachments must render each one as a
+    /// chip line below the text. The chip carries the attachment name AND
+    /// its MIME type so a glance at the transcript answers both "what file
+    /// was this" and "what kind".
+    ///
+    /// Without this, a user who sends three files only ever sees the text
+    /// they typed — the files vanish from history the moment they are sent.
+    /// The Panel renders the same data as visual chips; the TUI parity is
+    /// what this test pins.
+    #[test]
+    fn user_text_transcript_entry_can_carry_attachments() {
+        let mut state = AppState::new("test".into(), "claude".into());
+        state.add_user_message(
+            "see attached".into(),
+            vec![TuiAttachment {
+                name: "photo.png".into(),
+                mime: "image/png".into(),
+            }],
+        );
+
+        let lines = build_all_lines(&state, 80);
+
+        // The rendered text must still be present (we did not accidentally
+        // replace it with the chips).
+        let has_text = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| s.content.as_ref().contains("see attached"))
+        });
+        assert!(has_text, "the user text must still render");
+
+        // The chip: the file name AND the MIME both appear on at least one
+        // rendered line. Asserting on each separately catches a render that
+        // accidentally drops one half of the chip.
+        let has_name = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| s.content.as_ref().contains("photo.png"))
+        });
+        assert!(has_name, "the attachment chip must show the file name");
+
+        let has_mime = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| s.content.as_ref().contains("image/png"))
+        });
+        assert!(
+            has_mime,
+            "the attachment chip must show the MIME type so the user \
+             knows what they sent"
+        );
+    }
+
     #[test]
     fn reasoning_shown_only_in_verbose() {
         let mut state = AppState::new("test".into(), "claude".into());
@@ -1121,7 +1199,7 @@ mod tests {
     #[test]
     fn build_all_lines_reuses_cached_lines_for_unchanged_messages() {
         let mut state = AppState::new("test".into(), "claude".into());
-        state.add_user_message("Hello".into());
+        state.add_user_message("Hello".into(), vec![]);
         state.ensure_assistant_message();
         if let TranscriptEntry::AssistantText {
             markdown,
@@ -1199,7 +1277,7 @@ mod tests {
     #[test]
     fn build_all_lines_cached_matches_uncached_output() {
         let mut state = AppState::new("test".into(), "claude".into());
-        state.add_user_message("Hello".into());
+        state.add_user_message("Hello".into(), vec![]);
         state.ensure_assistant_message();
         if let TranscriptEntry::AssistantText {
             markdown: content, ..
@@ -1221,7 +1299,7 @@ mod tests {
         // streaming-cursor boundary cases live in that cut).
         let mut state = AppState::new("test".into(), "claude".into());
         for i in 0..6 {
-            state.add_user_message(format!("question {i}"));
+            state.add_user_message(format!("question {i}"), vec![]);
             state.ensure_assistant_message();
             if let TranscriptEntry::AssistantText {
                 markdown,
@@ -1556,7 +1634,7 @@ mod width_tests {
         state.verbose = true;
         let long = "verylongunbreakabletoken".repeat(20);
 
-        state.add_user_message(long.clone());
+        state.add_user_message(long.clone(), vec![]);
         state.messages.push(TranscriptEntry::AssistantText {
             id: "a1".into(),
             markdown: long.clone(),

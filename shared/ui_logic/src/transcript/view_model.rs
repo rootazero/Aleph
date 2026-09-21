@@ -166,6 +166,21 @@ pub struct TurnSummaryEntry {
     pub duration_ms: u64,
 }
 
+/// Compact projection of a file the user attached to a user message.
+///
+/// `UserText::attachments` is `Vec<TuiAttachment>` rather than the wire
+/// `PendingAttachment` (which carries the base64 payload + size) because
+/// the chip renderer only needs the label and the MIME type — the payload
+/// is gone by the time the bubble is up. The TUI does not currently ship
+/// attachments through its composer pipeline, so every existing sender
+/// passes `vec![]`; the field is wired in so the moment that pipeline lands,
+/// the chip render is already correct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiAttachment {
+    pub name: String,
+    pub mime: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptEntry {
     UserText {
@@ -178,6 +193,11 @@ pub enum TranscriptEntry {
         /// rather than "now", which would date a restored message to the
         /// moment it was restored.
         at_ms: Option<u64>,
+        /// Files the user attached to this turn, surfaced as chip rows below
+        /// the text on the user message. Empty for every locally-echoed send
+        /// the TUI has not been told a name/mime for yet, and for history
+        /// rows produced before the field existed.
+        attachments: Vec<TuiAttachment>,
     },
     AssistantText {
         id: String,

@@ -194,7 +194,7 @@ pub enum Focus {
 /// names it through this module, and a facade that lists a type no caller
 /// reaches is the kind of always-true claim this repo pays for later. The
 /// tests import it from `shared_ui_logic` like every other consumer does.
-pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry};
+pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry, TuiAttachment};
 
 /// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
 fn as_ms(t: DateTime<Utc>) -> Option<u64> {
@@ -1149,12 +1149,19 @@ impl AppState {
     /// Bumps `sends`, which is the whole reason this is not the same function
     /// as the peer path: a room peer's message is a user row too, and only
     /// one of the two means "I am done reading back".
-    pub fn add_user_message(&mut self, content: String) {
+    ///
+    /// `attachments` is the list of files the user dropped onto this send.
+    /// Every existing caller passes `vec![]` — the TUI's composer pipeline
+    /// does not yet ship attachments — but the slot is wired in so the chip
+    /// render is already correct on the moment a real attachment pipeline
+    /// lands.
+    pub fn add_user_message(&mut self, content: String, attachments: Vec<TuiAttachment>) {
         let id = self.next_entry_id();
         self.messages.push(TranscriptEntry::UserText {
             id,
             text: content,
             at_ms: as_ms(Utc::now()),
+            attachments,
         });
         self.sends = self.sends.saturating_add(1);
     }

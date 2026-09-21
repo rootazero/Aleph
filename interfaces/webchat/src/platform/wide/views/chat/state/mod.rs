@@ -285,12 +285,33 @@ impl RunCost {
     }
 }
 
+/// Compact projection of a file the user attached to this turn.
+///
+/// `PendingAttachment` carries the full base64 payload + size so the
+/// composer can ship the file, but a `ChatMessage` only needs to render a
+/// chip ("photo.png · image/png") — the payload is gone by the time the
+/// bubble is up. `PendingAttachment → AttachmentMeta` is a single field-by-
+/// field copy at the composer send boundary, the only place that has both
+/// types in scope (see `ChatState::push_user_message_with_attachments`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub name: String,
+    pub mime: String,
+}
+
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
     pub role: String,    // "user" | "assistant"
     pub content: String, // final or accumulated text
+    /// Files the user attached to this turn, rendered as chips below the
+    /// text on the user bubble. `serde(default)` keeps history rows
+    /// produced before the field existed loadable — they deserialize to an
+    /// empty list and simply render no chips. Empty for every assistant
+    /// row by construction.
+    #[serde(default)]
+    pub attachments: Vec<AttachmentMeta>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallEntry>,
     #[serde(default)]
@@ -953,6 +974,7 @@ impl ChatState {
                 id: format!("plan-archive-{seq}"),
                 role: "assistant".into(),
                 content: String::new(),
+                attachments: Vec::new(),
                 tool_calls: vec![],
                 is_streaming: false,
                 is_intermediate: false,
@@ -1145,15 +1167,44 @@ impl ChatState {
     /// funnels through here, so the counter is covered by construction rather
     /// than by remembering to bump it per call site.
     pub fn push_user_message(&self, text: &str) {
+        self.push_user_message_with_attachments(text, &[]);
+    }
+
+    /// Append a user message with optional attachments, and reset error state.
+    ///
+    /// The single writer of [`Self::sends`] — every surface that lets this
+    /// viewer send (composer, queued-prompt flush, retry, voice, slash command)
+    /// funnels through here, so the counter is covered by construction rather
+    /// than by remembering to bump it per call site.
+    ///
+    /// `attachments` is `&[PendingAttachment]` rather than `Vec<AttachmentMeta>`
+    /// so callers (only the composer send path has any) can hand over the
+    /// payload-bearing list they already have. The conversion to chip-only
+    /// `AttachmentMeta` happens here so the rest of the projection stays
+    /// unaware of base64 blobs. Voice, retry, slash-command sends and the
+    /// queued-prompt drain all pass `&[]` — they have nothing to chip.
+    pub fn push_user_message_with_attachments(
+        &self,
+        text: &str,
+        attachments: &[PendingAttachment],
+    ) {
         let seq = self.next_msg_id.get_untracked();
         self.next_msg_id.set(seq + 1);
         self.sends.update(|n| *n += 1);
         let id = format!("user-{seq}");
+        let meta: Vec<AttachmentMeta> = attachments
+            .iter()
+            .map(|a| AttachmentMeta {
+                name: a.name.clone(),
+                mime: a.mime_type.clone(),
+            })
+            .collect();
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
                 id,
                 role: "user".into(),
                 content: text.to_string(),
+                attachments: meta,
                 tool_calls: vec![],
                 is_streaming: false,
                 is_intermediate: false,
@@ -1238,6 +1289,7 @@ impl ChatState {
                     id,
                     role: "user".into(),
                     content: text.to_string(),
+                    attachments: Vec::new(),
                     tool_calls: vec![],
                     is_streaming: false,
                     is_intermediate: false,
@@ -1309,6 +1361,7 @@ impl ChatState {
                 id,
                 role: "assistant".into(),
                 content: String::new(),
+                attachments: Vec::new(),
                 tool_calls: vec![],
                 is_streaming: true,
                 is_intermediate: false,
@@ -1399,6 +1452,7 @@ impl ChatState {
                         id: target_id,
                         role: "assistant".into(),
                         content: String::new(),
+                        attachments: Vec::new(),
                         tool_calls: vec![],
                         is_streaming: true,
                         is_intermediate: false,

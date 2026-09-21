@@ -227,13 +227,14 @@ fn my_own_send_pulls_the_viewport_back_down() {
         id: "peer-1".into(),
         text: "a teammate".into(),
         at_ms: None,
+        attachments: Vec::new(),
     });
     state.settle_scroll();
     assert_eq!(state.scroll_offset, 12, "a peer's row moved my viewport");
     assert!(state.unseen_below);
 
     // My own send does.
-    state.add_user_message("mine".into());
+    state.add_user_message("mine".into(), vec![]);
     state.settle_scroll();
     assert_eq!(state.scroll_offset, 0);
     assert!(!state.unseen_below);
@@ -316,7 +317,7 @@ fn ensure_assistant_message_idempotent() {
 #[test]
 fn add_user_message_appended() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
         TranscriptEntry::UserText { text: content, .. } => assert_eq!(content, "hello"),
@@ -474,7 +475,7 @@ fn a_typed_answer_is_sent_verbatim() {
 #[test]
 fn switch_session_clears_messages() {
     let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     assert_eq!(state.messages.len(), 1);
 
     state.switch_session("s2");
@@ -549,7 +550,7 @@ fn provider_usage_cache_stat_matches_canonical_formula() {
 #[test]
 fn clear_screen_keeps_session() {
     let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     state.total_tokens = 500;
 
     state.clear_screen();
@@ -3000,6 +3001,7 @@ fn beginning_a_reattach_resets_the_run_but_not_the_transcript() {
         id: "u1".into(),
         text: "from before the drop".into(),
         at_ms: None,
+        attachments: Vec::new(),
     });
     let before = state.messages.len();
 

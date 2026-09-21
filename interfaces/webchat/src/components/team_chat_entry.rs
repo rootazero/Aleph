@@ -69,6 +69,7 @@ pub(crate) fn team_history_item_to_message(index: usize, item: TeamMessageItem) 
         id: format!("team-hist-{index}"),
         role: role.to_string(),
         content: item.content,
+        attachments: Vec::new(),
         tool_calls: Vec::new(),
         is_streaming: false,
         is_intermediate: false,

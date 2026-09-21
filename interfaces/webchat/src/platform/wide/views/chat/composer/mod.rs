@@ -252,7 +252,7 @@ pub(crate) fn InputArea() -> impl IntoView {
         is_sending.set(true);
         input_text.set(String::new());
         attachments.set(Vec::new());
-        chat.push_user_message(&text);
+        chat.push_user_message_with_attachments(&text, &files);
 
         // Team chat mode: route the requirement to the leader orchestration RPC
         // instead of the single-agent ChatApi::send. Early return skips the

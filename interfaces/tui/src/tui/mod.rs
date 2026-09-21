@@ -715,7 +715,7 @@ async fn main_loop<'c>(
 
             // -- Chat --
             Action::SendMessage(msg) => {
-                state.add_user_message(msg.clone());
+                state.add_user_message(msg.clone(), vec![]);
                 state.ctrl_c_count = 0;
 
                 // Save to input history
