@@ -2053,6 +2053,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
 #[cfg(test)]
 mod boot_order_tests {
+    /// Non-comment lines of a source file with their real 1-based line
+    /// numbers. Enumerated BEFORE the comment filter so a red names the line
+    /// an editor can jump to, not an index into the filtered list.
+    fn code_lines(src: &str) -> impl Iterator<Item = (usize, &str)> {
+        src.lines()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l))
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+    }
+
     /// The three runtime handles a plugin mount needs must be injected
     /// before BOTH first-load sites in this file: the `ensure_loaded()` in
     /// the real-execution branch (a boot with an AI provider), and the
@@ -2063,16 +2073,31 @@ mod boot_order_tests {
     /// to boot the server (twice) to observe it. Comment lines are stripped
     /// so prose naming these calls does not count. Every violation is
     /// reported at once so a misplaced setter names each site it lost to.
+    ///
+    /// This test's own needle literals cannot produce a false green: the
+    /// module is last in the file, so they sit after every real site, and
+    /// even if it were hoisted the self-match reads RED — the `load` line is
+    /// written before the needle array. The `not found` arm below is
+    /// therefore unreachable for these needles; it is not a weaker check to
+    /// be "fixed", the ordering check already covers a deleted setter.
     #[test]
     fn handles_are_installed_before_the_first_extension_load() {
-        let src = include_str!("mod.rs");
-        let code: Vec<&str> = src
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect();
+        // The second needle pins the CALL SITE of a load that lives in
+        // another file; if that load moves, the needle must move with it or
+        // the second axis goes vacuous while staying green. Same comment
+        // stripping as the main check: a commented-out call must not satisfy
+        // this either.
+        assert!(
+            code_lines(include_str!("tool_catalog_init.rs"))
+                .any(|(_, l)| l.contains("ensure_loaded()")),
+            "the `init_tool_catalog(` needle no longer stands for a load site — re-aim it at \
+             wherever the Simulated-mode first load moved"
+        );
+        let code: Vec<(usize, &str)> = code_lines(include_str!("mod.rs")).collect();
         let first = |needle: &str| {
             code.iter()
-                .position(|l| l.contains(needle))
+                .find(|(_, l)| l.contains(needle))
+                .map(|(line, _)| *line)
                 .unwrap_or_else(|| panic!("`{needle}` not found in agent_init/mod.rs"))
         };
         let load = first("ensure_loaded()");
@@ -2086,20 +2111,17 @@ mod boot_order_tests {
             let at = first(needle);
             if at >= load {
                 violations.push(format!(
-                    "`{needle}` (line {}) must come before the first `ensure_loaded()` (line {}) — \
-                     otherwise the first mount of a real-execution boot runs without that handle \
-                     and records a skip",
-                    at + 1,
-                    load + 1
+                    "`{needle}` (line {at}) must come before the first `ensure_loaded()` \
+                     (line {load}) — otherwise the first mount of a real-execution boot runs \
+                     without that handle and records a skip"
                 ));
             }
             if at >= catalog_init {
                 violations.push(format!(
-                    "`{needle}` (line {}) must come before the `init_tool_catalog(` call (line {}) — \
-                     its body runs the first `load_all` of a Simulated-mode boot, so that mount \
-                     would run without the handle and record a skip",
-                    at + 1,
-                    catalog_init + 1
+                    "`{needle}` (line {at}) must come before the `init_tool_catalog(` call \
+                     (line {catalog_init}) — its body runs the first `load_all` of a \
+                     Simulated-mode boot, so that mount would run without the handle and \
+                     record a skip"
                 ));
             }
         }
