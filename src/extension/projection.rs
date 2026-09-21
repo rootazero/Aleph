@@ -161,12 +161,21 @@ mod tests {
     /// failure mode it prevents is the one that shipped — `load_all` and
     /// `set_plugin_enabled` each deriving the set with a different predicate.
     ///
-    /// Comment lines and `#[cfg(test)]` module bodies are stripped before
-    /// matching (via `effects::census::production_text`, shared with the G1
-    /// census), because a doc comment or a test fixture that *names* a
-    /// needle is documentation, not a call — and without that shared
-    /// derivation this very `G3_PINNED` array would self-match its own
-    /// `lifecycle.rs`-owned entries as offenders.
+    /// Comment lines, `#[cfg(test)]` items, and every string/char literal's
+    /// payload are stripped before matching (via
+    /// `utils::source_scan::production_code_text`, shared with the G1
+    /// census in `effects/census.rs`), because a doc comment or a test
+    /// fixture that *names* a needle is documentation, not a call. Without
+    /// that, this very `G3_PINNED` array — whose tuples are string literals
+    /// containing the needle text itself — would self-match its own
+    /// `lifecycle.rs`-owned entries as offenders: it lives inside this
+    /// `mod tests`, which is itself `#[cfg(test)]`-attributed, so
+    /// `production_code_text`'s item-blanking step alone (before it ever
+    /// gets to literal payloads) already removes the whole block. The
+    /// literal-payload blanking is additional defense-in-depth — it is what
+    /// would catch a needle spelled in a string literal sitting in live,
+    /// non-test-declared code — not what is empirically load-bearing for
+    /// this array today; measured directly in the P1.14 addendum report.
     ///
     /// (needle, the only file allowed to contain a non-definition line with
     /// it). A module-level const on purpose: P6 appends
@@ -203,7 +212,10 @@ mod tests {
                 if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
-                let text = crate::extension::effects::census::production_text(&path);
+                let Ok(src) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let text = crate::utils::source_scan::production_code_text(&path, &src);
                 checked_files += 1;
                 let file_name = path
                     .file_name()

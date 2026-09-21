@@ -876,6 +876,21 @@ pub fn production_code_lines(src: &str) -> String {
         .join("\n")
 }
 
+/// [`production_code_lines`] (line-preserving, so a census message can
+/// report a `path:line` a reader can open) composed with the whole-file
+/// ancestor-declared-test-module check [`production_text`] already makes,
+/// and with every literal's payload blanked via [`code_text`] so a
+/// census's own message strings and marker constants cannot self-match.
+/// The Dropped-variant twin (no line numbers, literals kept) is
+/// [`production_text`].
+#[must_use]
+pub fn production_code_text(path: &std::path::Path, src: &str) -> String {
+    if declared_as_a_test_module(path) {
+        return String::new();
+    }
+    code_text(&production_code_lines(src))
+}
+
 /// `src` reduced to the code a compiler would see: comment text removed,
 /// and the *payload* of every string, byte-string, C-string, raw-string and
 /// char literal removed too, each literal leaving a delimiter sentinel in

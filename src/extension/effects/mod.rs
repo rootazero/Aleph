@@ -13,7 +13,7 @@
 //! fiber" rulings stand, narrowed to this).
 
 #[cfg(test)]
-pub(crate) mod census;
+mod census;
 mod disposer;
 mod scope;
 
