@@ -28,8 +28,8 @@ mod lifecycle;
 mod loader;
 pub mod marketplace;
 pub mod runtime;
-pub mod scope;
 pub mod validation;
+pub mod visibility;
 
 pub mod capability;
 pub mod effects;

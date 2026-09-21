@@ -276,7 +276,7 @@ pub async fn handle_plugin_install(
     scope: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::marketplace::MarketplaceManager;
-    use alephcore::extension::scope::parse_scope;
+    use alephcore::extension::visibility::parse_scope;
 
     // If source looks like a plugin name (no /, ., or :), use marketplace install locally
     let is_plugin_name = !source.contains('/') && !source.contains('.') && !source.contains(':');
@@ -322,7 +322,7 @@ pub async fn handle_plugin_update(
     scope: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::marketplace::UpdateOutcome;
-    use alephcore::extension::scope::{parse_scope, scope_install_dir};
+    use alephcore::extension::visibility::{parse_scope, scope_install_dir};
 
     alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
 
