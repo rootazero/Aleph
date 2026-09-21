@@ -23,24 +23,6 @@ use crate::state::run_clock::SecondTick;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// Whether the server has authorised this card to offer an "Allow for session"
-/// button. A member-tier turn (or any gate where the operator is asked for one
-/// shot) does not — the session ceiling on the same record is what Telegram
-/// already read.
-#[must_use]
-pub(crate) fn offers_session(allowed_decisions: &[String]) -> bool {
-    allowed_decisions.iter().any(|d| d == "allow-session")
-}
-
-/// Whether the server has authorised this card to offer an "Always allow"
-/// button. The hint copy tells the operator where to take it back; an
-/// operator-tier turn on a gate that is not the tool's own declared floor is
-/// the only card this lights up.
-#[must_use]
-pub(crate) fn offers_always(allowed_decisions: &[String]) -> bool {
-    allowed_decisions.iter().any(|d| d == "allow-always")
-}
-
 /// Resolve `id` with `decision` and drop it from the pending list on success.
 /// Optimistic removal keeps the surface responsive; the authoritative refetch
 /// driven by the `approval.resolved` event lands right behind it. `reason` is
@@ -94,8 +76,14 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
     // why the gate fired and who is being asked), carried on the record and
     // enforced when the answer comes back. Rendering a fixed three was the
     // asymmetry this closes: Telegram already read the list, the Panel did not.
-    let offers_session = offers_session(&approval.allowed_decisions);
-    let offers_always = offers_always(&approval.allowed_decisions);
+    let offers_session = approval
+        .allowed_decisions
+        .iter()
+        .any(|d| d == "allow-session");
+    let offers_always = approval
+        .allowed_decisions
+        .iter()
+        .any(|d| d == "allow-always");
     // Stored (not captured by value) so the deny-with-reason submit closure
     // stays `Copy` — the input's Enter handler and the confirm button both
     // need it (same pattern as `AskUserCard`).
@@ -270,7 +258,6 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{offers_always, offers_session};
     use crate::state::notifications::PendingApprovalView;
 
     /// Build a representative approval record with the legacy three-decision
@@ -294,66 +281,110 @@ mod tests {
         }
     }
 
-    // -- offers_session / offers_always -----------------------------------
+    // -- Decision-list fixture shape ---------------------------------------
+    //
+    // These pin the SHAPE of the records the inline predicates in
+    // `ApprovalCard` will scan at render time. The predicate itself
+    // (`iter().any(|d| d == "…")`) is a one-liner; what would otherwise
+    // break the rendering contract is the fixture — a record that
+    // silently lost `allow-session`, a tier name drifted to a wrong
+    // kebab-case, a stale test fixture diverging from the live wire
+    // values. These tests catch those.
 
-    /// The legacy three-button set (`default_decisions()`) must surface the
-    /// session button — Telegram reads it, the panel rendering a fixed three
-    /// was the asymmetry this closed.
+    /// Legacy three-button set surfaces `allow-session` so the inline
+    /// predicate in `ApprovalCard` draws the session button (the asymmetry
+    /// this card exists to close — Telegram reads the list, the Panel did
+    /// not).
     #[test]
-    fn offers_session_is_true_when_server_authorised_it() {
+    fn legacy_default_decisions_include_allow_session() {
         let r = default_record();
-        assert!(offers_session(&r.allowed_decisions));
+        assert_eq!(
+            r.allowed_decisions
+                .iter()
+                .filter(|d| *d == "allow-session")
+                .count(),
+            1,
+            "legacy three-button set must include allow-session: {:?}",
+            r.allowed_decisions
+        );
     }
 
-    /// A member-tier turn on a gate that is not the tool's own declared
-    /// floor: server sends only `allow-once` and `deny`, the panel must NOT
-    /// draw an "Allow for session" button — drawing one the server will
-    /// reject is a cosmetic bug; drawing one too few is the safe direction.
+    /// A member-tier turn sends only `allow-once` and `deny`. Drawing a
+    /// session button the server will reject is a cosmetic bug; drawing
+    /// one too few is the safe direction — so the predicate will see zero.
     #[test]
-    fn offers_session_is_false_for_member_tier() {
-        let decisions = vec!["allow-once".into(), "deny".into()];
-        assert!(!offers_session(&decisions));
+    fn member_tier_decisions_omit_allow_session() {
+        let r = PendingApprovalView {
+            allowed_decisions: vec!["allow-once".into(), "deny".into()],
+            ..default_record()
+        };
+        assert_eq!(
+            r.allowed_decisions
+                .iter()
+                .filter(|d| *d == "allow-session")
+                .count(),
+            0,
+            "member-tier set must not include allow-session: {:?}",
+            r.allowed_decisions
+        );
     }
 
-    /// Operator-tier on a gate that authorised `allow-always` in addition to
-    /// the legacy set. The hint copy points at Settings → Policies — a
-    /// permanent grant nobody can find is the part that makes permanence
-    /// scary.
+    /// Operator-tier on a gate that authorised `allow-always` in addition
+    /// to the legacy set — the only case the inline predicate lights up
+    /// for.
     #[test]
-    fn offers_always_is_true_for_operator_tier() {
-        let decisions = vec![
-            "allow-once".into(),
-            "allow-session".into(),
-            "allow-always".into(),
-            "deny".into(),
-        ];
-        assert!(offers_always(&decisions));
+    fn operator_tier_decisions_include_allow_always() {
+        let r = PendingApprovalView {
+            allowed_decisions: vec![
+                "allow-once".into(),
+                "allow-session".into(),
+                "allow-always".into(),
+                "deny".into(),
+            ],
+            ..default_record()
+        };
+        assert_eq!(
+            r.allowed_decisions
+                .iter()
+                .filter(|d| *d == "allow-always")
+                .count(),
+            1,
+            "operator-tier set must include allow-always: {:?}",
+            r.allowed_decisions
+        );
     }
 
-    /// `allow-always` is the one tier `default_decisions()` must never
-    /// include for old cores — it widens scope beyond what the server-side
-    /// 2026-08-11 ceiling knew about. A missing field may narrow, never
-    /// widen, so an old-core default set is silently absent of it.
+    /// `allow-always` is the one tier the legacy default set must never
+    /// include — it widens scope beyond what the 2026-08-11 server-side
+    /// ceiling knew about, so a missing field may narrow but never widen.
+    /// If a future core bumps `default_decisions` to include it, this
+    /// test fails and forces a deliberate decision to remove it (the
+    /// inline predicate will then surface the always-allow button to
+    /// operators on legacy cores — a behaviour change worth a
+    /// controller-visible test failure, not a silent widening).
     #[test]
-    fn offers_always_is_false_in_the_legacy_default_set() {
+    fn legacy_default_decisions_omit_allow_always() {
         let r = default_record();
-        assert!(
-            !offers_always(&r.allowed_decisions),
-            "legacy three-button set must not offer allow-always: {:?}",
+        assert_eq!(
+            r.allowed_decisions
+                .iter()
+                .filter(|d| *d == "allow-always")
+                .count(),
+            0,
+            "legacy three-button set must not include allow-always: {:?}",
             r.allowed_decisions
         );
     }
 
     // -- PendingApprovalView::remaining_secs ------------------------------
 
-    /// An approval with a future deadline answers with the truncated whole
-    /// seconds left. The contract is whole seconds, not fractional, so the
-    /// 1s-clock-driven render recomputes against the shared tick rather than
-    /// freezing at fetch time.
+    /// `remaining_secs` answers whole seconds, not fractional — the render
+    /// layer recomputes against the shared 1 s tick rather than freezing at
+    /// fetch time, so the contract is "truncated seconds left". A 47.5 s
+    /// lead time answers 47, not 48.
     #[test]
-    fn remaining_secs_is_positive_for_a_future_deadline() {
+    fn remaining_secs_truncates_fractional_seconds() {
         let r = default_record(); // expires_at_ms = 60_000
-        // 47.5 s before the deadline → 47 whole seconds left (truncated).
         let now_ms = r.expires_at_ms - 47_500;
         assert_eq!(r.remaining_secs(now_ms), 47);
     }
