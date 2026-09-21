@@ -187,10 +187,18 @@ async fn subscribe_runtime_agents(
         tracing::warn!(
             error = %e,
             "events.subscribe for runtime.agents.changed failed; \
-             re-fetch is still armed for the next main_loop tick"
+             the next main_loop tick will retry the subscribe and \
+             the re-fetch"
         );
+        // Arm the re-fetch flag ONLY on failure. On a successful
+        // subscribe, the call sites that wanted a refresh anyway
+        // (`run()` at startup, the reconnect-success arm in
+        // `main_loop`) set it themselves — and `main_loop`'s flag-check
+        // block now ALSO calls this helper, so setting the flag on
+        // success here would create a feedback loop (clear → refresh
+        // → subscribe → set → clear → refresh → …).
+        state.runtime_agents_refetch_due = true;
     }
-    state.runtime_agents_refetch_due = true;
     result.map(|_| ())
 }
 
@@ -310,7 +318,15 @@ pub async fn run(
     // startup already logs a warn inside the helper AND arms the re-fetch
     // flag, and `run()` is the wrong place to bubble the failure — the rest
     // of the launch (status bar, transcript attach) is still wanted.
+    //
+    // The helper now arms the re-fetch flag ONLY on failure. On a
+    // successful subscribe, set it ourselves so `main_loop`'s first
+    // iteration actually does the re-fetch (the previous "always-arm"
+    // helper behavior was masking this need, and was the reason adding
+    // a subscribe call to `main_loop`'s flag-check would otherwise
+    // create an infinite loop).
     let _ = subscribe_runtime_agents(&mut state, &client).await;
+    state.runtime_agents_refetch_due = true;
 
     // 3c. Attach to the named conversation: transcript + the settings that
     // govern it (mode / tier / thinking depth / model / cumulative tokens /
@@ -587,7 +603,12 @@ async fn main_loop<'c>(
                     // whole reconnect-success path because one optional
                     // subscription call didn't go through would lose every
                     // other repair this arm performed.
+                    //
+                    // The helper now arms the re-fetch flag ONLY on failure.
+                    // On a successful subscribe here, set it ourselves so the
+                    // next tick's flag-check actually runs the re-fetch.
                     let _ = subscribe_runtime_agents(state, client).await;
+                    state.runtime_agents_refetch_due = true;
                 }
                 Err(e) => {
                     backoff = next_backoff(backoff);
@@ -620,6 +641,18 @@ async fn main_loop<'c>(
         if state.runtime_agents_refetch_due {
             state.runtime_agents_refetch_due = false;
             refresh_runtime_agents(state, client).await;
+            // T1.8 retry wiring (review round 2): the re-fetch alone
+            // does NOT re-arm the per-connection topic stream on the
+            // gateway side — `events.subscribe` registers per-CONNECTION
+            // server state that was dropped when the socket closed, and
+            // a frozen subscribe RPC leaves the new socket subscribed to
+            // nothing even when every subsequent `runtime.agents.list`
+            // fetch succeeds. Call the same helper the reconnect-success
+            // arm uses; on a failed `events.subscribe` the helper sets
+            // the re-fetch flag back to true so the next tick retries
+            // BOTH calls, and on success the helper leaves the flag
+            // alone — which is what stops this block from spinning.
+            let _ = subscribe_runtime_agents(state, client).await;
             needs_redraw = true;
         }
 
@@ -1244,20 +1277,22 @@ mod tests {
         );
     }
 
-    /// Companion to the test above: the call sites that drive the reconnect
-    /// retry chain (`run()` at startup, the reconnect-success arm in
-    /// `main_loop`) must reach `subscribe_runtime_agents` at all, otherwise
-    /// the failure-path fix above is wasted on a function nothing calls.
-    /// The first half of that is already enforced by a happy-path test
-    /// elsewhere — the second half is what this test pins: that a successful
-    /// reconnect's arm still calls `subscribe_runtime_agents`, the way it did
-    /// pre-T1.8, so the existing per-connection subscription survives the
-    /// socket swap.
+    /// Companion to the test above: the retry wiring the brief's Step A3.4
+    /// asks for — `main_loop`'s flag-check block, the path that runs on
+    /// every tick, must re-call `subscribe_runtime_agents` when the flag
+    /// is set, not just `refresh_runtime_agents`. The previous fix-round-1
+    /// helper-only change missed this path: `refresh_runtime_agents`
+    /// re-fetches the agent table, but `events.subscribe` registers
+    /// PER-CONNECTION server state that was dropped on socket close, and
+    /// re-fetching the table does NOT re-arm the topic stream on a fresh
+    /// socket. A failed subscribe on reconnect therefore needed the same
+    /// retry treatment as a stale `runtime.agents.changed` notification,
+    /// and that is the flag-check block's job.
     ///
     /// Source-level for the same reason the wiring tests above are:
     /// `main_loop` owns a terminal and two live channels.
     #[test]
-    fn a_successful_reconnect_re_subscribes_to_runtime_agents() {
+    fn a_runtime_agents_refetch_due_tick_re_subscribes_to_runtime_agents() {
         let src = include_str!("mod.rs").replace('\r', "");
         let production = src.split("#[cfg(test)]").next().expect("split yields one");
         let code: String = production
@@ -1266,24 +1301,29 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Bounded to the reconnect-success arm the way
-        // `a_successful_reconnect_reconciles_the_side_question` bounds it,
-        // so an identical call sitting in some other arm (a dead one, or a
-        // startup arm) cannot satisfy this test.
+        // Bounded to the same `if state.runtime_agents_refetch_due { … }`
+        // block `a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call`
+        // bounds it to, so an identical subscribe call sitting in some
+        // OTHER arm of `main_loop` (or in `run()`'s startup) cannot
+        // satisfy "main_loop retries subscribe after failure" — the
+        // brief's Test 2 wording.
         let start = code
-            .find("state.begin_reattach();")
-            .expect("the reconnect success arm must still reset the run state");
-        let end = code
-            .find("backoff = next_backoff(backoff);")
-            .expect("the reconnect failure arm must still back off");
-        assert!(start < end, "the two arms are no longer in that order");
+            .find("if state.runtime_agents_refetch_due {")
+            .expect("main_loop must still check the runtime_agents_refetch_due flag");
+        let end = code[start..]
+            .find('}')
+            .map(|i| start + i)
+            .expect("the flag-check block must close");
+        let block = &code[start..end];
 
         assert!(
-            code[start..end].contains("subscribe_runtime_agents(state, client)"),
-            "a successful reconnect must re-subscribe to the agent-panel topic — \
-             `events.subscribe` registers per-connection server state, so the \
-             new socket arrives subscribed to nothing and the first reconnect \
-             silently freezes the panel without this call"
+            block.contains("subscribe_runtime_agents(state, client)"),
+            "the runtime_agents_refetch_due flag-check block in main_loop must \
+             re-call subscribe_runtime_agents — re-fetching the agent list alone \
+             does NOT re-arm the per-connection topic stream on a freshly \
+             re-opened socket, so a failed events.subscribe on reconnect leaves \
+             the panel dark even when every refresh succeeds. Got block:\n{}",
+            block,
         );
     }
 }
