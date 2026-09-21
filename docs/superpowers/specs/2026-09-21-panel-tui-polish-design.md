@@ -129,6 +129,8 @@ Aleph 的 Panel 对话窗口（`interfaces/webchat/src/platform/wide/views/chat/
 
 **退出条件**：所有新测试通过，无回归。
 
+> **Tier-3（性能/样式）**：本轮**不做**。Phase 1 审计中如有发现，归入下一轮（重构轮）。
+
 ### Phase 4：文档同步
 
 **目标**：FEATURE_LOCATOR.md 与 reference 文档同步更新。
