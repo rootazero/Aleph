@@ -622,6 +622,12 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+./qa/plugins/run.sh scope        # MCP plugin enable → disable → enable through `plugin_manage`;
+                                 # the slash entry AND the server's tool leave and re-enter
+                                 # `tools.catalog` each time (polled — the mount enqueues the
+                                 # server start). Also greps the log for a mount that ran
+                                 # before its handle was installed. python3 required: UNRUN
+                                 # (exit 2), never PASS, without it.
 
 ./qa/memory_curated/run.sh       # the curated hot tier's three verbs, the note window's
                                  # load-more, and the partition contract every enumerating

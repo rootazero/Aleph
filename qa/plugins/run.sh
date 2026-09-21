@@ -9,6 +9,9 @@
 #   ./qa/plugins/run.sh marketplaces # the registration surface: list / add /
 #                                  # remove, and the removable bit the Panel
 #                                  # draws its button from
+#   ./qa/plugins/run.sh scope      # MCP plugin enable → disable → enable on a real
+#                                  # daemon; `tools.catalog` changes each time; no
+#                                  # mount ran before its handle was installed
 #   ./qa/plugins/run.sh panel      # BOOTS AND WAITS: the same surface through
 #                                  # the browser, plus the source classifier
 #
@@ -307,6 +310,53 @@ marketplaces)
   fi
   ;;
 
+scope)
+  # The claim: a plugin's runtime footprint is one scope that mount creates and
+  # unmount takes back — observed from OUTSIDE the process, on the tool
+  # catalogue a client actually reads. Until this round `enable` after
+  # `disable` re-flipped the status and did nothing else (no server, no slash
+  # entry), and the boot-only slash registration meant a plugin enabled after
+  # boot had no `/command` at all. Two of the three flips below were silent
+  # no-ops that reported success.
+  #
+  # What this proves that `tests/plugin_lifecycle_roundtrip.rs` cannot: the
+  # daemon's own boot order (every handle installed before the first
+  # `load_all`) and the real tool bridge (an MCP server's tools reaching
+  # `tools.catalog` and leaving it). The integration test wires the three
+  # handles by hand; here the shipped binary has to.
+  command -v python3 >/dev/null || { echo "UNRUN: python3 not on PATH (the mock MCP server is python)"; exit 2; }
+  say "plant an MCP plugin whose server is the python mock"
+  python3 "$HERE/plant_scope.py" "$INSTALLED" "$HERE/mcp_mock_server.py" || exit 1
+
+  say "start server"
+  start_server || exit 1
+
+  say "drive: enable → disable → enable"
+  python3 "$HERE/drive_scope.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" || RC=$?
+
+  say "the daemon never mounted without a handle (boot order)"
+  # A mount that ran before its MCP handle / memory registry / tool catalog was
+  # installed logs `effect skipped: handle not attached` and records a Warn
+  # diagnostic. On the daemon that is a boot-order regression, not a state.
+  #
+  # The file is `logs/aleph-server.log.YYYY-MM-DD` (`start/helpers.rs`), so a
+  # `*.log` glob matches nothing and a grep over it is green forever. The
+  # positive control below is what makes the negative claim mean anything: it
+  # proves the grep is reading the file the daemon wrote THIS run.
+  if grep -h "plugin mounted, plugin_id=qa-scope" "$ALEPH_HOME"/logs/aleph-server.log.* 2>/dev/null | grep -q .; then
+    echo "  [PASS] the server log records the qa-scope mount (the grep below is reading the right file)"
+    if grep -h "handle not attached" "$ALEPH_HOME"/logs/aleph-server.log.* 2>/dev/null | grep -q .; then
+      echo "  [FAIL] a mount ran before its handle was installed:"
+      grep -h "handle not attached" "$ALEPH_HOME"/logs/aleph-server.log.* | head -5; RC=1
+    else
+      echo "  [PASS] no 'handle not attached' skip in the server log"
+    fi
+  else
+    echo "  [FAIL] no 'plugin mounted, plugin_id=qa-scope' line in $ALEPH_HOME/logs/ — the boot-order grep has nothing to read"
+    ls "$ALEPH_HOME/logs" 2>/dev/null; RC=1
+  fi
+  ;;
+
 panel)
   # BOOTS AND WAITS. Everything below is renderer behaviour, so there is no
   # agent turn -- what the fixture supplies is a realistic registration state
@@ -409,11 +459,13 @@ CHECKLIST
   while kill -0 "$SERVER_PID" 2>/dev/null; do sleep 5; done
   ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | panel)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"
-grep -i "plugin" "$ALEPH_HOME"/logs/*.log 2>/dev/null | grep -iE "warn|error" | head -20
+# `aleph-server.log.YYYY-MM-DD`, never `*.log`: the previous glob matched
+# nothing, so this section had printed "no warnings" for every stage it ever ran.
+grep -i "plugin" "$ALEPH_HOME"/logs/aleph-server.log.* 2>/dev/null | grep -iE "warn|error" | head -20
 
 say "verdict: rc=$RC"
 exit "$RC"
