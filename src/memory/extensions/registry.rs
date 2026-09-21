@@ -154,9 +154,12 @@ impl MemoryExtensionRegistry {
         removed
     }
 
-    /// Snapshot the MCP-backed extensions (test-only: the binding guards read
-    /// it). The lock is released before the caller does any async work.
-    #[cfg(test)]
+    /// Snapshot the MCP-backed extensions. Test-only: the in-process binding
+    /// guards read it under `cfg(test)`, and `tests/plugin_lifecycle_roundtrip.rs`
+    /// reads it through the `test-helpers` feature (an integration test
+    /// compiles the lib without `cfg(test)`). The lock is released before
+    /// the caller does any async work.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn mcp_bindings_snapshot(
         &self,
     ) -> Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>> {
