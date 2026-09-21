@@ -1,29 +1,54 @@
-//! The single place where plugin state becomes a **process-global projection**.
+//! The single place where plugin state becomes a **process-global projection**
+//! — the *view* half of the plugin lifecycle.
 //!
-//! # Why this module exists
+//! # Effects and views (spec 2026-09-20 §3.1, ruling U8 "C")
 //!
-//! A plugin does not only live in [`PluginRegistry`]. Loading one publishes it
-//! into surfaces that outlive any single call:
+//! A plugin's footprint on the running process splits by one question: **does
+//! it have an inverse?**
 //!
-//! * `utils::paths::PLUGIN_SKILL_DIRS` — read by `get_all_skills_dirs`, i.e. the
-//!   search set of the `skill_read` / `skill_list` tools.
-//! * `agents::PLUGIN_SUBAGENTS` — read by `AgentRegistry::resolve` (delegation)
-//!   and the harness prompt builder (`<available_agents>`).
-//! * `SkillSystem` — the scan that feeds the model's `<available_skills>` index.
-//! * `ExtensionManager::active_plugin_tools` — the tool-name index.
+//! * **Effects** have one, and live in the plugin's `EffectScope`
+//!   (`effects/scope.rs`): the registry row, the WASM module, transient MCP
+//!   servers, background services, the memory extension, slash entries. Each
+//!   registration returns a `Disposer`; `lifecycle.rs::unmount` runs the
+//!   list in reverse. Guard: `effects::census` (G1) and
+//!   `lifecycle::tests::g2_*` (G2).
+//! * **Views** have none but can be recomputed from the registry, and that is
+//!   what this module does:
+//!   - `utils::paths::PLUGIN_SKILL_DIRS` — read by `get_all_skills_dirs`, i.e.
+//!     the search set of the `skill_read` / `skill_list` tools.
+//!   - `agents::PLUGIN_SUBAGENTS` — read by `AgentRegistry::resolve`
+//!     (delegation) and the harness prompt builder (`<available_agents>`).
+//!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
+//!     index.
+//!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
+//!   (The hook executor is the fifth view; `sync_hooks_from_registry` in
+//!   `mod.rs` rebuilds it and is triggered from the same place.)
 //!
-//! Those are *effects*, not return values: nothing about a later call reminds
-//! you they are still installed. Cordis (the DeepSeek-Harness plugin framework)
-//! solves the same problem by making every registration an effect on the
-//! plugin's fiber, so one `dispose()` unwinds all of them. Aleph deliberately
-//! does **not** adopt a fiber runtime (R10 — see `HARNESS_PHILOSOPHY.md` §2.3);
-//! the equivalent guarantee here is cheaper and more Aleph-shaped: **one
-//! function derives the whole set from the registry, and every path that can
-//! change plugin activation calls it.**
+//! **One function derives the whole view set from the registry, and exactly
+//! one trigger calls it: `lifecycle.rs::after_transition`, once at the end of
+//! every public lifecycle primitive** (`mount` / `unmount` / `reload_plugin` /
+//! `reload` / `load_all`). Guard:
+//! `tests::publishing_plugin_projections_has_exactly_one_author` (G3) pins
+//! both the publish calls to this file and the trigger to `lifecycle.rs`.
 //!
-//! # The bug this replaces
+//! # What was narrowed, and why
 //!
-//! Before this module there were two authors of that derivation — `load_all`
+//! Three rounds (2026-08-15 dsh, 08-16 plugin-system, 08-19 compat) ruled
+//! "对照 Cordis 但架构不移植", and this comment used to say the derivation was
+//! the cheaper equivalent of a fiber's `dispose()` because "every path that
+//! can change plugin activation calls it". That was a list (判据 §5): the
+//! derivation covered three surfaces, and four effects outside it leaked
+//! past a disable — memory extensions (no unregister), slash entries
+//! (boot-only), MCP servers on re-enable (only `reload()` re-added them), and
+//! the narrow `reload_plugin` twin. The 2026-09-20 round kept the rulings'
+//! substance (no DI container, no Proxy context, no cascade restart, no HMR)
+//! and absorbed the one thing Cordis actually enforces: **a registration
+//! returns its disposer and the plugin handle owns it**
+//! (scan-dsh-cordis.md Top-8 #1). `src/harness/` is untouched.
+//!
+//! # The bug the single derivation fixed (still true)
+//!
+//! Before this module there were two authors of the derivation — `load_all`
 //! and `set_plugin_enabled` — and **they disagreed about the predicate**:
 //!
 //! | | skill dirs | sub-agents |
@@ -33,13 +58,8 @@
 //!
 //! So a boot (or any `reload()`, which the file watcher triggers) published the
 //! skills and sub-agents of plugins that were **disabled, shadowed, or failed to
-//! load** — the model could read their SKILL.md and delegate to their agents —
-//! while a runtime toggle used the correct predicate. Two code paths, opposite
-//! answers, and the wrong one ran on every start.
-//!
-//! The predicate is now stated once, in [`PluginProjection::derive`], and
-//! `projection.rs::tests::publishing_plugin_projections_has_exactly_one_author`
-//! fails by name if a second author appears.
+//! load** while a runtime toggle used the correct predicate. The predicate is
+//! stated once, in [`ExtensionManager::derive_plugin_projection`].
 
 use std::path::PathBuf;
 
@@ -111,8 +131,9 @@ impl ExtensionManager {
     ///
     /// Publish is replace-semantics (not append), so this doubles as the
     /// retraction path: a plugin that stopped being active simply is not in the
-    /// new vector. Its only caller is `lifecycle.rs::after_transition`, which
-    /// every transition ends with (load, reload, mount, unmount).
+    /// new vector. Called from exactly one place,
+    /// `lifecycle.rs::after_transition` (G3 pins it); do not add a second
+    /// caller — route the new path through a lifecycle primitive instead.
     ///
     /// Returns the projection that was installed, for logging and tests.
     pub(crate) async fn republish_plugin_projections(&self) -> PluginProjection {
