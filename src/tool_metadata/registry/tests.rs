@@ -1042,3 +1042,44 @@ async fn shorthand_alias_execution_and_discovery_agree() {
         assert_eq!(resolved.tool.name, *canonical, "/{alias} → {canonical}");
     }
 }
+
+#[tokio::test]
+async fn unregister_skills_removes_exactly_the_named_skill_entries() {
+    let catalog = ToolCatalog::new();
+    let mk = |id: &str| crate::skill::SkillInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: format!("{id} desc"),
+        scope: crate::domain::skill::PromptScope::System,
+        version: None,
+        allowed_tools: None,
+    };
+    let rejected = catalog
+        .register_skills(&[mk("qa-plug:hello"), mk("qa-plug:bye"), mk("other:keep")])
+        .await;
+    assert!(rejected.is_empty());
+    let names =
+        |tools: Vec<UnifiedTool>| -> Vec<String> { tools.into_iter().map(|t| t.name).collect() };
+    let before = names(catalog.list_all().await);
+    assert!(before.contains(&"qa-plug:hello".to_string()));
+
+    let removed = catalog
+        .unregister_skills(&["qa-plug:hello".to_string(), "qa-plug:bye".to_string()])
+        .await;
+    assert_eq!(removed, 2);
+    let after = names(catalog.list_all().await);
+    assert!(!after.contains(&"qa-plug:hello".to_string()));
+    assert!(!after.contains(&"qa-plug:bye".to_string()));
+    assert!(
+        after.contains(&"other:keep".to_string()),
+        "unrelated skill untouched"
+    );
+
+    assert_eq!(
+        catalog
+            .unregister_skills(&["qa-plug:hello".to_string()])
+            .await,
+        0,
+        "idempotent"
+    );
+}

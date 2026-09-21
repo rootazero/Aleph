@@ -49,6 +49,7 @@ mod service_manager;
 mod service_ops;
 mod skill_ops;
 mod skill_tool;
+mod slash_effect;
 mod template;
 mod types;
 pub mod watcher;
@@ -227,6 +228,14 @@ pub struct ExtensionManager {
     /// mirroring the `memory_registry` injection pattern.
     mcp_handle: crate::sync_primitives::RwLock<Option<crate::mcp::McpManagerHandle>>,
 
+    /// Live tool catalog, so `mount` can register a plugin's `commands/*.md`
+    /// as slash entries and `unmount` can remove them. `None` until
+    /// [`Self::set_tool_catalog`] is called at server boot (CLI/test paths
+    /// leave it unset, and the `slash_command` step is recorded as skipped).
+    /// Same injection shape as `mcp_handle` and `memory_registry`, for the
+    /// same reason: the manager is behind an `Arc` before the catalog exists.
+    tool_catalog: crate::sync_primitives::RwLock<Option<Arc<crate::tool_metadata::ToolCatalog>>>,
+
     /// File watcher for hot-reloading commands/agents/plugins/hooks.json.
     /// `None` until [`Self::start_watcher`] is called (test/CLI paths skip
     /// the watcher entirely).
@@ -350,6 +359,7 @@ impl ExtensionManager {
             load_guard: Mutex::new(()),
             memory_registry: crate::sync_primitives::RwLock::new(None),
             mcp_handle: crate::sync_primitives::RwLock::new(None),
+            tool_catalog: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
@@ -413,6 +423,13 @@ impl ExtensionManager {
     /// tool registrations.
     pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
         *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    /// Inject the live tool catalog after construction. Call once at server
+    /// boot BEFORE the first `load_all`, so every plugin's slash entries are
+    /// registered by its own mount rather than by a boot-time catch-up.
+    pub fn set_tool_catalog(&self, catalog: Arc<crate::tool_metadata::ToolCatalog>) {
+        *self.tool_catalog.write().unwrap_or_else(|e| e.into_inner()) = Some(catalog);
     }
 
     /// Bind every registered MCP-backed memory extension to the live MCP

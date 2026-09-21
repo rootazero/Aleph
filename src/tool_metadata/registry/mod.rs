@@ -207,6 +207,15 @@ impl ToolCatalog {
         n
     }
 
+    /// Remove the slash entries registered for the given skill ids.
+    pub async fn unregister_skills(&self, skill_ids: &[String]) -> usize {
+        let n = self.state.remove_skills(skill_ids).await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
+    }
+
     /// Set the active flag on a registered tool by canonical name. Returns
     /// `true` if a tool was found and its value actually changed. Inactive
     /// tools are excluded from every list / `find_best_match` query path
