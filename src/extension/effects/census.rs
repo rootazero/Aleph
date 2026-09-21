@@ -33,16 +33,25 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Drops every line whose trimmed start is `//` — both `//` line comments
+/// and `///` / `//!` doc comments (they all start with `//`). Shared by
+/// `production_text` and `assert_mod_tests_is_last_item` so the cut and the
+/// brace walk agree on one derivation of "what is code": a `// }` inside a
+/// census file's `mod tests` must not desync the walk any more than it
+/// desyncs the disposer-return scan.
+fn strip_line_comments(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The non-test, non-comment text of a source file.
 fn production_text(path: &Path) -> String {
     let src = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let cut = src.find("#[cfg(test)]\nmod tests").unwrap_or(src.len());
-    src[..cut]
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    strip_line_comments(&src[..cut])
 }
 
 /// Confirms `mod tests` is the last item in one of [`CENSUS_FILES`]: from
@@ -70,13 +79,18 @@ fn production_text(path: &Path) -> String {
 /// depth count. Char literals (e.g. `'{'`) are not special-cased (that
 /// needs lookahead to distinguish from a lifetime like `'a`); none of the
 /// five census files' test modules contain one today.
+///
+/// Walks `strip_line_comments`'d text, not the raw file: a `// }` sitting
+/// on its own line inside `mod tests` would otherwise desync the brace
+/// count and make this fire on a file that is fine — a misfiring guard is
+/// worse than a silent one.
 fn assert_mod_tests_is_last_item(path: &Path) {
     let src = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let Some(marker_start) = src.find("#[cfg(test)]\nmod tests") else {
         return; // No marker: nothing to verify.
     };
-    let tail = &src[marker_start..];
+    let tail = strip_line_comments(&src[marker_start..]);
     let Some(brace_start) = tail.find('{') else {
         panic!(
             "{}: found `#[cfg(test)]\\nmod tests` with no opening brace",
