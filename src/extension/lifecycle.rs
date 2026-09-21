@@ -781,6 +781,7 @@ mod tests {
     use super::*;
     use crate::discovery::DiscoveryConfig;
     use crate::extension::{ExtensionConfig, ExtensionManager};
+    use crate::memory::extensions::MemoryExtension;
     use std::path::{Path, PathBuf};
 
     /// Same shape as `mod.rs::tests::isolated_manager`, duplicated here rather
@@ -1110,5 +1111,324 @@ mod tests {
             "the skip is visible on the row's diagnostics: {:?}",
             reg.diagnostics()
         );
+    }
+
+    /// WASM fixture: every effect kind except `mcp_server`.
+    fn write_wasm_fixture(root: &Path) {
+        let dir = root.join("plugins").join("qa-wasm");
+        std::fs::create_dir_all(dir.join("commands")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+        std::fs::create_dir_all(dir.join("hooks")).unwrap();
+        std::fs::write(
+            dir.join("plugin.wasm"),
+            crate::extension::loader::EMPTY_WASM_MODULE,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("aleph.plugin.toml"),
+            r#"[plugin]
+id = "qa-wasm"
+name = "QA WASM"
+kind = "wasm"
+entry = "plugin.wasm"
+
+[permissions]
+background = true
+
+[[services]]
+id = "ticker"
+start_handler = "start_ticker"
+stop_handler = "stop_ticker"
+auto_start = false
+
+[memory]
+hooks = ["on_retrieve"]
+priority = 50
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("commands/hello.md"),
+            "---\ndescription: hi\n---\nHi $ARGUMENTS\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("agents/helper.md"),
+            "---\nname: helper\ndescription: helps\n---\nYou help.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("hooks/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"echo qa"}]}]}}"#,
+        )
+        .unwrap();
+    }
+
+    /// MCP fixture: `registry_row` + `mcp_server` + `memory_extension` + `slash_command`.
+    fn write_mcp_fixture(root: &Path) {
+        let dir = root.join("plugins").join("qa-mcp");
+        std::fs::create_dir_all(dir.join("commands")).unwrap();
+        std::fs::write(
+            dir.join("aleph.plugin.toml"),
+            r#"[plugin]
+id = "qa-mcp"
+name = "QA MCP"
+kind = "mcp"
+
+[memory]
+hooks = ["on_retrieve"]
+priority = 60
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(".mcp.json"),
+            r#"{"mcpServers":{"mock":{"command":"qa-nonexistent-mcp-binary-9f3a","args":[]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("commands/ping.md"),
+            "---\ndescription: ping\n---\nPong\n",
+        )
+        .unwrap();
+    }
+
+    /// Everything a mount can leave behind, read from the six surfaces.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Surfaces {
+        rows: Vec<(String, String)>,
+        capability_rows: (usize, usize, usize, usize, usize), // tools, hooks, services, skills, agents
+        loaded: Vec<String>,
+        memory: Vec<String>,
+        slash: Vec<String>,
+        hook_view: Vec<String>,
+        services: Vec<String>,
+    }
+
+    async fn snapshot(
+        manager: &ExtensionManager,
+        memory: &crate::memory::extensions::MemoryExtensionRegistry,
+        catalog: &crate::tool_metadata::ToolCatalog,
+    ) -> Surfaces {
+        let (rows, capability_rows) = {
+            let reg = manager.get_plugin_registry().await;
+            let mut rows: Vec<(String, String)> = reg
+                .list_plugins()
+                .into_iter()
+                .map(|r| (r.id.clone(), r.status.label().to_string()))
+                .collect();
+            rows.sort();
+            (
+                rows,
+                (
+                    reg.list_tools().len(),
+                    reg.list_hooks().len(),
+                    reg.list_services().len(),
+                    reg.list_skills().len(),
+                    reg.list_agents().len(),
+                ),
+            )
+        };
+        let mut loaded: Vec<String> = manager
+            .get_plugin_loader()
+            .await
+            .loaded_plugin_ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        loaded.sort();
+        let mut memory: Vec<String> = memory
+            .mcp_bindings_snapshot()
+            .iter()
+            .map(|e| e.name().to_string())
+            .collect();
+        memory.sort();
+        let mut slash: Vec<String> = catalog
+            .list_all()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        slash.sort();
+        let mut hook_view: Vec<String> = manager
+            .hook_executor_snapshot()
+            .await
+            .inventory()
+            .into_iter()
+            .map(|h| h.source)
+            .collect();
+        hook_view.sort();
+        let mut services: Vec<String> = manager
+            .list_services()
+            .await
+            .into_iter()
+            .map(|s| format!("{}:{}", s.plugin_id, s.id))
+            .collect();
+        services.sort();
+        Surfaces {
+            rows,
+            capability_rows,
+            loaded,
+            memory,
+            slash,
+            hook_view,
+            services,
+        }
+    }
+
+    /// A manager with every handle attached and both fixtures on disk,
+    /// disabled in `plugins.toml` so the baseline snapshot is "discovered,
+    /// nothing mounted".
+    async fn six_effect_bench(
+        tmp: &Path,
+    ) -> (
+        ExtensionManager,
+        std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+        std::sync::Arc<crate::tool_metadata::ToolCatalog>,
+    ) {
+        write_wasm_fixture(tmp);
+        write_mcp_fixture(tmp);
+        let (manager, cfg_path) = isolated_manager(tmp).await;
+        crate::extension::plugin_state::PluginsConfig {
+            entries: ["qa-wasm", "qa-mcp"]
+                .into_iter()
+                .map(|id| {
+                    (
+                        id.to_string(),
+                        crate::extension::plugin_state::PluginEntryConfig {
+                            enabled: Some(false),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        }
+        .save(&cfg_path)
+        .await
+        .unwrap();
+        let (manager2, _) = isolated_manager(tmp).await;
+        drop(manager);
+        let (actor, handle) = crate::mcp::manager::McpManagerActor::new(Some(tmp.join("mcp.json")))
+            .await
+            .unwrap();
+        tokio::spawn(actor.run());
+        manager2.set_mcp_handle(handle);
+        let memory = std::sync::Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new());
+        manager2.set_memory_registry(memory.clone());
+        let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
+        manager2.set_tool_catalog(catalog.clone());
+        manager2.load_all().await.unwrap();
+        (manager2, memory, catalog)
+    }
+
+    /// G2. Comment out any one `scope.effect(...)` in `mount_parsed` and the
+    /// matching surface stays populated after the disable → this fails by
+    /// naming the surface.
+    #[tokio::test]
+    async fn g2_mount_then_unmount_returns_every_surface_to_its_baseline() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
+
+        let before = snapshot(&manager, &memory, &catalog).await;
+        assert_eq!(
+            before.rows,
+            vec![
+                ("qa-mcp".to_string(), "disabled".to_string()),
+                ("qa-wasm".to_string(), "disabled".to_string())
+            ]
+        );
+        assert_eq!(
+            before.capability_rows,
+            (0, 0, 0, 0, 0),
+            "disabled rows carry no capability rows"
+        );
+        assert!(before.loaded.is_empty() && before.memory.is_empty() && before.services.is_empty());
+
+        assert!(manager.set_plugin_enabled("qa-wasm", true).await);
+        assert!(manager.set_plugin_enabled("qa-mcp", true).await);
+        assert_eq!(
+            manager.scope_steps("qa-wasm").unwrap(),
+            vec![
+                "registry_row",
+                "wasm_module",
+                "service",
+                "memory_extension",
+                "slash_command"
+            ]
+        );
+        assert_eq!(
+            manager.scope_steps("qa-mcp").unwrap(),
+            vec![
+                "registry_row",
+                "mcp_server",
+                "memory_extension",
+                "slash_command"
+            ]
+        );
+        {
+            let all: std::collections::BTreeSet<&str> = manager
+                .scope_steps("qa-wasm")
+                .unwrap()
+                .into_iter()
+                .chain(manager.scope_steps("qa-mcp").unwrap())
+                .collect();
+            let expected: std::collections::BTreeSet<&str> =
+                crate::extension::effects::STEP_LABELS.into_iter().collect();
+            assert_eq!(
+                all, expected,
+                "the two fixtures together cover every effect kind"
+            );
+        }
+        assert!(manager.scope_skipped("qa-wasm").unwrap().is_empty());
+        assert!(manager.scope_skipped("qa-mcp").unwrap().is_empty());
+        // The MCP half settles (the nonexistent binary fails inside the actor)
+        // without a timer of our own: the actor's handshake cap bounds it.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            manager.activation_settled(),
+        )
+        .await
+        .expect("every server-start watcher finished");
+
+        let during = snapshot(&manager, &memory, &catalog).await;
+        assert_ne!(during, before);
+        assert_eq!(during.loaded, vec!["qa-wasm".to_string()]);
+        assert_eq!(
+            during.memory,
+            vec!["QA MCP".to_string(), "QA WASM".to_string()]
+        );
+        assert!(
+            during.slash.contains(&"qa-wasm:hello".to_string())
+                && during.slash.contains(&"qa-mcp:ping".to_string())
+        );
+        assert!(during.hook_view.contains(&"qa-wasm".to_string()));
+        assert_eq!(during.capability_rows.2, 1, "one service row");
+        assert!(
+            during.services.is_empty(),
+            "auto_start = false: registered, not started"
+        );
+
+        assert!(manager.set_plugin_enabled("qa-wasm", false).await);
+        assert!(manager.set_plugin_enabled("qa-mcp", false).await);
+        let after = snapshot(&manager, &memory, &catalog).await;
+        assert_eq!(after, before, "an effect leaked past its unmount");
+    }
+
+    /// `reload()` = unmount everything + mount everything: the surfaces
+    /// after a reload equal the surfaces before it (no duplicate memory
+    /// registration, no doubled slash entries, no stale loader entry).
+    #[tokio::test]
+    async fn g2_reload_is_a_fixed_point_of_the_surfaces() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
+        manager.set_plugin_enabled("qa-wasm", true).await;
+        manager.set_plugin_enabled("qa-mcp", true).await;
+        let mounted = snapshot(&manager, &memory, &catalog).await;
+        let report = manager.reload().await.unwrap();
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(snapshot(&manager, &memory, &catalog).await, mounted);
     }
 }
