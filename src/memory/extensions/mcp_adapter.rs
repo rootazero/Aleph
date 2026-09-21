@@ -23,12 +23,13 @@ pub trait McpCaller: Send + Sync {
 
 pub struct McpMemoryExtension {
     name: String,
-    /// `Some` when created unbound by the plugin loader (drives the boot-time
-    /// rebind to a real `ManagerBackedMcpCaller`). `None` for test-constructed
+    /// `Some` when created unbound at mount (the `memory_extension` step then
+    /// binds a real `ManagerBackedMcpCaller`). `None` for test-constructed
     /// extensions that are handed a concrete caller up front.
     server_id: Option<String>,
-    /// Swappable so the boot-time bind can replace `UnboundMcpCaller` with the
-    /// real MCP-backed caller without re-registering. Dispatch reads via `.load()`.
+    /// Swappable so the `memory_extension` mount step can replace
+    /// `UnboundMcpCaller` with the real caller without re-registering.
+    /// Dispatch reads via `.load()`.
     ///
     /// Double-`Arc`: `arc-swap`'s `RefCnt` is only implemented for `Arc<T: Sized>`,
     /// so a trait object must be stored as `ArcSwap<Arc<dyn _>>` (the inner
@@ -38,8 +39,8 @@ pub struct McpMemoryExtension {
 }
 
 impl McpMemoryExtension {
-    /// Construct with a concrete caller (already bound). `server_id` is `None`,
-    /// so the boot-time bind pass skips it.
+    /// Construct with a concrete caller (already bound). `server_id` is `None`:
+    /// nothing binds it later.
     pub fn new(name: impl Into<String>, caller: Arc<dyn McpCaller>) -> Self {
         Self {
             name: name.into(),

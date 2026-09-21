@@ -47,9 +47,10 @@ pub struct MemoryExtensionRegistry {
     /// Extensions in registration order (for `on_capture` this is the chain order).
     extensions: RwLock<Vec<Arc<dyn MemoryExtension>>>,
     /// Typed side-table of MCP-backed extensions, retained at their concrete
-    /// type so the boot-time bind pass can call `rebind`. Each entry is the
-    /// SAME `Arc` as the corresponding `dyn MemoryExtension` in `extensions`,
-    /// so a rebind is immediately visible to dispatch.
+    /// type. Binding happens at mount (`register_memory_extension_effect`),
+    /// so in production this table is only maintained; the test-only
+    /// `mcp_bindings_snapshot` reads it. Each entry is the SAME `Arc` as the
+    /// corresponding `dyn MemoryExtension` in `extensions`.
     mcp_bindings: RwLock<Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>>>,
 }
 
@@ -106,8 +107,8 @@ impl MemoryExtensionRegistry {
 
     /// Register an MCP-backed extension. It lands in BOTH the dispatch list
     /// (as `dyn MemoryExtension`) and the typed side-table (as the concrete
-    /// `McpMemoryExtension`), sharing one `Arc` so a later `rebind` on the
-    /// side-table entry is visible to dispatch.
+    /// `McpMemoryExtension`), sharing one `Arc` so both lists hold the same
+    /// (already bound at mount) extension.
     ///
     /// Same dedup contract as [`register`]: rejects when an extension with
     /// the same `name()` is already registered.
@@ -150,8 +151,9 @@ impl MemoryExtensionRegistry {
         removed
     }
 
-    /// Snapshot the MCP-backed extensions for the boot-time bind pass. The
-    /// lock is released before the caller does any async work.
+    /// Snapshot the MCP-backed extensions (test-only: the binding guards read
+    /// it). The lock is released before the caller does any async work.
+    #[cfg(test)]
     pub fn mcp_bindings_snapshot(
         &self,
     ) -> Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>> {
