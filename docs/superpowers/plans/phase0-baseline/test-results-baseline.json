@@ -1,0 +1,43 @@
+{
+  "commit": "5e1b29062f02a90c4e201f34db7b28790c981ad8",
+  "captured_at": "2026-09-21T08:30:18Z",
+  "branch": "panel-tui-polish",
+  "suites": {
+    "alephcore_lib": {
+      "exit": 1,
+      "result": "19235 passed, 3 failed, 19 ignored, 19256 filtered; finished in 207.74s",
+      "note": "Pre-compiled binary from main worktree (commit 0927461ba, same as our HEAD base). Direct binary run used because recompilation OOMs.",
+      "pre_existing_failures": [
+        {"test": "capability::census::tests::every_installed_global_is_a_capability_slot", "why": "Source comment: literal is known to be one BELOW the live total; expected state"},
+        {"test": "tools::concurrency::tests::windows_separators_fold_onto_the_same_scope", "why": "Windows path test running on Linux; expected platform-specific failure"},
+        {"test": "verification::extension_stop_gate::tests::consecutive_veto_ceiling_unwedges_the_loop", "why": "Pre-existing test failure; needs investigation in Plan 2 audit"}
+      ],
+      "log": "docs/superpowers/plans/phase0-baseline/alephcore-lib-test.log"
+    },
+    "webchat_lib": {
+      "exit": 0,
+      "result": "1347 passed, 0 failed, 0 ignored; finished in 2.73s",
+      "log": "docs/superpowers/plans/phase0-baseline/webchat-lib-test.log"
+    },
+    "tui_lib": {
+      "exit": 1,
+      "result": "435 passed, 1 failed, 0 ignored; finished in 0.34s",
+      "pre_existing_failures": [
+        {"test": "tui::widgets::header::tests::the_version_comes_from_the_version_file_not_the_cargo_copy", "why": "Test uses relative path '../../VERSION' which breaks when CWD isn't interfaces/tui/. Pre-existing test infra bug; should use env!(CARGO_MANIFEST_DIR)"}
+      ],
+      "log": "docs/superpowers/plans/phase0-baseline/tui-lib-test.log"
+    },
+    "vitest": {
+      "exit": 0,
+      "result": "not configured (no vitest tests exist in repo)",
+      "note": "Only Playwright is configured. Recorded as N/A.",
+      "log": null
+    },
+    "playwright": {
+      "exit": 0,
+      "result": "deferred to Phase 3 (infra not ready)",
+      "note": "Requires npm install (no node_modules), browser binaries, and running aleph-server on port 18791. Phase 3 will set up npm + browser + server stack before e2e.",
+      "log": null
+    }
+  }
+}
