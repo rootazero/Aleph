@@ -1,25 +1,25 @@
-//! Unified dispatch registry (`ToolCatalog`) construction + command/tool RPC
+//! Unified dispatch registry (`ToolCatalog`) population + command/tool RPC
 //! wiring.
 //!
 //! Extracted verbatim from `agent_init/mod.rs`. This block runs after the
 //! real/simulated branch split — it is AI-provider-independent (it only maps
-//! command names to metadata) and produces the `ToolCatalog` the caller stores
-//! on `AgentHandlersResult.tool_catalog`.
+//! command names to metadata) and fills the `ToolCatalog` the caller built
+//! before the first extension load and stores on
+//! `AgentHandlersResult.tool_catalog`.
 //!
 //! Side effects preserved exactly: registers `commands.list` / `tools.catalog`
 //! / `tools.invoke` / `tools.effective` / `tools.cancel_call` /
 //! `tools.in_flight` / `command.execute` handlers, injects the `CommandParser`
-//! into the deferred `command_parser_cell`, spawns the `MemoryProducerScheduler`
-//! (handle intentionally leaked for server lifetime), and threads the memory
-//! extension registry into the global `ExtensionManager`.
+//! into the deferred `command_parser_cell`, and spawns the
+//! `MemoryProducerScheduler` (handle intentionally leaked for server lifetime).
 
 use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::GatewayServer;
 
-/// Build the unified dispatch registry and wire the command/tool RPC handlers.
-/// Returns the constructed `ToolCatalog` (the caller publishes it on
+/// Fill the unified dispatch registry and wire the command/tool RPC handlers.
+/// Returns the same `ToolCatalog` it was handed (the caller publishes it on
 /// `AgentHandlersResult`).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn init_tool_catalog(
@@ -31,17 +31,9 @@ pub(super) async fn init_tool_catalog(
     memory_db: &alephcore::memory::store::MemoryBackend,
     memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
-    tool_health: Arc<alephcore::tool_metadata::ToolHealthCache>,
+    tool_catalog: Arc<alephcore::tool_metadata::ToolCatalog>,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
-    use alephcore::tool_metadata::ToolCatalog;
-
-    // Shares the cache the `ExecutionEngine` already holds: the engine is
-    // wrapped in an `Arc` long before this runs, so it cannot be handed the
-    // catalog's own cache afterwards. Creating one cache up front and giving
-    // the same handle to both is what makes the probes registered below
-    // reachable from the per-request tool service.
-    let tool_catalog = Arc::new(ToolCatalog::with_health(tool_health));
 
     // Register curated multi-word slash commands (skill_read/skill_list,
     // groupchat, session_new, cron_manage, voice, goal, help).
@@ -500,22 +492,6 @@ pub(super) async fn init_tool_catalog(
         // server lifetime. Shutdown via process exit.
         if !daemon {
             println!("  MemoryProducerScheduler: spawned");
-        }
-    }
-
-    // ── Spec 4 Task 11: wire memory_registry into ExtensionManager ───────
-    // After the registry is constructed we inject it into the global
-    // ExtensionManager so any plugin loaded at runtime via
-    // `load_runtime_plugin` / `ensure_plugin_loaded` also gets
-    // `load_plugin_with_memory` (MCP memory extension auto-registration).
-    {
-        use alephcore::gateway::handlers::plugins::get_extension_manager;
-        if let Ok(ext_manager) = get_extension_manager() {
-            // ExtensionManager is stored behind Arc; we can only thread the
-            // registry through the methods that take `&self`.
-            // Inject via set_memory_registry if available (no-op if the
-            // Arc is already shared across threads).
-            ext_manager.set_memory_registry(memory_ext_registry.clone());
         }
     }
 

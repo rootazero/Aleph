@@ -572,7 +572,7 @@ agent 循环的执行器。
 MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不落盘）** server 注册到运行中的 `McpManager`，工具经现有 tool bridge 自动注册。
 
 - **transient 通道**：`McpManagerHandle::add_transient_server` / `remove_transient_server`（`src/mcp/manager/`）。与 `add_server` 不同，它只 `start_server_internal`，**不** upsert/持久化到用户 MCP 配置文件——插件 server 由插件生命周期管理，绝不污染用户配置。`server_id` 形如 `plugin:<id>/<name>`。
-- **注册编排**：`ExtensionManager::sync_mcp_plugin_servers()` 把所有启用的 MCP-kind 插件的 server 交给 manager（幂等；无 handle 时 no-op）。boot 时在 tool bridge spawn 之后由 `set_mcp_handle` + 后台任务触发；`reload()` 末尾再次调用以覆盖热重载安装。
+- **注册编排**：`ExtensionManager::sync_mcp_plugin_servers()` 把所有启用的 MCP-kind 插件的 server 交给 manager（幂等；无 handle 时 no-op）。boot 时 MCP handle 在 `agent_init` 里、首次 `ensure_loaded()` 之前就装上（`set_mcp_handle`，与 memory registry / tool catalog 同一处注入，由 `boot_order_tests` 钉住）；tool bridge spawn 之后的后台任务只做过渡期补装（再跑一次幂等的 sync）；`reload()` 末尾再次调用以覆盖热重载安装。
 - **卸载清理**：`unload_runtime_plugin` 在卸载前捕获 server id，卸载后 `remove_transient_server` 拆除，避免残留进程/工具。
 - `list_servers` 同时列出 transient client（不止 config），使 `mcp.list` 与 tool bridge 的 lag-recovery `resync_all` 都能感知插件 server。
 

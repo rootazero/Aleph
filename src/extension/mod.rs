@@ -418,9 +418,11 @@ impl ExtensionManager {
     ///
     /// Safe to call on `&Arc<ExtensionManager>`. Stores the handle so that
     /// [`Self::sync_mcp_plugin_servers`] can register plugin-owned MCP servers.
-    /// Call it once at server boot — *after* the MCP tool bridge is spawned, so
-    /// the `ServerStarted` events the sync triggers are observed and turned into
-    /// tool registrations.
+    /// Call it once at server boot, BEFORE the first `load_all` (it is
+    /// installed in `agent_init` next to the memory registry and the tool
+    /// catalog). Servers a plugin starts before the MCP tool bridge is spawned
+    /// are picked up by the bridge's boot-time reconcile against the servers
+    /// already running, so the early install does not lose tool registrations.
     pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
         *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }

@@ -183,6 +183,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // connects "probes registered at boot" to "the model never receives the
     // schema of a tool whose dependency is dead".
     let tool_health = Arc::new(alephcore::tool_metadata::ToolHealthCache::new());
+    // The unified dispatch registry, built HERE rather than inside
+    // `init_tool_catalog` so it exists before the first `ensure_loaded()`
+    // below: a plugin's `commands/*.md` become slash entries at its own
+    // mount (`extension/slash_effect.rs`), and a mount that runs before the
+    // catalog exists records that step as skipped. `init_tool_catalog` fills
+    // it in; nothing else about it changed.
+    let tool_catalog = Arc::new(alephcore::tool_metadata::ToolCatalog::with_health(
+        tool_health.clone(),
+    ));
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
     // embedding queue has a real producer/consumer instead of the manager
@@ -329,6 +338,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         .expect("first registration into a fresh registry cannot collide");
         std::sync::Arc::new(reg)
     };
+
+    // Every handle a plugin mount needs, installed before the first
+    // `ensure_loaded()` (below) so the first `load_all` mounts each plugin
+    // completely — MCP servers, memory extension, slash entries — instead of
+    // leaving those to a boot-time catch-up task. Order among the three does
+    // not matter; order against the load does (see `boot_order_tests`).
+    {
+        use alephcore::gateway::handlers::plugins::get_extension_manager;
+        if let Ok(ext_manager) = get_extension_manager() {
+            if let Some(h) = hub_mcp_handle.as_ref() {
+                ext_manager.set_mcp_handle(h.clone());
+            }
+            ext_manager.set_memory_registry(memory_ext_registry.clone());
+            ext_manager.set_tool_catalog(tool_catalog.clone());
+        }
+    }
 
     // Shared wake handle for the autonomous team dispatcher. `task_create`
     // notifies it; the dispatcher (constructed later, once GatewayContext
@@ -1950,11 +1975,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             });
     }
 
-    // Create unified dispatch registry (command discovery + resolution).
-    // AI-provider-independent — maps command names to metadata, registers the
-    // command/tool RPC handlers, spawns the memory producer scheduler, and
-    // threads the memory extension registry into the ExtensionManager. See
-    // `tool_catalog_init.rs`. `tool_reg_out` is `None` in simulated mode.
+    // Fill the unified dispatch registry (command discovery + resolution)
+    // built near the top of this function. AI-provider-independent — maps
+    // command names to metadata, registers the command/tool RPC handlers and
+    // spawns the memory producer scheduler. See `tool_catalog_init.rs`.
+    // `tool_reg_out` is `None` in simulated mode.
     tool_catalog_out = Some(
         init_tool_catalog(
             server,
@@ -1965,7 +1990,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db,
             &memory_ext_registry,
             daemon,
-            tool_health.clone(),
+            tool_catalog.clone(),
         )
         .await,
     );
@@ -2024,4 +2049,41 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         memory_backend: Some(memory_db.clone()),
         memory_ext_registry: memory_ext_registry.clone(),
     })
+}
+
+#[cfg(test)]
+mod boot_order_tests {
+    /// The three runtime handles a plugin mount needs must be injected
+    /// before the first `ensure_loaded()` in this file. Textual, because the
+    /// order is a property of this one function body and a runtime test
+    /// would have to boot the server to observe it. Comment lines are
+    /// stripped so prose naming these calls does not count.
+    #[test]
+    fn handles_are_installed_before_the_first_extension_load() {
+        let src = include_str!("mod.rs");
+        let code: Vec<&str> = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect();
+        let first = |needle: &str| {
+            code.iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("`{needle}` not found in agent_init/mod.rs"))
+        };
+        let load = first("ensure_loaded()");
+        for needle in [
+            "set_mcp_handle(",
+            "set_memory_registry(",
+            "set_tool_catalog(",
+        ] {
+            let at = first(needle);
+            assert!(
+                at < load,
+                "`{needle}` (line {}) must come before the first `ensure_loaded()` (line {}) — \
+                 otherwise the first mount runs without that handle and records a skip",
+                at + 1,
+                load + 1
+            );
+        }
+    }
 }
