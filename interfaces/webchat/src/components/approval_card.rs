@@ -23,6 +23,24 @@ use crate::state::run_clock::SecondTick;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+/// Whether the server has authorised this card to offer an "Allow for session"
+/// button. A member-tier turn (or any gate where the operator is asked for one
+/// shot) does not — the session ceiling on the same record is what Telegram
+/// already read.
+#[must_use]
+pub(crate) fn offers_session(allowed_decisions: &[String]) -> bool {
+    allowed_decisions.iter().any(|d| d == "allow-session")
+}
+
+/// Whether the server has authorised this card to offer an "Always allow"
+/// button. The hint copy tells the operator where to take it back; an
+/// operator-tier turn on a gate that is not the tool's own declared floor is
+/// the only card this lights up.
+#[must_use]
+pub(crate) fn offers_always(allowed_decisions: &[String]) -> bool {
+    allowed_decisions.iter().any(|d| d == "allow-always")
+}
+
 /// Resolve `id` with `decision` and drop it from the pending list on success.
 /// Optimistic removal keeps the surface responsive; the authoritative refetch
 /// driven by the `approval.resolved` event lands right behind it. `reason` is
@@ -76,14 +94,8 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
     // why the gate fired and who is being asked), carried on the record and
     // enforced when the answer comes back. Rendering a fixed three was the
     // asymmetry this closes: Telegram already read the list, the Panel did not.
-    let offers_session = approval
-        .allowed_decisions
-        .iter()
-        .any(|d| d == "allow-session");
-    let offers_always = approval
-        .allowed_decisions
-        .iter()
-        .any(|d| d == "allow-always");
+    let offers_session = offers_session(&approval.allowed_decisions);
+    let offers_always = offers_always(&approval.allowed_decisions);
     // Stored (not captured by value) so the deny-with-reason submit closure
     // stays `Copy` — the input's Enter handler and the confirm button both
     // need it (same pattern as `AskUserCard`).
@@ -254,4 +266,106 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{offers_always, offers_session};
+    use crate::state::notifications::PendingApprovalView;
+
+    /// Build a representative approval record with the legacy three-decision
+    /// ceiling (allow-once / allow-session / deny), which is what older cores
+    /// arrive with via `api::exec_approval::default_decisions`. Matches what
+    /// the inline chat card and the notification-center popover both render.
+    fn default_record() -> PendingApprovalView {
+        PendingApprovalView {
+            id: "ap-1".into(),
+            command: "rm -rf build/".into(),
+            agent_id: "agent-x".into(),
+            session_key: "session-1".into(),
+            tool_call_id: Some("tool-1".into()),
+            reason: Some("destructive".into()),
+            expires_at_ms: 60_000,
+            allowed_decisions: vec![
+                "allow-once".into(),
+                "allow-session".into(),
+                "deny".into(),
+            ],
+        }
+    }
+
+    // -- offers_session / offers_always -----------------------------------
+
+    /// The legacy three-button set (`default_decisions()`) must surface the
+    /// session button — Telegram reads it, the panel rendering a fixed three
+    /// was the asymmetry this closed.
+    #[test]
+    fn offers_session_is_true_when_server_authorised_it() {
+        let r = default_record();
+        assert!(offers_session(&r.allowed_decisions));
+    }
+
+    /// A member-tier turn on a gate that is not the tool's own declared
+    /// floor: server sends only `allow-once` and `deny`, the panel must NOT
+    /// draw an "Allow for session" button — drawing one the server will
+    /// reject is a cosmetic bug; drawing one too few is the safe direction.
+    #[test]
+    fn offers_session_is_false_for_member_tier() {
+        let decisions = vec!["allow-once".into(), "deny".into()];
+        assert!(!offers_session(&decisions));
+    }
+
+    /// Operator-tier on a gate that authorised `allow-always` in addition to
+    /// the legacy set. The hint copy points at Settings → Policies — a
+    /// permanent grant nobody can find is the part that makes permanence
+    /// scary.
+    #[test]
+    fn offers_always_is_true_for_operator_tier() {
+        let decisions = vec![
+            "allow-once".into(),
+            "allow-session".into(),
+            "allow-always".into(),
+            "deny".into(),
+        ];
+        assert!(offers_always(&decisions));
+    }
+
+    /// `allow-always` is the one tier `default_decisions()` must never
+    /// include for old cores — it widens scope beyond what the server-side
+    /// 2026-08-11 ceiling knew about. A missing field may narrow, never
+    /// widen, so an old-core default set is silently absent of it.
+    #[test]
+    fn offers_always_is_false_in_the_legacy_default_set() {
+        let r = default_record();
+        assert!(
+            !offers_always(&r.allowed_decisions),
+            "legacy three-button set must not offer allow-always: {:?}",
+            r.allowed_decisions
+        );
+    }
+
+    // -- PendingApprovalView::remaining_secs ------------------------------
+
+    /// An approval with a future deadline answers with the truncated whole
+    /// seconds left. The contract is whole seconds, not fractional, so the
+    /// 1s-clock-driven render recomputes against the shared tick rather than
+    /// freezing at fetch time.
+    #[test]
+    fn remaining_secs_is_positive_for_a_future_deadline() {
+        let r = default_record(); // expires_at_ms = 60_000
+        // 47.5 s before the deadline → 47 whole seconds left (truncated).
+        let now_ms = r.expires_at_ms - 47_500;
+        assert_eq!(r.remaining_secs(now_ms), 47);
+    }
+
+    /// An expired-but-not-yet-refetched row must never render a negative
+    /// countdown — the render layer reads the answer as seconds-remaining
+    /// and a negative number would be a layout bomb. Clamp at zero is the
+    /// contract.
+    #[test]
+    fn remaining_secs_clamps_at_zero_for_an_expired_row() {
+        let r = default_record();
+        let now_ms = r.expires_at_ms + 5_000;
+        assert_eq!(r.remaining_secs(now_ms), 0);
+    }
 }
