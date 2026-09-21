@@ -483,6 +483,9 @@ mod tests {
     /// encodes a mechanism's absence as its contract is worse than no test.
     #[test]
     fn plugin_data_variable_is_expanded() {
+        // Held for the whole body: `plugin_data_dir` is read twice (inside the
+        // parser and for `expected`), and both reads must see one `ALEPH_HOME`.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let content = r#"{
             "mcpServers": {
                 "srv": {
