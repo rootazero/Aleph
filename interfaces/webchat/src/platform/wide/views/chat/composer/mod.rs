@@ -1741,6 +1741,125 @@ mod tests {
         );
     }
 
+    // --- Team chat attachment rejection preserves the tray (T1.7) -----
+    //
+    // `teams.chat.send` carries only `{team_id, message}` — there is no
+    // attachment leg on the group transcript. When the user typed a
+    // message, attached a file, and hit Enter in a group conversation, the
+    // tray used to be cleared *before* the team branch ran, so the file
+    // vanished with no reply and no error. The fix refuses the send and
+    // returns early so the tray survives — mirroring the single-chat
+    // `failed_send_restores_the_tray` pattern. This guard pins the wiring
+    // so a future reorder can't silently regress it.
+    //
+    // The path is on the wasm-only `csr` build and is structurally
+    // untestable via render-to-HTML (see the A1 report's parked blocker),
+    // so the check is textual — same L1-bound style as the guards above.
+
+    /// Locate the team-attachment rejection block. Returns the text
+    /// between the opening `if chat.team_id...` line and the matching
+    /// closing brace `}`. The block must surface `set_send_error` and
+    /// must NOT touch `attachments` — those are the two halves of T1.7.
+    fn team_rejection_block(src: &str) -> Option<&str> {
+        let body = typed_send_body(src)?;
+        // Open at the team-attachment guard's `if` and find the matching
+        // close. Walk braces because the call body contains a multi-line
+        // `set_send_error(...)` invocation.
+        let open_idx = body.find("if chat.team_id.get_untracked().is_some() && !files.is_empty()")?;
+        let after_if = &body[open_idx..];
+        let after_open_brace = after_if.find('{')?;
+        let bytes = after_if.as_bytes();
+        let mut depth: i32 = 0;
+        let mut close_offset = None;
+        for (i, &b) in bytes[after_open_brace..].iter().enumerate() {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_offset = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close = close_offset?;
+        // The block we care about is between the `{` and the matching `}`.
+        let block_start = after_open_brace + 1;
+        let block_end = after_open_brace + close;
+        Some(&after_if[block_start..block_end])
+    }
+
+    /// The team-attachment rejection path must (a) recognise the
+    /// `team_id.is_some() && !files.is_empty()` shape, (b) surface a user-
+    /// visible error via `set_send_error`, and (c) NOT clear attachments
+    /// before returning. The check on (c) is the whole point of T1.7.
+    fn team_attachment_rejection_preserves_tray(src: &str) -> bool {
+        let Some(block) = team_rejection_block(src) else {
+            return false;
+        };
+        // (b) — user-visible error is reported.
+        if !block.contains("set_send_error(") {
+            return false;
+        }
+        // (c) — the tray must NOT be cleared inside the rejection block.
+        // Any `attachments.set(...)` call before the early `return` would
+        // drop the user's file before they see the banner.
+        !block.contains("attachments.set(")
+    }
+
+    #[test]
+    fn team_chat_attachment_rejection_preserves_the_tray() {
+        assert!(
+            team_attachment_rejection_preserves_tray(include_str!("mod.rs")),
+            "team-attachment rejection in the typed-send path no longer \
+             preserves the tray — a file attached to a group message will \
+             vanish on Enter with only a refusal banner left behind"
+        );
+    }
+
+    /// RED proof: the bug shape. The team guard reports the error but
+    /// also clears the tray before the early `return`, so the file is
+    /// dropped before the user sees anything.
+    #[test]
+    fn team_rejection_check_rejects_tray_clear_before_early_return() {
+        let before = r"
+            let send_message = move || {
+                let files = attachments.get_untracked();
+                if chat.team_id.get_untracked().is_some() && !files.is_empty() {
+                    chat.set_send_error(ChatSendError::new(
+                        ChatSendErrorCode::Unsupported,
+                        t_string!(i18n, chat.team_attachments_unsupported).to_string(),
+                    ));
+                    attachments.set(Vec::new());
+                    return;
+                }
+                is_sending.set(true);
+                input_text.set(String::new());
+                attachments.set(Vec::new());
+                chat.push_user_message(&text);
+    // The question this conversation";
+        assert!(!team_attachment_rejection_preserves_tray(before));
+    }
+
+    /// …and the brace-matcher must actually find the team guard. Without
+    /// this, the green test above passes vacuously the day the helper
+    /// stops locating the rejection block.
+    #[test]
+    fn the_team_rejection_block_scrape_finds_the_guard() {
+        let block = team_rejection_block(include_str!("mod.rs"))
+            .expect("could not locate the team-attachment guard block");
+        assert!(
+            block.contains("set_send_error("),
+            "scraped block is not the team-attachment rejection"
+        );
+        assert!(
+            block.contains("return;"),
+            "scraped block is not the team-attachment rejection"
+        );
+    }
+
     // --- IME composition gate (T1.2) production wiring guard ----------
     //
     // The unit tests in `ime_tests` cover the pure-logic seam; this guard
