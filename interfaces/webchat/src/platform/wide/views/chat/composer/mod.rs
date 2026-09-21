@@ -87,6 +87,17 @@ pub(crate) fn InputArea() -> impl IntoView {
     // can share the same list as the paperclip input.
     let attachments = chat.pending_attachments;
 
+    // IME composition gate (T1.2) — Chinese IMEs (pinyin / wubi) fire a
+    // trailing `keydown(Enter)` after `compositionend` with `isComposing`
+    // already cleared, which would otherwise dispatch `send_message`. The
+    // gate swallows Enter while a composition is active and for a short
+    // "recently settled" window afterwards. Logic lives in the pure
+    // `ImeGate` struct (unit-tested at the bottom of this file) so the
+    // gate is not coupled to leptos signals or the keyboard-event closure
+    // (which is structurally untestable in this crate's `csr` build — see
+    // the A1 report's parked render-test blocker).
+    let ime_gate = RwSignal::new(ImeGate::new());
+
     // Palette state — populated lazily on first `/`.
     let all_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
     let show_palette = RwSignal::new(false);
@@ -945,6 +956,24 @@ pub(crate) fn InputArea() -> impl IntoView {
 
     let on_keydown = {
         move |ev: web_sys::KeyboardEvent| {
+            // IME composition gate (T1.2). Chinese / Japanese / Korean IMEs
+            // emit a trailing `keydown(Enter)` *after* `compositionend` to
+            // commit a candidate; the Enter arrives with `isComposing` already
+            // cleared, so it would otherwise dispatch `send_message`. We
+            // swallow Enter when:
+            //   1. a composition is still active (Enter should pick a
+            //      partial candidate, not send);
+            //   2. we are inside the 100ms "recently settled" window after
+            //      `compositionend` (covers the trailing-Enter race).
+            // All other keys are unaffected, so palette navigation, Esc
+            // force-insert, ArrowUp recall, and shift-Enter newlines all
+            // behave exactly as before.
+            if ev.key() == "Enter"
+                && ime_gate.with_untracked(|g| g.should_suppress_enter(js_sys::Date::now() as u64))
+            {
+                ev.prevent_default();
+                return;
+            }
             // @-mention palette takes priority over slash palette.
             if show_mention.get_untracked() {
                 let count = mention_members.get_untracked().len() + 1; // +1 for "@all"
@@ -1343,6 +1372,19 @@ pub(crate) fn InputArea() -> impl IntoView {
                             mention_at.set(at);
                         }
                         on:keydown=on_keydown
+                        // IME composition listeners (T1.2) — same pattern as
+                        // every browser that ships a textarea. We use the
+                        // typed `CompositionEvent` because the gate only
+                        // needs the boundary timestamps, not the payload;
+                        // the `web-sys` `CompositionEvent` feature is
+                        // enabled in Cargo.toml to back this listener type.
+                        on:compositionstart=move |_ev: web_sys::CompositionEvent| {
+                            ime_gate.update(|g| g.on_composition_start());
+                        }
+                        on:compositionend=move |_ev: web_sys::CompositionEvent| {
+                            let now_ms = js_sys::Date::now() as u64;
+                            ime_gate.update(|g| g.on_composition_end(now_ms));
+                        }
                     />
 
                     // Toolbar row — left: attach + voice + project/model/gauge;
@@ -1697,5 +1739,211 @@ mod tests {
             body.contains("ChatApi::send("),
             "the scraped region is not the send path"
         );
+    }
+
+    // --- IME composition gate (T1.2) production wiring guard ----------
+    //
+    // The unit tests in `ime_tests` cover the pure-logic seam; this guard
+    // pins the production wiring (composition listeners + Enter gate) so
+    // the seam cannot pass without it. Mirrors the source-pattern style of
+    // `failed_send_restores_the_tray`: the wiring is on the wasm-only
+    // `csr` path and is structurally untestable via render-to-HTML
+    // (see A1's parked blocker), so a textual check is the best L1-bound
+    // guarantee we can give.
+    fn production_half_ime(src: &str) -> &str {
+        src.split("#[cfg").next().unwrap_or(src)
+    }
+
+    fn has_composition_listener(src: &str, event: &str) -> bool {
+        let needle = format!("on:composition{event}=");
+        production_half_ime(src).contains(&needle)
+    }
+
+    fn enter_branch_is_gated(src: &str) -> bool {
+        // The Enter branch must consult `should_suppress_enter` *before*
+        // touching `send_message` / `enqueue_message`. The gate sits at
+        // the top of `on_keydown` and returns early, so the source must
+        // reference both `should_suppress_enter` and the conditional Enter
+        // dispatch.
+        let body = production_half_ime(src);
+        body.contains("should_suppress_enter(")
+            && body.contains("ev.key() == \"Enter\"")
+    }
+
+    #[test]
+    fn the_composer_wires_compositionstart_listener() {
+        assert!(
+            has_composition_listener(include_str!("mod.rs"), "start"),
+            "composer lost its compositionstart listener — Chinese IME \
+             composition will never be marked active"
+        );
+    }
+
+    #[test]
+    fn the_composer_wires_compositionend_listener() {
+        assert!(
+            has_composition_listener(include_str!("mod.rs"), "end"),
+            "composer lost its compositionend listener — trailing \
+             keydown(Enter) from a Chinese IME candidate commit will \
+             dispatch send_message (regression of T1.2)"
+        );
+    }
+
+    #[test]
+    fn the_composer_gates_enter_through_should_suppress_enter() {
+        assert!(
+            enter_branch_is_gated(include_str!("mod.rs")),
+            "composer Enter branch no longer consults should_suppress_enter \
+             — IME trailing Enter will dispatch send_message (regression \
+             of T1.2)"
+        );
+    }
+}
+
+// --- IME composition gate (T1.2) -----------------------------------------
+//
+// Chinese IME (pinyin, wubi, …) keeps a `compositionstart`/`compositionend`
+// session around its candidate window. When the user picks a candidate with
+// Enter, browsers fire `compositionend` *and then* a `keydown(Enter)` with
+// `isComposing` already cleared on the same tick — Enter reaches the
+// composer with `isComposing == false`, and any send-on-Enter handler fires.
+// The desktop composer previously had no composition listeners at all and
+// would dispatch `send_message` on that trailing Enter.
+//
+// `ImeGate` is the pure-logic seam: it tracks composition lifecycle and
+// answers `should_suppress_enter(now_ms)`. The production handler wires
+// DOM `compositionstart`/`compositionend` into `on_composition_start` /
+// `on_composition_end`, and gates `Enter` on `should_suppress_enter`. The
+// unit tests below exercise the seam without rendering Leptos (the panel is
+// `csr`-only; render-to-HTML is structurally unavailable — see the A1
+// report's parked blocker).
+//
+// The 100ms "recently settled" window covers the trailing keydown that
+// browsers emit *after* `compositionend`. Without it, the seam would still
+// fire send on the same keypress the IME just emitted.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ImeGate {
+    composition_active: bool,
+    last_composition_end_ms: Option<u64>,
+}
+
+impl ImeGate {
+    /// Length of the "recently settled" window after `compositionend`. The
+    /// value is calibrated to the trailing-Enter pattern (browser fires
+    /// `compositionend` then `keydown(Enter)` on the same tick) with margin
+    /// for the IME's own intra-window delay before bubbling Enter.
+    const SETTLED_WINDOW_MS: u64 = 100;
+
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn on_composition_start(&mut self) {
+        self.composition_active = true;
+    }
+
+    fn on_composition_end(&mut self, now_ms: u64) {
+        self.composition_active = false;
+        self.last_composition_end_ms = Some(now_ms);
+    }
+
+    /// Returns `true` when the trailing Enter from an IME candidate commit
+    /// should *not* trigger send. Three reasons to suppress:
+    /// 1. Composition is still active (Enter confirms a partial candidate).
+    /// 2. Composition just ended and we are inside the 100ms "recently
+    ///    settled" window — the browser's trailing `keydown(Enter)` falls
+    ///    here.
+    /// 3. (covered by 2) The Enter that closed the composition is the very
+    ///    event the gate is screening; with the window we swallow it.
+    fn should_suppress_enter(&self, now_ms: u64) -> bool {
+        if self.composition_active {
+            return true;
+        }
+        match self.last_composition_end_ms {
+            Some(t) => now_ms.saturating_sub(t) < Self::SETTLED_WINDOW_MS,
+            None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use super::ImeGate;
+
+    /// Enter pressed while the IME candidate window is still open (user
+    /// confirming a partial pinyin like "zhong" → should commit the partial
+    /// candidate to the textarea, not send).
+    #[test]
+    fn enter_during_active_composition_does_not_send() {
+        let mut g = ImeGate::new();
+        g.on_composition_start();
+        assert!(g.should_suppress_enter(0));
+        assert!(g.should_suppress_enter(50));
+        assert!(g.should_suppress_enter(99));
+    }
+
+    /// The browser's trailing keydown(Enter) after compositionend arrives on
+    /// the same tick. Suppressing Enter inside the 100ms "recently settled"
+    /// window fixes T1.2.
+    #[test]
+    fn enter_within_100ms_of_composition_end_does_not_send() {
+        let mut g = ImeGate::new();
+        g.on_composition_start();
+        g.on_composition_end(1_000);
+        assert!(g.should_suppress_enter(1_000)); // same tick
+        assert!(g.should_suppress_enter(1_050)); // 50ms after end
+        assert!(g.should_suppress_enter(1_099)); // 99ms after end (boundary)
+    }
+
+    /// Past the 100ms window the trailing-Enter pattern no longer applies —
+    /// the next Enter is a real send.
+    #[test]
+    fn enter_after_100ms_of_composition_end_sends() {
+        let mut g = ImeGate::new();
+        g.on_composition_start();
+        g.on_composition_end(1_000);
+        // 100ms exactly: <, not <= — the window is "strictly less than 100ms".
+        assert!(!g.should_suppress_enter(1_100));
+        assert!(!g.should_suppress_enter(1_150));
+        assert!(!g.should_suppress_enter(2_000));
+    }
+
+    /// Boundary: equal-to-window is *outside* (suppress at t=99, allow at
+    /// t=100). Pins the strict-less-than semantics so a future "use `<=`"
+    /// drive-by doesn't silently widen the swallow.
+    #[test]
+    fn settled_window_is_strict_less_than_100ms() {
+        let mut g = ImeGate::new();
+        g.on_composition_start();
+        g.on_composition_end(500);
+        assert!(g.should_suppress_enter(599)); // 99ms — still inside
+        assert!(!g.should_suppress_enter(600)); // 100ms — outside
+    }
+
+    /// Plain (non-IME) Enter: no compositionstart ever fired → gate is
+    /// transparent. Pinned so the gate cannot accidentally swallow a normal
+    /// send on a fresh page load.
+    #[test]
+    fn enter_without_any_composition_sends() {
+        let g = ImeGate::new();
+        assert!(!g.should_suppress_enter(0));
+        assert!(!g.should_suppress_enter(1_000_000));
+    }
+
+    /// After a settled window expires, a *new* composition cycle still works:
+    /// the trailing-Enter suppression re-arms for the next IME session.
+    #[test]
+    fn second_composition_cycle_suppresses_again() {
+        let mut g = ImeGate::new();
+        g.on_composition_start();
+        g.on_composition_end(1_000);
+        // 200ms later — first window expired, Enter sends.
+        assert!(!g.should_suppress_enter(1_200));
+        // New IME session: compositionstart + compositionend at t=2000.
+        g.on_composition_start();
+        assert!(g.should_suppress_enter(2_050)); // active
+        g.on_composition_end(2_000);
+        assert!(g.should_suppress_enter(2_050)); // 50ms after end — inside
+        assert!(!g.should_suppress_enter(2_200)); // 200ms after — outside
     }
 }
