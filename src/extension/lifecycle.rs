@@ -1262,7 +1262,7 @@ priority = 60
             .list_services()
             .await
             .into_iter()
-            .map(|s| format!("{}:{}", s.plugin_id, s.id))
+            .map(|s| crate::extension::namespaced_component_key(&s.plugin_id, &s.id))
             .collect();
         services.sort();
         Surfaces {
