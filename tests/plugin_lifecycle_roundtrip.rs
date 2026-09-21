@@ -254,6 +254,9 @@ async fn drive(aleph_home: &Path) -> usize {
     let mut led = Ledger(0);
     plant_plugin(aleph_home);
 
+    // `ExtensionConfig::extra_plugin_parents` is `cfg(test)` — invisible from
+    // `tests/`, so this literal is complete (`..Default::default()` would be
+    // `clippy::needless_update`).
     let manager = ExtensionManager::new(ExtensionConfig {
         discovery: DiscoveryConfig {
             working_dir: aleph_home.to_path_buf(),
