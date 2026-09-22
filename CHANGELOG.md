@@ -5,6 +5,78 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-09-21 — Panel & TUI polish round 1 (L1, audit-first)
+
+A one-day polish pass against the Panel and TUI surfaces that followed the
+`[26.9.1]` release. Thin-coverage fixes — eleven Tier-1 (pin-down bugs
+the audit flagged as "could not tell" but is in fact "no") and a
+Tier-2 sweep of small hardening around the corners the Tier-1 fixes
+opened up. All commits land green against the existing Panel
+(1368 → 1389) and TUI (442 → 452) test baselines; no protocol changes,
+no new public surfaces.
+
+### Fixes
+
+**Panel**
+- Voice button state machine no longer ghosts the "finish" transition
+  or leaks the long-press timer (T1.4).
+- IME composition gate prevents Enter from sending during the Chinese
+  candidate window (T1.2).
+- Attachment `<For>` key switched to a stable hash so list diffing is
+  correct under reorder (T1.3).
+- Team-chat attachment rejection preserves the tray instead of dropping
+  the staged attachments on the floor (T1.7).
+- ApprovalCard component gained regression tests covering the two
+  invariant paths (T1.5).
+- `ask.rs` test density boosted to cover the parked and answered arms
+  (T1.6).
+- Panel reattach retries on the next `connection_epoch` instead of
+  abandoning the subscriber (T2.6).
+- Event string-dispatch gained a static coverage guard so a new
+  `StreamEvent` variant cannot silently fall through (T2.12).
+
+**TUI**
+- `subscribe_runtime_agents` retries on reconnect failure rather than
+  leaving the subscription arm dropped (T1.8).
+- `SessionKnobs` now exposes `model_pin` as a fifth field, with the
+  status bar and slash command both wired (T1.9, Criterion 19 widening).
+- Header `VERSION` test uses `CARGO_MANIFEST_DIR` so it is cwd-
+  independent (T1.11).
+- `halt_notice` startup locale falls back to `en` if the requested
+  locale is unavailable (T2.2).
+- Dialog scroll indicator and sent-history boundary added to the
+  composer so long histories stay navigable (T2.5).
+- Command-palette snapshot helpers landed for future render tests
+  (T2.4).
+
+**Shared / wire**
+- User bubble now renders sent attachments as chips on both Panel and
+  TUI surfaces, fed by `AttachmentMeta` (Panel) / `TuiAttachment`
+  (TUI) through a stable `push_user_message_with_attachments` sibling
+  (T1.1, T1.10).
+- `ReasoningBlock` and `UncertaintySignal` stream events are consumed
+  end-to-end on the Panel (T2.13).
+- C-track hardening covers five small surfaces: sentinel tail in
+  install run, mark-queued guard in approval, `propose_session_knobs`
+  defaults round-trip, terminal spawn cwd jail regression, and the
+  workspace resolver pinning (T2.7–T2.11).
+- Playwright e2e scaffolding landed for the streaming-echo reconnect
+  path; the spec itself runs RED against the Simulated-mode gateway
+  and is staged for a real-LLM CI lane (T2.1).
+
+### Tests
+
+- Added 30+ unit tests across 8 modules — thin coverage hardening so
+  each of the fixes has at least one regression guard.
+- Panel: 1368 → 1389 (+21). TUI: 442 → 452 (+10).
+- No new public surfaces; all helpers are module-private.
+
+### Out of scope (deferred to next round)
+
+- True image rendering on the Panel — requires a wire-protocol change.
+- A3 reasoning persistence across sessions — wire change, parked.
+- `pi-ask-user` UX mode additions — new features, not polish.
+
 ## [26.9.1]
 
 Five days, 549 commits, 822 files, +99.7k/-9.0k — of which +58.6k/-8.0k is
