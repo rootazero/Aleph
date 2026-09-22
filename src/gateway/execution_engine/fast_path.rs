@@ -270,14 +270,18 @@ where
         // Transcript rows: the `FastPathJournal`'s (see the success twin).
         // When the failure came from the tool, `execute_direct_tool` already
         // wrote the close batch (`ToolError`, this same echo, `RunFinished {
-        // Errored }`). When it came from one of the three pre-dispatch
-        // `Failed` arms (invalid mode JSON, missing `tool_id`, unknown mode
-        // type — all unreachable through `try_resolve_slash_command` and the
-        // channel router's `serialize_parsed_command`), or from the open
-        // batch itself being refused (one transaction: nothing landed), no
-        // run was ever opened and this turn leaves NO transcript row: the
-        // user still gets the echo below via `ResponseChunk` + `RunComplete`.
-        // A missing row, never a wrong one (criterion #17).
+        // Errored }`). When it came from one of the four pre-dispatch
+        // `Failed` arms, or from the open batch itself being refused (one
+        // transaction: nothing landed), no run was ever opened and this turn
+        // leaves NO transcript row: the user still gets the echo below via
+        // `ResponseChunk` + `RunComplete`. Three of those arms (invalid mode
+        // JSON, missing `tool_id`, unknown mode type) stay unreachable
+        // through `try_resolve_slash_command` and the channel router's
+        // `serialize_parsed_command`; the fourth — the owner named by the
+        // mode JSON refused by `extension::visibility::slash_owner_admits` —
+        // is reachable from every producer, whenever a session outside the
+        // owning project sends a plugin-owned `/cmd`. A missing row, never a
+        // wrong one (criterion #17).
         let _ = emitter
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),

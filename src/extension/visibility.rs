@@ -204,22 +204,25 @@ pub fn retain_visible_owned_commands(
 /// Face ④ (dispatch): admit a resolved slash command unless its owner is a
 /// plugin this session may not see. `mode` is the JSON
 /// `serialize_parsed_command` produced; an absent `owning_plugin` key is
-/// "no owner". The refusal names the plugin so the operator knows which
-/// project to enter — fail-closed, not fail-dead.
+/// "no owner", while a present key that is not a string is a malformed
+/// owner and is refused — "I cannot read the owner" must not be read as
+/// "there is none". The refusal names the plugin so the operator knows
+/// which project to enter — fail-closed, not fail-dead.
 pub fn slash_owner_admits(
     mode: &serde_json::Value,
     ctx: &VisibilityCtx,
     visible: impl Fn(&str, &VisibilityCtx) -> bool,
 ) -> Result<(), String> {
-    match mode
-        .get("owning_plugin")
-        .and_then(serde_json::Value::as_str)
-    {
+    match mode.get("owning_plugin") {
         None => Ok(()),
-        Some(owner) if visible(owner, ctx) => Ok(()),
-        Some(owner) => Err(format!(
+        Some(serde_json::Value::String(owner)) if visible(owner, ctx) => Ok(()),
+        Some(serde_json::Value::String(owner)) => Err(format!(
             "this command belongs to plugin `{owner}`, which is not available to this \
              session's project; enter the project that installed it to use it"
+        )),
+        Some(other) => Err(format!(
+            "slash command metadata names an owner but `owning_plugin` is not a string \
+             ({other}); refusing to dispatch"
         )),
     }
 }
@@ -596,5 +599,12 @@ mod tests {
             refusal.contains("proj"),
             "the refusal names the plugin: {refusal}"
         );
+
+        // A present-but-malformed owner is not "no owner": fail-closed, even
+        // in the project the plugin would be visible from.
+        let malformed = serde_json::json!({"type": "direct_tool", "owning_plugin": 7});
+        let refusal = slash_owner_admits(&malformed, &in_p, visible)
+            .expect_err("a non-string owner must be refused");
+        assert!(refusal.contains("owning_plugin"), "{refusal}");
     }
 }

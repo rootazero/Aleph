@@ -40,8 +40,9 @@ pub struct SkillInfo {
     /// The plugin that registered this entry (`commands/*.md` of a plugin, or a
     /// plugin-shipped skill). `None` for user / bundled skills. Carried onto
     /// `ToolSource::Skill` so the slash list and fast path can ask
-    /// `extension::visibility` whether this session may see the owner, and so
-    /// the plugin lifecycle can retract the entry by owner.
+    /// `extension::visibility` whether this session may see the owner. Unmount
+    /// does not read it — the `slash_command` disposer removes the exact ids
+    /// it registered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
 }

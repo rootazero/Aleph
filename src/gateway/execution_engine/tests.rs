@@ -1675,8 +1675,10 @@ async fn guest_slash_command_for_a_dangerous_tool_never_reaches_the_registry() {
 
 /// Face ④ dispatch: a `/cmd` owned by a plugin the session cannot see is
 /// refused at the one consumer of the mode JSON, whichever surface stamped
-/// it. No process-global extension manager is installed in this test, so
-/// the manager-backed lookup answers "unknown" — the fail-closed branch.
+/// it. The process is shared with sibling tests, some of which install a
+/// process-global extension manager; the assertion relies only on
+/// `plugin_visible("proj", …)` being false either way — no registry row
+/// named `proj` exists, and an unknown id is the fail-closed branch.
 #[tokio::test]
 async fn a_slash_command_owned_by_an_invisible_plugin_is_refused_before_dispatch() {
     let temp = tempfile::tempdir().unwrap();
