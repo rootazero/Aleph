@@ -15,14 +15,10 @@
 // Imports needed by the test module below — these were originally at the
 // top of `handler.rs` and are now in `connection/mod.rs`. Re-importing
 // them here so `use super::*;` in the test module keeps resolving.
-use crate::sync_primitives::Arc;
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
-use crate::gateway::event_scope::{scope_for_role, EventScopeGuard, is_superuser_scope};
-use crate::gateway::handlers::HandlerRegistry;
-use crate::gateway::lane::LaneManager;
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::protocol::JsonRpcResponse;
-use crate::gateway::rate_limiter::{RateLimitConfig, RateLimiter};
+use crate::gateway::rate_limiter::RateLimiter;
 use super::per_client_buffer::PerClientBuffer;
 use tokio::sync::broadcast;
 
@@ -33,10 +29,10 @@ use tokio::sync::broadcast;
 // `super::connection::*`; see `connection/mod.rs`.
 pub use super::connection::{
     connect_verdict, device_revoked_id, device_revoked_should_close, dispatch_with_caller_context,
-    event_wire_form, extract_topic_and_data, forward_bus_to_client, handle_connection,
-    is_token_rotated_frame, node_connect_claim, overflow_warning_frame, parse_trusted_ips,
-    process_request, refuse_insecure_remote, resolve_stamped_identity, rotated_should_close_remote,
-    wall_admits, ws_upgrade_handler, ConnectionContext, DEVICE_REVOKED_TOPIC, TOKEN_ROTATED_TOPIC,
+    event_wire_form, extract_topic_and_data, forward_bus_to_client, is_token_rotated_frame,
+    node_connect_claim, overflow_warning_frame, parse_trusted_ips, process_request,
+    refuse_insecure_remote, resolve_stamped_identity, rotated_should_close_remote, wall_admits,
+    ws_upgrade_handler, DEVICE_REVOKED_TOPIC, TOKEN_ROTATED_TOPIC,
 };
 
 #[cfg(test)]

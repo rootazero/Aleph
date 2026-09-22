@@ -46,7 +46,7 @@ use super::ConnectionContext;
 pub(super) async fn run_cleanup(
     conn_id: &str,
     ctx: &ConnectionContext,
-    rpc_pending: &Arc<crate::cluster::reverse_rpc::PendingInvokes>,
+    rpc_pending: &Arc<crate::cluster::PendingInvokes>,
 ) {
     // 1. Shared connection map
     {

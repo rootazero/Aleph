@@ -43,7 +43,7 @@ use crate::gateway::rate_limiter::{
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
-use super::{ConnectionState, GatewaySharedState};
+use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
 
 pub mod upgrade;

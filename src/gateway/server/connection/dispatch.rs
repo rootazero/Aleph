@@ -13,8 +13,7 @@
 
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::protocol::{
-    JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR,
+    JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED, PARSE_ERROR,
 };
 
 /// Scope `process_request` with the caller-identity task-locals + P1 scope
