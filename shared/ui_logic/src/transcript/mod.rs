@@ -28,7 +28,7 @@ mod group;
 mod view_model;
 pub use group::{group_entries, MAX_GAP_TEXT, MIN_GROUP};
 pub use view_model::{
-    RowBody, RowStatus, ToolGroup, ToolRow, TranscriptEntry, TurnSummaryEntry,
+    RowBody, RowStatus, ToolGroup, ToolRow, TranscriptEntry, TuiAttachment, TurnSummaryEntry,
     READ_ONLY_DISPLAY_NAMES,
 };
 

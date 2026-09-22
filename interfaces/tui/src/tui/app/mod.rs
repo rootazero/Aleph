@@ -194,7 +194,7 @@ pub enum Focus {
 /// names it through this module, and a facade that lists a type no caller
 /// reaches is the kind of always-true claim this repo pays for later. The
 /// tests import it from `shared_ui_logic` like every other consumer does.
-pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry};
+pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry, TuiAttachment};
 
 /// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
 fn as_ms(t: DateTime<Utc>) -> Option<u64> {
@@ -642,14 +642,23 @@ pub fn provider_picker_rows(
 // banner and the `///` lines above it came along, so the struct they describe
 // has been undocumented ever since. They are back on it below.
 
-/// The four session knobs as the status bar reads them. Borrowed from the
+/// The five session knobs as the status bar reads them. Borrowed from the
 /// snapshot so the renderer cannot hold a stale copy across an attach.
+///
+/// The fifth (`model_pin`) is the model `select_model` pinned, if any —
+/// NOT one of the four `slash::SessionKnob` variants (whose author is the
+/// slash command), and intentionally so: a slash command patching the row
+/// alone would be honored after a restart and silently ignored before one —
+/// a second writer that wins by accident. The status bar reads it directly
+/// from here rather than via `SessionKnob::ALL`, which is why the count on
+/// that constant stays at four.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SessionKnobs<'a> {
     pub mode: Option<&'a str>,
     pub exec_tier: Option<&'a str>,
     pub think_level: Option<&'a str>,
     pub memory_mode: Option<&'a str>,
+    pub model_pin: Option<&'a str>,
 }
 
 /// The run `chat.history` reports in flight on the session being attached,
@@ -1140,12 +1149,19 @@ impl AppState {
     /// Bumps `sends`, which is the whole reason this is not the same function
     /// as the peer path: a room peer's message is a user row too, and only
     /// one of the two means "I am done reading back".
-    pub fn add_user_message(&mut self, content: String) {
+    ///
+    /// `attachments` is the list of files the user dropped onto this send.
+    /// Every existing caller passes `vec![]` — the TUI's composer pipeline
+    /// does not yet ship attachments — but the slot is wired in so the chip
+    /// render is already correct on the moment a real attachment pipeline
+    /// lands.
+    pub fn add_user_message(&mut self, content: String, attachments: Vec<TuiAttachment>) {
         let id = self.next_entry_id();
         self.messages.push(TranscriptEntry::UserText {
             id,
             text: content,
             at_ms: as_ms(Utc::now()),
+            attachments,
         });
         self.sends = self.sends.saturating_add(1);
     }
@@ -1955,13 +1971,14 @@ impl AppState {
         }
     }
 
-    /// The conversation's usage mode, exec tier, thinking depth and memory mode
-    /// as the status bar renders them.
+    /// The conversation's usage mode, exec tier, thinking depth, memory mode,
+    /// and pinned model as the status bar renders them.
     ///
     /// `None` in the tuple means the session follows the global default — the
     /// renderer prints nothing rather than guessing which default is live,
     /// because the TUI does not read the server's config and a guess would be
-    /// indistinguishable from a fact.
+    /// indistinguishable from a fact. Same for `model_pin: None`: the
+    /// conversation is not pinned, not "the pin got lost".
     #[must_use]
     pub fn session_knobs(&self) -> SessionKnobs<'_> {
         let snap = self.session_snapshot.as_ref();
@@ -1970,6 +1987,7 @@ impl AppState {
             exec_tier: snap.and_then(|s| s.exec_tier.as_deref()),
             think_level: snap.and_then(|s| s.think_level.as_deref()),
             memory_mode: snap.and_then(|s| s.memory_mode.as_deref()),
+            model_pin: snap.and_then(|s| s.model_pin.as_deref()),
         }
     }
 

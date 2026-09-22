@@ -94,6 +94,7 @@ mod tests {
             id: format!("{role}-x"),
             role: role.into(),
             content: content.into(),
+            attachments: Vec::new(),
             tool_calls: vec![],
             is_streaming: false,
             is_intermediate: intermediate,

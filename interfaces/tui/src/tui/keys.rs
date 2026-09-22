@@ -1874,3 +1874,102 @@ mod mouse_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod sent_history_tests {
+    use super::*;
+    use tui_textarea::TextArea;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn press_up(state: &mut AppState, ta: &mut TextArea) -> Action {
+        handle_input_key(state, ta, key(KeyCode::Up))
+    }
+
+    fn press_down(state: &mut AppState, ta: &mut TextArea) -> Action {
+        handle_input_key(state, ta, key(KeyCode::Down))
+    }
+
+    fn text(ta: &TextArea) -> String {
+        ta.lines().join("\n")
+    }
+
+    /// Seed three messages. The newest is index 2 (length - 1), the oldest is
+    /// index 0 — the same order `push_send_history` writes them in.
+    fn seeded_state() -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        for msg in ["first", "second", "third"] {
+            state.push_send_history(msg.into());
+        }
+        state
+    }
+
+    /// **B8's guard (1/3).** The first Up against an empty composer must land
+    /// on the most recently sent message, not on `FocusChat` and not on the
+    /// oldest. This is what makes Up feel like history rather than a no-op.
+    #[test]
+    fn sent_history_up_recalls_most_recent() {
+        let mut state = seeded_state();
+        let mut ta = TextArea::default();
+        let action = press_up(&mut state, &mut ta);
+        assert!(matches!(action, Action::None), "got {action:?}");
+        assert_eq!(text(&ta), "third", "expected most recent, got {:?}", text(&ta));
+        assert_eq!(state.history_index, Some(2));
+    }
+
+    /// **B8's guard (2/3).** Repeated Up walks older without ever going past
+    /// the oldest entry. Reaching index 0 and pressing Up again MUST be a
+    /// no-op — a panic, a wrap, or a jump-to-newest would all be a
+    /// user-visible regression on the oldest-message boundary.
+    #[test]
+    fn sent_history_up_walks_older_and_stops_at_oldest() {
+        let mut state = seeded_state();
+        let mut ta = TextArea::default();
+
+        press_up(&mut state, &mut ta);
+        assert_eq!(text(&ta), "third");
+        assert_eq!(state.history_index, Some(2));
+
+        press_up(&mut state, &mut ta);
+        assert_eq!(text(&ta), "second", "expected older, got {:?}", text(&ta));
+        assert_eq!(state.history_index, Some(1));
+
+        press_up(&mut state, &mut ta);
+        assert_eq!(text(&ta), "first", "expected oldest, got {:?}", text(&ta));
+        assert_eq!(state.history_index, Some(0));
+
+        // Pressing Up again MUST NOT panic, MUST NOT wrap, and MUST NOT clear
+        // the composer — the user is reading the oldest message.
+        let action = press_up(&mut state, &mut ta);
+        assert!(matches!(action, Action::None), "got {action:?}");
+        assert_eq!(text(&ta), "first", "oldest must stay put, got {:?}", text(&ta));
+        assert_eq!(state.history_index, Some(0));
+    }
+
+    /// **B8's guard (3/3).** Down after Up walks newer and clears the
+    /// composer when the user steps past the newest entry. Mirrors Bash /
+    /// fish readline so the muscle memory holds; without it, leaving history
+    /// leaves the textarea full of a stale message.
+    #[test]
+    fn sent_history_down_after_up_recovers() {
+        let mut state = seeded_state();
+        let mut ta = TextArea::default();
+
+        press_up(&mut state, &mut ta); // → "third"
+        press_up(&mut state, &mut ta); // → "second"
+        assert_eq!(text(&ta), "second");
+
+        press_down(&mut state, &mut ta); // → "third"
+        assert_eq!(text(&ta), "third", "got {:?}", text(&ta));
+        assert_eq!(state.history_index, Some(2));
+
+        // One more Down steps PAST the newest and clears the composer — the
+        // boundary in the other direction.
+        let action = press_down(&mut state, &mut ta);
+        assert!(matches!(action, Action::None), "got {action:?}");
+        assert!(text(&ta).is_empty(), "past-newest must clear, got {:?}", text(&ta));
+        assert_eq!(state.history_index, None);
+    }
+}

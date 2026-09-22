@@ -285,12 +285,52 @@ impl RunCost {
     }
 }
 
+/// Compact projection of a file the user attached to this turn.
+///
+/// `PendingAttachment` carries the full base64 payload + size so the
+/// composer can ship the file, but a `ChatMessage` only needs to render a
+/// chip ("photo.png · image/png") — the payload is gone by the time the
+/// bubble is up. `PendingAttachment → AttachmentMeta` is a single field-by-
+/// field copy at the composer send boundary, the only place that has both
+/// types in scope (see `ChatState::push_user_message_with_attachments`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub name: String,
+    pub mime: String,
+}
+
+/// One model-side uncertainty note attached to a run.
+///
+/// Mirrors `StreamEvent::UncertaintySignal` (T2.13): backend has always
+/// emitted this event, but until the panel started consuming it the user
+/// never saw it — there was no place for it to land. Stored keyed by
+/// `run_id` (mirrors how `run_halts` / `run_costs` are stored) so the
+/// trailing assistant bubble can show a small chip explaining why the model
+/// flagged itself, without coupling the chip's existence to whichever bubble
+/// happened to mount last.
+///
+/// `serde` derives exist for the (theoretical) session-snapshot path;
+/// nothing currently snapshots this field. Cheap insurance for parity with
+/// the other per-run maps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UncertaintyNote {
+    pub uncertainty: String,
+    pub action: aleph_protocol::events::UncertaintyAction,
+}
+
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
     pub role: String,    // "user" | "assistant"
     pub content: String, // final or accumulated text
+    /// Files the user attached to this turn, rendered as chips below the
+    /// text on the user bubble. `serde(default)` keeps history rows
+    /// produced before the field existed loadable — they deserialize to an
+    /// empty list and simply render no chips. Empty for every assistant
+    /// row by construction.
+    #[serde(default)]
+    pub attachments: Vec<AttachmentMeta>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallEntry>,
     #[serde(default)]
@@ -728,6 +768,14 @@ pub struct ChatState {
     /// scoped exactly like [`Self::run_costs`] — same producer frame, same
     /// per-conversation lifetime, same snapshot.
     pub run_halts: RwSignal<std::collections::HashMap<String, RunHalt>>,
+    /// Latest uncertainty note per run (T2.13). Backend has always emitted
+    /// `StreamEvent::UncertaintySignal` for self-flagged uncertainty; the panel
+    /// was the only surface that never rendered it. Keyed the same way
+    /// `run_halts` is, so the assistant bubble reads it the same way
+    /// `MessageBubble::halt_view` reads `run_halts`. Cleared per-run on
+    /// `clear_uncertainty` (called by `complete_run` / `fail_run`) so a new
+    /// run never inherits the previous turn's note.
+    pub uncertainty_signals: RwSignal<std::collections::HashMap<String, UncertaintyNote>>,
     /// Per-session execution tier override (`"ask"` | `"auto"` | `"full"`).
     /// `None` = follow the global tier. Mirrors what core persists under
     /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
@@ -824,6 +872,14 @@ pub struct ChatState {
     /// Active single-chat task plan (scratchpad-driven Todo widget). `None`
     /// hides the panel. Projected by `events.rs` via `scratchpad_plan_update`.
     pub plan: RwSignal<Option<PlanView>>,
+    /// `true` after `reattach_after_connect` gave up retrying
+    /// `gateway.metrics.run_concurrency` and the probe never landed. The
+    /// app-root Effect re-reads this on every `connection_epoch` bump and
+    /// re-fires `reattach_after_connect` while it is set, clearing it on
+    /// success — the "transient RPC failure, socket is fine" recovery path
+    /// (T2.6). Cleared by a successful reattach. Ephemeral, like `retry_pulse`
+    /// — excluded from [`SessionSnapshot`].
+    pub pending_reattach: RwSignal<bool>,
 }
 
 impl Default for ChatState {
@@ -865,6 +921,7 @@ impl ChatState {
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             run_halts: RwSignal::new(std::collections::HashMap::new()),
+            uncertainty_signals: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
             session_think_level: RwSignal::new(None),
@@ -873,6 +930,7 @@ impl ChatState {
             global_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
+            pending_reattach: RwSignal::new(false),
             next_msg_id: RwSignal::new(0),
             sends: RwSignal::new(0),
             team_id: RwSignal::new(None),
@@ -953,6 +1011,7 @@ impl ChatState {
                 id: format!("plan-archive-{seq}"),
                 role: "assistant".into(),
                 content: String::new(),
+                attachments: Vec::new(),
                 tool_calls: vec![],
                 is_streaming: false,
                 is_intermediate: false,
@@ -1145,15 +1204,44 @@ impl ChatState {
     /// funnels through here, so the counter is covered by construction rather
     /// than by remembering to bump it per call site.
     pub fn push_user_message(&self, text: &str) {
+        self.push_user_message_with_attachments(text, &[]);
+    }
+
+    /// Append a user message with optional attachments, and reset error state.
+    ///
+    /// The single writer of [`Self::sends`] — every surface that lets this
+    /// viewer send (composer, queued-prompt flush, retry, voice, slash command)
+    /// funnels through here, so the counter is covered by construction rather
+    /// than by remembering to bump it per call site.
+    ///
+    /// `attachments` is `&[PendingAttachment]` rather than `Vec<AttachmentMeta>`
+    /// so callers (only the composer send path has any) can hand over the
+    /// payload-bearing list they already have. The conversion to chip-only
+    /// `AttachmentMeta` happens here so the rest of the projection stays
+    /// unaware of base64 blobs. Voice, retry, slash-command sends and the
+    /// queued-prompt drain all pass `&[]` — they have nothing to chip.
+    pub fn push_user_message_with_attachments(
+        &self,
+        text: &str,
+        attachments: &[PendingAttachment],
+    ) {
         let seq = self.next_msg_id.get_untracked();
         self.next_msg_id.set(seq + 1);
         self.sends.update(|n| *n += 1);
         let id = format!("user-{seq}");
+        let meta: Vec<AttachmentMeta> = attachments
+            .iter()
+            .map(|a| AttachmentMeta {
+                name: a.name.clone(),
+                mime: a.mime_type.clone(),
+            })
+            .collect();
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
                 id,
                 role: "user".into(),
                 content: text.to_string(),
+                attachments: meta,
                 tool_calls: vec![],
                 is_streaming: false,
                 is_intermediate: false,
@@ -1238,6 +1326,7 @@ impl ChatState {
                     id,
                     role: "user".into(),
                     content: text.to_string(),
+                    attachments: Vec::new(),
                     tool_calls: vec![],
                     is_streaming: false,
                     is_intermediate: false,
@@ -1309,6 +1398,7 @@ impl ChatState {
                 id,
                 role: "assistant".into(),
                 content: String::new(),
+                attachments: Vec::new(),
                 tool_calls: vec![],
                 is_streaming: true,
                 is_intermediate: false,
@@ -1338,8 +1428,21 @@ impl ChatState {
     /// Scoped to the run this conversation is actually following: a lane frame
     /// for a sibling run (another tab, a channel, cron) must not repaint this
     /// conversation's phase.
+    ///
+    /// Out-of-order guard (T2.10): a stale `run_queued` arriving AFTER the run
+    /// has already been admitted (and therefore reads `Thinking` / `Streaming`
+    /// / `Error`) must NOT flip the phase back to "waiting" — the wait is
+    /// over, the phase it ended into is the source of truth for what is
+    /// happening NOW. Mirror image of `mark_admitted`'s "only ever flips
+    /// `Queued` → `Thinking`" guard.
     pub fn mark_queued(&self, run_id: &str, ahead: u16) {
         if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(
+            self.phase.get_untracked(),
+            ChatPhase::Thinking | ChatPhase::Streaming | ChatPhase::Error
+        ) {
             return;
         }
         self.phase.set(ChatPhase::Queued { ahead });
@@ -1399,6 +1502,7 @@ impl ChatState {
                         id: target_id,
                         role: "assistant".into(),
                         content: String::new(),
+                        attachments: Vec::new(),
                         tool_calls: vec![],
                         is_streaming: true,
                         is_intermediate: false,
@@ -1642,6 +1746,34 @@ impl ChatState {
         });
     }
 
+    /// Record (or refresh) the latest uncertainty note for a run (T2.13).
+    /// Driven by `StreamEvent::UncertaintySignal`; the chip on the trailing
+    /// assistant bubble reads it the same way `halt_view` reads `run_halts`.
+    /// Latest-wins: a second signal within one run overwrites the first — the
+    /// chip is a "this answer had doubts" indicator, not a stack of them
+    /// (mirrors the TUI's `add_system_message` decision to keep the most
+    /// recent, not accumulate). Drops the call when `uncertainty` is blank,
+    /// because an empty signal would render as a chip with no explanation.
+    pub fn set_uncertainty(&self, run_id: &str, note: UncertaintyNote) {
+        if note.uncertainty.trim().is_empty() {
+            return;
+        }
+        self.uncertainty_signals
+            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+                m.insert(run_id.to_string(), note);
+            });
+    }
+
+    /// Drop a run's uncertainty note. Called by `complete_run` / `fail_run`
+    /// for the run that just settled, so the chip never outlives its run.
+    /// (`run_id`s are not reused; clearing an unrelated id is harmless.)
+    pub fn clear_uncertainty(&self, run_id: &str) {
+        self.uncertainty_signals
+            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+                m.remove(run_id);
+            });
+    }
+
     /// Prefix reuse across every priced run of *this* conversation.
     ///
     /// A single run's figure is noisy — the first run of a session writes the
@@ -1673,6 +1805,9 @@ impl ChatState {
         self.active_run_id.set(None);
         self.phase.set(ChatPhase::Idle);
         self.clear_provider_retry();
+        // T2.13: uncertainty note belongs to the run that produced it; once
+        // the run settles the chip must not bleed into the next turn.
+        self.clear_uncertainty(run_id);
     }
 
     /// Promote a completed run's authoritative final answer into its trailing
@@ -1737,6 +1872,8 @@ impl ChatState {
         let structured = ChatSendError::from_wire_code(error_code, error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
+        // T2.13: see `complete_run` — same lifetime rule.
+        self.clear_uncertainty(run_id);
     }
 
     /// Record a structured chat send error from the composer / outbound
@@ -1936,6 +2073,7 @@ impl ChatState {
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
             run_halts: self.run_halts.get_untracked(),
+            uncertainty_signals: self.uncertainty_signals.get_untracked(),
             knobs: self.session_knobs(),
             plan: self.plan.get_untracked(),
         }
@@ -1969,6 +2107,7 @@ impl ChatState {
         }
         self.run_costs.set(snap.run_costs);
         self.run_halts.set(snap.run_halts);
+        self.uncertainty_signals.set(snap.uncertainty_signals);
         self.apply_session_knobs(snap.knobs);
         self.next_msg_id.set(snap.next_msg_id);
         self.sends.set(snap.sends);
@@ -2028,6 +2167,11 @@ pub struct SessionSnapshot {
     pub run_costs: std::collections::HashMap<String, RunCost>,
     /// Per-run halt reason, for the same reason and by the same route.
     pub run_halts: std::collections::HashMap<String, RunHalt>,
+    /// Per-run uncertainty note (T2.13). Same lifetime and rationale as
+    /// `run_costs` / `run_halts`: the chip survives a tab swap because the
+    /// note belongs to the conversation, not to whichever bubble happens to
+    /// be on screen.
+    pub uncertainty_signals: std::collections::HashMap<String, UncertaintyNote>,
     /// This conversation's dials, so a tab swap restores the tier / mode /
     /// depth / memory setting the server is actually enforcing rather than the
     /// install defaults. One field, so a new dial cannot be captured on the way
@@ -2871,15 +3015,18 @@ mod step_tests {
     }
 
     /// Asserting the effect arrives, not that the call happened. `mark_queued`
-    /// is guarded on `active_run_id`, and `start_assistant_message` sets that
-    /// only on the branch where it does not early-return — so this is the one
-    /// path the whole queued phase depends on.
+    /// is guarded on `active_run_id`, and the canonical first-frame path is
+    /// `apply_run_queued` setting `active_run_id` for a conversation that has
+    /// not seen the run yet — this is the only path the whole queued phase
+    /// depends on (T2.10 out-of-order guard means a Thinking/Streaming/Error
+    /// phase is left alone, so the test must start from `Idle`).
     #[test]
     fn marking_a_run_queued_moves_the_phase() {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.start_assistant_message("run-a");
+        // `apply_run_queued`'s first half: adopt when nothing else is in flight.
+        chat.active_run_id.set(Some("run-a".into()));
         chat.mark_queued("run-a", 2);
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 2 });
     }
@@ -2916,10 +3063,80 @@ mod step_tests {
         chat.mark_admitted("run-a");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
 
-        // And a sibling run's admission is not this conversation's news.
-        chat.mark_queued("run-a", 1);
+        // And a sibling run's admission is not this conversation's news:
+        // the phase was Queued, a sibling admit must not flip it to Thinking.
+        chat.phase.set(ChatPhase::Queued { ahead: 1 });
         chat.mark_admitted("run-b");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
+    }
+
+    /// Out-of-order `run_queued` after `run_admitted` must NOT flip the
+    /// phase back to `Queued` (T2.10).
+    ///
+    /// The mirror image of `mark_admitted`'s "only ever flips Queued →
+    /// Thinking" guard. Once the run is admitted (or further along), a
+    /// stale lane frame arriving later — the server may have queued it
+    /// while we were reconnecting, or a re-attach replayed a snapshot —
+    /// must not regress the UI from "the model is thinking/streaming" to
+    /// "queued: 1 ahead". Without this guard the user sees the busy
+    /// indicator swap to "waiting" for an already-running turn.
+    #[test]
+    fn mark_queued_after_admitted_does_not_flip_back_to_queued() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        // The exact brief sequence: admitted first, stale queued frame second.
+        chat.start_assistant_message("run-1");
+        chat.mark_admitted("run-1");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Thinking,
+            "a queued frame arriving after admission must be ignored"
+        );
+
+        // The same guard fires further along the timeline.
+        chat.phase.set(ChatPhase::Streaming);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Streaming,
+            "a queued frame mid-stream must not regress the UI"
+        );
+
+        chat.phase.set(ChatPhase::Error);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Error,
+            "even after an error the wait indicator is not the truth"
+        );
+
+        // And the guard must NOT prevent the legitimate transition: from
+        // `Idle`, a fresh queued frame still drives the phase to Queued.
+        // Mirror `apply_run_queued`'s adoption half: set active_run_id
+        // directly so phase stays Idle (start_assistant_message would set
+        // it to Thinking and the guard would (correctly) fire).
+        let chat2 = ChatState::new();
+        chat2.active_run_id.set(Some("run-2".into()));
+        chat2.mark_queued("run-2", 2);
+        assert_eq!(
+            chat2.phase.get_untracked(),
+            ChatPhase::Queued { ahead: 2 },
+            "guard only protects non-queued phases; the happy path still works"
+        );
+
+        // And within Queued itself, a smaller `ahead` still updates — the
+        // lane is moving, this is not the out-of-order frame the guard
+        // exists to catch.
+        chat2.mark_queued("run-2", 0);
+        assert_eq!(
+            chat2.phase.get_untracked(),
+            ChatPhase::Queued { ahead: 0 },
+            "legitimate forward-progress lane updates must still apply"
+        );
     }
 
     /// Pins the fact `platform::phone::chat::composer`'s `running` predicate

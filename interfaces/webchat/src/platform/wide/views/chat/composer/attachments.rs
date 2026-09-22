@@ -45,6 +45,23 @@ pub(crate) const MAX_ATTACHMENT_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 /// gateway's per-request budget and keeps the UI chip strip legible.
 pub(crate) const MAX_ATTACHMENT_COUNT: usize = 10;
 
+/// Stable per-attachment key for the preview-chip `<For>`.
+///
+/// Deliberately excludes the attachment's index in the parent list so
+/// removing a middle attachment does NOT shift every subsequent chip's
+/// key. With an index-aware key, leptos sees a new key for the shifted
+/// chip and reuses the wrong DOM node — the wrong chip disappears. A
+/// content-based hash keeps every chip's key stable across inserts,
+/// removals, and reorders.
+fn attachment_key(att: &PendingAttachment) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    att.name.hash(&mut h);
+    att.size.hash(&mut h);
+    format!("{:x}", h.finish())
+}
+
 /// banner for permissions that the browser already surfaces.
 pub(crate) fn read_file_list_into(
     file_list: &web_sys::FileList,
@@ -137,7 +154,7 @@ pub(crate) fn AttachmentPreviewBar(attachments: RwSignal<Vec<PendingAttachment>>
                     each=move || {
                         attachments.get().into_iter().enumerate().collect::<Vec<_>>()
                     }
-                    key=|(idx, f)| format!("{}:{}", idx, f.name)
+                    key=|(_idx, f): &(usize, PendingAttachment)| attachment_key(f)
                     children=move |(idx, file)| {
                         let file_name = file.name.clone();
                         let file_size = format_size(file.size);
@@ -193,5 +210,36 @@ mod tests {
     fn format_size_uses_mb_at_threshold() {
         assert_eq!(format_size(1024 * 1024), "1.0 MB");
         assert_eq!(format_size(3 * 1024 * 1024 + 1024 * 512), "3.5 MB");
+    }
+
+    fn att(name: &str, size: u64) -> PendingAttachment {
+        PendingAttachment {
+            name: name.into(),
+            size,
+            mime_type: "text/plain".into(),
+            data_base64: String::new(),
+        }
+    }
+
+    #[test]
+    fn attachment_for_key_uses_stable_hash_not_index() {
+        // c.txt sits at idx 2 in `with_b`; after removing b, c.txt shifts to
+        // idx 1 in `without_b`. The <For> key for c.txt MUST be stable across
+        // that shift — otherwise leptos reuses the wrong DOM node when a
+        // middle attachment is removed.
+        let with_b = vec![att("a.txt", 100), att("b.txt", 200), att("c.txt", 300)];
+        let without_b = vec![att("a.txt", 100), att("c.txt", 300)];
+        let key_c_at_idx_2 = attachment_key(&with_b[2]);
+        let key_c_at_idx_1 = attachment_key(&without_b[1]);
+        assert_eq!(key_c_at_idx_2, key_c_at_idx_1);
+    }
+
+    #[test]
+    fn attachment_key_is_deterministic() {
+        let a = att("x.png", 999);
+        assert_eq!(attachment_key(&a), attachment_key(&a));
+        // Two distinct attachments with the same identity should still match.
+        let a2 = att("x.png", 999);
+        assert_eq!(attachment_key(&a), attachment_key(&a2));
     }
 }

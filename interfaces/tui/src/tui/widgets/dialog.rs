@@ -107,7 +107,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     frame.render_widget(question, question_area);
 
     // Render options
-    let option_lines: Vec<Line> = dialog
+    let mut option_lines: Vec<Line> = dialog
         .options
         .iter()
         .enumerate()
@@ -123,6 +123,22 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
             Line::from(Span::styled(format!("  [{}] {}", i + 1, opt), style))
         })
         .collect();
+
+    // If the option list overflows the visible area, signal that there is
+    // more below — without this, the user has no way to know the list was
+    // truncated and pressing a high number key silently does nothing.
+    let total_options = dialog.options.len();
+    let visible_options = options_area.height as usize;
+    if total_options > visible_options && visible_options >= 2 {
+        // Trade one option row for the indicator so the hint actually fits.
+        let reserve = visible_options - 1;
+        let hidden = total_options - reserve;
+        option_lines.truncate(reserve);
+        option_lines.push(Line::from(Span::styled(
+            format!("  \u{2193} {hidden} more"),
+            Style::default().fg(theme().muted),
+        )));
+    }
 
     let options_widget = Paragraph::new(option_lines);
     frame.render_widget(options_widget, options_area);
@@ -313,5 +329,77 @@ mod tests {
 
         dialog.multi_select = true;
         assert!(hint_for(&dialog).contains("commas"));
+    }
+
+    /// Render `dialog` into a `(w, h)` test backend and return the visible
+    /// text as a single string (rows joined by '\n'). Mirrors the helper
+    /// `command_palette` uses so a regression on what the user actually sees
+    /// is caught here, not only in a code review.
+    fn paint(dialog: &DialogState, w: u16, h: u16) -> String {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(w, h);
+        let mut term = Terminal::new(backend).expect("backend");
+        term.draw(|f| render_dialog(f, dialog, f.area()))
+            .expect("draw");
+        let buf = term.backend().buffer().clone();
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| {
+                        buf.cell((x, y))
+                            .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn dialog_with(options: Vec<&'static str>) -> DialogState {
+        DialogState {
+            session_key: "k".into(),
+            question: "Pick one".into(),
+            options: options.into_iter().map(String::from).collect(),
+            selected: 0,
+            multi_select: false,
+            secret: false,
+            input: String::new(),
+            typing: false,
+        }
+    }
+
+    /// **B8's guard.** When the menu outgrows the box, the user has no way to
+    /// know there is more to scroll to without a visible affordance — the
+    /// question looks complete and pressing the next number key silently
+    /// does nothing. Pin the indicator so a future "let's drop the trailing
+    /// row, it never has content" cleanup is caught here.
+    #[test]
+    fn dialog_shows_more_indicator_when_options_exceed_visible() {
+        // Eight options in a 12-row frame: the dialog borders eat two rows
+        // and the question / answer / blanks take another four, leaving the
+        // list visibly truncated. The rest MUST be signalled.
+        let dialog = dialog_with(vec![
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+        ]);
+        let screen = paint(&dialog, 50, 12);
+        assert!(
+            screen.contains("more"),
+            "no scroll indicator on screen:\n{screen}"
+        );
+    }
+
+    /// The indicator is for "there is more below", not decoration. Showing
+    /// it on a short list is a louder lie than the silent scroll — the user
+    /// presses Up/Down expecting hidden rows and gets nothing.
+    #[test]
+    fn dialog_omits_more_indicator_when_options_fit() {
+        // Three options in a roomy 24-row frame: there is nothing to scroll.
+        let dialog = dialog_with(vec!["alpha", "bravo", "charlie"]);
+        let screen = paint(&dialog, 60, 24);
+        assert!(
+            !screen.contains("more"),
+            "spurious scroll indicator on a short list:\n{screen}"
+        );
     }
 }

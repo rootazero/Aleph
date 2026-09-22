@@ -878,6 +878,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         message.with_untracked(|m| m.as_ref().map(|m| run_id_from_message_id(&m.id)));
     let run_for_cost = message_run_id.clone().unwrap_or_default();
     let run_for_halt = message_run_id.clone().unwrap_or_default();
+    let run_for_uncertainty = message_run_id.clone().unwrap_or_default();
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code
@@ -1065,6 +1066,35 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         })
     };
 
+    // T2.13: small chip on the trailing assistant bubble surfacing the run's
+    // latest uncertainty note. Same shape and lifetime as `halt_view` — same
+    // per-run map, same clear-on-settle hook, same projector seam — but for
+    // a different frame (`StreamEvent::UncertaintySignal` instead of
+    // `run_complete.summary.terminate_reason`). Sits below the bubble next to
+    // the halt / cost line; never renders for user bubbles, never renders when
+    // the run produced no note, and never carries over into the next turn because
+    // `complete_run` / `fail_run` clear it the moment the run settles.
+    let uncertainty_view = move || {
+        if is_user() {
+            return None;
+        }
+        let note = chat
+            .uncertainty_signals
+            .with(|m| m.get(&run_for_uncertainty).cloned())?;
+        // Tooltip: short verb-noun so it survives a translation; the wire
+        // shape (`uncertainty: String`, `suggested_action: enum`) is what it
+        // describes. Mirrors `halt_view`'s `title=` style.
+        let title = format!("{}: {}", note.action.description(), note.uncertainty);
+        Some(view! {
+            <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
+                        flex items-center gap-1"
+                 title=title>
+                <span>"\u{2753}"</span>
+                <span>{note.uncertainty}</span>
+            </div>
+        })
+    };
+
     // Team chat: Layout A — avatar disc outside the bubble + agent name above.
     // Only when message.agent_id is Some (team message). Zero regression on the
     // single-agent path (agent_id is None → layout_a is None).
@@ -1212,6 +1242,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 {model_view}
                                 {cost_view}
                                 {halt_view}
+                                {uncertainty_view}
                             </div>
                         </div>
                     </div>
@@ -1249,10 +1280,38 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 let content = message.with_untracked(|m| {
                                     m.as_ref().map(|m| m.content.clone()).unwrap_or_default()
                                 });
+                                // Snapshot the attachment list the same way:
+                                // user messages do not mutate after creation,
+                                // so a one-time read avoids an unused reactive
+                                // subscription per row. Chips render below the
+                                // text — the same place they sat in the
+                                // composer tray, so the user's eye keeps the
+                                // same mental picture of "what did I just send".
+                                let attachments = message.with_untracked(|m| {
+                                    m.as_ref()
+                                        .map(|m| m.attachments.clone())
+                                        .unwrap_or_default()
+                                });
                                 view! {
                                     <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
                                         {content}
                                     </div>
+                                    {(!attachments.is_empty()).then(move || view! {
+                                        <div class="flex flex-wrap gap-1 mt-1.5">
+                                            <For
+                                                each=move || attachments.clone()
+                                                key=|a| a.name.clone()
+                                                children=|a| view! {
+                                                    <span
+                                                        class="attachment-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-sunken border border-border text-[11px] text-text-secondary"
+                                                        title={a.mime}
+                                                    >
+                                                        <span class="name font-medium">{a.name}</span>
+                                                    </span>
+                                                }
+                                            />
+                                        </div>
+                                    })}
                                 }.into_any()
                             } else {
                                 // Assistant text — the paced renderer is mounted
@@ -1264,6 +1323,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             {model_view}
                             {cost_view}
                             {halt_view}
+                            {uncertainty_view}
                         </div>
                     </div>
                 }.into_any()
@@ -1680,6 +1740,76 @@ mod bubble_width_tests {
             "expected at least the single-agent and team bubbles to be \
              checked, saw {checked} — the markup this guard scans has moved \
              and it is now reporting green on nothing"
+        );
+    }
+}
+
+/// Source-pattern guard: the user bubble must render the attachments the
+/// user sent as chips below the text, otherwise they vanish from history
+/// the moment they are sent.
+///
+/// The projection wiring (`ChatMessage.attachments` populated by
+/// `ChatState::push_user_message_with_attachments`) is exercised by tests
+/// inside `state/mod.rs`; this guard is the half that would otherwise be
+/// invisible to a type checker — a render branch that quietly omits the
+/// new field after the message already carries it. Asserting on the
+/// production source catches the omission without needing a render harness
+/// (the `aleph-panel` crate is `csr`-only; see Phase 1 audit for why
+/// snapshot tests are structurally unavailable here).
+#[cfg(test)]
+mod attachment_chip_render_tests {
+    /// The user-bubble branch in `MessageBubble` (the `is_user()` arm)
+    /// must render every `message.attachments` entry as a chip element.
+    /// The exact class names are not pinned — `attachment-chip` is the
+    /// CSS hook the project uses elsewhere — but the iterated mapping over
+    /// `message.attachments` is the load-bearing shape: a `for` loop over
+    /// the field, with `a.name` and `a.mime` rendered into the DOM.
+    #[test]
+    fn user_bubble_renders_sent_attachments_as_chips() {
+        let src = include_str!("messages.rs");
+        let production = crate::i18n_census::production_lines(src);
+
+        // The user-bubble render lives in the inline view! of the
+        // `MessageBubble` component. Anchor on `whitespace-pre-wrap` (the
+        // text container), then take the next ~40 production lines as the
+        // arm body — enough to capture both the text div and the chip
+        // block that follows.
+        let lines: Vec<(usize, String)> = production
+            .into_iter()
+            .filter(|(_, l)| !l.trim().is_empty())
+            .collect();
+        let anchor_idx = lines
+            .iter()
+            .position(|(_, l)| l.contains("whitespace-pre-wrap"))
+            .expect("user-bubble text container must exist in MessageBubble");
+        let arm_end = (anchor_idx + 50).min(lines.len());
+        let arm: String = lines[anchor_idx..arm_end]
+            .iter()
+            .map(|(_, l)| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            arm.contains("attachments")
+                && (arm.contains(".attachments") || arm.contains("attachments.clone()")),
+            "user-bubble arm does not reference the `.attachments` field — \
+             sent files will silently disappear from history. Saw arm:\n{arm}"
+        );
+        assert!(
+            arm.contains("a.name"),
+            "user-bubble arm does not render `a.name` — the chip has no \
+             label to identify the file. Saw arm:\n{arm}"
+        );
+        assert!(
+            arm.contains("a.mime"),
+            "user-bubble arm does not render `a.mime` — the chip has no \
+             type tag for assistive tech or copy/paste. Saw arm:\n{arm}"
+        );
+        assert!(
+            arm.contains("attachment-chip"),
+            "user-bubble arm does not tag the chip with the `attachment-chip` \
+             CSS hook — styling and aria hooks have nothing to bind to. \
+             Saw arm:\n{arm}"
         );
     }
 }

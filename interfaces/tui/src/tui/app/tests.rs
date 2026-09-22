@@ -59,12 +59,26 @@ fn tool_rows(state: &AppState) -> Vec<&ToolRow> {
 #[test]
 fn a_halt_notice_is_written_in_one_language() {
     use super::events::halt_notice;
-    let en = halt_notice("hit_max_iterations", UiLocale::En);
+    let en = halt_notice("hit_max_iterations", Some(UiLocale::En));
     assert_eq!(en, "Run stopped: hit max iterations");
-    let zh = halt_notice("hit_max_iterations", UiLocale::Zh);
+    let zh = halt_notice("hit_max_iterations", Some(UiLocale::Zh));
     assert_eq!(zh, "运行已停止：已达迭代上限");
     // An unrecognised token still says something true.
-    assert!(halt_notice("quota_exceeded_v9", UiLocale::En).contains("quota_exceeded_v9"));
+    assert!(halt_notice("quota_exceeded_v9", Some(UiLocale::En)).contains("quota_exceeded_v9"));
+}
+
+/// Before locale is resolved (the first frame a TUI may paint while the
+/// environment read is still settling), the surface must not flash a raw
+/// token. It defaults to English — which has a row for every known token
+/// — so an unrecognised token falls through the label verbatim inside a
+/// localised sentence rather than appearing naked.
+#[test]
+fn halt_notice_falls_back_when_locale_is_unset() {
+    use super::events::halt_notice;
+    let token = "halt-token-x";
+    let notice = halt_notice(token, None);
+    assert!(!notice.is_empty());
+    assert!(notice.contains("halt-token-x") || notice.contains(token));
 }
 
 /// The arm fires, and it reads `terminate_detail` before `terminate_reason`.
@@ -227,13 +241,14 @@ fn my_own_send_pulls_the_viewport_back_down() {
         id: "peer-1".into(),
         text: "a teammate".into(),
         at_ms: None,
+        attachments: Vec::new(),
     });
     state.settle_scroll();
     assert_eq!(state.scroll_offset, 12, "a peer's row moved my viewport");
     assert!(state.unseen_below);
 
     // My own send does.
-    state.add_user_message("mine".into());
+    state.add_user_message("mine".into(), vec![]);
     state.settle_scroll();
     assert_eq!(state.scroll_offset, 0);
     assert!(!state.unseen_below);
@@ -316,7 +331,7 @@ fn ensure_assistant_message_idempotent() {
 #[test]
 fn add_user_message_appended() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
         TranscriptEntry::UserText { text: content, .. } => assert_eq!(content, "hello"),
@@ -474,7 +489,7 @@ fn a_typed_answer_is_sent_verbatim() {
 #[test]
 fn switch_session_clears_messages() {
     let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     assert_eq!(state.messages.len(), 1);
 
     state.switch_session("s2");
@@ -549,7 +564,7 @@ fn provider_usage_cache_stat_matches_canonical_formula() {
 #[test]
 fn clear_screen_keeps_session() {
     let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("hello".into());
+    state.add_user_message("hello".into(), vec![]);
     state.total_tokens = 500;
 
     state.clear_screen();
@@ -1591,6 +1606,47 @@ fn adopting_a_different_key_drops_the_stale_settings() {
     state.apply_session_snapshot(snapshot("old"));
     state.adopt_canonical_session_key("agent:main:main:s7");
     assert_eq!(state.session_knobs(), SessionKnobs::default());
+}
+
+/// A pin set by `select_model` flows through the snapshot the same way as
+/// the four settable knobs: the status bar must show it, not the model that
+/// last served (which disagrees for exactly one turn after a pick — the
+/// caption would otherwise name the model the user just switched away from).
+#[test]
+fn session_knobs_includes_model_pin_from_session_snapshot() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(snapshot("agent:main:main:s3"));
+
+    assert_eq!(
+        state.session_knobs().model_pin,
+        Some("claude-opus-5"),
+        "the pin must ride through session_knobs so the status bar can paint it"
+    );
+}
+
+/// A conversation with no pin must NOT report one — the renderer has to know
+/// that "unset" is a real state (the install default is in play), not a
+/// missing field.
+#[test]
+fn session_knobs_with_no_pin_returns_none() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "no-pin".into(),
+        model_pin: None,
+        model_pin_provider: None,
+        // The other knobs stay defaulted; the assertion is only about the pin.
+        ..SessionSnapshot::default()
+    });
+
+    assert!(
+        state.session_knobs().model_pin.is_none(),
+        "an unset pin must not become a guessed default in the status bar"
+    );
+    assert_eq!(
+        state.session_knobs(),
+        SessionKnobs::default(),
+        "no other knob moves just because the pin is unset"
+    );
 }
 
 /// A locally-set knob shows immediately, without waiting for the next attach —
@@ -2695,6 +2751,49 @@ fn an_impossible_age_falls_back_instead_of_panicking() {
     );
 }
 
+/// The elapsed timer's terminal value: `run_started_at` is cleared on
+/// `RunComplete` (T2.9).
+///
+/// `AppState::run_started_at` drives the status-bar working indicator. The
+/// chosen contract is "the timer reads while a run is in flight, disappears
+/// when it ends" — the inverse of "freeze the final value", which would
+/// make the busy spinner stick at the same number for the lifetime of the
+/// finished transcript and read as a still-running turn. The render guard
+/// in `tui/render.rs` already gates on `current_run.is_some()`, so
+/// `None` here cleanly hides the indicator without any extra check at the
+/// render site. If this test ever goes red, someone changed either
+/// `events.rs`'s `RunComplete` arm or `run_clock.rs` to freeze a sentinel
+/// and the status bar will start lying about liveness.
+#[test]
+fn run_complete_clears_the_elapsed_timer() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    // Accepted → timer is on.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-1".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    assert_eq!(state.current_run.as_deref(), Some("run-1"));
+    assert!(
+        state.run_started_at.is_some(),
+        "RunAccepted must light the working indicator"
+    );
+
+    // Complete → timer disappears.
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 2,
+        summary: RunSummary::default(),
+        total_duration_ms: 12_345,
+    });
+    assert!(
+        state.run_started_at.is_none(),
+        "RunComplete must clear the indicator — the freeze alternative would \
+         keep a stale number on the status bar for the lifetime of the transcript"
+    );
+}
+
 /// The adopted run is recorded by home session, so a `/session` switch away and
 /// back behaves like any other run: dropped while elsewhere, kept on return.
 #[test]
@@ -2959,6 +3058,7 @@ fn beginning_a_reattach_resets_the_run_but_not_the_transcript() {
         id: "u1".into(),
         text: "from before the drop".into(),
         at_ms: None,
+        attachments: Vec::new(),
     });
     let before = state.messages.len();
 
