@@ -231,6 +231,7 @@ impl ExtensionManager {
                             .register_plugin(Self::unparsed_record(
                                 dir_path,
                                 &e.to_string(),
+                                found.origin,
                                 found.scope_key.clone(),
                             ));
                     }
@@ -368,22 +369,24 @@ impl ExtensionManager {
     /// The `Error` row for a directory whose manifest does not parse. It used
     /// to vanish at `debug!` level — on every surface identical to "never
     /// installed" — so it gets a row, an id derived from the directory, the
-    /// parse error, and the key of where it was found, so `plugins.list` can
-    /// say which project owns the broken plugin. Origin stays `Global` (as it
-    /// always was for this row).
+    /// parse error, and where it was found. Origin and key are both facts of
+    /// that discovery hit (`PluginOrigin::classify` derives the one,
+    /// `ScopeKey::from_discovery` the other), applied here for the row that
+    /// has no parsed manifest — a hardcoded origin would let the two disagree
+    /// on one row.
     fn unparsed_record(
         dir_path: &std::path::Path,
         error: &str,
+        origin: PluginOrigin,
         scope_key: ScopeKey,
     ) -> PluginRecord {
         let leaf = dir_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| dir_path.display().to_string());
-        let mut record =
-            PluginRecord::new(leaf.clone(), leaf, PluginKind::Static, PluginOrigin::Global)
-                .with_root_dir(dir_path.to_path_buf())
-                .with_error(error.to_string());
+        let mut record = PluginRecord::new(leaf.clone(), leaf, PluginKind::Static, origin)
+            .with_root_dir(dir_path.to_path_buf())
+            .with_error(error.to_string());
         record.scope_key = scope_key;
         record
     }
@@ -1498,7 +1501,8 @@ priority = 60
 
     /// The parse-error row (a directory whose manifest will not parse) also
     /// carries the key of where it was found, so `plugins.list` can say which
-    /// project owns the broken plugin.
+    /// project owns the broken plugin — and the origin derived from the same
+    /// discovery hit, so the two facts cannot disagree on one row.
     #[tokio::test]
     async fn load_all_stamps_the_key_on_parse_error_rows_too() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
@@ -1520,6 +1524,11 @@ priority = 60
         assert_eq!(
             record.scope_key,
             crate::extension::visibility::ScopeKey::project(dir.path())
+        );
+        assert_eq!(
+            record.origin,
+            PluginOrigin::Workspace,
+            "a project-parent hit classifies as Workspace (types/plugins.rs::classify)"
         );
     }
 
