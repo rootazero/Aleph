@@ -281,44 +281,124 @@ the sub-trait split as the preferred shape when it is taken. Compare
 the type simply gained more `impl` blocks and the only cost was `pub(super)`
 where a stage calls another stage.
 
+#### Round 1 newly-declared leftovers (2026-09-22)
+
+The Round-1 split pass surveyed every file ≥3000 lines; most were either
+splittable or already decomposed. The following ten are kept whole — the
+"why" matches the `store_impl.rs` shape above (single concept whose depth
+the language forbids mechanically extracting). See
+[`docs/superpowers/specs/2026-09-22-large-file-split-design.md`](../superpowers/specs/2026-09-22-large-file-split-design.md)
+§5.2 for the full table; key entries below.
+
+#### `src/bin/aleph-server/commands/start/mod.rs` (4067 行)
+
+**保留理由**：文件本身 L58-63 明确写「`start_server` is a single ~2270-line monolithic bootstrap sequence. Its hundreds of locals are threaded through sequential phases and consumed at the tail, so the body cannot be split into helper fns without changing data flow」。顶层已有 5 个子模块 (`builder` / `orchestrator_init` / `helpers` / `runtime_warmup` / `bootstrap_factories`) 拆出约 6300 行，剩余主体不可拆。
+
+**何时重新评估**：若作者本人重构 L58-63 描述的 body 为多 fn，先重打开本任务。
+
+#### `src/extension/mod.rs` (1884 行)
+
+**保留理由**：已 27 个 .rs 文件 + 6 子目录（manifest/marketplace/registrar/registry/runtime/types）；4 个 `impl ExtensionManager` 块已拆到 plugin_ops / service_ops / skill_ops / projection — 这就是 Pattern C 想做的事，只是文件名不同。`loader.rs` / `registry/` / `types/` 名字已被私有模块占用，强行重命名代价远超收益。
+
+**何时重新评估**：若需新增跨现有 plugin_ops/service_ops/skill_ops/projection 的 facade 层。
+
+#### `src/extension/hooks/mod.rs` (1278 行)
+
+**保留理由**：6 个 sibling 子模块已拆（executor 1538 / consent 823 / json_output 349 / output_budget 402 / user_settings 614）；mod.rs 是 partial decomposition（5 types + 12 pub fn + 5 impl）；不是 thin facade。
+
+**何时重新评估**：若 `executor.rs`（现 1538 行，比 mod.rs 还大）需要进一步拆分为 rail / clipboard / tool 三子文件。
+
+#### `src/gateway/handlers/agent.rs` (3657 行)
+
+**保留理由**：1300 行 production + **2357 行 `mod tests`**。用户裁定「测试不拆」使纯 Pattern A 拆分仅是 relocation（test 从 agent.rs 抽出到 agent/tests.rs）；相对路径迁移需手工修改 50+ 处「super::super::」引用，估计需 touch 20+ tests；原始 hybrid split 代价超过收益。
+
+**何时重新评估**：若 tests 模块迁出到独立 `agent/tests.rs` 后收益>代价，或允许拆分 tests 子模块。
+
+#### `src/browser/page_state/fetch_chromium.rs` (7236 行)
+
+**保留理由**：单 capture 算术（DOMSnapshot + 跨源 stitch）；source_scan 守卫锁定 RawDom 构造位置。
+
+**潜在风险**：若强行拆为 stitch.rs + capture.rs，会让 `only_the_page_state_fetchers_construct_a_raw_dom` 守卫定位漂移。
+
+**何时重新评估**：lines 突破 10000；或 Rust 加 `impl` 跨文件语法。
+
+#### `src/executor/builtin_registry/definitions.rs` (4115 行)
+
+**保留理由**：纯 catalog 数据；模块文档禁描述字面重复。
+
+**何时重新评估**：若 catalog 拆为多源（plugins 注入条目）且每个源都有独立测试。
+
+#### `src/gateway/event_visibility.rs` (3686 行)
+
+**保留理由**：SessionOwnership 与 EventVisibilityIndex 互锁；2 impl 服务同一概念。
+
+**何时重新评估**：若 SessionIdentity 衍生第二概念。
+
+#### `src/builtin_tools/desktop/native.rs` (3665 行)
+
+**保留理由**：平台实现深度；macOS 一份，Linux/Windows 平行。
+
+**何时重新评估**：Linux/Windows 也达到同等规模。
+
+#### `src/capability/census.rs` (3540 行)
+
+**保留理由**：单一推导规则 + 11 个 guard tests；source_scan relative path 强耦合。
+
+**何时重新评估**：若 guard tests 拆为多文件测试。
+
+#### `src/memory/dreaming/mod.rs` (3464 行)
+
+**保留理由**：13 个兄弟子文件已就位（含 stages/、evolution/）；mod.rs 仅 orchestration。
+
+**何时重新评估**：orchestration 突破 5000 行。
+
 ---
 
 ## 7. Refactoring Backlog
 
 Files identified for refactoring, ordered by priority. Each item links to the pattern that should be applied.
 
+### Round 1 (2026-09-22) outcomes
+
+Completed: `src/gateway/server/handler.rs` (PR #1, commit `68f3290f`), `src/builtin_tools/workflow_tool.rs` (PR #4, commit `ab617384b`), `src/gateway/session_projector.rs` (PR #6, commit `3a9c882ae`).
+
+Reclassified as declared leftovers (see §6): `start/mod.rs` (4067), `extension/mod.rs` (1884), `extension/hooks/mod.rs` (1278), `handlers/agent.rs` (3657).
+
 ### P0 — Critical (职责严重混杂)
 
-| File | Lines | Problem | Pattern |
-|------|-------|---------|---------|
-| `src/bin/aleph-server/commands/start/mod.rs` | ~800 | Single large function, no structure | Pattern D (refactored to `builder/`) |
-| `src/extension/mod.rs` | 1159 | God Object, 46 public methods | Pattern C |
+| File | Lines | Problem | Pattern | Status |
+|------|-------|---------|---------|--------|
+| `src/gateway/server/handler.rs` | 3527 | 5 lifecycle phases + 0 types | Pattern D | ✅ Round 1 |
+| `src/bin/aleph-server/commands/start/mod.rs` | 4067 | Single large function, no structure | Pattern D (→ declared leftover §6) | ❌→§6 |
+| `src/extension/mod.rs` | 1884 | God Object, 46 public methods | Pattern C (→ declared leftover §6) | ❌→§6 |
 
 ### P1 — High (明显可拆分)
 
-| File | Lines | Problem | Pattern |
-|------|-------|---------|---------|
-| `src/memory/context/mod.rs` | ~600 | Types now split across `context/` submodules | Pattern B (completed) |
-| `src/memory/note_retrieval/mod.rs` | 1808 → 81 | 880-line inherent impl + 875 lines of inline tests | Pattern A + `tests.rs` (completed 2026-08-23) |
-| `src/memory/store/sqlite/notes/store_impl.rs` | 2560 | One `impl NoteStore` block, 53 methods | **Blocked — see below** |
-| `src/browser/mod.rs` | 1459 | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` |
-| `src/gateway/execution_engine.rs` | 1088 | Two engine implementations, state models mixed in | Pattern A + `types.rs` |
+| File | Lines | Problem | Pattern | Status |
+|------|-------|---------|---------|--------|
+| `src/memory/context/mod.rs` | ~600 | Types now split across `context/` submodules | Pattern B | ✅ prior round |
+| `src/memory/note_retrieval/mod.rs` | 1808 → 81 | 880-line inherent impl + 875 lines of inline tests | Pattern A + `tests.rs` | ✅ 2026-08-23 |
+| `src/memory/store/sqlite/notes/store_impl.rs` | 2571 | One `impl NoteStore` block, 53 methods | **Blocked (declared leftover §6)** | ❌→§6 |
+| `src/browser/mod.rs` | 244 (post-split) | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` | ✅ prior round |
+| `src/gateway/execution_engine.rs` | 1088 → 40 files | Two engine implementations, state models mixed in | Pattern A + `types.rs` | ✅ prior round |
+| `src/gateway/handlers/agent.rs` | 3657 | 1300 production + 2357 tests; tests stay whole | Pattern A (→ declared leftover §6) | ❌→§6 |
 
 ### P2 — Medium (可优化)
 
-| File | Lines | Problem | Pattern |
-|------|-------|---------|---------|
-| `src/tools/server.rs` | 1034 | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation |
-| `src/extension/hooks/mod.rs` | 993 | Similar to `extension/mod.rs` | Pattern C |
-| `src/dispatcher/model_router/health/status.rs` | 997 | Health status logic mixed with model routing | Pattern A |
+| File | Lines | Problem | Pattern | Status |
+|------|-------|---------|---------|--------|
+| `src/tools/server.rs` | (renamed/removed) | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation | ✅ prior round |
+| `src/extension/hooks/mod.rs` | 1278 | Partial decomposition (→ declared leftover §6) | Pattern C | ❌→§6 |
+| `src/builtin_tools/workflow_tool.rs` | 5100 | 6 DTO + 4 impl + PhaseTally + main | Pattern A | ✅ Round 1 (commit `ab617384b`) |
+| `src/gateway/session_projector.rs` | 3359 | 3 struct + 4 impl + main | Pattern A | ✅ Round 1 (commit `3a9c882ae`) |
 
 ### P3 — Low (轻度优化)
 
-| File | Lines | Problem | Pattern |
-|------|-------|---------|---------|
-| `src/thinker/prompt_builder/` | ~1200 | `Message`/`MessageRole` belong in `types.rs` | Extract `types.rs` |
-| `src/dispatcher/types/unified.rs` | 1003 | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` |
-| `src/providers/profile_manager.rs` | 1024 | Review for separation of auth vs. profile concerns | TBD after review |
+| File | Lines | Problem | Pattern | Status |
+|------|-------|---------|---------|--------|
+| `src/thinker/prompt_builder/` | ~1200 → 1570 | `Message`/`MessageRole` belong in `types.rs` | Extract `types.rs` | partially done |
+| `src/dispatcher/types/unified.rs` | (renamed/removed) | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` | ✅ prior round |
+| `src/providers/profile_manager.rs` | (renamed/removed) | Review for separation of auth vs. profile concerns | TBD after review | ✅ prior round |
 
 ---
 
@@ -328,4 +408,4 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 
 ---
 
-*Last updated: 2026-02-23. See git log for change history.*
+*Last updated: 2026-09-22 (Round 1 split: handler.rs / workflow_tool.rs / session_projector.rs + 4 new declared leftovers). See git log for change history.*
