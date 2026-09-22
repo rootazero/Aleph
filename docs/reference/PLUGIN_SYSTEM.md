@@ -793,7 +793,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 
 | 投影面 | 谁读它 |
 |--------|--------|
-| `utils::paths::PLUGIN_SKILL_DIRS` | `get_all_skills_dirs` → `skill_read` / `skill_list` 的搜索集 |
+| `utils::paths::PLUGIN_SKILL_DIRS` | `get_all_skills_dirs` → `skill_read` / `skill_list` 的搜索集；`skill::guess_source` → 技能的归属插件 id（随目录一起发布的**注册表 id**，不是目录名——D-4，2026-09-22） |
 | `agents::PLUGIN_SUBAGENTS` | `AgentRegistry::resolve`（委派）+ harness 的 `<available_agents>` |
 | `SkillSystem` | 模型的 `<available_skills>` 索引 |
 | `ExtensionManager::active_plugin_tools` | 工具名索引 |

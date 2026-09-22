@@ -764,14 +764,56 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Extract the owning plugin id from a plugin-bundled skill path.
+/// The owner of a skill under a PUBLISHED plugin skill dir — the primary
+/// derivation of "which plugin owns this skill".
 ///
-/// Plugin skills live at `<…>/plugins/<plugin_id>/skills/<skill>/SKILL.md`, and
+/// `extension::projection` publishes every active plugin's `<root>/skills`
+/// together with the plugin's REGISTRY id (`PublishedPluginSkillDir`), copied
+/// from the same `PluginRecord` as its `ScopeKey`. Among the published dirs
+/// that are an ancestor of (or equal to) `path`, the longest wins. Both
+/// spellings are compared — the literal `starts_with` first, then both sides
+/// canonicalised — because `rescan_dirs` hands this the very dirs that were
+/// published (same spelling) while the watcher's `reload_file` and
+/// `skill_reader` may hand canonical paths. `None` = no published dir covers
+/// `path`.
+fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+    let published = crate::utils::paths::plugin_skill_dirs();
+    if published.is_empty() {
+        return None;
+    }
+    let longest_covering = |covers: &dyn Fn(&Path) -> bool| {
+        published
+            .iter()
+            .filter(|d| covers(&d.dir))
+            .max_by_key(|d| d.dir.components().count())
+            .map(|d| d.plugin_id.clone())
+    };
+    longest_covering(&|dir| path.starts_with(dir)).or_else(|| {
+        let canonical = crate::extension::visibility::canonical_root(path);
+        longest_covering(&|dir| {
+            canonical.starts_with(crate::extension::visibility::canonical_root(dir))
+        })
+    })
+}
+
+/// FALLBACK owner for a plugin skill path that no published dir covers:
+/// the directory component immediately before `skills/`.
+///
+/// Plugin skills live at `<…>/plugins/<dir>/skills/<skill>/SKILL.md`, and
 /// bundled ones nest a marketplace layer
-/// (`<…>/plugins/cache/<market>/<plugin_id>/skills/…`). Rather than assume the
+/// (`<…>/plugins/cache/<market>/<dir>/skills/…`). Rather than assume the
 /// component right after `plugins`, take the component immediately *before* the
 /// `skills` segment — robust to both layouts. Returns `None` for non-plugin
 /// paths (no `plugins` ancestor before a `skills` segment).
+///
+/// The directory name is NOT the registry id (`My_Plugin` registers as
+/// `my-plugin`), so this only runs when [`plugin_id_from_published_dirs`]
+/// found nothing — a plugin that is not loaded, errored, or not yet
+/// republished. Its result is an id the registry may not name, which every
+/// visibility face reads as "not visible": that is the correct fail-closed
+/// answer for an unloaded plugin's skill. It must stay `Plugin(_)` rather
+/// than falling through to `Workspace` / `Global` / `Bundled`, which would be
+/// fail-open (unscoped visibility for a skill nobody vouched for).
 fn plugin_id_from_path(path: &Path) -> Option<String> {
     let comps: Vec<String> = path
         .components()
@@ -793,7 +835,10 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 
 /// Guess the `SkillSource` from a file path.
 ///
-/// - Under `<…>/plugins/<id>/skills/` (any root) → Plugin(id)
+/// - Under a published plugin skill dir (`extension::projection`) →
+///   Plugin(<registry id published with that dir>)
+/// - Under `<…>/plugins/<dir>/skills/` that no published dir covers →
+///   Plugin(<dir>) — the fail-closed fallback for an unloaded plugin
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled
 /// - Under `~/.aleph/skills/` otherwise → Global
 /// - Contains `.aleph/skills` but not under home → Workspace
@@ -801,12 +846,16 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 pub fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
-    // Plugin-bundled skills take precedence: they live under a `plugins/<id>/
+    // Plugin-bundled skills take precedence: they live under a `plugins/<dir>/
     // skills` tree (never matching the `.aleph/skills` check below) and must be
     // classed `Plugin` so they outrank Global/Bundled in the prompt index and
     // `skill_read` collision resolution. Before this branch every plugin skill
-    // fell through to `Bundled`, mis-ranking it as lowest priority.
-    if let Some(plugin_id) = plugin_id_from_path(path) {
+    // fell through to `Bundled`, mis-ranking it as lowest priority. The owner
+    // is the registry id published with the covering dir; the path parse is
+    // only the fallback for a dir nothing published (see both fns' docs).
+    if let Some(plugin_id) =
+        plugin_id_from_published_dirs(path).or_else(|| plugin_id_from_path(path))
+    {
         return SkillSource::Plugin(crate::domain::skill::PluginId::new(plugin_id));
     }
 
@@ -1093,6 +1142,18 @@ Content two."#,
             None
         );
         assert_eq!(plugin_id_from_path(Path::new("/tmp/whatever")), None);
+    }
+
+    /// The fallback for a plugin path no published dir covers keeps the
+    /// path-derived id: an id the registry may not name, which every face
+    /// reads as "not visible" — the right answer for an unloaded plugin.
+    #[test]
+    fn guess_source_falls_back_to_the_path_for_an_unpublished_plugin_dir() {
+        let p = Path::new("/somewhere/.aleph/plugins/Loose_Dir/skills/x/SKILL.md");
+        assert_eq!(
+            guess_source(p),
+            SkillSource::Plugin(crate::domain::skill::PluginId::new("Loose_Dir"))
+        );
     }
 
     #[test]

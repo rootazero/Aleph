@@ -192,14 +192,27 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
 /// carries a curated `usage` hint (builtins / skills / plugins / custom
 /// commands) or a friendly alias seeded from `tool_metadata::aliases`
 /// (`/model`→select_model, …). `channel` scopes visibility when known.
+///
+/// This is the channel-side list face of the verb `commands.list` serves:
+/// rows a plugin owns are listed only when `owner_visible(plugin_id, ctx)`
+/// says so, with the same daemon-CWD ctx `handle_list_from_registry` derives
+/// (its rationale comment applies here verbatim) — otherwise a channel user
+/// is offered `/proj:cmd` and then refused by the slash fast path.
 pub(crate) async fn render_command_help(
     catalog: &ToolCatalog,
     channel: Option<ChannelType>,
+    owner_visible: &(dyn Fn(&str, &crate::extension::visibility::VisibilityCtx) -> bool + Sync),
 ) -> String {
     let tools = match channel {
         Some(ch) => catalog.list_for_channel(ch).await,
         None => catalog.list_all_for_ui().await,
     };
+    let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(None);
+    let tools = crate::extension::visibility::retain_visible_owned_commands(
+        tools,
+        &visibility,
+        owner_visible,
+    );
 
     let mut curated: Vec<&UnifiedTool> = tools
         .iter()
@@ -1207,7 +1220,7 @@ mod tests {
             ))
             .await;
 
-        let help = render_command_help(&registry, None).await;
+        let help = render_command_help(&registry, None, &|_, _| true).await;
 
         assert!(help.contains("/help"), "curated /help must appear:\n{help}");
         assert!(
@@ -1227,5 +1240,40 @@ mod tests {
             help.contains("namespace"),
             "fold hint line missing:\n{help}"
         );
+    }
+
+    /// `/help` is the channel-side list face of the same verb `commands.list`
+    /// serves: a plugin-owned row the daemon cannot see must not be offered.
+    #[tokio::test]
+    async fn render_command_help_hides_commands_of_plugins_the_daemon_cannot_see() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = ToolCatalog::new();
+        registry.register_builtin_tools().await;
+        // A plugin-owned skill row, carrying the usage hint `register_skills`
+        // gives every skill row (that hint is what makes it a curated line).
+        registry
+            .register_with_conflict_resolution(
+                UnifiedTool::new(
+                    "skill:proj:cmd",
+                    "proj:cmd",
+                    "a plugin command",
+                    ToolSource::Skill {
+                        id: "proj:cmd".into(),
+                        plugin_id: Some("proj".into()),
+                    },
+                )
+                .with_usage("/proj:cmd [input]"),
+            )
+            .await;
+
+        let hidden = render_command_help(&registry, None, &|_, _| false).await;
+        assert!(!hidden.contains("proj:cmd"), "{hidden}");
+        assert!(
+            hidden.contains("/help"),
+            "unowned rows still listed:\n{hidden}"
+        );
+        let shown = render_command_help(&registry, None, &|_, _| true).await;
+        assert!(shown.contains("proj:cmd"), "{shown}");
     }
 }

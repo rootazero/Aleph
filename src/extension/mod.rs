@@ -1723,11 +1723,69 @@ mod tests {
         let published = crate::utils::paths::plugin_skill_dirs();
         let mine = published
             .iter()
-            .find(|(d, _)| d.ends_with("p2-skilled/skills"))
+            .find(|d| d.dir.ends_with("p2-skilled/skills"))
             .expect("plugin skills dir published");
         assert_eq!(
-            mine.1,
+            mine.scope_key,
             crate::extension::visibility::ScopeKey::project(dir.path())
+        );
+    }
+
+    /// D-4: a plugin whose directory name is not its id (`My_Plugin` →
+    /// registry id `my-plugin`, via `sanitize_plugin_id`) must still have its
+    /// skills classified under the REGISTRY id, or every visibility face
+    /// looks up an owner no registry names and drops the skill everywhere.
+    #[tokio::test]
+    async fn plugin_skills_are_owned_by_the_registry_id_not_the_directory_name() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        // Auto-discovered plugin: no manifest, id = sanitize_plugin_id("My_Plugin").
+        let skill = dir.path().join("plugins/My_Plugin/skills/planted");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: planted\ndescription: planted skill\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+
+        let record = manager
+            .get_plugin_record("my-plugin")
+            .await
+            .expect("registered under the sanitised id");
+        let published = crate::utils::paths::plugin_skill_dirs();
+        let entry = published
+            .iter()
+            .find(|d| d.dir == record.root_dir.join("skills"))
+            .expect("the plugin's skills dir is published");
+        assert_eq!(entry.plugin_id, "my-plugin");
+
+        let manifests = manager.skill_system().list_skills().await;
+        let planted = manifests
+            .iter()
+            .find(|m| m.name() == "planted")
+            .expect("the planted skill was loaded");
+        assert_eq!(
+            planted.source(),
+            &crate::domain::skill::SkillSource::Plugin(crate::domain::skill::PluginId::new(
+                "my-plugin"
+            )),
+            "owner must be the registry id, not the directory name"
+        );
+
+        // And the face that dropped it before this task now keeps it.
+        let in_p = crate::extension::visibility::VisibilityCtx {
+            project_root: Some(crate::extension::visibility::canonical_root(dir.path())),
+        };
+        let kept = crate::extension::visibility::retain_visible_plugin_skills(
+            manifests.clone(),
+            &in_p,
+            |id| manager.plugin_scope_key(id),
+        );
+        assert!(
+            kept.iter().any(|m| m.name() == "planted"),
+            "visible in its own project"
         );
     }
 }

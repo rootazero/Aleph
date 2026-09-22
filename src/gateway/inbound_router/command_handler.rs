@@ -502,9 +502,19 @@ impl InboundMessageRouter {
             return Ok(());
         };
 
-        let mut text =
-            crate::gateway::handlers::commands::render_command_help(parser.tool_registry(), None)
-                .await;
+        // The manager-backed owner predicate — the same closure
+        // `tool_catalog_init.rs` hands `commands.list`, this face's twin; no
+        // installed manager = unknown owner = not listed (fail-closed, as
+        // `ExtensionManager::plugin_visible` documents).
+        let mut text = crate::gateway::handlers::commands::render_command_help(
+            parser.tool_registry(),
+            None,
+            &|owner, ctx| {
+                crate::extension::try_extension_manager()
+                    .is_some_and(|m| m.plugin_visible(owner, ctx))
+            },
+        )
+        .await;
         text.push_str(ROUTER_OWNED_HELP_LINES);
 
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);

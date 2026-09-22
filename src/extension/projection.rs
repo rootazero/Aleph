@@ -75,12 +75,15 @@ use super::ExtensionManager;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PluginProjection {
     /// `<root_dir>/skills` of every **active** plugin, with its owner's
-    /// `ScopeKey`, de-duplicated and in registry order. Feeds both the
-    /// `SkillSystem` scan (bare dirs — it indexes everything the process can
-    /// see; per-request narrowing happens at read time via
+    /// REGISTRY id and `ScopeKey`, de-duplicated and in registry order. Feeds
+    /// both the `SkillSystem` scan (bare dirs — it indexes everything the
+    /// process can see; per-request narrowing happens at read time via
     /// `retain_visible_plugin_skills`) and `publish_plugin_skill_dirs`
-    /// (dir + key — the `skill_read` search set filters by key directly).
-    pub(crate) plugin_skill_dirs: Vec<(PathBuf, super::visibility::ScopeKey)>,
+    /// (dir + id + key — the `skill_read` search set filters by key directly,
+    /// and `skill::guess_source` classifies a skill under the id published
+    /// with the dir that covers it, so the owner the faces look up is the one
+    /// the registry names).
+    pub(crate) plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir>,
     /// Sub-agents contributed by **active** plugins, each with its owner's
     /// `ScopeKey` — [`crate::agents::visible_plugin_subagents`] filters by it.
     pub(crate) subagents: Vec<crate::agents::PluginSubagent>,
@@ -103,14 +106,22 @@ impl ExtensionManager {
     async fn derive_plugin_projection(&self, base_skill_dirs: &[PathBuf]) -> PluginProjection {
         let registry = self.plugin_registry.read().await;
 
-        let mut plugin_skill_dirs: Vec<(PathBuf, super::visibility::ScopeKey)> = Vec::new();
+        // The id published with each dir is `record.id` — the registry id —
+        // copied in the same loop as `record.scope_key`, so "whose dir" and
+        // "which key" cannot come from two derivations (D-4: the directory
+        // name is not the id).
+        let mut plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir> = Vec::new();
         for record in registry.list_active_plugins() {
             let dir = record.root_dir.join("skills");
             if dir.is_dir()
                 && !base_skill_dirs.contains(&dir)
-                && !plugin_skill_dirs.iter().any(|(d, _)| *d == dir)
+                && !plugin_skill_dirs.iter().any(|d| d.dir == dir)
             {
-                plugin_skill_dirs.push((dir, record.scope_key.clone()));
+                plugin_skill_dirs.push(crate::utils::paths::PublishedPluginSkillDir {
+                    dir,
+                    plugin_id: record.id.clone(),
+                    scope_key: record.scope_key.clone(),
+                });
             }
         }
 
@@ -161,13 +172,17 @@ impl ExtensionManager {
 
         let projection = self.derive_plugin_projection(&skill_dirs).await;
 
-        skill_dirs.extend(projection.plugin_skill_dirs.iter().map(|(d, _)| d.clone()));
+        skill_dirs.extend(projection.plugin_skill_dirs.iter().map(|d| d.dir.clone()));
 
         // Publish the plugin roots on their own too: `SkillSystem` only feeds
         // the prompt index, while `get_all_skills_dirs` (the `skill_read` /
         // `skill_list` search set) reads this global. Splitting them is what
         // lets a plugin root outside the well-known locations
         // (e.g. `plugins/cache/<market>/<id>/skills`) still be readable.
+        // This publish must precede `skill_system.init` below: the rescan it
+        // triggers classifies each plugin skill's owner through
+        // `skill::guess_source`, which reads the id published here — publish
+        // after and the scan would fall back to the directory name.
         crate::utils::paths::publish_plugin_skill_dirs(projection.plugin_skill_dirs.clone());
         crate::agents::publish_plugin_subagents(projection.subagents.clone());
 

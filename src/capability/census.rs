@@ -133,7 +133,7 @@
 //! | `builtin_tools/scratchpad_registry.rs::STORE_PATH` | `Lazy<Mutex<Option<PathBuf>>>` | "keeps the registry in-memory-only" |
 //! | `builtin_tools/process_journal.rs::RESERVED_THROUGH` | `LazyLock<Mutex<u64>>` | "`0` = nothing reserved (also the value while persistence is off)" |
 //! | `exec/masker.rs::OPERATOR_PATTERNS` | `LazyLock<RwLock<Arc<Vec<…>>>>` | zero mask patterns — redaction degrades to none |
-//! | `utils/paths.rs::PLUGIN_SKILL_DIRS` | `RwLock<Vec<(PathBuf, ScopeKey)>>` — **no `OnceLock`** | "no plugin skills" = `load_all` never ran |
+//! | `utils/paths.rs::PLUGIN_SKILL_DIRS` | `RwLock<Vec<PublishedPluginSkillDir>>` — **no `OnceLock`** | "no plugin skills" = `load_all` never ran |
 //! | `agents/registry.rs::PLUGIN_SUBAGENTS` | `OnceLock<RwLock<Arc<[PluginSubagent]>>>` | "no plugin sub-agents" = extensions never loaded |
 //! | `projects/roster.rs::ROSTER` | `OnceLock<RwLock<RosterSnapshot>>` | `is_member` → `false` for everyone (its own doc says so) |
 //! | `scope/directory.rs::NAMES` | `OnceLock<RwLock<HashMap<…>>>` | every user renders as a bare id; `hydrate` is "called once at boot" |
