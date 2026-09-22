@@ -8,6 +8,7 @@ mod byte_range;
 mod canvas_asset_route;
 mod flood_guard;
 mod handler;
+pub mod connection;
 mod metrics_endpoint;
 mod per_client_buffer;
 mod probe;

@@ -24,7 +24,7 @@ mod node_approval;
 mod node_file_cmd;
 mod node_runtime;
 mod registry;
-mod reverse_rpc;
+pub mod reverse_rpc;
 
 pub use enrollment::{
     admit_node, deregister_node, enroll_node_device, DeregisterError, DeregisterOutcome,
