@@ -1038,11 +1038,13 @@ impl HookExecutor {
             matcher: hook.matcher.clone(),
             actions: hook.actions.iter().map(describe_action).collect(),
             timeout_secs: hook.timeout_secs,
-            project_root: hook
-                .plugin_name
-                .starts_with("user:project")
-                .then(|| hook.plugin_root.parent().map(|p| p.display().to_string()))
-                .flatten(),
+            // Same fact the fire-time gate reads (`project_scope_allows`), so
+            // the inventory can never show a hook as unbound while the gate
+            // suppresses it. Canonical spelling, as the key stores it.
+            project_root: match &hook.scope_key {
+                crate::extension::visibility::ScopeKey::Global => None,
+                crate::extension::visibility::ScopeKey::Project(p) => Some(p.display().to_string()),
+            },
             reachable,
             issue,
             consent: self.consent_state(hook),
@@ -1136,7 +1138,7 @@ impl HookExecutor {
 mod tests {
     use super::*;
     use crate::extension::types::HookEvent;
-    use crate::extension::visibility::{ScopeKey, VisibilityCtx};
+    use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
     use std::path::PathBuf;
 
     fn dummy_hook(plugin_name: &str) -> HookConfig {
@@ -1251,14 +1253,32 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let hook = project_hook("user:project", root.path());
         let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        // Canonical spelling — the same string the gate compares against.
         assert_eq!(
-            entry.project_root.as_deref(),
-            Some(root.path().display().to_string()).as_deref()
+            entry.project_root,
+            Some(canonical_root(root.path()).display().to_string())
         );
 
         // Global and plugin hooks are not workspace-bound.
         let plain = &HookExecutor::new(vec![dummy_hook("plugin:foo")]).inventory()[0];
         assert!(plain.project_root.is_none());
+    }
+
+    /// The inventory reads the same fact the gate reads: a plugin-shipped hook
+    /// whose key is `Project(root)` is bound to that root, label or no label.
+    /// Deriving it from the `user:project` prefix instead would show
+    /// `project_root: None` for a hook the gate suppresses everywhere else —
+    /// "registered but silent" with no visible reason.
+    #[test]
+    fn inventory_binds_a_plugin_hook_with_a_project_key_to_that_root() {
+        let root = tempfile::tempdir().unwrap();
+        let mut hook = dummy_hook("plugin:foo");
+        hook.scope_key = ScopeKey::project(root.path());
+        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        assert_eq!(
+            entry.project_root,
+            Some(canonical_root(root.path()).display().to_string())
+        );
     }
 
     #[test]
