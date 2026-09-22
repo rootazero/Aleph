@@ -2385,4 +2385,54 @@ mod tests {
         });
         assert_eq!(provider_usage_pct(&ev), None);
     }
+
+    /// Every terminate token core already labels must reach `RunHalt::label`'s
+    /// match as an arm — otherwise the panel renders the raw wire token
+    /// (`hit_max_iterations` at a person, which `aleph watch` really did print
+    /// before this round added the umbrella arm). The `other => other.to_string()`
+    /// fall-through in `RunHalt::label` is for a *newer core*, not for this
+    /// client's own list.
+    ///
+    /// Pinned on `aleph_protocol::terminate::labelled_tokens()` (the same
+    /// source the core-side census walks) rather than a hand-written list, so
+    /// a fourteenth token on the protocol side is picked up here on the commit
+    /// that adds it.
+    ///
+    /// Source-level because the arms are the fact; a runtime call would need a
+    /// `Locale` and only ever exercises the fall-through on a missing arm.
+    #[test]
+    fn every_terminate_token_has_a_run_halt_label_arm() {
+        // `production_lines`, not `split("#[cfg(test)]")`: the blind cut stops
+        // at the first marker rather than walking gated items, and it
+        // under-scans silently — `no_guard_in_this_crate_hand_rolls_the_cfg_test_cut`
+        // holds this crate to one implementation of that question.
+        let code: String = crate::i18n_census::production_lines(include_str!("state/mod.rs"))
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut covered = 0usize;
+        for token in aleph_protocol::terminate::labelled_tokens() {
+            // `RunHalt::label` deliberately has no `completed` arm: a clean run
+            // is filtered upstream by `parse_run_halt`, so the label function
+            // never sees it. Skipping here keeps the comparison sound without
+            // inventing a fake arm.
+            if token == aleph_protocol::terminate::CLEAN_TOKEN {
+                continue;
+            }
+            covered += 1;
+            assert!(
+                code.contains(&format!("\"{token}\" =>")),
+                "`RunHalt::label` has no arm for `{token}` — panel will render \
+                 the raw wire token to the user. Add the arm (mirrors \
+                 `aleph_protocol::terminate::LABELS`)."
+            );
+        }
+        assert!(
+            covered >= 13,
+            "the scan covered {covered} terminate tokens (minus `completed`); \
+             a small count means the protocol table shrank rather than that \
+             this guard stopped scanning — check `labelled_tokens()`"
+        );
+    }
 }
