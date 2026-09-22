@@ -87,16 +87,6 @@ impl DiscoveryManager {
         self.scanner.discover_component("skills")
     }
 
-    /// Discover all command directories
-    pub fn discover_command_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_component("commands")
-    }
-
-    /// Discover all agent directories
-    pub fn discover_agent_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_component("agents")
-    }
-
     /// Discover plugins from `~/.aleph/plugins/` plus each supplied extra
     /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
     /// so project-local installs are discovered alongside the global ones.

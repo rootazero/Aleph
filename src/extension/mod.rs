@@ -638,20 +638,18 @@ impl ExtensionManager {
     /// where a constant answer looks like a working shadowing rule. It stopped
     /// being harmless the moment the owner trust policy gained a producer.
     ///
-    /// # What this walk covers, and why the trust policy is still safe
+    /// # What this walk covers (D-2, 2026-09-21)
     ///
-    /// It unions the skill, command and agent directories too, so on a stock
-    /// install ~88 of the ~91 entries are bundled *skills*, not plugins. That
-    /// looks alarming next to a policy that refuses unvouched plugins, and a
-    /// `trust_gated` flag was briefly added here to exempt them.
-    ///
-    /// It was a no-op and has been retracted (R10). A skill directory has no
-    /// plugin manifest, so `adapter_registry.parse_dir` rejects it and the
-    /// registry records an `error` row *before* the trust gate is reached —
-    /// with the gate forced on for every entry, the blocked set was still
-    /// exactly the three planted plugins. Those rows are not `loaded` either
-    /// before or after enforcement, which is also why "0 of 91 loaded" was a
-    /// badly-chosen QA assertion rather than the regression it looked like.
+    /// This used to also union the skill, command and agent directories, so
+    /// on a stock install ~88 of the ~91 entries were bundled *skills*, not
+    /// plugins — no manifest adapter can match a skill/agent/command dir, so
+    /// every one of them became an `error` row in `plugins.list`
+    /// ("`No manifest adapter matched directory`"). A `trust_gated` flag was
+    /// briefly added to exempt those rows from the owner trust policy; it was
+    /// a no-op (the rows were errors *before* the trust gate ran, gate or no
+    /// gate) and was retracted (R10). The union itself carried no plugin the
+    /// plugin scanner didn't already find, so it has been removed: this walk
+    /// now returns plugin roots only, from `discover_plugins_with_extra`.
     fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<DiscoveredExtensionDir>> {
         use std::collections::HashSet;
 
@@ -688,30 +686,27 @@ impl ExtensionManager {
             parents
         };
 
-        // Collect from all discovery sources: skills, commands, agents, plugins.
-        let all_dirs = [
-            self.discovery.discover_skill_dirs(),
-            self.discovery.discover_command_dirs(),
-            self.discovery.discover_agent_dirs(),
-            self.discovery
-                .discover_plugins_with_extra(&project_plugin_parents),
-        ];
-
-        for dirs in all_dirs.into_iter().flatten() {
-            for d in dirs {
-                let canonical = match d.path.canonicalize() {
-                    Ok(path) => path,
-                    Err(e) => {
-                        tracing::debug!("Failed to canonicalize path {:?}: {}", d.path, e);
-                        d.path.clone()
-                    }
-                };
-                if seen.insert(canonical) {
-                    result.push(DiscoveredExtensionDir {
-                        origin: PluginOrigin::classify(d.source),
-                        path: d.path,
-                    });
+        // Plugin roots come from the plugin scanner only. A skill, agent or
+        // command found by the component scanners is a component, not a
+        // plugin root — no manifest adapter can match one — so unioning them
+        // here only manufactured `Error` rows in `plugins.list` (88 of 89 on
+        // the first real-machine run of the 2026-09-20 round, D-2).
+        for d in self
+            .discovery
+            .discover_plugins_with_extra(&project_plugin_parents)?
+        {
+            let canonical = match d.path.canonicalize() {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::debug!("Failed to canonicalize path {:?}: {}", d.path, e);
+                    d.path.clone()
                 }
+            };
+            if seen.insert(canonical) {
+                result.push(DiscoveredExtensionDir {
+                    origin: PluginOrigin::classify(d.source),
+                    path: d.path,
+                });
             }
         }
 
@@ -1140,6 +1135,49 @@ mod tests {
             format!("name = \"{id}\"\nversion = \"1.0.0\"\n"),
         )
         .unwrap();
+    }
+
+    /// D-2: a component found by the skill / agent / command scanners is not a
+    /// plugin root — no manifest adapter can match it, so under the old union
+    /// every `<scan>/skills/<x>` became an `Error` row in `plugins.list`
+    /// (88 of 89 rows on the first real-machine run). The project `.aleph/`
+    /// is reached through the upward walk (`max_upward_depth: 1` = the
+    /// working dir itself); the real plugin is the positive control.
+    #[tokio::test]
+    async fn component_dirs_are_not_plugin_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join(".aleph/skills/planted-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: planted-skill\n---\n").unwrap();
+        write_project_plugin(dir.path(), "real-plugin");
+
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: dir.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: true,
+                max_upward_depth: 1,
+            },
+            plugins_config_path: Some(dir.path().join("plugins.toml")),
+            extra_plugin_parents: vec![dir.path().join("plugins")],
+        })
+        .await
+        .unwrap();
+
+        let found: Vec<PathBuf> = manager
+            .collect_plugin_dirs()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.path)
+            .collect();
+        assert!(
+            found.iter().any(|p| p.ends_with("plugins/real-plugin")),
+            "positive control: the real plugin must be discovered: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|p| p.ends_with("skills/planted-skill")),
+            "a skill dir is a component, not a plugin root: {found:?}"
+        );
     }
 
     /// The regression this whole round exists for.

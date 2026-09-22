@@ -187,11 +187,13 @@ impl DirectoryScanner {
             scan_component_dir(scan_dir, component_name, &mut discovered);
         }
 
-        // Sort by priority (lower first). The single consumer in
-        // `extension::ExtensionManager` uses first-wins dedup via
-        // `seen.insert(canonical)`, so the LOWER priority is the one that
-        // survives a name/path collision — keep that invariant documented
-        // here so callers know which direction the dedup goes.
+        // Sort by priority (lower first). The single consumer,
+        // `projection.rs::republish_plugin_projections`, folds this into the
+        // dir list `SkillSystem::init` scans (`skill/mod.rs::rescan_dirs`) —
+        // this sort just gives that scan a deterministic order. It is NOT a
+        // dedup key for that consumer: a same-id skill collision is resolved
+        // by `SkillRegistry::register` via `SkillSource::priority()`
+        // (workspace > plugin > global > bundled), independent of scan order.
         discovered.sort_by_key(|d| d.priority);
 
         trace!(
@@ -225,13 +227,13 @@ impl DirectoryScanner {
         for parent in extra_parents {
             self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project, 20);
         }
-        // Match `discover_component`: ascending-priority sort so the single
-        // downstream consumer's first-wins dedup (which keeps the FIRST
-        // entry on a canonical-path collision) has the same semantics across
-        // both APIs. Without this, `discover_plugins_with_extra` returns
-        // global-then-project in raw read_dir order, which makes the dedup
-        // pick GLOBAL on a project/global clash — the opposite of what
-        // `discover_component` does for skills/commands/agents.
+        // Ascending-priority sort: `collect_plugin_dirs` — the only consumer
+        // — dedups by canonical path with first-wins (`seen.insert(canonical)`),
+        // so the LOWER-priority entry (global, priority 10) survives a
+        // project/global collision over project (priority 20). This already
+        // matches raw read_dir order (global scanned before project, above),
+        // but the sort is what makes that a guarantee rather than an
+        // accident of scan order.
         discovered.sort_by_key(|d| d.priority);
         trace!(
             "Discovered {} plugins ({} extra parents)",
