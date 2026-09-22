@@ -941,6 +941,20 @@ impl ExtensionManager {
         snapshot
     }
 
+    /// [`Self::active_plugin_tools_snapshot`] narrowed to the plugins a
+    /// session in `ctx` may see. This is face ① of the visibility predicate;
+    /// the request-build site (`tool_refresh::active_plugin_tools_for_agent`)
+    /// is its only production caller.
+    pub fn active_plugin_tools_visible_to(
+        &self,
+        ctx: &visibility::VisibilityCtx,
+    ) -> Vec<ToolRegistration> {
+        self.active_plugin_tools_snapshot()
+            .into_iter()
+            .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
+            .collect()
+    }
+
     /// The visibility key of a registered plugin, any status. `None` = unknown id.
     pub fn plugin_scope_key(&self, plugin_id: &str) -> Option<visibility::ScopeKey> {
         self.plugin_scope_keys
@@ -1618,5 +1632,66 @@ mod tests {
                 .any(|t| t.plugin_id == "p2-vis"),
             "the tool index, by contrast, is active-only"
         );
+    }
+
+    /// Face ①: a Project(p) plugin's tools are in the index for a session in
+    /// p and absent for a session with no project. The snapshot is global;
+    /// the request-time filter is what changes.
+    #[tokio::test]
+    async fn plugin_tool_index_is_filtered_by_the_owning_plugins_visibility() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut record = PluginRecord::new(
+                "p2-tools".into(),
+                "P2 Tools".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Workspace,
+            );
+            record.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(record);
+            registry.register_tool(ToolRegistration {
+                name: "p2_scoped_tool".into(),
+                description: "only in its project".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_p2_scoped_tool".into(),
+                plugin_id: "p2-tools".into(),
+            });
+            let mut global = PluginRecord::new(
+                "p2-global-tools".into(),
+                "P2 Global".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Global,
+            );
+            global.scope_key = ScopeKey::Global;
+            registry.register_plugin(global);
+            registry.register_tool(ToolRegistration {
+                name: "p2_global_tool".into(),
+                description: "everywhere".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_p2_global_tool".into(),
+                plugin_id: "p2-global-tools".into(),
+            });
+        }
+        manager.sync_runtime_snapshots().await;
+
+        let names = |ctx: &VisibilityCtx| -> Vec<String> {
+            manager
+                .active_plugin_tools_visible_to(ctx)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+        assert_eq!(names(&in_p), vec!["p2_global_tool", "p2_scoped_tool"]);
+        assert_eq!(names(&nowhere), vec!["p2_global_tool"]);
+        // The unfiltered snapshot still holds both: the filter is per request.
+        assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
     }
 }

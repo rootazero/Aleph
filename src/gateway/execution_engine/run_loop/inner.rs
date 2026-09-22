@@ -211,6 +211,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // `AfterToolCall` / compaction hooks) and `hook_session_id` are
         // resolved once by `run_agent_loop` and threaded in as parameters.
 
+        // Who may see what, for this run: derived once here from the
+        // run-loop task-local (`run_agent_loop` published `workspace_override`
+        // just above this frame) and handed to every face built below —
+        // the plugin tool index here, the MCP join further down. One value
+        // per run, not one read per face.
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::tool_metadata::UnifiedTool> = self
             .tools
@@ -221,7 +228,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .collect();
         let mut allowed_tools = base_allowed_tools.clone();
         if let Some(ext_manager) = extension_manager.as_ref() {
-            allowed_tools.extend(active_plugin_tools_for_agent(ext_manager, &agent));
+            allowed_tools.extend(active_plugin_tools_for_agent(
+                ext_manager,
+                &agent,
+                &visibility,
+            ));
         } else {
             allowed_tools.extend(
                 self.tools

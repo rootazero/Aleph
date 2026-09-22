@@ -23,13 +23,15 @@ pub(super) fn plugin_tool_to_unified_tool(
     unified
 }
 
-/// Get active plugin tools filtered by agent allowlist.
+/// Get active plugin tools filtered by agent allowlist AND by the owning
+/// plugin's visibility to this session (`extension::visibility`).
 pub(super) fn active_plugin_tools_for_agent(
     extension_manager: &crate::extension::ExtensionManager,
     agent: &AgentInstance,
+    visibility: &crate::extension::visibility::VisibilityCtx,
 ) -> Vec<crate::tool_metadata::UnifiedTool> {
     extension_manager
-        .active_plugin_tools_snapshot()
+        .active_plugin_tools_visible_to(visibility)
         .into_iter()
         .filter(|tool| agent.is_tool_allowed(&tool.name))
         .map(plugin_tool_to_unified_tool)
