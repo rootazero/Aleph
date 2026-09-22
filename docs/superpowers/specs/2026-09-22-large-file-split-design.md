@@ -10,19 +10,19 @@
 
 ## 0. 范围与不在范围
 
-### 0.1 在范围（必须拆的 4 个文件）
+### 0.1 在范围（必须拆的 3 个文件）
 
 | 档位 | 文件 | 行数 | Pattern |
 |---|---|---|---|
 | **P0** | `src/gateway/server/handler.rs` | 3527 | D（按生命周期阶段） |
 | **P2** | `src/builtin_tools/workflow_tool.rs` | 5100 | A（DTO + tally + 主体） |
-| **P2** | `src/gateway/handlers/agent.rs` | 3657 | A（types + manager + re-export） |
 | **P2** | `src/gateway/session_projector.rs` | 3359 | A（missed_seqs + run_span + 主体） |
 
 > **Round 1 中途裁决**（2026-09-22 ledger entries）：
 > - **start/mod.rs**（4067 行）原列 P0。重分类为 LEGACY_KEEP（§0.2 第 7 项）。
 > - **extension/mod.rs**（1884 行）原列 P0。重分类为 LEGACY_KEEP（§0.2 第 8 项）。
-> - **extension/hooks/mod.rs**（1278 行）原列 P2。重分类为 LEGACY_KEEP（§0.2 第 9 项）— 6 个 sibling 子模块已拆，mod.rs 是 partial decomposition 不是 thin facade。
+> - **extension/hooks/mod.rs**（1278 行）原列 P2。重分类为 LEGACY_KEEP（§0.2 第 9 项）。
+> - **handlers/agent.rs**（3657 行）原列 P2。文件 = 1300 production + 2357 tests，<br>用户裁定「测试不拆」要求 tests 保持整体；纯 Pattern A 拆分收益仅是 relocation（agent/tests.rs 从 agent.rs 抽出），不价值本次拆分代价。重分类为 LEGACY_KEEP（§0.2 第 10 项）。
 
 ### 0.2 不在范围（登记为声明遗留 — 不拆）
 
@@ -39,6 +39,7 @@
 | `src/bin/aleph-server/commands/start/mod.rs` | 4067 | 顶层已有 5 个子模块（builder/orchestrator_init/helpers/runtime_warmup/bootstrap_factories）；剩 3950 行 `start_server` 单进进进 async fn 共享数百 locals；文件本身注释（L58-63）已声明「cannot be split」；`include_str!` 守卫 pin `install_policy`/`install_ledger`/`register("users.X")` 留在 mod.rs |
 | `src/extension/mod.rs` | 1884 | 已高度模块化（27 个 .rs 文件 + 6 子目录 manifest/marketplace/registrar/registry/runtime/types）；4 个 `impl ExtensionManager` 块已拆到 plugin_ops/service_ops/skill_ops/projection；loader.rs/types.rs 名字已被占用为私有模块；422 行 `mod tests` +「测试不拆」使 < 200 行目标不可能 |
 | `src/extension/hooks/mod.rs` | 1278 | 6 个 sibling 子模块已拆（executor 1538 / consent 823 / json_output 349 / output_budget 402 / user_settings 614）；mod.rs 是 partial decomposition（5 types + 12 pub fn + 5 impl）；不是 thin facade；拆分需重命名现有 executor.rs （冲突）或重入子模块创建新层 |
+| `src/gateway/handlers/agent.rs` | 3657 | 1300 production + 2357 tests；用户裁定「测试不拆」使纯 Pattern A 拆分仅是 relocation（test 抽出到 agent/tests.rs），不价值本次拆分代价 |
 
 ### 0.3 不进范围（用户已裁定）
 
