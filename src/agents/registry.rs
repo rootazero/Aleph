@@ -7,6 +7,15 @@ use tracing::warn;
 
 use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 
+/// One plugin-shipped sub-agent with the visibility key of the plugin that
+/// shipped it. `AgentDef` carries no plugin id (its `id` is the agent name),
+/// so the key rides beside it rather than being re-derived from a name.
+#[derive(Debug, Clone)]
+pub struct PluginSubagent {
+    pub scope_key: crate::extension::visibility::ScopeKey,
+    pub def: AgentDef,
+}
+
 /// Plugin-shipped sub-agent definitions, published by
 /// `ExtensionManager::load_all` after every (re)load and consumed lazily by
 /// [`AgentRegistry::resolve`] (delegation) and the harness prompt builder
@@ -17,17 +26,19 @@ use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 /// until the first `load_all` — plugins aren't loaded before then and resolve /
 /// catalog only run per-request afterwards. Lowest precedence: read only on a
 /// registry miss (resolve) or insert-if-absent (catalog), so a builtin / user /
-/// project agent of the same id always wins.
-static PLUGIN_SUBAGENTS: OnceLock<RwLock<Arc<[AgentDef]>>> = OnceLock::new();
+/// project agent of the same id always wins. Each entry carries the
+/// `ScopeKey` of the plugin that shipped it — [`visible_plugin_subagents`]
+/// filters by it, and is the only path every reader below should use.
+static PLUGIN_SUBAGENTS: OnceLock<RwLock<Arc<[PluginSubagent]>>> = OnceLock::new();
 
-fn plugin_subagents_lock() -> &'static RwLock<Arc<[AgentDef]>> {
+fn plugin_subagents_lock() -> &'static RwLock<Arc<[PluginSubagent]>> {
     PLUGIN_SUBAGENTS.get_or_init(|| RwLock::new(Arc::new([])))
 }
 
 /// Publish the installed plugins' sub-agent definitions for delegation +
 /// catalog surfacing. Replaces the previous set wholesale (called after every
 /// extension (re)load so the set stays in sync with what is installed).
-pub fn publish_plugin_subagents(agents: Vec<AgentDef>) {
+pub fn publish_plugin_subagents(agents: Vec<PluginSubagent>) {
     let mut guard = plugin_subagents_lock()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -36,12 +47,27 @@ pub fn publish_plugin_subagents(agents: Vec<AgentDef>) {
 
 /// Snapshot the currently-published plugin sub-agent definitions.
 #[must_use]
-pub fn plugin_subagents() -> Arc<[AgentDef]> {
+pub fn plugin_subagents() -> Arc<[PluginSubagent]> {
     Arc::clone(
         &plugin_subagents_lock()
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     )
+}
+
+/// The plugin sub-agents a session in `ctx` may delegate to. Every reader of
+/// [`plugin_subagents`] that reaches the model goes through this — the
+/// prompt catalog, `resolve`, and the two id listings — so they cannot
+/// disagree about which plugin agents exist for a given project.
+#[must_use]
+pub fn visible_plugin_subagents(
+    ctx: &crate::extension::visibility::VisibilityCtx,
+) -> Vec<AgentDef> {
+    plugin_subagents()
+        .iter()
+        .filter(|p| crate::extension::visibility::visible_to(&p.scope_key, ctx))
+        .map(|p| p.def.clone())
+        .collect()
 }
 
 /// Registry for managing agent definitions
@@ -114,9 +140,12 @@ impl AgentRegistry {
     /// `<available_agents>` catalog advertises (plugin defs are folded in there
     /// too) does not exist — while a delegation to that very id would have
     /// succeeded.
-    pub fn available_agent_ids(&self) -> Vec<String> {
+    pub fn available_agent_ids(&self, project_root: Option<&std::path::Path>) -> Vec<String> {
+        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
+            project_root.map(std::path::Path::to_path_buf),
+        );
         let mut ids = self.list_ids();
-        ids.extend(plugin_subagents().iter().map(|a| a.id.clone()));
+        ids.extend(visible_plugin_subagents(&ctx).into_iter().map(|a| a.id));
         ids.sort();
         ids.dedup();
         ids
@@ -129,7 +158,10 @@ impl AgentRegistry {
     /// `allowed_tools = ["*"]`. Printing them in the "Unknown agent_type"
     /// error is how a model discovers the string `main` in the first place,
     /// so the disclosure surface has to agree with the gate.
-    pub fn spawnable_agent_ids(&self) -> Vec<String> {
+    pub fn spawnable_agent_ids(&self, project_root: Option<&std::path::Path>) -> Vec<String> {
+        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
+            project_root.map(std::path::Path::to_path_buf),
+        );
         let mut ids: Vec<String> = self.list_subagents().into_iter().map(|a| a.id).collect();
         // B1-07: apply the same `mode == SubAgent` filter to plugin-shipped
         // ids that `resolve_spawnable` applies to all sources — they are the
@@ -138,10 +170,10 @@ impl AgentRegistry {
         // first plugin def built Primary would silently disagree: advertised
         // as spawnable, rejected at spawn.
         ids.extend(
-            plugin_subagents()
-                .iter()
+            visible_plugin_subagents(&ctx)
+                .into_iter()
                 .filter(|a| a.mode == AgentMode::SubAgent)
-                .map(|a| a.id.clone()),
+                .map(|a| a.id),
         );
         ids.sort();
         ids.dedup();
@@ -260,9 +292,11 @@ impl AgentRegistry {
     ///
     /// On a full registry + alias miss, a third pass consults the
     /// process-global plugin sub-agents ([`plugin_subagents`], published by
-    /// `ExtensionManager::load_all`) by exact id — so a plugin-shipped agent is
-    /// delegatable, but only when no builtin / user / project agent claims the
-    /// id (plugin is lowest precedence).
+    /// `ExtensionManager::load_all`) by exact id, filtered through
+    /// [`visible_plugin_subagents`] against `project_root` — so a
+    /// plugin-shipped agent is delegatable only when its owning plugin is
+    /// visible to this call's project AND no builtin / user / project agent
+    /// claims the id (plugin is lowest precedence).
     ///
     /// A genuinely unknown selector still returns `None`, so callers keep
     /// surfacing their "Unknown `agent_type`. Available: …" error. This closes
@@ -289,8 +323,15 @@ impl AgentRegistry {
         }
         // Plugin-shipped sub-agents (lowest precedence): reached only after the
         // registry and alias table both miss, so a plugin agent adds a new
-        // delegatable id but never shadows a builtin/user/project one.
-        plugin_subagents().iter().find(|a| a.id == id).cloned()
+        // delegatable id but never shadows a builtin/user/project one. Filtered
+        // by the same `project_root` this call already received — an explicit
+        // root and the visibility ctx must not disagree.
+        let ctx = crate::extension::visibility::VisibilityCtx::from_project_root(
+            project_root.map(std::path::Path::to_path_buf),
+        );
+        visible_plugin_subagents(&ctx)
+            .into_iter()
+            .find(|a| a.id == id)
     }
 }
 
@@ -843,19 +884,40 @@ mod tests {
         );
     }
 
+    // `serial` because this test and
+    // `plugin_subagents_are_visible_only_to_their_project` share one process
+    // global (`PLUGIN_SUBAGENTS`, replaced wholesale by every
+    // `publish_plugin_subagents` call). Unguarded, the default parallel
+    // runner is free to interleave the two tests' publish/read pairs, so one
+    // test's publish silently overwrites the other's between its own publish
+    // and its own assertion — reproducible under this module's default
+    // parallel test run. Same fix P2.6 applied to the sibling
+    // `PLUGIN_SKILL_DIRS` global (`extension::mod::tests::
+    // projection_publishes_skill_dirs_with_their_scope_keys`).
     #[test]
+    #[serial_test::serial(plugin_subagents_global)]
     fn resolve_falls_back_to_plugin_subagents_but_registry_wins() {
         use crate::agents::types::AgentSource;
+        use crate::extension::visibility::ScopeKey;
         // Publish a unique plugin sub-agent plus one that collides with the
         // builtin `explore`. Process-global, but unique ids keep this from
         // perturbing parallel tests, and `explore` always resolves to the
-        // builtin (registry wins) regardless of what is published.
+        // builtin (registry wins) regardless of what is published. Both are
+        // `ScopeKey::Global` — visible regardless of project root — so this
+        // test stays orthogonal to the project-visibility behavior covered by
+        // `plugin_subagents_are_visible_only_to_their_project`.
         let mut plugin_explore = AgentDef::new("explore", AgentMode::SubAgent);
         plugin_explore.description = "PLUGIN explore (must be shadowed)".into();
         plugin_explore.source = AgentSource::Plugin;
         publish_plugin_subagents(vec![
-            AgentDef::new("plugin-delegate-xyz", AgentMode::SubAgent),
-            plugin_explore,
+            PluginSubagent {
+                scope_key: ScopeKey::Global,
+                def: AgentDef::new("plugin-delegate-xyz", AgentMode::SubAgent),
+            },
+            PluginSubagent {
+                scope_key: ScopeKey::Global,
+                def: plugin_explore,
+            },
         ]);
 
         let registry = AgentRegistry::with_builtins();
@@ -879,7 +941,7 @@ mod tests {
         // The "Available agents: …" faces must offer the same set `resolve`
         // accepts — a delegatable plugin id must never be reported as
         // nonexistent — and a shadowed collision appears exactly once.
-        let available = registry.available_agent_ids();
+        let available = registry.available_agent_ids(None);
         assert!(
             available.contains(&"plugin-delegate-xyz".to_string()),
             "available ids must include delegatable plugin agents: {available:?}"
@@ -895,6 +957,48 @@ mod tests {
         );
 
         // Hygiene: clear the process-global for other tests.
+        publish_plugin_subagents(Vec::new());
+    }
+
+    /// Face ③: a Project(p) plugin agent resolves and is listed only for a
+    /// session in p. `resolve`, `available_agent_ids`, `spawnable_agent_ids`
+    /// are three faces of one verb and must answer alike.
+    #[test]
+    #[serial_test::serial(plugin_subagents_global)]
+    fn plugin_subagents_are_visible_only_to_their_project() {
+        use crate::extension::visibility::ScopeKey;
+        let p = tempfile::tempdir().unwrap();
+        let q = tempfile::tempdir().unwrap();
+        publish_plugin_subagents(vec![
+            PluginSubagent {
+                scope_key: ScopeKey::project(p.path()),
+                def: AgentDef::new("p2-proj-agent", AgentMode::SubAgent),
+            },
+            PluginSubagent {
+                scope_key: ScopeKey::Global,
+                def: AgentDef::new("p2-global-agent", AgentMode::SubAgent),
+            },
+        ]);
+        let registry = AgentRegistry::with_builtins();
+
+        assert!(registry.resolve("p2-proj-agent", Some(p.path())).is_some());
+        assert!(registry.resolve("p2-proj-agent", Some(q.path())).is_none());
+        assert!(registry
+            .resolve("p2-global-agent", Some(q.path()))
+            .is_some());
+
+        let in_p = registry.available_agent_ids(Some(p.path()));
+        let in_q = registry.available_agent_ids(Some(q.path()));
+        assert!(in_p.contains(&"p2-proj-agent".to_string()));
+        assert!(!in_q.contains(&"p2-proj-agent".to_string()));
+        assert!(in_q.contains(&"p2-global-agent".to_string()));
+        assert!(
+            !registry
+                .spawnable_agent_ids(Some(q.path()))
+                .contains(&"p2-proj-agent".to_string()),
+            "spawnable and resolve must agree"
+        );
+
         publish_plugin_subagents(Vec::new());
     }
 

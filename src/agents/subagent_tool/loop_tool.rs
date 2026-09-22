@@ -860,8 +860,11 @@ impl LoopTool for SubagentTool {
                         {
                             Some(def) => def,
                             None => {
-                                let available =
-                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
+                                let available = self
+                                    .agent_resolution
+                                    .agent_registry
+                                    .spawnable_agent_ids(project_root_ref)
+                                    .join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -877,8 +880,11 @@ impl LoopTool for SubagentTool {
                         {
                             Some(def) => def,
                             None => {
-                                let available =
-                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
+                                let available = self
+                                    .agent_resolution
+                                    .agent_registry
+                                    .spawnable_agent_ids(project_root_ref)
+                                    .join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -1186,8 +1192,11 @@ impl LoopTool for SubagentTool {
                         {
                             Some(def) => def,
                             None => {
-                                let available =
-                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
+                                let available = self
+                                    .agent_resolution
+                                    .agent_registry
+                                    .spawnable_agent_ids(project_root_ref)
+                                    .join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -1364,7 +1373,11 @@ impl LoopTool for SubagentTool {
             {
                 Some(def) => def,
                 None => {
-                    let available = self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
+                    let available = self
+                        .agent_resolution
+                        .agent_registry
+                        .spawnable_agent_ids(project_root_ref)
+                        .join(", ");
                     return ToolResult::Error {
                         error: format!(
                             "Unknown agent_type '{agent_type}'. Available agents: {available}"

@@ -114,7 +114,7 @@ impl AgentInfoTool {
             .catalog
             .resolve(agent_id, project_root.as_deref())
             .ok_or_else(|| {
-                let available = self.catalog.available_agent_ids();
+                let available = self.catalog.available_agent_ids(project_root.as_deref());
                 AgentManageError::AgentNotFound {
                     agent_id: agent_id.to_string(),
                     available,

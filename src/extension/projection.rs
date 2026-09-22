@@ -81,8 +81,9 @@ pub(crate) struct PluginProjection {
     /// `retain_visible_plugin_skills`) and `publish_plugin_skill_dirs`
     /// (dir + key — the `skill_read` search set filters by key directly).
     pub(crate) plugin_skill_dirs: Vec<(PathBuf, super::visibility::ScopeKey)>,
-    /// Sub-agents contributed by **active** plugins.
-    pub(crate) subagents: Vec<crate::agents::AgentDef>,
+    /// Sub-agents contributed by **active** plugins, each with its owner's
+    /// `ScopeKey` — [`crate::agents::visible_plugin_subagents`] filters by it.
+    pub(crate) subagents: Vec<crate::agents::PluginSubagent>,
 }
 
 impl ExtensionManager {
@@ -115,16 +116,22 @@ impl ExtensionManager {
 
         // An agent row survives only while its owning plugin is active. The
         // registry keys agents by plugin id, so this is the same predicate as
-        // above applied one level down — not a second rule.
+        // above applied one level down — not a second rule. Each surviving
+        // def is paired with its owning plugin's `scope_key` so
+        // `visible_plugin_subagents` can filter it per-session.
         let subagents = registry
             .list_agents()
             .into_iter()
-            .filter(|agent| {
-                registry
-                    .get_plugin(&agent.plugin_id)
-                    .is_some_and(|p| p.status.is_active())
+            .filter_map(|agent| {
+                let plugin = registry.get_plugin(&agent.plugin_id)?;
+                if !plugin.status.is_active() {
+                    return None;
+                }
+                super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
+                    scope_key: plugin.scope_key.clone(),
+                    def,
+                })
             })
-            .filter_map(super::plugin_agent_to_def)
             .collect();
 
         PluginProjection {
