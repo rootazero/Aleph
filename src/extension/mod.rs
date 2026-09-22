@@ -1145,6 +1145,7 @@ mod tests {
     /// working dir itself); the real plugin is the positive control.
     #[tokio::test]
     async fn component_dirs_are_not_plugin_candidates() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join(".aleph/skills/planted-skill");
         std::fs::create_dir_all(&skill).unwrap();
