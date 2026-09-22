@@ -126,7 +126,8 @@ fn shell_skill_read(cmd: &str) -> Option<(SkillKind, String)> {
 /// Classify a candidate path as living inside a known skill root. Reuses the
 /// existing skill-dir enumerators (SSOT): [`get_all_skills_dirs`] already lists
 /// agent/project/global/plugin roots in precedence order, and
-/// [`get_plugin_skills_dirs`] is the subset used to tag a plugin-shipped skill.
+/// [`get_plugin_skills_dirs`] (the on-disk plugin roots under the well-known
+/// locations, no status check) is what tags a plugin-shipped skill.
 ///
 /// [`get_all_skills_dirs`]: crate::utils::paths::get_all_skills_dirs
 /// [`get_plugin_skills_dirs`]: crate::utils::paths::get_plugin_skills_dirs

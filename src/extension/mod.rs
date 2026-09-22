@@ -1176,13 +1176,24 @@ mod tests {
     }
 
     /// Build an isolated manager whose only project plugin root is `dir`, with
-    /// the durable plugin document redirected to a temp file.
+    /// the durable plugin document redirected to a temp file. Plugins are
+    /// discovered under `<dir>/plugins`; `isolated_manager_at` takes the
+    /// parent explicitly for a test that needs the plugin somewhere else.
     ///
     /// `ALEPH_HOME` is deliberately **not** touched: it is a process-global
     /// switch and libtest runs tests in parallel, so two tests redirecting it
     /// would silently fight. The config path is a constructor parameter for
     /// exactly this reason.
     async fn isolated_manager(dir: &std::path::Path) -> (ExtensionManager, PathBuf) {
+        isolated_manager_at(dir, dir.join("plugins")).await
+    }
+
+    /// `isolated_manager` with the plugin parent directory chosen by the
+    /// caller (the project root stays `dir`).
+    async fn isolated_manager_at(
+        dir: &std::path::Path,
+        plugins_parent: PathBuf,
+    ) -> (ExtensionManager, PathBuf) {
         let cfg_path = dir.join("plugins.toml");
         let manager = ExtensionManager::new(ExtensionConfig {
             discovery: DiscoveryConfig {
@@ -1194,7 +1205,7 @@ mod tests {
             plugins_config_path: Some(cfg_path.clone()),
             extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
                 project_root: dir.to_path_buf(),
-                dir: dir.join("plugins"),
+                dir: plugins_parent,
             }],
         })
         .await
@@ -1787,5 +1798,54 @@ mod tests {
             kept.iter().any(|m| m.name() == "planted"),
             "visible in its own project"
         );
+    }
+
+    /// D-5: disabling a plugin removes its skills from BOTH sub-faces of
+    /// face ② — the `<available_skills>` index (`SkillSystem`) and the
+    /// `skill_read` search set (`get_all_skills_dirs`) — without a restart.
+    /// Re-enabling brings them back (the published list is the one source).
+    ///
+    /// The plugin is planted under `<dir>/.aleph/plugins/` on purpose: that
+    /// is a well-known root the old static scan (`get_plugin_skills_dirs`)
+    /// enumerated, so the search-set arm is also the guard against that scan
+    /// coming back — under `<dir>/plugins` it would stay green either way.
+    #[tokio::test]
+    async fn disabling_a_plugin_removes_its_skills_from_the_index_and_the_search_set() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_parent = dir.path().join(".aleph/plugins");
+        let skill = plugins_parent.join("p2-off/skills/off-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: off-skill\ndescription: goes away when disabled\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager_at(dir.path(), plugins_parent).await;
+        manager.load_all().await.unwrap();
+
+        async fn indexed(m: &ExtensionManager) -> bool {
+            m.skill_system()
+                .list_skills()
+                .await
+                .iter()
+                .any(|s| s.name() == "off-skill")
+        }
+        let searchable = || {
+            crate::utils::paths::get_all_skills_dirs(Some(dir.path()))
+                .unwrap()
+                .iter()
+                .any(|d| d.ends_with("plugins/p2-off/skills"))
+        };
+        assert!(indexed(&manager).await, "loaded: indexed");
+        assert!(searchable(), "loaded: searchable");
+
+        manager.unmount("p2-off").await.unwrap();
+        assert!(!indexed(&manager).await, "disabled: must leave the index");
+        assert!(!searchable(), "disabled: must leave the search set");
+
+        manager.mount("p2-off").await.unwrap();
+        assert!(indexed(&manager).await, "re-enabled: indexed again");
+        assert!(searchable(), "re-enabled: searchable again");
     }
 }

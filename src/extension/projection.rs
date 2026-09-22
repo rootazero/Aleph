@@ -15,11 +15,13 @@
 //! * **Views** have none but can be recomputed from the registry, and that is
 //!   what this module does:
 //!   - `utils::paths::PLUGIN_SKILL_DIRS` — read by `get_all_skills_dirs`, i.e.
-//!     the search set of the `skill_read` / `skill_list` tools.
+//!     the search set of the `skill_read` / `skill_list` tools, and by
+//!     `SkillSystem::scan_roots`, i.e. the scan below: it is the ONE source
+//!     of plugin skill dirs for both (D-5).
 //!   - `agents::PLUGIN_SUBAGENTS` — read by `AgentRegistry::resolve`
 //!     (delegation) and the harness prompt builder (`<available_agents>`).
 //!   - `SkillSystem` — the scan that feeds the model's `<available_skills>`
-//!     index.
+//!     index; `init` receives the base dirs only.
 //!   - `ExtensionManager::active_plugin_tools` — the tool-name index.
 //!     (The hook executor is the fifth view; `after_transition` rebuilds it
 //!     with `sync_hooks_from_registry` — registry-defined hooks — then
@@ -97,8 +99,8 @@ impl ExtensionManager {
     /// dir is one whose skills `guess_source` can only classify by directory
     /// name, i.e. a silent D-4 recurrence for any plugin whose dir name is not
     /// its id. Whether the `SkillSystem` scan also reached the dir by another
-    /// route is the scan list's concern (`republish_plugin_projections` dedups
-    /// it), not the projection's.
+    /// route is the scan's concern (`SkillSystem::scan_roots` dedups against
+    /// its base dirs), not the projection's.
     ///
     /// **The activation predicate lives here and nowhere else.** `is_active()`
     /// is true only for [`PluginStatus::Loaded`](crate::extension::PluginStatus),
@@ -161,7 +163,14 @@ impl ExtensionManager {
     ///
     /// Returns the projection that was installed, for logging and tests.
     pub(crate) async fn republish_plugin_projections(&self) -> PluginProjection {
-        let mut skill_dirs: Vec<PathBuf> = self
+        // The BASE skill dirs only. Plugin dirs are deliberately not folded
+        // in: `SkillSystem::init` merges (nothing ever leaves that set), so a
+        // plugin dir pushed once would be rescanned after the plugin was
+        // disabled, and its skills would stay in `<available_skills>` until
+        // restart (D-5). The scan reads the plugin dirs from the published
+        // list below instead — one source for both the index and the
+        // `skill_read` search set.
+        let skill_dirs: Vec<PathBuf> = self
             .discovery
             .discover_skill_dirs()
             .unwrap_or_default()
@@ -171,24 +180,16 @@ impl ExtensionManager {
 
         let projection = self.derive_plugin_projection().await;
 
-        // A plugin dir discovery already listed is not scanned twice. This is
-        // the scan list's dedup, not a publish gate: `SkillSystem::init` only
-        // dedups against dirs it already holds, not within one batch.
-        for published in &projection.plugin_skill_dirs {
-            if !skill_dirs.contains(&published.dir) {
-                skill_dirs.push(published.dir.clone());
-            }
-        }
-
-        // Publish the plugin roots on their own too: `SkillSystem` only feeds
-        // the prompt index, while `get_all_skills_dirs` (the `skill_read` /
-        // `skill_list` search set) reads this global. Splitting them is what
-        // lets a plugin root outside the well-known locations
-        // (e.g. `plugins/cache/<market>/<id>/skills`) still be readable.
+        // The plugin roots are published as one process-global with two
+        // readers: `get_all_skills_dirs` (the `skill_read` / `skill_list`
+        // search set) and `SkillSystem::scan_roots` (the scan that feeds the
+        // prompt index). Replace-semantics, so a plugin that is no longer
+        // active is absent from both on the next read.
         // This publish must precede `skill_system.init` below: the rescan it
-        // triggers classifies each plugin skill's owner through
-        // `skill::guess_source`, which reads the id published here — publish
-        // after and the scan would fall back to the directory name.
+        // triggers reads the plugin dirs from the published list and
+        // classifies each plugin skill's owner through `skill::guess_source`,
+        // which reads the id published here — publish after and the scan
+        // would neither see the dirs nor name their owner.
         crate::utils::paths::publish_plugin_skill_dirs(projection.plugin_skill_dirs.clone());
         crate::agents::publish_plugin_subagents(projection.subagents.clone());
 
