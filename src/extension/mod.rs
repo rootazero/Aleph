@@ -183,6 +183,12 @@ pub struct ExtensionManager {
     /// cheaply read tool metadata and revision state without awaiting locks.
     active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
 
+    /// `plugin_id → ScopeKey` for every registered row, refreshed in the same
+    /// registry read as [`Self::active_plugin_tools`]. Read by every visibility
+    /// face through [`Self::plugin_visible`]; `Option::None` for an id the
+    /// registry never saw, which the predicate reads as "not visible".
+    plugin_scope_keys: Arc<StdRwLock<HashMap<String, visibility::ScopeKey>>>,
+
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
 
@@ -369,6 +375,7 @@ impl ExtensionManager {
             // the builtin skill tools and the gateway RPC handlers.
             skill_system: crate::skill::shared_skill_system().clone(),
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
+            plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
             memory_registry: crate::sync_primitives::RwLock::new(None),
@@ -858,7 +865,10 @@ impl ExtensionManager {
 
     fn build_active_plugin_tool_index(
         registry: &PluginRegistry,
-    ) -> HashMap<String, ToolRegistration> {
+    ) -> (
+        HashMap<String, ToolRegistration>,
+        HashMap<String, visibility::ScopeKey>,
+    ) {
         let mut active_plugins: Vec<String> = registry
             .list_active_plugins()
             .into_iter()
@@ -880,11 +890,17 @@ impl ExtensionManager {
             }
         }
 
-        active_tools
+        let scope_keys = registry
+            .list_plugins()
+            .into_iter()
+            .map(|p| (p.id.clone(), p.scope_key.clone()))
+            .collect();
+
+        (active_tools, scope_keys)
     }
 
     async fn refresh_active_plugin_tools(&self) {
-        let active_tools = {
+        let (active_tools, scope_keys) = {
             let registry = self.plugin_registry.read().await;
             Self::build_active_plugin_tool_index(&registry)
         };
@@ -893,6 +909,10 @@ impl ExtensionManager {
             .active_plugin_tools
             .write()
             .unwrap_or_else(|e| e.into_inner()) = active_tools;
+        *self
+            .plugin_scope_keys
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = scope_keys;
         self.plugin_tool_revision.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -915,6 +935,27 @@ impl ExtensionManager {
         let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
         snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
         snapshot
+    }
+
+    /// The visibility key of a registered plugin, any status. `None` = unknown id.
+    pub fn plugin_scope_key(&self, plugin_id: &str) -> Option<visibility::ScopeKey> {
+        self.plugin_scope_keys
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(plugin_id)
+            .cloned()
+    }
+
+    /// May a session in `ctx` see anything this plugin contributes?
+    ///
+    /// Fail-closed on an unknown id: the registry is the only authority on
+    /// where a plugin came from, and a plugin it cannot name has no key to
+    /// compare. Every capability face (tool index, skills, sub-agents, slash
+    /// list, MCP bridge) asks this; hooks compare their own stamped key with
+    /// the same `visible_to`.
+    pub fn plugin_visible(&self, plugin_id: &str, ctx: &visibility::VisibilityCtx) -> bool {
+        self.plugin_scope_key(plugin_id)
+            .is_some_and(|key| visibility::visible_to(&key, ctx))
     }
 
     /// Resolve an active plugin tool by short name or `plugin_id:name`.
@@ -1526,5 +1567,33 @@ mod tests {
         std::fs::create_dir(&outside).unwrap();
         let err = ensure_plugin_root_within_authoritative(&root, &outside).unwrap_err();
         assert!(err.contains("outside authoritative"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx};
+        let dir = tempfile::tempdir().unwrap();
+        write_project_plugin(dir.path(), "p2-vis");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+
+        let here = VisibilityCtx {
+            project_root: Some(crate::extension::visibility::canonical_root(dir.path())),
+        };
+        let elsewhere = VisibilityCtx { project_root: None };
+        assert_eq!(
+            manager.plugin_scope_key("p2-vis"),
+            Some(ScopeKey::project(dir.path()))
+        );
+        assert!(manager.plugin_visible("p2-vis", &here));
+        assert!(!manager.plugin_visible("p2-vis", &elsewhere));
+        // Never registered → not visible anywhere. `Some(true)` here would let
+        // a face show a tool whose owner the registry cannot name.
+        assert!(!manager.plugin_visible("never-registered", &here));
+        assert_eq!(manager.plugin_scope_key("never-registered"), None);
     }
 }
