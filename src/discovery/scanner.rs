@@ -7,7 +7,9 @@ use super::paths::{
     CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
     SKILL_FILE,
 };
-use super::types::{DiscoveredPath, DiscoverySource, ScanDirectory};
+use super::types::{
+    DiscoveredPath, DiscoveryScope, GlobalRoot, ProjectPluginParent, ScanDirectory,
+};
 use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace};
@@ -97,7 +99,7 @@ impl DirectoryScanner {
         if let Some(ref claude_home) = self.claude_home {
             dirs.push(ScanDirectory::new(
                 claude_home.clone(),
-                DiscoverySource::ClaudeGlobal,
+                DiscoveryScope::Global(GlobalRoot::Claude),
                 0,
             ));
         }
@@ -106,7 +108,7 @@ impl DirectoryScanner {
         if self.aleph_home.exists() {
             dirs.push(ScanDirectory::new(
                 self.aleph_home.clone(),
-                DiscoverySource::AlephGlobal,
+                DiscoveryScope::Global(GlobalRoot::Aleph),
                 10,
             ));
         }
@@ -136,7 +138,10 @@ impl DirectoryScanner {
                     continue;
                 }
                 let priority = 20u32.saturating_add(i as u32);
-                dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
+                match ScanDirectory::project(dir, priority) {
+                    Some(sd) => dirs.push(sd),
+                    None => debug!("project .claude dir with no parent skipped"),
+                }
             }
 
             // 4. Project-level .aleph/ directories (upward traversal). Native
@@ -158,7 +163,10 @@ impl DirectoryScanner {
                     continue;
                 }
                 let priority = 40u32.saturating_add(i as u32);
-                dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
+                match ScanDirectory::project(dir, priority) {
+                    Some(sd) => dirs.push(sd),
+                    None => debug!("project .aleph dir with no parent skipped"),
+                }
             }
         }
 
@@ -215,17 +223,24 @@ impl DirectoryScanner {
     /// of a cloned repo is an individual plugin.
     pub fn discover_plugins_with_extra(
         &self,
-        extra_parents: &[PathBuf],
+        extra_parents: &[ProjectPluginParent],
     ) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
         self.scan_plugin_parent(
             &self.aleph_home.join(PLUGINS_DIR),
             &mut discovered,
-            DiscoverySource::AlephGlobal,
+            &DiscoveryScope::Global(GlobalRoot::Aleph),
             10,
         );
         for parent in extra_parents {
-            self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project, 20);
+            self.scan_plugin_parent(
+                &parent.dir,
+                &mut discovered,
+                &DiscoveryScope::Project {
+                    root: parent.project_root.clone(),
+                },
+                20,
+            );
         }
         // Ascending-priority sort: `collect_plugin_dirs` — the only consumer
         // — dedups by canonical path with first-wins (`seen.insert(canonical)`),
@@ -244,13 +259,14 @@ impl DirectoryScanner {
     }
 
     /// Scan a single plugin-parent directory, pushing each plugin root (direct
-    /// manifest or one-level monorepo subdir) into `discovered`. A missing or
+    /// manifest or one-level monorepo subdir) into `discovered`, every one
+    /// stamped with the `scope` this parent was handed. A missing or
     /// unreadable parent is a silent no-op.
     fn scan_plugin_parent(
         &self,
         plugins_dir: &Path,
         discovered: &mut Vec<DiscoveredPath>,
-        source: DiscoverySource,
+        scope: &DiscoveryScope,
         priority: u32,
     ) {
         // The top-level parent follows symlinks (`is_dir()`), mirroring
@@ -288,7 +304,11 @@ impl DirectoryScanner {
 
             if has_plugin_manifest(&path) {
                 // Direct plugin directory
-                discovered.push(DiscoveredPath::new(path, source, priority));
+                discovered.push(DiscoveredPath {
+                    path,
+                    priority,
+                    scope: scope.clone(),
+                });
             } else if let Ok(sub_entries) = std::fs::read_dir(&path) {
                 // Check subdirectories (monorepo layout)
                 for sub_entry in sub_entries {
@@ -303,7 +323,11 @@ impl DirectoryScanner {
                         continue;
                     }
                     if has_plugin_manifest(&sub_path) {
-                        discovered.push(DiscoveredPath::new(sub_path, source, priority));
+                        discovered.push(DiscoveredPath {
+                            path: sub_path,
+                            priority,
+                            scope: scope.clone(),
+                        });
                     }
                 }
             }
@@ -383,11 +407,11 @@ fn classify_entry(
         meta.file_type().is_file() && path.extension().and_then(|e| e.to_str()) == Some("md")
     };
     if is_component {
-        out.push(DiscoveredPath::new(
-            path.to_path_buf(),
-            scan_dir.source,
-            scan_dir.priority,
-        ));
+        out.push(DiscoveredPath {
+            path: path.to_path_buf(),
+            priority: scan_dir.priority,
+            scope: scan_dir.scope.clone(),
+        });
     }
 }
 
@@ -455,6 +479,7 @@ fn has_plugin_manifest(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::DiscoverySource;
     use super::*;
     use tempfile::TempDir;
 
@@ -540,7 +565,7 @@ mod tests {
         assert!(!dirs.is_empty());
         assert!(dirs
             .iter()
-            .any(|d| d.source == DiscoverySource::AlephGlobal));
+            .any(|d| d.scope.source() == DiscoverySource::AlephGlobal));
     }
 
     #[test]
@@ -791,7 +816,10 @@ mod tests {
 
         // With the project's plugin parent, both are discovered.
         let plugins = scanner
-            .discover_plugins_with_extra(&[project.join(".aleph/plugins")])
+            .discover_plugins_with_extra(&[ProjectPluginParent {
+                project_root: project.clone(),
+                dir: project.join(".aleph/plugins"),
+            }])
             .unwrap();
         let names: Vec<String> = plugins
             .iter()
@@ -804,10 +832,64 @@ mod tests {
         // the present project one).
         let plugins2 = scanner
             .discover_plugins_with_extra(&[
-                project.join(".aleph/plugins"),
-                root.join("workspace/proj-missing/.aleph/plugins"),
+                ProjectPluginParent {
+                    project_root: project.clone(),
+                    dir: project.join(".aleph/plugins"),
+                },
+                ProjectPluginParent {
+                    project_root: root.join("workspace/proj-missing"),
+                    dir: root.join("workspace/proj-missing/.aleph/plugins"),
+                },
             ])
             .unwrap();
         assert_eq!(plugins2.len(), 2);
+    }
+
+    /// Project plugin parents are scanned with the root they were handed, and
+    /// the root survives onto every discovered plugin — a plugin found under
+    /// `<root>/.aleph/plugins.local/` reports `<root>`, not its own directory
+    /// and not the parent's.
+    #[test]
+    fn project_plugin_parents_carry_their_root_onto_discovered_plugins() {
+        let home = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let local = root.path().join(".aleph/plugins.local/proj-local");
+        std::fs::create_dir_all(local.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            local.join(".claude-plugin/plugin.toml"),
+            "name = \"proj-local\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        // Same construction the sibling plugin tests use: the home is a
+        // struct field, so no process-global `ALEPH_HOME` is touched.
+        let scanner = DirectoryScanner {
+            aleph_home: home.path().join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: home.path().to_path_buf(),
+            config: DiscoveryConfig {
+                working_dir: home.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+            },
+        };
+        let found = scanner
+            .discover_plugins_with_extra(&[ProjectPluginParent {
+                project_root: root.path().to_path_buf(),
+                dir: root.path().join(".aleph/plugins.local"),
+            }])
+            .unwrap();
+        let hit = found
+            .iter()
+            .find(|d| d.path.ends_with("proj-local"))
+            .expect("plugin discovered");
+        assert_eq!(
+            hit.scope,
+            DiscoveryScope::Project {
+                root: root.path().to_path_buf()
+            }
+        );
+        assert_eq!(hit.source(), DiscoverySource::Project);
     }
 }

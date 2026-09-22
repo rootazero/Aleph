@@ -31,9 +31,15 @@ pub fn canonical_root(p: &Path) -> PathBuf {
 /// Where a registry row was discovered, as the visibility predicate sees it.
 ///
 /// `Project(root)` is produced only for `<project>/.claude/…` and
-/// `<project>/.aleph/plugins{,.local}/…` (see `ScopeKey::from_discovery` in
-/// Task P2.3); every other origin — `~/.aleph`, `~/.claude`, bundled,
-/// marketplace cache, the future `ClaudeCache` — is `Global`.
+/// `<project>/.aleph/plugins{,.local}/…` (see [`ScopeKey::from_discovery`]);
+/// every other origin — `~/.aleph`, `~/.claude`, bundled, marketplace cache,
+/// the future `ClaudeCache` — is `Global`.
+///
+/// Persisted keys are canonical by construction (every producer goes through
+/// [`ScopeKey::project`]); nothing deserialises a `ScopeKey` — or a
+/// `PluginRecord` / `HookConfig` carrying one — from storage or the wire
+/// today, so the `Deserialize` derive has no reader. The first reader must
+/// canonicalise on the way in, because serde will not.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScopeKey {
@@ -48,6 +54,20 @@ impl ScopeKey {
     #[must_use]
     pub fn project(root: &Path) -> Self {
         Self::Project(canonical_root(root))
+    }
+
+    /// Derive the key from where discovery found the item. `Project(root)`
+    /// for a project scope (the scanner recorded the root when it produced
+    /// the scan dir — `<root>/.claude`, `<root>/.aleph`, or a registered
+    /// project's `.aleph/plugins{,.local}`); `Global` for every global root,
+    /// each named — no wildcard, so a new root must be placed here by hand.
+    #[must_use]
+    pub fn from_discovery(d: &crate::discovery::DiscoveredPath) -> Self {
+        use crate::discovery::{DiscoveryScope, GlobalRoot};
+        match &d.scope {
+            DiscoveryScope::Project { root } => Self::project(root),
+            DiscoveryScope::Global(GlobalRoot::Aleph | GlobalRoot::Claude) => Self::Global,
+        }
     }
 }
 
@@ -331,5 +351,26 @@ mod tests {
         let p = tempdir().unwrap();
         let ctx = VisibilityCtx::from_project_root(Some(p.path().to_path_buf()));
         assert!(visible_to(&ScopeKey::project(p.path()), &ctx));
+    }
+
+    #[test]
+    fn from_discovery_yields_project_only_for_project_scopes() {
+        use crate::discovery::{DiscoveredPath, DiscoverySource, GlobalRoot};
+        let root = tempdir().unwrap();
+        let plugin_dir = root.path().join(".aleph/plugins/x");
+
+        let in_project =
+            DiscoveredPath::in_project(plugin_dir.clone(), root.path().to_path_buf(), 20);
+        assert_eq!(in_project.source(), DiscoverySource::Project);
+        assert_eq!(
+            ScopeKey::from_discovery(&in_project),
+            ScopeKey::project(root.path())
+        );
+
+        for global in [GlobalRoot::Aleph, GlobalRoot::Claude] {
+            let d = DiscoveredPath::global(plugin_dir.clone(), global, 10);
+            assert_ne!(d.source(), DiscoverySource::Project);
+            assert_eq!(ScopeKey::from_discovery(&d), ScopeKey::Global, "{global:?}");
+        }
     }
 }

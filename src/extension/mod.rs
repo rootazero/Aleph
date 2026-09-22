@@ -128,7 +128,7 @@ pub struct ExtensionConfig {
     /// same environment variable. Gated on `cfg(test)` so it cannot become an
     /// undocumented production knob with no consumers (R10).
     #[cfg(test)]
-    pub extra_plugin_parents: Vec<PathBuf>,
+    pub extra_plugin_parents: Vec<crate::discovery::ProjectPluginParent>,
     // NOTE: there is deliberately no `owner_trust` field here.
     //
     // One existed, alongside an `OwnerTrustPolicyConfig` DTO, and had zero
@@ -141,12 +141,14 @@ pub struct ExtensionConfig {
     // and the one an operator edits would be the one that loses.
 }
 
-/// One directory found by discovery, with the two facts the registry walk
-/// needs and the scan is the only place that knows.
+/// One directory found by discovery, with the facts the registry walk needs
+/// and the scan is the only place that knows.
 struct DiscoveredExtensionDir {
     path: PathBuf,
     /// Where it came from, per [`PluginOrigin::classify`].
     origin: PluginOrigin,
+    /// Who may see it, per [`visibility::ScopeKey::from_discovery`].
+    scope_key: visibility::ScopeKey,
 }
 
 /// Extension Manager - main entry point for the extension system
@@ -218,7 +220,7 @@ pub struct ExtensionManager {
 
     /// Test-only extra plugin parents; see [`ExtensionConfig::extra_plugin_parents`].
     #[cfg(test)]
-    extra_plugin_parents: Vec<PathBuf>,
+    extra_plugin_parents: Vec<crate::discovery::ProjectPluginParent>,
 
     /// Live MCP manager handle, used by `mount` to register plugin-owned MCP
     /// servers as **transient** (runtime-only) servers (`mcp_server` step).
@@ -660,24 +662,32 @@ impl ExtensionManager {
         // `.aleph/plugins` (+ `.aleph/plugins.local`), so project-local installs
         // are discovered alongside the global `~/.aleph/plugins` (Claude-Code
         // style). The daemon serves all registered projects from one process,
-        // so discovery is union-of-all; isolating which project sees which
-        // plugin at runtime is a separate, deferred concern. A failure to read
-        // the registry degrades to global-only discovery.
-        let project_plugin_parents: Vec<PathBuf> = crate::projects::ProjectStore::shared()
-            .list()
-            .map(|projects| {
-                projects
-                    .into_iter()
-                    .filter_map(|p| p.workspace_path)
-                    .flat_map(|root| {
-                        [
-                            root.join(".aleph/plugins"),
-                            root.join(".aleph/plugins.local"),
-                        ]
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // so discovery is union-of-all; each parent is handed to the scanner
+        // WITH the project it belongs to, and that root becomes the row's
+        // `scope_key` — the fact the per-face visibility gate reads. A failure
+        // to read the registry degrades to global-only discovery.
+        let project_plugin_parents: Vec<crate::discovery::ProjectPluginParent> =
+            crate::projects::ProjectStore::shared()
+                .list()
+                .map(|projects| {
+                    projects
+                        .into_iter()
+                        .filter_map(|p| p.workspace_path)
+                        .flat_map(|root| {
+                            [
+                                crate::discovery::ProjectPluginParent {
+                                    project_root: root.clone(),
+                                    dir: root.join(".aleph/plugins"),
+                                },
+                                crate::discovery::ProjectPluginParent {
+                                    project_root: root.clone(),
+                                    dir: root.join(".aleph/plugins.local"),
+                                },
+                            ]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
         #[cfg(test)]
         let project_plugin_parents = {
@@ -704,7 +714,8 @@ impl ExtensionManager {
             };
             if seen.insert(canonical) {
                 result.push(DiscoveredExtensionDir {
-                    origin: PluginOrigin::classify(d.source),
+                    origin: PluginOrigin::classify(d.source()),
+                    scope_key: visibility::ScopeKey::from_discovery(&d),
                     path: d.path,
                 });
             }
@@ -758,19 +769,22 @@ impl ExtensionManager {
     /// Sync hooks from `PluginRegistry` to `HookExecutor`.
     ///
     /// Reads `HookRegistration` entries from the registry and converts them
-    /// to `HookConfig` entries that `HookExecutor` understands.
+    /// to `HookConfig` entries that `HookExecutor` understands. Each hook is
+    /// stamped with the OWNING ROW's `scope_key`: a hook shipped by a
+    /// project-local plugin is visible only inside that project, exactly
+    /// like the plugin itself.
     async fn sync_hooks_from_registry(&self) {
-        let hook_regs: Vec<HookRegistration> = {
+        let hook_regs: Vec<(HookRegistration, visibility::ScopeKey)> = {
             let registry = self.plugin_registry.read().await;
             registry
                 .list_hooks()
                 .into_iter()
-                .filter(|hook| {
+                .filter_map(|hook| {
                     registry
                         .get_plugin(&hook.plugin_id)
-                        .is_some_and(|plugin| plugin.status.is_active())
+                        .filter(|plugin| plugin.status.is_active())
+                        .map(|plugin| (hook.clone(), plugin.scope_key.clone()))
                 })
-                .cloned()
                 .collect()
         };
 
@@ -778,7 +792,7 @@ impl ExtensionManager {
         // HookExecutor was already reset by `lifecycle.rs::after_transition`.
         // Convert HookRegistration → HookConfig for the executor, consuming
         // each registration by value so its fields move into the config.
-        for hr in hook_regs {
+        for (hr, scope_key) in hook_regs {
             let HookRegistration {
                 event,
                 priority,
@@ -836,8 +850,7 @@ impl ExtensionManager {
                 plugin_root: plugin_root.unwrap_or_default(),
                 handler: Some(handler),
                 timeout_secs,
-                // P2.3 replaces this with the owning record's key.
-                scope_key: crate::extension::visibility::ScopeKey::Global,
+                scope_key,
             };
             executor.add_hook(hook_config);
         }
@@ -1120,7 +1133,10 @@ mod tests {
                 max_upward_depth: 0,
             },
             plugins_config_path: Some(cfg_path.clone()),
-            extra_plugin_parents: vec![dir.join("plugins")],
+            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                project_root: dir.to_path_buf(),
+                dir: dir.join("plugins"),
+            }],
         })
         .await
         .unwrap();
@@ -1160,7 +1176,10 @@ mod tests {
                 max_upward_depth: 1,
             },
             plugins_config_path: Some(dir.path().join("plugins.toml")),
-            extra_plugin_parents: vec![dir.path().join("plugins")],
+            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                project_root: dir.path().to_path_buf(),
+                dir: dir.path().join("plugins"),
+            }],
         })
         .await
         .unwrap();

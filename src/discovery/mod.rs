@@ -90,9 +90,11 @@ impl DiscoveryManager {
     /// Discover plugins from `~/.aleph/plugins/` plus each supplied extra
     /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
     /// so project-local installs are discovered alongside the global ones.
+    /// Each extra parent names the project it belongs to; every plugin found
+    /// under it carries that root as its [`DiscoveryScope`].
     pub fn discover_plugins_with_extra(
         &self,
-        extra_parents: &[PathBuf],
+        extra_parents: &[ProjectPluginParent],
     ) -> DiscoveryResult<Vec<DiscoveredPath>> {
         self.scanner.discover_plugins_with_extra(extra_parents)
     }

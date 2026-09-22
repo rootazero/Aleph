@@ -34,6 +34,7 @@ use super::manifest::PluginManifest;
 use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
+use super::visibility::ScopeKey;
 use super::{loader, manifest, mcp_config, registrar, slash_effect, ExtensionManager};
 use crate::extension::capability::CapabilityDeclaration;
 use crate::sync_primitives::Arc;
@@ -227,7 +228,11 @@ impl ExtensionManager {
                         self.plugin_registry
                             .write()
                             .await
-                            .register_plugin(Self::unparsed_record(dir_path, &e.to_string()));
+                            .register_plugin(Self::unparsed_record(
+                                dir_path,
+                                &e.to_string(),
+                                found.scope_key.clone(),
+                            ));
                     }
                     continue;
                 }
@@ -259,7 +264,12 @@ impl ExtensionManager {
             self.migrate_legacy_disabled_marker(dir_path, &plugin_id)
                 .await;
 
-            let record = Self::build_record(&output, dir_path.clone(), found.origin);
+            let record = Self::build_record(
+                &output,
+                dir_path.clone(),
+                found.origin,
+                found.scope_key.clone(),
+            );
             match self.admit(&plugin_id, found.origin).await {
                 Err(e @ MountError::Blocked { .. }) => {
                     tracing::info!(plugin_id = %plugin_id, origin = ?found.origin, "plugin skipped by owner trust policy (not in allowlist)");
@@ -337,15 +347,18 @@ impl ExtensionManager {
     }
 
     /// The record for a parsed plugin. Adapters hardcode `Global` and `Static`;
-    /// where it was found and what runtime it needs are facts of discovery
-    /// and of the manifest, applied here in one place.
+    /// where it was found (origin AND visibility key) and what runtime it
+    /// needs are facts of discovery and of the manifest, applied here in one
+    /// place.
     fn build_record(
         output: &AdapterOutput,
         root_dir: PathBuf,
         origin: PluginOrigin,
+        scope_key: ScopeKey,
     ) -> PluginRecord {
         let mut record = PluginRecord::from_adapter_output(output, root_dir.clone());
         record.origin = origin;
+        record.scope_key = scope_key;
         if let Ok(m) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
             record.kind = m.kind;
         }
@@ -354,16 +367,25 @@ impl ExtensionManager {
 
     /// The `Error` row for a directory whose manifest does not parse. It used
     /// to vanish at `debug!` level — on every surface identical to "never
-    /// installed" — so it gets a row, an id derived from the directory, and
-    /// the parse error. Origin is `Global` (as it always was for this row).
-    fn unparsed_record(dir_path: &std::path::Path, error: &str) -> PluginRecord {
+    /// installed" — so it gets a row, an id derived from the directory, the
+    /// parse error, and the key of where it was found, so `plugins.list` can
+    /// say which project owns the broken plugin. Origin stays `Global` (as it
+    /// always was for this row).
+    fn unparsed_record(
+        dir_path: &std::path::Path,
+        error: &str,
+        scope_key: ScopeKey,
+    ) -> PluginRecord {
         let leaf = dir_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| dir_path.display().to_string());
-        PluginRecord::new(leaf.clone(), leaf, PluginKind::Static, PluginOrigin::Global)
-            .with_root_dir(dir_path.to_path_buf())
-            .with_error(error.to_string())
+        let mut record =
+            PluginRecord::new(leaf.clone(), leaf, PluginKind::Static, PluginOrigin::Global)
+                .with_root_dir(dir_path.to_path_buf())
+                .with_error(error.to_string());
+        record.scope_key = scope_key;
+        record
     }
 
     /// The two admission gates, pure: owner trust, then the operator's
@@ -398,12 +420,12 @@ impl ExtensionManager {
         {
             return Err(MountError::AlreadyMounted(id.to_string()));
         }
-        let (root_dir, origin) = self
+        let (root_dir, origin, scope_key) = self
             .plugin_registry
             .read()
             .await
             .get_plugin(id)
-            .map(|r| (r.root_dir.clone(), r.origin))
+            .map(|r| (r.root_dir.clone(), r.origin, r.scope_key.clone()))
             .ok_or_else(|| MountError::NotFound(id.to_string()))?;
 
         if let Err(e) = self.admit(id, origin).await {
@@ -439,7 +461,7 @@ impl ExtensionManager {
                 });
             }
         };
-        let record = Self::build_record(&output, root_dir, origin);
+        let record = Self::build_record(&output, root_dir, origin, scope_key);
         self.mount_parsed(output, record).await
     }
 
@@ -637,8 +659,9 @@ impl ExtensionManager {
     /// The ONE site that turns a mount-step failure into a status:
     /// `PluginStatus::Error("<step>: <reason>")` on a row rebuilt from the
     /// pre-mount record (the `registry_row` disposer removed the live one).
-    /// P2.3 stamps the row's scope key here; the variant name is today's
-    /// (G-2 — no rename).
+    /// `shell` is the record `build_record` built, so its `scope_key` (and
+    /// `origin`) survive the failed mount without being re-derived here; the
+    /// variant name is today's (G-2 — no rename).
     async fn write_failed_row(&self, shell: PluginRecord, step: &'static str, reason: &str) {
         tracing::warn!(plugin_id = %shell.id, step, error = %reason, "mount failed; partial effects disposed");
         self.plugin_registry
@@ -797,7 +820,10 @@ mod tests {
                 max_upward_depth: 0,
             },
             plugins_config_path: Some(cfg_path.clone()),
-            extra_plugin_parents: vec![dir.join("plugins")],
+            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                project_root: dir.to_path_buf(),
+                dir: dir.join("plugins"),
+            }],
         })
         .await
         .unwrap();
@@ -1445,5 +1471,122 @@ priority = 60
         let report = manager.reload().await.unwrap();
         assert!(report.failed.is_empty(), "{:?}", report.failed);
         assert_eq!(snapshot(&manager, &memory, &catalog).await, mounted);
+    }
+
+    // ── P2.3: the row carries the key of where discovery found it ─────────
+
+    /// Discovery stamps the key on the row: a plugin found under a project's
+    /// plugin parent is `Project(root)`, a plugin found under `~/.aleph` is
+    /// `Global`. Everything downstream (tool index, skills, agents, slash,
+    /// MCP, hooks) reads this field; a row without it is a row every session
+    /// can see.
+    #[tokio::test]
+    async fn load_all_stamps_project_scope_key_from_the_discovery_root() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_static_plugin(dir.path(), "p2-scoped");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let registry = manager.get_plugin_registry().await;
+        let record = registry.get_plugin("p2-scoped").expect("registered");
+        assert_eq!(
+            record.scope_key,
+            crate::extension::visibility::ScopeKey::project(dir.path()),
+            "test extras are handed to discovery as (root, parent) pairs, so the row must carry the root"
+        );
+    }
+
+    /// The parse-error row (a directory whose manifest will not parse) also
+    /// carries the key of where it was found, so `plugins.list` can say which
+    /// project owns the broken plugin.
+    #[tokio::test]
+    async fn load_all_stamps_the_key_on_parse_error_rows_too() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("plugins/p2-broken");
+        std::fs::create_dir_all(broken.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            broken.join(".claude-plugin/plugin.toml"),
+            "name = [not toml",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let registry = manager.get_plugin_registry().await;
+        let record = registry
+            .get_plugin("p2-broken")
+            .expect("error row registered");
+        assert!(matches!(record.status, PluginStatus::Error(_)));
+        assert_eq!(
+            record.scope_key,
+            crate::extension::visibility::ScopeKey::project(dir.path())
+        );
+    }
+
+    /// `unmount` keeps the row (Disabled) and `mount` re-reads it: the key
+    /// survives a disable/enable cycle without discovery re-running. (The
+    /// old narrow `reload_plugin` used to rebuild the record from the adapter
+    /// alone; P1 deleted it, and the new one is unmount+mount.)
+    #[tokio::test]
+    async fn mount_after_unmount_keeps_the_rows_scope_key() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_static_plugin(dir.path(), "p2-cycle");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let want = crate::extension::visibility::ScopeKey::project(dir.path());
+        manager.unmount("p2-cycle").await.unwrap();
+        assert_eq!(
+            manager
+                .get_plugin_record("p2-cycle")
+                .await
+                .unwrap()
+                .scope_key,
+            want
+        );
+        manager.mount("p2-cycle").await.unwrap();
+        assert_eq!(
+            manager
+                .get_plugin_record("p2-cycle")
+                .await
+                .unwrap()
+                .scope_key,
+            want
+        );
+    }
+
+    /// `sync_hooks_from_registry` stamps plugin hooks with the OWNING ROW's key
+    /// (P2.2 wrote a placeholder `Global` there). Asserted through the
+    /// production face — `HookExecutor::inventory()` derives `project_root`
+    /// from the hook's `scope_key`, so a hook still carrying the placeholder
+    /// shows `project_root: None` here exactly as it would to an operator.
+    #[tokio::test]
+    async fn plugin_hooks_inherit_the_owning_rows_scope_key() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        // `write_static_plugin` ships a `hooks/hooks.json` (one PreToolUse
+        // command hook) — what the TOML adapter reads when the manifest
+        // names no hooks field.
+        write_static_plugin(dir.path(), "p2-hooky");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let mine: Vec<Option<String>> = manager
+            .hook_executor_snapshot()
+            .await
+            .inventory()
+            .into_iter()
+            .filter(|h| h.source == "p2-hooky")
+            .map(|h| h.project_root)
+            .collect();
+        assert!(
+            !mine.is_empty(),
+            "the plugin's hooks.json must produce at least one hook"
+        );
+        let want = Some(
+            crate::extension::visibility::canonical_root(dir.path())
+                .display()
+                .to_string(),
+        );
+        assert!(mine.iter().all(|root| *root == want), "got {mine:?}");
     }
 }

@@ -328,6 +328,14 @@ pub struct PluginRecord {
     pub error: Option<String>,
     /// Root directory of the plugin
     pub root_dir: PathBuf,
+    /// Who may see this plugin (`extension::visibility`). Stamped by
+    /// `lifecycle.rs::build_record` from the discovery that found the
+    /// directory — the adapters cannot know it, exactly as they cannot know
+    /// `origin` (the `record.origin = origin` line beside it). `PluginRecord::new`
+    /// / `from_adapter_output` start it at `Global` for the same reason they
+    /// start `origin` at the adapter's placeholder; `load_all` overwrites it
+    /// on every row it registers, including error rows.
+    pub scope_key: crate::extension::visibility::ScopeKey,
     // Registration tracking
     /// Tool names registered by this plugin
     pub tool_names: Vec<String>,
@@ -363,6 +371,7 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             root_dir: PathBuf::new(),
+            scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names: Vec::new(),
             hook_count: 0,
             service_ids: Vec::new(),
@@ -424,6 +433,7 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             root_dir,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names,
             hook_count,
             service_ids,
