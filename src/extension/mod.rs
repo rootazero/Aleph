@@ -905,6 +905,10 @@ impl ExtensionManager {
             Self::build_active_plugin_tool_index(&registry)
         };
 
+        // Both maps are derived under the one registry read above, but published
+        // by two sequential writes: a reader between them can see new tools with
+        // a not-yet-published key, which reads as `None` → not visible
+        // (fail-closed), never the reverse.
         *self
             .active_plugin_tools
             .write()
@@ -1595,5 +1599,24 @@ mod tests {
         // a face show a tool whose owner the registry cannot name.
         assert!(!manager.plugin_visible("never-registered", &here));
         assert_eq!(manager.plugin_scope_key("never-registered"), None);
+
+        // The key map covers every registered row, any status — activation is
+        // a separate question each face asks itself. `unmount` is a lifecycle
+        // transition (Loaded → Disabled) that runs `after_transition`, which
+        // rebuilds both snapshots; the row survives, so the key must too.
+        manager.unmount("p2-vis").await.unwrap();
+        assert_eq!(
+            manager.plugin_scope_key("p2-vis"),
+            Some(ScopeKey::project(dir.path())),
+            "the key map covers every registered row, any status — activation is a separate question each face asks itself"
+        );
+        assert!(manager.plugin_visible("p2-vis", &here));
+        assert!(
+            !manager
+                .active_plugin_tools_snapshot()
+                .iter()
+                .any(|t| t.plugin_id == "p2-vis"),
+            "the tool index, by contrast, is active-only"
+        );
     }
 }
