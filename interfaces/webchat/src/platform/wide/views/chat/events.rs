@@ -607,6 +607,74 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
     }
 }
 
+/// T2.13: project one `StreamEvent::ReasoningBlock` into the per-run
+/// reasoning buffer that the existing `ReasoningPanel` renders.
+///
+/// Backend has always emitted these events — the structured alternative to
+/// the flat `reasoning` events — but the panel's `match event_type`
+/// dispatcher never had a `"reasoning_block"` arm, so the content never
+/// reached `chat.reasoning_text` and the user never saw structured
+/// reasoning. The TUI has always consumed these (`StreamEvent::ReasoningBlock
+/// { content, .. } => append_reasoning_entry`); the panel is the lone
+/// straggler this closes.
+///
+/// `step_type` / `label` / `confidence` / `is_final` are decoded but not
+/// projected: the panel's reasoning UI is a flat transcript pane, not a
+/// structured step list, so those fields would not change anything visually.
+/// If a future revision splits reasoning by step type, those fields become
+/// the source.
+///
+/// No-op on missing/blank content so a malformed payload cannot append a
+/// spurious newline to the transcript.
+fn apply_reasoning_block(chat: ChatState, data: &serde_json::Value) {
+    let content = data
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if content.is_empty() {
+        return;
+    }
+    append_reasoning(chat, content);
+}
+
+/// T2.13: project one `StreamEvent::UncertaintySignal` into the per-run
+/// `uncertainty_signals` map that the assistant bubble's chip reads.
+///
+/// Mirrors the TUI's `add_system_message` in spirit, but instead of a
+/// system line the panel renders a small chip on the trailing assistant
+/// bubble — same data, less screen real estate, doesn't disturb the
+/// conversational rhythm. Field names follow `aleph_protocol`'s
+/// `UncertaintySignal` exactly (`uncertainty`, `suggested_action`), so a
+/// change to the wire shape on one side is picked up here.
+///
+/// No-op on either field missing — both must be present for the chip to
+/// render something honest. `set_uncertainty` additionally drops the call
+/// when `uncertainty` is whitespace, so a structured event with an empty
+/// prose string cannot render an unexplained chip.
+fn apply_uncertainty_signal(chat: ChatState, run_id: &str, data: &serde_json::Value) {
+    let uncertainty = match data
+        .get("uncertainty")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return,
+    };
+    let action = match data
+        .get("suggested_action")
+        .and_then(|v| serde_json::from_value::<aleph_protocol::events::UncertaintyAction>(v.clone()).ok())
+    {
+        Some(a) => a,
+        None => return,
+    };
+    chat.set_uncertainty(
+        run_id,
+        crate::views::chat::state::UncertaintyNote {
+            uncertainty,
+            action,
+        },
+    );
+}
+
 /// Project the run's cost + token split from the `run_complete` summary onto
 /// the assistant bubble's meta line. Core prices the run (`estimated_cost_usd`
 /// / `cost_status`) and splits the tokens (`token_breakdown`); the panel only
@@ -1227,6 +1295,22 @@ pub fn subscribe_run_events(
                 // applies; the terminal summary still lands last and stays
                 // authoritative.
                 apply_context_gauge(chat, data);
+            }
+            "reasoning_block" => {
+                // T2.13: structured reasoning chunks have always been emitted
+                // by the gateway and consumed by the TUI; the panel dropped
+                // them at the dispatcher for lack of an arm. Routed through
+                // `apply_reasoning_block` (host-tested projector) rather than
+                // inlined, so the arm's existence and its contract share one
+                // source of truth — see the matching source-level guard.
+                apply_reasoning_block(chat, data);
+            }
+            "uncertainty_signal" => {
+                // T2.13: same story as `reasoning_block` — the wire event
+                // exists, the TUI consumes it, the panel was the only
+                // surface ignoring it. Per-project (host-tested), so the
+                // arm's contract is pinned in `projection_tests`.
+                apply_uncertainty_signal(chat, run_id, data);
             }
             "run_complete" => {
                 // The run is over: its trace-mode membership is no longer
@@ -2339,6 +2423,163 @@ mod projection_tests {
             Some("run-1".to_string())
         );
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 0 });
+    }
+
+    /// T2.13: backend has always emitted `StreamEvent::ReasoningBlock`, but the
+    /// panel had no `reasoning_block` arm in its dispatcher, so the structured
+    /// reasoning never reached `reasoning_text` and the ReasoningPanel never
+    /// saw it. This test pins the projector: a `reasoning_block` event's
+    /// `content` lands in the per-run reasoning buffer that the existing
+    /// collapsible panel renders.
+    ///
+    /// Pure projector call — same host-testable seam as `apply_run_cost`,
+    /// `apply_context_gauge`, `parse_run_halt`. The dispatcher that calls it
+    /// is the `subscribe_run_events` `'static` closure, which needs a live
+    /// `DashboardState` / `SessionMap` and would only ever be exercised here
+    /// through a CSR-only end-to-end harness; the per-arm coverage of THAT
+    /// closure is the source-level guard below.
+    #[test]
+    fn stream_event_reasoning_block_appends_to_reasoning_text() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        // Reasoning text is reset per-run; two `reasoning_block` events for
+        // the same run should accumulate, separated by a newline (matches the
+        // `append_reasoning` newline convention already used by the trace
+        // path so the panel renders one continuous transcript).
+        apply_reasoning_block(
+            chat,
+            &json!({ "run_id": "run-1", "seq": 1,
+                     "step_type": "observation", "label": "Saw", "content": "first" }),
+        );
+        apply_reasoning_block(
+            chat,
+            &json!({ "run_id": "run-1", "seq": 2,
+                     "step_type": "analysis", "label": "Thought", "content": "second" }),
+        );
+
+        assert_eq!(
+            chat.reasoning_text.get_untracked(),
+            "first\nsecond",
+            "two reasoning_block chunks for one run must accumulate into the \
+             per-run buffer the ReasoningPanel renders"
+        );
+    }
+
+    /// T2.13: counterpart for `StreamEvent::UncertaintySignal`. The wire
+    /// shape carries `uncertainty` (free-form) and `suggested_action`
+    /// (`UncertaintyAction`); the panel needs to remember it per-run so the
+    /// trailing assistant bubble can show a chip explaining why the model
+    /// flagged itself. Multiple signals in one run should keep the latest —
+    /// the chip is a "this answer had doubts" indicator, not a stack of them.
+    ///
+    /// Pure projector call, mirroring the other dispatch-side tests.
+    #[test]
+    fn stream_event_uncertainty_signal_attaches_to_run() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        apply_uncertainty_signal(
+            chat,
+            "run-1",
+            &json!({ "run_id": "run-1", "seq": 1,
+                     "uncertainty": "model picked the wrong file",
+                     "suggested_action": "ask_for_clarification" }),
+        );
+        let first = chat
+            .uncertainty_signals
+            .get_untracked()
+            .get("run-1")
+            .cloned()
+            .expect("first signal registers");
+        assert_eq!(first.uncertainty, "model picked the wrong file");
+        assert_eq!(
+            first.action,
+            aleph_protocol::events::UncertaintyAction::AskForClarification
+        );
+
+        // A second signal within the same run overwrites — latest wins.
+        apply_uncertainty_signal(
+            chat,
+            "run-1",
+            &json!({ "run_id": "run-1", "seq": 2,
+                     "uncertainty": "narrowed it down",
+                     "suggested_action": "proceed_with_caution" }),
+        );
+        let second = chat
+            .uncertainty_signals
+            .get_untracked()
+            .get("run-1")
+            .cloned()
+            .expect("second signal still scoped to run-1");
+        assert_eq!(second.uncertainty, "narrowed it down");
+        assert_eq!(
+            second.action,
+            aleph_protocol::events::UncertaintyAction::ProceedWithCaution
+        );
+
+        // And the projector must ignore malformed payloads rather than
+        // silently stamp `Unknown`-flavored entries the chip would render.
+        apply_uncertainty_signal(
+            chat,
+            "run-2",
+            &json!({ "run_id": "run-2", "seq": 3 }), // missing both fields
+        );
+        assert!(
+            !chat.uncertainty_signals.get_untracked().contains_key("run-2"),
+            "a signal with neither uncertainty nor suggested_action is no signal"
+        );
+    }
+
+    /// Source-level guard, matching the `the_run_complete_arm_actually_projects_the_halt`
+    /// precedent: the dispatcher's `match event_type` MUST carry a
+    /// `"reasoning_block" =>` arm that drives `apply_reasoning_block`. Without
+    /// that arm the projector is dead code — every test above passes but no
+    /// live event ever reaches the projector, and the user sees no reasoning.
+    ///
+    /// `i18n_census::production_lines` (not a blind `split("#[cfg(test)]")`)
+    /// so the scan walks gated items, the same one-trick this crate uses for
+    /// every other "did the dispatcher keep its arm" guard.
+    #[test]
+    fn the_reasoning_block_arm_actually_appends() {
+        let code: String = crate::i18n_census::production_lines(include_str!("events.rs"))
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("\"reasoning_block\" =>"),
+            "the `run.*` dispatcher no longer has a `reasoning_block` arm; \
+             `StreamEvent::ReasoningBlock` will silently drop on the panel"
+        );
+        assert!(
+            code.contains("apply_reasoning_block("),
+            "the `reasoning_block` arm must call `apply_reasoning_block`; \
+             an inline mirror would drift from the host-tested projector"
+        );
+    }
+
+    /// Source-level guard for `uncertainty_signal` — the matching arm and its
+    /// projector, mirroring `the_reasoning_block_arm_actually_appends` above.
+    #[test]
+    fn the_uncertainty_signal_arm_actually_attaches() {
+        let code: String = crate::i18n_census::production_lines(include_str!("events.rs"))
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("\"uncertainty_signal\" =>"),
+            "the `run.*` dispatcher no longer has an `uncertainty_signal` arm; \
+             `StreamEvent::UncertaintySignal` will silently drop on the panel"
+        );
+        assert!(
+            code.contains("apply_uncertainty_signal("),
+            "the `uncertainty_signal` arm must call `apply_uncertainty_signal`; \
+             an inline mirror would drift from the host-tested projector"
+        );
     }
 }
 

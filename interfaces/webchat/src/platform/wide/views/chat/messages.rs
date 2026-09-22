@@ -878,6 +878,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         message.with_untracked(|m| m.as_ref().map(|m| run_id_from_message_id(&m.id)));
     let run_for_cost = message_run_id.clone().unwrap_or_default();
     let run_for_halt = message_run_id.clone().unwrap_or_default();
+    let run_for_uncertainty = message_run_id.clone().unwrap_or_default();
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code
@@ -1065,6 +1066,35 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         })
     };
 
+    // T2.13: small chip on the trailing assistant bubble surfacing the run's
+    // latest uncertainty note. Same shape and lifetime as `halt_view` — same
+    // per-run map, same clear-on-settle hook, same projector seam — but for
+    // a different frame (`StreamEvent::UncertaintySignal` instead of
+    // `run_complete.summary.terminate_reason`). Sits below the bubble next to
+    // the halt / cost line; never renders for user bubbles, never renders when
+    // the run produced no note, and never carries over into the next turn because
+    // `complete_run` / `fail_run` clear it the moment the run settles.
+    let uncertainty_view = move || {
+        if is_user() {
+            return None;
+        }
+        let note = chat
+            .uncertainty_signals
+            .with(|m| m.get(&run_for_uncertainty).cloned())?;
+        // Tooltip: short verb-noun so it survives a translation; the wire
+        // shape (`uncertainty: String`, `suggested_action: enum`) is what it
+        // describes. Mirrors `halt_view`'s `title=` style.
+        let title = format!("{}: {}", note.action.description(), note.uncertainty);
+        Some(view! {
+            <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
+                        flex items-center gap-1"
+                 title=title>
+                <span>"\u{2753}"</span>
+                <span>{note.uncertainty}</span>
+            </div>
+        })
+    };
+
     // Team chat: Layout A — avatar disc outside the bubble + agent name above.
     // Only when message.agent_id is Some (team message). Zero regression on the
     // single-agent path (agent_id is None → layout_a is None).
@@ -1212,6 +1242,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 {model_view}
                                 {cost_view}
                                 {halt_view}
+                                {uncertainty_view}
                             </div>
                         </div>
                     </div>
@@ -1292,6 +1323,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             {model_view}
                             {cost_view}
                             {halt_view}
+                            {uncertainty_view}
                         </div>
                     </div>
                 }.into_any()

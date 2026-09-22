@@ -299,6 +299,25 @@ pub struct AttachmentMeta {
     pub mime: String,
 }
 
+/// One model-side uncertainty note attached to a run.
+///
+/// Mirrors `StreamEvent::UncertaintySignal` (T2.13): backend has always
+/// emitted this event, but until the panel started consuming it the user
+/// never saw it — there was no place for it to land. Stored keyed by
+/// `run_id` (mirrors how `run_halts` / `run_costs` are stored) so the
+/// trailing assistant bubble can show a small chip explaining why the model
+/// flagged itself, without coupling the chip's existence to whichever bubble
+/// happened to mount last.
+///
+/// `serde` derives exist for the (theoretical) session-snapshot path;
+/// nothing currently snapshots this field. Cheap insurance for parity with
+/// the other per-run maps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UncertaintyNote {
+    pub uncertainty: String,
+    pub action: aleph_protocol::events::UncertaintyAction,
+}
+
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
@@ -749,6 +768,14 @@ pub struct ChatState {
     /// scoped exactly like [`Self::run_costs`] — same producer frame, same
     /// per-conversation lifetime, same snapshot.
     pub run_halts: RwSignal<std::collections::HashMap<String, RunHalt>>,
+    /// Latest uncertainty note per run (T2.13). Backend has always emitted
+    /// `StreamEvent::UncertaintySignal` for self-flagged uncertainty; the panel
+    /// was the only surface that never rendered it. Keyed the same way
+    /// `run_halts` is, so the assistant bubble reads it the same way
+    /// `MessageBubble::halt_view` reads `run_halts`. Cleared per-run on
+    /// `clear_uncertainty` (called by `complete_run` / `fail_run`) so a new
+    /// run never inherits the previous turn's note.
+    pub uncertainty_signals: RwSignal<std::collections::HashMap<String, UncertaintyNote>>,
     /// Per-session execution tier override (`"ask"` | `"auto"` | `"full"`).
     /// `None` = follow the global tier. Mirrors what core persists under
     /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
@@ -894,6 +921,7 @@ impl ChatState {
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             run_halts: RwSignal::new(std::collections::HashMap::new()),
+            uncertainty_signals: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
             session_think_level: RwSignal::new(None),
@@ -1718,6 +1746,34 @@ impl ChatState {
         });
     }
 
+    /// Record (or refresh) the latest uncertainty note for a run (T2.13).
+    /// Driven by `StreamEvent::UncertaintySignal`; the chip on the trailing
+    /// assistant bubble reads it the same way `halt_view` reads `run_halts`.
+    /// Latest-wins: a second signal within one run overwrites the first — the
+    /// chip is a "this answer had doubts" indicator, not a stack of them
+    /// (mirrors the TUI's `add_system_message` decision to keep the most
+    /// recent, not accumulate). Drops the call when `uncertainty` is blank,
+    /// because an empty signal would render as a chip with no explanation.
+    pub fn set_uncertainty(&self, run_id: &str, note: UncertaintyNote) {
+        if note.uncertainty.trim().is_empty() {
+            return;
+        }
+        self.uncertainty_signals
+            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+                m.insert(run_id.to_string(), note);
+            });
+    }
+
+    /// Drop a run's uncertainty note. Called by `complete_run` / `fail_run`
+    /// for the run that just settled, so the chip never outlives its run.
+    /// (`run_id`s are not reused; clearing an unrelated id is harmless.)
+    pub fn clear_uncertainty(&self, run_id: &str) {
+        self.uncertainty_signals
+            .update(|m: &mut std::collections::HashMap<String, UncertaintyNote>| {
+                m.remove(run_id);
+            });
+    }
+
     /// Prefix reuse across every priced run of *this* conversation.
     ///
     /// A single run's figure is noisy — the first run of a session writes the
@@ -1749,6 +1805,9 @@ impl ChatState {
         self.active_run_id.set(None);
         self.phase.set(ChatPhase::Idle);
         self.clear_provider_retry();
+        // T2.13: uncertainty note belongs to the run that produced it; once
+        // the run settles the chip must not bleed into the next turn.
+        self.clear_uncertainty(run_id);
     }
 
     /// Promote a completed run's authoritative final answer into its trailing
@@ -1813,6 +1872,8 @@ impl ChatState {
         let structured = ChatSendError::from_wire_code(error_code, error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
+        // T2.13: see `complete_run` — same lifetime rule.
+        self.clear_uncertainty(run_id);
     }
 
     /// Record a structured chat send error from the composer / outbound
@@ -2012,6 +2073,7 @@ impl ChatState {
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
             run_halts: self.run_halts.get_untracked(),
+            uncertainty_signals: self.uncertainty_signals.get_untracked(),
             knobs: self.session_knobs(),
             plan: self.plan.get_untracked(),
         }
@@ -2045,6 +2107,7 @@ impl ChatState {
         }
         self.run_costs.set(snap.run_costs);
         self.run_halts.set(snap.run_halts);
+        self.uncertainty_signals.set(snap.uncertainty_signals);
         self.apply_session_knobs(snap.knobs);
         self.next_msg_id.set(snap.next_msg_id);
         self.sends.set(snap.sends);
@@ -2104,6 +2167,11 @@ pub struct SessionSnapshot {
     pub run_costs: std::collections::HashMap<String, RunCost>,
     /// Per-run halt reason, for the same reason and by the same route.
     pub run_halts: std::collections::HashMap<String, RunHalt>,
+    /// Per-run uncertainty note (T2.13). Same lifetime and rationale as
+    /// `run_costs` / `run_halts`: the chip survives a tab swap because the
+    /// note belongs to the conversation, not to whichever bubble happens to
+    /// be on screen.
+    pub uncertainty_signals: std::collections::HashMap<String, UncertaintyNote>,
     /// This conversation's dials, so a tab swap restores the tier / mode /
     /// depth / memory setting the server is actually enforcing rather than the
     /// install defaults. One field, so a new dial cannot be captured on the way
