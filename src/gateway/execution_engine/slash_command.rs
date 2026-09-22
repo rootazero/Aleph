@@ -191,9 +191,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(
             request.workspace_override.clone(),
         );
-        crate::extension::visibility::slash_owner_admits(&mode, &visibility, |owner, ctx| {
-            crate::extension::try_extension_manager().is_some_and(|m| m.plugin_visible(owner, ctx))
-        })
+        crate::extension::visibility::slash_owner_admits(
+            &mode,
+            &visibility,
+            crate::extension::visibility::manager_backed_owner_visible(),
+        )
         .map_err(ExecutionError::Failed)?;
 
         let mode_type = mode["type"].as_str().unwrap_or("");

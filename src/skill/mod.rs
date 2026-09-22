@@ -773,9 +773,12 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
 /// that are an ancestor of (or equal to) `path`, the longest wins. Both
 /// spellings are compared — the literal `starts_with` first, then both sides
 /// canonicalised — because `rescan_dirs` hands this the very dirs that were
-/// published (same spelling) while the watcher's `reload_file` and
-/// `skill_reader` may hand canonical paths. `None` = no published dir covers
-/// `path`.
+/// published (same spelling), while `skill_reader` derives its `skill_dir`
+/// from `get_all_skills_dirs`, whose step (a) static scan
+/// (`get_plugin_skills_dirs`) can reach the same plugin dir under a spelling
+/// that differs from the published one (`/var` vs `/private/var`, a literal
+/// `$HOME` vs a canonicalised discovery root). `None` = no published dir
+/// covers `path`.
 fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
     let published = crate::utils::paths::plugin_skill_dirs();
     if published.is_empty() {

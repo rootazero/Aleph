@@ -245,13 +245,12 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("commands.list", move |req| {
             let registry = reg.clone();
             async move {
+                let owner_visible =
+                    alephcore::extension::visibility::manager_backed_owner_visible();
                 alephcore::gateway::handlers::commands::handle_list_from_registry(
                     req,
                     &registry,
-                    &|owner, ctx| {
-                        alephcore::extension::try_extension_manager()
-                            .is_some_and(|m| m.plugin_visible(owner, ctx))
-                    },
+                    &owner_visible,
                 )
                 .await
             }

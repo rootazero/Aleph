@@ -201,6 +201,24 @@ pub fn retain_visible_owned_commands(
     retain_visible_owned(tools, ctx, catalog_owner, visible)
 }
 
+/// The production owner predicate every slash face hands to the filters
+/// above: the installed `ExtensionManager`'s `plugin_visible`, or "not
+/// visible" when no manager is installed — an unknown owner is refused,
+/// never admitted (fail-closed, as `plugin_visible` documents).
+///
+/// Exists only because three faces spell the same closure: `commands.list`
+/// (`tool_catalog_init.rs`, the bin crate — hence `pub`; `try_extension_manager`
+/// and `plugin_visible` are already `pub`, so nothing widens), the fast
+/// path's `slash_owner_admits` (`execution_engine/slash_command.rs`) and
+/// `/help`'s `render_command_help` (`inbound_router/command_handler.rs`). A
+/// fourth face calls this rather than re-spelling it; tests pass their own
+/// closures.
+pub fn manager_backed_owner_visible() -> impl Fn(&str, &VisibilityCtx) -> bool {
+    |owner: &str, ctx: &VisibilityCtx| {
+        crate::extension::try_extension_manager().is_some_and(|m| m.plugin_visible(owner, ctx))
+    }
+}
+
 /// Face ④ (dispatch): admit a resolved slash command unless its owner is a
 /// plugin this session may not see. `mode` is the JSON
 /// `serialize_parsed_command` produced; an absent `owning_plugin` key is

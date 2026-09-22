@@ -92,18 +92,20 @@ pub(crate) struct PluginProjection {
 impl ExtensionManager {
     /// Derive the projection from the registry under one read lock.
     ///
-    /// `base_skill_dirs` is the non-plugin part of the skill search set; it is
-    /// passed in so a plugin dir that discovery already found is not added
-    /// twice (the `SkillSystem` would scan it once anyway, but a duplicate in
-    /// `PLUGIN_SKILL_DIRS` would make `skill_read` report the same skill from
-    /// two roots).
+    /// Every active plugin's existing `<root>/skills` is published — there is
+    /// no "discovery already found this dir" exemption. An unpublished plugin
+    /// dir is one whose skills `guess_source` can only classify by directory
+    /// name, i.e. a silent D-4 recurrence for any plugin whose dir name is not
+    /// its id. Whether the `SkillSystem` scan also reached the dir by another
+    /// route is the scan list's concern (`republish_plugin_projections` dedups
+    /// it), not the projection's.
     ///
     /// **The activation predicate lives here and nowhere else.** `is_active()`
     /// is true only for [`PluginStatus::Loaded`](crate::extension::PluginStatus),
     /// so `Disabled` / `Overridden` / `Error` plugins contribute nothing — which
     /// is the whole point: an inactive plugin must be invisible to the model,
     /// not merely absent from the management list.
-    async fn derive_plugin_projection(&self, base_skill_dirs: &[PathBuf]) -> PluginProjection {
+    async fn derive_plugin_projection(&self) -> PluginProjection {
         let registry = self.plugin_registry.read().await;
 
         // The id published with each dir is `record.id` — the registry id —
@@ -113,10 +115,7 @@ impl ExtensionManager {
         let mut plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir> = Vec::new();
         for record in registry.list_active_plugins() {
             let dir = record.root_dir.join("skills");
-            if dir.is_dir()
-                && !base_skill_dirs.contains(&dir)
-                && !plugin_skill_dirs.iter().any(|d| d.dir == dir)
-            {
+            if dir.is_dir() && !plugin_skill_dirs.iter().any(|d| d.dir == dir) {
                 plugin_skill_dirs.push(crate::utils::paths::PublishedPluginSkillDir {
                     dir,
                     plugin_id: record.id.clone(),
@@ -170,9 +169,16 @@ impl ExtensionManager {
             .map(|d| d.path)
             .collect();
 
-        let projection = self.derive_plugin_projection(&skill_dirs).await;
+        let projection = self.derive_plugin_projection().await;
 
-        skill_dirs.extend(projection.plugin_skill_dirs.iter().map(|d| d.dir.clone()));
+        // A plugin dir discovery already listed is not scanned twice. This is
+        // the scan list's dedup, not a publish gate: `SkillSystem::init` only
+        // dedups against dirs it already holds, not within one batch.
+        for published in &projection.plugin_skill_dirs {
+            if !skill_dirs.contains(&published.dir) {
+                skill_dirs.push(published.dir.clone());
+            }
+        }
 
         // Publish the plugin roots on their own too: `SkillSystem` only feeds
         // the prompt index, while `get_all_skills_dirs` (the `skill_read` /

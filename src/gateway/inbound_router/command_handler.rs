@@ -502,17 +502,13 @@ impl InboundMessageRouter {
             return Ok(());
         };
 
-        // The manager-backed owner predicate — the same closure
-        // `tool_catalog_init.rs` hands `commands.list`, this face's twin; no
-        // installed manager = unknown owner = not listed (fail-closed, as
-        // `ExtensionManager::plugin_visible` documents).
+        // The same owner predicate `commands.list` and the slash fast path
+        // use; no installed manager = unknown owner = not listed.
+        let owner_visible = crate::extension::visibility::manager_backed_owner_visible();
         let mut text = crate::gateway::handlers::commands::render_command_help(
             parser.tool_registry(),
             None,
-            &|owner, ctx| {
-                crate::extension::try_extension_manager()
-                    .is_some_and(|m| m.plugin_visible(owner, ctx))
-            },
+            &owner_visible,
         )
         .await;
         text.push_str(ROUTER_OWNED_HELP_LINES);
