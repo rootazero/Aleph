@@ -884,21 +884,25 @@ mod tests {
         );
     }
 
-    // `serial` because this test and
-    // `plugin_subagents_are_visible_only_to_their_project` share one process
-    // global (`PLUGIN_SUBAGENTS`, replaced wholesale by every
-    // `publish_plugin_subagents` call). Unguarded, the default parallel
-    // runner is free to interleave the two tests' publish/read pairs, so one
-    // test's publish silently overwrites the other's between its own publish
-    // and its own assertion — reproducible under this module's default
-    // parallel test run. Same fix P2.6 applied to the sibling
-    // `PLUGIN_SKILL_DIRS` global (`extension::mod::tests::
-    // projection_publishes_skill_dirs_with_their_scope_keys`).
+    // This test and `plugin_subagents_are_visible_only_to_their_project`
+    // both replace the process-global `PLUGIN_SUBAGENTS` wholesale via
+    // `publish_plugin_subagents`. Every writer of that global in the test
+    // binary — these two directly, plus every `extension::` test that goes
+    // through `load_all()` → `republish_plugin_projections` (e.g.
+    // `src/extension/mod.rs:1281,1299,1344,1378,1600,1722`) — holds
+    // `ALEPH_HOME_TEST_GUARD` via `IsolatedAlephHome`, ONE regime
+    // (`utils/paths.rs:77-82`). A `#[serial_test::serial(...)]` group here
+    // would be a SECOND, non-excluding regime over the same data: it stops
+    // this test racing its sibling, but not either of them racing an
+    // `extension::` test's `load_all()` — and per `utils/paths.rs`'s own
+    // warning, two regimes over one resource is exactly the shape that once
+    // hung the whole `--lib` suite. `IsolatedAlephHome::new()` is P2.6's
+    // fix for the sibling `PLUGIN_SKILL_DIRS` global, reused verbatim here.
     #[test]
-    #[serial_test::serial(plugin_subagents_global)]
     fn resolve_falls_back_to_plugin_subagents_but_registry_wins() {
         use crate::agents::types::AgentSource;
         use crate::extension::visibility::ScopeKey;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         // Publish a unique plugin sub-agent plus one that collides with the
         // builtin `explore`. Process-global, but unique ids keep this from
         // perturbing parallel tests, and `explore` always resolves to the
@@ -964,9 +968,9 @@ mod tests {
     /// session in p. `resolve`, `available_agent_ids`, `spawnable_agent_ids`
     /// are three faces of one verb and must answer alike.
     #[test]
-    #[serial_test::serial(plugin_subagents_global)]
     fn plugin_subagents_are_visible_only_to_their_project() {
         use crate::extension::visibility::ScopeKey;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let p = tempfile::tempdir().unwrap();
         let q = tempfile::tempdir().unwrap();
         publish_plugin_subagents(vec![
@@ -986,12 +990,23 @@ mod tests {
         assert!(registry
             .resolve("p2-global-agent", Some(q.path()))
             .is_some());
+        // The Global-keyed agent is visible everywhere, including from the
+        // project that owns the project-scoped one — `Global` is not merely
+        // "the fallback outside `p`", it is unconditionally visible.
+        assert!(registry
+            .resolve("p2-global-agent", Some(p.path()))
+            .is_some());
 
         let in_p = registry.available_agent_ids(Some(p.path()));
         let in_q = registry.available_agent_ids(Some(q.path()));
         assert!(in_p.contains(&"p2-proj-agent".to_string()));
         assert!(!in_q.contains(&"p2-proj-agent".to_string()));
         assert!(in_q.contains(&"p2-global-agent".to_string()));
+        assert!(
+            in_p.contains(&"p2-global-agent".to_string()),
+            "a Global plugin agent must be listed from every project, not only \
+             the ones without a project-scoped agent of their own"
+        );
         assert!(
             !registry
                 .spawnable_agent_ids(Some(q.path()))
