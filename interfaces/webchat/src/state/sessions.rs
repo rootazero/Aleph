@@ -51,13 +51,17 @@ pub struct SessionMap {
     /// **No longer answers "is this session running"** — [`Self::server_running`]
     /// does, for every consumer (the row dot, the active counter, and since
     /// 2026-08-10 the re-hydrate suppression that was the last hold-out). What
-    /// survives here is a *double-bind witness*: [`Self::bind_run`] increments
-    /// and [`Self::settle_run`] decrements, so a run bound twice leaves a
-    /// residue that one settle cannot clear, and the tests assert on exactly
-    /// that. Kept rather than cut for that reason — it is the only local
-    /// evidence that the three binding paths (send response, `run_accepted`,
-    /// `hydrate_and_follow`) do not overlap. It is deliberately NOT
-    /// authoritative: it only ever counted what THIS client happened to
+    /// survives here is a per-conversation counter of client-bound runs, so
+    /// [`Self::is_running`] and the new [`Self::running_count_for`] can answer
+    /// "is THIS tab currently mid-run" without consulting the server's view
+    /// (the routes table is the source of truth for the binding itself; this
+    /// field is the count it implies). [`Self::bind_run`] is idempotent on
+    /// the same `run_id` — a second bind for an already-bound run is a
+    /// no-op — so the count is exact: one bind, one settle, count zero. The
+    /// caller-side `route_lookup` guards in `events.rs` and `chat_sidebar.rs`
+    /// remain as defence-in-depth, but they are no longer the only thing
+    /// preventing a phantom dot from a duplicate bind. It is deliberately
+    /// NOT authoritative: it only ever counted what THIS client happened to
     /// observe, which is why it leaked whenever a terminal frame went missing.
     running: RwSignal<HashMap<ConvId, usize>>,
     /// Server-authoritative running state: maintained by `RunningSetChanged` events (or cold-load seed),
@@ -367,7 +371,17 @@ impl SessionMap {
     }
 
     /// Bind a run to a conversation: register route, running+1, backfill meta.session_key.
+    ///
+    /// Idempotent on `run_id`: a second bind for an already-bound run is a
+    /// no-op. The routes table is the source of truth for "is this run
+    /// bound"; the caller-side `route_lookup` guards in `events.rs` and
+    /// `chat_sidebar.rs` remain as defence-in-depth but are no longer the
+    /// only thing preventing a phantom `running` residue from a duplicate
+    /// bind (T2.8).
     pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
+        if self.route.with_untracked(|m| m.contains_key(run_id)) {
+            return;
+        }
         self.route.update(|m| {
             m.insert(run_id.to_string(), conv);
         });
@@ -409,6 +423,22 @@ impl SessionMap {
     #[must_use]
     pub fn is_running(&self, conv: ConvId) -> bool {
         self.running.with(|m| m.get(&conv).is_some_and(|n| *n > 0))
+    }
+
+    /// Exact per-conversation run-refcount from the client-side `running`
+    /// table (T2.8 guard helper).
+    ///
+    /// Distinct from [`Self::is_running`] (which collapses to a boolean) and
+    /// [`Self::running_session_count`] (which is the *server*-authoritative
+    /// set's size). This one is the "did THIS client observe this many binds
+    /// for this conv that have not yet been settled" number — bounded above
+    /// by the number of distinct `run_id`s ever routed here, and exactly
+    /// equal to it minus the settled ones, because [`Self::bind_run`] is
+    /// idempotent on the same `run_id`.
+    #[must_use]
+    pub fn running_count_for(&self, conv: ConvId) -> usize {
+        self.running
+            .with_untracked(|m| m.get(&conv).copied().unwrap_or(0))
     }
 
     /// Sidebar row reverse-lookup of ConvId by backend session_key (for the red dot).
@@ -1052,6 +1082,84 @@ mod tests {
             map.start_new(singleton, "agent-a", "New chat");
             let live = HashSet::from(["sess-a".to_string()]);
             assert_eq!(map.rejoin_target(&live), None);
+        });
+    }
+
+    /// `bind_run` is idempotent on `run_id` (T2.8).
+    ///
+    /// Three call sites bind a run — the send response, the `run_accepted`
+    /// event arm, and the re-attach path — and each guards against the
+    /// others via `route_lookup` before calling. The guards are
+    /// defence-in-depth, not load-bearing: the method itself must not
+    /// double-count if a guard is ever removed. A duplicate `bind_run` for
+    /// the same `run_id` must leave `running_count_for(c) == 1`, not 2,
+    /// and a subsequent `settle_run` must clear the route and reduce the
+    /// count to 0 (not 1, which would leave a phantom dot).
+    #[test]
+    fn bind_run_called_twice_does_not_double_count_running() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let c = map.open_conversation("agent-a", "A");
+
+            map.bind_run("run-1", c, Some("sess-9"));
+            map.bind_run("run-1", c, Some("sess-9"));
+            assert_eq!(
+                map.running_count_for(c),
+                1,
+                "second bind must be a no-op — the route already carries run-1"
+            );
+
+            // Route still resolves, session_key still set, only the count is
+            // invariant.
+            assert_eq!(map.route_lookup("run-1"), Some(c));
+            assert_eq!(map.conv_for_session_key("sess-9"), Some(c));
+
+            // One settle clears both the route and the count — no residue.
+            map.settle_run("run-1");
+            assert_eq!(map.route_lookup("run-1"), None);
+            assert_eq!(map.running_count_for(c), 0);
+            assert!(!map.is_running(c));
+        });
+    }
+
+    /// Routes live on the [`SessionMap`] (the registry), not on each
+    /// `ChatState`; switching the active conversation away and back must NOT
+    /// erase them (T2.11).
+    ///
+    /// A run that started in `sess-a` and is still streaming must keep
+    /// routing to the `sess-a` tab even when the user has, in the meantime,
+    /// switched to `sess-b` to read something else, then back. If routes
+    /// were stored on the singleton `ChatState` (the active conversation's
+    /// projection), the second switch would land on a freshly-restored
+    /// `sess-a` whose route map is empty, and every later frame of the
+    /// still-streaming run would fail `frame_belongs_here` and be dropped.
+    /// Pin: routes survive any number of active-conv flips.
+    #[test]
+    fn switching_back_to_a_session_recovers_its_run_route() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+
+            let s1 = map.adopt_session(singleton, "agent-a", "sess-a", || "A".into());
+            map.bind_run("run-1", s1, Some("sess-a"));
+            assert_eq!(map.route_lookup("run-1"), Some(s1));
+
+            // Away (read s2).
+            let s2 = map.adopt_session(singleton, "agent-b", "sess-b", || "B".into());
+            assert_ne!(s2, s1);
+            assert!(
+                map.route_lookup("run-1").is_some(),
+                "switching away must not lose routes — they live on the registry"
+            );
+
+            // Back.
+            let again = map.adopt_session(singleton, "agent-a", "sess-a", || "A".into());
+            assert_eq!(again, s1, "the original s1 tab must be reused");
+            assert_eq!(
+                map.route_lookup("run-1"),
+                Some(s1),
+                "the still-streaming run must still resolve to s1 on return"
+            );
         });
     }
 }

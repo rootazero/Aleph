@@ -1918,6 +1918,7 @@ mod tests {
         BASE_TOPICS,
         GATEWAY_NOT_READY,
     };
+    use leptos::prelude::{GetUntracked, Update};
     use std::collections::BTreeSet;
 
     /// The defect this floor exists to stop, stated as the predicate: a request
@@ -2171,5 +2172,45 @@ mod tests {
         let failure = super::RpcFailure::local("Request timed out");
         assert_eq!(failure.code, None);
         assert_eq!(failure.message, "Request timed out");
+    }
+
+    /// `with_owner` analogue to the one in `state::sessions::tests`: signals
+    /// need a current Owner to allocate under, even when they are only read
+    /// with `get_untracked`. The state tests already prove this; doing it
+    /// again here would just be a copy — `DashboardState::new` does its own
+    /// allocation, so a plain local is sufficient.
+    fn with_owner<T>(f: impl FnOnce() -> T) -> T {
+        let owner = leptos::prelude::Owner::new();
+        owner.set();
+        f()
+    }
+
+    /// `connection_epoch` is the single dependency every "reconnect-handler"
+    /// Effect tracks: it ticks once per successful handshake, and any handler
+    /// that reads it must see a STRICTLY INCREASING sequence, because Effects
+    /// distinguish "re-run" from "still the same epoch" by value comparison.
+    ///
+    /// The T2.7 guard pins the contract that the only writer
+    /// (`connection_epoch.update(|n| *n += 1)` in the handshake path) is the
+    /// only writer — a refactor that turned it into a snapshot of an external
+    /// counter, or that accidentally allowed a decrement on disconnect, would
+    /// silently break every reconnect-driven Effect across the panel
+    /// (`app.rs`, `chat_sidebar.rs`, `chat/state/mod.rs::pending_reattach`).
+    #[test]
+    fn connection_epoch_is_monotone_across_reconnect() {
+        with_owner(|| {
+            let dash = super::DashboardState::new();
+            let e0 = dash.connection_epoch.get_untracked();
+            dash.connection_epoch.update(|n| *n += 1);
+            let e1 = dash.connection_epoch.get_untracked();
+            dash.connection_epoch.update(|n| *n += 1);
+            let e2 = dash.connection_epoch.get_untracked();
+            dash.connection_epoch.update(|n| *n += 1);
+            let e3 = dash.connection_epoch.get_untracked();
+            assert!(
+                e1 > e0 && e2 > e1 && e3 > e2,
+                "every reconnect must strictly increase the epoch (got {e0} → {e1} → {e2} → {e3})"
+            );
+        });
     }
 }

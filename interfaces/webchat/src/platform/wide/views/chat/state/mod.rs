@@ -1400,8 +1400,21 @@ impl ChatState {
     /// Scoped to the run this conversation is actually following: a lane frame
     /// for a sibling run (another tab, a channel, cron) must not repaint this
     /// conversation's phase.
+    ///
+    /// Out-of-order guard (T2.10): a stale `run_queued` arriving AFTER the run
+    /// has already been admitted (and therefore reads `Thinking` / `Streaming`
+    /// / `Error`) must NOT flip the phase back to "waiting" — the wait is
+    /// over, the phase it ended into is the source of truth for what is
+    /// happening NOW. Mirror image of `mark_admitted`'s "only ever flips
+    /// `Queued` → `Thinking`" guard.
     pub fn mark_queued(&self, run_id: &str, ahead: u16) {
         if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(
+            self.phase.get_untracked(),
+            ChatPhase::Thinking | ChatPhase::Streaming | ChatPhase::Error
+        ) {
             return;
         }
         self.phase.set(ChatPhase::Queued { ahead });
@@ -2934,15 +2947,18 @@ mod step_tests {
     }
 
     /// Asserting the effect arrives, not that the call happened. `mark_queued`
-    /// is guarded on `active_run_id`, and `start_assistant_message` sets that
-    /// only on the branch where it does not early-return — so this is the one
-    /// path the whole queued phase depends on.
+    /// is guarded on `active_run_id`, and the canonical first-frame path is
+    /// `apply_run_queued` setting `active_run_id` for a conversation that has
+    /// not seen the run yet — this is the only path the whole queued phase
+    /// depends on (T2.10 out-of-order guard means a Thinking/Streaming/Error
+    /// phase is left alone, so the test must start from `Idle`).
     #[test]
     fn marking_a_run_queued_moves_the_phase() {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.start_assistant_message("run-a");
+        // `apply_run_queued`'s first half: adopt when nothing else is in flight.
+        chat.active_run_id.set(Some("run-a".into()));
         chat.mark_queued("run-a", 2);
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 2 });
     }
@@ -2979,10 +2995,80 @@ mod step_tests {
         chat.mark_admitted("run-a");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
 
-        // And a sibling run's admission is not this conversation's news.
-        chat.mark_queued("run-a", 1);
+        // And a sibling run's admission is not this conversation's news:
+        // the phase was Queued, a sibling admit must not flip it to Thinking.
+        chat.phase.set(ChatPhase::Queued { ahead: 1 });
         chat.mark_admitted("run-b");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
+    }
+
+    /// Out-of-order `run_queued` after `run_admitted` must NOT flip the
+    /// phase back to `Queued` (T2.10).
+    ///
+    /// The mirror image of `mark_admitted`'s "only ever flips Queued →
+    /// Thinking" guard. Once the run is admitted (or further along), a
+    /// stale lane frame arriving later — the server may have queued it
+    /// while we were reconnecting, or a re-attach replayed a snapshot —
+    /// must not regress the UI from "the model is thinking/streaming" to
+    /// "queued: 1 ahead". Without this guard the user sees the busy
+    /// indicator swap to "waiting" for an already-running turn.
+    #[test]
+    fn mark_queued_after_admitted_does_not_flip_back_to_queued() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        // The exact brief sequence: admitted first, stale queued frame second.
+        chat.start_assistant_message("run-1");
+        chat.mark_admitted("run-1");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Thinking,
+            "a queued frame arriving after admission must be ignored"
+        );
+
+        // The same guard fires further along the timeline.
+        chat.phase.set(ChatPhase::Streaming);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Streaming,
+            "a queued frame mid-stream must not regress the UI"
+        );
+
+        chat.phase.set(ChatPhase::Error);
+        chat.mark_queued("run-1", 1);
+        assert_eq!(
+            chat.phase.get_untracked(),
+            ChatPhase::Error,
+            "even after an error the wait indicator is not the truth"
+        );
+
+        // And the guard must NOT prevent the legitimate transition: from
+        // `Idle`, a fresh queued frame still drives the phase to Queued.
+        // Mirror `apply_run_queued`'s adoption half: set active_run_id
+        // directly so phase stays Idle (start_assistant_message would set
+        // it to Thinking and the guard would (correctly) fire).
+        let chat2 = ChatState::new();
+        chat2.active_run_id.set(Some("run-2".into()));
+        chat2.mark_queued("run-2", 2);
+        assert_eq!(
+            chat2.phase.get_untracked(),
+            ChatPhase::Queued { ahead: 2 },
+            "guard only protects non-queued phases; the happy path still works"
+        );
+
+        // And within Queued itself, a smaller `ahead` still updates — the
+        // lane is moving, this is not the out-of-order frame the guard
+        // exists to catch.
+        chat2.mark_queued("run-2", 0);
+        assert_eq!(
+            chat2.phase.get_untracked(),
+            ChatPhase::Queued { ahead: 0 },
+            "legitimate forward-progress lane updates must still apply"
+        );
     }
 
     /// Pins the fact `platform::phone::chat::composer`'s `running` predicate

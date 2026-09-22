@@ -2737,6 +2737,49 @@ fn an_impossible_age_falls_back_instead_of_panicking() {
     );
 }
 
+/// The elapsed timer's terminal value: `run_started_at` is cleared on
+/// `RunComplete` (T2.9).
+///
+/// `AppState::run_started_at` drives the status-bar working indicator. The
+/// chosen contract is "the timer reads while a run is in flight, disappears
+/// when it ends" — the inverse of "freeze the final value", which would
+/// make the busy spinner stick at the same number for the lifetime of the
+/// finished transcript and read as a still-running turn. The render guard
+/// in `tui/render.rs` already gates on `current_run.is_some()`, so
+/// `None` here cleanly hides the indicator without any extra check at the
+/// render site. If this test ever goes red, someone changed either
+/// `events.rs`'s `RunComplete` arm or `run_clock.rs` to freeze a sentinel
+/// and the status bar will start lying about liveness.
+#[test]
+fn run_complete_clears_the_elapsed_timer() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    // Accepted → timer is on.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-1".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    assert_eq!(state.current_run.as_deref(), Some("run-1"));
+    assert!(
+        state.run_started_at.is_some(),
+        "RunAccepted must light the working indicator"
+    );
+
+    // Complete → timer disappears.
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 2,
+        summary: RunSummary::default(),
+        total_duration_ms: 12_345,
+    });
+    assert!(
+        state.run_started_at.is_none(),
+        "RunComplete must clear the indicator — the freeze alternative would \
+         keep a stale number on the status bar for the lifetime of the transcript"
+    );
+}
+
 /// The adopted run is recorded by home session, so a `/session` switch away and
 /// back behaves like any other run: dropped while elsewhere, kept on return.
 #[test]
