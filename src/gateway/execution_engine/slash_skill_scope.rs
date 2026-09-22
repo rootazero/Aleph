@@ -292,6 +292,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: declared,
+                plugin_id: None,
             }])
             .await;
         if !rejected.is_empty() {
@@ -421,6 +422,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: Some(vec!["Bash".to_string()]),
+                plugin_id: None,
             }])
             .await;
 
@@ -530,6 +532,7 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: None,
+                    plugin_id: None,
                 },
                 SkillInfo {
                     id: "borrower".to_string(),
@@ -538,6 +541,7 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: Some(vec!["sibling".to_string()]),
+                    plugin_id: None,
                 },
             ])
             .await;
@@ -563,6 +567,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: Some(vec!["grep".to_string(), "bash".to_string()]),
+                plugin_id: None,
             }])
             .await;
         assert!(rejected.is_empty(), "unexpectedly refused: {rejected:?}");

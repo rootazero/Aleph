@@ -48,6 +48,7 @@ async fn registry_with_mixed_sources() -> ToolCatalog {
             "Refine text",
             ToolSource::Skill {
                 id: "refine-text".into(),
+                plugin_id: None,
             },
         ),
     ];

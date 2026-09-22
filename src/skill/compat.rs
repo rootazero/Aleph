@@ -37,6 +37,13 @@ pub struct SkillInfo {
     /// manifest, so they always project `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
+    /// The plugin that registered this entry (`commands/*.md` of a plugin, or a
+    /// plugin-shipped skill). `None` for user / bundled skills. Carried onto
+    /// `ToolSource::Skill` so the slash list and fast path can ask
+    /// `extension::visibility` whether this session may see the owner, and so
+    /// the plugin lifecycle can retract the entry by owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
 }
 
 impl From<SkillManifest> for SkillInfo {
@@ -50,6 +57,10 @@ impl From<SkillManifest> for SkillInfo {
             allowed_tools: manifest
                 .allowed_tools()
                 .map(|tools| tools.iter().map(String::clone).collect()),
+            plugin_id: match manifest.source() {
+                crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str().to_string()),
+                _ => None,
+            },
         }
     }
 }
@@ -96,6 +107,27 @@ mod tests {
         assert_eq!(info.scope, PromptScope::System);
         assert!(info.version.is_none());
         assert!(info.allowed_tools.is_none());
+        assert!(info.plugin_id.is_none(), "a global skill has no owner");
+    }
+
+    /// The boot path (`init_tool_catalog`) projects every user-invocable
+    /// manifest through this `From`, so it is where a plugin-shipped skill's
+    /// owner first reaches the catalog row. Both impls (`SkillManifest` and
+    /// `&SkillManifest`) must agree; the by-ref one delegates.
+    #[test]
+    fn skill_info_names_the_owning_plugin_of_a_plugin_skill() {
+        use crate::domain::skill::PluginId;
+        let manifest = SkillManifest::new(
+            "proj:cmd",
+            "cmd",
+            "Owned",
+            SkillContent::new("c"),
+            SkillSource::Plugin(PluginId::new("proj")),
+        );
+        let by_ref: SkillInfo = (&manifest).into();
+        assert_eq!(by_ref.plugin_id.as_deref(), Some("proj"));
+        let by_value: SkillInfo = manifest.into();
+        assert_eq!(by_value.plugin_id.as_deref(), Some("proj"));
     }
 
     /// The projection must carry the empty-vs-absent distinction, not just the

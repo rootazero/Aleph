@@ -54,7 +54,7 @@ impl ToolState {
         removed
     }
 
-    /// Remove the skill-sourced entries whose `ToolSource::Skill { id }` is
+    /// Remove the skill-sourced entries whose `ToolSource::Skill { id, .. }` is
     /// one of `skill_ids`. The inverse of `ToolRegistrar::register_skills`
     /// for a plugin's `commands/*.md` entries; the plugin lifecycle calls it
     /// from the `slash_command` effect's disposer with the exact ids it
@@ -63,7 +63,7 @@ impl ToolState {
         let mut tools = self.tools.write().await;
         let initial_count = tools.len();
         tools.retain(|_, tool| match &tool.source {
-            super::super::types::ToolSource::Skill { id } => !skill_ids.contains(id),
+            super::super::types::ToolSource::Skill { id, .. } => !skill_ids.contains(id),
             _ => true,
         });
         let removed = initial_count - tools.len();

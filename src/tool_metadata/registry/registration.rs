@@ -269,6 +269,7 @@ impl ToolRegistrar {
                 &skill.description,
                 ToolSource::Skill {
                     id: skill.id.clone(),
+                    plugin_id: skill.plugin_id.clone(),
                 },
             )
             .with_display_name(&skill.name)

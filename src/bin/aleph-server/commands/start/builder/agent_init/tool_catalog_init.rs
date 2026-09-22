@@ -154,7 +154,6 @@ pub(super) async fn init_tool_catalog(
 
     // Register skills and plugin tools from ExtensionManager (if initialized)
     {
-        use alephcore::domain::Entity;
         use alephcore::gateway::handlers::plugins::get_extension_manager;
         if let Ok(ext_manager) = get_extension_manager() {
             // Ensure extensions are discovered and loaded (skills + plugins)
@@ -164,23 +163,15 @@ pub(super) async fn init_tool_catalog(
 
             {
                 let skill_manifests = ext_manager.skill_system().list_skills().await;
+                // One projection (`From<&SkillManifest>`), so the catalog row
+                // carries the same six fields plus the owning plugin
+                // (`SkillSource::Plugin`) that every other producer of a
+                // `SkillInfo` does — the literal that used to live here was a
+                // second, field-for-field copy of that impl.
                 let skill_infos: Vec<alephcore::skill::SkillInfo> = skill_manifests
                     .iter()
                     .filter(|s| s.is_user_invocable())
-                    .map(|s| alephcore::skill::SkillInfo {
-                        id: s.id().as_str().to_string(),
-                        name: s.name().to_string(),
-                        description: s.description().to_string(),
-                        scope: s.scope().clone(),
-                        version: s.version().map(str::to_string),
-                        // `allowed-tools:` frontmatter, projected verbatim.
-                        // `None` (key absent) and `Some(vec![])` (explicit
-                        // deny-all) mean different things all the way down to
-                        // the run loop, so this must not be flattened.
-                        allowed_tools: s
-                            .allowed_tools()
-                            .map(|tools| tools.iter().map(String::clone).collect()),
-                    })
+                    .map(alephcore::skill::SkillInfo::from)
                     .collect();
                 let rejected = tool_catalog.register_skills(&skill_infos).await;
                 if !daemon {
@@ -254,8 +245,15 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("commands.list", move |req| {
             let registry = reg.clone();
             async move {
-                alephcore::gateway::handlers::commands::handle_list_from_registry(req, &registry)
-                    .await
+                alephcore::gateway::handlers::commands::handle_list_from_registry(
+                    req,
+                    &registry,
+                    &|owner, ctx| {
+                        alephcore::extension::try_extension_manager()
+                            .is_some_and(|m| m.plugin_visible(owner, ctx))
+                    },
+                )
+                .await
             }
         });
         if !daemon {

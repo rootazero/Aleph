@@ -96,7 +96,10 @@ mod tests {
             ToolSourceType::Mcp
         );
         assert_eq!(
-            ToolSourceType::from(&ToolSource::Skill { id: "test".into() }),
+            ToolSourceType::from(&ToolSource::Skill {
+                id: "test".into(),
+                plugin_id: None
+            }),
             ToolSourceType::Skill
         );
         assert_eq!(

@@ -135,6 +135,11 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// possibly empty (`allowed-tools: []` → deny-all). The two are read back
 /// apart in `execution_engine::slash_skill_scope`, so this must stay a JSON
 /// value rather than being flattened to a list on the way out.
+///
+/// `owning_plugin` (any kind) is written only when the resolved entry is
+/// plugin-owned; the key is absent otherwise. The fast path's visibility
+/// gate (`extension::visibility::slash_owner_admits`) reads it back, so this
+/// serializer is the one place the owner enters the mode JSON.
 #[must_use]
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;
@@ -154,7 +159,7 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
     }
 
     let args = parsed.arguments.as_deref().unwrap_or("");
-    let value = match &parsed.context {
+    let mut value = match &parsed.context {
         CommandContext::Skill {
             skill_id,
             display_name,
@@ -191,6 +196,9 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "source": "slash_command",
         }),
     };
+    if let Some(owner) = &parsed.owning_plugin {
+        value["owning_plugin"] = serde_json::Value::String(owner.clone());
+    }
     serde_json::to_string(&value).ok()
 }
 
@@ -732,5 +740,37 @@ mod tests {
     fn parse_clarify_index_rejects_bot_suffix_artifact() {
         assert_eq!(parse_clarify_index("1@MyBot"), None);
         assert_eq!(parse_clarify_index("clarify:1"), None);
+    }
+
+    /// Face ④ of `extension::visibility`: this serializer is the single
+    /// producer of the mode JSON, so the owner recorded on the `ParsedCommand`
+    /// has exactly one place to reach the fast-path gate.
+    #[test]
+    fn serialize_parsed_command_carries_the_owner_into_the_mode_json() {
+        use super::serialize_parsed_command;
+        use crate::command::{CommandContext, ParsedCommand};
+        use crate::tool_metadata::ToolSourceType;
+        let parsed = ParsedCommand {
+            source_type: ToolSourceType::Skill,
+            command_name: "proj:cmd".into(),
+            tool_id: "skill:proj:cmd".into(),
+            arguments: Some("x".into()),
+            context: CommandContext::Skill {
+                skill_id: "proj:cmd".into(),
+                display_name: "cmd".into(),
+                allowed_tools: None,
+            },
+            owning_plugin: Some("proj".into()),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serialize_parsed_command(&parsed).unwrap()).unwrap();
+        assert_eq!(json["owning_plugin"], "proj");
+        // An unowned command writes no key at all — the consumer treats
+        // "absent" as "no owner", never as "owner named by an empty string".
+        let mut unowned = parsed;
+        unowned.owning_plugin = None;
+        let json: serde_json::Value =
+            serde_json::from_str(&serialize_parsed_command(&unowned).unwrap()).unwrap();
+        assert!(json.get("owning_plugin").is_none());
     }
 }

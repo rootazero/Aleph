@@ -184,6 +184,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mode: serde_json::Value = serde_json::from_str(mode_json)
             .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {e}")))?;
 
+        // Face ④ of `extension::visibility`: whichever surface stamped this
+        // mode (Panel/CLI resolver, channel router, TUI), the owner it names
+        // is judged here, once, against the request's own project. No
+        // installed extension manager ⇒ unknown owner ⇒ refused.
+        let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(
+            request.workspace_override.clone(),
+        );
+        crate::extension::visibility::slash_owner_admits(&mode, &visibility, |owner, ctx| {
+            crate::extension::try_extension_manager().is_some_and(|m| m.plugin_visible(owner, ctx))
+        })
+        .map_err(ExecutionError::Failed)?;
+
         let mode_type = mode["type"].as_str().unwrap_or("");
 
         info!(

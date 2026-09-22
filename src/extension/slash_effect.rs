@@ -18,8 +18,8 @@ use crate::tool_metadata::ToolCatalog;
 /// `bin/aleph-server/…/tool_catalog_init.rs`). The id is `qualified_name()`
 /// (`<plugin>:<name>`), the registry's own key derivation, so the dispatch id
 /// and the lookup key cannot drift apart. Later rounds add fields HERE
-/// (`plugin_id` for visibility, `argument_hint` / `allowed_tools` / `model`
-/// from the command's frontmatter), never at a second construction site.
+/// (`argument_hint` / `allowed_tools` / `model` from the command's
+/// frontmatter), never at a second construction site.
 pub(crate) fn plugin_command_skill_info(cmd: &SkillRegistration) -> SkillInfo {
     SkillInfo {
         id: cmd.qualified_name(),
@@ -32,6 +32,10 @@ pub(crate) fn plugin_command_skill_info(cmd: &SkillRegistration) -> SkillInfo {
         // No `allowed-tools:` to project: `None` keeps the agent's full tool
         // surface, which is what plugin commands have always done.
         allowed_tools: None,
+        // The owner, for `extension::visibility` face ④ (the slash list and
+        // the fast path). Unmount does not read it — the `slash_command`
+        // disposer removes the exact ids it registered.
+        plugin_id: Some(cmd.plugin_id.clone()),
     }
 }
 
@@ -96,6 +100,11 @@ mod tests {
         assert_eq!(info.id, "qa-plug:hello", "registry key = slash id");
         assert_eq!(info.name, "hello");
         assert_eq!(info.description, "hello description");
+        assert_eq!(
+            info.plugin_id.as_deref(),
+            Some("qa-plug"),
+            "the owner rides onto the catalog row for face ④"
+        );
         assert_eq!(info.scope, crate::domain::skill::PromptScope::System);
         assert!(
             info.version.is_none(),

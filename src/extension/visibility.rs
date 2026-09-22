@@ -180,6 +180,50 @@ pub fn retain_visible_plugin_skills(
     )
 }
 
+/// Face ④ (list): the owner of a catalog row, if a plugin registered it.
+fn catalog_owner(tool: &crate::tool_metadata::UnifiedTool) -> Option<&str> {
+    match &tool.source {
+        crate::tool_metadata::ToolSource::Plugin { plugin_id } => Some(plugin_id.as_str()),
+        crate::tool_metadata::ToolSource::Skill { plugin_id, .. } => plugin_id.as_deref(),
+        _ => None,
+    }
+}
+
+/// Face ④ (list): keep every row that no plugin owns, and an owned row only
+/// when `visible(owner, ctx)`. `visible` is `ExtensionManager::plugin_visible`
+/// in production; a closure in tests.
+#[must_use]
+pub fn retain_visible_owned_commands(
+    tools: Vec<crate::tool_metadata::UnifiedTool>,
+    ctx: &VisibilityCtx,
+    visible: impl Fn(&str, &VisibilityCtx) -> bool,
+) -> Vec<crate::tool_metadata::UnifiedTool> {
+    retain_visible_owned(tools, ctx, catalog_owner, visible)
+}
+
+/// Face ④ (dispatch): admit a resolved slash command unless its owner is a
+/// plugin this session may not see. `mode` is the JSON
+/// `serialize_parsed_command` produced; an absent `owning_plugin` key is
+/// "no owner". The refusal names the plugin so the operator knows which
+/// project to enter — fail-closed, not fail-dead.
+pub fn slash_owner_admits(
+    mode: &serde_json::Value,
+    ctx: &VisibilityCtx,
+    visible: impl Fn(&str, &VisibilityCtx) -> bool,
+) -> Result<(), String> {
+    match mode
+        .get("owning_plugin")
+        .and_then(serde_json::Value::as_str)
+    {
+        None => Ok(()),
+        Some(owner) if visible(owner, ctx) => Ok(()),
+        Some(owner) => Err(format!(
+            "this command belongs to plugin `{owner}`, which is not available to this \
+             session's project; enter the project that installed it to use it"
+        )),
+    }
+}
+
 /// Parse a scope string from CLI --scope argument
 pub fn parse_scope(s: &str) -> Result<PluginScope, String> {
     match s.to_lowercase().as_str() {
@@ -456,5 +500,101 @@ mod tests {
         // No project: the project plugin's skill is gone; the orphan (a plugin
         // id the registry cannot name) is gone in BOTH contexts — fail-closed.
         assert_eq!(names(&nowhere), vec!["bundled-one", "global-plugin-skill"]);
+    }
+
+    fn owned_tool(
+        id: &str,
+        source: crate::tool_metadata::ToolSource,
+    ) -> crate::tool_metadata::UnifiedTool {
+        crate::tool_metadata::UnifiedTool::new(id, id, "d", source)
+    }
+
+    #[test]
+    fn retain_visible_owned_commands_drops_only_invisible_owners() {
+        use crate::tool_metadata::ToolSource;
+        let p = tempdir().unwrap();
+        let tools = vec![
+            owned_tool("builtin:help", ToolSource::Builtin),
+            owned_tool(
+                "skill:user-skill",
+                ToolSource::Skill {
+                    id: "user-skill".into(),
+                    plugin_id: None,
+                },
+            ),
+            owned_tool(
+                "skill:proj:cmd",
+                ToolSource::Skill {
+                    id: "proj:cmd".into(),
+                    plugin_id: Some("proj".into()),
+                },
+            ),
+            owned_tool(
+                "plugin:proj:tool",
+                ToolSource::Plugin {
+                    plugin_id: "proj".into(),
+                },
+            ),
+            owned_tool(
+                "plugin:glob:tool",
+                ToolSource::Plugin {
+                    plugin_id: "glob".into(),
+                },
+            ),
+        ];
+        let visible = |id: &str, ctx: &VisibilityCtx| match id {
+            "proj" => visible_to(&ScopeKey::project(p.path()), ctx),
+            "glob" => true,
+            _ => false,
+        };
+        let ids = |ctx: &VisibilityCtx| -> Vec<String> {
+            retain_visible_owned_commands(tools.clone(), ctx, visible)
+                .into_iter()
+                .map(|t| t.id)
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(p.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+        assert_eq!(
+            ids(&in_p),
+            vec![
+                "builtin:help",
+                "skill:user-skill",
+                "skill:proj:cmd",
+                "plugin:proj:tool",
+                "plugin:glob:tool"
+            ]
+        );
+        assert_eq!(
+            ids(&nowhere),
+            vec!["builtin:help", "skill:user-skill", "plugin:glob:tool"]
+        );
+    }
+
+    #[test]
+    fn slash_owner_admits_is_a_no_op_without_an_owner_and_refuses_an_invisible_one() {
+        let p = tempdir().unwrap();
+        let visible = |id: &str, ctx: &VisibilityCtx| {
+            id == "proj" && visible_to(&ScopeKey::project(p.path()), ctx)
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(p.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+
+        let unowned = serde_json::json!({"type": "direct_tool", "tool_id": "help", "args": ""});
+        assert!(slash_owner_admits(&unowned, &nowhere, visible).is_ok());
+
+        let owned = serde_json::json!({
+            "type": "skill", "skill_id": "proj:cmd", "owning_plugin": "proj", "args": ""
+        });
+        assert!(slash_owner_admits(&owned, &in_p, visible).is_ok());
+        let refusal = slash_owner_admits(&owned, &nowhere, visible).unwrap_err();
+        assert!(
+            refusal.contains("proj"),
+            "the refusal names the plugin: {refusal}"
+        );
     }
 }

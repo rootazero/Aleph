@@ -118,6 +118,10 @@ pub enum ToolSource {
     Skill {
         /// Skill directory ID (e.g., "refine-text")
         id: String,
+        /// Owning plugin, when a plugin registered this entry. See
+        /// `skill::SkillInfo::plugin_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plugin_id: Option<String>,
     },
 
     /// User-defined custom command from config.toml
@@ -223,7 +227,7 @@ impl ToolSource {
             Self::Native => format!("native:{name}"),
             Self::Builtin => format!("builtin:{name}"),
             Self::Mcp { server } => format!("mcp:{server}:{name}"),
-            Self::Skill { id } => {
+            Self::Skill { id, .. } => {
                 // Skills are identified by their internal id only — the tool
                 // name is a display label and not part of the identity.
                 format!("skill:{id}")
@@ -262,7 +266,14 @@ mod tests {
             .label(),
             "MCP"
         );
-        assert_eq!(ToolSource::Skill { id: "test".into() }.label(), "Skill");
+        assert_eq!(
+            ToolSource::Skill {
+                id: "test".into(),
+                plugin_id: None
+            }
+            .label(),
+            "Skill"
+        );
         assert_eq!(ToolSource::Custom { rule_index: 0 }.label(), "Custom");
     }
 
@@ -282,7 +293,11 @@ mod tests {
             ToolPriority::Mcp
         );
         assert_eq!(
-            ToolSource::Skill { id: "test".into() }.priority(),
+            ToolSource::Skill {
+                id: "test".into(),
+                plugin_id: None
+            }
+            .priority(),
             ToolPriority::Skill
         );
     }
@@ -299,7 +314,14 @@ mod tests {
             .suffix(),
             "mcp"
         );
-        assert_eq!(ToolSource::Skill { id: "test".into() }.suffix(), "skill");
+        assert_eq!(
+            ToolSource::Skill {
+                id: "test".into(),
+                plugin_id: None
+            }
+            .suffix(),
+            "skill"
+        );
     }
 
     #[test]
@@ -313,7 +335,11 @@ mod tests {
         .is_mcp());
         assert!(!ToolSource::Builtin.is_mcp());
 
-        assert!(ToolSource::Skill { id: "test".into() }.is_skill());
+        assert!(ToolSource::Skill {
+            id: "test".into(),
+            plugin_id: None
+        }
+        .is_skill());
         assert!(!ToolSource::Builtin.is_skill());
     }
 
