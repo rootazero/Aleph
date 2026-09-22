@@ -1413,6 +1413,91 @@ mod tests {
         assert!(!exec.project_scope_allows(&hook, &nowhere));
     }
 
+    // ── Fire-site wiring (判据 §4) ────────────────────────────────────────
+    //
+    // The tests above call `project_scope_allows` directly, so deleting the
+    // `continue` in `execute_interceptors` or the `.filter` in
+    // `execute_observers` would leave them all green. These two go through
+    // the fire sites themselves: effect reached, not just predicate correct.
+
+    /// An interceptor keyed to project `a` is skipped by `execute_interceptors`
+    /// while project `b` is active, and runs while `a` is. A `Prompt` action
+    /// keeps this spawn-free; `hooks_executed` is bumped right after the gate.
+    #[tokio::test]
+    async fn execute_interceptors_skips_a_hook_keyed_to_another_project() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let mut hook = dummy_hook("plugin:foo");
+        hook.event = HookEvent::BeforeToolCall;
+        hook.kind = HookKind::Interceptor;
+        hook.actions = vec![HookAction::Prompt {
+            prompt: "gated".into(),
+        }];
+        hook.scope_key = ScopeKey::project(a.path());
+        let exec = HookExecutor::new(vec![hook]);
+
+        let in_b = crate::projects::with_project_root(Some(b.path().to_path_buf()), async {
+            exec.execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+                .await
+                .unwrap()
+                .1
+        })
+        .await;
+        assert_eq!(
+            in_b.hooks_executed, 0,
+            "interceptor keyed to a must not run inside b"
+        );
+
+        let in_a = crate::projects::with_project_root(Some(a.path().to_path_buf()), async {
+            exec.execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+                .await
+                .unwrap()
+                .1
+        })
+        .await;
+        assert_eq!(
+            in_a.hooks_executed, 1,
+            "interceptor keyed to a must run inside a"
+        );
+    }
+
+    /// An observer keyed to project `a` does not touch its sentinel while
+    /// project `b` is active, and does while `a` is.
+    #[cfg(unix)] // POSIX-only: shell observer uses the `touch` fixture
+    #[tokio::test]
+    async fn execute_observers_skips_a_hook_keyed_to_another_project() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let sentinel = a.path().join("observed.flag");
+        let mut hook = dummy_hook("plugin:foo");
+        hook.actions = vec![HookAction::Command {
+            command: format!("touch '{}'", sentinel.display()),
+        }];
+        // Command actions spawn with `plugin_root` as cwd; `dummy_hook`'s
+        // empty path would fail the spawn before the gate is ever exercised.
+        hook.plugin_root = std::env::temp_dir();
+        hook.scope_key = ScopeKey::project(a.path());
+        let exec = HookExecutor::new(vec![hook]);
+        let ctx = HookContext::new("s");
+
+        crate::projects::with_project_root(Some(b.path().to_path_buf()), async {
+            exec.execute_observers(HookEvent::MessageReceived, &ctx)
+                .await;
+        })
+        .await;
+        assert!(
+            !sentinel.exists(),
+            "observer keyed to a must not run inside b"
+        );
+
+        crate::projects::with_project_root(Some(a.path().to_path_buf()), async {
+            exec.execute_observers(HookEvent::MessageReceived, &ctx)
+                .await;
+        })
+        .await;
+        assert!(sentinel.exists(), "observer keyed to a must run inside a");
+    }
+
     #[test]
     fn plugin_action_round_trips_through_serde() {
         // Wire-format lock for the variant `sync_hooks_from_registry` emits.

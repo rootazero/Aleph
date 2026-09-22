@@ -51,6 +51,14 @@ impl ScopeKey {
     }
 }
 
+/// What the requesting session is bound to. `None` = no project (a Panel
+/// session that never entered a project, or a run whose `workspace_override`
+/// is unset AND whose daemon has no readable CWD).
+#[derive(Clone, Debug, Default)]
+pub struct VisibilityCtx {
+    pub project_root: Option<PathBuf>,
+}
+
 impl VisibilityCtx {
     /// The one derivation of "which project is this session in".
     ///
@@ -80,14 +88,6 @@ impl VisibilityCtx {
     pub fn for_session() -> Self {
         Self::from_project_root(crate::projects::current_project_root())
     }
-}
-
-/// What the requesting session is bound to. `None` = no project (a Panel
-/// session that never entered a project, or a run whose `workspace_override`
-/// is unset AND whose daemon has no readable CWD).
-#[derive(Clone, Debug, Default)]
-pub struct VisibilityCtx {
-    pub project_root: Option<PathBuf>,
 }
 
 /// `Global` → always visible. `Project(p)` → visible iff the session's project
@@ -308,12 +308,19 @@ mod tests {
     /// stands in — plain-server mode, where "the project" is the directory the
     /// operator launched from. This is NOT a new rule: `project_scope_allows`
     /// applied it to project hooks before this round.
+    ///
+    /// The cwd is process-global and one sibling test (`teams::dispatcher::
+    /// runner`) moves it briefly, so the equality is asserted only when the
+    /// reads bracketing `for_session()` agree — otherwise the read raced.
     #[tokio::test]
     async fn for_session_falls_back_to_the_daemon_cwd() {
+        let before = std::env::current_dir().ok().map(|c| canonical_root(&c));
         let got =
             crate::projects::with_project_root(None, async { VisibilityCtx::for_session() }).await;
-        let cwd = std::env::current_dir().ok().map(|c| canonical_root(&c));
-        assert_eq!(got.project_root, cwd);
+        let after = std::env::current_dir().ok().map(|c| canonical_root(&c));
+        if before == after {
+            assert_eq!(got.project_root, before);
+        }
         assert!(got.project_root.is_some(), "the test process has a cwd");
     }
 
