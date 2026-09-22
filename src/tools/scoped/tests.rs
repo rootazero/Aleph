@@ -528,6 +528,7 @@ fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookCon
         plugin_root: PathBuf::from("/tmp"),
         handler: None,
         timeout_secs: None,
+        scope_key: crate::extension::visibility::ScopeKey::Global,
     }
 }
 

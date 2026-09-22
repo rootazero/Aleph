@@ -337,6 +337,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
         }
     }
 

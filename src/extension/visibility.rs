@@ -51,6 +51,37 @@ impl ScopeKey {
     }
 }
 
+impl VisibilityCtx {
+    /// The one derivation of "which project is this session in".
+    ///
+    /// `root` is `RunRequest.workspace_override`, however it reached the
+    /// caller: the run-loop task-local ([`Self::for_session`]), the request
+    /// field before the run exists (slash resolution), or an RPC parameter
+    /// (`commands.list`). `None` falls back to the daemon CWD — plain-server
+    /// mode, where the operator launched Aleph *inside* the project. That is
+    /// the rule the hook executor's `project_scope_allows` has applied since
+    /// project mode shipped; it is not widened here. In App mode the CWD is
+    /// meaningless and holds no `.aleph/plugins`, so the fallback resolves to
+    /// "Global only" there, which is the fail-closed answer.
+    #[must_use]
+    pub fn from_project_root(root: Option<PathBuf>) -> Self {
+        let effective = root.or_else(|| std::env::current_dir().ok());
+        Self {
+            project_root: effective.map(|p| canonical_root(&p)),
+        }
+    }
+
+    /// [`Self::from_project_root`] fed from the run-loop task-local
+    /// (`crate::projects::current_project_root`, published by
+    /// `run_loop/mod.rs` from the request's `workspace_override`). Only
+    /// meaningful inside a run; callers outside one must use
+    /// `from_project_root` with the request's own field.
+    #[must_use]
+    pub fn for_session() -> Self {
+        Self::from_project_root(crate::projects::current_project_root())
+    }
+}
+
 /// What the requesting session is bound to. `None` = no project (a Panel
 /// session that never entered a project, or a run whose `workspace_override`
 /// is unset AND whose daemon has no readable CWD).
@@ -250,7 +281,7 @@ mod tests {
 
     /// A root that does not exist keeps its literal spelling (no panic, no
     /// silent `Global`): the comparison degrades to string equality, the same
-    /// rule `paths_equal` in the hook executor applied.
+    /// rule the hook executor's gate applied before it moved here.
     #[test]
     fn project_key_of_a_missing_dir_is_still_a_project_key() {
         let ghost = std::path::Path::new("/definitely/not/here/aleph-p2");
@@ -258,5 +289,40 @@ mod tests {
             ScopeKey::Project(root) => assert_eq!(root, ghost),
             ScopeKey::Global => panic!("a missing dir must not decay to Global"),
         }
+    }
+
+    /// The derivation hooks have always used: task-local first, daemon CWD
+    /// second. Inside a `with_project_root(Some(p))` scope the ctx is `p`.
+    #[tokio::test]
+    async fn for_session_reads_the_run_task_local() {
+        let p = tempdir().unwrap();
+        let want = canonical_root(p.path());
+        let got = crate::projects::with_project_root(Some(p.path().to_path_buf()), async {
+            VisibilityCtx::for_session()
+        })
+        .await;
+        assert_eq!(got.project_root, Some(want));
+    }
+
+    /// Outside any scope (or with an explicit `None` override) the daemon CWD
+    /// stands in — plain-server mode, where "the project" is the directory the
+    /// operator launched from. This is NOT a new rule: `project_scope_allows`
+    /// applied it to project hooks before this round.
+    #[tokio::test]
+    async fn for_session_falls_back_to_the_daemon_cwd() {
+        let got =
+            crate::projects::with_project_root(None, async { VisibilityCtx::for_session() }).await;
+        let cwd = std::env::current_dir().ok().map(|c| canonical_root(&c));
+        assert_eq!(got.project_root, cwd);
+        assert!(got.project_root.is_some(), "the test process has a cwd");
+    }
+
+    /// The request-side entry point is the same function fed from the field
+    /// instead of the task-local: same canonicalisation, same fallback.
+    #[test]
+    fn from_project_root_canonicalises_and_matches_the_key() {
+        let p = tempdir().unwrap();
+        let ctx = VisibilityCtx::from_project_root(Some(p.path().to_path_buf()));
+        assert!(visible_to(&ScopeKey::project(p.path()), &ctx));
     }
 }

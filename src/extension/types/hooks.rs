@@ -402,6 +402,15 @@ pub struct HookConfig {
     /// timeout when set. Applies to Command and Http actions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// Who may see this hook fire: stamped by the producer that knows where
+    /// the hook came from (`hooks::load_user_hooks` for `~/.aleph/hooks.json`
+    /// and project files, `ExtensionManager::sync_hooks_from_registry` for
+    /// plugin-shipped hooks, from the owning plugin's registry row). The
+    /// executor compares it with `extension::visibility::visible_to`. There is
+    /// deliberately no `Default`: a hook constructed without saying where it
+    /// belongs would fire everywhere.
+    pub scope_key: crate::extension::visibility::ScopeKey,
 }
 
 // =============================================================================

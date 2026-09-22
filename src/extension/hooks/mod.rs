@@ -556,6 +556,7 @@ pub async fn fire_global_observer(
 mod tests {
     use super::*;
     use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
+    use crate::extension::visibility::ScopeKey;
     use crate::extension::HookPriority;
 
     #[test]
@@ -719,6 +720,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -750,6 +752,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -778,6 +781,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -821,6 +825,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -953,6 +958,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -982,6 +988,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -1069,6 +1076,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }
     }
 
@@ -1122,6 +1130,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         };
         let executor = HookExecutor::new(vec![hook]).with_consent(consent.clone());
 
@@ -1203,6 +1212,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }
     }
 

@@ -176,16 +176,6 @@ fn describe_action(action: &HookAction) -> String {
     )
 }
 
-/// Compare two directory paths for identity, canonicalising best-effort so
-/// symlinks (`/var` → `/private/var`), `.`/`..` segments and trailing slashes
-/// don't cause a spurious mismatch. Falls back to the raw path when a side
-/// doesn't resolve so the comparison degrades gracefully rather than failing.
-fn paths_equal(a: &Path, b: &Path) -> bool {
-    let ca = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
-    let cb = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
-    ca == cb
-}
-
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
 pub struct HookExecutor {
@@ -343,38 +333,25 @@ impl HookExecutor {
         }
     }
 
-    /// Gate a project-scoped user hook to the active workspace.
+    /// Gate a hook to the sessions that may see it.
     ///
-    /// Hooks loaded from a project's `.aleph/hooks*.json` are tagged
-    /// `user:project*` and carry that project's `.aleph` directory as their
-    /// `plugin_root`. The daemon serves every registered project from one
-    /// process, so all such hooks live in one shared executor — without this
-    /// gate a hook checked into project A would fire while the agent works
-    /// inside project B (an isolation / arbitrary-command-execution leak).
+    /// Every hook carries a [`ScopeKey`](crate::extension::visibility::ScopeKey)
+    /// stamped by its producer; this is the hook face of the one visibility
+    /// predicate ([`visible_to`](crate::extension::visibility::visible_to)) the
+    /// tool index, skills, sub-agents, slash list and MCP bridge share. The
+    /// daemon serves every registered project from one process, so all
+    /// project hooks live in one executor — without this gate a hook checked
+    /// into project A would fire while the agent works inside project B (an
+    /// isolation / arbitrary-command-execution leak).
     ///
-    /// Returns `true` (always fires) for non-project hooks: global user hooks
-    /// (`user:global`) and plugin-shipped hooks are not bound to any one
-    /// directory. For project hooks, the hook's project root is compared
-    /// against the effective workspace — the Panel-picked project
-    /// ([`current_project_root`](crate::projects::current_project_root)) if a
-    /// run is active, else the daemon CWD (plain server mode). When neither
-    /// resolves, it fails open to preserve pre-project-mode behaviour.
-    fn project_scope_allows(&self, hook: &HookConfig) -> bool {
-        if !hook.plugin_name.starts_with("user:project") {
-            return true;
-        }
-        // `<project>/.aleph/hooks*.json` → plugin_root is `<project>/.aleph`,
-        // so the project root is its parent.
-        let hook_project = match hook.plugin_root.parent() {
-            Some(p) => p,
-            None => return true,
-        };
-        let effective =
-            crate::projects::current_project_root().or_else(|| std::env::current_dir().ok());
-        match effective {
-            Some(root) => paths_equal(&root, hook_project),
-            None => true,
-        }
+    /// `ctx` is computed once per fire-site call, not per hook, so a batch of
+    /// interceptors is judged against one answer.
+    fn project_scope_allows(
+        &self,
+        hook: &HookConfig,
+        ctx: &crate::extension::visibility::VisibilityCtx,
+    ) -> bool {
+        crate::extension::visibility::visible_to(&hook.scope_key, ctx)
     }
 
     /// Execute a single action.
@@ -907,6 +884,7 @@ impl HookExecutor {
         interceptors.sort_by_key(|h| h.priority.as_i32());
 
         let mut current_context = context;
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
 
         for hook in interceptors {
             // Check matcher pattern
@@ -915,7 +893,7 @@ impl HookExecutor {
             }
 
             // Project-scoped hooks fire only in their own workspace.
-            if !self.project_scope_allows(hook) {
+            if !self.project_scope_allows(hook, &visibility) {
                 continue;
             }
 
@@ -1104,13 +1082,14 @@ impl HookExecutor {
     /// run sequentially. Observers cannot block or modify the context.
     /// Errors are logged but do not propagate.
     pub async fn execute_observers(&self, event: HookEvent, context: &HookContext) {
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
         // Filter hooks by event and kind == Observer
         let observers: Vec<_> = self
             .hooks
             .iter()
             .filter(|h| h.event == event && h.kind == HookKind::Observer)
             .filter(|h| self.matches_pattern(h, context))
-            .filter(|h| self.project_scope_allows(h))
+            .filter(|h| self.project_scope_allows(h, &visibility))
             .collect();
 
         if observers.is_empty() {
@@ -1157,6 +1136,7 @@ impl HookExecutor {
 mod tests {
     use super::*;
     use crate::extension::types::HookEvent;
+    use crate::extension::visibility::{ScopeKey, VisibilityCtx};
     use std::path::PathBuf;
 
     fn dummy_hook(plugin_name: &str) -> HookConfig {
@@ -1172,6 +1152,7 @@ mod tests {
             plugin_root: PathBuf::new(),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }
     }
 
@@ -1331,19 +1312,50 @@ mod tests {
         assert_eq!(exec.hook_count(), 1);
     }
 
-    /// A project hook carries its project's `.aleph` dir as `plugin_root`.
+    /// A project hook carries its project's key; the hook loader stamps it
+    /// from the file's directory (`<root>/.aleph/hooks*.json` → `Project(root)`).
     fn project_hook(plugin_name: &str, project_root: &Path) -> HookConfig {
         let mut h = dummy_hook(plugin_name);
         h.plugin_root = project_root.join(".aleph");
+        h.scope_key = ScopeKey::project(project_root);
         h
     }
 
     #[test]
-    fn global_and_plugin_hooks_are_never_project_gated() {
+    fn global_hooks_are_never_project_gated() {
         let exec = HookExecutor::empty();
         // No `with_project_root` scope active here, yet these must still fire.
-        assert!(exec.project_scope_allows(&dummy_hook("user:global")));
-        assert!(exec.project_scope_allows(&dummy_hook("plugin:foo")));
+        assert!(
+            exec.project_scope_allows(&dummy_hook("user:global"), &VisibilityCtx::for_session())
+        );
+        assert!(exec.project_scope_allows(&dummy_hook("plugin:foo"), &VisibilityCtx::for_session()));
+    }
+
+    /// The gate no longer sniffs the `user:project` label: a plugin-shipped
+    /// hook whose plugin was found under a project is gated exactly like a
+    /// project hook file. Same predicate, sixth face.
+    #[tokio::test]
+    async fn a_plugin_hook_with_a_project_key_is_gated_like_a_project_hook() {
+        let proj = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let exec = HookExecutor::empty();
+        let mut hook = dummy_hook("some-plugin");
+        hook.scope_key = ScopeKey::project(proj.path());
+
+        let inside = crate::projects::with_project_root(Some(proj.path().to_path_buf()), async {
+            exec.project_scope_allows(&hook, &VisibilityCtx::for_session())
+        })
+        .await;
+        let elsewhere =
+            crate::projects::with_project_root(Some(other.path().to_path_buf()), async {
+                exec.project_scope_allows(&hook, &VisibilityCtx::for_session())
+            })
+            .await;
+        assert!(inside, "plugin hook must fire inside its own project");
+        assert!(
+            !elsewhere,
+            "plugin hook must NOT fire inside another project"
+        );
     }
 
     #[tokio::test]
@@ -1355,17 +1367,30 @@ mod tests {
 
         // Active project == the hook's project → fires.
         let in_a = crate::projects::with_project_root(Some(proj_a.path().to_path_buf()), async {
-            exec.project_scope_allows(&hook_a)
+            exec.project_scope_allows(&hook_a, &VisibilityCtx::for_session())
         })
         .await;
         assert!(in_a, "project hook must fire inside its own project");
 
         // A different project is active → suppressed (no cross-project leak).
         let in_b = crate::projects::with_project_root(Some(proj_b.path().to_path_buf()), async {
-            exec.project_scope_allows(&hook_a)
+            exec.project_scope_allows(&hook_a, &VisibilityCtx::for_session())
         })
         .await;
         assert!(!in_b, "project hook must NOT fire inside another project");
+    }
+
+    /// Behaviour change recorded in the spec: with NO resolvable project
+    /// (task-local `None` and CWD unreadable is not reproducible here, so the
+    /// ctx is built directly) a project hook is suppressed, where it used to
+    /// fail open.
+    #[test]
+    fn a_project_hook_with_no_project_context_is_suppressed_not_fired() {
+        let proj = tempfile::tempdir().unwrap();
+        let exec = HookExecutor::empty();
+        let hook = project_hook("user:project", proj.path());
+        let nowhere = VisibilityCtx { project_root: None };
+        assert!(!exec.project_scope_allows(&hook, &nowhere));
     }
 
     #[test]
@@ -1401,6 +1426,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            scope_key: ScopeKey::Global,
         }
     }
 

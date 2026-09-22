@@ -841,6 +841,8 @@ impl ExtensionManager {
                 plugin_root: plugin_root.unwrap_or_default(),
                 handler: Some(handler),
                 timeout_secs,
+                // P2.3 replaces this with the owning record's key.
+                scope_key: crate::extension::visibility::ScopeKey::Global,
             };
             executor.add_hook(hook_config);
         }

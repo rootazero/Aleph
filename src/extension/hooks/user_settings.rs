@@ -10,10 +10,12 @@
 //!    targets). In App mode the daemon CWD is meaningless, so project hooks
 //!    are loaded from the registry rather than (only) the launch directory.
 //!
-//! Layers 2–4 are tagged `user:project` / `user:project-local`; the
-//! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time so a
-//! hook checked into project A never runs while the agent works inside project
-//! B. Layer 1 (`user:global`) always fires.
+//! Layers 2–4 are tagged `user:project` / `user:project-local` (logs /
+//! consent) and stamped `ScopeKey::Project(root)`; the
+//! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time
+//! through `visibility::visible_to` so a hook checked into project A never
+//! runs while the agent works inside project B. Layer 1 (`user:global`) is
+//! stamped `ScopeKey::Global` and always fires.
 //!
 //! The format mirrors Claude Code's `settings.json` `hooks` block so users
 //! can copy a working config across both tools without translation:
@@ -48,6 +50,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+use crate::extension::visibility::{canonical_root, ScopeKey};
 
 /// One contiguous group from a `hooks.json` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -123,7 +126,7 @@ pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<Hoo
     // silently empty layer.
     if let Ok(home) = crate::utils::paths::get_config_dir() {
         let p = home.join("hooks.json");
-        load_into(&p, "user:global", &mut out);
+        load_into(&p, "user:global", &ScopeKey::Global, &mut out);
     }
 
     // Track project roots already loaded (by canonical path) so a folder that
@@ -145,26 +148,28 @@ pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<Hoo
     out
 }
 
-/// Best-effort canonicalisation for path-equality bookkeeping. Falls back to
-/// the path as-given when the directory does not resolve (e.g. not yet
-/// created) so dedup stays stable instead of panicking.
+/// Best-effort canonicalisation for path-equality bookkeeping. A thin alias
+/// of the shared visibility derivation so the dedup key and the
+/// [`ScopeKey`] stamped on each row cannot canonicalise differently.
 fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    canonical_root(p)
 }
 
 /// Load a project directory's checked-in + gitignored hook files. Both are
-/// tagged `user:project*` so the executor's fire-time gate binds them to this
-/// project root (`<root>/.aleph` → `plugin_root`, parent recovers `<root>`).
+/// tagged `user:project*` for logs / consent and stamped `Project(root)` so
+/// the executor's fire-time gate (`visible_to`) binds them to this project.
 fn load_project_layer(root: &Path, out: &mut Vec<HookConfig>) {
-    load_into(&root.join(".aleph/hooks.json"), "user:project", out);
+    let key = ScopeKey::project(root);
+    load_into(&root.join(".aleph/hooks.json"), "user:project", &key, out);
     load_into(
         &root.join(".aleph/hooks.local.json"),
         "user:project-local",
+        &key,
         out,
     );
 }
 
-fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
+fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<HookConfig>) {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
@@ -289,6 +294,7 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                     plugin_root: plugin_root.clone(),
                     handler: None,
                     timeout_secs,
+                    scope_key: scope.clone(),
                 });
             }
         }
@@ -387,7 +393,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].event, HookEvent::SessionStart);
         assert_eq!(out[0].matcher.as_deref(), Some("anything"));
@@ -412,7 +418,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
         let h = &out[0];
         assert_eq!(h.event, HookEvent::BeforeToolCall);
@@ -441,7 +447,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].event, HookEvent::AfterToolCall);
         assert_eq!(out[0].kind, HookKind::Observer);
@@ -480,7 +486,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 2, "one registration per action");
         assert_eq!(out[0].timeout_secs, Some(5));
         assert_eq!(out[1].timeout_secs, Some(600));
@@ -511,7 +517,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].timeout_secs, Some(42), "inherits group default");
         assert_eq!(out[1].timeout_secs, Some(7), "own value wins");
@@ -530,7 +536,7 @@ mod tests {
             r#"{ "hooks": { "PreToolUse": [ { "matcher": "Write", "hooks": [] } ] } }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
     }
 
@@ -540,7 +546,7 @@ mod tests {
         let cfg = dir.path().join(".aleph/hooks.json");
         write(&cfg, "not json");
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
     }
 
@@ -555,7 +561,7 @@ mod tests {
             ] } }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
     }
 
@@ -584,7 +590,12 @@ mod tests {
         assert_eq!(
             hooks[0].plugin_root,
             proj.path().join(".aleph"),
-            "project hook must carry its own .aleph as plugin_root for the fire-time gate"
+            "project hook must carry its own .aleph as plugin_root for variable substitution"
+        );
+        assert_eq!(
+            hooks[0].scope_key,
+            ScopeKey::project(proj.path()),
+            "project hook must carry its project's key for the fire-time gate"
         );
     }
 
@@ -610,5 +621,34 @@ mod tests {
         let roots = vec![proj.path().to_path_buf()];
         let hooks = load_user_hooks(Some(cwd.path()), &roots);
         assert_eq!(count_project_hooks(&hooks), 2);
+    }
+
+    /// The producer stamps the key: a project layer file yields `Project(root)`
+    /// rows, the global file yields `Global` rows. Without the stamp the
+    /// executor's gate has nothing to compare and every project hook would
+    /// silently become global (fail-open).
+    #[test]
+    fn project_layer_rows_carry_their_project_key_and_global_rows_carry_global() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".aleph")).unwrap();
+        std::fs::write(
+            root.path().join(".aleph/hooks.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        load_project_layer(root.path(), &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scope_key, ScopeKey::project(root.path()));
+
+        let global = root.path().join("hooks.json");
+        std::fs::write(
+            &global,
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        load_into(&global, "user:global", &ScopeKey::Global, &mut out);
+        assert_eq!(out[0].scope_key, ScopeKey::Global);
     }
 }
