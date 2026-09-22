@@ -57,7 +57,15 @@ fn run_scoped_id(event: &StreamEvent) -> Option<&str> {
 /// leaving the English lead-in in place would render "Run stopped: 已达迭代上限"
 /// — a sentence in neither language. The lead-in is this surface's own copy
 /// (the TUI has no message catalogue) while the label is the shared table's.
-pub(super) fn halt_notice(token: &str, locale: UiLocale) -> String {
+///
+/// `locale` is `Option` so the very first paint — which can race the
+/// environment read the working verb uses, and which would otherwise flash
+/// either a raw token or the wrong-language lead-in — lands on English by
+/// default. English has a row in the shared table for every known token, so
+/// an unrecognised token still surfaces inside a localised sentence rather
+/// than naked.
+pub(super) fn halt_notice(token: &str, locale: Option<UiLocale>) -> String {
+    let locale = locale.unwrap_or(UiLocale::En);
     let label = terminate::label(token, locale);
     match locale {
         UiLocale::En => format!("Run stopped: {label}"),
@@ -539,7 +547,7 @@ impl AppState {
                     summary.terminate_reason.as_deref(),
                     summary.terminate_detail.as_deref(),
                 ) {
-                    self.add_system_message(halt_notice(token, UiLocale::from_env()));
+                    self.add_system_message(halt_notice(token, Some(UiLocale::from_env())));
                 }
 
                 // Last, so the turn closes on it.

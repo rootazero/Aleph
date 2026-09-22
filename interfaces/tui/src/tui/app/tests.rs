@@ -59,12 +59,26 @@ fn tool_rows(state: &AppState) -> Vec<&ToolRow> {
 #[test]
 fn a_halt_notice_is_written_in_one_language() {
     use super::events::halt_notice;
-    let en = halt_notice("hit_max_iterations", UiLocale::En);
+    let en = halt_notice("hit_max_iterations", Some(UiLocale::En));
     assert_eq!(en, "Run stopped: hit max iterations");
-    let zh = halt_notice("hit_max_iterations", UiLocale::Zh);
+    let zh = halt_notice("hit_max_iterations", Some(UiLocale::Zh));
     assert_eq!(zh, "运行已停止：已达迭代上限");
     // An unrecognised token still says something true.
-    assert!(halt_notice("quota_exceeded_v9", UiLocale::En).contains("quota_exceeded_v9"));
+    assert!(halt_notice("quota_exceeded_v9", Some(UiLocale::En)).contains("quota_exceeded_v9"));
+}
+
+/// Before locale is resolved (the first frame a TUI may paint while the
+/// environment read is still settling), the surface must not flash a raw
+/// token. It defaults to English — which has a row for every known token
+/// — so an unrecognised token falls through the label verbatim inside a
+/// localised sentence rather than appearing naked.
+#[test]
+fn halt_notice_falls_back_when_locale_is_unset() {
+    use super::events::halt_notice;
+    let token = "halt-token-x";
+    let notice = halt_notice(token, None);
+    assert!(!notice.is_empty());
+    assert!(notice.contains("halt-token-x") || notice.contains(token));
 }
 
 /// The arm fires, and it reads `terminate_detail` before `terminate_reason`.
