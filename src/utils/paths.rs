@@ -639,21 +639,30 @@ fn collect_project_skills_dirs(
 /// threading the list through every call site (mirrors the `CHANNEL_CONFIG_
 /// SNAPSHOT` pattern). Empty until the first `load_all`, which is fine: plugins
 /// aren't loaded before then and `skill_read` only runs per-request afterwards.
-static PLUGIN_SKILL_DIRS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+///
+/// Each entry carries the owning plugin's `ScopeKey` alongside the dir:
+/// `get_all_skills_dirs` filters by `visible_to(key, ctx)` before appending, so
+/// a Project(p) plugin's skills are only searchable from p — the `skill_read`
+/// face of the same predicate that narrows the `<available_skills>` prompt
+/// index (`extension::visibility::retain_visible_plugin_skills`).
+static PLUGIN_SKILL_DIRS: RwLock<Vec<(PathBuf, crate::extension::visibility::ScopeKey)>> =
+    RwLock::new(Vec::new());
 
-/// Publish the installed plugins' skill base directories for skill discovery.
-/// Called by the extension manager after every (re)load so the set stays in
-/// sync with what is actually installed. Replaces the previous set wholesale.
-pub fn publish_plugin_skill_dirs(dirs: Vec<PathBuf>) {
-    let mut guard: RwLockWriteGuard<'_, Vec<PathBuf>> = PLUGIN_SKILL_DIRS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+/// Publish the installed plugins' skill base directories, each with the
+/// owning plugin's visibility key, for skill discovery. Called by the
+/// extension manager after every (re)load so the set stays in sync with what
+/// is actually installed. Replaces the previous set wholesale.
+pub fn publish_plugin_skill_dirs(dirs: Vec<(PathBuf, crate::extension::visibility::ScopeKey)>) {
+    let mut guard: RwLockWriteGuard<'_, Vec<(PathBuf, crate::extension::visibility::ScopeKey)>> =
+        PLUGIN_SKILL_DIRS
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = dirs;
 }
 
-/// Snapshot the currently-published plugin skill base directories.
+/// Snapshot the currently-published plugin skill base directories with keys.
 #[must_use]
-pub fn plugin_skill_dirs() -> Vec<PathBuf> {
+pub fn plugin_skill_dirs() -> Vec<(PathBuf, crate::extension::visibility::ScopeKey)> {
     PLUGIN_SKILL_DIRS
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -922,9 +931,17 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     //    b) Base dirs published by the extension manager (`<plugin_root>/skills`)
     //       via `publish_plugin_skill_dirs` — covers plugin roots outside the
     //       well-known locations (e.g. `plugins/cache/<market>/<id>/skills`).
-    //       Empty until the first `ExtensionManager::load_all`.
-    for plugin_dir in plugin_skill_dirs() {
-        push_if_new_skills_dir(&mut dirs, &plugin_dir, "plugin skills dir");
+    //       Empty until the first `ExtensionManager::load_all`. Each dir
+    //       carries its plugin's visibility key: `project_dir` here is the
+    //       same fact `VisibilityCtx::from_project_root` reads (the run's
+    //       `workspace_override`, else CWD — see `start_dir` above), so this
+    //       is the `skill_read` face of the one predicate.
+    let visibility =
+        crate::extension::visibility::VisibilityCtx::from_project_root(Some(start_dir.clone()));
+    for (plugin_dir, key) in plugin_skill_dirs() {
+        if crate::extension::visibility::visible_to(&key, &visibility) {
+            push_if_new_skills_dir(&mut dirs, &plugin_dir, "plugin skills dir");
+        }
     }
 
     info!(
@@ -1913,6 +1930,39 @@ mod tests {
         let aleph_idx = dirs.iter().position(|d| d == &aleph_skills);
         let claude_idx = dirs.iter().position(|d| d == &claude_skills);
         assert!(aleph_idx < claude_idx);
+    }
+
+    /// The `skill_read` search set honours the published plugin dirs' keys:
+    /// a Project(p) plugin's `skills/` dir is searched from p and not from
+    /// another project. Mirrors the prompt-index filter one layer up; the two
+    /// are the read and the list of one verb.
+    #[test]
+    fn get_all_skills_dirs_drops_plugin_dirs_invisible_to_the_project() {
+        use crate::extension::visibility::ScopeKey;
+        let _home = IsolatedAlephHome::new();
+        let proj_a = tempfile::tempdir().unwrap();
+        let proj_b = tempfile::tempdir().unwrap();
+        let a_plugin_skills = proj_a.path().join("plugin-a/skills");
+        let global_plugin_skills = proj_a.path().join("plugin-g/skills");
+        std::fs::create_dir_all(&a_plugin_skills).unwrap();
+        std::fs::create_dir_all(&global_plugin_skills).unwrap();
+        publish_plugin_skill_dirs(vec![
+            (a_plugin_skills.clone(), ScopeKey::project(proj_a.path())),
+            (global_plugin_skills.clone(), ScopeKey::Global),
+        ]);
+
+        let from_a = get_all_skills_dirs(Some(proj_a.path())).unwrap();
+        assert!(from_a.contains(&a_plugin_skills));
+        assert!(from_a.contains(&global_plugin_skills));
+
+        let from_b = get_all_skills_dirs(Some(proj_b.path())).unwrap();
+        assert!(
+            !from_b.contains(&a_plugin_skills),
+            "project A's plugin skills leaked into B"
+        );
+        assert!(from_b.contains(&global_plugin_skills));
+
+        publish_plugin_skill_dirs(Vec::new());
     }
 
     #[test]

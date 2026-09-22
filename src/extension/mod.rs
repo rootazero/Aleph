@@ -1694,4 +1694,40 @@ mod tests {
         // The unfiltered snapshot still holds both: the filter is per request.
         assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
     }
+
+    /// The projection publishes each plugin's skills dir WITH its key: the
+    /// derivation of "which dirs" and "whose dirs" is one pass over the
+    /// registry, so the two cannot disagree.
+    #[tokio::test]
+    async fn projection_publishes_skill_dirs_with_their_scope_keys() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        // The same guard also serializes this test against every sibling that
+        // calls `load_all()` (they all take this one mutex): `PLUGIN_SKILL_DIRS`
+        // is a process-global replaced wholesale by each `load_all()`, so an
+        // unguarded read here raced a concurrent sibling's publish and lost
+        // the entry before the assertion — reproducible 100% of the time
+        // under this module's default parallel test run.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_project_plugin(dir.path(), "p2-skilled");
+        std::fs::create_dir_all(dir.path().join("plugins/p2-skilled/skills/hello")).unwrap();
+        std::fs::write(
+            dir.path().join("plugins/p2-skilled/skills/hello/SKILL.md"),
+            "---\nname: hello\ndescription: hi\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let published = crate::utils::paths::plugin_skill_dirs();
+        let mine = published
+            .iter()
+            .find(|(d, _)| d.ends_with("p2-skilled/skills"))
+            .expect("plugin skills dir published");
+        assert_eq!(
+            mine.1,
+            crate::extension::visibility::ScopeKey::project(dir.path())
+        );
+    }
 }

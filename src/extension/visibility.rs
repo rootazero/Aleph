@@ -142,6 +142,44 @@ pub fn scope_install_dir(
     }
 }
 
+/// The shape shared by every "list" face: items that no plugin owns pass;
+/// an owned item passes iff its owner is visible. `owner_of` names the owner
+/// (a `SkillSource::Plugin` id, a catalog row's `plugin_id`); `visible` is
+/// `ExtensionManager::plugin_visible` in production.
+#[must_use]
+pub fn retain_visible_owned<T>(
+    items: Vec<T>,
+    ctx: &VisibilityCtx,
+    owner_of: impl Fn(&T) -> Option<&str>,
+    visible: impl Fn(&str, &VisibilityCtx) -> bool,
+) -> Vec<T> {
+    items
+        .into_iter()
+        .filter(|item| owner_of(item).is_none_or(|owner| visible(owner, ctx)))
+        .collect()
+}
+
+/// Face ②a: the `<available_skills>` index. Non-plugin skills pass through;
+/// a plugin skill is kept only when the registry can name its plugin AND
+/// that plugin is visible to `ctx`. `lookup` is `ExtensionManager::plugin_scope_key`
+/// in production and a closure in tests, so the filter stays a pure function.
+#[must_use]
+pub fn retain_visible_plugin_skills(
+    manifests: Vec<crate::domain::skill::SkillManifest>,
+    ctx: &VisibilityCtx,
+    lookup: impl Fn(&str) -> Option<ScopeKey>,
+) -> Vec<crate::domain::skill::SkillManifest> {
+    retain_visible_owned(
+        manifests,
+        ctx,
+        |m| match m.source() {
+            crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str()),
+            _ => None,
+        },
+        |owner, ctx| lookup(owner).is_some_and(|key| visible_to(&key, ctx)),
+    )
+}
+
 /// Parse a scope string from CLI --scope argument
 pub fn parse_scope(s: &str) -> Result<PluginScope, String> {
     match s.to_lowercase().as_str() {
@@ -372,5 +410,51 @@ mod tests {
             assert_ne!(d.source(), DiscoverySource::Project);
             assert_eq!(ScopeKey::from_discovery(&d), ScopeKey::Global, "{global:?}");
         }
+    }
+
+    #[test]
+    fn retain_visible_plugin_skills_keeps_non_plugin_and_visible_plugin_skills_only() {
+        use crate::domain::skill::{PluginId, SkillContent, SkillManifest, SkillSource};
+        let p = tempdir().unwrap();
+        let mk = |id: &str, src: SkillSource| {
+            SkillManifest::new(id, id, format!("{id} desc"), SkillContent::new("body"), src)
+        };
+        let manifests = vec![
+            mk("bundled-one", SkillSource::Bundled),
+            mk(
+                "proj-plugin-skill",
+                SkillSource::Plugin(PluginId::new("proj-plugin")),
+            ),
+            mk(
+                "global-plugin-skill",
+                SkillSource::Plugin(PluginId::new("global-plugin")),
+            ),
+            mk(
+                "orphan-plugin-skill",
+                SkillSource::Plugin(PluginId::new("unknown-plugin")),
+            ),
+        ];
+        let lookup = |id: &str| match id {
+            "proj-plugin" => Some(ScopeKey::project(p.path())),
+            "global-plugin" => Some(ScopeKey::Global),
+            _ => None,
+        };
+        let names = |ctx: &VisibilityCtx| -> Vec<String> {
+            retain_visible_plugin_skills(manifests.clone(), ctx, lookup)
+                .iter()
+                .map(|m| m.name().to_string())
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(p.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+        assert_eq!(
+            names(&in_p),
+            vec!["bundled-one", "proj-plugin-skill", "global-plugin-skill"]
+        );
+        // No project: the project plugin's skill is gone; the orphan (a plugin
+        // id the registry cannot name) is gone in BOTH contexts — fail-closed.
+        assert_eq!(names(&nowhere), vec!["bundled-one", "global-plugin-skill"]);
     }
 }

@@ -74,10 +74,13 @@ use super::ExtensionManager;
 /// be unit-tested without touching global state.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PluginProjection {
-    /// `<root_dir>/skills` of every **active** plugin, de-duplicated and in
-    /// registry order. Feeds both the `SkillSystem` scan and
-    /// `publish_plugin_skill_dirs`.
-    pub(crate) plugin_skill_dirs: Vec<PathBuf>,
+    /// `<root_dir>/skills` of every **active** plugin, with its owner's
+    /// `ScopeKey`, de-duplicated and in registry order. Feeds both the
+    /// `SkillSystem` scan (bare dirs — it indexes everything the process can
+    /// see; per-request narrowing happens at read time via
+    /// `retain_visible_plugin_skills`) and `publish_plugin_skill_dirs`
+    /// (dir + key — the `skill_read` search set filters by key directly).
+    pub(crate) plugin_skill_dirs: Vec<(PathBuf, super::visibility::ScopeKey)>,
     /// Sub-agents contributed by **active** plugins.
     pub(crate) subagents: Vec<crate::agents::AgentDef>,
 }
@@ -99,12 +102,14 @@ impl ExtensionManager {
     async fn derive_plugin_projection(&self, base_skill_dirs: &[PathBuf]) -> PluginProjection {
         let registry = self.plugin_registry.read().await;
 
-        let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
+        let mut plugin_skill_dirs: Vec<(PathBuf, super::visibility::ScopeKey)> = Vec::new();
         for record in registry.list_active_plugins() {
             let dir = record.root_dir.join("skills");
-            if dir.is_dir() && !base_skill_dirs.contains(&dir) && !plugin_skill_dirs.contains(&dir)
+            if dir.is_dir()
+                && !base_skill_dirs.contains(&dir)
+                && !plugin_skill_dirs.iter().any(|(d, _)| *d == dir)
             {
-                plugin_skill_dirs.push(dir);
+                plugin_skill_dirs.push((dir, record.scope_key.clone()));
             }
         }
 
@@ -149,7 +154,7 @@ impl ExtensionManager {
 
         let projection = self.derive_plugin_projection(&skill_dirs).await;
 
-        skill_dirs.extend(projection.plugin_skill_dirs.iter().cloned());
+        skill_dirs.extend(projection.plugin_skill_dirs.iter().map(|(d, _)| d.clone()));
 
         // Publish the plugin roots on their own too: `SkillSystem` only feeds
         // the prompt index, while `get_all_skills_dirs` (the `skill_read` /
