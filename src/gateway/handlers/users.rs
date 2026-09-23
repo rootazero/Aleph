@@ -974,12 +974,16 @@ impl BackgroundWorkHandles {
 /// `goal(action='update', status='active')` / `loop(action='resume')` /
 /// `cron_manage(action='toggle')` / `heartbeat_toggle`.
 ///
-/// **Deliberately deferred, recorded rather than hidden:** cron's fire-time
-/// backstop (`CronService::disable_walled_owner_job`, driven by the
-/// executor's `walled_owner_reason` check) has NO heartbeat counterpart after
-/// this change. The twin is not closed — a heartbeat task re-enabled by a
-/// second admin after its owner was walled will still fire, exactly as a cron
-/// job would have before round-5 ④.
+/// **Fire-time backstop, both schedulers (round 11).** The sweep is the
+/// primary; each trigger also re-asks the users table through the one
+/// resolver, `scope::authority::resolve` — cron in
+/// `executor::execute_cron_job` (disarms via
+/// `CronService::disable_walled_owner_job`), heartbeat in
+/// `service::timer::execute_heartbeat_tick` BEFORE the L1 probe (disarms via
+/// `ops::disable_walled_owner_task`). A task re-enabled by a second admin
+/// after its owner was walled is disarmed on its next fire. A users-store
+/// READ error disarms nothing: that fire is skipped with "authority unknown"
+/// on record and the next fire asks again.
 ///
 /// # Why this reports the SAME struct `users.get` reports
 ///
