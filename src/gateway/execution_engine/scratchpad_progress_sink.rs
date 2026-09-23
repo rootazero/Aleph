@@ -131,6 +131,19 @@ impl ScratchpadProgressSink {
         });
         Self { inner, tx }
     }
+
+    /// A second sink over `inner` that pushes into THIS sink's queue, drained
+    /// by the one task `new` spawned. A run's spawned subagents get one of
+    /// these (`run_trace_sinks.rs`): their progress lines reach the same
+    /// channel in one FIFO with the parent's, instead of racing it from a
+    /// second drain. The drain ends once every sharer has dropped.
+    #[must_use]
+    pub(crate) fn sharing_queue(&self, inner: Arc<dyn TraceSink>) -> Self {
+        Self {
+            inner,
+            tx: self.tx.clone(),
+        }
+    }
 }
 
 impl TraceSink for ScratchpadProgressSink {
@@ -282,6 +295,29 @@ mod tests {
         let line = scratchpad_progress_line(&ev).expect("failure cap should surface");
         assert!(line.contains("5"));
         assert!(line.contains("熔断"));
+    }
+
+    /// A sharer pushes into the SAME queue as the sink it was made from, so a
+    /// parent's line and a child's line keep the order they were emitted in.
+    /// Red if `sharing_queue` builds its own queue (the child's line never
+    /// reaches this receiver) or forwards nowhere.
+    #[test]
+    fn a_sharer_pushes_into_the_same_queue_in_emission_order() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let parent = ScratchpadProgressSink {
+            inner: Arc::new(crate::harness::NoopTraceSink),
+            tx,
+        };
+        let child = parent.sharing_queue(Arc::new(crate::harness::NoopTraceSink));
+
+        parent.on_trace(&scratchpad_completed("complete_item", Some("[x] parent")));
+        child.on_trace(&scratchpad_completed("complete_item", Some("[x] child")));
+
+        let first = rx.try_recv().expect("the parent's line is queued");
+        let second = rx.try_recv().expect("the child's line is queued behind it");
+        assert!(first.contains("[x] parent"), "got {first}");
+        assert!(second.contains("[x] child"), "got {second}");
+        assert!(rx.try_recv().is_err(), "exactly two lines");
     }
 
     #[test]

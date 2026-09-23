@@ -79,9 +79,17 @@ pub struct SpawnerBase {
     pub consecutive_failure_cap: Option<usize>,
     /// Stage A (P1) — per-turn wall-clock timeout from `[stability]`.
     pub turn_timeout: Option<std::time::Duration>,
-    /// Stage A (P1) — trace sink, cloned from parent's `HarnessDeps`.
-    /// Subagent run events flow into the same sink as the main runner.
+    /// The sink the child's harness loop (and its worktree / MCP-scope
+    /// lifecycle) emits into. In production it ends at the subagent boundary:
+    /// it never reaches the parent run's `agent_trace` mirror or the parent's
+    /// persisted trace (`gateway/execution_engine/run_trace_sinks.rs`).
     pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// The sink the child's `MeteringProvider`s emit into — `ProviderUsage`
+    /// and `CacheHealthDegraded`, the accounting events. In production this is
+    /// the parent run's own chain, so a child's spend is persisted under the
+    /// parent's task and counted by `teams.usage` and the doctor. `None`
+    /// records the child's spend nowhere.
+    pub accounting_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// P3 Stage I — shared plugin-registry handle. Used by `McpScope::provision`
     /// for per-agent MCP scope lookups (validated + snapshotted under a read
     /// guard at provision time). `None` means MCP scope is disabled (legacy
@@ -801,10 +809,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // subagent emits a LoopTraceEvent::ProviderUsage labelled with the
         // subagent's agent_def.id (the top-level wrap site in
         // harness_bridge/runner_impl.rs now labels with its own `spec.agent`
-        // for the same reason).
+        // for the same reason). Usage goes to the ACCOUNTING sink, not the
+        // harness sink: a child's spend stays on the parent run's chain while
+        // its loop events stop at the subagent boundary.
         let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::MeteringProvider::new(
             llm,
-            base.trace_sink.clone(),
+            base.accounting_sink.clone(),
             req.agent_def.id.clone(),
         ));
 
@@ -853,7 +863,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 Arc::new(crate::providers::MeteringProvider::new(
                     cheap.clone(),
                     // rust-doctor-disable-next-line excessive-clone
-                    base.trace_sink.clone(),
+                    base.accounting_sink.clone(),
                     format!("compactor:{}", req.agent_def.id),
                 )) as Arc<dyn AiProvider>
             });

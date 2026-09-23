@@ -715,7 +715,8 @@ impl crate::orchestrator::dispatch::HarnessRunner for NoCompleteHarness {
 /// The gateway drain exits on `RecvError::Closed` when the harness returns
 /// without `Complete`, and `Closed` needs every STRONG sender gone. The emit
 /// sink is reachable from holders that outlive the run (a background
-/// subagent's `ForwardingTraceSink`), so this test keeps an `Arc` of the sink
+/// subagent's metering, which holds the run's chain as its accounting sink),
+/// so this test keeps an `Arc` of the sink
 /// alive past the assertion. Red (a timeout) if the sink — or anything else
 /// reachable from the request — owns a strong sender.
 #[tokio::test]

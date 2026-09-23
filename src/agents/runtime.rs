@@ -195,9 +195,11 @@ pub(crate) struct RoutingExperience {
     pub(crate) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
 }
 
-/// Role-grouped sub-config — trace sink threaded into `SpawnerBase`.
+/// Role-grouped sub-config — the harness and accounting sinks threaded into
+/// `SpawnerBase` (split by producer; see `SpawnerBase::accounting_sink`).
 pub(crate) struct TraceContext {
     pub(crate) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    pub(crate) accounting_sink: Option<Arc<dyn crate::harness::TraceSink>>,
 }
 
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
@@ -280,7 +282,10 @@ impl AgentRuntime {
                 verifier_chain: None,
             },
             routing_experience: RoutingExperience { routing_store: None },
-            trace: TraceContext { trace_sink: None },
+            trace: TraceContext {
+                trace_sink: None,
+                accounting_sink: None,
+            },
         }
     }
 
@@ -408,9 +413,15 @@ impl AgentRuntime {
         self
     }
 
-    /// Stage A (P1) — wire the trace sink. Subagents emit into the same sink.
+    /// Stage A (P1) — wire the sink the child's harness loop emits into.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace.trace_sink = Some(sink);
+        self
+    }
+
+    /// Wire the sink the child's `MeteringProvider`s emit into.
+    pub fn with_accounting_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
+        self.trace.accounting_sink = Some(sink);
         self
     }
 
@@ -642,6 +653,7 @@ impl AgentRuntime {
             consecutive_failure_cap: self.policy_inheritance.consecutive_failure_cap,
             turn_timeout: self.policy_inheritance.turn_timeout,
             trace_sink: self.trace.trace_sink.clone(),
+            accounting_sink: self.trace.accounting_sink.clone(),
             // P3 Stage I — per-agent MCP scope; provisioned when an agent_def
             // declares `mcp_servers` and a registry is wired (B2).
             plugin_registry: self.background.plugin_registry.clone(),

@@ -27,6 +27,7 @@ mod history;
 pub mod markdown_skill_tools;
 mod persistence;
 mod run_loop;
+mod run_trace_sinks;
 mod scratchpad_progress_sink;
 mod session_run_registry;
 mod settle;
@@ -56,6 +57,9 @@ pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
+#[cfg(test)]
+pub(crate) use run_trace_sinks::PersistenceProbe;
+pub(crate) use run_trace_sinks::{RunTraceSinks, ScratchpadTarget};
 pub use simple::SimpleExecutionEngine;
 pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias, stamp_btw};
 pub(crate) use steering::wake_lane_if_burst_drained;

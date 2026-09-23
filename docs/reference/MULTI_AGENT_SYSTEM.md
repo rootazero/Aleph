@@ -1338,15 +1338,24 @@ struct SubagentProgress {
 ### Wiring (R10-Safe Decorator)
 
 `ForwardingTraceSink` (in `src/agents/forwarding_trace_sink.rs`) wraps the
-parent-inherited `trace_sink` exclusively for background subagents. It:
+child's harness `trace_sink` exclusively for background subagents. It:
 
 1. Translates `LoopTraceEvent::ToolCallStarted` / `ToolCallCompleted` /
    `TurnStateEntered{Think}` / `SessionCompleted{Cancelled}` into
    `SubagentProgress`
 2. Pushes the translated event onto `BackgroundAgentTracker.progress` (FIFO,
    capped at 50)
-3. Always forwards the original event to the inner sink (preserves
-   gateway/disk trace flow)
+3. Always forwards the original event to the inner sink — the child chain,
+   which ends at the subagent boundary (`[unattended redaction] → [scratchpad
+   push] → nothing`)
+
+A child's harness events never reach the parent run's `agent_trace` frames or
+the parent's persisted trace: `src/gateway/execution_engine/run_trace_sinks.rs`
+builds a separate child chain and hands it to both spawn paths. The one
+exception is accounting — a child's `MeteringProvider`s (`ProviderUsage` /
+`CacheHealthDegraded`) emit into the parent run's own chain, so subagent spend
+still reaches the live wire and is persisted under the parent's task for
+`teams.usage` and the doctor's cache checks.
 
 Other LoopTraceEvent variants pass through untranslated. Adding new translation
 cases does not require harness changes.

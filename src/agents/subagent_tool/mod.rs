@@ -142,10 +142,15 @@ pub(super) struct RoutingExperience {
     pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
 }
 
-/// Role-grouped sub-config — parent trace sink threaded into background
-/// subagents via `ForwardingTraceSink` for progress observation.
+/// Role-grouped sub-config — the two sinks a spawned child writes into, split
+/// by PRODUCER (both decided at `gateway/execution_engine/run_trace_sinks.rs`).
 pub(super) struct TraceContext {
+    /// What the child's harness loop emits into. Background children get it
+    /// wrapped in `ForwardingTraceSink` for progress observation.
     pub(super) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// What the child's `MeteringProvider`s emit into (`ProviderUsage` /
+    /// `CacheHealthDegraded`). Never wrapped, never reaches the harness loop.
+    pub(super) accounting_sink: Option<Arc<dyn crate::harness::TraceSink>>,
 }
 
 /// A `LoopTool` that delegates tasks to a temporary `AgentLoop`.
@@ -241,7 +246,10 @@ impl SubagentTool {
                 verifier_chain: None,
             },
             routing: RoutingExperience { routing_store: None },
-            trace: TraceContext { trace_sink: None },
+            trace: TraceContext {
+                trace_sink: None,
+                accounting_sink: None,
+            },
         }
     }
 
@@ -422,10 +430,19 @@ impl SubagentTool {
         self
     }
 
-    /// Stage F (P2) — thread the parent trace sink so background subagents can
-    /// be observed via `ForwardingTraceSink`. Only wired on the background path.
+    /// The sink a spawned child's HARNESS LOOP emits into, on both spawn
+    /// paths; the background path wraps it in `ForwardingTraceSink` for
+    /// progress observation. In production this is NOT the parent run's own
+    /// chain — see `gateway/execution_engine/run_trace_sinks.rs`.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace.trace_sink = Some(sink);
+        self
+    }
+
+    /// The sink a spawned child's `MeteringProvider`s emit into. Unset, a
+    /// child's provider usage is recorded nowhere.
+    pub fn with_accounting_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
+        self.trace.accounting_sink = Some(sink);
         self
     }
 

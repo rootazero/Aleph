@@ -178,10 +178,10 @@ impl SubagentTool {
         // watcher (otherwise it parks until process exit).
         let bridge_cancel = cancel_token.clone();
         let mut runtime = self.build_runtime(child_chain, cancel_token);
-        if let Some(parent_sink) = self.trace.trace_sink.clone() {
+        if let Some(harness_sink) = self.trace.trace_sink.clone() {
             let wrapper: std::sync::Arc<dyn crate::harness::TraceSink> = std::sync::Arc::new(
                 crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
-                    parent_sink,
+                    harness_sink,
                     self.background.background_tracker.clone(),
                     request_id.clone(),
                     tree_agent_id.clone(),
@@ -465,6 +465,9 @@ impl SubagentTool {
         }
         if let Some(sink) = self.trace.trace_sink.clone() {
             runtime = runtime.with_trace_sink(sink);
+        }
+        if let Some(sink) = self.trace.accounting_sink.clone() {
+            runtime = runtime.with_accounting_sink(sink);
         }
         if let Some(rs) = self.routing.routing_store.clone() {
             runtime = runtime.with_routing_store(rs);

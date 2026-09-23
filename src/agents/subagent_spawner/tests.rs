@@ -237,6 +237,7 @@ mod tests {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
+            accounting_sink: None,
             // P3 Stage I:
             plugin_registry: None,
             subagent_semaphore: None,
@@ -1360,12 +1361,18 @@ mod tests {
         fn flush(&self) {}
     }
 
+    /// The child's metered usage lands on the ACCOUNTING sink, labelled with
+    /// the child's id, and never on the harness sink. Red if the metering
+    /// wrap reads the harness sink (the accounting capture is empty and the
+    /// harness capture holds the usage).
     #[tokio::test]
     async fn subagent_spawn_emits_provider_usage_with_agent_id() {
         let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
         let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let harness = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
         let mut base = make_base(provider);
-        base.trace_sink = Some(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+        base.accounting_sink = Some(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+        base.trace_sink = Some(harness.clone() as Arc<dyn crate::harness::TraceSink>);
 
         let agent = agent_with_allowed("test-subagent-id", vec!["*"]);
         let req = SpawnRequest {
@@ -1405,6 +1412,19 @@ mod tests {
         let (agent_id, cache_read) = &usage_events[0];
         assert_eq!(agent_id, "test-subagent-id", "agent_id label mismatch");
         assert_eq!(*cache_read, Some(7), "cache_read_tokens mismatch");
+
+        let harness_events = harness.0.lock().unwrap();
+        assert!(
+            !harness_events.is_empty(),
+            "the child's loop still emits into its harness sink"
+        );
+        assert!(
+            !harness_events.iter().any(|e| matches!(
+                e,
+                crate::harness::trace::LoopTraceEvent::ProviderUsage { .. }
+            )),
+            "provider usage must not reach the harness sink"
+        );
     }
 
     // -- VESR v1.1 (b): routing capture helpers ------------------------------

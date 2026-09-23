@@ -29,9 +29,10 @@
 //! `RecvError::Closed` whenever the harness returns without a terminal
 //! `Complete` (e.g. `runner_impl`'s post-loop "session read" error), and
 //! `Closed` only arrives once every STRONG sender is gone. This sink is
-//! reachable from holders that outlive the run — a background subagent wraps
-//! the parent sink in a `ForwardingTraceSink` inside its own `tokio::spawn`
-//! (`agents/subagent_tool/spawn.rs`). A strong sender here would let such a
+//! reachable from holders that outlive the run — a background subagent's
+//! `MeteringProvider`s hold the run's chain as their accounting sink inside
+//! the child's own `tokio::spawn` (`run_trace_sinks.rs`,
+//! `agents/subagent_tool/spawn.rs`). A strong sender here would let such a
 //! holder delay the drain's `Closed` for the child's whole lifetime. So the
 //! sink keeps a [`broadcast::WeakSender`] and upgrades it per event; once the
 //! run's strong senders are gone the upgrade fails and the event is dropped
@@ -127,8 +128,8 @@ impl AgentTraceEmitSink {
     ///
     /// Takes the sender by reference and keeps only its weak half: this sink
     /// never owns the channel, and a holder that outlives the run (a
-    /// background subagent's `ForwardingTraceSink`) cannot delay the drain's
-    /// `Closed`.
+    /// background subagent's metering, which holds the run's chain as its
+    /// accounting sink) cannot delay the drain's `Closed`.
     pub fn new(inner: Arc<dyn TraceSink>, tx: &broadcast::Sender<FlowStreamEvent>) -> Self {
         Self {
             inner,
@@ -277,7 +278,8 @@ mod tests {
 
     /// The sink never owns the channel: once the last strong sender drops, a
     /// receiver sees `Closed` even while the sink itself is still alive (the
-    /// shape of a background subagent holding the parent sink past the run),
+    /// shape of a background subagent's metering holding the run's chain past
+    /// the run),
     /// and a later `on_trace` is a silent drop, not a panic. Red if the sink
     /// stores a strong `broadcast::Sender`.
     #[tokio::test]

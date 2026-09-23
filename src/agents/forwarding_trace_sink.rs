@@ -1,11 +1,22 @@
-//! `ForwardingTraceSink` — decorator over a parent's `TraceSink` that translates
-//! select child `LoopTraceEvent` emissions into `SubagentProgress` entries on a
-//! `BackgroundAgentTracker`, while always forwarding the original event through
+//! `ForwardingTraceSink` — decorator over a background child's harness sink
+//! that translates select child `LoopTraceEvent` emissions into
+//! `SubagentProgress` entries on a `BackgroundAgentTracker` (plus the live
+//! `SubagentTreeEvent::Progress`), while always forwarding the original event
 //! to the inner sink.
 //!
 //! Per P2 Stage F design (§3.3): installed ONLY on the background subagent
-//! spawn path. Sync subagents share the parent's `trace_sink` directly (Stage A
-//! inheritance); no wrapper is needed or installed there.
+//! spawn path. Sync subagents get the same inner sink directly, with no
+//! wrapper.
+//!
+//! The inner sink is the CHILD chain that
+//! `gateway/execution_engine/run_trace_sinks.rs` builds, and it ends at the
+//! subagent boundary: `[unattended redaction] → [scratchpad push] → nothing`.
+//! The forward therefore never reaches the parent run's `agent_trace` frames
+//! or the parent's persisted trace — this decorator's tracker/tree
+//! side-channel is the only way a child's activity reaches a client. The
+//! child's accounting events (`ProviderUsage` / `CacheHealthDegraded`) do not
+//! pass through here at all: its `MeteringProvider`s emit straight into the
+//! parent run's own chain.
 
 use crate::sync_primitives::Arc;
 
@@ -16,12 +27,13 @@ use crate::harness::trace::{LoopTraceEvent, LoopTraceSessionOutcome, LoopTraceSt
 use crate::harness::TraceSink;
 use aleph_protocol::subagent_tree::SubagentTreeEvent;
 
-/// Decorator over a parent's `TraceSink` that translates select child events
-/// into `SubagentProgress` entries on a `BackgroundAgentTracker`, while always
-/// forwarding the original event through to the inner sink.
+/// Decorator over a background child's harness sink that translates select
+/// child events into `SubagentProgress` entries on a `BackgroundAgentTracker`,
+/// while always forwarding the original event through to the inner sink.
 ///
 /// Installed only on background subagent paths (see `SubagentTool`'s background
-/// branch). Sync subagents share the parent's `trace_sink` directly.
+/// branch). Sync subagents get the same inner sink directly. That inner sink
+/// is the child chain, not the parent run's — see the module doc.
 pub struct ForwardingTraceSink {
     inner: Arc<dyn TraceSink>,
     tracker: Arc<BackgroundAgentTracker>,

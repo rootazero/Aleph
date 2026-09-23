@@ -1507,6 +1507,11 @@ async fn foreground_subagent_inherits_trace_sink() {
     );
 }
 
+/// A background child's harness loop emits into the harness sink the tool was
+/// handed, through `ForwardingTraceSink`. In production that sink is the
+/// child chain `RunTraceSinks` builds, which ends at the subagent boundary —
+/// NOT the parent run's own chain (pinned by the
+/// `a_*_never_reaches_the_parents_flow_channel` guards below).
 #[tokio::test]
 async fn background_subagent_forwards_trace_to_parent_sink() {
     let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
@@ -1547,8 +1552,298 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
     let events = sink.0.lock().unwrap();
     assert!(
         !events.is_empty(),
-        "background subagent must forward trace events to the parent sink \
-         via ForwardingTraceSink"
+        "a background child's harness loop must emit into the harness sink it \
+         was handed, via ForwardingTraceSink"
+    );
+}
+
+// =============================================================================
+// Subagent trace boundary — driven through the production sink construction
+// (`RunTraceSinks`, the one site `run_loop/inner.rs` calls) and a real child.
+// =============================================================================
+
+fn tool_with_run_sinks(
+    sinks: &crate::gateway::execution_engine::RunTraceSinks,
+    tracker: Arc<BackgroundAgentTracker>,
+) -> SubagentTool {
+    sinks.hand_to_subagents(SubagentTool::new(
+        Arc::new(UsageMockProvider),
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    ))
+}
+
+/// Everything published on the flow channel so far, as trace events.
+fn published_traces(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::orchestrator::dispatch::FlowStreamEvent>,
+) -> Vec<aleph_protocol::AgentTraceEvent> {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut out = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(crate::orchestrator::dispatch::FlowStreamEvent::Trace(event)) => out.push(event),
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(n)) => panic!("flow receiver lagged by {n}"),
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return out,
+        }
+    }
+}
+
+fn turn_started_iterations(events: &[aleph_protocol::AgentTraceEvent]) -> Vec<usize> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            aleph_protocol::AgentTraceEvent::TurnStarted { iteration } => Some(*iteration),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_provider_usage(events: &[aleph_protocol::AgentTraceEvent]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, aleph_protocol::AgentTraceEvent::ProviderUsage { .. }))
+}
+
+async fn run_background_child(tool: &SubagentTool, tracker: &BackgroundAgentTracker) -> String {
+    let out = tool
+        .execute(
+            serde_json::json!({ "task": "bg", "run_in_background": true }),
+            CancellationToken::new(),
+        )
+        .await;
+    let rid = match out {
+        ToolResult::Success { output } => output["request_id"].as_str().unwrap().to_string(),
+        other => unreachable!("expected background success, got {other:?}"),
+    };
+    for _ in 0..200 {
+        if tracker
+            .list_running(None)
+            .iter()
+            .all(|(id, _, _)| id != &rid)
+        {
+            return rid;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("background child {rid} did not finish");
+}
+
+/// A sync child's turns are not the parent run's steps: its `TurnStarted`
+/// must never be published on the parent's flow channel (so never become a
+/// parent `agent_trace` frame). Red if the child's harness loop is handed the
+/// parent run's chain. Red the other way if the parent's own chain stops
+/// publishing (the closing `TurnStarted { 7 }`), or if the child never ran
+/// (its metered `ProviderUsage` — the accounting exception — is absent).
+#[tokio::test]
+async fn a_sync_childs_turn_started_never_reaches_the_parents_flow_channel() {
+    let (tx, mut rx) = crate::orchestrator::flow_event_channel();
+    let sinks = crate::gateway::execution_engine::RunTraceSinks::build(
+        Arc::new(crate::harness::NoopTraceSink),
+        None,
+        &tx,
+        false,
+    );
+    let tool = tool_with_run_sinks(&sinks, make_tracker());
+
+    let out = tool
+        .execute(
+            serde_json::json!({ "task": "hi" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(out, ToolResult::Success { .. }),
+        "the child must run: {out:?}"
+    );
+
+    let child = published_traces(&mut rx);
+    assert!(
+        has_provider_usage(&child),
+        "the child ran and its metered usage kept the parent's live route: {child:?}"
+    );
+    assert_eq!(
+        turn_started_iterations(&child),
+        Vec::<usize>::new(),
+        "a sync child's TurnStarted reached the parent's flow channel"
+    );
+
+    sinks
+        .run_sink()
+        .on_trace(&crate::harness::trace::LoopTraceEvent::TurnStarted { iteration: 7 });
+    assert_eq!(
+        turn_started_iterations(&published_traces(&mut rx)),
+        vec![7],
+        "the parent's own TurnStarted must still be published"
+    );
+    drop(tx);
+}
+
+/// The background twin of the guard above, through `ForwardingTraceSink`.
+/// Red if the background child's harness loop reaches the parent run's chain.
+/// Red the other way if the parent's own chain stops publishing, if the child
+/// never ran (no metered usage), or if the tree side-channel loses its
+/// producer (the tracker holds no progress for the child).
+#[tokio::test]
+async fn a_background_childs_turn_started_never_reaches_the_parents_flow_channel() {
+    let (tx, mut rx) = crate::orchestrator::flow_event_channel();
+    let sinks = crate::gateway::execution_engine::RunTraceSinks::build(
+        Arc::new(crate::harness::NoopTraceSink),
+        None,
+        &tx,
+        false,
+    );
+    let tracker = make_tracker();
+    let tool = tool_with_run_sinks(&sinks, tracker.clone());
+
+    let rid = run_background_child(&tool, &tracker).await;
+
+    assert!(
+        !tracker.progress_snapshot(&rid, 50).is_empty(),
+        "the child's progress must still reach the tracker"
+    );
+    let child = published_traces(&mut rx);
+    assert!(
+        has_provider_usage(&child),
+        "the child ran and its metered usage kept the parent's live route: {child:?}"
+    );
+    assert_eq!(
+        turn_started_iterations(&child),
+        Vec::<usize>::new(),
+        "a background child's TurnStarted reached the parent's flow channel"
+    );
+
+    sinks
+        .run_sink()
+        .on_trace(&crate::harness::trace::LoopTraceEvent::TurnStarted { iteration: 7 });
+    assert_eq!(
+        turn_started_iterations(&published_traces(&mut rx)),
+        vec![7],
+        "the parent's own TurnStarted must still be published"
+    );
+    drop(tx);
+}
+
+/// A parent task row plus a persistence probe over it, and the run's sinks
+/// built on that probe exactly as `run_loop/inner.rs` builds them.
+async fn persisted_parent() -> (
+    Arc<crate::resilience::StateDatabase>,
+    crate::gateway::execution_engine::PersistenceProbe,
+    crate::gateway::execution_engine::RunTraceSinks,
+    tokio::sync::broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+) {
+    let db = Arc::new(crate::resilience::StateDatabase::in_memory().unwrap());
+    db.insert_agent_task(&crate::resilience::AgentTask::new(
+        "parent-run",
+        "session-1",
+        "main",
+        "parent turn",
+        crate::resilience::RiskLevel::High,
+    ))
+    .await
+    .unwrap();
+    let probe = crate::gateway::execution_engine::PersistenceProbe::new(db.clone(), "parent-run");
+    let (tx, _rx) = crate::orchestrator::flow_event_channel();
+    let sinks =
+        crate::gateway::execution_engine::RunTraceSinks::build(probe.sink(), None, &tx, false);
+    (db, probe, sinks, tx)
+}
+
+/// The parent task's persisted rows once `ready` holds. Row writes are
+/// spawned tasks, and a sink `flush()` from inside the child run moves the
+/// pending ones into a spawned flush the probe cannot await — so wait for the
+/// markers, then re-read once more to catch any write still in flight.
+async fn settled_rows(
+    db: &crate::resilience::StateDatabase,
+    probe: &crate::gateway::execution_engine::PersistenceProbe,
+    ready: fn(&[aleph_protocol::AgentTraceEvent]) -> bool,
+) -> Vec<aleph_protocol::AgentTraceEvent> {
+    let read = || async move {
+        db.get_traces_by_task("parent-run")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.event)
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..100 {
+        probe.drain().await;
+        if ready(&read().await) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            probe.drain().await;
+            return read().await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("parent task rows never became ready: {:?}", read().await);
+}
+
+/// A child's harness-loop events are never persisted as rows of the PARENT's
+/// task (`trace.by_runs` would replay them as the parent's own steps). Red if
+/// the child's harness loop is handed the parent run's chain: the child's
+/// `TurnStarted { 1 }` lands beside the parent's `TurnStarted { 7 }`. Red the
+/// other way if the parent's own event stops persisting.
+#[tokio::test]
+async fn a_childs_turn_started_is_not_persisted_under_the_parents_task() {
+    let (db, probe, sinks, _tx) = persisted_parent().await;
+    let tool = tool_with_run_sinks(&sinks, make_tracker());
+
+    let out = tool
+        .execute(
+            serde_json::json!({ "task": "hi" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(out, ToolResult::Success { .. }),
+        "the child must run: {out:?}"
+    );
+    sinks
+        .run_sink()
+        .on_trace(&crate::harness::trace::LoopTraceEvent::TurnStarted { iteration: 7 });
+
+    // Ready once the parent's marker and the child's metered usage (proof the
+    // child ran, emitted after its first TurnStarted) are both written.
+    let rows = settled_rows(&db, &probe, |rows| {
+        turn_started_iterations(rows).contains(&7) && has_provider_usage(rows)
+    })
+    .await;
+    assert_eq!(
+        turn_started_iterations(&rows),
+        vec![7],
+        "only the parent's own TurnStarted may be persisted under its task: {rows:?}"
+    );
+}
+
+/// CONTROL — the other direction of the same gate: a child's ACCOUNTING
+/// events (its `MeteringProvider`s' `ProviderUsage`) keep today's route and
+/// are still persisted under the parent's task, where `teams.usage` and the
+/// doctor's cache checks count them. Green before and after the cut by
+/// design; red if the cut takes the accounting route with it (the child's
+/// metering handed the child chain, or no accounting sink at all).
+#[tokio::test]
+async fn a_childs_provider_usage_is_still_persisted_under_the_parents_task() {
+    let (db, probe, sinks, _tx) = persisted_parent().await;
+    let tool = tool_with_run_sinks(&sinks, make_tracker());
+
+    let out = tool
+        .execute(
+            serde_json::json!({ "task": "hi" }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(out, ToolResult::Success { .. }),
+        "the child must run: {out:?}"
+    );
+    // `settled_rows` panics (red) when the usage row never appears.
+    let rows = settled_rows(&db, &probe, has_provider_usage).await;
+    assert!(
+        has_provider_usage(&rows),
+        "the child's provider usage must be persisted under the parent's task: {rows:?}"
     );
 }
 
