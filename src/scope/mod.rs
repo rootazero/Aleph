@@ -32,6 +32,7 @@
 use aleph_protocol::scope as wire;
 use std::collections::HashMap;
 
+pub mod authority;
 pub mod carried;
 pub mod directory;
 
