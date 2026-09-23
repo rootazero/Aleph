@@ -9,6 +9,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::error::{AlephError, Result as AlephResult};
 use crate::harness::tests::harness_ext::AgentHarnessTestExt;
+use crate::harness::trace::LoopTraceEvent;
 use crate::harness::{AgentHarness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
@@ -299,6 +300,135 @@ async fn think_with_no_tool_use_returns_done() {
         })
         .expect("AssistantMessage present");
     assert_eq!(assistant, "hi");
+}
+
+/// One Think iteration with a thinking block records exactly one
+/// `ReasoningEmitted` beside its `TextEmitted{Final}`, carrying the same
+/// iteration and the whole block. This is the record `trace.by_runs`
+/// replays a folded step from.
+#[tokio::test]
+async fn a_think_turn_with_thinking_emits_one_reasoning_record() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
+    let (sink, recorded) = super::stability::RecordingTraceSink::new();
+    let provider = Arc::new(FixedProvider {
+        response: ProviderResponse {
+            text: Some("hi".into()),
+            thinking: Some("Weighing the two readings of the question.".into()),
+            ..Default::default()
+        },
+    });
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(EmptyTools),
+        llm: provider,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+    assert_eq!(state, TurnState::Done);
+
+    let events = recorded.lock().unwrap_or_else(|e| e.into_inner());
+    let reasoning: Vec<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            LoopTraceEvent::ReasoningEmitted { iteration, text } => {
+                Some((*iteration, text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning,
+        vec![(1, "Weighing the two readings of the question.".to_string())],
+        "exactly one reasoning record, on iteration 1: {events:?}"
+    );
+    let text_iteration = events.iter().find_map(|e| match e {
+        LoopTraceEvent::TextEmitted { iteration, .. } => Some(*iteration),
+        _ => None,
+    });
+    assert_eq!(
+        text_iteration,
+        Some(1),
+        "the text record shares the iteration"
+    );
+}
+
+/// `Some("")` — a provider that sends an empty thinking block — must not
+/// produce a record that would later render as "Thought for 0s".
+#[tokio::test]
+async fn an_empty_thinking_block_emits_no_reasoning_event() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
+    let (sink, recorded) = super::stability::RecordingTraceSink::new();
+    let provider = Arc::new(FixedProvider {
+        response: ProviderResponse {
+            text: Some("hi".into()),
+            thinking: Some(String::new()),
+            ..Default::default()
+        },
+    });
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(EmptyTools),
+        llm: provider,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+    assert_eq!(state, TurnState::Done);
+
+    let events = recorded.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::ReasoningEmitted { .. })),
+        "an empty thinking block must not be recorded: {events:?}"
+    );
 }
 
 #[tokio::test]

@@ -73,7 +73,7 @@ use crate::harness::TraceSink;
 use crate::orchestrator::dispatch::FlowStreamEvent;
 
 /// True for the trace variants the clients consume as `agent_trace`: turn
-/// boundaries, authoritative per-step text, tool lifecycle, plus the two
+/// boundaries, authoritative per-step text and reasoning, tool lifecycle, plus the two
 /// recovery/watchdog moments that explain *why* the loop changed course —
 /// reactive context compaction (problem: context overflow → handled: history
 /// compacted → next: retried) and a structural goal-loop veto (problem:
@@ -97,6 +97,7 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
         event,
         LoopTraceEvent::TurnStarted { .. }
             | LoopTraceEvent::TextEmitted { .. }
+            | LoopTraceEvent::ReasoningEmitted { .. }
             | LoopTraceEvent::ToolCallStarted { .. }
             | LoopTraceEvent::ToolCallCompleted { .. }
             | LoopTraceEvent::ReactiveCompactionAttempted { .. }
@@ -173,6 +174,10 @@ mod tests {
             iteration: 1,
             stream: LoopTraceTextKind::Final,
             text: "hi".into(),
+        }));
+        assert!(is_step_event(&LoopTraceEvent::ReasoningEmitted {
+            iteration: 1,
+            text: "why".into(),
         }));
         assert!(is_step_event(&LoopTraceEvent::TurnStarted { iteration: 2 }));
     }
