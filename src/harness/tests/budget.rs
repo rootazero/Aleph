@@ -384,9 +384,9 @@ const BUDGETED: [&str; 12] = [
 ///     guardrail's `Block` arm was the only one that did not, so a blocked call
 ///     was absent from `tool_timeline` → `FlowOutcome` → `RunSummary
 ///     .tool_summaries`. That list is the AUTHORITATIVE terminal state
-///     consumers reconcile against precisely because the `agent_trace` mirror
-///     is deliberately lossy (`AgentTraceEmitSink` = bounded `mpsc(256)` +
-///     `try_send`); a block was therefore the one class of call with no
+///     consumers reconcile against precisely because live `agent_trace` frames
+///     are best-effort (a lagging receiver of the run's broadcast flow channel
+///     drops them); a block was therefore the one class of call with no
 ///     backstop — drop its single live frame and the Panel row stayed "running"
 ///     forever. The run digest under-counted and `deps.tool_signal_sink` (the
 ///     dream cycle's `insights.tools` feed) never saw the attempt either.

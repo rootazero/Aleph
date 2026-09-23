@@ -1379,8 +1379,8 @@ fn a_second_turn_is_not_clipped_by_the_first_turns_watermark() {
     assert_eq!(assistant_text(&state), "turn1 turn2 ");
 }
 
-/// `agent_trace` is a deliberately-lossy mirror (bounded mpsc + `try_send`), so
-/// a tool-heavy run can drop a `ToolCallCompleted` and leave the row spinning
+/// `agent_trace` frames are best-effort (a lagging server-side receiver drops
+/// them), so a tool-heavy run can drop a `ToolCallCompleted` and leave the row spinning
 /// forever. `RunComplete` must reconcile against the authoritative
 /// `summary.tool_summaries` - the invariant the protocol documents and the
 /// Panel already implements, and which the TUI was never wired to.

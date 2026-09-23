@@ -145,8 +145,8 @@ impl AppState {
     /// record.
     ///
     /// The live tool rows are built from `agent_trace`, which the protocol
-    /// itself documents as a *deliberately lossy* mirror (bounded mpsc +
-    /// `try_send`, drop when full) — and says, in the same doc, that
+    /// itself documents as *best-effort* (a lagging receiver drops frames) —
+    /// and says, in the same doc, that
     /// `RunSummary.tool_summaries` exists precisely so consumers can reconcile
     /// against it at `run_complete`. The TUI is the second consumer of that
     /// mirror and had never been wired to the invariant, so one dropped frame

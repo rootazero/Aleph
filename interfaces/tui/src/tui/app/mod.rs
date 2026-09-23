@@ -178,9 +178,9 @@ pub enum Focus {
 ///
 /// `ToolExecution` / `ToolStatus` are gone with it, replaced by the shared
 /// `ToolRow` / `RowStatus` the Panel will paint from too. The one piece of
-/// `ToolStatus` worth restating is its `Unknown`: live tool frames ride the
-/// deliberately-lossy `agent_trace` mirror (bounded mpsc + `try_send`), so a
-/// busy run can drop a `ToolCallCompleted`; `RunComplete` reconciles against
+/// `ToolStatus` worth restating is its `Unknown`: live tool frames ride
+/// `agent_trace`, which is best-effort (a lagging server-side receiver drops
+/// frames), so a busy run can drop a `ToolCallCompleted`; `RunComplete` reconciles against
 /// the authoritative `summary.tool_summaries`, and anything still `Running`
 /// after that had no authoritative record either. That is now
 /// `RowStatus::Pending` by way of [`ToolRow::settle_resumed`], which carries

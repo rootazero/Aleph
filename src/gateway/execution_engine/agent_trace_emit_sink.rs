@@ -12,16 +12,16 @@
 //! `tool_start` / `tool_end`; without this sink no `agent_trace` frame would
 //! ever be emitted.
 //!
-//! ## Why it sends on the flow channel (2026-09-23)
+//! ## Why it sends on the flow channel
 //!
-//! Until then this sink queued events on its own `mpsc` and emitted them from
-//! a spawned task. `seq` is assigned at emit time, so a `turn_started` could
-//! take a LATER seq than the `response_chunk`s of the iteration it opens —
-//! the race the Panel's `begin_step` patched around. Now `on_trace` does a
-//! synchronous `broadcast::Sender::send` of [`FlowStreamEvent::Trace`] onto
-//! the run's one channel, and the one serial drain (`helpers.rs`) stamps the
-//! seq. `on_trace` and the harness callback (`on_delta` / `on_reasoning`) run
-//! on the same task in program order, so seq order is now logical order.
+//! `on_trace` does a synchronous `broadcast::Sender::send` of
+//! [`FlowStreamEvent::Trace`] onto the run's one flow channel — the channel
+//! the harness callback (`on_delta` / `on_reasoning`) publishes on — and the
+//! one serial drain (`helpers.rs`) stamps `seq` as it emits. The send happens
+//! on the emitting task before `on_trace` returns, so frames emitted by one
+//! task keep their emission order in `seq`; nothing assigns a trace frame its
+//! `seq` after its neighbours. Frames from different tasks (a tool running on
+//! its own task) interleave in the order their sends happen.
 //!
 //! ## Why it holds a `WeakSender`
 //!
@@ -217,10 +217,10 @@ mod tests {
     }
 
     /// The mirror publishes SYNCHRONOUSLY onto the run's flow channel — no
-    /// spawned task, no `.await`. The previous design handed the event to a
-    /// background task, so nothing was observable until the test yielded;
-    /// this `try_recv` with no runtime at all is what goes red on it. The
-    /// test's own strong `tx` stays alive, so the sink's weak half upgrades.
+    /// spawned task, no `.await`: this `try_recv`, made with no runtime at
+    /// all, must already see the frame. Red if `on_trace` hands the send to
+    /// another task. The test's own strong `tx` stays alive, so the sink's
+    /// weak half upgrades.
     #[test]
     fn on_trace_publishes_onto_the_flow_channel_before_returning() {
         let (tx, mut rx) = flow_event_channel();

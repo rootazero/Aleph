@@ -441,8 +441,9 @@ pub async fn handle_abort(
 /// reconstructed the list by *replaying* the persisted trace. That replay is a
 /// weaker thing than it looks:
 ///
-/// * `agent_trace` is a deliberately lossy mirror (bounded `mpsc` + `try_send`,
-///   drop on full) — which is exactly why `RunSummary.plan` exists as the live
+/// * live `agent_trace` frames are best-effort (a lagging receiver of the run's
+///   broadcast flow channel, or of a WS connection's event stream, drops
+///   them) — which is exactly why `RunSummary.plan` exists as the live
 ///   path's reconciliation — and the replay path has no such reconciliation at
 ///   all;
 /// * it only covers assistant rows inside the fetched window, so a plan older

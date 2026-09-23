@@ -36,8 +36,8 @@ pub(crate) struct DrainState {
     scratchpad_calls: std::collections::HashMap<String, bool>,
     /// Terminal execution list for this run, latched from the last
     /// `scratchpad` result. Stamped onto `RunSummary.plan` so renderers can
-    /// reconcile a checklist whose live frames the lossy `agent_trace` WS
-    /// mirror dropped — the same authoritative-terminal-state contract
+    /// reconcile a checklist whose live `agent_trace` frames a lagging WS
+    /// forwarder dropped — the same authoritative-terminal-state contract
     /// `tool_summaries` already provides for tool rows. `Some(empty)` after a
     /// `clear`, so the panel hides rather than freezing on the last checklist.
     plan: Option<aleph_protocol::plan::PlanSnapshot>,
@@ -141,9 +141,11 @@ pub(crate) async fn emit_flow_event(
             presentation,
         } => {
             {
-                // Latch the terminal execution list. This drain is in-process
-                // and unbounded — unlike the WS `agent_trace` mirror it feeds —
-                // so what we capture here is authoritative.
+                // Latch the terminal execution list. The drain sees each frame
+                // before any per-connection WS forwarder can lag and drop it, so
+                // this latch is at least as complete as any client's live view;
+                // only a drain-side `Lagged` (logged in `helpers.rs`) costs it
+                // the frame.
                 let mut s = state.lock().await;
                 // A failed call changed nothing on disk, so it must not move
                 // the latch either — a rejected `clear` used to blank the strip.

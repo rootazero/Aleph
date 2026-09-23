@@ -856,8 +856,9 @@ pub struct RunSummary {
     /// was active.
     ///
     /// Authoritative, for the same reason `tool_summaries` is: the live plan
-    /// frames ride `tool_call_completed` on the deliberately-lossy
-    /// `agent_trace` mirror (bounded mpsc + `try_send`), so a dropped frame
+    /// frames ride `tool_call_completed` `agent_trace` frames, which are
+    /// best-effort (a lagging receiver on the server's run channel or on a
+    /// connection's event stream drops them), so a dropped frame
     /// would otherwise leave a renderer stuck on a stale checklist forever
     /// with no repair path. Consumers reconcile against this at `run_complete`
     /// exactly as they do for tool rows.

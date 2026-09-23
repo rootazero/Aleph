@@ -78,8 +78,9 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             // Tool results are the highest-bandwidth secret channel in an
             // unattended run: a tool that read a credential echoes it in
             // `result` (which the scratchpad progress push sends to the bound
-            // channel and `AgentTraceEmitSink` puts on the WS), and the model
-            // can echo one into `call.input` (a scratchpad objective/plan).
+            // channel and `AgentTraceEmitSink` publishes to the run's flow
+            // channel), and the model can echo one into `call.input` (a
+            // scratchpad objective/plan).
             let mut changed = mask_json_strings(masker, input);
             changed |= mask_in_place(masker, tool_id);
             changed |= mask_in_place(masker, tool_name);
