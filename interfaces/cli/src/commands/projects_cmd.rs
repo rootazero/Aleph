@@ -308,7 +308,7 @@ const fn rescope_sentence(outcome: RescopeOutcome) -> &'static str {
         // a result the server never gave it.
         RescopeOutcome::Unknown => {
             "The binding is recorded, but whether an existing transcript moved could not \
-             be determined — the session store did not answer. Check `aleph doctor`, then \
+             be determined — the session store did not answer. Check `al doctor`, then \
              run the same bind again to retry the move: re-binding a conversation to the \
              project it is already bound to is idempotent, and the handler retries the \
              rescope every time."

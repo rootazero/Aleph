@@ -263,7 +263,7 @@ impl MarketplaceManager {
                 problems.push(MarketplaceProblem {
                     marketplace: marketplace_name.clone(),
                     reason: format!(
-                        "not synced yet — no local cache at {}. Run `aleph plugin marketplace \
+                        "not synced yet — no local cache at {}. Run `al plugin marketplace \
                          update {marketplace_name}` first.",
                         marketplace_dir.display()
                     ),
@@ -365,7 +365,7 @@ impl MarketplaceManager {
 
         match results.len() {
             0 => Err(format!(
-                "Plugin '{plugin_name}' not found. Try 'aleph plugin marketplace update' first."
+                "Plugin '{plugin_name}' not found. Try 'al plugin marketplace update' first."
             )),
             1 => {
                 let result = &results[0];
@@ -457,7 +457,7 @@ impl MarketplaceManager {
 
         match results.len() {
             0 => Err(format!(
-                "Plugin '{plugin_name}' not found in any marketplace. Try 'aleph plugin marketplace update' first."
+                "Plugin '{plugin_name}' not found in any marketplace. Try 'al plugin marketplace update' first."
             )),
             1 => {
                 let result = &results[0];

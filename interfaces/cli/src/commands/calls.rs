@@ -71,7 +71,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
         );
     }
     println!();
-    println!("Cancel one with: aleph calls cancel <call_id>");
+    println!("Cancel one with: al calls cancel <call_id>");
     client.close().await?;
     Ok(())
 }

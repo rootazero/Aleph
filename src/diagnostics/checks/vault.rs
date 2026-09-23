@@ -99,7 +99,7 @@ impl HealthCheck for VaultCheck {
                 "Do NOT delete the file — it holds your only copy of every secret. \
                  The daemon moves a corrupt vault aside to `<path>.corrupt-<timestamp>` \
                  on next start; restore from a backup, or re-enter secrets with \
-                 `aleph secret set <name>` once the daemon has rebuilt an empty vault.",
+                 `al secret set <name>` once the daemon has rebuilt an empty vault.",
             )],
             Err(e) => vec![Finding::problem(
                 ID,

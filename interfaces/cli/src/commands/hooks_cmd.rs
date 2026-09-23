@@ -37,7 +37,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json_out: bool) -> CliRe
     );
     if events.is_empty() {
         println!();
-        println!("No user hooks defined. Use `aleph hooks add` to create one.");
+        println!("No user hooks defined. Use `al hooks add` to create one.");
         client.close().await?;
         return Ok(());
     }

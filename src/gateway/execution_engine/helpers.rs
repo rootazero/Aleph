@@ -110,7 +110,7 @@ pub(super) async fn stamp_run_meta(
         warn!(
             session_key = %session_key.to_key_string(),
             run_id,
-            "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
+            "session/service capability absent; skipped run_id/occupancy stamp — see `al doctor`"
         );
         return;
     };

@@ -37,7 +37,7 @@ struct Args {
     ///
     /// The letter goes to the older, released meaning. `--session` set the
     /// precedent in this same struct: `-s` was taken by `--server`, so it took
-    /// `-k` rather than a collision. `aleph chat -c` keeps the short form for
+    /// `-k` rather than a collision. `al chat -c` keeps the short form for
     /// anyone who wants the keystroke — the two commands have to resolve to the
     /// same THREAD (they share `resolve_last_session`), not to the same letter.
     #[arg(long = "continue", conflicts_with = "session")]

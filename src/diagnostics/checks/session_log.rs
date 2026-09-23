@@ -191,7 +191,7 @@ impl HealthCheck for SessionLogCheck {
                 ID,
                 SUBJECT,
                 "this doctor run has no open session event log, so no session's run \
-                 markers could be read at all. Run `aleph doctor` against the running \
+                 markers could be read at all. Run `al doctor` against the running \
                  daemon rather than `aleph-server doctor`, which is a cold process.",
             )];
         };
@@ -370,7 +370,7 @@ impl HealthCheck for SessionLogCheck {
             return vec![finding.with_fix_hint(
                 "Not mechanically repairable: resolving a contradiction means deciding which \
                  of two disagreeing records is true, which this check cannot do for you. A \
-                 `refused` log is why `aleph resume` answered `log_inconsistent` for that \
+                 `refused` log is why `aleph-server resume` answered `log_inconsistent` for that \
                  session — read the named seq in the transcript. A reported kind was worked \
                  around with a stated reading and costs nothing but the note.",
             )];

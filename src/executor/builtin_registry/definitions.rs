@@ -2976,7 +2976,13 @@ mod tests {
     /// 114_393 would give 115_935), which is exactly why this ledger forbids
     /// deriving a ceiling by addition. No description was edited in the
     /// merge; the +30 Windows gap recorded above is carried forward unchanged.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_904;
+    ///
+    /// 2026-09-24 (`al` CLI rename): 115_904 -> 115_911 B (+7), all of it
+    /// `hooks_manage` (1_015 -> 1_022), measured on macOS both ends: its
+    /// approval sentence named `aleph hooks test`, a command only the server
+    /// binary has, and now names `aleph-server hooks test`. A correction to an
+    /// existing runtime fact, not a new sentence.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_911;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3393,7 +3399,12 @@ mod tests {
     /// 2026-09-06 merge: both deltas stack on the 104_302 base, so the
     /// ceiling is 104_302 + 528 + 361 = 105_191; re-measured on macOS after
     /// the merge (the guard prints the total if this drifts).
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_191;
+    ///
+    /// 2026-09-24 (`al` CLI rename): 105_191 -> 105_198 B (+7). The guard's own
+    /// per-tool ledger names `hooks_manage` (2_219 -> 2_226) as the only row
+    /// that moved: the `command` field doc named `aleph hooks test`, a
+    /// server-only command, and now names `aleph-server hooks test`.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_198;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3443,7 +3454,7 @@ mod tests {
         ("goal", 4985),
         ("grep", 1545),
         ("heartbeat_report", 764),
-        ("hooks_manage", 2219),
+        ("hooks_manage", 2226),
         ("list_models", 597),
         ("local_voice", 332),
         ("loop", 2998),

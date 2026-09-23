@@ -1099,7 +1099,7 @@ fn last_run_notice(last_run: &LastRunState) -> Option<String> {
                 last_run.contradictions.join("、")
             };
             Some(format!(
-                "会话日志不一致（{tags}）— 恢复已拒绝，请运行 aleph doctor"
+                "会话日志不一致（{tags}）— 恢复已拒绝，请运行 al doctor"
             ))
         }
         LastRunDisposition::Interrupted => Some(match (last_run.progress, counts) {

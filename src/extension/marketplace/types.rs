@@ -231,7 +231,7 @@ impl PluginSearchResult {
                     "Plugin '{name}' declares a '{kind}' source, which this marketplace \
                      cannot install — Aleph serves plugins from the marketplace directory itself. \
                      Add the upstream repository as its own marketplace, or install it directly \
-                     with `aleph plugin install <url>`."
+                     with `al plugin install <url>`."
                 ))
             }
         }

@@ -164,7 +164,7 @@ impl SimpleExecutionEngine {
             // no other surface will report the gap.
             warn!(
                 session_key = %request.session_key.to_key_string(),
-                "session/service capability absent; dropped UserMessage — see `aleph doctor`"
+                "session/service capability absent; dropped UserMessage — see `al doctor`"
             );
         }
 
@@ -250,7 +250,7 @@ impl SimpleExecutionEngine {
                     // reaches `messages`.
                     warn!(
                         session_key = %request.session_key.to_key_string(),
-                        "session/service capability absent; dropped AssistantMessage — see `aleph doctor`"
+                        "session/service capability absent; dropped AssistantMessage — see `al doctor`"
                     );
                 }
 

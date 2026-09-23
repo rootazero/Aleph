@@ -104,14 +104,14 @@ pub fn handle_pair(
                 return Err(format!(
                     "user {uid} is deactivated\n\nA ticket bound to a walled principal mints, \
                      prints a URL, and refuses every frame after pairing. Run \
-                     `aleph users update {uid} --status active` first."
+                     `al users update {uid} --status active` first."
                 )
                 .into())
             }
             Ok(None) => {
                 return Err(format!(
-                    "no such user: {uid}\n\nRun `aleph users list` to see who exists, \
-                     or `aleph users create <name>` to add someone."
+                    "no such user: {uid}\n\nRun `al users list` to see who exists, \
+                     or `al users create <name>` to add someone."
                 )
                 .into())
             }

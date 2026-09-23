@@ -84,7 +84,7 @@ pub fn speak(dash: &DashboardState, chat: &ChatState, text: String) {
                     "This system cannot decode {mime}. Voice replies need the GStreamer \
                      decoder plugins on THIS machine — gstreamer1.0-plugins-good, -bad \
                      and -ugly cover the usual set. If the Aleph server runs here too, \
-                     `aleph doctor` names the exact one."
+                     `al doctor` names the exact one."
                 )));
                 return;
             }
@@ -150,7 +150,7 @@ fn play(chat: ChatState, src: &str, revoke: bool) {
                         "This system cannot decode the voice reply. Install the GStreamer \
                          decoder plugins on THIS machine — gstreamer1.0-plugins-good, \
                          -bad and -ugly cover the usual set. If the Aleph server runs \
-                         here too, `aleph doctor` names the exact one."
+                         here too, `al doctor` names the exact one."
                             .to_string(),
                     ));
                 }

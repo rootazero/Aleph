@@ -58,7 +58,7 @@ impl HooksConsentCheck {
                     "Hooks await approval",
                     format!("{pending} shell hook(s) are pending approval and will be skipped until reviewed."),
                 )
-                .with_fix_hint("Review each with `aleph hooks test <fingerprint>`, then approve if trusted."),
+                .with_fix_hint("Review each with `aleph-server hooks test <fingerprint>`, then approve if trusted."),
             );
         }
 
@@ -90,7 +90,7 @@ impl HooksConsentCheck {
                     "Stale fingerprint",
                     format!("{drifted} entr(ies) have a fingerprint that no longer matches their command (registry hand-edited?)."),
                 )
-                .with_fix_hint("Revoke and re-approve the affected hooks: `aleph hooks revoke <fingerprint>`."),
+                .with_fix_hint("Revoke and re-approve the affected hooks: `aleph-server hooks revoke <fingerprint>`."),
             );
         }
 

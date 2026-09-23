@@ -53,7 +53,7 @@ pub async fn emit_for_ambient_call(
             site = %site,
             session = %session,
             what,
-            "session/service capability absent; not persisted — see `aleph doctor`"
+            "session/service capability absent; not persisted — see `al doctor`"
         );
         return;
     };

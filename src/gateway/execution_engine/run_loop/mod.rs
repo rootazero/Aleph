@@ -553,7 +553,7 @@ pub(super) async fn journal_hook_stop_with(
     let Some(svc) = svc else {
         warn!(
             session_key = %request.session_key.to_key_string(),
-            "session/service capability absent; hook stop not journaled — see `aleph doctor`"
+            "session/service capability absent; hook stop not journaled — see `al doctor`"
         );
         return;
     };

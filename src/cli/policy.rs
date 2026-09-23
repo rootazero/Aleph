@@ -51,7 +51,7 @@ impl fmt::Display for LockHeldError {
         }
         write!(
             f,
-            ". This command requires exclusive access — run `aleph stop` first. \
+            ". This command requires exclusive access — run `aleph-server stop` first. \
              Do not remove the lock file while it is held. Lock: {}",
             self.lock_path.display()
         )

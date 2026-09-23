@@ -207,7 +207,7 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
             ));
             lines.push(
                 "            Heartbeat tasks were NOT counted: no heartbeat service is \
-                 running on that server. Run `aleph doctor` — `core/capability-wiring` \
+                 running on that server. Run `al doctor` — `core/capability-wiring` \
                  names the cause."
                     .to_string(),
             );
@@ -370,7 +370,7 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
                 lines.push(
                     "Heartbeat tasks were NOT checked: no heartbeat service is running on \
                      that server, so any heartbeat task they own is still armed. Run \
-                     `aleph doctor` — `core/capability-wiring` names the cause."
+                     `al doctor` — `core/capability-wiring` names the cause."
                         .to_string(),
                 );
             }

@@ -92,7 +92,7 @@ impl HealthCheck for ProjectionHolesCheck {
                 SUBJECT,
                 "this doctor run has no live projector and/or no open session event log, \
                  so the transcript projection could not be compared against the event \
-                 log at all. Run `aleph doctor` against the running daemon rather than \
+                 log at all. Run `al doctor` against the running daemon rather than \
                  `aleph-server doctor`, which is a cold process.",
             )];
         };
@@ -182,7 +182,7 @@ impl HealthCheck for ProjectionHolesCheck {
             ),
         )
         .with_fix_hint(
-            "Run `aleph doctor --fix` — the repair replays the missing events through \
+            "Run `al doctor --fix` — the repair replays the missing events through \
              the projector's own drain task, which is idempotent and cannot duplicate \
              rows that are already there.",
         )

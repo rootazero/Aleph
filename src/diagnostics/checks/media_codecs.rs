@@ -145,7 +145,7 @@ pub(crate) fn findings_for(verdict: &CodecVerdict) -> Vec<Finding> {
             "Media decoder status unknown",
             format!("Could not determine which media formats this system can decode: {reason}"),
         )
-        .with_fix_hint("Install gstreamer1.0-tools to let `aleph doctor` answer this.")
+        .with_fix_hint("Install gstreamer1.0-tools to let `al doctor` answer this.")
         .with_tag(TAG_CODECS_UNKNOWN)],
     }
 }

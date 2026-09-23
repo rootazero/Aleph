@@ -82,7 +82,7 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
         ),
         ResumeStatus::LogInconsistent => println!(
             "{named}'s event log contradicts itself, so its run state could not be read and \
-             nothing was tried. Run `aleph doctor` — the `core/session-log` check names the \
+             nothing was tried. Run `al doctor` — the `core/session-log` check names the \
              contradiction."
         ),
         ResumeStatus::Unavailable => {
@@ -140,7 +140,7 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
     }
     if response.contradictions > 0 {
         println!(
-            "  {} log contradiction(s) were reported along the way — see `aleph doctor`.",
+            "  {} log contradiction(s) were reported along the way — see `al doctor`.",
             response.contradictions
         );
     }

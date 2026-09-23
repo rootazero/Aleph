@@ -62,7 +62,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
     if pending > 0 {
         println!();
         println!(
-            "{pending} hook(s) pending approval — review with `aleph hooks test <fingerprint>`."
+            "{pending} hook(s) pending approval — review with `aleph-server hooks test <fingerprint>`."
         );
     }
     Ok(())

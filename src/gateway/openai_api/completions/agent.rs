@@ -349,7 +349,7 @@ pub async fn handle(
                     tracing::warn!(
                         session_key = %session_key,
                         role = msg.role.as_str(),
-                        "session/service capability absent; dropped a replayed history message — see `aleph doctor`"
+                        "session/service capability absent; dropped a replayed history message — see `al doctor`"
                     );
                 }
             }

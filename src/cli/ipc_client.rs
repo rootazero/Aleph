@@ -27,7 +27,7 @@ where
     let endpoint = read_endpoint(data_dir)?.with_context(|| {
         format!(
             "server is initializing or crashed (no .ipc-endpoint.json at {}). \
-             Try again or run `aleph stop` first.",
+             Try again or run `aleph-server stop` first.",
             data_dir.display()
         )
     })?;

@@ -378,7 +378,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         } else {
             warn!(
                 session_key = %request.session_key.to_key_string(),
-                "session/service capability absent; fast path runs unjournaled — see `aleph doctor`"
+                "session/service capability absent; fast path runs unjournaled — see `al doctor`"
             );
         }
 

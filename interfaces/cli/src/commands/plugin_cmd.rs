@@ -72,20 +72,20 @@ pub fn init(name: &str, template: PluginTemplate, target_dir: Option<&Path>) -> 
             println!("Next steps:");
             println!("  cd {}", target.display());
             println!("  npm install");
-            println!("  aleph plugin validate .");
-            println!("  aleph plugin install .");
+            println!("  al plugin validate .");
+            println!("  al plugin install .");
         }
         PluginTemplate::Wasm => {
             println!("Next steps:");
             println!("  cd {}", target.display());
             println!("  cargo build --target wasm32-wasi --release");
-            println!("  aleph plugin validate .");
+            println!("  al plugin validate .");
         }
         PluginTemplate::Static => {
             println!("Next steps:");
             println!("  cd {}", target.display());
             println!("  # Edit SKILL.md with your skill content");
-            println!("  aleph plugin validate .");
+            println!("  al plugin validate .");
         }
     }
 

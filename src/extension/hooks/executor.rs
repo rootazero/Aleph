@@ -524,14 +524,14 @@ impl HookExecutor {
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
-                    "Shell hook command not approved — skipped. Review with `aleph hooks list`."
+                    "Shell hook command not approved — skipped. Review with `aleph-server hooks list`."
                 );
                 return Ok(ActionResult {
                     success: false,
                     output: None,
                     error: Some(format!(
                         "shell hook from plugin '{plugin_name}' is not approved; \
-                         run `aleph hooks test` to review and approve it"
+                         run `aleph-server hooks test` to review and approve it"
                     )),
                     exit_code: None,
                 });
@@ -771,14 +771,14 @@ impl HookExecutor {
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
-                    "HTTP hook URL not approved — skipped. Review with `aleph hooks list`."
+                    "HTTP hook URL not approved — skipped. Review with `aleph-server hooks list`."
                 );
                 return Ok(ActionResult {
                     success: false,
                     output: None,
                     error: Some(format!(
                         "http hook from plugin '{plugin_name}' is not approved; \
-                         run `aleph hooks test` to review and approve it"
+                         run `aleph-server hooks test` to review and approve it"
                     )),
                     exit_code: None,
                 });

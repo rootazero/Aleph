@@ -188,7 +188,7 @@ impl ShellHookConsent {
                     plugin = plugin_name,
                     command,
                     "Hook script changed since it was approved — refusing to run. \
-                     Re-review with `aleph hooks test <fingerprint>`."
+                     Re-review with `aleph-server hooks test <fingerprint>`."
                 );
                 false
             }

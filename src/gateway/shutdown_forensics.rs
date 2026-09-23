@@ -346,7 +346,7 @@ mod tests {
             assert!(findings[0]
                 .fix_hint
                 .as_deref()
-                .is_some_and(|h| h.contains("aleph doctor")));
+                .is_some_and(|h| h.contains("`al doctor`")));
         }
 
         mark_boot();
