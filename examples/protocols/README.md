@@ -134,20 +134,20 @@ model = "provider-model-name"
 #### Option B: Using CLI Flags
 
 ```bash
-aleph chat --protocol my-provider --model provider-model-name
+al chat --protocol my-provider --model provider-model-name
 ```
 
 ### Step 5: Test the Configuration
 
 ```bash
 # Test with a simple prompt
-aleph chat --provider my-provider "Hello, world!"
+al chat --provider my-provider "Hello, world!"
 
 # Test streaming
-aleph chat --provider my-provider --stream "Tell me a story"
+al chat --provider my-provider --stream "Tell me a story"
 
 # Enable debug logging to troubleshoot
-RUST_LOG=debug aleph chat --provider my-provider "Test"
+RUST_LOG=debug al chat --provider my-provider "Test"
 ```
 
 ## Configuration Sections Explained
@@ -211,7 +211,7 @@ Then set the environment variable:
 
 ```bash
 export MY_PROVIDER_API_KEY="your-api-key"
-aleph chat --provider my-provider "Hello"
+al chat --provider my-provider "Hello"
 ```
 
 ## JSONPath for Response Mapping
@@ -271,7 +271,7 @@ response_mapping:
 **Error**: `Failed to extract content from response`
 
 **Solution**:
-1. Enable debug logging: `RUST_LOG=debug aleph chat ...`
+1. Enable debug logging: `RUST_LOG=debug al chat ...`
 2. Examine actual response structure in logs
 3. Update `response_mapping.content` JSONPath
 4. Add `content_alternatives` for fallbacks

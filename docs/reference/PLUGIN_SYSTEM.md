@@ -151,7 +151,7 @@ sensitive = true
 | status | 含义 | 补救 |
 |--------|------|------|
 | `loaded` | 活跃，capability 对模型可见 | — |
-| `disabled` | operator 关掉了（`plugins.toml`）| `aleph plugin enable <name>` |
+| `disabled` | operator 关掉了（`plugins.toml`）| `al plugin enable <name>` |
 | `overridden` | 同 id 被更高优先级 scope 的副本遮蔽 | `status_detail` 给出胜出路径 |
 | `error` | manifest 解析失败 | `status_detail` 给出解析错误 |
 | `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |
@@ -208,27 +208,27 @@ MCP server id 由 `mcp_config.rs` 组成 `plugin:<id>/<server>`。
 
 ```bash
 # Marketplace 管理
-aleph plugin marketplace list                      # 列出注册项（含内置 aleph-official）
-aleph plugin marketplace browse [query]            # 列出内容（--marketplace 收窄）
-aleph plugin marketplace add HKUDS/CLI-Anything    # 添加 GitHub marketplace
-aleph plugin marketplace add /local/path           # 添加本地 marketplace
-aleph plugin marketplace update [name]             # 同步缓存
-aleph plugin marketplace remove <name>             # 移除
+al plugin marketplace list                      # 列出注册项（含内置 aleph-official）
+al plugin marketplace browse [query]            # 列出内容（--marketplace 收窄）
+al plugin marketplace add HKUDS/CLI-Anything    # 添加 GitHub marketplace
+al plugin marketplace add /local/path           # 添加本地 marketplace
+al plugin marketplace update [name]             # 同步缓存
+al plugin marketplace remove <name>             # 移除
 
 # 插件安装
-aleph plugin install <plugin-name>                 # 从 marketplace 安装
-aleph plugin install <git-url>                     # 直接 URL 安装
-aleph plugin list                                  # 列出已安装
-aleph plugin update [name] [--force] [--scope ...] # 升级已装插件（省略 name 升级全部）
-aleph plugin uninstall <name>                      # 卸载
-aleph plugin enable/disable <name>                 # 启用/禁用（耐久，见下）
+al plugin install <plugin-name>                 # 从 marketplace 安装
+al plugin install <git-url>                     # 直接 URL 安装
+al plugin list                                  # 列出已安装
+al plugin update [name] [--force] [--scope ...] # 升级已装插件（省略 name 升级全部）
+al plugin uninstall <name>                      # 卸载
+al plugin enable/disable <name>                 # 启用/禁用（耐久，见下）
 ```
 
 > **`enable` / `disable` 的耐久载体是 `<data_dir>/plugins.toml`**（`src/extension/plugin_state.rs`），
 > 不是插件目录里的 `.disabled` 标记文件。
 >
 > 2026-08-16 之前那个标记有**四个写者、零个读者**——`discovery::scanner` 的
-> `has_plugin_manifest` 与 `scan_plugin_parent` 从不看它——所以 `aleph plugin disable X`
+> `has_plugin_manifest` 与 `scan_plugin_parent` 从不看它——所以 `al plugin disable X`
 > 打印成功、改变的东西活不过这个进程。handler 自己的 doc 逐字写着
 > "preventing the plugin from being discovered and loaded on next scan"，那句话是假的。
 >
@@ -343,9 +343,9 @@ version = "0.1.0"
 **优先级（高→低）：** `agent-level` > `local` > `project` > `user` > `bundled`
 
 ```bash
-aleph plugin install <name> --scope user      # 默认
-aleph plugin install <name> --scope project   # 团队共享
-aleph plugin install <name> --scope local     # 个人项目
+al plugin install <name> --scope user      # 默认
+al plugin install <name> --scope project   # 团队共享
+al plugin install <name> --scope local     # 个人项目
 ```
 
 ---
@@ -356,13 +356,13 @@ aleph plugin install <name> --scope local     # 个人项目
 
 ```bash
 # 步骤 1: 添加 marketplace（GitHub repo）
-aleph plugin marketplace add HKUDS/CLI-Anything
+al plugin marketplace add HKUDS/CLI-Anything
 
 # 步骤 2: 安装插件
-aleph plugin install cli-anything
+al plugin install cli-anything
 
 # 验证
-aleph plugin list
+al plugin list
 # → cli-anything    -    enabled    Build powerful, stateful CLI interfaces...
 ```
 

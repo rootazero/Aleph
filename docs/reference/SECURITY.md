@@ -1377,7 +1377,7 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
-### Reading the security trail — `aleph audit` (2026-08-21)
+### Reading the security trail — `al audit` (2026-08-21)
 
 `security_audit_log` had **five producers and no reader**. `AuthFailure`,
 `RateLimited`, `CommandPolicy`, `ScopedContentRead` and `AuthorityChange` were
@@ -1394,7 +1394,7 @@ and there was no surface from which that clause could be run.
   `aleph_protocol::audit`. Admin-gated by the new `security.` prefix in
   `method_admin.rs` (prefix, not method, so a future `security.audit.export`
   arrives gated). Census entry pins the ruling.
-- **Client**: `aleph audit [--type] [--actor] [--since 90s|5m|2h|7d] [--limit]`.
+- **Client**: `al audit [--type] [--actor] [--since 90s|5m|2h|7d] [--limit]`.
 
 Two honesty properties are carried on **every** response rather than left to the
 reader: `retention_secs`, because an empty window otherwise means *nothing
@@ -1505,7 +1505,7 @@ resolvers, `check`/`check_with` — the single admission predicate),
 `src/config/types/policies/spend.rs` (`[policies.spend]`),
 `src/providers/metering.rs` (the floor arm),
 `src/gateway/execution_engine/run_loop/` (the admission arm, `deny_if_over_spend`),
-`src/gateway/handlers/spend.rs` (`spend.query`), `interfaces/cli` (`aleph spend`).
+`src/gateway/handlers/spend.rs` (`spend.query`), `interfaces/cli` (`al spend`).
 Boot wiring — `src/bin/aleph-server/commands/start/mod.rs`, right after
 `initialize_vault`.
 
@@ -1570,11 +1570,11 @@ anything already billed. There is deliberately no `spend.reset`: zeroing a
 ledger row is, after the fact, indistinguishable from a write that never
 happened, so raising the ceiling in `[policies.spend]` (live-appliable, see
 below) is the reversible way to say the same thing. `spend.query`/
-`aleph spend` — admin-gated, same `spend.`-prefix reasoning
+`al spend` — admin-gated, same `spend.`-prefix reasoning
 `security.audit.query` documents for its own prefix, since a spend report
 names every principal on the machine and their dollar figures — are the
 only read faces today; there is no Panel surface, matching the CLI-only
-pattern `users.*`/`aleph audit` already established for admin-gated
+pattern `users.*`/`al audit` already established for admin-gated
 controls.
 
 ### Retention
@@ -2627,7 +2627,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   wording immediately above used to say closing it needed a schema change and
   a product decision; re-scouting the family found it needed neither. The
   `workspace.` family has exactly one client and that client is already
-  operator (`aleph workspace list|create|archive`, over loopback); the Panel
+  operator (`al workspace list|create|archive`, over loopback); the Panel
   has none — `interfaces/webchat/src/api/workspace.rs` records that its
   `workspace.list` call was removed long ago — and `workspace.update` /
   `workspace.get` have no client anywhere.
@@ -2713,7 +2713,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     `session_visible` / `session_visible_to`;
   - `users.create` / `users.update` had only a server half. **No shipped surface
     could create a second person**, which made every predicate P0–P2 built
-    unreachable in practice. Closed by `aleph users` + `pair --user`.
+    unreachable in practice. Closed by `al users` + `pair --user`.
 
   Three rulings to preserve:
 
@@ -3283,7 +3283,7 @@ attribution, and a bound workspace as the room's default cwd.
   (2026-08-30). Re-verify an entry in the code before acting on it.**
   1. **`projects.channel.bind`/`unbind` have no tool surface (R8 gap).** A
      channel conversation can be bound to a room over RPC (Panel) or
-     `aleph projects channel bind`, but not by conversation.
+     `al projects channel bind`, but not by conversation.
      *(This entry used to read "`projects.*` has no tool surface" and was
      false from 2026-08-25, when round-8 shipped `project_manage`; round-9
      then added its ninth action, `bind_workspace`. Only `channel.*` is

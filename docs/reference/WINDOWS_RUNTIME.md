@@ -305,7 +305,7 @@ non-obvious:
 - `instance_lock` takes an exclusive whole-file lock via `fs2`, which is
   `LockFileEx` on Windows. Unlike Unix advisory `flock`, that lock is
   **mandatory**: while the server holds it, any *other* process's `ReadFile`
-  on the locked range fails with a lock violation. So a separate `aleph status`
+  on the locked range fails with a lock violation. So a separate `aleph-server status`
   process cannot read `aleph.lock`'s contents while the server is running —
   exactly the case we'd want to detect. (This is already documented in
   `instance_lock`'s `#[cfg(not(windows))]` test gates.)

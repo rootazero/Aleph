@@ -19,7 +19,7 @@ Each section answers four questions:
 
 ---
 
-## 1. `aleph webhook` — inbound webhook subscriptions
+## 1. `al webhook` — inbound webhook subscriptions
 
 ### What exists today
 
@@ -85,7 +85,7 @@ already-shipped infrastructure.
 
 ---
 
-## 2. `aleph proxy` — outbound network proxy configuration
+## 2. `al proxy` — outbound network proxy configuration
 
 ### What exists today
 

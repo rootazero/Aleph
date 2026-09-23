@@ -19,7 +19,7 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 启动时任何 `Another Aleph instance holds the lock …` 都意味着**锁此刻确实
 被某个活进程握着**（OS 报了争用；持有者一退出 OS 就释放）。三种措辞只是
 持有者记录 `aleph.lock.pid` 说了什么：`PID N` = 能点名 → `kill N` 或
-`aleph stop`；`holder record names PID N, which is not running` = 记录过期
+`aleph-server stop`；`holder record names PID N, which is not running` = 记录过期
 （通常是 fork 后没改写 PID 的守护进程）；`holder record … missing or
 unreadable` = 点不了名。**三种都不要 `rm aleph.lock`**：Unix 上删掉被锁的
 文件再重建是新 inode，下一个启动者会拿到另一把锁、和持有者并排跑——正是
@@ -29,7 +29,7 @@ vault HMAC 丢数据的双实例条件。去进程列表里找到持有者停掉
 （`SHUTDOWN_FAILSAFE` → `process::exit`）也会在退出前清掉它
 （`remove_held_holder_records_before_exit`），只有崩溃 / SIGKILL 会留下
 它——锁本身此时已被 OS 释放，下一次启动直接赢得锁并覆盖记录，**不会**报
-上面那些话；`aleph doctor` 的 `core/instance-lock` 才是给这种残留用的，
+上面那些话；`al doctor` 的 `core/instance-lock` 才是给这种残留用的，
 `--fix` 会清掉——但它**先探锁**（`instance_lock::is_lock_held`），锁被握着时
 只报「Holder record stale」、什么都不删；删除本身也是握着锁做的
 （`remove_holder_record_if_lock_free`），且只删 sidecar、不动 `aleph.lock`。若文件系统本身拒绝加锁（无 lockd 的 NFS、不支持字节范围锁
@@ -80,7 +80,7 @@ Aleph 自己 spawn 浏览器（2026-09-05 起 Chromium，2026-09-06 起还有 ob
   步**，后面每一件事还要在同一个 5 s 里跑完。这段代码是在和花掉 failsafe 的那个看门狗**赛跑**——一个早先
   的版本要了 35.5 s（它所处 failsafe 的七倍），于是进程在等待途中被强制退出，浏览器没停掉，它后面的
   projector flush / monitor / MCP / 端点清理 / `GatewayStop` 钩子也一起跳过了。**把 failsafe 调大不是
-  出路**：5 s 是外部天花板（`aleph stop` 的 SIGTERM ≤5 s 然后 SIGKILL ≤2 s），越过它落下来的是监管者的
+  出路**：5 s 是外部天花板（`aleph-server stop` 的 SIGTERM ≤5 s 然后 SIGKILL ≤2 s），越过它落下来的是监管者的
   SIGKILL 而不是我们自己的 `exit(0)`，连兜底那条路的回收也没了。一条**编译期** `assert!`
   （`ORDERLY_BROWSER_STOP_BUDGET * 2 <= SHUTDOWN_FAILSAFE`）钉住这个关系：动了其中一个常量而不动另一个，
   构建直接停。
