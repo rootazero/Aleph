@@ -822,9 +822,9 @@ mod tests {
         // honestly red).
         assert_eq!(
             raw + slots,
-            49,
+            50,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             49. Never assert either side alone: raw shrinks and slots grows as \
+             50. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
@@ -832,12 +832,15 @@ mod tests {
              known to be one BELOW the live total (see the comment above); a \
              red of exactly one, with `main`'s unaccounted handle still \
              unfound, is the expected state and not evidence about your change. \
-             Last moved 2026-09-06: 48 -> 49 when `thinker/prompt-size-registry` \
-             was added, so `context.breakdown` could report the prompt that was \
-             actually sent instead of re-deriving it. Before that, 2026-09-04: \
-             47 -> 48 when `heartbeat/service` was added, so `users.update`'s \
-             deactivation freeze had a fourth subsystem to reach. NOTE: this \
-             branch (worktree-cc-render-r1) added `thinker/prompt-size-registry`; \
+             Last moved 2026-09-23: 49 -> 50 when `security/users-store` was \
+             added, so the fire-time authority resolver could re-read the users \
+             table at every background trigger. Before that, 2026-09-06: 48 -> \
+             49 when `thinker/prompt-size-registry` was added, so \
+             `context.breakdown` could report the prompt that was actually sent \
+             instead of re-deriving it. Before that, 2026-09-04: 47 -> 48 when \
+             `heartbeat/service` was added, so `users.update`'s deactivation \
+             freeze had a fourth subsystem to reach. NOTE: this branch \
+             (worktree-cc-render-r1) added `thinker/prompt-size-registry`; \
              origin/main independently added `search::handle::GLOBAL_SEARCH_HANDLE` \
              (b359f75e4) and `tasks::heartbeat::GLOBAL_HEARTBEAT` (bb2c5ed4c). \
              Both branches' slots are in `ALL_SLOTS`; the merged count is 49.",

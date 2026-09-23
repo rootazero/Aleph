@@ -365,6 +365,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::session::store::global_session_event_store_slot(),
     crate::gateway::session_projector::message_projector_slot(),
     crate::session::service::global_session_service_slot(),
+    crate::gateway::security::store::slot::users_store_slot(),
 ];
 
 #[cfg(test)]

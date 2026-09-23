@@ -661,12 +661,9 @@ async fn restamp_live_connections(
         return;
     }
 
-    // Wire word, not the enum's storage word: `admin` ⇒ `"operator"` is the
-    // same mapping `resolve_connection_identity` applies at connect time.
-    let wanted = match role {
-        UserRole::Admin => "operator",
-        UserRole::Member => "member",
-    };
+    // Wire word, not the enum's storage word — the one mapping
+    // `resolve_connection_identity` also applies at connect time.
+    let wanted = role.wire_role();
     let bound: std::collections::HashSet<&str> = device_ids.iter().map(String::as_str).collect();
 
     let mut restamped = 0usize;

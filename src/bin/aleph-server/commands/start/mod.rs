@@ -518,6 +518,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.security_store.clone(),
     )));
 
+    // The users table the fire-time authority resolver
+    // (`scope::authority::resolve`) re-reads at every background trigger —
+    // the SAME `SecurityStore` Arc as above, so a deactivation or demotion
+    // written by `users.update` is what the next cron / heartbeat fire
+    // sees. Unconditional: `initialize_vault` always yields a store (on
+    // disk, else in memory), so this slot has no decline arm. Missing it is
+    // `FailsOpen` — every fire would resolve `Legacy`.
+    // The users table the fire-time authority resolver
+    // (`scope::authority::resolve`) re-reads at every background trigger —
+    // the SAME `SecurityStore` Arc as above, so a deactivation or demotion
+    // written by `users.update` is what the next cron / heartbeat fire
+    // sees. Unconditional: `initialize_vault` always yields a store (on
+    // disk, else in memory), so this slot has no decline arm. Missing it is
+    // `FailsOpen` — every fire would resolve `Legacy`.
+    alephcore::gateway::security::store::install_users_store(
+        auth_bundle.security_store.clone(),
+    );
+
     // Bound the ledger's growth now that a real ledger exists to bound:
     // drop spend rows older than `spend::period::RETENTION_PERIODS` past
     // periods, computed by walking calendar boundaries backward rather than
@@ -3972,6 +3990,10 @@ mod tests {
     /// Nothing else can see this failure, so this is a source-level census:
     /// assert a production (comment-stripped) call to each name exists.
     ///
+    /// `install_users_store` joined the list in round 11 for the same reason:
+    /// its only consumer (`scope::authority::resolve`) degrades to `Legacy`
+    /// silently when it is missing.
+    ///
     /// CRLF-safe (`\r` stripped before any split — an anchored
     /// `"\n#[cfg(test)]"` needle matches nothing on this repo's Windows
     /// checkout, silently turning "production" into the whole file) and
@@ -3989,14 +4011,15 @@ mod tests {
              its own doc comment"
         );
         let production = alephcore::utils::source_scan::code_text(&production);
-        for call in ["install_policy(", "install_ledger("] {
+        for call in ["install_policy(", "install_ledger(", "install_users_store("] {
             assert!(
                 production.contains(call),
-                "start/mod.rs must contain a production call to \
-                 spend::{call} — without it the round's config, ledger and \
-                 admission checks are all wired to a handle boot never \
-                 installs, and the server runs as if no ceiling were ever \
-                 configured"
+                "start/mod.rs must contain a production call to {call} — \
+                 without it the handle is wired to nothing boot installs: \
+                 for the spend pair the server runs as if no ceiling were \
+                 ever configured; for the users store every fire-time \
+                 authority check answers Legacy and a deactivated or \
+                 demoted principal's background work runs unchecked"
             );
         }
     }

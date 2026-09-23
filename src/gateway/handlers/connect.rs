@@ -180,7 +180,7 @@ pub fn resolve_connection_identity(
     device_id: Option<&str>,
     store: &crate::gateway::security::store::SecurityStore,
 ) -> (Option<String>, &'static str) {
-    use crate::gateway::security::store::{UserRole, UserStatus, OWNER_USER_ID};
+    use crate::gateway::security::store::{UserStatus, OWNER_USER_ID};
 
     if is_loopback {
         return (Some(OWNER_USER_ID.to_string()), "operator");
@@ -204,10 +204,7 @@ pub fn resolve_connection_identity(
     match store.get_user(&linked_user_id) {
         Ok(Some(u)) if u.status == UserStatus::Deactivated => (None, "guest"),
         Ok(Some(u)) => {
-            let role = match u.role {
-                UserRole::Admin => "operator",
-                UserRole::Member => "member",
-            };
+            let role = u.role.wire_role();
             (Some(u.user_id), role)
         }
         // Dangling user_id (points at a row no longer in `users`), or a
