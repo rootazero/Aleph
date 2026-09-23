@@ -172,9 +172,14 @@ pub enum PluginRuntimeStatus {
     /// The manifest could not be parsed. `status_detail` carries the error.
     ///
     /// Also the fallback for a status label this build's enum does not
-    /// recognise (`#[serde(other)]`, which serde requires to sit on the last
-    /// variant) — an unfamiliar word must never decode-fail the whole
-    /// response, and must never read as healthy.
+    /// recognise (`#[serde(other)]`) — an unfamiliar word must never
+    /// decode-fail the whole response, and must never read as healthy.
+    ///
+    /// MUST stay the last variant: serde requires `#[serde(other)]` to sit on
+    /// the last one. This enum has no `PartialOrd`/`Ord`/`Hash` derive, no
+    /// discriminant cast, and no `ALL`/`VARIANTS`-style array anywhere in the
+    /// tree (checked) — declaration order is otherwise unobserved, and JSON
+    /// (de)serialisation goes by name (`rename_all`), not position.
     #[serde(other)]
     Error,
 }

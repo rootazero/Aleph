@@ -38,8 +38,8 @@ fn load_plugins(
     spawn_local(async move {
         match state.rpc_call("plugins.list", json!({})).await {
             Ok(result) => {
-                if let Some(list) = result.get("plugins") {
-                    match serde_json::from_value::<Vec<PluginInfo>>(list.clone()) {
+                match result.get("plugins") {
+                    Some(list) => match serde_json::from_value::<Vec<PluginInfo>>(list.clone()) {
                         Ok(parsed) => plugins.set(parsed),
                         Err(e) => {
                             // A shape we cannot read is also not an empty
@@ -53,6 +53,20 @@ fn load_plugins(
                                 |e| format!("Failed to read plugin list: {e}"),
                             )));
                         }
+                    },
+                    None => {
+                        // Same defect class as the decode-failure arm above
+                        // (判据 §8/§11): a reply missing the `plugins` key
+                        // entirely used to silently leave the signal
+                        // untouched, which on first load reads exactly like
+                        // "zero plugins installed" instead of "the server
+                        // sent something this build cannot read".
+                        plugins.set(Vec::new());
+                        error.set(Some(crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            "plugins.list reply has no `plugins` field",
+                            |e| format!("Failed to read plugin list: {e}"),
+                        )));
                     }
                 }
                 loading.set(false);
