@@ -503,12 +503,13 @@ impl DiagnosticReport {
         .to_string()
     }
 
-    /// Render a compact human report. Used by the CLI and the tool's text view.
+    /// Render a compact human report. Printed by `aleph-server doctor`; the
+    /// doctor tool returns `summary` plus the structured report, not this.
     #[must_use]
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "aleph doctor ({}): {} check(s), {} finding(s)\n",
+            "doctor ({}): {} check(s), {} finding(s)\n",
             self.posture,
             self.checks_run,
             self.findings.len()

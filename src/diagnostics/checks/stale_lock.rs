@@ -169,7 +169,7 @@ impl HealthCheck for StaleLockCheck {
             ),
         )
         .with_fix_hint(format!(
-            "Run `al doctor --fix`, or remove manually: rm \"{holder_display}\""
+            "Run `aleph-server doctor --fix`, or remove manually: rm \"{holder_display}\""
         ))
         .repairable();
 

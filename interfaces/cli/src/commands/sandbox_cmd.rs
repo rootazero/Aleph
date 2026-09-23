@@ -48,7 +48,7 @@ pub fn run(
 ) -> CliResult<()> {
     if command.is_empty() {
         return Err(CliError::Other(
-            "aleph sandbox run: missing command to execute (use `--` to separate flags)".into(),
+            "sandbox run: missing command to execute (use `--` to separate flags)".into(),
         ));
     }
 

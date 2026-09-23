@@ -29,7 +29,7 @@ vault HMAC 丢数据的双实例条件。去进程列表里找到持有者停掉
 （`SHUTDOWN_FAILSAFE` → `process::exit`）也会在退出前清掉它
 （`remove_held_holder_records_before_exit`），只有崩溃 / SIGKILL 会留下
 它——锁本身此时已被 OS 释放，下一次启动直接赢得锁并覆盖记录，**不会**报
-上面那些话；`al doctor` 的 `core/instance-lock` 才是给这种残留用的，
+上面那些话；`aleph-server doctor` 的 `core/instance-lock` 才是给这种残留用的，
 `--fix` 会清掉——但它**先探锁**（`instance_lock::is_lock_held`），锁被握着时
 只报「Holder record stale」、什么都不删；删除本身也是握着锁做的
 （`remove_holder_record_if_lock_free`），且只删 sidecar、不动 `aleph.lock`。若文件系统本身拒绝加锁（无 lockd 的 NFS、不支持字节范围锁

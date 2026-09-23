@@ -686,7 +686,7 @@ Services are started and stopped via the Aleph API:
 
 ```bash
 # From the CLI
-aleph plugins call <plugin-id> service.start --args '{"service_id": "file-watcher"}'
+al plugin call <plugin-id> service.start '{"service_id": "file-watcher"}'
 ```
 
 ---
@@ -834,7 +834,7 @@ Doctor checks:
 aleph plugin dev .
 
 # In another terminal, test tool calls
-aleph plugins call <plugin-id> <tool-name> --args '{"key": "value"}'
+al plugin call <plugin-id> <tool-name> '{"key": "value"}'
 ```
 
 ### Testing Node.js Plugins
@@ -909,27 +909,27 @@ When the same plugin ID exists at multiple levels, the higher-priority version w
 
 ```bash
 # Install from a local directory
-aleph-server plugins install /path/to/my-plugin
+al plugin install /path/to/my-plugin
 
 # Install from a zip archive
-aleph-server plugins install ./my-plugin.aleph-plugin.zip
+al plugin install ./my-plugin.aleph-plugin.zip
 ```
 
 ### Managing Plugins
 
 ```bash
 # List installed plugins
-aleph-server plugins list
+al plugin list
 
 # Enable/disable a plugin
-aleph-server plugins enable <plugin-id>
-aleph-server plugins disable <plugin-id>
+al plugin enable <plugin-id>
+al plugin disable <plugin-id>
 
 # Uninstall a plugin
-aleph-server plugins uninstall <plugin-id>
+al plugin uninstall <plugin-id>
 
 # Call a tool directly
-aleph plugins call <plugin-id> <tool-name> --args '{"key": "value"}'
+al plugin call <plugin-id> <tool-name> '{"key": "value"}'
 ```
 
 ### Plugin Directory Layout

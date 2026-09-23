@@ -27,7 +27,7 @@ pub async fn list(json: bool) -> CliResult<()> {
         output::print_json(&payload);
     } else {
         eprintln!(
-            "aleph webhook list is not yet wired to a backend RPC.\n\
+            "webhook list is not yet wired to a backend RPC.\n\
              Webhook endpoints are still configured via TOML (`[[webhooks.endpoints]]`).\n\
              Management surface tracked in {GAPS_DOC}."
         );

@@ -8,6 +8,8 @@ readme = "README.md"
 repository.workspace = true
 categories = ["command-line-utilities"]
 keywords = ["aleph", "cli", "assistant", "automation"]
+# Two bins, so `cargo run -p aleph-cli` needs to be told which one.
+default-run = "al"
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
 # It serves as a reference implementation showing how to build
@@ -16,6 +18,12 @@ keywords = ["aleph", "cli", "assistant", "automation"]
 # Two names for one program: `al` is the primary command, `aleph` the long
 # name. Both are one-line shims over `aleph_cli::main` (src/lib.rs), so they
 # cannot drift; `cargo install --path interfaces/cli` installs both.
+[lib]
+# The library exists only to be shared by the two bins, and its sole public
+# item is `main`, so a doctest cannot reach the items the doc comments
+# describe. Doctests stay off, as they were when this was a bin-only crate.
+doctest = false
+
 [[bin]]
 name = "al"
 path = "src/bin/al.rs"

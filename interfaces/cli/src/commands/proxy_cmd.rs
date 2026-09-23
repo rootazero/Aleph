@@ -26,7 +26,7 @@ pub async fn show(json: bool) -> CliResult<()> {
         output::print_json(&payload);
     } else {
         eprintln!(
-            "aleph proxy: no user-facing proxy config layer exists yet.\n\
+            "proxy: no user-facing proxy config layer exists yet.\n\
              Today: set HTTPS_PROXY / HTTP_PROXY / NO_PROXY in the env that\n\
              launches `aleph-server`. The sandbox subsystem uses its own\n\
              internal proxy for managed egress on macOS — unrelated.\n\

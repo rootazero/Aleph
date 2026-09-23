@@ -108,7 +108,7 @@ fn remove_holder_record(holder_path: &Path) {
             holder = %holder_path.display(),
             error = %e,
             "instance lock released but its holder sidecar could not be removed; \
-             `al doctor` will report it as stale until it is cleared"
+             `aleph-server doctor` will report it as stale until it is cleared"
         );
     }
 }
