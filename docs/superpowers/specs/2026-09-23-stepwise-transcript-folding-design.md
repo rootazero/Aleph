@@ -132,11 +132,11 @@ tally(&StepEntry) -> Option<TurnSummaryEntry>: 复用 turn_summary::summarize_tu
 
 **最终回答的判定**：`RunComplete` 时，当前打开的 step 的 `text` **提升**为顶层 `AssistantText`；该 step 若还剩 thinking / notes 就留下作一行折叠（`💭 Thought for 4s · 首句`），什么都不剩就删除。纯聊天一轮（思考 + 回答、无工具）因此渲染为一行折叠 + 完整回答，与 Claude Code 一致。
 
-〔amended 2026-09-23 (Phase S)〕 **记录是权威的，未被记录覆盖的流式文字是临时的**。`TextEmitted{Final}` 替换它所覆盖的那一段流式文字，正如 `ReasoningEmitted` 替换流式 thinking（§5.2；T910-F1）——实时腿因此在 grace 轮与救援路径上也收敛到重放腿，这种情形**永不**报 `NeedsResync`。没有任何 `TextEmitted{Final}` 覆盖的流式 delta 在 run 结束时被丢弃：打开的 step 的文字截回到记录为止；一个没有记录的 step，若 run 带着最终文字（实时腿 `RunSummary.final_response`，重放腿 `SessionCompleted.final_text`）就取它，否则不留文字（T910-N1）。理由是 R4：重放永远看不到未覆盖的 delta，实时腿就不能把它们当作回答呈现。代价：一次被叫停的流里没被确认的半截文字，在 run 结束时消失。
+〔amended 2026-09-23 (Phase S)〕 **记录是权威的，未被记录覆盖的流式文字是临时的**。`TextEmitted{Final}` 替换它所覆盖的那一段流式文字，正如 `ReasoningEmitted` 替换流式 thinking（§5.2；T910-F1）——实时腿因此在 grace 轮与救援路径上也收敛到重放腿，这种情形**永不**报 `NeedsResync`。没有任何 `TextEmitted{Final}` 覆盖的流式 delta 在 run 结束时被丢弃：打开的 step 的文字截回到它的记录所覆盖的长度，没有记录的 step 以无文字结束（T910-N1）。**最终文字的填补是 run 作用域的**（T910-N1b）：只有当这个 run **没有任何 step** 持有文字记录时，打开的 step 才取 run 的最终文字（实时腿 `RunSummary.final_response`，重放腿 `SessionCompleted.final_text`）；只要有一步记录过文字，服务端的最终文字就是在复述已经显示过的东西，不再填。重放腿的填补还**按结局设闸**：只对「实时终局帧确定是 `RunComplete`」的那些结局填（T910-NEW1）——逐个结局的判定与它的服务端依据写在 `shared/ui_logic/src/transcript/reducer/mod.rs::apply_trace` 的 `SessionCompleted` 臂的注释里，那里是这份清单的唯一真源。`RunError` 不带最终文字，只有被记录覆盖的文字留下。理由是 R4：重放永远看不到未覆盖的 delta，实时腿就不能把它们当作回答呈现。代价：一次被叫停的流里没被确认的半截文字，在 run 结束时消失。
 
 **run 作用域 vs step 作用域**：`CacheHealthDegraded` / `SessionCompleted` 等不属于某一步的旁白走顶层 `SystemNotice`（既有变体），不进 step。
 
-〔amended 2026-09-23 (Phase S)〕 落地（`reducer/mod.rs::apply_trace`）：`CacheHealthDegraded` → 顶层 `SystemNotice`，它可能来自子代理的 metering（§5.4），只影响归属；`ProviderUsage` 是账不是 step，不产条目；`SessionCompleted { final_text }` 在重放腿上是**最终回答的兜底**——打开的 step 没有文字而 `final_text` 非空时追加给它，随后照常提升；它的 `duration_ms` 只供 run 结束的摘要行（D7）。
+〔amended 2026-09-23 (Phase S)〕 落地（`reducer/mod.rs::apply_trace`）：`CacheHealthDegraded` → 顶层 `SystemNotice`，它可能来自子代理的 metering（§5.4），只影响归属；`ProviderUsage` 是账不是 step，不产条目；`SessionCompleted { final_text }` 只在重放腿上到达（实时 sink 不发它，`is_step_event`），是**最终回答的兜底**——按上一段的 run 作用域与结局闸填进打开的 step，随后照常提升；它的 `duration_ms` 只供 run 结束的摘要行（D7 · T910-N1b · T910-NEW1）。
 
 **档位与展开**：
 
@@ -226,9 +226,9 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 - **文件**：`reducer.rs` 已按职责拆成 `reducer/{mod,step_ops,tool_rows,run_end}.rs`（测试在 `reducer/tests.rs` 与 `reducer/tests/g2.rs`）——生产代码过了 P2 的文件上限，在 Phase T 建在它上面之前拆开（T910-SPLIT）。
 - **搬，不复制**：`trace_result_to_wire` 从 TUI `app/trace.rs` 搬进 `reducer/tool_rows.rs`，TUI 改为 import 共享的那一份（PF-C3/D15）。reducer/折叠器的其余部分仍是 Phase T 的替换工作。
-- **`NeedsResync` 的客户端动作**（T910-N2）：丢弃整份转录，从 session 的重放重建——用户消息来自 session 日志，每个 run 的 `trace.by_runs` 行逐条 `apply_replay`、再 `finish_replay`。run 进行中收到它时保留当前显示、标为陈旧，等 run 结束再重建。reducer 没有「替换某个 run」的接口，Phase S 也不加。
+- **`NeedsResync` 的客户端动作**（T910-N2）：可达的成因有两个——`RunSummary.loops` 多于数到的 `TurnStarted`，或一条 thinking 记录指向打开的 step 以外的迭代；其余生产者是今天没有输入能到达的 fail-closed 分支。动作：丢弃整份转录，从 session 的重放重建——用户消息来自 session 日志，每个 run 的 `trace.by_runs` 行逐条 `apply_replay`、再 `finish_replay`。run 进行中收到它时保留当前显示、标为陈旧，等 run 结束再重建。reducer 没有「替换某个 run」的接口，Phase S 也不加。
 - **摘要行的输入**（T910-SUM）：两条腿都是**这个 run 的全部工具行**（行就是记录）；实时腿漏掉的行仍先经 `RunSummary.tool_summaries` 对账补建。摘要行**按 run** 计（`RunState.first_entry` 圈出这个 run 的条目），不是按整份转录。`TurnSummaryEntry` 没有 id 字段，它的 `Change::Inserted` 用 `next_id` 铸的 `summary-N`——一个按键重绘的消费者要么按位置作键、要么届时加字段（PF-C9，归 Phase T/P）。
-- **`RunError` / 中止**：`fail_run` 把打开的 step 的文字提升为普通的顶层 `AssistantText`，另推一条 `SystemNotice("Error: …")`——`AssistantText` 没有 error 字段（D10；§9 同改）。
+- **`RunError` / 中止**：`fail_run` 先把未被记录覆盖的流式文字丢掉（错误不带最终文字，§4 修订段），再把打开的 step 剩下的文字提升为普通的顶层 `AssistantText`，另推一条 `SystemNotice("Error: …")`——`AssistantText` 没有 error 字段（D10；§9 同改）。
 - **下标 fail-closed**：打开的 step 经 `get_mut` 取得，取不到即 `NeedsResync`，不用会 panic 的下标；越界的线上迭代号读作「未知」，不截断（PF-C5/C10 · PF-C6）。
 
 **约束**：`default-features = false` 下必须编译（TUI 构建），不许碰 leptos / web-sys；输入是 `aleph_protocol` 的**类型化**帧。`md_enhance` / `fold` / `diff_view` / `group` 原样在 step 内部复用。在 reducer 自己的状态上就地更新是这个 crate 的既有习惯（`ToolRow::start/finish`），本轮沿用，不为不可变性另造一层拷贝。
@@ -287,6 +287,8 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 - **续写轮的 thinking**：一个 step 的 thinking 会从第 1 段（流式）翻成第 N 段（记录）（456-L3）。
 - **reasoning 第二份持久副本没有字节上限**：`task_traces` 里的 thinking 不设上限，`trace.by_runs` 一次最多服务 `MAX_RUNS` 个 run、不截断（456-L8）。
 - **受护栏的 run**：reasoning 不经输出护栏到达实时 `agent_trace` 与 `task_traces`；有人值守 run 的 reasoning 不打码落盘（与 `TextEmitted` 同规则、同属主）——产品决定（456-L2）。
+- **服务端的最终文字扫描是整个会话的**：`src/harness/agent.rs` 的 `final_text` 与 `think.rs` 的 `last_assistant_has_text` 扫描整份 session 日志，而 `runner_impl.rs` 把 `final_response` 限在本 run——一个没记下任何 `AssistantMessage` 的 run，重放时会把上一个 run 的回答当成自己的，grace 轮也可能因上一个 run 的文字被跳过。修法是把两处扫描限在本 run：这是 `src/harness/` 的改动（R10 棘轮，答三问），不在 Phase S 的服务端范围内（910-rereview2 NEW-1 (ii)）。
+- **thinking 兜底的回答会重复 thinking 块**：一个 run 没有文字记录、而服务端的最终文字取自最后一条消息的 thinking（只有 thinking 的 provider 兜底）时，两条腿上的回答都会重复该 step 的 thinking 块；本期确认它看起来如何（910-rereview2 LOW-3）。
 - **截断切开 ZWJ 序列**：纯外观（78-L4）。
 - **只认单一位置的 TUI 扫描**：Step 有了生产者之后，这几处看不见 step 里的行——`interfaces/tui/src/tui/app/mod.rs` 的 `find_tool_mut` 与按工具名的 `find_map`、`app/tests.rs` 泄漏测试里的 `TranscriptEntry::Step(_) => ""` 臂、`widgets/chat_area.rs` 的 `content_fingerprint(&s.id)` 臂（78-L6，替换清单）。
 - **`TranscriptEntry::Reasoning` 的删除**（§4 修订段；PF-D16）。
@@ -322,6 +324,8 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 |---|---|
 | 帧前面没有 `TurnStarted` | `iteration: None` step，标题只用计数，**永不**被追认步号 |
 | `summary.loops ≠ 数出的 step 数` | `NeedsResync` → 重拉该 run 整段替换；重拉也失败 → 保留实时条目 + 顶层 `SystemNotice`「过程可能不完整」，**不**装作完整。〔amended 2026-09-23 (Phase S)：条件落地为 `loops > 0 && steps_seen < loops`（§5.1）；重建的是整份转录，run 进行中则先标陈旧、run 结束再建（§6，T910-N2）〕 |
+| thinking 记录的迭代号与打开的 step 不符〔amended 2026-09-23 (Phase S)：新增行〕 | `NeedsResync`，什么都不移动；客户端动作与上一行相同（§6 修订段，T910-N2） |
+| run 结束时 step 里有未被记录覆盖的流式文字〔amended 2026-09-23 (Phase S)：新增行〕 | 丢弃；最终文字只在整个 run 没有文字记录时填补，重放腿另按结局设闸（§4 修订段，T910-N1 · N1b · NEW1） |
 | 重放行无结束事件 | `Pending`，不转圈（沿用 `settle_resumed`） |
 | 一次迭代什么都没产出（thinking/text/tools/notes 全空） | 不渲染——"Step 3：（无）"是在断言什么都没发生 |
 | thinking 被脱敏 | 正文显示 `Unavailable::Redacted` 原因芯片，标题退到 text → 计数。〔amended 2026-09-23 (Phase S)：没有芯片——thinking 在写时原地打码，reducer 不知道它被打过码；正文与标题都是打过码的文字（§4 修订段，D1/D2）。标题里出现打码占位符还是退到 text，由 Phase T 定〕 |
