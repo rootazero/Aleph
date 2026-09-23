@@ -1130,7 +1130,7 @@ lives in [FEATURE_LOCATOR §5.22](FEATURE_LOCATOR.md) round-10 ⑬⑭⑮ and in
   stamped neither column and `HeartbeatTask` had neither column at all, and the
   consequence was never an error: four readers short-circuit on NULL (the
   deactivation freeze treats the job as owned by nobody, the fire-time
-  `walled_owner_reason` check reads it as legacy, the run executes with no
+  authority check (`scope::authority::resolve`) reads it as legacy, the run executes with no
   scope, and the spend lands on `@unattributed`). That census is a NAME census,
   not a dataflow proof — a body that stamps a different job than the one it
   constructs passes — and its own doc says so.

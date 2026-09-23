@@ -559,7 +559,7 @@ impl CronJob {
     /// carried none, so every job created from the Panel or the CLI reached
     /// the store with both columns NULL — and four readers then short-circuit
     /// on that NULL: the deactivation sweep (`pause_all_owned_by`) counts it
-    /// as not-owned, `walled_owner_reason` skips it as "legacy"
+    /// as not-owned, the fire-time authority resolver (`scope::authority`) reads it as "legacy"
     /// (byte-indistinguishable from a genuinely pre-P1 job),
     /// `executor::build_cron_metadata` has no `ScopeAttribution` to rehydrate
     /// so the run executes unscoped — the UNRESTRICTED arm of every visibility
@@ -969,7 +969,7 @@ mod tests {
              `CronJob::{STAMP}` (directly or through a helper that does): \
              {offenders:?}. A job created with neither owner_user_id nor \
              scope_id is invisible to `pause_all_owned_by`, reads as a legacy \
-             job to `walled_owner_reason`, executes unscoped, and charges its \
+             job to the fire-time authority resolver, executes unscoped, and charges its \
              spend to @unattributed."
         );
     }

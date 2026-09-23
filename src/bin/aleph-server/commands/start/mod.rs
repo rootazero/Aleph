@@ -525,13 +525,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // sees. Unconditional: `initialize_vault` always yields a store (on
     // disk, else in memory), so this slot has no decline arm. Missing it is
     // `FailsOpen` — every fire would resolve `Legacy`.
-    // The users table the fire-time authority resolver
-    // (`scope::authority::resolve`) re-reads at every background trigger —
-    // the SAME `SecurityStore` Arc as above, so a deactivation or demotion
-    // written by `users.update` is what the next cron / heartbeat fire
-    // sees. Unconditional: `initialize_vault` always yields a store (on
-    // disk, else in memory), so this slot has no decline arm. Missing it is
-    // `FailsOpen` — every fire would resolve `Legacy`.
     alephcore::gateway::security::store::install_users_store(
         auth_bundle.security_store.clone(),
     );
@@ -2770,6 +2763,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // the heartbeat side also removes a real divergence: when
             // `agent_result.channel_registry_cell` is `None`, two
             // `unwrap_or_else` calls minted two *different* empty cells.
+            // Fire-time owner authority is not threaded here: the executor
+            // asks `scope::authority::resolve`, which reads the users store
+            // boot installed right after `initialize_vault`.
             let executor_fn = build_cron_executor_fn(
                 Arc::clone(exec_adapter),
                 Arc::clone(registry),
@@ -2777,9 +2773,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // D2: thread the cron-default iteration cap so each job's
                 // RunRequest carries it as max_iterations_override.
                 cron_state.config.default_max_iterations,
-                // Fire-time owner liveness (round-5 ④): the executor re-asks
-                // the users table at trigger time.
-                Some(auth_bundle.security_store.clone()),
             );
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway) — the
