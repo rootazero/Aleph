@@ -3311,9 +3311,11 @@ attribution, and a bound workspace as the room's default cwd.
        group is readable by every member's recall. Pre-existing
        adoption-by-absence shape, unchanged by this round; recorded here
        because binding a group is what makes strangers reach it.
-     - **A re-bind with no `--label` silently clears the stored label.**
-       `bind` otherwise reads as an idempotent no-op; this half is not. The
-       fixture records it as a fact rather than asserting it.
+     - ~~A re-bind with no `--label` silently clears the stored label.~~
+       **Closed in round-11 (D2, Ruling R-e)**: omitted keeps, `--label ""`
+       clears, a value replaces; the receipt reports the stored label
+       (`RETURNING`). The Panel can keep or replace but has no clear
+       affordance (an empty box sends no label).
   3. `resume_coordinator::retrigger` does not re-check the binding: a
      resumed room run whose folder vanished degrades to the agent workspace
      (background sweep, nobody to tell) where `build_run_request` refuses
