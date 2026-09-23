@@ -189,6 +189,19 @@ jobs:
         env:
           PROPTEST_CASES: 1024
 
+      # `-p alephcore` never compiles a dependency's `#[cfg(test)]` modules, so
+      # the shared crates' own tests (the transcript reducer and its guards,
+      # the protocol, the TUI, the CLI) ran in no leg before this step. The
+      # same three commands as `just test-shared`; shared-ui-logic runs in both
+      # feature shapes because the TUI and the CLI build it with defaults off.
+      - name: Run shared crate tests
+        shell: bash
+        run: >-
+          bash scripts/ci_run_with_resource_log.sh bash -c
+          'cargo test -p shared-ui-logic --no-default-features &&
+          cargo test -p shared-ui-logic &&
+          cargo test -p aleph-protocol -p aleph-tui -p aleph-cli'
+
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 

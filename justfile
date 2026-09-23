@@ -441,6 +441,17 @@ test-desktop-integration:
 # Run all desktop-related tests
 test-desktop-all: test-desktop test-desktop-macos test-desktop-integration
 
+# Run the shared crates' own tests. `cargo test -p alephcore` compiles only
+# alephcore's test targets, never a dependency's `#[cfg(test)]` modules, so the
+# transcript reducer and its guards (shared-ui-logic), aleph-protocol, aleph-tui
+# and aleph-cli are tested here or nowhere. shared-ui-logic runs in both feature
+# shapes: the TUI and the CLI build it with default features off, the Panel on.
+# CI's "Run shared crate tests" step runs the same three commands.
+test-shared:
+    cargo test -p shared-ui-logic --no-default-features
+    cargo test -p shared-ui-logic
+    cargo test -p aleph-protocol -p aleph-tui -p aleph-cli
+
 # Run proptest with high coverage (1024 cases per test)
 test-proptest:
     PROPTEST_CASES=1024 cargo test -p alephcore --lib
@@ -452,8 +463,8 @@ test-loom:
 # Run full logic review suite (proptest + loom)
 test-logic: test-proptest test-loom
 
-# Run all tests (core + desktop + proptest)
-test-all: test test-desktop-all test-proptest check-phase5 check-wiring
+# Run all tests (core + desktop + proptest + shared crates)
+test-all: test test-desktop-all test-proptest test-shared check-phase5 check-wiring
 
 # Re-verify the tests marked `#[ignore]` because they pass in isolation but
 # flake under the full `cargo test --lib` parallel fan-out on a contended
