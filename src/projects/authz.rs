@@ -64,6 +64,42 @@ pub fn is_owner(project: &Project, actor: Option<&str>, actor_is_admin: bool) ->
         || actor_is_admin
 }
 
+/// Whether `actor` is an ACTIVE org admin. The single lookup both faces'
+/// owner gates used to spell inline (`handlers/projects.rs::require_owner`,
+/// `project_manage.rs::require_owner`). No store, no actor, an unknown or
+/// deactivated user, or a store error all answer `false` — admin escalation
+/// is a grant, and a grant that cannot be verified is not made (criterion §8).
+#[must_use]
+pub fn is_active_admin(
+    users: Option<&crate::gateway::security::store::SecurityStore>,
+    actor: Option<&str>,
+) -> bool {
+    use crate::gateway::security::store::{UserRole, UserStatus};
+    let (Some(users), Some(actor)) = (users, actor) else {
+        return false;
+    };
+    match users.get_user(actor) {
+        Ok(Some(u)) => u.role == UserRole::Admin && u.status == UserStatus::Active,
+        Ok(None) => false,
+        Err(e) => {
+            tracing::warn!(actor = %actor, error = %e, "projects: admin lookup failed closed");
+            false
+        }
+    }
+}
+
+/// Whether `actor` may reconfigure `project` — [`is_owner`] with the admin
+/// escalation resolved. What the owner-level gates enforce AND what
+/// `ProjectRow.manageable` reports; one function so the two cannot disagree.
+#[must_use]
+pub fn manageable(
+    project: &Project,
+    actor: Option<&str>,
+    users: Option<&crate::gateway::security::store::SecurityStore>,
+) -> bool {
+    is_owner(project, actor, is_active_admin(users, actor))
+}
+
 /// The refusal both faces give for removing a room's owner, verbatim.
 ///
 /// The text is shared rather than re-typed because the rule is one rule: the
@@ -353,6 +389,41 @@ mod tests {
             "a plain member may not reconfigure"
         );
         assert!(is_owner(&project, None, false), "unrestricted passes");
+    }
+
+    #[test]
+    fn manageable_is_owner_or_active_admin_and_nothing_else() {
+        use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+        let (_store, project, _g) = store_with_room();
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-alice", "u-alice", UserRole::Member).unwrap();
+        users.create_user("u-bob", "u-bob", UserRole::Member).unwrap();
+        users.create_user("u-carol", "u-carol", UserRole::Admin).unwrap();
+        users.create_user("u-dave", "u-dave", UserRole::Admin).unwrap();
+        users
+            .update_user("u-dave", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+
+        assert!(manageable(&project, Some("u-alice"), Some(&users)), "the owner");
+        assert!(manageable(&project, Some("u-carol"), Some(&users)), "an active admin");
+        assert!(!manageable(&project, Some("u-bob"), Some(&users)), "a plain member");
+        assert!(!manageable(&project, Some("u-dave"), Some(&users)), "a deactivated admin");
+        assert!(!manageable(&project, Some("u-carol"), None), "no store: no admin escalation");
+        assert!(manageable(&project, None, Some(&users)), "unrestricted passes");
+    }
+
+    /// criterion §8: a store that cannot answer is not an admin.
+    #[test]
+    fn a_store_error_does_not_make_anyone_an_admin() {
+        use crate::gateway::security::store::SecurityStore;
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute("DROP TABLE users", [])
+            .unwrap();
+        assert!(!is_active_admin(Some(&users), Some("u-carol")));
     }
 
     #[test]

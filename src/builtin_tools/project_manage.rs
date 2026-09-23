@@ -236,16 +236,7 @@ impl ProjectManageTool {
 
     /// Refuse unless the actor may reconfigure `project`.
     fn require_owner(&self, project: &Project, actor: Option<&str>) -> Result<()> {
-        let is_admin = match (actor, self.users.as_ref()) {
-            (Some(caller), Some(users)) => matches!(
-                users.get_user(caller),
-                Ok(Some(u))
-                    if u.role == crate::gateway::security::store::UserRole::Admin
-                        && u.status == crate::gateway::security::store::UserStatus::Active
-            ),
-            _ => false,
-        };
-        if authz::is_owner(project, actor, is_admin) {
+        if authz::manageable(project, actor, self.users.as_deref()) {
             return Ok(());
         }
         Err(AlephError::tool(
@@ -291,13 +282,14 @@ impl ProjectManageTool {
         }
     }
 
-    fn render(&self, project: Project) -> Result<ProjectRow> {
+    fn render(&self, project: Project, actor: Option<&str>) -> Result<ProjectRow> {
         let members = self
             .store
             .members(&project.id)
             .map_err(|e| AlephError::tool(format!("failed to read roster: {e}")))?;
+        let manageable = authz::manageable(&project, actor, self.users.as_deref());
         Ok(crate::gateway::handlers::projects::render_project(
-            project, members,
+            project, members, manageable,
         ))
     }
 
@@ -420,7 +412,7 @@ impl AlephTool for ProjectManageTool {
                 let mut rows = Vec::new();
                 for p in all {
                     if crate::gateway::visibility::project_visible_to(&p.id, actor) {
-                        rows.push(self.render(p)?);
+                        rows.push(self.render(p, actor)?);
                     }
                 }
                 let message = format!("{} room(s)", rows.len());
@@ -438,7 +430,7 @@ impl AlephTool for ProjectManageTool {
                 let name = project.name.clone();
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(project)?),
+                    project: Some(self.render(project, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("room '{name}'"),
@@ -454,7 +446,7 @@ impl AlephTool for ProjectManageTool {
                 self.announce(&id, ChangeKind::Created, None);
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(project)?),
+                    project: Some(self.render(project, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("created room '{name}' ({id})"),
@@ -472,7 +464,7 @@ impl AlephTool for ProjectManageTool {
                 self.announce(id, ChangeKind::Updated, None);
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(renamed)?),
+                    project: Some(self.render(renamed, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("renamed to '{name}'"),
@@ -644,7 +636,7 @@ impl AlephTool for ProjectManageTool {
                 );
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(bound)?),
+                    project: Some(self.render(bound, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message,
@@ -714,6 +706,35 @@ mod tests {
             user_id: None,
             path: None,
         }
+    }
+
+    #[tokio::test]
+    async fn the_tool_row_says_who_may_manage_the_room() {
+        let (tool, project, _store, _g) = fixture();
+        let get = |who: &'static str| {
+            let tool = tool.clone();
+            let id = project.id.clone();
+            async move {
+                as_user(who, async {
+                    tool.call(ProjectManageArgs {
+                        action: ProjectAction::Get,
+                        project_id: Some(id),
+                        name: None,
+                        user: None,
+                        user_id: None,
+                        path: None,
+                    })
+                    .await
+                })
+                .await
+                .expect("a roster member reads the room")
+                .project
+                .expect("get returns the row")
+                .manageable
+            }
+        };
+        assert!(get("u-alice").await, "the owner");
+        assert!(!get("u-bob").await, "a plain member");
     }
 
     /// The capability this task exists for. Asserted on the ROSTER, not on the

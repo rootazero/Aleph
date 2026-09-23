@@ -7,7 +7,7 @@
 
 use aleph_protocol::projects::{
     BindingPeerKind, ChannelBindParams, ChannelBindResult, ChannelBindingRow, ChannelListParams,
-    ChannelListResult, ChannelUnbindParams, ChannelUnbindResult,
+    ChannelListResult, ChannelUnbindParams, ChannelUnbindResult, ProjectResult,
 };
 
 use crate::context::DashboardState;
@@ -88,11 +88,9 @@ impl ProjectsApi {
     ) -> Result<ProjectInfo, String> {
         let params = serde_json::json!({ "path": path, "name": name });
         let result = state.rpc_call("projects.add", params).await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
+        serde_json::from_value::<ProjectResult>(result)
+            .map(|r| r.project)
+            .map_err(|e| e.to_string())
     }
 
     // `create_blank` and `remove` bindings lived here with zero callers.
@@ -124,11 +122,9 @@ impl ProjectsApi {
     pub async fn create(state: &DashboardState, name: &str) -> Result<ProjectInfo, String> {
         let params = serde_json::json!({ "name": name });
         let result = state.rpc_call("projects.create", params).await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
+        serde_json::from_value::<ProjectResult>(result)
+            .map(|r| r.project)
+            .map_err(|e| e.to_string())
     }
 
     /// Fetch a single project room by id. Errors (including "not found" /
@@ -138,11 +134,9 @@ impl ProjectsApi {
         let result = state
             .rpc_call("projects.get", serde_json::json!({ "id": id }))
             .await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
+        serde_json::from_value::<ProjectResult>(result)
+            .map(|r| r.project)
+            .map_err(|e| e.to_string())
     }
 
     /// Get-or-create the room's canonical chat session key.
@@ -175,11 +169,9 @@ impl ProjectsApi {
     ) -> Result<ProjectInfo, String> {
         let params = serde_json::json!({ "id": id, "name": name });
         let result = state.rpc_call("projects.rename", params).await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
+        serde_json::from_value::<ProjectResult>(result)
+            .map(|r| r.project)
+            .map_err(|e| e.to_string())
     }
 
     /// Archive a room (not deletion — roster and memory survive). Owner-only
@@ -213,11 +205,9 @@ impl ProjectsApi {
     ) -> Result<ProjectInfo, String> {
         let params = serde_json::json!({ "id": id, "path": path });
         let result = state.rpc_call("projects.bind_workspace", params).await?;
-        let project = result
-            .get("project")
-            .cloned()
-            .ok_or_else(|| "missing project in response".to_string())?;
-        serde_json::from_value(project).map_err(|e| e.to_string())
+        serde_json::from_value::<ProjectResult>(result)
+            .map(|r| r.project)
+            .map_err(|e| e.to_string())
     }
 
     /// Add a member to the roster. Owner-only server-side. Returns the
@@ -422,12 +412,30 @@ mod tests {
             r#"{"id":"p-1","name":"Rowboat","owner_user_id":"u-1",
                 "workspace_path":"/srv/rowboat","status":"active",
                 "member_ids":["u-1","u-2"],"created_at":1,"updated_at":2,
-                "last_used_at":3}"#,
+                "last_used_at":3,"manageable":true}"#,
         )
         .expect("the shared row must parse what render_project sends");
         assert_eq!(row.owner_user_id.as_deref(), Some("u-1"));
         assert_eq!(row.member_ids, vec!["u-1".to_string(), "u-2".to_string()]);
         assert_eq!(row.workspace_path.as_deref(), Some("/srv/rowboat"));
+    }
+
+    /// The single-project envelope parses through the contract type — and a
+    /// row without `manageable` is an error, not a silently read-only room.
+    #[test]
+    fn a_project_result_parses_and_manageable_is_required() {
+        let ok: aleph_protocol::projects::ProjectResult = serde_json::from_str(
+            r#"{"project":{"id":"p-1","name":"R","owner_user_id":null,"workspace_path":null,
+                "status":"active","member_ids":[],"created_at":1,"updated_at":2,
+                "last_used_at":3,"manageable":false}}"#,
+        )
+        .expect("the envelope the server builds");
+        assert!(!ok.project.manageable);
+        assert!(serde_json::from_str::<aleph_protocol::projects::ProjectResult>(
+            r#"{"project":{"id":"p-1","name":"R","owner_user_id":null,"workspace_path":null,
+                "status":"active","member_ids":[],"created_at":1,"updated_at":2,"last_used_at":3}}"#,
+        )
+        .is_err());
     }
 
     /// A server-side rename of the roster key is an ERROR here, not an empty

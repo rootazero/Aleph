@@ -3368,7 +3368,7 @@ attribution, and a bound workspace as the room's default cwd.
        only NULL rows. The window is milliseconds and the remedy is free:
        re-running `bind` on the same room is a documented no-op that re-runs
        the scan.
-  7. **Single-project RPC responses have no typed envelope** (Ruling BD).
+  7. ~~**Single-project RPC responses have no typed envelope** (Ruling BD).
      `projects.list` gained `ProjectListResult`; the single-project
      responses did not — the server writes the literal
      `json!({ "project": … })` in **6** places and the Panel reads
@@ -3377,7 +3377,12 @@ attribution, and a bound workspace as the room's default cwd.
      the list change applies verbatim (信封也是 wire key，而且它通常是最后一个
      没被类型化的部分). Deferred because 11 sites across two crates is a task
      rather than a nit, and it is pre-existing. **Counts re-verified
-     2026-08-30 and unmoved; re-verify again before acting.**
+     2026-08-30 and unmoved; re-verify again before acting.**~~
+     **Closed in round-11 (D3):** `aleph_protocol::projects::ProjectResult`
+     is built by `handlers/projects.rs::project_response` at all 6 sites and
+     parsed by all 5 Panel sites; `ProjectRow.manageable` is derived by
+     `projects::authz::manageable`, which both faces' `require_owner` now
+     call.
   8. **`AuthorityChange` is used more broadly than its own doc describes**
      (Ruling BJ). `daemon.shutdown` is logged as an `AuthorityChange`, while
      that variant's doc says it covers "changes who can do what". The ruling
