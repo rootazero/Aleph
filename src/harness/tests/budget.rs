@@ -695,9 +695,9 @@ const BUDGETED: [&str; 12] = [
 ///     the gateway's `UnattendedRedactingSink`). (2) **yes** — which iteration
 ///     a thinking block belongs to is a runtime fact of the loop, not a
 ///     capability a stronger model absorbs. (3) **consumers today** — the
-///     Panel Agent Trace replay view (`agent_trace_model.rs`) and CLI
-///     `aleph trace get`, both through the shared presentation arm; next,
-///     Phase S Task 9's shared step reducer. Nothing was deleted to absorb it.
+///     Panel Agent Trace view (`agent_trace_model.rs`) and CLI `aleph trace show`
+///     via the shared presentation arm; the shared step reducer folds it, which
+///     nothing renders before Phase T. Nothing was deleted to absorb it.
 ///     (Corrected in the review follow-up: the first version of this entry
 ///     answered a different three questions and left (2) unanswered.)
 const CEILING: usize = 5266;
