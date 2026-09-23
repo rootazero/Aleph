@@ -102,6 +102,7 @@ enum MessageKind {
     Reasoning,
     Tool,
     ToolGroup,
+    Step,
     TurnSummary,
     System,
 }
@@ -187,6 +188,10 @@ fn message_kind_and_fingerprint(message: &TranscriptEntry) -> (MessageKind, u64)
             }
             (MessageKind::ToolGroup, acc)
         }
+        // Phase S: the variant exists, no TUI path constructs it yet. Phase T
+        // replaces this with the step row; until then an entry that cannot
+        // exist renders nothing rather than a guessed shape.
+        TranscriptEntry::Step(s) => (MessageKind::Step, content_fingerprint(&s.id)),
         TranscriptEntry::TurnSummary(s) => (
             MessageKind::TurnSummary,
             content_fingerprint(&turn_summary_text(s)),
@@ -777,7 +782,12 @@ fn render_settled_message(
 ) -> Vec<usize> {
     let base = out.len();
     match message {
-        TranscriptEntry::UserText { text, at_ms, attachments, .. } => {
+        TranscriptEntry::UserText {
+            text,
+            at_ms,
+            attachments,
+            ..
+        } => {
             render_user_message(text, attachments, *at_ms, width, out);
         }
         TranscriptEntry::AssistantText { markdown, .. } => {
@@ -799,6 +809,10 @@ fn render_settled_message(
         TranscriptEntry::ToolGroup(group) => {
             out.extend(render_tool_group(group, now_ms, width, modality));
         }
+        // Phase S: the variant exists, no TUI path constructs it yet. Phase T
+        // replaces this with the step row; until then an entry that cannot
+        // exist renders nothing rather than a guessed shape.
+        TranscriptEntry::Step(_) => {}
         TranscriptEntry::TurnSummary(summary) => {
             out.push(Line::from(Span::styled(
                 turn_summary_text(summary),
@@ -860,14 +874,8 @@ fn render_user_message(
     for att in attachments {
         lines.push(Line::from(vec![
             Span::styled("\u{2503} ", prefix_style),
-            Span::styled(
-                "\u{1F4CE} ".to_string(),
-                Style::default().fg(theme().muted),
-            ),
-            Span::styled(
-                att.name.clone(),
-                Style::default().fg(theme().muted),
-            ),
+            Span::styled("\u{1F4CE} ".to_string(), Style::default().fg(theme().muted)),
+            Span::styled(att.name.clone(), Style::default().fg(theme().muted)),
             Span::styled(
                 format!(" ({})", att.mime),
                 Style::default().fg(theme().muted),
