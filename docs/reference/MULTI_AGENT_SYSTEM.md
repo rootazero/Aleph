@@ -87,9 +87,11 @@ Subagents inherit the following from their parent via `SpawnerBase`:
   (`src/gateway/execution_engine/run_trace_sinks.rs`)
 - `accounting_sink` (2026-09-23) — a second inherited sink, read only by the
   child's `MeteringProvider`s (turn and `compactor:<id>` spend). It is the parent
-  run's own chain, so a child's `ProviderUsage` / `CacheHealthDegraded` still
-  reach the live wire and persist under the parent's task for `teams.usage` and
-  the doctor
+  run's own chain, so a child's `ProviderUsage` / `CacheHealthDegraded` persist
+  under the parent's task for `teams.usage` and the doctor, and reach the live
+  wire only while the parent run's strong senders are alive: a background
+  child's later usage is persisted only, because the emit sink's weak sender
+  no longer upgrades ([spec §5.4](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md))
 - `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
   spawner builds the child's **own** budget + compactor + preflight pipeline
 - `cheap_summary_provider` (2026-08-04) — the `[generation] cheap_model` tier, so the
@@ -1362,8 +1364,11 @@ the parent's persisted trace: `src/gateway/execution_engine/run_trace_sinks.rs`
 builds a separate child chain and hands it to both spawn paths. The one
 exception is accounting — a child's `MeteringProvider`s (`ProviderUsage` /
 `CacheHealthDegraded`) emit into the parent run's own chain, so subagent spend
-still reaches the live wire and is persisted under the parent's task for
-`teams.usage` and the doctor's cache checks.
+is persisted under the parent's task for `teams.usage` and the doctor's cache
+checks. It reaches the live wire only while the parent run's strong senders are
+alive; a background child's later usage is persisted only, because the emit
+sink's weak sender no longer upgrades
+([spec §5.4](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)).
 
 Other LoopTraceEvent variants pass through untranslated. Adding new translation
 cases does not require harness changes.
