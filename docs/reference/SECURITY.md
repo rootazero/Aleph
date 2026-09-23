@@ -3387,6 +3387,11 @@ attribution, and a bound workspace as the room's default cwd.
      is accurate and stays; narrowing prose beside a broader practice is
      this repo's most common drift shape.
 
+     **Round-11 (D4):** the variant's doc no longer lists verbs; it points at
+     `security::audit::tests::AUTHORITY_VERBS`, a per-call-site census
+     (25 call sites / 22 verbs at `a3993672c`) compared against a scan of the
+     source, so the list cannot narrow silently again.
+
 ### Network boundary = reachability
 
 - **Default — loopback only.** `aleph-server` binds `127.0.0.1`

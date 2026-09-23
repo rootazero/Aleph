@@ -19,19 +19,16 @@ pub enum AuditEventType {
     EnvInjectionDetected,
     PiiDetected,
     LeakWarning,
-    /// An operator read persisted content belonging to another user.
+    /// A write that moves the boundary of who can do what — as opposed to
+    /// [`Self::ScopedContentRead`], a read across it.
     ///
-    /// Ratified by human ruling on 2026-08-07: `trace.list` / `trace.get`
-    /// hand an operator any run's full transcript (prompts, tool inputs, tool
-    /// outputs) and stay admin-gated rather than owner-scoped, because that is
-    /// the operator's debugging surface. What was missing was the
-    /// accountability half — the read left no trace of itself anywhere. This
-    /// variant is that trace. Reading your OWN content is not an event, so on
-    /// a single-user box nothing is ever recorded here.
-    /// A write that changes who can do what: principal created, role
-    /// promoted/demoted, principal deactivated/reactivated, room roster
-    /// add/remove, `allowed_users` rewritten, channel sender approved with a
-    /// user binding, device revoked, bootstrap ticket minted.
+    /// **Which verbs record one is deliberately not listed here.** The list is
+    /// `tests::AUTHORITY_VERBS`, compared against a scan of every production
+    /// `AuditEntry::authority_change(` call by
+    /// `every_authority_change_verb_is_in_the_census_and_nothing_else_is`. This
+    /// doc used to hand-copy eight verbs while the producers recorded
+    /// twenty-two — `daemon.shutdown`, `config.patch` and `secrets.*` among
+    /// them: a narrowing sentence beside a broader practice.
     ///
     /// `ScopedContentRead` made cross-user READS accountable; the writes that
     /// move the boundary itself were silent until this variant — every one of
@@ -42,6 +39,15 @@ pub enum AuditEventType {
     /// `WHERE` clause. Never carries secrets (ticket codes, device tokens) —
     /// it names the object of the change, not the credential.
     AuthorityChange,
+    /// An operator read persisted content belonging to another user.
+    ///
+    /// Ratified by human ruling on 2026-08-07: `trace.list` / `trace.get`
+    /// hand an operator any run's full transcript (prompts, tool inputs, tool
+    /// outputs) and stay admin-gated rather than owner-scoped, because that is
+    /// the operator's debugging surface. What was missing was the
+    /// accountability half — the read left no trace of itself anywhere. This
+    /// variant is that trace. Reading your OWN content is not an event, so on
+    /// a single-user box nothing is ever recorded here.
     ScopedContentRead,
     /// The sandbox command hard-filter ([`crate::sandbox::command_policy`])
     /// refused a command, or matched a `Warn`-tier rule and let it through.
@@ -563,85 +569,6 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 mod tests {
     use super::*;
 
-    /// Every file that is expected to record an authority change, and the verb
-    /// it records.
-    ///
-    /// # What this census can and cannot do
-    ///
-    /// The **backward** direction is mechanical and is the half that catches
-    /// drift on its own: any file that calls `authority_change(` and is not
-    /// listed here fails, so a new producer cannot appear un-reviewed.
-    ///
-    /// The **forward** direction is a name list, and name lists only describe
-    /// the world on the day they are written — "a write that changes who can do
-    /// what" is a judgement, not a grep. That limit is declared rather than
-    /// papered over. What the list does buy is the failure this round found:
-    /// [`AuditEventType::AuthorityChange`]'s own doc names *device revoked* in
-    /// its list of covered writes, and no producer existed. Prose naming a
-    /// behaviour is not the behaviour, and a doc comment has no test.
-    const AUTHORITY_PRODUCERS: &[(&str, &str)] = &[
-        (
-            "src/gateway/handlers/users.rs",
-            "principal created / role / status",
-        ),
-        (
-            "src/gateway/handlers/projects.rs",
-            "room roster add / remove (RPC)",
-        ),
-        (
-            "src/builtin_tools/project_manage.rs",
-            "room roster add / remove (tool)",
-        ),
-        (
-            "src/gateway/handlers/projects_channel.rs",
-            "room bound to / released from a channel conversation",
-        ),
-        (
-            "src/gateway/handlers/pairing.rs",
-            "channel sender approve / revoke",
-        ),
-        (
-            "src/gateway/handlers/gateway_ticket.rs",
-            "bootstrap ticket minted",
-        ),
-        (
-            "src/gateway/handlers/gateway_devices.rs",
-            "device credential revoked",
-        ),
-        (
-            "src/gateway/handlers/agents.rs",
-            "allowed_users rewritten (RPC)",
-        ),
-        (
-            "src/builtin_tools/agent_manage/update.rs",
-            "allowed_users rewritten (tool)",
-        ),
-        // Added by 9d3bdc3a5 ("audit high-privilege mutations"), which wrote
-        // the calls but not the rows — the census went red at that commit and
-        // stayed red, which is the census working. Verbs below are the ones
-        // each `authority_change` actually records, not a summary of the file.
-        (
-            "src/gateway/handlers/cluster.rs",
-            "cluster node device credential mint (enroll) / revoke (deregister)",
-        ),
-        (
-            "src/gateway/handlers/config.rs",
-            "config section rewritten (may touch auth / provider keys / channel wiring)",
-        ),
-        (
-            "src/gateway/handlers/daemon_control.rs",
-            "daemon shutdown requested (ends every connected session)",
-        ),
-        (
-            "src/gateway/handlers/gateway_token.rs",
-            "shared gateway token rotated / every paired device revoked",
-        ),
-        (
-            "src/gateway/handlers/secrets.rs",
-            "vault secret set / delete (key name only)",
-        ),
-    ];
-
     /// Strip `//` line comments before scanning.
     ///
     /// A scanner judges code; a comment is documentation. Without this, the
@@ -659,84 +586,148 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
-    #[test]
-    fn every_declared_authority_producer_still_records_one() {
-        let root = repo_root();
-        for (path, verb) in AUTHORITY_PRODUCERS {
-            let full = root.join(path);
-            let src = std::fs::read_to_string(&full)
-                .unwrap_or_else(|e| panic!("{path} (declared producer of {verb}) unreadable: {e}"));
-            assert!(
-                code_only(&src).contains("authority_change("),
-                "{path} is the declared producer of the authority change {verb:?}, and it no \
-                 longer records one. Either restore the call or remove the row — an authority \
-                 write that leaves no record is invisible to `aleph audit`, which is the only \
-                 surface that can answer what changed."
-            );
+    /// Every production call that records an [`AuditEventType::AuthorityChange`],
+    /// as `(file, verb)` — one row per call site, sorted.
+    ///
+    /// This is the list the variant's doc used to hand-copy (eight verbs,
+    /// while the producers recorded twenty-two). It is now the only copy, and
+    /// it is compared against a scan of the source rather than read by a
+    /// person: a new call site, a removed one, or a renamed verb all go red in
+    /// `every_authority_change_verb_is_in_the_census_and_nothing_else_is`.
+    ///
+    /// # What this census still cannot see
+    ///
+    /// A write that SHOULD record an authority change and calls nothing. "A
+    /// write that changes who can do what" is a judgement, not a grep — the
+    /// round-10 tool-face roster gap was exactly that shape. The census makes
+    /// the existing trail exact; it does not find a missing one.
+    const AUTHORITY_VERBS: &[(&str, &str)] = &[
+        ("src/builtin_tools/agent_manage/update.rs", "agent_update"),
+        ("src/builtin_tools/project_manage.rs", "project_manage.member_add"),
+        ("src/builtin_tools/project_manage.rs", "project_manage.member_remove"),
+        ("src/gateway/handlers/agents.rs", "agents.update"),
+        ("src/gateway/handlers/cluster.rs", "cluster.deregister"),
+        ("src/gateway/handlers/cluster.rs", "cluster.enroll"),
+        ("src/gateway/handlers/config.rs", "config.patch"),
+        ("src/gateway/handlers/daemon_control.rs", "daemon.shutdown"),
+        ("src/gateway/handlers/gateway_devices.rs", "devices.revoke"),
+        ("src/gateway/handlers/gateway_ticket.rs", "gateway.ticket.create"),
+        ("src/gateway/handlers/gateway_ticket.rs", "gateway.ticket.revoke"),
+        ("src/gateway/handlers/gateway_token.rs", "gateway.token.rotate"),
+        ("src/gateway/handlers/pairing.rs", "channel.pairing.approve"),
+        ("src/gateway/handlers/pairing.rs", "channel.pairing.revoke"),
+        ("src/gateway/handlers/projects.rs", "projects.member.add"),
+        ("src/gateway/handlers/projects.rs", "projects.member.remove"),
+        ("src/gateway/handlers/projects_channel.rs", "projects.channel.bind"),
+        ("src/gateway/handlers/projects_channel.rs", "projects.channel.unbind"),
+        ("src/gateway/handlers/secrets.rs", "secrets.delete"),
+        ("src/gateway/handlers/secrets.rs", "secrets.set"),
+        ("src/gateway/handlers/users.rs", "users.create"),
+        ("src/gateway/handlers/users.rs", "users.update"),
+        ("src/gateway/handlers/users.rs", "users.update"),
+        ("src/gateway/handlers/users.rs", "users.update"),
+        ("src/gateway/handlers/users.rs", "users.update"),
+    ];
+
+    /// The verb each `AuditEntry::authority_change(` call in `code` records:
+    /// the first string literal of the call, up to its first `": "`.
+    ///
+    /// Refuses — rather than guessing — every shape it does not recognise, so
+    /// an unreadable call site is a red test and not a silently skipped one:
+    /// a call spelled through an alias, a detail that is not a literal (a `;`
+    /// before any `"` means the call ended without one), and a literal whose
+    /// prefix is not a dotted lowercase verb followed by `": "`.
+    fn verbs_recorded_in(code: &str) -> Result<Vec<String>, String> {
+        const CALL: &str = "::authority_change(";
+        const SPELLED: &str = "AuditEntry::authority_change(";
+        let mut verbs = Vec::new();
+        let mut rest = code;
+        while let Some(at) = rest.find(CALL) {
+            if !rest[..at + CALL.len()].ends_with(SPELLED) {
+                return Err(format!("a call not spelled `{SPELLED}` — this scanner cannot read it"));
+            }
+            let after = &rest[at + CALL.len()..];
+            let quote = after.find('"').ok_or("no string literal after the call")?;
+            if after[..quote].contains(';') {
+                return Err("the detail is not a string literal (`;` before any `\"`)".into());
+            }
+            let body = &after[quote + 1..];
+            let end = body.find('"').ok_or("unterminated detail literal")?;
+            let literal = &body[..end];
+            let (verb, _) = literal
+                .split_once(": ")
+                .ok_or_else(|| format!("detail {literal:?} has no `<verb>: ` prefix"))?;
+            let well_formed = !verb.is_empty()
+                && verb
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_');
+            if !well_formed {
+                return Err(format!("detail prefix {verb:?} is not a dotted lowercase verb"));
+            }
+            verbs.push(verb.to_string());
+            rest = &body[end + 1..];
         }
+        Ok(verbs)
     }
 
     #[test]
-    fn no_authority_producer_exists_outside_the_census() {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-
+    fn every_authority_change_verb_is_in_the_census_and_nothing_else_is() {
         let root = repo_root();
-        let src_root = root.join("src");
-        let mut files = Vec::new();
-        walk(&src_root, &mut files);
+        let sources = crate::utils::source_scan::rust_sources_under(&root.join("src"));
         assert!(
-            files.len() > 100,
+            sources.len() > 100,
             "the scan found {} files — it is not looking at the source tree it thinks it is",
-            files.len()
+            sources.len()
         );
-
-        // This file defines the constructor and the census, so it names the
-        // call unavoidably; it is not a producer.
-        let this_file = root.join("src/security/audit.rs");
-        let declared: std::collections::HashSet<_> = AUTHORITY_PRODUCERS
-            .iter()
-            .map(|(p, _)| root.join(p))
-            .collect();
-
-        let mut undeclared = Vec::new();
-        for file in files {
-            if file == this_file || declared.contains(&file) {
+        let mut found: Vec<(String, String)> = Vec::new();
+        for (rel, text) in sources {
+            // This file defines the constructor and the census; not a producer.
+            if rel == "src/security/audit.rs" {
                 continue;
             }
-            let Ok(src) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            if code_only(&src).contains("authority_change(") {
-                undeclared.push(
-                    file.strip_prefix(&root)
-                        .unwrap_or(&file)
-                        .display()
-                        .to_string(),
-                );
-            }
+            let production = crate::utils::source_scan::production_text(&root.join(&rel), &text);
+            let code = crate::utils::source_scan::strip_comment_lines(&production);
+            let verbs = verbs_recorded_in(&code).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            found.extend(verbs.into_iter().map(|v| (rel.clone(), v)));
         }
-        assert!(
-            undeclared.is_empty(),
-            "these files record authority changes but are not in AUTHORITY_PRODUCERS: {undeclared:?}. \
-             Add them with the verb they record — the census is how the next round learns which \
-             writes are supposed to leave a trail."
+        found.sort();
+        let mut expected: Vec<(String, String)> = AUTHORITY_VERBS
+            .iter()
+            .map(|(f, v)| ((*f).to_string(), (*v).to_string()))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            found, expected,
+            "the authority-change call sites and AUTHORITY_VERBS disagree. A new \
+             producer gets a row (with the verb it records); a removed one loses its \
+             row. This table is the only list of what `aleph audit` can show under \
+             `authority_change` — the variant's doc points here instead of copying it."
         );
+    }
+
+    /// The extractor is a guard, so it has to be shown going red on each
+    /// shape it claims to refuse (criterion §3: a guard never falsified is
+    /// not a guard).
+    #[test]
+    fn the_verb_extractor_reads_the_shipped_shapes_and_refuses_the_rest() {
+        let shipped = "log.log(crate::security::audit::AuditEntry::authority_change(\n\
+                       actor,\n format!(\n \"users.update: role {} {}→{}\",\n a, b, c\n ),\n));\n\
+                       log.log(AuditEntry::authority_change(None, \"daemon.shutdown: x\".to_string()));";
+        assert_eq!(
+            verbs_recorded_in(shipped).unwrap(),
+            vec!["users.update".to_string(), "daemon.shutdown".to_string()]
+        );
+        assert!(verbs_recorded_in("Entry::authority_change(None, \"a.b: c\")").is_err(), "alias");
+        assert!(
+            verbs_recorded_in("AuditEntry::authority_change(None, detail);\nlet s = \"x.y: z\";").is_err(),
+            "a non-literal detail must not borrow the next literal in the file"
+        );
+        assert!(verbs_recorded_in("AuditEntry::authority_change(None, \"no verb here\")").is_err());
+        assert!(verbs_recorded_in("AuditEntry::authority_change(None, \"Users.Update: x\")").is_err());
     }
 
     /// Every file expected to emit an SSRF-block audit entry. Much smaller
-    /// than [`AUTHORITY_PRODUCERS`] because the design is a chokepoint, not a
+    /// than [`AUTHORITY_VERBS`] because the design is a chokepoint, not a
     /// census of call sites: every `SsrfError::BlockedAddress` funnels through
     /// one of these two validators, so two files cover every refusal path
     /// (direct fetch, redirect hop, MCP SSE transport).
