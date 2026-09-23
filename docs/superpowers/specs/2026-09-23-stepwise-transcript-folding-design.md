@@ -355,7 +355,7 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 其余**照旧有效**：cc-tui 折叠规则、diff、mermaid、TUI 身份、主题、`/context` 覆盖层。做法：旧 spec 顶部加一条横幅指向本文，**不**逐行改它（一个事实一个家）。
 
-**文档落点**（完成后独立 commit）：`TRANSCRIPT_RENDERING.md` 新增 §7（Step · reducer · 重放腿 · 单管道），§5.1「没有渲染器」那笔债关闭；`FEATURE_LOCATOR §6.13` 更新，〔amended 2026-09-23 (Phase S)：Phase S 不关闭 §5.1 那笔债——它的形状在 TRANSCRIPT_RENDERING §7.3 以新的日期复现，Phase T 关闭它；FEATURE_LOCATOR 的 `### 6.13` 由 `e164ce568`（2026-09-07）写下、被同日的合并 `6eaa64b94` 连标题带正文丢掉，十一处引用却全部留下；这一轮是**重建**它（按合并前的原文取回仍然成立的部分，见 FEATURE_LOCATOR §6.13 与附录 D.0.198）〕新的判据实例进附录 D/E；`SESSION_KNOBS.md` 加一行"显示密度**刻意不是**会话旋钮，住在客户端"；`CLAUDE.md` 路由表那一行只在事实变了时改（`trace.tool_output` 仍零客户端，本轮不动）。
+**文档落点**（完成后独立 commit）：`TRANSCRIPT_RENDERING.md` 新增 §7（Step · reducer · 重放腿 · 单管道），§5.1「没有渲染器」那笔债关闭；`FEATURE_LOCATOR §6.13` 更新，〔amended 2026-09-23 (Phase S)：Phase S 不关闭 §5.1 那笔债——它的形状在 TRANSCRIPT_RENDERING §7.3 以新的日期复现，Phase T 关闭它；FEATURE_LOCATOR 的 `### 6.13` 由 `e164ce568`（2026-09-07）写下；同日的合并 `6eaa64b94` 手工解了两处真的附录编号冲突（解得对），但改写的范围超出了 git 标出的冲突块，把本节的标题与正文连同 git 能干净合并的其他内容一起丢了，十一处引用却全部留下；这一轮是**重建**它（按合并前的原文取回仍然成立的部分，见 FEATURE_LOCATOR §6.13 与附录 D.0.198）〕新的判据实例进附录 D/E；`SESSION_KNOBS.md` 加一行"显示密度**刻意不是**会话旋钮，住在客户端"；`CLAUDE.md` 路由表那一行只在事实变了时改（`trace.tool_output` 仍零客户端，本轮不动）。
 
 ---
 
