@@ -1810,14 +1810,18 @@ priority = 60
     /// not the empty state a full reset leaves behind, not a plugin-only
     /// state with the user's layer still missing. A run that snapshots into
     /// either would execute its whole turn without the hooks it should have
-    /// had, silently (fail-open).
+    /// had, silently (fail-open). The fixture seeds ONE hook of each kind
+    /// (a plugin hook and a `user:global` hook) so a plugin-only tear is
+    /// visible to this test too, not just a full reset to empty.
     ///
-    /// Shape: hold a READ guard across the whole rebuild, spawn
-    /// `after_transition`, let it run until it blocks on ITS first write
-    /// (queued behind the guard), drop the guard, then IMMEDIATELY queue a
-    /// second read — no `.await` in between, so it registers as a waiter
-    /// before `after_transition`'s NEXT write (if the body still has one)
-    /// gets a chance to queue behind it.
+    /// Shape: hold a READ guard so `after_transition`'s first write queues
+    /// behind it (asserted, not assumed — see the `try_read` check below),
+    /// spawn `after_transition`, let it run until it blocks on that write,
+    /// drop the guard, then IMMEDIATELY queue a second read — no `.await`
+    /// in between, so it registers as a waiter before `after_transition`'s
+    /// NEXT write (if the body still has one) gets a chance to queue behind
+    /// it. Runtime flavour is pinned explicitly (`current_thread`): the
+    /// ordering argument below depends on it.
     ///
     /// This relies on tokio's `RwLock` being fair (write-preferring FIFO):
     /// verified against `tokio` 1.52.3 (the version this workspace locks,
@@ -1829,28 +1833,53 @@ priority = 60
     /// released." Traced through `batch_semaphore.rs::add_permits_locked`:
     /// releasing the guard hands the freed permit straight to the head of
     /// the wait queue and dequeues it SYNCHRONOUSLY inside that `drop` call
-    /// — before any other task's poll runs — so on the old three-write body
-    /// the second read is already queued behind the reset write and ahead of
-    /// the two refill writes (which `after_transition`'s still-suspended
-    /// task has not tried to queue yet at that instant): it is granted right
-    /// after the reset write releases and lands on the empty executor. On
-    /// the new one-write body there is only one write to land after.
-    #[tokio::test]
+    /// — before any other task's poll runs — so on a body with more than
+    /// one write to `hook_executor`, the second read is already queued
+    /// behind whichever write is first and ahead of every later one (which
+    /// `after_transition`'s still-suspended task has not tried to queue yet
+    /// at that instant): it is granted right after the first write releases
+    /// and lands on whatever that first write installed. On the one-write
+    /// body there is only one write to land after.
+    #[tokio::test(flavor = "current_thread")]
     async fn after_transition_installs_the_next_executor_in_one_write_a_reader_never_sees_it_torn()
     {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
         write_static_plugin(dir.path(), "p3a-hooky");
+        // A `user:global` hook alongside the plugin hook: without it, a body
+        // that installs the plugin layer alone and refills `user:` hooks in
+        // a SEPARATE second write would still read `hook_count() == before`
+        // (the fixture's only hook would already be present) and this test
+        // would stay green through exactly the tear Q4 named (Important Q1,
+        // task-P3.3a-review.md).
+        std::fs::write(
+            crate::utils::paths::get_config_dir()
+                .unwrap()
+                .join("hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+        )
+        .unwrap();
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
 
-        let before = manager.hook_executor_snapshot().await.hook_count();
-        assert!(before > 0, "fixture must seed at least one hook");
+        let before_snapshot = manager.hook_executor_snapshot().await;
+        let before = before_snapshot.hook_count();
+        let mut before_sources: Vec<String> = before_snapshot
+            .inventory()
+            .into_iter()
+            .map(|h| h.source)
+            .collect();
+        before_sources.sort();
+        assert_eq!(
+            before_sources,
+            vec!["p3a-hooky".to_string(), "user:global".to_string()],
+            "fixture must seed exactly one plugin hook and one user hook"
+        );
 
         let views = manager.views();
         let hook_executor = Arc::clone(&views.hook_executor);
 
-        // Hold a reader across the whole rebuild.
+        // Hold a reader so `after_transition`'s first write queues behind it.
         let read_guard = hook_executor.read().await;
 
         // Run `after_transition` up to (and blocked on) its first write.
@@ -1862,15 +1891,38 @@ priority = 60
             tokio::task::yield_now().await;
         }
 
+        // Precondition (a): the write really is queued by now — not assumed
+        // from the yield count alone. A queued writer takes every currently
+        // free permit into its own wait-node on its first poll
+        // (`batch_semaphore.rs:423-431`, `:488`), so with `read_guard` still
+        // held, a fresh `try_read` has zero permits to draw on and must fail.
+        // If this ever fires, the yield count above needs raising (or the
+        // body grew an extra await before its first write) — that failure
+        // would otherwise show up as a false green below, not a red.
+        assert!(
+            hook_executor.try_read().is_err(),
+            "after_transition's first write must be queued before the guard drops, or the \
+             ordering this test relies on doesn't hold"
+        );
+
         // Release the guard, then IMMEDIATELY queue a second read.
         drop(read_guard);
-        let mid_rebuild = hook_executor.read().await.hook_count();
+        let mid = hook_executor.read().await;
+        let mid_rebuild = mid.hook_count();
+        let mut mid_sources: Vec<String> = mid.inventory().into_iter().map(|h| h.source).collect();
+        mid_sources.sort();
+        drop(mid);
 
         assert_eq!(
             mid_rebuild, before,
             "a reader observed a torn executor mid-rebuild ({mid_rebuild} hooks, expected \
              {before}) — a run snapshotting at this instant would execute its whole turn with \
              the wrong hook set, silently"
+        );
+        assert_eq!(
+            mid_sources, before_sources,
+            "a reader observed the wrong hook set mid-rebuild ({mid_sources:?}, expected \
+             {before_sources:?}) even though the count matched"
         );
 
         tokio::time::timeout(WAIT, handle)

@@ -743,12 +743,8 @@ impl ExtensionManager {
 impl projection::Views {
     /// Compute the user-level hook configs (`~/.aleph/hooks.json`, project
     /// files) fresh from disk. Pure derivation — does not touch
-    /// `hook_executor`. Shared by [`Self::sync_user_hooks`] (the file-watcher
-    /// path below, which installs the result incrementally under its own
-    /// lock) and `lifecycle.rs::after_transition` (which layers the result
-    /// into a freshly built executor off-lock, then installs it with one
-    /// write) so there is one derivation of "what are the user hooks right
-    /// now", not two (判据 §12).
+    /// `hook_executor`. The one source both hook-install paths read from
+    /// (判据 §12); see `Views::after_transition` for how they differ.
     fn user_hook_configs() -> Vec<HookConfig> {
         let cwd = std::env::current_dir().ok();
         // App mode: the daemon CWD is meaningless, so also load hooks from
@@ -777,13 +773,8 @@ impl projection::Views {
     /// appended, both under the same guard. Idempotent, so repeat calls never
     /// leak duplicate registrations.
     ///
-    /// `after_transition` does NOT call this method: it builds a whole next
-    /// executor off-lock (registry hooks via
-    /// [`Self::sync_hooks_from_registry`], then [`Self::user_hook_configs`])
-    /// and installs it with one write instead (see its doc). Both paths
-    /// derive the user hooks through `user_hook_configs`, so there is one
-    /// source for "what are the user hooks right now" even though the two
-    /// callers install the result differently.
+    /// Not called by `after_transition` — see `Views::after_transition` for
+    /// how that path installs the user layer instead.
     pub(crate) async fn sync_user_hooks(&self) {
         let user_hooks = Self::user_hook_configs();
         let mut executor = self.hook_executor.write().await;
@@ -811,9 +802,8 @@ impl projection::Views {
     /// like the plugin itself.
     ///
     /// Takes `executor` by `&mut` instead of writing `self.hook_executor`
-    /// directly so `after_transition` can build the whole next executor
-    /// off-lock — this call and the `user:` layer that follows it both land
-    /// on the same local value — and install it with exactly one write.
+    /// directly, so its caller can build a next executor off-lock; see
+    /// `Views::after_transition`.
     async fn sync_hooks_from_registry(&self, executor: &mut HookExecutor) {
         let hook_regs: Vec<(HookRegistration, visibility::ScopeKey)> = {
             let registry = self.plugin_registry.read().await;
