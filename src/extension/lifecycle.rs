@@ -1947,9 +1947,9 @@ priority = 60
 
     /// 判据 §8 / spec §3.3: `Pending` changes only when a dependency reports.
     /// Advance a paused tokio clock by an hour with NO dependency report and
-    /// the status is byte-identical. Mutation record: a
-    /// `tokio::spawn(async { sleep(10min); flip Pending→Error })` inside
-    /// `watch_server_starts` (or `write_readiness`) turns this red.
+    /// the status is byte-identical. Mutation record: a 10-minute
+    /// Pending→Error timer spawned right after `mount_parsed`'s moment-1
+    /// `write_readiness` call turns this red.
     #[tokio::test(start_paused = true)]
     async fn pending_never_times_out_into_error() {
         // Same isolation as every sibling `write_mcp_project_plugin` test in
@@ -1982,7 +1982,7 @@ priority = 60
         // Let any background task `mount_parsed` may have spawned reach its
         // first suspension point (e.g. register a `sleep`) BEFORE the clock
         // moves: `tokio::time::advance` jumps the clock in one step and then
-        // yields exactly once (`tokio-1.53.1/src/time/clock.rs:270-281`) — a
+        // yields exactly once (`tokio-1.52.3/src/time/clock.rs:270-281`) — a
         // task that has not been polled even once yet has no timer
         // registered for `advance` to fire, so a timer mutation racing the
         // uncontended, single-poll `load_all()` call above would go
