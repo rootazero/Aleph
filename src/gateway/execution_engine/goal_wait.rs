@@ -542,6 +542,10 @@ impl GoalWakeService {
 /// `memory.project_scoped` / retrieval / compaction reads would silently fall
 /// back to the unscoped namespace even though the goal was created inside a
 /// personal or project scope.
+///
+/// Also re-emits the goal's original requester ([`Goal::author_user_id`]) as
+/// `AUTHOR_USER_KEY` — the fifth key `carry_policy_metadata` carries on the
+/// hook path (round 11, R-b).
 fn rehydrate_owner_scope(
     goal: &Goal,
     mut policy_meta: HashMap<String, String>,
@@ -551,6 +555,12 @@ fn rehydrate_owner_scope(
         goal.scope_id.as_deref(),
     ) {
         crate::scope::stamp_metadata(&mut policy_meta, &attr);
+    }
+    if let Some(author) = goal.author_user_id.as_deref() {
+        policy_meta.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author.to_string(),
+        );
     }
     policy_meta
 }
@@ -626,5 +636,24 @@ mod tests {
         let meta = rehydrate_owner_scope(&legacy, HashMap::new());
         assert!(!meta.contains_key(crate::scope::OWNER_META_KEY));
         assert!(!meta.contains_key(crate::scope::SCOPE_META_KEY));
+    }
+
+    /// The wake path is the continuation with no predecessor; without the
+    /// author it resolves authority against the room CREATOR (R-b).
+    #[test]
+    fn rehydrate_owner_scope_carries_the_author() {
+        let goal = owned_goal().with_author(Some("u-bob".into()));
+        let meta = rehydrate_owner_scope(&goal, HashMap::new());
+        assert_eq!(
+            meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+                .map(String::as_str),
+            Some("u-bob")
+        );
+    }
+
+    #[test]
+    fn rehydrate_owner_scope_writes_no_author_for_a_goal_without_one() {
+        let meta = rehydrate_owner_scope(&owned_goal(), HashMap::new());
+        assert!(!meta.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
     }
 }

@@ -12,7 +12,8 @@
 //! - [`block_goal_on_failure`] — route a failed continuation run to a `Blocked`
 //!   goal + an origin-channel notice.
 //! - [`rearm_goal_after_busy`] — a continuation that lost the session run-slot
-//!   retries the SAME claimed step instead of burning it.
+//!   or whose authority was unknown at fire time retries the SAME claimed step
+//!   instead of burning it.
 //!
 //! Crash recovery is deliberately NOT here: `ResumeCoordinator` already
 //! re-triggers a run interrupted mid-flight at boot, and that run's completion
@@ -592,31 +593,34 @@ pub(super) async fn block_goal_on_failure(
 /// time, so re-arm the SAME continuation with a short retry delay instead of
 /// dropping it (which burned the iteration for zero work, and stalled the pursuit
 /// outright whenever the colliding run then failed — its own hook never runs).
+/// The second `cause` is a fire whose authority was unknown (round 11, R-a):
+/// equally not a pursuit failure, so it takes the same retry.
 pub(super) async fn rearm_goal_after_busy(
     session: &str,
     origin: Option<&OriginRoute>,
+    cause: &'static str,
 ) -> Option<(u64, u64)> {
     let store = crate::goal::global()?;
     match store.rearm_after_busy(session, now_ms()) {
         Ok(RearmDecision::Retry { delay_ms, wake_ms }) => {
-            info!(session = %session, delay_ms,
-                "goal pursuit: agent busy at continuation fire; re-armed with a retry delay");
+            info!(session = %session, delay_ms, cause,
+                "goal pursuit: continuation could not run at fire; re-armed with a retry delay");
             Some((delay_ms, wake_ms))
         }
         Ok(RearmDecision::Exhausted { note }) => {
             clear_goal_welded_strategy(session);
             notify_origin(origin, format!("⏹ {note}")).await;
-            info!(session = %session, note = %note,
-                "goal pursuit: cap tripped during a busy collision; goal blocked");
+            info!(session = %session, note = %note, cause,
+                "goal pursuit: cap tripped while re-arming; goal blocked");
             None
         }
         Ok(RearmDecision::Drop) => {
-            info!(session = %session,
-                "goal pursuit: agent busy at continuation fire; goal no longer active or re-claimed — dropped");
+            info!(session = %session, cause,
+                "goal pursuit: continuation could not run at fire; goal no longer active or re-claimed — dropped");
             None
         }
         Err(e) => {
-            warn!(error = %e, session = %session, "goal pursuit: re-arm after busy failed");
+            warn!(error = %e, session = %session, cause, "goal pursuit: re-arm failed");
             None
         }
     }

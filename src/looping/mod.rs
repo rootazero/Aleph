@@ -28,6 +28,10 @@ const PENDING_TICK_STALE_GRACE_MS: u64 = 60_000;
 /// stale before it wakes.
 const BUSY_RETRY_DELAY_MS: u64 = 30_000;
 
+// The busy AND the authority-unknown re-arm (round 11) rely on this: a
+// re-armed tick must never look stale before it wakes.
+const _: () = assert!(BUSY_RETRY_DELAY_MS < PENDING_TICK_STALE_GRACE_MS);
+
 /// Outcome of [`LoopRegistry::try_claim_tick`] — the single atomic decision
 /// the continuation hook acts on after a run completes.
 #[derive(Debug, Clone, PartialEq, Eq)]

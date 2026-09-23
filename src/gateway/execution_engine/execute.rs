@@ -1332,6 +1332,14 @@ pub(super) type OriginRoute = (
 /// `memory.project_scoped` / retrieval / compaction reads never fall back to
 /// the unscoped or wrong-owner namespace.
 ///
+/// [`super::AUTHOR_USER_KEY`] is the fifth key (round 11, ruling R-b): the
+/// ORIGINAL requester. In a project room the scope owner is the room's creator
+/// and the author is whoever actually asked, so without it a continuation of
+/// Bob's turn in Alice's room was charged, audited and — once
+/// [`spawn_continuation_run`] resolves authority at fire time — judged as
+/// Alice. Its role is still derived from that person's role AT FIRE TIME, not
+/// copied from here.
+///
 /// Everything else is per-turn (locale / platform / busy-input mode / slash
 /// mode) and is deliberately dropped. `channel_id` / `conversation_id` stay out
 /// too: they are what make an approval routable, and an unattended run must keep
@@ -1344,6 +1352,7 @@ pub(super) fn carry_policy_metadata(
         super::CHANNEL_TOOL_PERMISSIONS_KEY,
         crate::scope::OWNER_META_KEY,
         crate::scope::SCOPE_META_KEY,
+        super::AUTHOR_USER_KEY,
     ]
     .iter()
     .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
@@ -1377,6 +1386,57 @@ fn continuation_metadata(
     m
 }
 
+/// The `RunRequest` one continuation fire hands the adapter, before the
+/// fire-time authority gate ([`admit_continuation`]) stamps it.
+fn continuation_request(
+    session_key: &crate::routing::session_key::SessionKey,
+    prompt: String,
+    policy_meta: std::collections::HashMap<String, String>,
+    workspace_override: Option<std::path::PathBuf>,
+) -> RunRequest {
+    RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input: prompt,
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: continuation_metadata(policy_meta),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override,
+        max_iterations_override: None,
+        model_override: None,
+    }
+}
+
+/// Why a continuation fire did not run: the two stopping arms of
+/// [`crate::gateway::fire_gate::FireVerdict`], without its `Proceed` (which
+/// [`admit_continuation`] returns as the admitted request instead).
+#[derive(Debug)]
+enum ContinuationStop {
+    /// Deactivated / deleted — halt the pursuit and say why.
+    Refused(String),
+    /// The users store errored (R-a) — re-arm the same step, never a failure.
+    Unknown(String),
+}
+
+/// Apply the fire-time `authority` to the continuation `request` about to
+/// execute (round 11, N4). `Ok` is that same request — stamped on `Granted`,
+/// byte-identical on `Legacy`. The request goes in by value and comes back
+/// out so the caller can only execute the admitted one: a stamp that landed
+/// on any other map would be a stamp the run never sees (criterion §4).
+fn admit_continuation(
+    authority: crate::scope::authority::FireAuthority,
+    mut request: RunRequest,
+) -> Result<RunRequest, ContinuationStop> {
+    use crate::gateway::fire_gate::FireVerdict;
+    match crate::gateway::fire_gate::apply(authority, &mut request.metadata) {
+        FireVerdict::Proceed => Ok(request),
+        FireVerdict::Refused(reason) => Err(ContinuationStop::Refused(reason)),
+        FireVerdict::Unknown(reason) => Err(ContinuationStop::Unknown(reason)),
+    }
+}
+
 /// Enqueue one autonomous continuation run (same session, same agent, given prompt).
 /// Shared by goal continuations (`should_continue` / gate-failure) and loop-tick
 /// continuations — eliminates the duplicate `RunRequest` construction and
@@ -1389,6 +1449,17 @@ fn continuation_metadata(
 /// dropping the root moved the run out of the project (no project CLAUDE.md /
 /// AGENTS.md, no project skills) and told the model so in its
 /// workspace_directive.
+///
+/// **Fire-time authority (round 11, N4).** After `confirm_fire`, the agent
+/// lookup and the out-of-bounds check, the continuation asks
+/// `scope::authority::resolve` about the person it acts for (the carried
+/// author, else the carried owner). `Refused` (deactivated / deleted) halts
+/// the pursuit through [`halt_on_refused_authority`]. `Unknown` (the users
+/// store errored) re-arms the SAME claimed step through the busy-collision
+/// re-arm, so no iteration is spent (ruling R-a). `Granted` re-stamps the
+/// request (a demoted admin's continuation runs as `member`). `Legacy` is
+/// byte-identical to before. The verdict-to-request step is
+/// [`admit_continuation`].
 pub(super) fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
@@ -1409,21 +1480,14 @@ pub(super) fn spawn_continuation_run(
     delay_ms: Option<u64>,
     kind: ContinuationKind,
 ) {
-    let cont_request = super::RunRequest {
-        run_id: uuid::Uuid::new_v4().to_string(),
-        // Cloned (not moved) so the AgentBusy retry below can re-enqueue the
-        // SAME tick prompt without recomputing it.
-        input: prompt.clone(),
-        session_key: session_key.clone(),
-        timeout_secs: None,
-        metadata: continuation_metadata(policy_meta.clone()),
-        attachments: Vec::new(),
-        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override: workspace_override.clone(),
-        max_iterations_override: None,
-        model_override: None,
-    };
+    // Prompt cloned (not moved) so the AgentBusy retry below can re-enqueue
+    // the SAME tick prompt without recomputing it.
+    let cont_request = continuation_request(
+        &session_key,
+        prompt.clone(),
+        policy_meta.clone(),
+        workspace_override.clone(),
+    );
     let cont_agent_id = session_key.agent_id().to_string();
     tokio::spawn(async move {
         // Loop cadence: wait the requested delay before this tick fires. Goal
@@ -1590,6 +1654,66 @@ pub(super) fn spawn_continuation_run(
                     .map(|(ch, conv)| (reg, ch, conv)),
                 None => None,
             };
+        // Fire-time authority (round 11): the person this continuation acts
+        // for may have been deactivated, deleted or demoted since the step
+        // was claimed. Resolved HERE — after confirm_fire cleared the pending
+        // marker, which is exactly the state the busy re-arm below needs. The
+        // request is moved through `admit_continuation` and shadowed, so only
+        // the admitted (stamped) request can reach the adapter.
+        let authority = crate::scope::authority::resolve(
+            &crate::gateway::fire_gate::subject_from_metadata(&policy_meta),
+        );
+        let cont_request = match admit_continuation(authority, cont_request) {
+            Ok(admitted) => admitted,
+            Err(ContinuationStop::Refused(reason)) => {
+                warn!(session = %session_key_str, kind = ?kind, reason = %reason,
+                    "continuation: authority refused at fire time; halting");
+                halt_on_refused_authority(kind, &session_key_str, &reason, origin.as_ref()).await;
+                return;
+            }
+            Err(ContinuationStop::Unknown(reason)) => {
+                // "I could not look" is not a failure (criteria §8 / §15): no
+                // failure routing, no halt — re-arm the same claimed step.
+                warn!(session = %session_key_str, kind = ?kind, reason = %reason,
+                    "continuation: authority unknown at fire time; re-arming the same step");
+                let rearmed = match kind {
+                    ContinuationKind::Loop { .. } => rearm_loop_after_busy(
+                        &session_key_str,
+                        origin.as_ref(),
+                        "authority unknown",
+                    )
+                    .await
+                    .map(|(d, w)| (d, ContinuationKind::Loop { wake_ms: w })),
+                    ContinuationKind::Goal { .. } => {
+                        super::goal_continuation::rearm_goal_after_busy(
+                            &session_key_str,
+                            origin.as_ref(),
+                            "authority unknown",
+                        )
+                        .await
+                        .map(|(d, w)| (d, ContinuationKind::Goal { wake_ms: w }))
+                    }
+                };
+                if let Some((delay_ms, next_kind)) = rearmed {
+                    // The UNSTAMPED policy map: the next fire resolves again
+                    // from the carried facts.
+                    spawn_continuation_run(
+                        registry.clone(),
+                        adapter.clone(),
+                        session_key.clone(),
+                        session_key_str.clone(),
+                        prompt.clone(),
+                        policy_meta.clone(),
+                        workspace_override.clone(),
+                        event_bus.clone(),
+                        session_manager.clone(),
+                        Some(delay_ms),
+                        next_kind,
+                    );
+                }
+                return;
+            }
+        };
         // Kept for the AgentBusy retry re-spawn (the original is consumed by
         // the emitter construction just below). `policy_meta` must be carried
         // too — without it the FIRST busy-retry silently drops the inherited
@@ -1649,7 +1773,9 @@ pub(super) fn spawn_continuation_run(
                 // re-armed the goal).
                 let (delay_ms, next_kind) = match kind {
                     ContinuationKind::Loop { .. } => {
-                        match rearm_loop_after_busy(&session_key_str, origin.as_ref()).await {
+                        match rearm_loop_after_busy(&session_key_str, origin.as_ref(), "agent busy")
+                            .await
+                        {
                             Some((delay_ms, wake_ms)) => {
                                 (Some(delay_ms), ContinuationKind::Loop { wake_ms })
                             }
@@ -1660,6 +1786,7 @@ pub(super) fn spawn_continuation_run(
                         match super::goal_continuation::rearm_goal_after_busy(
                             &session_key_str,
                             origin.as_ref(),
+                            "agent busy",
                         )
                         .await
                         {
@@ -1725,7 +1852,8 @@ pub(super) fn spawn_continuation_run(
 }
 
 /// Loop sibling of [`super::goal_continuation::rearm_goal_after_busy`]: a woken
-/// tick lost the session run-slot (`AgentBusy`). Re-arm the SAME tick with a
+/// tick could not run — it lost the session run-slot (`AgentBusy`), or its
+/// authority could not be established (`cause`). Re-arm the SAME tick with a
 /// short retry delay; or, when a cap tripped during the collision, clear the
 /// loop-welded strategy and notify the origin — mirroring [`stop_loop_on_failure`]
 /// — so a cap-trip during a busy collision never leaves the loop a silently
@@ -1734,6 +1862,7 @@ pub(super) fn spawn_continuation_run(
 pub(super) async fn rearm_loop_after_busy(
     session_key_str: &str,
     origin: Option<&OriginRoute>,
+    cause: &'static str,
 ) -> Option<(u64, u64)> {
     let reg = crate::looping::global()?;
     let now = std::time::SystemTime::now()
@@ -1741,8 +1870,8 @@ pub(super) async fn rearm_loop_after_busy(
         .map_or(0, |d| d.as_millis() as u64);
     match reg.rearm_after_busy(session_key_str, now) {
         crate::looping::RearmDecision::Retry { delay_ms, wake_ms } => {
-            info!(session = %session_key_str, delay_ms,
-                "loop: agent busy at tick fire; re-armed the tick with a retry delay");
+            info!(session = %session_key_str, delay_ms, cause,
+                "loop: tick could not run at fire; re-armed the tick with a retry delay");
             Some((delay_ms, wake_ms))
         }
         crate::looping::RearmDecision::Exhausted { note } => {
@@ -1752,14 +1881,71 @@ pub(super) async fn rearm_loop_after_busy(
             // blocks a future re-plan, then tell the user (R5).
             clear_loop_welded_strategy(session_key_str, "cap-trip stop");
             notify_origin(origin, format!("⏹ {note}")).await;
-            info!(session = %session_key_str, note = %note,
-                "loop: cap tripped during a busy collision; loop stopped");
+            info!(session = %session_key_str, note = %note, cause,
+                "loop: cap tripped while re-arming a tick that could not run; loop stopped");
             None
         }
         crate::looping::RearmDecision::Drop => {
-            info!(session = %session_key_str,
-                "loop: agent busy at tick fire; loop no longer active, re-claimed, or superseded — tick dropped");
+            info!(session = %session_key_str, cause,
+                "loop: tick could not run at fire; loop no longer active, re-claimed, or superseded — tick dropped");
             None
+        }
+    }
+}
+
+/// Terminate a continuation whose person was DEFINITELY refused at fire time
+/// (deactivated or deleted — `FireVerdict::Refused`). The same two
+/// lifecycle writes as the agent-miss arm above, with two differences:
+///
+/// - a loop is PAUSED, not stopped — caps, tick count, prompt and cadence
+///   survive, so reactivating the person plus `loop(action='resume')` brings
+///   it back. The agent-miss arm stops because the agent will never return;
+///   a person can.
+/// - the welded strategy is kept for the same reason.
+///
+/// Both push the reason to the origin channel (R5 — an autonomous ending is
+/// never silent).
+pub(super) async fn halt_on_refused_authority(
+    kind: ContinuationKind,
+    session_key_str: &str,
+    reason: &str,
+    origin: Option<&OriginRoute>,
+) {
+    match kind {
+        ContinuationKind::Loop { .. } => {
+            let Some(reg) = crate::looping::global() else {
+                return;
+            };
+            let note = format!(
+                "Paused: {reason}. An administrator must reactivate that person before this \
+                 loop can resume."
+            );
+            if matches!(
+                reg.transition(
+                    session_key_str,
+                    crate::looping::LoopStatus::Paused,
+                    Some(note.clone())
+                ),
+                crate::looping::TransitionOutcome::Applied { .. }
+            ) {
+                notify_origin(origin, format!("⏸ {note}")).await;
+            }
+        }
+        ContinuationKind::Goal { .. } => {
+            let Some(store) = crate::goal::global() else {
+                return;
+            };
+            let note = format!(
+                "Autonomous pursuit halted: {reason}. An administrator must reactivate that \
+                 person, then set the goal back to active, before it can continue."
+            );
+            match store.block_if_active(session_key_str, &note, super::goal_continuation::now_ms())
+            {
+                Ok(true) => notify_origin(origin, format!("⏹ {note}")).await,
+                Ok(false) => {}
+                Err(e) => warn!(error = %e, session = %session_key_str,
+                    "goal pursuit: failed to block goal after an authority refusal"),
+            }
         }
     }
 }
@@ -2202,6 +2388,29 @@ mod carry_policy_metadata_tests {
         );
     }
 
+    /// R-b: the 5th carried key. Without it every goal/loop continuation in a
+    /// room answers "who is asking" with the room's CREATOR (the scope owner),
+    /// and the fire-time authority check below judges the wrong person.
+    #[test]
+    fn continuation_carries_the_original_requester() {
+        let mut src = HashMap::new();
+        crate::scope::stamp_metadata(
+            &mut src,
+            &crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".into(),
+                scope: crate::scope::ScopeId::Project("p-room".into()),
+            },
+        );
+        src.insert(super::super::AUTHOR_USER_KEY.to_string(), "u-bob".into());
+
+        let out = carry_policy_metadata(&src);
+
+        assert_eq!(
+            out.get(super::super::AUTHOR_USER_KEY).map(String::as_str),
+            Some("u-bob")
+        );
+    }
+
     /// The composed invariant, end to end: a Chat-tier Telegram turn's clamp and
     /// channel permission layer reach the continuation, AND the continuation is
     /// still unattended. This is the bug — a continuation used to build its
@@ -2436,5 +2645,180 @@ mod transient_loop_park_tests {
         let state = reg.get(session).expect("still registered");
         assert_eq!(state.status, LoopStatus::Stopped);
         assert_eq!(state.pending_tick_wake_ms, None);
+    }
+}
+
+#[cfg(test)]
+mod fire_authority_tests {
+    use super::*;
+    use crate::looping::types::{Cadence, LoopState, LoopStatus};
+    use std::collections::HashMap;
+
+    fn registry() -> crate::sync_primitives::Arc<crate::looping::LoopRegistry> {
+        crate::looping::global().unwrap_or_else(|| {
+            crate::looping::init_global(crate::sync_primitives::Arc::new(
+                crate::looping::LoopRegistry::default(),
+            ));
+            crate::looping::global().expect("loop registry installed")
+        })
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64)
+    }
+
+    /// The shape every tick is in at the gate: claimed (iteration spent),
+    /// confirmed (pending cleared).
+    fn fired_tick(session: &str) -> LoopState {
+        LoopState::new(
+            session,
+            "watch CI",
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            now_ms(),
+        )
+        .spent_iteration()
+        .with_pending_tick(None)
+    }
+
+    /// A refused loop is PAUSED, not stopped: every cap, tick count, prompt
+    /// and cadence survives, so an administrator reactivating the person
+    /// plus `loop(action='resume')` brings it back.
+    #[tokio::test]
+    async fn a_refused_loop_tick_pauses_the_loop_with_the_reason() {
+        let reg = registry();
+        let session = "fire-authority/refused-loop";
+        reg.put(fired_tick(session));
+
+        halt_on_refused_authority(
+            ContinuationKind::Loop { wake_ms: 0 },
+            session,
+            "principal deactivated",
+            None,
+        )
+        .await;
+
+        let state = reg.get(session).expect("still registered");
+        assert_eq!(state.status, LoopStatus::Paused);
+        assert!(
+            state
+                .stop_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("principal deactivated")),
+            "the reason must be on the row: {:?}",
+            state.stop_reason
+        );
+    }
+
+    /// R-a: "authority unknown" re-arms the SAME claimed tick — no iteration
+    /// spent, pending re-stamped inside the stale grace.
+    #[tokio::test]
+    async fn an_unknown_authority_rearms_the_same_tick_without_spending_one() {
+        let reg = registry();
+        let session = "fire-authority/unknown-loop";
+        reg.put(fired_tick(session));
+        let used_before = reg.get(session).unwrap().iterations_used;
+
+        let (delay_ms, wake_ms) = rearm_loop_after_busy(session, None, "authority unknown")
+            .await
+            .expect("an Active, confirmed tick must re-arm");
+
+        let state = reg.get(session).unwrap();
+        assert_eq!(state.status, LoopStatus::Active);
+        assert_eq!(
+            state.iterations_used, used_before,
+            "no second iteration may be spent"
+        );
+        assert_eq!(state.pending_tick_wake_ms, Some(wake_ms));
+        assert_eq!(delay_ms, 30_000);
+    }
+
+    /// Bob (member) continuing his own turn in Alice's (admin) room: the
+    /// policy map `carry_policy_metadata` hands a continuation.
+    fn bobs_room_continuation_policy() -> HashMap<String, String> {
+        let mut src = HashMap::new();
+        crate::scope::stamp_metadata(
+            &mut src,
+            &crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".into(),
+                scope: crate::scope::ScopeId::Project("p-room".into()),
+            },
+        );
+        src.insert(super::super::AUTHOR_USER_KEY.to_string(), "u-bob".into());
+        src.insert("platform".into(), "telegram".into());
+        carry_policy_metadata(&src)
+    }
+
+    fn users() -> crate::gateway::security::store::SecurityStore {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        let store = SecurityStore::in_memory().expect("in-memory security store");
+        store
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
+        store.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        store
+    }
+
+    /// Criterion §4 (controller ruling b): the Granted the resolver returned
+    /// is the one on the request the adapter executes. Bob's continuation
+    /// carried no `caller_role` (read as operator), so the only way it reaches
+    /// the adapter as `member` is through the resolved grant's ceiling. A
+    /// production swap to `Granted::legacy`, a stamp into a copy of the map,
+    /// or a request rebuilt after the gate all leave the role absent here.
+    #[test]
+    fn the_resolved_grant_reaches_the_continuation_request() {
+        let store = users();
+        let policy_meta = bobs_room_continuation_policy();
+        let authority = crate::scope::authority::resolve_with(
+            Some(&store),
+            &crate::gateway::fire_gate::subject_from_metadata(&policy_meta),
+        );
+        let request = continuation_request(
+            &crate::routing::session_key::SessionKey::main("fire-authority-admit"),
+            "keep going".to_string(),
+            policy_meta,
+            None,
+        );
+
+        let Ok(admitted) = admit_continuation(authority, request) else {
+            panic!("an active member's continuation must be admitted");
+        };
+
+        let meta = &admitted.metadata;
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+        assert_eq!(
+            meta.get(super::super::AUTHOR_USER_KEY).map(String::as_str),
+            Some("u-bob")
+        );
+        assert_eq!(
+            meta.get(super::super::UNATTENDED_KEY).map(String::as_str),
+            Some("true"),
+            "the gate stamps onto the continuation request, it does not rebuild it"
+        );
+    }
+
+    /// R-a at the continuation's own seam: "authority unknown" is a stop that
+    /// is NOT a refusal — the caller re-arms instead of halting.
+    #[test]
+    fn an_unknown_authority_admits_no_continuation_and_is_not_a_refusal() {
+        let request = continuation_request(
+            &crate::routing::session_key::SessionKey::main("fire-authority-unknown"),
+            "keep going".to_string(),
+            bobs_room_continuation_policy(),
+            None,
+        );
+        match admit_continuation(
+            crate::scope::authority::FireAuthority::Unknown("disk I/O error".into()),
+            request,
+        ) {
+            Err(ContinuationStop::Unknown(reason)) => assert!(reason.contains("disk I/O error")),
+            Err(ContinuationStop::Refused(reason)) => {
+                panic!("an unknown authority must not read as refused: {reason}")
+            }
+            Ok(_) => panic!("an unknown authority must not run the continuation"),
+        }
     }
 }

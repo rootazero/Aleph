@@ -2205,6 +2205,39 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     );
 }
 
+/// A refused goal continuation BLOCKS the goal with the reason as its note
+/// (the agent-miss arm's `block_if_active`), so `goal(action='list')` stops
+/// showing a live pursuit that can never run.
+#[tokio::test]
+async fn a_refused_goal_continuation_blocks_the_goal_with_the_reason() {
+    let store = goal_store_global();
+    let session = "agent:main:fire-authority-refused-goal";
+    store
+        .put(
+            &crate::goal::Goal::new(session, "obj", 0, 0)
+                .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+
+    super::execute::halt_on_refused_authority(
+        super::execute::ContinuationKind::Goal { wake_ms: 0 },
+        session,
+        "principal gone",
+        None,
+    )
+    .await;
+
+    let goal = store.get(session).unwrap().expect("row kept");
+    assert_eq!(goal.status, crate::goal::GoalStatus::Blocked);
+    assert!(
+        goal.note
+            .as_deref()
+            .is_some_and(|n| n.contains("principal gone")),
+        "the blocked note must name why: {:?}",
+        goal.note
+    );
+}
+
 // The goal store is process-global and `sweep_once` scans EVERY row in it, so
 // two tests that each park a goal into the sweep's claim shape will consume one
 // another's barrier: the sweep clears it and claims the continuation FIRST, and

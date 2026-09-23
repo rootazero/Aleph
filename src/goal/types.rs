@@ -187,6 +187,19 @@ pub struct Goal {
     /// `None`; `skip_serializing_if` → they round-trip unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<String>,
+    /// Round 11 (ruling R-b): the person who SET this goal — the original
+    /// requester, which in a project room differs from
+    /// [`Self::owner_user_id`] (the room's creator). Stamped once at
+    /// `goal(action='set')` from the creating run's room-author task-local
+    /// (`scope::current_room_author`, seeded from `AUTHOR_USER_KEY`) and
+    /// re-emitted into hook-less wake continuations
+    /// (`goal_wait::rehydrate_owner_scope`), where fire-time authority is
+    /// resolved against THIS person. Claim-pipeline-owned like `owner_user_id`.
+    /// `#[serde(default)]` → pre-round-11 payloads read `None` (authority then
+    /// falls back to the owner); `skip_serializing_if` → they round-trip
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_user_id: Option<String>,
 }
 
 /// One delegation session enrolled in a goal's shared token budget.
@@ -243,6 +256,7 @@ impl Goal {
             workspace: None,
             owner_user_id: None,
             scope_id: None,
+            author_user_id: None,
         }
     }
 
@@ -325,6 +339,16 @@ impl Goal {
     pub fn with_owner_scope(mut self, attr: Option<&crate::scope::ScopeAttribution>) -> Self {
         self.owner_user_id = attr.map(|a| a.owner_user_id.clone());
         self.scope_id = attr.map(|a| a.scope.render());
+        self
+    }
+
+    /// Stamp (or clear) the original requester — see [`Self::author_user_id`].
+    /// Separate from [`Self::with_owner_scope`] because the scope attribution
+    /// does not carry the speaker; the creation site holds both and passes
+    /// both. Does not bump `updated_at_ms` (config, not a lifecycle event).
+    #[must_use]
+    pub fn with_author(mut self, author: Option<String>) -> Self {
+        self.author_user_id = author;
         self
     }
 

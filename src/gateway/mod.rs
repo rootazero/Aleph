@@ -27,6 +27,7 @@ pub mod link;
 
 pub mod admin_api;
 pub mod announce_delivery;
+pub(crate) mod fire_gate;
 pub mod btw;
 pub mod credential_planner;
 pub mod event_bus;
