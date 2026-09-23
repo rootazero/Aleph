@@ -1039,9 +1039,11 @@ impl SessionEventObserver for MessageProjector {
 mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_projector::projector_sub::run_span::{collect_run_spans, RunSpan};
     use crate::orchestrator::dispatch::TokenBreakdown;
     use crate::session::events::{Durability, MessageContent, Retire, ToolOutput, TurnId};
     use crate::session::service::SessionError;
+    use crate::session::store::{RetiredAnchorKind, RetiredRunAnchor};
     use tempfile::tempdir;
 
     /// See `session::store::tests::the_accessor_exposes_this_handle_to_the_roster`

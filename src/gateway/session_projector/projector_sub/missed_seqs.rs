@@ -60,7 +60,7 @@ pub struct RepairReport {
 /// one since the last heal.
 #[derive(Default)]
 pub(crate) struct MissedSeqs {
-    seqs: HashMap<SessionId, BTreeSet<EventSeq>>,
+    pub(crate) seqs: HashMap<SessionId, BTreeSet<EventSeq>>,
     dirty: HashSet<SessionId>,
 }
 

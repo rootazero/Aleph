@@ -15,11 +15,17 @@
 // Imports needed by the test module below — these were originally at the
 // top of `handler.rs` and are now in `connection/mod.rs`. Re-importing
 // them here so `use super::*;` in the test module keeps resolving.
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::middleware::MiddlewareChain;
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::protocol::JsonRpcResponse;
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::rate_limiter::RateLimiter;
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use super::per_client_buffer::PerClientBuffer;
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use tokio::sync::broadcast;
 
 // Single re-export block — pulls every helper / orchestrator symbol the
@@ -27,6 +33,7 @@ use tokio::sync::broadcast;
 // canvas_asset_route.rs, metrics_endpoint.rs) and the test module's
 // `use super::*;` expect. The actual definitions live in
 // `super::connection::*`; see `connection/mod.rs`.
+#[allow(unused_imports)] // re-exports consumed by `mod tests` via `use super::*;`
 pub use super::connection::{
     connect_verdict, device_revoked_id, device_revoked_should_close, dispatch_with_caller_context,
     event_wire_form, extract_topic_and_data, forward_bus_to_client, is_token_rotated_frame,
@@ -177,6 +184,7 @@ mod device_revocation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     // ── Connect-time identity stamping (resolve_stamped_identity) ─────────
     // These pin the branch logic extracted verbatim from the connect
