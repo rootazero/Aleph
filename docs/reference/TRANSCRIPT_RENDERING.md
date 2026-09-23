@@ -13,6 +13,9 @@
 > **更新（2026-09-11）**：Phase B（TUI）已完成，`shared/ui_logic/src/transcript/` 不再是零调用者——
 > 见 §5.1 的已偿注记。Phase C（Panel）仍**没有建**。
 > 本文仍只描述 Phase A 那半边；B 侧的现状在 `docs/superpowers/plans/2026-09-11-cc-render-phase-b-tui.md`。
+> **更新（2026-09-23）**：§7 记录按迭代折叠的 Phase S（服务端单管道 + `ReasoningEmitted` + 共享核 Step/reducer），
+> 它的 spec 母本是 [`2026-09-23-stepwise-transcript-folding-design.md`](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)（裁定的真源），
+> 并且又开了一段**有日期的零消费者区间**（§7.3）。
 
 ---
 
@@ -30,6 +33,7 @@ Phase A 交付三样东西，各自独立可验证：
 | **呈现侧信道 Presentation side-channel** | 文件变更工具把一份结构化 `FileChange` 挂在结果上，**模型看不到**，两条腿把它送到人面前 | `shared/protocol/src/file_change.rs` · `src/builtin_tools/file_ops/diff.rs` · `src/exec/masker.rs` |
 | **两个读面 RPC** | `trace.tool_output`（一次工具调用的**未截断**输出，分页）· `context.breakdown`（这个会话**上一次真正发出去的** prompt 由什么占着） | `src/gateway/handlers/{tool_output,context_breakdown}.rs` · `src/thinker/prompt_size_registry.rs` |
 | **共享渲染核 shared core** | 折叠 / 摘要 / 分组 / diff 行 / markdown 前处理 / 上下文行——**data → data**，两端各自绘制 | `shared/ui_logic/src/transcript/`（11 个模块，60 条 `#[test]`） |
+| **按迭代折叠（Phase S）** | 单管道 · `ReasoningEmitted` · Step/reducer——见 §7 | `shared/ui_logic/src/transcript/{step,detail,reducer}` |
 
 **熵减的一半也在这一轮里**：`ToolResult` 的网关孪生（`src/gateway/event_emitter/types.rs`）曾是一个手写副本，
 带一个 `metadata: Option<Value>` 字段——**零写者**，`skip_serializing_if` 让它一次都没上过线。
@@ -376,6 +380,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 > 都有生产调用点。`context.breakdown` 的第一个客户端是 `/context` 覆盖层
 > （`interfaces/tui/src/tui/{app/context_view.rs,widgets/context_overlay.rs}`）。
 > **`trace.tool_output` 仍然零客户端**——下面这份测量对它依然成立。Panel（Phase C）未动。
+> **2026-09-23 起本节的形状复现在 §7.3**（reducer/step/detail 的零消费者区间）——同一形状、新的日期，不是同一笔债。
 > 保留原文是因为它是一次带谓词和 commit 的测量，不是一句会过期的断言（判据 §18）。
 
 **测量（2026-09-07，在本分支 HEAD 上）**：`transcript::` 在 `interfaces/` 里**一次都没有出现**；
@@ -527,3 +532,61 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 - **别调 `capability::census` 的那个数字**（§5.5）。
 - **数字带谓词**：本文里每一个计数都写了它数的是什么、以及测于哪个 commit。复述之前重数一遍，包括重数我的
   （附录 C.1）。
+
+---
+
+## 7. 按迭代折叠：Step · reducer · 单管道 · `ReasoningEmitted`（Phase S，2026-09-23）
+
+> English summary: Phase S of the stepwise-folding design
+> ([spec 2026-09-23](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md) — the rulings live there;
+> this section says where they landed). Server: the agent-trace mirror publishes on the run's own broadcast
+> channel (`FlowStreamEvent::Trace`) through a weak sender, so `agent_trace` frames take their `seq` from the
+> same serial drain as text and tool frames; the harness emits `ReasoningEmitted { iteration, text }` beside
+> `TextEmitted{Final}`, which `task_traces` persists and `trace.by_runs` replays unchanged; a subagent's
+> harness events stop at the subagent boundary. Shared core: `TranscriptEntry::Step` (one Think→Act
+> iteration), `step_headline` (thinking → text → tally), `DetailLevel`, and the pure `Transcript` reducer
+> whose live and replay legs meet in one `apply_trace`. **Nothing renders it yet** (dated debt, §7.3).
+> Numbered after §6 on purpose, so section numbers stay monotonic.
+
+### 7.1 交付了什么
+
+| 交付 | 是什么 | 落点 |
+|---|---|---|
+| **一条管道** | `AgentTraceEmitSink` 不再自起 mpsc + 排水任务；`on_trace` 同步 `send` `FlowStreamEvent::Trace` 进 run 自己的 broadcast 通道，drain 原地取 `seq`。sink 只持 `broadcast::WeakSender`、每个事件 upgrade 一次——它**从不拥有**通道。通道由 `run_loop/inner.rs` 用 `orchestrator::flow_event_channel()` 创建，强 sender 按值移进 `FlowRequest.event_tx`、初始 receiver 当场 drop；`dispatch` 有 `event_tx` 则 `subscribe`，无则自建 | `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/execution_engine/run_loop/inner.rs` |
+| **`ReasoningEmitted`** | `LoopTraceEvent` / `AgentTraceEvent` 各加一个变体（`kind = "reasoning_emitted"`）；`think.rs` 经私有的 `emit_reasoning` 在 `TextEmitted{Final}` 的两个生产点（正常 Think 轮、grace 轮）旁各发一次，只记**非空白**的 thinking；无人值守时 `mask_trace_event` 写前脱敏；`is_step_event` 放行上线；`task_traces` 落盘、`trace.by_runs` 原样回放。消费契约（一个迭代可以有两条，追加不替换）写在协议变体自己的 doc 上 | `src/harness/{trace.rs,agent/think.rs}` · `src/gateway/trace_protocol.rs` · `src/gateway/execution_engine/unattended_redacting_sink.rs` · `shared/protocol/src/events.rs` |
+| **子代理边界** | 子代理的 harness 事件不再进父 run 的 `agent_trace` 帧与 `task_traces` 行（子代理 harness 链终于 `NoopTraceSink`）；子代理的 `MeteringProvider` 仍握父链，`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下（`teams.usage` 与 doctor 读它们）。一个构造点决定两条链 | `src/gateway/execution_engine/run_trace_sinks.rs`（`RunTraceSinks::build` · `ChildTraceSinks`） |
+| **Step 与 reducer** | `StepEntry` · `step_headline` / `first_sentence` / `step_tally` · `DetailLevel` / `effective_open` · `Transcript::{apply_live, apply_replay, finish_replay}` 与 `Change`；`trace_result_to_wire` 从 TUI **搬**进 reducer（TUI 现在 import 它，不再各持一份） | `shared/ui_logic/src/transcript/{step.rs,detail.rs,reducer/}` |
+
+### 7.2 裁定住在 spec 里——这里只指路
+
+这一层有几条会在别处被「统一」掉的裁定。**正文只在 spec 里写一次**（判据 §1），这里给名字、守卫与指针：
+
+- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。
+- **`iteration: None` 永不被追认**、**记录是权威的**（`ReasoningEmitted` 之于 thinking、`TextEmitted{Final}` 之于文字）、**没有记录覆盖的流式文字是临时的** → spec §4 · §5.2。
+- **`RunSummary.loops` 是终局闸**，`NeedsResync` 之后客户端怎么做 → spec §5.1 · §9。
+
+### 7.3 🛑 零消费者区间（有日期的债）
+
+**测量（2026-09-23，在 `4cdbee4d2` 上）**，三条命令即谓词：
+
+```
+grep -rn -E "\bTranscript\b|transcript::Change|step_headline|first_sentence|step_tally|DetailLevel|effective_open|StepEntry" interfaces --include=*.rs
+grep -rn "TranscriptEntry::Step" interfaces --include=*.rs
+grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
+```
+
+- **reducer / step / detail**：`interfaces/` 里零调用者。第一条命令的两个命中都不是它们（TUI 的一句 `Transcript unavailable` 文案、Panel 自己 tool card 的一个 `effective_open` 测试名）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
+- **`TranscriptEntry::Step`**：TUI 里只有编译臂（`widgets/chat_area.rs` 两处、`app/tests.rs` 一处），没有生产者。
+- **`AgentTraceEvent::ReasoningEmitted`**：TUI `app/trace.rs::append_trace_debug_entry` 里是 `=> {}`（直播 thinking 已经经 `StreamEvent::Reasoning` 画过一次；重放与非流式轮次在 Phase T 之前**不显示** thinking）；Panel 聊天转录的 `chat/events.rs::apply_trace_event` 按 `kind` 分派，落进 `_ => {}` 静默忽略；Panel 的 agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点——那是调试面，不是转录。
+
+这是 spec §11 裁定的顺序（S → T → P）。
+**关闭条件**：Phase T（TUI）落地即关闭 reducer/step/detail 与 TUI 那一臂；Phase P 关闭 Panel 聊天那一臂。
+**若 T 与 P 都不发生**，reducer 是一棵带测试、没有消费者的树——届时删除它比重新推导便宜，前提是有人被告知它在这里（就是这一段）。
+
+### 7.4 这一层的不变量与没做的
+
+- **发送端寿命不变量**：gateway 在 `helpers.rs::run_dispatch_and_drain_classified` 的 `Ok(Err(_))` 臂（harness 没发 `Complete` 就返回——loop 之前失败，或 `runner_impl` 在 loop 之后读 session 出错）里**无界** `drain.await`，drain 只在 `RecvError::Closed` 时退出，而 `Closed` 要等**每一个强 sender** 都消失。强 sender 只有请求的 `event_tx`（按值移入，`dispatch` 返回即 drop）与 dispatch 交给 harness 任务的那一份；emit sink 只持弱半边，所以后台子代理的 metering 经父链握着 sink，也拖不住 `Closed`。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`：sink 的 `Arc` 活在 dispatch 之外，`Closed` 仍须到达）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。**重访条件**：任何代码把一个强 `broadcast::Sender<FlowStreamEvent>` 存进比 dispatch 活得久的结构，或在 `inner.rs` 创建通道的那个作用域里留一份 clone（那里的注释写着这条不变量）。
+- **顺序守卫是两条，缺一不可**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`，一次**不带 runtime** 的 `try_recv` 必须已经看到帧——确定性的那半）· G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`，真 `BroadcastCallback` + 真 sink 经真 drain 断言 `seq` 序——效果的那半，单独存在时可能靠一次让出碰巧变绿）。
+- **老 run**（2026-09-23 之前录的）在 `task_traces` 里没有 reasoning——冷加载时那些 step 的标题退到 text 首句 / 工具计数，不回 session 日志去猜（spec §13）。
+- **`TranscriptEntry::Reasoning` 还在**：它的删除归 Phase T，因为它的 TUI 渲染器要活到 Step 能被画出来为止（spec §12）。
+- **Phase S 交给 T / P 的清单**在 spec §7 末尾，不在这里重抄。
