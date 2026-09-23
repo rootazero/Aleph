@@ -580,7 +580,7 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 - **`TranscriptEntry::Step`**：TUI 里只有编译臂（`widgets/chat_area.rs` 两处、`app/tests.rs` 一处），没有生产者。
 - **`AgentTraceEvent::ReasoningEmitted`**：TUI `app/trace.rs::append_trace_debug_entry` 里是 `=> {}`（直播 thinking 已经经 `StreamEvent::Reasoning` 画过一次；重放与非流式轮次在 Phase T 之前**不显示** thinking）；Panel 聊天转录的 `chat/events.rs::apply_trace_event` 按 `kind` 分派，落进 `_ => {}` 静默忽略；Panel 的 agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点——那是调试面，不是转录。
 
-这是 spec §11 裁定的顺序（S → T → P）。
+这是 spec §11 裁定的顺序（S → T → P）；形状见 [FEATURE_LOCATOR 附录 E.7](FEATURE_LOCATOR.md)「一个共享核比它的渲染器早落一期」。
 **关闭条件**：Phase T（TUI）落地即关闭 reducer/step/detail 与 TUI 那一臂；Phase P 关闭 Panel 聊天那一臂。
 **若 T 与 P 都不发生**，reducer 是一棵带测试、没有消费者的树——届时删除它比重新推导便宜，前提是有人被告知它在这里（就是这一段）。
 
