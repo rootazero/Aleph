@@ -48,9 +48,9 @@ pub fn build_cron_executor_fn(
         let registry = Arc::clone(&agent_registry);
         let ch_cell = Arc::clone(&channel_registry_cell);
         let max_iter = default_max_iterations;
-        Box::pin(async move {
-            execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await
-        })
+        Box::pin(
+            async move { execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await },
+        )
     })
 }
 
@@ -102,8 +102,9 @@ fn fire_subject(snapshot: &JobSnapshot) -> FireSubject<'_> {
     }
 }
 
-/// Turn the fire-time verdict into either the attribution this fire runs
-/// under, or the result that is its fire-log record of why it did not run.
+/// Turn the fire-time verdict into either the run metadata this fire runs
+/// under (built from the granted attribution by [`build_cron_metadata`]), or
+/// the result that is its fire-log record of why it did not run.
 ///
 /// The deactivation sweep (`CronService::pause_all_owned_by`) stays the
 /// primary; this catches what it structurally cannot — a second admin
@@ -117,15 +118,24 @@ fn fire_subject(snapshot: &JobSnapshot) -> FireSubject<'_> {
 ///   fire as a transient error — the job stays enabled (phase3 backs off an
 ///   error, it never disables) and the next fire asks again. This flips the
 ///   pre-round-11 "a read error lets the job run", which let a walled
-///   owner's job run whenever the store hiccupped.
+///   owner's job run whenever the store hiccupped. The result is marked
+///   `unadmitted`, so phase3 fires no chain successor for work that never
+///   ran.
+///
+/// Returning the metadata rather than the `Granted` keeps the verdict and
+/// the stamp in one place a unit test can see: there is no second step in
+/// `execute_cron_job` that could stamp something other than the verdict.
 async fn admit_cron_fire(
     snapshot: &JobSnapshot,
     authority: FireAuthority,
     started_at: i64,
-) -> Result<Granted, ExecutionResult> {
+) -> Result<HashMap<String, String>, ExecutionResult> {
     match authority {
-        FireAuthority::Legacy => Ok(Granted::legacy(&fire_subject(snapshot))),
-        FireAuthority::Granted(granted) => Ok(granted),
+        FireAuthority::Legacy => Ok(build_cron_metadata(
+            snapshot,
+            &Granted::legacy(&fire_subject(snapshot)),
+        )),
+        FireAuthority::Granted(granted) => Ok(build_cron_metadata(snapshot, &granted)),
         refused @ FireAuthority::Refused(_) => {
             let reason = format!(
                 "{} ({}) — job disabled at fire time",
@@ -154,13 +164,16 @@ async fn admit_cron_fire(
         unknown @ FireAuthority::Unknown(_) => {
             let reason = unknown.reason().unwrap_or_default();
             warn!(job_id = %snapshot.id, %reason, "cron: fire-time authority unknown, skipping this fire");
-            Err(make_error_result(
-                started_at,
-                reason.clone(),
-                ErrorReason::Transient(reason),
-                RetryHint::transient(RetryCategory::ServerError),
-                snapshot.trigger_source,
-            ))
+            Err(ExecutionResult {
+                unadmitted: true,
+                ..make_error_result(
+                    started_at,
+                    reason.clone(),
+                    ErrorReason::Transient(reason),
+                    RetryHint::transient(RetryCategory::ServerError),
+                    snapshot.trigger_source,
+                )
+            })
         }
     }
 }
@@ -198,10 +211,10 @@ async fn execute_cron_job(
 
     // Fire-time authority (round-5 ④, generalised in round 11): re-ask the
     // users table at TRIGGER time through the one resolver every background
-    // executor shares. See `admit_cron_fire` for the three stopping arms.
+    // executor shares. See `admit_cron_fire` for the stopping arms.
     let authority = crate::scope::authority::resolve(&fire_subject(&snapshot));
-    let granted = match admit_cron_fire(&snapshot, authority, started_at).await {
-        Ok(granted) => granted,
+    let metadata = match admit_cron_fire(&snapshot, authority, started_at).await {
+        Ok(metadata) => metadata,
         Err(result) => return result,
     };
 
@@ -235,8 +248,6 @@ async fn execute_cron_job(
 
     // Build prompt with cron context injected
     let prompt = build_cron_prompt(&snapshot);
-
-    let metadata = build_cron_metadata(&snapshot, &granted);
 
     let timeout_secs = snapshot.timeout_ms.map(|ms| (ms / 1000).max(1) as u64);
 
@@ -409,6 +420,7 @@ async fn execute_cron_job(
                 retry_hint: delivery_failed.then(|| {
                     RetryHint::transient(crate::tasks::shared::retry_hint::RetryCategory::Network)
                 }),
+                unadmitted: false,
             }
         }
         Err(ExecutionError::Timeout) => {
@@ -425,6 +437,7 @@ async fn execute_cron_job(
                 delivery_status: None,
                 trigger_source: snapshot.trigger_source,
                 retry_hint: Some(classify("timeout")),
+                unadmitted: false,
             }
         }
         Err(ExecutionError::AgentBusy(msg)) => {
@@ -445,6 +458,7 @@ async fn execute_cron_job(
                 delivery_status: None,
                 trigger_source: snapshot.trigger_source,
                 retry_hint: Some(hint),
+                unadmitted: false,
             }
         }
         Err(e) => {
@@ -736,6 +750,7 @@ fn make_error_result(
         delivery_status: None,
         trigger_source,
         retry_hint: Some(retry_hint),
+        unadmitted: false,
     }
 }
 
@@ -829,8 +844,12 @@ mod tests {
     fn users() -> crate::gateway::security::store::SecurityStore {
         use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
         let store = SecurityStore::in_memory().unwrap();
-        store.create_user("u-alice", "Alice", UserRole::Member).unwrap();
-        store.create_user("u-walled", "Walled", UserRole::Member).unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        store
+            .create_user("u-walled", "Walled", UserRole::Member)
+            .unwrap();
         store
             .update_user("u-walled", None, None, Some(UserStatus::Deactivated))
             .unwrap();
@@ -853,15 +872,22 @@ mod tests {
     #[tokio::test]
     async fn a_walled_owners_fire_is_refused_permanently() {
         let snapshot = owned_snapshot("u-walled");
-        let authority = crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
+        let authority =
+            crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
         let result = admit_cron_fire(&snapshot, authority, 0)
             .await
             .expect_err("a walled owner must not fire");
         assert_eq!(result.status, RunStatus::Error);
-        assert!(matches!(result.error_reason, Some(ErrorReason::Permanent(_))));
+        assert!(matches!(
+            result.error_reason,
+            Some(ErrorReason::Permanent(_))
+        ));
         assert!(!result.retry_hint.expect("hint").retryable);
         let text = result.error.expect("fire log text");
-        assert!(text.contains("principal deactivated") && text.contains("u-walled"), "{text}");
+        assert!(
+            text.contains("principal deactivated") && text.contains("u-walled"),
+            "{text}"
+        );
     }
 
     /// R-a: a users-store READ error skips this fire as a TRANSIENT error —
@@ -877,12 +903,23 @@ mod tests {
             .execute("DROP TABLE users", [])
             .unwrap();
         let snapshot = owned_snapshot("u-alice");
-        let authority = crate::scope::authority::resolve_with(Some(&store), &fire_subject(&snapshot));
+        let authority =
+            crate::scope::authority::resolve_with(Some(&store), &fire_subject(&snapshot));
         let result = admit_cron_fire(&snapshot, authority, 0)
             .await
             .expect_err("an unknown authority must not run the job");
-        assert!(matches!(result.error_reason, Some(ErrorReason::Transient(_))));
-        assert!(result.retry_hint.expect("hint").retryable, "must stay on the backoff ladder");
+        assert!(matches!(
+            result.error_reason,
+            Some(ErrorReason::Transient(_))
+        ));
+        assert!(
+            result.retry_hint.expect("hint").retryable,
+            "must stay on the backoff ladder"
+        );
+        assert!(
+            result.unadmitted,
+            "phase3 must fire no chain successor for it"
+        );
         assert!(result.error.unwrap().starts_with("authority unknown: "));
     }
 
@@ -891,10 +928,15 @@ mod tests {
     #[tokio::test]
     async fn a_member_owners_job_runs_with_a_member_ceiling() {
         let snapshot = owned_snapshot("u-alice");
-        let authority = crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
-        let granted = admit_cron_fire(&snapshot, authority, 0).await.expect("active owner fires");
-        let metadata = build_cron_metadata(&snapshot, &granted);
-        assert_eq!(metadata.get("caller_role").map(String::as_str), Some("member"));
+        let authority =
+            crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
+        let metadata = admit_cron_fire(&snapshot, authority, 0)
+            .await
+            .expect("active owner fires");
+        assert_eq!(
+            metadata.get("caller_role").map(String::as_str),
+            Some("member")
+        );
         assert_eq!(
             crate::spend::principal_from_metadata(&metadata),
             crate::spend::Principal::User("u-alice".to_string())
@@ -905,14 +947,40 @@ mod tests {
     #[tokio::test]
     async fn an_admin_owners_job_carries_no_caller_role() {
         let snapshot = owned_snapshot(crate::gateway::security::store::OWNER_USER_ID);
-        let authority = crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
-        let granted = admit_cron_fire(&snapshot, authority, 0).await.expect("admin fires");
-        assert!(!build_cron_metadata(&snapshot, &granted).contains_key("caller_role"));
+        let authority =
+            crate::scope::authority::resolve_with(Some(&users()), &fire_subject(&snapshot));
+        let metadata = admit_cron_fire(&snapshot, authority, 0)
+            .await
+            .expect("admin fires");
+        assert!(!metadata.contains_key("caller_role"));
     }
 
-    /// `build_cron_metadata` rehydrates owner/scope from the job snapshot's
-    /// persisted fields — the fire path has no completing run to inherit
-    /// metadata from, so it must reconstruct attribution itself.
+    /// `Legacy` through the real admission path: an owner-less job gets
+    /// exactly the metadata it got before the resolver existed — the
+    /// traceability and route keys, no scope keys, no caller_role.
+    #[tokio::test]
+    async fn a_legacy_fire_keeps_the_pre_resolver_metadata() {
+        let snapshot = make_test_snapshot();
+        let metadata = admit_cron_fire(&snapshot, FireAuthority::Legacy, 0)
+            .await
+            .expect("a legacy job fires");
+        let expected: HashMap<String, String> = [
+            ("cron_job_id", "test-job-1"),
+            ("trigger_source", TriggerSource::Schedule.as_str()),
+            ("source_channel_id", "discord:general"),
+            ("channel_id", "discord:general"),
+            ("conversation_id", "123456"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(metadata, expected);
+    }
+
+    /// `build_cron_metadata` stamps owner/scope from the `Granted` it is
+    /// handed (here the legacy one, i.e. the snapshot's persisted pair) —
+    /// the fire path has no completing run to inherit metadata from, so the
+    /// attribution comes from the fire-time verdict.
     #[test]
     fn owned_snapshot_emits_scope_metadata_keys() {
         let mut snapshot = make_test_snapshot();

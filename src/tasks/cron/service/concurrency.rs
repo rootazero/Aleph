@@ -218,9 +218,16 @@ pub async fn phase3_writeback<C: Clock>(
 
         // Resolve the chain successor for this outcome. Triggering needs
         // `&mut store`, so collect here and apply after the `job` borrow ends.
-        let chain_target = match result.status {
-            RunStatus::Ok | RunStatus::Skipped => job.next_job_id_on_success.clone(),
-            RunStatus::Error | RunStatus::Timeout => job.next_job_id_on_failure.clone(),
+        // An unadmitted fire (authority unknown) never ran the job's work, so
+        // it has no outcome to chain on: neither successor fires. It still
+        // counted as an error above, so the backoff ladder applies.
+        let chain_target = if result.unadmitted {
+            None
+        } else {
+            match result.status {
+                RunStatus::Ok | RunStatus::Skipped => job.next_job_id_on_success.clone(),
+                RunStatus::Error | RunStatus::Timeout => job.next_job_id_on_failure.clone(),
+            }
         };
         if let Some(target) = chain_target {
             chain_triggers.push((job_id.clone(), target));
@@ -523,6 +530,7 @@ mod tests {
             delivery_status: None,
             trigger_source: TriggerSource::Schedule,
             retry_hint,
+            unadmitted: false,
         }
     }
 
@@ -751,6 +759,53 @@ mod tests {
             b.state.next_run_at_ms,
             Some(9_999_999_999),
             "Error result must not fire the on_success chain"
+        );
+    }
+
+    /// An unadmitted fire (fire-time authority unknown) never ran the job's
+    /// work: NEITHER chain successor fires, but it still counts as an error
+    /// so the backoff ladder applies.
+    #[tokio::test]
+    async fn phase3_unadmitted_error_fires_no_chain_but_still_counts() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_failure = Some("job-b".to_string());
+            job_a.next_job_id_on_success = Some("job-c".to_string());
+            add_job(&mut guard, job_a, &clock);
+            add_job(&mut guard, make_test_job("job-b"), &clock);
+            add_job(&mut guard, make_test_job("job-c"), &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            for id in ["job-b", "job-c"] {
+                guard.get_job_mut(id).unwrap().state.next_run_at_ms = Some(9_999_999_999);
+            }
+            guard.persist().unwrap();
+        }
+
+        let unadmitted = ExecutionResult {
+            unadmitted: true,
+            ..make_execution_result(RunStatus::Error)
+        };
+        let results = vec![("job-a".to_string(), unadmitted)];
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
+
+        let guard = store.lock().await;
+        for id in ["job-b", "job-c"] {
+            assert_eq!(
+                guard.get_job(id).unwrap().state.next_run_at_ms,
+                Some(9_999_999_999),
+                "an unadmitted fire must not trigger {id}"
+            );
+        }
+        assert_eq!(
+            guard.get_job("job-a").unwrap().state.consecutive_errors,
+            1,
+            "an unadmitted fire still counts as an error (backoff applies)"
         );
     }
 

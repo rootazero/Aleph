@@ -143,9 +143,7 @@ impl FireAuthority {
     #[must_use]
     pub fn reason(&self) -> Option<String> {
         match self {
-            Self::Refused(RefusalReason::Deactivated) => {
-                Some("principal deactivated".to_string())
-            }
+            Self::Refused(RefusalReason::Deactivated) => Some("principal deactivated".to_string()),
             Self::Refused(RefusalReason::Gone) => Some("principal gone".to_string()),
             Self::Unknown(err) => Some(format!("authority unknown: {err}")),
             Self::Legacy | Self::Granted(_) => None,
@@ -211,7 +209,8 @@ mod tests {
     fn store() -> SecurityStore {
         let s = SecurityStore::in_memory().unwrap();
         s.create_user("u-alice", "Alice", UserRole::Member).unwrap();
-        s.create_user("u-walled", "Walled", UserRole::Member).unwrap();
+        s.create_user("u-walled", "Walled", UserRole::Member)
+            .unwrap();
         s.update_user("u-walled", None, None, Some(UserStatus::Deactivated))
             .unwrap();
         s
@@ -381,8 +380,15 @@ mod tests {
             ..owned("u-alice", "personal:u-alice")
         };
         let g = granted(resolve_with(Some(&s), &subject));
-        assert_eq!(g.role_ceiling, Some("member"), "u-alice (a member) was checked");
-        assert_eq!(g.author, None, "an empty author must not be carried back as \"\"");
+        assert_eq!(
+            g.role_ceiling,
+            Some("member"),
+            "u-alice (a member) was checked"
+        );
+        assert_eq!(
+            g.author, None,
+            "an empty author must not be carried back as \"\""
+        );
         let mut m = HashMap::new();
         g.stamp(&mut m);
         assert!(

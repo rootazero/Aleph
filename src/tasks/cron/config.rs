@@ -691,6 +691,12 @@ pub struct ExecutionResult {
     /// failure (the writeback path uses this to stop scheduling further retries and
     /// to bypass the failure-alert cooldown).
     pub retry_hint: Option<crate::tasks::shared::retry_hint::RetryHint>,
+    /// In-process only (this struct is not persisted): the fire was never
+    /// admitted — the fire-time authority could not be read — so the job's
+    /// work did not run. Phase 3 still counts it as an error (the backoff
+    /// ladder applies) but fires NEITHER chain successor: a failure chain
+    /// reacts to the job's work failing, and there was no work.
+    pub unadmitted: bool,
 }
 
 // ── CronJobView ─────────────────────────────────────────────────────────
