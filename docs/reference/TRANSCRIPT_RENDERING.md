@@ -32,8 +32,9 @@ Phase A 交付三样东西，各自独立可验证：
 |---|---|---|
 | **呈现侧信道 Presentation side-channel** | 文件变更工具把一份结构化 `FileChange` 挂在结果上，**模型看不到**，两条腿把它送到人面前 | `shared/protocol/src/file_change.rs` · `src/builtin_tools/file_ops/diff.rs` · `src/exec/masker.rs` |
 | **两个读面 RPC** | `trace.tool_output`（一次工具调用的**未截断**输出，分页）· `context.breakdown`（这个会话**上一次真正发出去的** prompt 由什么占着） | `src/gateway/handlers/{tool_output,context_breakdown}.rs` · `src/thinker/prompt_size_registry.rs` |
-| **共享渲染核 shared core** | 折叠 / 摘要 / 分组 / diff 行 / markdown 前处理 / 上下文行——**data → data**，两端各自绘制 | `shared/ui_logic/src/transcript/`（11 个模块，60 条 `#[test]`） |
-| **按迭代折叠（Phase S）** | 单管道 · `ReasoningEmitted` · Step/reducer——见 §7 | `shared/ui_logic/src/transcript/{step,detail,reducer}` |
+| **共享渲染核 shared core** | 折叠 / 摘要 / 分组 / diff 行 / markdown 前处理 / 上下文行——**data → data**，两端各自绘制 | `shared/ui_logic/src/transcript/`（Phase A 的模块，§4 逐个列出） |
+
+**按迭代折叠（Phase S，2026-09-23）** 在同一目录加了 `step` / `detail` / `reducer`，并把服务端的 trace 镜像改成单管道、加了 `ReasoningEmitted`——见 §7。
 
 **熵减的一半也在这一轮里**：`ToolResult` 的网关孪生（`src/gateway/event_emitter/types.rs`）曾是一个手写副本，
 带一个 `metadata: Option<Value>` 字段——**零写者**，`skip_serializing_if` 让它一次都没上过线。
@@ -575,7 +576,7 @@ grep -rn "TranscriptEntry::Step" interfaces --include=*.rs
 grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 ```
 
-- **reducer / step / detail**：`interfaces/` 里零调用者。第一条命令的两个命中都不是它们（TUI 的一句 `Transcript unavailable` 文案、Panel 自己 tool card 的一个 `effective_open` 测试名）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
+- **reducer / step / detail**：`interfaces/` 里零调用者。谓词是：第一条命令的每一个命中都是注释、一句 UI 文案，或 Panel 自己 tool card 的 `effective_open` 测试——**没有一个是 reducer / step / detail 的调用者**，所以零消费者区间成立（这里刻意不写命中数：它随无关的注释变，复核时重跑命令、按这条谓词逐条读）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
 - **`TranscriptEntry::Step`**：TUI 里只有编译臂（`widgets/chat_area.rs` 两处、`app/tests.rs` 一处），没有生产者。
 - **`AgentTraceEvent::ReasoningEmitted`**：TUI `app/trace.rs::append_trace_debug_entry` 里是 `=> {}`（直播 thinking 已经经 `StreamEvent::Reasoning` 画过一次；重放与非流式轮次在 Phase T 之前**不显示** thinking）；Panel 聊天转录的 `chat/events.rs::apply_trace_event` 按 `kind` 分派，落进 `_ => {}` 静默忽略；Panel 的 agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点——那是调试面，不是转录。
 
