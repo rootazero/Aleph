@@ -181,7 +181,9 @@ pub fn resolve_with(users: Option<&SecurityStore>, subject: &FireSubject<'_>) ->
                 && record.role == UserRole::Member;
             FireAuthority::Granted(Granted {
                 scope: ScopeAttribution::from_persisted(subject.owner, subject.scope),
-                author: subject.author.map(str::to_string),
+                // The FILTERED author: an empty `AUTHOR_USER_KEY` was read as
+                // absent above, so it must not be stamped back as `""`.
+                author: author.map(str::to_string),
                 role_ceiling: capped.then(|| UserRole::Member.wire_role()),
                 carried_role: subject.carried_role.map(str::to_string),
             })
@@ -380,6 +382,13 @@ mod tests {
         };
         let g = granted(resolve_with(Some(&s), &subject));
         assert_eq!(g.role_ceiling, Some("member"), "u-alice (a member) was checked");
+        assert_eq!(g.author, None, "an empty author must not be carried back as \"\"");
+        let mut m = HashMap::new();
+        g.stamp(&mut m);
+        assert!(
+            !m.contains_key(AUTHOR_USER_KEY),
+            "stamp() writes no AUTHOR_USER_KEY for an absent author: {m:?}"
+        );
         let walled = FireSubject {
             author: Some(""),
             ..owned("u-walled", "personal:u-walled")
