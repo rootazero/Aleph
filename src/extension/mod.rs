@@ -23,6 +23,7 @@
 //!                       (unified hooks)
 //! ```
 
+pub mod activation_gate;
 pub mod hooks;
 mod lifecycle;
 mod loader;
@@ -45,7 +46,7 @@ pub mod plugin_state;
 pub mod plugin_trust;
 pub mod plugin_vars;
 mod projection;
-pub mod readiness;
+pub(crate) mod readiness;
 pub mod registry;
 mod service_manager;
 mod service_ops;

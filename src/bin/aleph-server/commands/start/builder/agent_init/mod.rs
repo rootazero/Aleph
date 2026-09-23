@@ -625,6 +625,48 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 if let Err(e) = ext_manager.ensure_loaded().await {
                     tracing::warn!("Failed to load extensions for plugin tools: {}", e);
                 }
+                // Activation gate (dsh `assertEntriesActivated`, evidence
+                // scan-dsh-cordis.md §5.1): every plugin has been mounted
+                // with every handle present (P1.8), so a plugin still
+                // `Pending` once its servers have answered is waiting on
+                // something that is not coming. `activation_settled` is the
+                // watchers' own completion — no timer. Spawned so a slow
+                // handshake never holds boot; the gate reads status and
+                // never writes it. Daemon posture: one line per plugin + the
+                // `extension/plugins-activated` doctor check; QA profiles set
+                // ALEPH_ACTIVATION_GATE=fatal.
+                let gate_manager = std::sync::Arc::clone(ext_manager);
+                tokio::spawn(async move {
+                    use alephcore::extension::activation_gate::{
+                        assess, posture_from_env, GatePosture,
+                    };
+                    gate_manager.activation_settled().await;
+                    let gate_registry = gate_manager.get_plugin_registry().await;
+                    let report = assess(&gate_registry);
+                    if report.is_clean() {
+                        tracing::info!("activation gate: every plugin reached a terminal status");
+                        return;
+                    }
+                    let posture =
+                        posture_from_env(std::env::var("ALEPH_ACTIVATION_GATE").ok().as_deref());
+                    for line in report.render_lines() {
+                        match posture {
+                            GatePosture::Log => {
+                                tracing::warn!(gate = "extension/plugins-activated", "{line}")
+                            }
+                            GatePosture::Fatal => {
+                                tracing::error!(gate = "extension/plugins-activated", "{line}")
+                            }
+                        }
+                    }
+                    if posture == GatePosture::Fatal {
+                        tracing::error!(
+                            count = report.non_terminal.len(),
+                            "ALEPH_ACTIVATION_GATE=fatal: plugins did not activate; exiting"
+                        );
+                        std::process::exit(78);
+                    }
+                });
                 let registry = ext_manager.get_plugin_registry().await;
                 for plugin in registry.list_plugins() {
                     if !plugin.status.is_active() {

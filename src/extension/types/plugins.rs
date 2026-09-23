@@ -212,6 +212,19 @@ impl PluginStatus {
         matches!(self, Self::Loaded | Self::Pending { .. })
     }
 
+    /// Whether this is a state the plugin can stay in: everything except
+    /// [`Self::Pending`]. Written as an exhaustive `match` with no wildcard
+    /// so that a new variant is a compile error HERE, where a human decides
+    /// whether it is terminal — not a silent "true". The activation gate and
+    /// the doctor check derive their "still waiting" set from this.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        match self {
+            Self::Loaded | Self::Disabled | Self::Error(_) | Self::Blocked(_) => true,
+            Self::Pending { .. } => false,
+        }
+    }
+
     /// Stable lowercase label for client display / serialization — the wire
     /// vocabulary of [`aleph_protocol::plugins::PluginRuntimeStatus`].
     #[must_use]

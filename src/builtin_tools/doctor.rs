@@ -120,7 +120,10 @@ impl DoctorTool {
             .with_projection_holes_check()
             // Same two handles, the other question: does the log contradict
             // itself. `aleph resume` names this check to the operator by id.
-            .with_session_log_check())
+            .with_session_log_check()
+            // The doctor face of the boot activation gate: which mounted
+            // plugins never reached a terminal status.
+            .with_plugins_activated_check())
     }
 }
 
@@ -280,15 +283,16 @@ mod tests {
     /// distinguish from "the builder call was deleted", and the state the
     /// operator must never be shown as a complete transcript.
     #[tokio::test]
-    async fn the_daemon_path_still_reports_the_two_log_backed_checks() {
+    async fn the_daemon_path_still_reports_the_three_handle_backed_checks() {
         use crate::diagnostics::check::HealthCheck;
         let _home = IsolatedAlephHome::new();
         let holes = crate::diagnostics::checks::ProjectionHolesCheck::new(None, None).id();
         let log = crate::diagnostics::checks::SessionLogCheck::new(None, None).id();
+        let activated = crate::diagnostics::checks::PluginsActivatedCheck::from_records(None).id();
 
         let out = DoctorTool::default().call(inspect_args()).await.unwrap();
         let seen: Vec<&str> = out.report.findings.iter().map(|f| f.check_id).collect();
-        for id in [holes, log] {
+        for id in [holes, log, activated] {
             assert!(
                 seen.contains(&id),
                 "`{id}` is appended by the doctor builtin's own engine build, \
