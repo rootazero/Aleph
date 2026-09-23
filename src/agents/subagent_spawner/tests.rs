@@ -1452,12 +1452,8 @@ mod tests {
         let probe =
             crate::gateway::execution_engine::PersistenceProbe::new(db.clone(), "parent-run");
         let (tx, _rx) = crate::orchestrator::flow_event_channel();
-        let sinks = crate::gateway::execution_engine::RunTraceSinks::build(
-            probe.sink(),
-            None,
-            &tx,
-            false,
-        );
+        let sinks =
+            crate::gateway::execution_engine::RunTraceSinks::build(probe.sink(), None, &tx, false);
         let (harness, accounting) = sinks.child_sinks().into_parts();
 
         let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
