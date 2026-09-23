@@ -128,3 +128,6 @@ User instruction: "继续，等 fix wave 跑完就合并" — once the fix wave 
 ## FR-1 addendum (2026-09-24, after the wave's report)
 - T2B-SPLIT's line "live usage frames … exactly as today" is SUPERSEDED by FR-1 H2: live delivery holds only while the parent run's strong senders are alive; afterwards a background child's accounting frames are persisted only. The ledger is append-only; the earlier line stays as history.
 - Citation discipline: the docs cite ruling ids from the committed ledger (`docs/superpowers/plans/2026-09-23-stepwise-fold-phase-s-rulings.md`), never review-finding labels ("终审 H2/M3" is session narration). `final-review.md` §8's own FR numbering is the reviewer's; the ledger's ids are the ones the docs use. The wrap-up refresh commit fixes the spec's citations accordingly.
+
+## Errata (2026-09-24)
+- Line 75 (T910-F1) says the record replaces `text[text_record_len..]`. No identifier `text_record_len` ever existed (`git log -S text_record_len -- src shared` is empty). The offset is the text cursor's `record_len`: `RunState.text` is a `RecordCursor` (`shared/ui_logic/src/transcript/reducer/{mod.rs,step_ops.rs}`), and a record replaces what follows `record_len`. `RunState.text_recorded` is a separate, run-scoped bool: whether any step of this run holds a `TextEmitted` record (ruling T910-N1b). The ledger is append-only; line 75 stays as written.
