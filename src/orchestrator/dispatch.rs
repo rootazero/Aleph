@@ -80,6 +80,15 @@ pub enum FlowStreamEvent {
     },
     /// Safety gate blocked the turn. `reason` is for i18n formatting.
     SafetyBlock { reason: String },
+    /// A step-relevant harness trace event, mirrored onto THIS channel so it
+    /// takes its `seq` from the same serial drain as the text / thinking /
+    /// tool frames around it. Carried as the protocol type: the sink filters
+    /// (`is_step_event`) and converts before sending, so the drain only
+    /// stamps `run_id` + `seq`. Until 2026-09-23 these frames rode a separate
+    /// `mpsc` + spawned task and could be sequenced after the `ResponseChunk`s
+    /// of the iteration they open — the race the Panel's `begin_step` patched
+    /// around.
+    Trace(aleph_protocol::AgentTraceEvent),
     /// Terminal event — carries the complete `FlowOutcome`. Always last.
     Complete(FlowOutcome),
 }
@@ -1217,9 +1226,7 @@ impl Orchestrator {
                     tracing::error!(
                         "harness task panicked; surfacing as FlowError::Internal: {msg}"
                     );
-                    Err(FlowError::Internal(format!(
-                        "harness task panicked: {msg}"
-                    )))
+                    Err(FlowError::Internal(format!("harness task panicked: {msg}")))
                 }
             };
 

@@ -231,6 +231,19 @@ pub(crate) async fn emit_flow_event(
                 .await?;
         }
 
+        FlowStreamEvent::Trace(event) => {
+            // Same counter, same task as every other frame of this run: that
+            // is the whole reason the trace mirror moved onto this channel.
+            let seq = emitter.next_seq();
+            emitter
+                .emit(StreamEvent::AgentTrace {
+                    run_id: run_id.to_string(),
+                    seq,
+                    event,
+                })
+                .await?;
+        }
+
         FlowStreamEvent::Complete(outcome) => {
             // One implementation, two callers: the live drain in
             // `helpers.rs` takes the two halves separately so it can decide
@@ -641,6 +654,55 @@ mod tests {
                 assert_eq!(run_id, "run-1");
             }
             other => panic!("expected ResponseChunk, got {other:?}"),
+        }
+    }
+
+    /// A trace event on the flow channel becomes an `AgentTrace` frame with
+    /// the run's NEXT seq — the same counter the surrounding text/tool frames
+    /// draw from. Before this arm existed, trace frames took their seq on a
+    /// separate task and could land after the text they logically preceded.
+    #[tokio::test]
+    async fn trace_goes_to_emitter_agent_trace_with_the_next_seq() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::Delta("before".to_string()),
+            &emitter,
+            "run-1",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+        emit_flow_event(
+            FlowStreamEvent::Trace(aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 3 }),
+            &emitter,
+            "run-1",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+
+        let events = inner.events().await;
+        assert_eq!(events.len(), 2, "one chunk, one trace frame: {events:?}");
+        let chunk_seq = match &events[0] {
+            StreamEvent::ResponseChunk { seq, .. } => *seq,
+            other => panic!("expected ResponseChunk first, got {other:?}"),
+        };
+        match &events[1] {
+            StreamEvent::AgentTrace {
+                run_id,
+                seq,
+                event: aleph_protocol::AgentTraceEvent::TurnStarted { iteration },
+            } => {
+                assert_eq!(run_id, "run-1");
+                assert_eq!(*iteration, 3);
+                assert!(
+                    *seq > chunk_seq,
+                    "trace seq {seq} must follow the chunk's {chunk_seq}"
+                );
+            }
+            other => panic!("expected AgentTrace(TurnStarted), got {other:?}"),
         }
     }
 
