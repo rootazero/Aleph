@@ -26,12 +26,12 @@
 | 事实 | 锚点 | 对设计的意义 |
 |---|---|---|
 | Provider 侧的 thinking 流**已经是摘要**：OpenAI Responses 请求 `summary: "auto"`，`reasoning_summary_text.delta` 与原始 `reasoning_text.delta`（gpt-oss）**都**映射为 `ProviderDelta::ThinkingDelta`；Anthropic `ThinkingBlock.display` 从未被设置 ⇒ API 默认 `summarized` | `src/providers/responses/shared.rs:220` · `src/providers/protocols/openai_responses/tests.rs:616,650` · `src/providers/anthropic/types.rs:92-100` | 折叠正文 = provider 摘要，**wire 上分不出摘要与原始 CoT**；一行标题仍要确定性截首句（§4） |
-| 每次 Think 迭代把 `{text, tool_use blocks, thinking, thinking_signature, usage}` 写进 session 事件日志（SSOT） | `src/harness/agent/think.rs:903-915` | 思考**已持久化**；缺的是读面 |
-| `messages` 投影只写 `content.text`，`thinking: None`；`chat.history` 行 = role/content/timestamp/metadata；`trace.by_runs` 重放里没有 reasoning | `src/gateway/session_projector.rs:731-750` · `src/gateway/handlers/session/db_handlers/types.rs:14-24` · `src/gateway/handlers/trace_replay.rs` | 重放读腿要补 reasoning + 迭代号（§5） |
+| 每次 Think 迭代把 `{text, tool_use blocks, thinking, thinking_signature, usage}` 写进 session 事件日志（SSOT）——**但** `turn_id` 是整个用户轮的 uuid，不是迭代号；一次没有工具调用的迭代（最终回答、grace turn）在日志里**没有** join 键能对回某一步 | `src/harness/agent/think.rs:903-915` · `src/harness/agent.rs:988-998`（`current_turn_id`） | session 日志**不能**当按迭代重放的来源（2026-09-23 修正；原稿写"一次迭代一条事件，不用猜"，前提为假） |
+| `trace.by_runs` 回放的是 `task_traces` 表（每行一个 `AgentTraceEvent`），文字行 `TextEmitted{iteration}` 与工具行**已经带迭代号**；session 日志只被读来补 diff presentation。缺的**只有 reasoning**：`LoopTraceEvent` 没有 thinking 变体 | `src/gateway/handlers/trace_replay.rs:129-242,324-378` · `src/harness/trace.rs:24-177` | 重放腿要补的是一个 trace 变体，不是一条读腿（§5.2） |
 | 投影**每次迭代写一行** assistant 行 | `session_projector.rs:733` 每条 `AssistantMessage` 事件一行 | 冷加载时 history 与 replay 会双份，须按 run 去重（§8） |
 | 实时帧 `Reasoning{run_id,seq,content,is_complete}` / `ResponseChunk{…, full_text, chunk_index, is_final}` **不带迭代号** | `src/gateway/event_emitter/types.rs:96-101,140-149` | 归属只能靠 `TurnStarted` 的顺序 |
 | `TurnStarted{iteration}` 走 `AgentTraceEmitSink`：`try_send` 进 mpsc(256) + `tokio::spawn` 排水，`seq` 在排到时才分配；文字 / 思考 / 工具帧走 `harness_bridge/callback.rs` 的**同步** `broadcast::Sender<FlowStreamEvent>`（容量 `CHANNEL_BUFFER_SIZE = 256`） | `src/gateway/execution_engine/agent_trace_emit_sink.rs:92-118` · `src/orchestrator/harness_bridge/callback.rs:151,155` · `src/orchestrator/dispatch.rs:589,1048` | 竞态是**结构性**的（两条管道）；Panel `begin_step` 的注释就是在描述它 |
-| 两个入口都在 orchestrator / gateway 侧；`src/harness/` 12 文件一个都不需要碰 | `src/harness/callback.rs:21-28` 只定义 `on_delta/on_reasoning`，实现在 `orchestrator/harness_bridge/callback.rs` | R10 棘轮零改动 |
+| 竞态修法的两个入口都在 orchestrator / gateway 侧（`callback.rs:21-28` 只定义 `on_delta/on_reasoning`，实现在 `orchestrator/harness_bridge/callback.rs`）；但 thinking **从未进过 trace 流**，让重放腿拿到按迭代的 reasoning 必须在 harness 加一个变体 + 两处 emit | `src/harness/trace.rs` · `src/harness/agent/think.rs:896,1335`（`TextEmitted` 的两个生产点） | R10 棘轮：按实测抬 `CEILING`，commit 里答三问（裁定 R9） |
 | `RunSummary.loops: u32` 已在 wire 上，= `outcome.iterations` | `shared/protocol/src/events.rs:804` · `src/gateway/execution_engine/event_drain.rs:437` | 终局闸的现成事实（§5） |
 | TUI：thinking 非 `/verbose` 时**整段不显示**（不是折叠）；`TranscriptEntry::Reasoning{collapsed}` 的 `collapsed` 字段**零读者**；`/verbose` 与 `/tools off\|new\|all\|verbose` 两根旋钮互不相干；`TurnStarted/TurnCompleted/VerifierVeto/ReactiveCompaction/CacheHealth/MoA*/ToolSummary` 全部经 `append_reasoning_entry` 变成"reasoning"条目 | `interfaces/tui/src/tui/widgets/chat_area.rs:789-793` · `app/trace.rs:56-82,303-320` · `app/mod.rs:953,1183` · `app/events.rs:421-424` · `commands.rs:348` | §7 的删除清单与 notes 去向 |
 | Panel：`ReasoningPanel` 是挂在消息列表尾部的**单 run** 信号（`reasoning_text`），刷新即丢；`begin_step(iteration)` 已把上一气泡改标 `intermediate-{run}-{n}`，中间步骤已是无气泡密排行；`append_reasoning` 有约十个调用点承接旁白 | `interfaces/webchat/src/platform/wide/views/chat/reasoning.rs` · `state/mod.rs:1478-1530` · `events.rs:566` | Panel 已有"中间 vs 最终"边界，缺的是容器与持久 |
@@ -52,6 +52,7 @@
 | R6 | 折叠粒度 | **A**：按 Think→Act **迭代**折叠，一次迭代一行；展开后里面才是思考 / 过渡文字 / 工具行（工具行沿用 09-06 裁定的 cc-tui 规则） |
 | R7 | `brief` / `full` 档位住哪 | **A**：每台设备一根（Panel localStorage 外观轴、TUI `<aleph_home>/tui-detail`），零服务端改动；TUI 的 `/verbose` 与 `/tools …` 合并为 `/detail`。R8 会话式入口**不预建**，只记落点（§13） |
 | R8 | 实现走法 | **方案 1**：共享视图模型按迭代成型 · 单管道有序帧 · 一条重放读腿（§3） |
+| R9 | 重放腿的 reasoning 从哪来（2026-09-23 计划期发现 §1 前提为假后追加） | **(b)**：harness trace 流加 `ReasoningEmitted { iteration, text }`，在 `think.rs` 紧挨 `TextEmitted{Final}` 的两个生产点发；迭代号由 harness 计数器一处派生，无人值守走写时脱敏，重放零新代码。**不**从 session 日志按 run 标记范围数第 N 条（grace turn 会错位，且是第二份推导）。代价：动 `src/harness/`（抬棘轮答三问）+ `AgentTraceEvent` 事件集 +1；只覆盖此后录的 run |
 
 ---
 
@@ -71,6 +72,8 @@ harness ──on_reasoning/on_delta──▶ harness_bridge/callback ─┐
                                           ┌──────────────────┴─────────────────┐
                                         TUI 绘制                              Panel 绘制
 ```
+
+**R9 修正（2026-09-23）**：reasoning 走 harness trace 流的新变体 `ReasoningEmitted` → `task_traces` 与 wire 的 `agent_trace` 帧；实时腿的 `StreamEvent::AgentTrace { event }` 与重放行是**同一个** `AgentTraceEvent`，所以 reducer 的两条腿收敛到同一个 `apply_trace(&AgentTraceEvent)`（§6）。
 
 **为什么不是方案 2（帧上盖迭代号）**：迭代号只有 harness 知道——要么改 `HarnessCallback` trait（R10 棘轮，答 3 问），要么让 drain 再数一遍（判据 §1 两份推导）；frame_census 三个变体加字段；两腿的迭代号来源不同；竞态只是绕开没解决。
 **为什么不是方案 3（服务端发 Step 信封帧）**：新帧家族过 census + 三份客户端解析 + 重放再造一份信封；标题要等 Think 结束才有 ⇒ 服务端做呈现决策，与"共享核 data→data、两端各自画"（TRANSCRIPT_RENDERING §4）分层相反；且它同样得先解决方案 1 的竞态。
@@ -123,20 +126,22 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 
 ---
 
-## 5. 服务端 · 两处改动，wire 字节不变
+## 5. 服务端 · 三处改动；`StreamEvent` 帧集不变，`AgentTraceEvent` 事件集 +1
 
 ### 5.1 一条管道（`src/gateway/execution_engine/agent_trace_emit_sink.rs`）
 
-`AgentTraceEmitSink::on_trace` 不再 `try_send` 进自己的 mpsc + `tokio::spawn` 排水，而是把 step 事件 `send` 进 `FlowStreamEvent` 那条 broadcast 管道（新变体 `FlowStreamEvent::Trace(LoopTraceEvent)`），由 `event_drain` 原地 `next_seq()` 后发 `StreamEvent::AgentTrace`。harness 调 `on_trace` 与调 `on_delta` 是同一线程同一程序序，所以 `seq` 从此就是逻辑序。`is_step_event` 过滤不变、帧内容不变、`frame_census` 不动、`UnattendedRedactingSink` 仍包在最外层先看到一切。
+`AgentTraceEmitSink::on_trace` 不再 `try_send` 进自己的 mpsc + `tokio::spawn` 排水，而是把 step 事件 `send` 进 `FlowStreamEvent` 那条 broadcast 管道（新变体 `FlowStreamEvent::Trace(aleph_protocol::AgentTraceEvent)`，在 sink 里先过 `is_step_event` 再 `.into()` 转成协议类型），由 `event_drain` 原地 `next_seq()` 后发 `StreamEvent::AgentTrace`。harness 调 `on_trace` 与调 `on_delta` 是同一线程同一程序序，所以 `seq` 从此就是逻辑序。`is_step_event` 过滤不变、帧内容不变、`frame_census` 不动、`UnattendedRedactingSink` 仍包在最外层先看到一切。
 
-- **计划期核一件事**：sink 在 `run_loop/inner.rs:1015` 构造，broadcast 发送端在 `orchestrator/dispatch.rs:1048` 创建——两处能否拿到同一个 `Sender`。拿不到就把 sink 的构造挪到能拿到的地方，**不准**开第二条管道。
+- **计划期已核（2026-09-23）**：sink 在 `run_loop/inner.rs:1014-1019` 构造并随 `FlowRequest.trace_sink` 进 dispatch，而 broadcast 发送端在 `orchestrator/dispatch.rs:1048` 之后才创建——两处**拿不到**同一个 `Sender`。裁定的落点：`FlowRequest` 加 `event_tx: Option<broadcast::Sender<FlowStreamEvent>>`，由 inner.rs 用 `flow_event_channel()` 创建后同时交给 sink 与请求；`dispatch` 有则 `subscribe()`、无则自建。脱敏 sink 仍包在 emit sink 外层（`redacting.rs:453` 那条读源码的测试钉着这个顺序）。**不准**开第二条管道。
 - `FlowStreamEvent` 加变体会让每个穷尽 `match` 编译不过——那是穷尽匹配替我们数消费者，逐处答，不加 `_ =>`。
 - **承重后的丢帧**：broadcast 接收端 `Lagged(n)` 丢掉的事件**没分配过 seq**，客户端的 `MissedSeqs` 看不见这种洞。step 事件每迭代约 2 条，缓冲按文字 delta 算本来就够；真正的闸在终局——`RunSummary.loops` 必须等于客户端数出的 step 数，不等就 `NeedsResync`（§9）。drain 遇到 `Lagged(n)` 时 `warn!` 带 run_id + 丢弃数。
 - 不经 harness 的路径（`execution_engine/simple.rs` / `slash_command.rs` / `openai_api/completions/agent.rs`）本来就没有 `TurnStarted`，它们的 reasoning 落进 `iteration: None` step，不改。
 
-### 5.2 重放读腿（`src/gateway/handlers/trace_replay.rs`）
+### 5.2 重放腿 = 一个 trace 变体（R9；`src/harness/trace.rs` · `src/harness/agent/think.rs` · `src/gateway/trace_protocol.rs` · `shared/protocol/src/events.rs`）
 
-`trace.by_runs` 每个 run 的行里补 `Reasoning { iteration, text }` 与 `Text { iteration, text }`，工具行盖 `iteration`——全部从 session 事件日志的 `AssistantMessage { content.thinking, text, blocks }` 派生：一次迭代一条事件，`blocks` 里的 `tool_use.id` 就是工具行的 join 键，不用猜。reasoning 走和工具输出**同一个** `mask_*`（重放腿无条件脱敏，TRANSCRIPT_RENDERING §2.3 的既定不对称保持）。新字段进 `frame_census` 视野（重放响应类型若在 census 范围内）。
+`LoopTraceEvent::ReasoningEmitted { iteration, text }` 与协议侧 `AgentTraceEvent::ReasoningEmitted { iteration, text }`（`kind = "reasoning_emitted"`）。harness 在 `TextEmitted{Final}` 的**两个**生产点旁各发一次（正常 Think 轮 + grace 轮），只在 `response.thinking` 非空时发。它经既有链路落地：`GatewayTraceSink` → `task_traces`（`trace.by_runs` 原样回放，**零新代码**）；`is_step_event` 放行 → 实时 `agent_trace` 帧（reducer 用它把流式 thinking 替换成权威全文，与 `TextEmitted` 对文字的关系相同）；无人值守时 `mask_trace_event` 的新臂在写前脱敏（那个 match 是穷尽的，少一臂编译不过——机制而非纪律）。原稿"从 session 日志派生"的整段作废（§1）。
+
+**穷尽 match 的连带**：`AgentTraceEvent` 不是 `non_exhaustive`，新变体让每个穷尽 match 编译不过——这正是它替我们数消费者。已知的：`trace_protocol.rs` 的 `From`、`unattended_redacting_sink.rs::mask_trace_event`、`events.rs::kind()`、`shared/protocol/src/trace_presentation.rs`、`interfaces/tui/src/tui/app/trace.rs`。TUI 的那一臂在 Phase S 里只求编译（追加为 thinking），Phase T 再接进 step。**没有一处允许 `_ =>`**。
 
 ### 5.3 守卫（各答"什么时候红"）
 
@@ -152,7 +157,7 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 |---|---|
 | `step.rs` | §4 的类型 + `step_headline` / `first_sentence` / `tally` |
 | `detail.rs` | `DetailLevel` + `effective_open`（纯函数；持久化在各客户端） |
-| `reducer.rs` | `Transcript`：`apply_live(&StreamEvent) -> Vec<Change>` · `apply_replay(&ReplayRow) -> Vec<Change>`；两入口收敛到同一组内部 `push_*`；`Change = Updated(id) \| Inserted(id) \| Removed(id) \| NeedsResync` |
+| `reducer.rs` | `Transcript`：`apply_live(&StreamEvent, now_ms) -> Vec<Change>` · `apply_replay(&AgentTraceEvent) -> Vec<Change>` · `finish_replay() -> Vec<Change>`；`apply_live` 遇到 `StreamEvent::AgentTrace { event }` 与 `apply_replay` 都进同一个 `apply_trace(&AgentTraceEvent)`；`Change = Updated(id) \| Inserted(id) \| Removed(id) \| NeedsResync` |
 
 reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`（`push_reasoning` / `append_assistant_content` / `start_tool_execution`）与 Panel `ChatState` 的 `begin_step` / `append_chunk` / `set_step_text` / `update_tool` 一族。`settle_resumed` 的"恢复后永不转圈"、`ToolRow` 状态机、两张脸（`ToolStart` vs `AgentTrace::ToolCallStarted`）按 `tool_id` 的去重都搬进来，不复制。`RunComplete` 时它是 `TurnSummary`（`✻ Worked for 32s · 3 steps`）的**唯一生产者**——B6 发现的"有渲染器没生产者"就此闭合。
 
@@ -272,7 +277,7 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 **真机**：新增 `qa/transcript_fold/run.sh {order,replay}`——`order` 用已有的 WS 帧 tap 对真 run 断言每个迭代 `TurnStarted.seq <` 该迭代第一条 `Reasoning.seq`；`replay` 把实时抓到的 step 与 `trace.by_runs` 折出的逐字段比对。`resync` 没法诚实注入，**不写**假阶段。Windows Terminal 上 `⏺ ⠹ ✻` 列宽仍 UNMEASURED，继续挂在清单上。
 
-**回滚**：wire 未变 ⇒ 服务端回滚 = revert §5 的两个文件；三个客户端各自独立。
+**回滚**：`StreamEvent` 帧集未变 ⇒ 客户端不受服务端回滚影响；服务端回滚 = revert §5 的三组改动（管道 / harness 变体与协议变体 / 穷尽 match 各臂）——三组必须一起 revert，单独 revert 变体会让各臂编译不过。
 
 ---
 
@@ -291,4 +296,4 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 - **不**做服务端每用户档位（R7）。哪天要 R8 会话式入口：值放 `SessionMetadata.identity_meta.custom["detail_level"]`，读者是客户端启动时的一次 `sessions.get`，仍以设备本地覆盖为准——先记落点，不预建。
 - **不**改其他通道（Telegram / Slack 等只收最终回答，本来如此）。
 - **不**做 phone 专属版式；**不**做并排 diff；**不**接 `trace.tool_output`（仍零客户端）。
-- **遗留**：Panel `events.rs` 非转录帧仍走字符串分派（§8）；`RunSummary` 网关孪生与协议孪生的整体统一（09-06 §4.4a 已记）；`ToolGroup::headline` 无条件数 `rows.len()`（TRANSCRIPT_RENDERING §5.6）。
+- **遗留**：R9 之前录的 run 在 `task_traces` 里没有 reasoning——冷加载时那些 step 的标题退到 text 首句 / 工具计数，thinking 位显示为"未记录"，**不**回 session 日志去猜；Panel `events.rs` 非转录帧仍走字符串分派（§8）；`RunSummary` 网关孪生与协议孪生的整体统一（09-06 §4.4a 已记）；`ToolGroup::headline` 无条件数 `rows.len()`（TRANSCRIPT_RENDERING §5.6）。
