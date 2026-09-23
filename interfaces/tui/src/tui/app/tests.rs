@@ -2179,6 +2179,10 @@ fn no_side_question_frame_reaches_the_main_transcript() {
                 RowBody::Text(t) => t,
                 _ => "",
             },
+            // Phase S: the variant exists, no TUI path constructs it yet.
+            // Phase T replaces this with the step row; until then an entry
+            // that cannot exist renders nothing rather than a guessed shape.
+            TranscriptEntry::Step(_) => "",
             TranscriptEntry::ToolGroup(_) | TranscriptEntry::TurnSummary(_) => "",
         };
         assert!(

@@ -5,6 +5,7 @@
 use aleph_protocol::file_change::{FileChange, Presentation};
 use aleph_protocol::ToolResult;
 
+use super::step::StepEntry;
 use super::summarize::{summarize, CallSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +212,9 @@ pub enum TranscriptEntry {
     },
     Tool(ToolRow),
     ToolGroup(ToolGroup),
+    /// One Think→Act iteration (spec §4). Phase S adds the variant; Phase T
+    /// is its first producer and renderer.
+    Step(StepEntry),
     TurnSummary(TurnSummaryEntry),
     SystemNotice {
         id: String,
