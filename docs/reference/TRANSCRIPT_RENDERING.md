@@ -1,18 +1,19 @@
 # TRANSCRIPT_RENDERING.md — 转录呈现：文件变更侧信道与共享渲染核
 
-> **Tier 2**。落点索引在 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) **§6.13**；判据触发器在它的**附录 E.0 / E.1 / E.3 / E.4 / E.7**。
+> **Tier 2**。落点索引在 [FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) **§6.13**；判据触发器在它的**附录 E.0 / E.1 / E.3 / E.4 / E.7 / E.10**。
 > spec 母本：[`docs/superpowers/specs/2026-09-06-cc-style-transcript-rendering-design.md`](../superpowers/specs/2026-09-06-cc-style-transcript-rendering-design.md) ·
 > 计划：[`docs/superpowers/plans/2026-09-06-cc-render-phase-a-wire-and-shared-core.md`](../superpowers/plans/2026-09-06-cc-render-phase-a-wire-and-shared-core.md) ·
-> 逐 Task 台账（裁定 / 更正 / 残余，约 420 行）：`.superpowers/sdd/2026-09-06-cc-render-phase-a-wire-and-shared-core/progress.md`。
+> 逐 Task 台账（裁定 / 更正 / 残余）：`.superpowers/sdd/2026-09-06-cc-render-phase-a-wire-and-shared-core/progress.md`——实施期的本机工作笔记，
+> `.superpowers/` 被 `.gitignore` 排除，**不在仓库里**；下文提到「台账」处，可核对的只有本文复述的那部分。
 > 脱敏信任模型全文在 [SECURITY.md](SECURITY.md)；工具输出 ingress / 预算级联在 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)；prompt 预算与截断在 [§1.2](FEATURE_LOCATOR.md)。
 >
 > ⚠️ **本文不复制代码拥有的事实**（判据 §1）。每个常量、每个枚举成员、每条顺序都带着**它的所有者**（符号 + 文件）出现；
 > 读到与代码不一致时**代码是权威**。行号是**对当前 HEAD 的断言**，最会腐烂——引用前重读。
 >
-> 🛑 **本文描述 Phase A 的交付**：**服务端线路 + 共享渲染核**。A→B→C 的顺序是用户自己裁定的，不是遗漏。
+> 🛑 **§0–§6 描述 Phase A 的交付**：**服务端线路 + 共享渲染核**。A→B→C 的顺序是用户自己裁定的，不是遗漏。
 > **更新（2026-09-11）**：Phase B（TUI）已完成，`shared/ui_logic/src/transcript/` 不再是零调用者——
 > 见 §5.1 的已偿注记。Phase C（Panel）仍**没有建**。
-> 本文仍只描述 Phase A 那半边；B 侧的现状在 `docs/superpowers/plans/2026-09-11-cc-render-phase-b-tui.md`。
+> B 侧的现状不在本文，在 `docs/superpowers/plans/2026-09-11-cc-render-phase-b-tui.md`。
 > **更新（2026-09-23）**：§7 记录按迭代折叠的 Phase S（服务端单管道 + `ReasoningEmitted` + 共享核 Step/reducer），
 > 它的 spec 母本是 [`2026-09-23-stepwise-transcript-folding-design.md`](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)（裁定的真源），
 > 并且又开了一段**有日期的零消费者区间**（§7.3）。
@@ -36,7 +37,7 @@ Phase A 交付三样东西，各自独立可验证：
 
 **按迭代折叠（Phase S，2026-09-23）** 在同一目录加了 `step` / `detail` / `reducer`，并把服务端的 trace 镜像改成单管道、加了 `ReasoningEmitted`——见 §7。
 
-**熵减的一半也在这一轮里**：`ToolResult` 的网关孪生（`src/gateway/event_emitter/types.rs`）曾是一个手写副本，
+**熵减的一半也在 Phase A 里**：`ToolResult` 的网关孪生（`src/gateway/event_emitter/types.rs`）曾是一个手写副本，
 带一个 `metadata: Option<Value>` 字段——**零写者**，`skip_serializing_if` 让它一次都没上过线。
 它被**删除**而不是搬进 `aleph_protocol`（协议 crate 不收投机字段），网关侧现在是 `pub use aleph_protocol::ToolResult;`，
 `StreamEvent::ToolEnd` 与线上帧因此不可能再漂。
@@ -194,7 +195,7 @@ ToolOutput.metadata.presentation : Option<Presentation>          （src/session/
   其余一律经 `FileChange::unavailable(..)`（构造出来就没有 hunk），所以「有理由且有 hunk」这个状态不可达。
 - 第二遍扫描的成本上界是 `MAX_HUNK_LINES = 400`，与第一遍同阶，且 hunk 为空时整段跳过。
 
-⚠️ `FileChange.path` **也被 mask**，而这不是本轮的判断——它沿用孪生腿早就付过账的那条裁定
+⚠️ `FileChange.path` **也被 mask**，而这不是 Phase A 的判断——它沿用孪生腿早就付过账的那条裁定
 （`execution_engine/unattended_redacting_sink.rs` 的模块 doc）：**没有白名单，不对「哪个字段算自由文本」做判断**，
 identifier 形状的字段只花一次不会命中的正则，比一条需要人对每个新字段重新分类的规则便宜。
 而且「一个路径永远不像凭据」**不是我们能替运维承诺的**——`[[security.mask_patterns]]` 允许装任意正则。
@@ -220,7 +221,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 推论两条，都要写下来：
 
-1. `trace.by_runs` 在这个计划碰它之前，就已经在为 attended run 服务未脱敏的工具文本。**既存的、归属在别处的，不是本轮的**。
+1. `trace.by_runs` 在这个计划碰它之前，就已经在为 attended run 服务未脱敏的工具文本。**既存的、归属在别处的，不是 Phase A 的**。
 2. §1 那个缺陷（同一帧上 `output` 打了码而 `presentation` 没有）**只在 unattended run 上存在过**，
    所以它的修复对它的作用域是完整的。
 
@@ -233,7 +234,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 不是一份被打码的 diff。
 
 **⚠️ 别用「把这处 masking 删掉」来消解这个不一致。** 正解是把 attended/unattended 标记记到 trace 行（或会话）上，
-让重放能对齐写时——那是 schema + 写路径的改动，本轮明令禁止。
+让重放能对齐写时——那是 schema + 写路径的改动，Phase A 明令禁止。
 **重访触发条件**：任何人因为别的理由要往持久化的 run 状态里加 attended/unattended 信号时，顺手把这条关掉；
 以及任何人在 Phase B/C 里觉得这个不对称碍事时，来这里而不是去删那行 masking。
 
@@ -263,7 +264,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `source` 是分辨它们的那一半。
 
 **被拒有三条路，一条都不许读成「这里有些字节」**（判据 §8）：文件不在了 · 在 store root 之外 · **是为另一次调用写的**。
-第三条是本轮新加的绑定，理由是**混淆代理**：marker 住在工具文本里，而工具文本是**工具打印的任何东西**——
+第三条是 Phase A 新加的绑定，理由是**混淆代理**：marker 住在工具文本里，而工具文本是**工具打印的任何东西**——
 一次读到攻击者所写文件的 `file_read`、一次 echo、一个抓来的网页，都能含一行 `[Full output persisted: `，
 而 `extract_persisted_path` **按设计扫描每一行**（Layer-2 可能在真 marker 上方插一段错误摘要）。
 所有 session 的 blob 共用一个 root，所以只有 containment 的话，session A 输出里一行伪造 marker 就能把服务端的读引到 session B 的 blob 上。
@@ -327,7 +328,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 但**从不写进登记簿**，所以一个子代理的 session key 会**永久**答 `RESOURCE_NOT_FOUND`，而不是「还没测，待会再问」。
 这是诚实的，但它**不是暂时的**——接上它需要在 spawner 那边加一个写者。
 
-**R9 中性性是被测试的**：这个功能要求测量与组装是同一次遍历，于是本轮把 `prompt_pipeline.rs` 的**五条**遍历
+**R9 中性性是被测试的**：这个功能要求测量与组装是同一次遍历，于是 Phase A 把 `prompt_pipeline.rs` 的**五条**遍历
 （`execute` / `execute_with_mode` / `execute_stable_with_mode` / `execute_dynamic_with_mode` / `layer_breakdown`）
 塌成一条私有的带测量遍历，五个公开签名全部不变。
 `the_collapsed_traversal_matches_a_direct_append` 保留一份 `#[cfg(test)]` 的**塌陷前**参考实现，
@@ -347,20 +348,20 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 | `theme_tokens` | 两端共用的**语义颜色角色**唯一名册（Panel 映到 CSS 变量名，TUI 映到 `ratatui::Color`） | `SemanticColor` · `ALL_SEMANTIC_COLORS` · `mix_rgb` |
 | `fold` | 把工具结果正文折成几**物理**行——**先 wrap 再数**（一行 minified JSON 就是六十行终端；数逻辑行会全给你看） | `fold` · `wrap_physical` · `FoldPolicy` · `DEFAULT_COLLAPSED_ROWS` |
 | `summarize` | 工具在行上**叫什么**（Aleph snake_case → Claude Code 词表；其余 humanize；MCP 是 `Server · Tool`），以及哪个参数值一行 | `DISPLAY_NAMES` · `display_name` · `summarize` · `CallSummary` |
-| `group` | 把连续的只读工具行并成一条 `Explored N calls` | `group_entries` · `MIN_GROUP` · `MAX_GAP_TEXT` |
+| `group` | 把连续的只读工具行并成一条 `Explored N calls` | `group_entries` · `MIN_GROUP` · `MAX_GAP_TEXT`（Phase S 加的 step 内孪生见 §7.1） |
 | `view_model` | 转录作为数据：条目按时间顺序，一条工具行**自成一个条目**（Claude Code 把工具与文本交错） | `TranscriptEntry` · `ToolRow` · `ToolGroup` · `RowStatus` · `READ_ONLY_DISPLAY_NAMES` |
 | `diff_view` | 从线上 `FileChange` 到可绘制的行；成对 Del/Add 上做第二次 token LCS 标出改动的词，带预算 | `diff_rows` · `stats_label` · `word_spans` · `COLLAPSED_DIFF_ROWS` |
 | `md_enhance` | markdown 前处理（admonition / 裸 URL / `name.ext:NN` / mermaid 围栏），**不引正则 crate** | `enhance` · `find_path_refs` · `linkify_bare_urls` · `Block` |
 | `affordance` | 两端逐字共用的小呈现决定（时长、spinner、动词、locale） | `fmt_duration_ms` · `spinner_frame` · `verb` · `Locale` |
 | `context` | 把 `ContextBreakdown` 变成 `/context` 视图的行，含 provider 对账与显式 `Other` 余量 | `reconcile` · `ContextRow` · `PROVIDER_TOLERANCE` |
-| `turn_summary` | `Ran 3 commands, read 2 files, edited 1 file · 42s`——存成**数据**，绘制时再成文 | `summarize_turn` · `MIN_TOOLS_FOR_SUMMARY` |
+| `turn_summary` | `Ran 3 commands, read 2 files, edited 1 file · 42s`——存成**数据**，绘制时再成文 | `summarize_turn` · `MIN_TOOLS_FOR_SUMMARY`（Phase S 加的导出见 §7.1） |
 
 三条在别处会被「统一」掉、所以写在这里的裁定：
 
 - **`settle_resumed` 从不伪造 `Ok`**：任何 `Running` 行恢复后落到 `Pending`。少报，绝不多报。
 - **`summarize_turn` 的时长与分类计数都只累计 `is_terminal()` 的行**，全部非终态时整条返回 `None`——
   一个全零的条目渲染成「Ran 0 commands」是在断言什么都没发生，而真相是**不知道**。
-  `ToolGroup::headline` **刻意**不跟它对齐（它在活着的行旁边现绘，"N calls" 复述的是读者自己数得出来的东西），这是 Phase B/C 第一次绘制它时要定的措辞。
+  `ToolGroup::headline` **刻意**不跟它对齐（它在活着的行旁边现绘，"N calls" 复述的是读者自己数得出来的东西）；它的绘制现状见 §5.6。
 - **`reconcile` 在 provider 总数**小于**各部分之和且超出 `PROVIDER_TOLERANCE` 时，`total` 与 `percent` 都报 `None`**，
   保留逐项行、不发 `Other` 行。两个测量互相矛盾时「这个上下文有多满」诚实的答案就是不知道。
   **不对称是刻意的**：各部分**低于**总数时保留 `Other` 行。
@@ -370,9 +371,9 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 ---
 
-## 5. 本轮**没有**做的事 / 已知开口
+## 5. Phase A **没有**做的事 / 已知开口
 
-> 一份只描述顺利路径的参考文档，正是这一轮整天在花钱避免的那个东西。以下每一条都是知情的开口，不是遗漏。
+> 一份只描述顺利路径的参考文档，正是 Phase A 整天在花钱避免的那个东西。以下每一条都是知情的开口，不是遗漏。
 
 ### 5.1 🛑 `shared/ui_logic/src/transcript/` 没有渲染器——**一笔有日期的债，不是沉默**
 
@@ -389,7 +390,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `connection`、`state::SessionKnobs`、`state::chat_scroll`），从来不是这一个。
 `src/` 那侧唯一的引用是 `src/tools/presentation_census.rs` 里的一条 `#[cfg(test)]` 依赖
 （它调真的 `display_name`，见 §5.4）。整棵树 11 个模块 / 2 272 行 / **60 条 `#[test]`**，**零调用者**。
-⚠️ 那个 58 是 `grep -c "#\[test\]" shared/ui_logic/src/transcript/*.rs` 数出来的，谓词是「这棵树里的测试函数」；
+⚠️ 那个 60 是 `grep -c "#\[test\]" shared/ui_logic/src/transcript/*.rs` 数出来的，谓词是「这棵树里的测试函数」；
 台账里那个 **144 是 `shared-ui-logic` 整个 crate `--lib` 的通过数**，谓词不同——两个数都对，别互相替代（附录 C.1）。
 
 ⚠️ **台账（`progress.md` 判据 §17 那条）只点名了 `diff_view.rs`；实测的范围更宽——是整个 `transcript/` 树。**
@@ -397,7 +398,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `stats_label` 里那几个 `Some(Unavailable::…)` 臂就是「说出理由，从不猜」这句话在代码里的全部落实，
 而它今天没有人调用。（**别在这里维护成员个数**——上一版写着「六个」，`Encoding` 一删就静默变假了；
 数目的所有者是枚举自己。）
-⚠️ **同一句话在共享核里被复现过一次，本轮修掉了**：`diff_rows` 只遍历 `change.hunks`，
+⚠️ **同一句话在共享核里被复现过一次，Phase A 修掉了**：`diff_rows` 只遍历 `change.hunks`，
 于是一个 `Redacted` / `TooLarge` 的 change 与一次真正的空编辑返回**逐字节相同**的值，
 理由只活在 `stats_label` 这个**另一个函数**里——正是 `Redacted` 那条裁定要防的形状
 （「一个空 hunk 列表读起来像『这次改动什么都没碰』」）被搬到了上一层。
@@ -430,8 +431,8 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
   `browser_tools::offload_full_content` **刻意**把 blob 归在**调用方**工具而不是快照工具名下，
   而 `browser_tools/exec.rs` 有一条断言逐字钉住这一点。不先处理那个例外就上精确匹配，
   等于拿一个窄泄露换来**一整类**浏览器结果的假 `Expired`。
-- **交给用户的开放决定**（2026-09-07 裁定：本轮只修注释不修谓词）。仍需衡量的是那个取舍，而衡量需要测量。
-  ⚠️ 本轮之前**根本没有任何绑定**，所以发出去的东西严格优于原状。
+- **交给用户的开放决定**（2026-09-07 裁定：Phase A 只修注释不修谓词）。仍需衡量的是那个取舍，而衡量需要测量。
+  ⚠️ Phase A 之前**根本没有任何绑定**，所以发出去的东西严格优于原状。
 
 ### 5.3 ⚠️ canonicalize 关不掉硬链接——一个**断言开口仍然开着**的测试
 
@@ -486,7 +487,8 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 ### 5.6 其他仍然开着的东西
 
-- **`trace.tool_output` 还没有客户端。** 它是 Phase B/C 要接的读面。
+- **`trace.tool_output` 还没有客户端，也没有哪一期拥有它**：Phase B 发货时没接它，
+  [spec 2026-09-23 §13](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md) 写明 S/T/P 也不接。
   `context.breakdown` **已有一个**（2026-09-11，Phase B B7：`/context` 覆盖层），它的客户端在调 `reconcile`
   **之前**先从实时 `ContextGauge` 填上了 `provider_reported`（§3.2）——那句要求写在这里、写在 wire 类型上、
   也写在 `reconcile` 上，三处都在对一个当时不存在的客户端说话，而**没有一处说得出应该由谁来做**。
@@ -498,17 +500,17 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
   ⚠️ 更窄也更准的说法：一个**跑了但返回 `success: false`** 的工具走的是**成功**分支（`Some(&output)`、`error: None`），
   所以 `Unavailable::ToolFailed` 在 `tool_end` 上**已经可达**。错误臂只服务 harness 级失败（工具压根没跑、被护栏拦下、或中止），
   那里根本没有 `ToolOutput`，也就没有 diff 可丢。**重访条件**：哪天某条 harness 错误路径开始携带 `ToolOutput`。
-- **`ConnectionFailure::Timeout` 是零生产者、五消费者**（Panel 侧五处 match 臂）。本轮保留了这个变体并附上诚实的
+- **`ConnectionFailure::Timeout` 是零生产者、五消费者**（Panel 侧五处 match 臂）。Phase A 保留了这个变体并附上诚实的
   「今天没有路径产出它」注释，**没有**写计划里建议的那句点名产出路径的注释——那句会是假的。
   Phase C（连接 UX）必须二选一：把真实超时分类进它，或连同那五处一起 CUT。
 - **`plugins/diff-viewer` 的 CUT 只记了一条笔记，没有执行**：`plugins/` 是指向兄弟仓 Aleph-plugins 的 git submodule，
   从这个 worktree 里删要么对上游毫无作用、要么弄坏 submodule 指针，而 `include_dir!` 在编译期嵌入那棵树。
   CUT 晚一轮，落在它该落的那个仓里。
-- **`ToolGroup::headline` 无条件数 `rows.len()`**，而它的时长求和只算终态行（§4）。Phase A 不绘制 headline，
-  措辞由 Phase B/C 第一次画它时决定。
+- **`ToolGroup::headline` 无条件数 `rows.len()`**，而它的时长求和只算终态行（§4）。TUI 自 Phase B 起原样绘制它
+  （`widgets/tool_row.rs` 调 `headline()`）；Phase S 的 `group_tool_rows` 是 `ToolGroup` 的第二个生产者（§7.1）。
 - **`src/tools/result_processing.rs` 那处不是 rustfmt-clean 的行**（`hoist_presentation` 的畸形载荷断言，`:998`）
   在本分支上被**两个不同的实施者各拒绝过一次**，理由相同且正确：为一个装饰性收益去重排别人的活行会招来冲突。
-  它由本轮末尾一次格式化清理关闭（提交 `0834d7dae`，与另外九个文件一起）。两位实施者都称它「pre-existing」，
+  它由 Phase A 末尾一次格式化清理关闭（提交 `0834d7dae`，与另外九个文件一起）。两位实施者都称它「pre-existing」，
   而它其实只是「不是我的」：在分支起点 `40a3579a8` 上它是干净的，所以归属本分支的更早一个任务。
   **「pre-existing」不报出它对照的那个基线时不成立**——同一句话在「相对我的任务」和「相对 main」两种读法下真假相反。
   留下的规则是：单跑 `rustfmt --edition 2021 <file>`，**不要** `cargo fmt -p alephcore`
@@ -531,6 +533,8 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
   **同一个** `mask_presentation`。脱敏的面现在是**三个**，普查是 `mask_presentation` 的调用点，不是这句散文。
 - **别把 `context.breakdown` 改成读时重新派生**——那正是它存在的理由的反面（§3.2）。
 - **别调 `capability::census` 的那个数字**（§5.5）。
+- **改了 `shared/ui_logic/src/transcript/` 就跑 `just test-shared`**：共享核的测试（reducer、G2、step 的性质测试）由它与 CI 的
+  `Run shared crate tests` 步骤跑，alephcore 的命令编译不到它们——为什么见 CLAUDE.md「最小可信验证集」。
 - **数字带谓词**：本文里每一个计数都写了它数的是什么、以及测于哪个 commit。复述之前重数一遍，包括重数我的
   （附录 C.1）。
 
@@ -553,16 +557,16 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 | 交付 | 是什么 | 落点 |
 |---|---|---|
-| **一条管道** | `AgentTraceEmitSink` 不再自起 mpsc + 排水任务；`on_trace` 同步 `send` `FlowStreamEvent::Trace` 进 run 自己的 broadcast 通道，drain 原地取 `seq`。sink 只持 `broadcast::WeakSender`、每个事件 upgrade 一次——它**从不拥有**通道。通道由 `run_loop/inner.rs` 用 `orchestrator::flow_event_channel()` 创建，强 sender 按值移进 `FlowRequest.event_tx`、初始 receiver 当场 drop；`dispatch` 有 `event_tx` 则 `subscribe`，无则自建 | `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/execution_engine/run_loop/inner.rs` |
-| **`ReasoningEmitted`** | `LoopTraceEvent` / `AgentTraceEvent` 各加一个变体（`kind = "reasoning_emitted"`）；`think.rs` 经私有的 `emit_reasoning` 在 `TextEmitted{Final}` 的两个生产点（正常 Think 轮、grace 轮）旁各发一次，只记**非空白**的 thinking；无人值守时 `mask_trace_event` 写前脱敏；`is_step_event` 放行上线；`task_traces` 落盘、`trace.by_runs` 原样回放。消费契约（一个迭代可以有两条，追加不替换）写在协议变体自己的 doc 上 | `src/harness/{trace.rs,agent/think.rs}` · `src/gateway/trace_protocol.rs` · `src/gateway/execution_engine/unattended_redacting_sink.rs` · `shared/protocol/src/events.rs` |
-| **子代理边界** | 子代理的 harness 事件不再进父 run 的 `agent_trace` 帧与 `task_traces` 行（子代理 harness 链终于 `NoopTraceSink`）；子代理的 `MeteringProvider` 仍握父链，`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下（`teams.usage` 与 doctor 读它们）。一个构造点决定两条链 | `src/gateway/execution_engine/run_trace_sinks.rs`（`RunTraceSinks::build` · `ChildTraceSinks`） |
-| **Step 与 reducer** | `StepEntry` · `step_headline` / `first_sentence` / `step_tally` · `DetailLevel` / `effective_open` · `Transcript::{apply_live, apply_replay, finish_replay}` 与 `Change`；`trace_result_to_wire` 从 TUI **搬**进 reducer（TUI 现在 import 它，不再各持一份） | `shared/ui_logic/src/transcript/{step.rs,detail.rs,reducer/}` |
+| **一条管道** | `AgentTraceEmitSink` 不再自起 mpsc + 排水任务；`on_trace` 同步 `send` `FlowStreamEvent::Trace` 进 run 自己的 broadcast 通道，drain 原地取 `seq`（`event_drain.rs` 的 `FlowStreamEvent::Trace` 臂；排水循环是 `helpers.rs::run_dispatch_and_drain_classified`，`Lagged` 在那里只记一条 warn）。sink 只持 `broadcast::WeakSender`、每个事件 upgrade 一次——它**从不拥有**通道。通道由 `run_loop/inner.rs` 用 `orchestrator::flow_event_channel()` 创建，强 sender 按值移进 `FlowRequest.event_tx`、初始 receiver 当场 drop；`dispatch` 有 `event_tx` 则 `subscribe`，无则自建 | `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/execution_engine/run_loop/inner.rs` · `src/gateway/execution_engine/{event_drain.rs,helpers.rs}` |
+| **`ReasoningEmitted`** | `LoopTraceEvent` / `AgentTraceEvent` 各加一个变体（`kind = "reasoning_emitted"`）；`think.rs` 经私有的 `emit_reasoning` 在 `TextEmitted{Final}` 的两个生产点（正常 Think 轮、grace 轮）旁各发一次，只记**非空白**的 thinking；无人值守时 `mask_trace_event` 写前脱敏（守卫 G3：`reasoning_emitted_is_masked_before_persistence_on_unattended_runs` · `trace_replay.rs::a_reasoning_row_replays_masked_on_the_by_runs_leg`）；`is_step_event` 放行上线；`task_traces` 落盘、`trace.by_runs` 原样回放。这是模型 thinking 的一份新的持久化拷贝，attended run 上它在实时帧与落盘两处都**不**脱敏——§2.3 的不变量原样适用于它。消费契约（一个迭代可以有两条，追加不替换）写在协议变体自己的 doc 上 | `src/harness/{trace.rs,agent/think.rs}` · `src/gateway/trace_protocol.rs` · `src/gateway/execution_engine/unattended_redacting_sink.rs` · `shared/protocol/src/{events.rs,trace_presentation.rs}` |
+| **子代理边界** | 子代理的 harness 事件不再进父 run 的 `agent_trace` 帧与 `task_traces` 行（子代理 harness 链终于 `NoopTraceSink`；它保留 scratchpad 推送，经 `ScratchpadProgressSink::sharing_queue` 与 run 共用一条队列，父子两边的进度行按一个顺序到达通道）；子代理的 `MeteringProvider` 仍握父链，`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下（`teams.usage` 与 doctor 读它们），但后台子代理在 run 结束之后的这两种帧只落库、不上线（→ spec §5.4）。一个构造点决定两条链 | `src/gateway/execution_engine/run_trace_sinks.rs`（`RunTraceSinks::build` · `ChildTraceSinks`） |
+| **Step 与 reducer** | `StepEntry` · `step_headline` / `first_sentence` / `step_tally` / `HEADLINE_MAX_COLS` · `DetailLevel` / `effective_open` · `Transcript::{apply_live, apply_replay, finish_replay}` 与 `Change`；step 内的只读分组 `group_tool_rows` → `StepTool`（`group_entries` 的孪生）与 step 的工具汇总 `summarize_rows`（`summarize_turn` 的孪生）；`trace_result_to_wire` 从 TUI **搬**进 reducer（TUI 现在 import 它，不再各持一份） | `shared/ui_logic/src/transcript/{step.rs,detail.rs,reducer/,group.rs,turn_summary.rs}` |
 
 ### 7.2 裁定住在 spec 里——这里只指路
 
 这一层有几条会在别处被「统一」掉的裁定。**正文只在 spec 里写一次**（判据 §1），这里给名字、守卫与指针：
 
-- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。
+- **两条腿一处派生是结构性的，不是纪律性的**：`apply_live` 收到的 `StreamEvent::AgentTrace { event }` 与 `trace.by_runs` 的行是同一个 `AgentTraceEvent`，两条腿都进 `reducer/mod.rs` 的 `apply_trace`。守卫 G2 `the_live_leg_and_the_replay_leg_fold_to_the_same_entries`（`reducer/tests/g2.rs`，去掉时钟后比整份条目）→ spec §6 · §5.3。⚠️ 它的两条腿都是**手工构造的 fixture**：真 drain 帧对真 `trace.by_runs` 行的集成层 G2 推迟到 Phase T 的 `qa/transcript_fold`（spec §5.3 的修订段）。
 - **`iteration: None` 永不被追认**、**记录是权威的**（`ReasoningEmitted` 之于 thinking、`TextEmitted{Final}` 之于文字）、**没有记录覆盖的流式文字是临时的** → spec §4 · §5.2。
 - **`RunSummary.loops` 是终局闸**，`NeedsResync` 之后客户端怎么做 → spec §5.1 · §9。
 
@@ -579,6 +583,7 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 - **reducer / step / detail**：`interfaces/` 里零调用者。谓词是：第一条命令的每一个命中都是注释、一句 UI 文案，或 Panel 自己 tool card 的 `effective_open` 测试——**没有一个是 reducer / step / detail 的调用者**，所以零消费者区间成立（这里刻意不写命中数：它随无关的注释变，复核时重跑命令、按这条谓词逐条读）。reducer 模块里唯一有生产调用者的是 `trace_result_to_wire`——它是从 TUI **搬**来的，TUI `app/trace.rs` 仍用它画自己的工具行，这不算 reducer 的消费者。
 - **`TranscriptEntry::Step`**：TUI 里只有编译臂（`widgets/chat_area.rs` 两处、`app/tests.rs` 一处），没有生产者。
 - **`AgentTraceEvent::ReasoningEmitted`**：TUI `app/trace.rs::append_trace_debug_entry` 里是 `=> {}`（直播 thinking 已经经 `StreamEvent::Reasoning` 画过一次；重放与非流式轮次在 Phase T 之前**不显示** thinking）；Panel 聊天转录的 `chat/events.rs::apply_trace_event` 按 `kind` 分派，落进 `_ => {}` 静默忽略；Panel 的 agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点——那是调试面，不是转录。
+  第三条命令**看不见**的一个渲染者：CLI `aleph trace show`（`interfaces/cli/src/commands/trace_cmd.rs`）把每一行交给共享 presenter `present_agent_trace_event_with_preset`，于是它打印成 `[Reasoning] iter N: <截断的文字>`（标签在 `shared/protocol/src/trace_presentation.rs` 的 `AgentTracePresentationLabels.reasoning_emitted`）——那个文件里不出现变体名，grep 按名字找不到它。Panel 检查视图的正文也出自同一个 presenter。它们同样是调试面，不是转录。
 
 这是 spec §11 裁定的顺序（S → T → P）；形状见 [FEATURE_LOCATOR 附录 E.7](FEATURE_LOCATOR.md)「一个共享核比它的渲染器早落一期」。
 **关闭条件**：Phase T（TUI）落地即关闭 reducer/step/detail 与 TUI 那一臂；Phase P 关闭 Panel 聊天那一臂。
@@ -586,8 +591,8 @@ grep -rn "ReasoningEmitted\|reasoning_emitted" interfaces --include=*.rs
 
 ### 7.4 这一层的不变量与没做的
 
-- **发送端寿命不变量**：gateway 在 `helpers.rs::run_dispatch_and_drain_classified` 的 `Ok(Err(_))` 臂（harness 没发 `Complete` 就返回——loop 之前失败，或 `runner_impl` 在 loop 之后读 session 出错）里**无界** `drain.await`，drain 只在 `RecvError::Closed` 时退出，而 `Closed` 要等**每一个强 sender** 都消失。强 sender 只有请求的 `event_tx`（按值移入，`dispatch` 返回即 drop）与 dispatch 交给 harness 任务的那一份；emit sink 只持弱半边，所以后台子代理的 metering 经父链握着 sink，也拖不住 `Closed`。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`：sink 的 `Arc` 活在 dispatch 之外，`Closed` 仍须到达）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。**重访条件**：任何代码把一个强 `broadcast::Sender<FlowStreamEvent>` 存进比 dispatch 活得久的结构，或在 `inner.rs` 创建通道的那个作用域里留一份 clone（那里的注释写着这条不变量）。
-- **顺序守卫是两条，缺一不可**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`，一次**不带 runtime** 的 `try_recv` 必须已经看到帧——确定性的那半）· G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`，真 `BroadcastCallback` + 真 sink 经真 drain 断言 `seq` 序——效果的那半，单独存在时可能靠一次让出碰巧变绿）。
+- **发送端寿命不变量**：drain 要等**每一个强 sender** 都消失才收到 `Closed`，emit sink 只持弱半边。守卫：`no_sender_outlives_dispatch`（`src/orchestrator/tests/dispatch.rs`）· `a_live_sink_does_not_keep_the_channel_open`（`agent_trace_emit_sink.rs`）。机制与重访条件的所有者是 `FlowRequest.event_tx` 的 doc、emit sink 模块 doc 的「Why it holds a `WeakSender`」与 `run_loop/inner.rs` 创建通道处的注释；判据全文 → [FEATURE_LOCATOR 附录 D.4.51](FEATURE_LOCATOR.md)。
+- **顺序守卫是两条**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`）· G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`）。为什么缺一不可 → spec §5.3 的修订段；判据全文 → [FEATURE_LOCATOR 附录 D.0.196](FEATURE_LOCATOR.md)。
 - **老 run**（2026-09-23 之前录的）在 `task_traces` 里没有 reasoning——冷加载时那些 step 的标题退到 text 首句 / 工具计数，不回 session 日志去猜（spec §13）。
 - **`TranscriptEntry::Reasoning` 还在**：它的删除归 Phase T，因为它的 TUI 渲染器要活到 Step 能被画出来为止（spec §12）。
 - **Phase S 交给 T / P 的清单**在 spec §7 末尾，不在这里重抄。
