@@ -49,9 +49,10 @@
 //! * It always forwards the original event to the inner sink, so trace
 //!   persistence + scratchpad progress are unaffected.
 //! * On unattended runs `UnattendedRedactingSink` wraps OUTSIDE this sink
-//!   (`run_loop/inner.rs`), so every event is masked before it is published;
-//!   `RedactingEmitter` relies on that and passes `AgentTrace` through
-//!   (`redacting.rs`), pinned by a test that reads `mask_trace_event`.
+//!   (`run_trace_sinks.rs::RunTraceSinks::build`), so every event is masked
+//!   before it is published; `RedactingEmitter` relies on that and passes
+//!   `AgentTrace` through (`redacting.rs`), pinned by a test that reads
+//!   `mask_trace_event`.
 //!
 //! Only the step-relevant variants are forwarded (see [`is_step_event`]) —
 //! the heavy/internal ones (session metrics, worktree/MCP lifecycle) carry no

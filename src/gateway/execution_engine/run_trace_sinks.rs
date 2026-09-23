@@ -23,8 +23,11 @@
 //! tool and the doctor's cache checks aggregate `provider_usage` /
 //! `cache_health_degraded` rows across all tasks by agent id, and a child has
 //! no task of its own to persist under (`task_traces.task_id` must name an
-//! `agent_tasks` row). So a child's usage still reaches the live wire and is
-//! still persisted under the parent's task. `is_step_event` publishes both
+//! `agent_tasks` row). So a child's usage is still persisted under the
+//! parent's task, and reaches the live wire only while the run's strong
+//! senders are alive: a background child's later usage is persisted only,
+//! because `AgentTraceEmitSink`'s weak sender no longer upgrades (its module
+//! doc, "Why it holds a `WeakSender`"). `is_step_event` publishes both
 //! kinds on the live leg (they feed the cache indicators), so they do not
 //! open steps by themselves: a reducer over the parent's replayed rows must
 //! treat them as non-step, exactly as the live leg's reducers must.

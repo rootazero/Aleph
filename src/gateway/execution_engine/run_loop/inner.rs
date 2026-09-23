@@ -1014,8 +1014,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             //   tracker through `ForwardingTraceSink`.
             // * a subagent's `MeteringProvider`s (the accounting exception):
             //   this run's own chain, so a child's `ProviderUsage` /
-            //   `CacheHealthDegraded` keep today's route — live on the wire and
-            //   persisted under this run's task for `teams.usage` and the doctor.
+            //   `CacheHealthDegraded` are persisted under this run's task for
+            //   `teams.usage` and the doctor, and published live only while
+            //   this run's strong senders live — a background child's later
+            //   usage is persisted only (`agent_trace_emit_sink.rs`, "Why it
+            //   holds a `WeakSender`").
             //
             // Sender-lifetime invariant: the only STRONG senders of this
             // channel are the request's (`event_tx`, moved by value into the
