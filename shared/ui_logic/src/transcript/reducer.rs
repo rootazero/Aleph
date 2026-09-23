@@ -1,8 +1,10 @@
-//! The fold. Live frames (`apply_live`) become a `Vec<TranscriptEntry>`
-//! through one internal `apply_trace` — the leg-independent core every
+//! The fold. Live frames (`apply_live`) and replay rows (`apply_replay`,
+//! then `finish_replay`) become the same `Vec<TranscriptEntry>` through one
+//! internal `apply_trace` — the leg-independent core every
 //! `AgentTraceEvent` goes through, whichever leg delivered it. That is the
 //! "two legs, one derivation" rule of TRANSCRIPT_RENDERING §2, made
-//! structural.
+//! structural; G2 (`the_live_leg_and_the_replay_leg_fold_to_the_same_entries`)
+//! pins it modulo clocks.
 //!
 //! Pure over its inputs: the wall clock and the run's frames are arguments;
 //! the entry-id counter is internal and deterministic. It is written to
@@ -48,6 +50,10 @@ pub enum Change {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct RunState {
     run_id: String,
+    /// Index into `entries` where this run's entries begin. A transcript
+    /// holds a session's runs; the run-end trailers count only this run's
+    /// rows. Nothing before it is ever removed while the run is open.
+    first_entry: usize,
     /// Index into `entries` of the `Live` step, if any.
     open_step: Option<usize>,
     /// Bytes of `ResponseChunk` text appended to the open step; the trace's
@@ -64,9 +70,22 @@ struct RunState {
     text_rendered: bool,
     /// `TurnStarted` frames seen — compared with `RunSummary.loops`.
     steps_seen: u32,
+    /// Replay leg only: whether a `SessionCompleted` row arrived, and its
+    /// wall clock. `finish_replay` reads both; the live leg ends on
+    /// `RunComplete` instead.
+    session_completed: bool,
+    session_duration_ms: Option<u64>,
 }
 
 impl RunState {
+    fn starting_at(first_entry: usize, run_id: String) -> Self {
+        Self {
+            run_id,
+            first_entry,
+            ..Self::default()
+        }
+    }
+
     /// The per-step bookkeeping, cleared whenever the open step changes.
     fn reset_step_state(&mut self) {
         self.turn_streamed_len = 0;
@@ -118,10 +137,7 @@ impl Transcript {
 
     pub fn apply_live(&mut self, ev: &StreamEvent, now_ms: u64) -> Vec<Change> {
         if let StreamEvent::RunAccepted { run_id, .. } = ev {
-            self.run = Some(RunState {
-                run_id: run_id.clone(),
-                ..RunState::default()
-            });
+            self.run = Some(RunState::starting_at(self.entries.len(), run_id.clone()));
             return Vec::new();
         }
         // Frames of a run this transcript was not told about (another run,
@@ -168,6 +184,45 @@ impl Transcript {
             | StreamEvent::ContextGauge { .. }
             | StreamEvent::SessionUserMessage { .. } => Vec::new(),
         }
+    }
+
+    // ---- replay leg ------------------------------------------------------
+
+    /// One `trace.by_runs` row. The same `apply_trace` the live leg uses;
+    /// the only difference is the absent clock. Call `finish_replay` after
+    /// the run's last row.
+    pub fn apply_replay(&mut self, ev: &AgentTraceEvent) -> Vec<Change> {
+        let first_entry = self.entries.len();
+        let run = self
+            .run
+            .get_or_insert_with(|| RunState::starting_at(first_entry, String::new()));
+        if let AgentTraceEvent::SessionCompleted { duration_ms, .. } = ev {
+            // Remembered for the trailer; `finish_replay` reads it back
+            // after the last row.
+            run.session_completed = true;
+            run.session_duration_ms = *duration_ms;
+        }
+        self.apply_trace(ev, None)
+    }
+
+    /// After the last row: what `complete_run` does for a live run, with
+    /// what a log can honestly say. No `tool_summaries` exist on this leg —
+    /// the run's rows ARE the record — and a run whose log has no
+    /// `SessionCompleted` ends `Pending` (unknown), with no answer hoisted.
+    pub fn finish_replay(&mut self) -> Vec<Change> {
+        let (completed, duration_ms) = self.run.as_ref().map_or((false, None), |r| {
+            (r.session_completed, r.session_duration_ms)
+        });
+        let mut changes = self.settle_orphans();
+        if completed {
+            changes.extend(self.hoist_open_step_text(None));
+            let rows = self.run_rows_where(|_| true);
+            changes.extend(self.push_trailers(&rows, duration_ms));
+        } else {
+            changes.extend(self.close_open_step(StepStatus::Pending, None));
+        }
+        self.run = None;
+        changes
     }
 
     // ---- the shared leg --------------------------------------------------
@@ -638,8 +693,9 @@ impl Transcript {
         // 4. The last step's text IS the answer: hoist it out (ruling R5).
         changes.extend(self.hoist_open_step_text(now_ms));
         // 5. The trailers, over the rows the record names.
-        let rows = self.rows_where(|r| summary.tool_summaries.iter().any(|i| i.tool_id == r.id));
-        changes.extend(self.push_trailers(&rows, total_ms));
+        let rows =
+            self.run_rows_where(|r| summary.tool_summaries.iter().any(|i| i.tool_id == r.id));
+        changes.extend(self.push_trailers(&rows, Some(total_ms)));
         // 6. Effect reached? Fewer turn boundaries than the loop counted
         //    means frames were lost — say so, patch nothing. `<`, not `≠`:
         //    the loops/TurnStarted relation on the grace turn is unmeasured
@@ -661,9 +717,12 @@ impl Transcript {
         changes
     }
 
-    /// Every row across every step that `keep` accepts, in entry order.
-    fn rows_where(&self, keep: impl Fn(&ToolRow) -> bool) -> Vec<ToolRow> {
+    /// Every row of THIS run's steps that `keep` accepts, in entry order.
+    fn run_rows_where(&self, keep: impl Fn(&ToolRow) -> bool) -> Vec<ToolRow> {
+        let first = self.run.as_ref().map_or(0, |r| r.first_entry);
         self.entries
+            .get(first..)
+            .unwrap_or_default()
             .iter()
             .filter_map(|e| match e {
                 TranscriptEntry::Step(s) => Some(s.tools.iter()),
@@ -675,9 +734,10 @@ impl Transcript {
             .collect()
     }
 
-    /// The run's trailers: the turn summary over `rows` and the worked-for
-    /// notice with the iterations this transcript saw.
-    fn push_trailers(&mut self, rows: &[ToolRow], total_ms: u64) -> Vec<Change> {
+    /// The run's trailers, one derivation for both legs: the turn summary
+    /// over `rows`, and the worked-for notice with the iterations this
+    /// transcript saw when the run's wall clock is known.
+    fn push_trailers(&mut self, rows: &[ToolRow], total_ms: Option<u64>) -> Vec<Change> {
         let mut changes = Vec::new();
         if let Some(entry) = summarize_turn(rows) {
             // `TurnSummaryEntry` carries no id; the change names a minted one
@@ -686,8 +746,10 @@ impl Transcript {
             self.entries.push(TranscriptEntry::TurnSummary(entry));
             changes.push(Change::Inserted(id));
         }
-        let steps_seen = self.run.as_ref().map_or(0, |r| r.steps_seen);
-        changes.push(self.push_notice(format!("{} · {} steps", worked_for(total_ms), steps_seen)));
+        if let Some(ms) = total_ms {
+            let steps_seen = self.run.as_ref().map_or(0, |r| r.steps_seen);
+            changes.push(self.push_notice(format!("{} · {} steps", worked_for(ms), steps_seen)));
+        }
         changes
     }
 
@@ -810,6 +872,7 @@ fn presentation_text(ev: &AgentTraceEvent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcript::{step_headline, step_tally};
     use aleph_protocol::events::ToolSummaryItem;
     use aleph_protocol::{
         AgentTraceEvent, AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart,
@@ -1516,5 +1579,339 @@ mod tests {
         let row = &steps(&t)[0].tools[0];
         assert!(matches!(row.body, RowBody::FileChanges(ref c) if c.len() == 1));
         assert_eq!(row.status, RowStatus::Ok { duration_ms: 9 });
+    }
+
+    // ---- replay leg + G2 -------------------------------------------------
+
+    /// A replay row is the same `AgentTraceEvent` a live `agent_trace`
+    /// frame carries. The two legs share `apply_trace`; this fixture checks
+    /// the parts that DIFFER around it: no `RunAccepted`, no deltas, no
+    /// `RunComplete`, and `finish_replay` doing what `complete_run` does.
+    ///
+    /// `text_first` puts iteration 2's `TextEmitted{Final}` before its
+    /// `ReasoningEmitted` — the order production emits them in; the fold
+    /// must not depend on either. `salvage` adds the verifier-halt salvage
+    /// path's second `ReasoningEmitted` on iteration 1.
+    fn full_run_trace_with(text_first: bool, salvage: bool) -> Vec<AgentTraceEvent> {
+        let mut rows = vec![
+            AgentTraceEvent::TurnStarted { iteration: 1 },
+            AgentTraceEvent::ReasoningEmitted {
+                iteration: 1,
+                text: "Look at the failing test first.".into(),
+            },
+        ];
+        if salvage {
+            rows.push(AgentTraceEvent::ReasoningEmitted {
+                iteration: 1,
+                text: "The veto says a box is unchecked.".into(),
+            });
+        }
+        rows.extend([
+            AgentTraceEvent::ToolCallStarted {
+                iteration: 1,
+                call: AgentTraceToolCallStart {
+                    tool_id: "r1".into(),
+                    tool_name: "file_read".into(),
+                    input: json!({"path": "tests/a.rs"}),
+                },
+            },
+            AgentTraceEvent::ToolCallCompleted {
+                iteration: 1,
+                call: AgentTraceToolCallEnd {
+                    tool_id: "r1".into(),
+                    tool_name: "file_read".into(),
+                    input: json!({"path": "tests/a.rs"}),
+                    duration_ms: 12,
+                    presentation: None,
+                },
+                result: AgentTraceToolResult::Success {
+                    output: json!("fn a() {}"),
+                },
+            },
+            AgentTraceEvent::TurnStarted { iteration: 2 },
+        ]);
+        let thinking = AgentTraceEvent::ReasoningEmitted {
+            iteration: 2,
+            text: "The timezone is the bug.".into(),
+        };
+        let text = AgentTraceEvent::TextEmitted {
+            iteration: 2,
+            stream: AgentTraceTextKind::Final,
+            text: "Fixed the timezone handling.".into(),
+        };
+        if text_first {
+            rows.extend([text, thinking]);
+        } else {
+            rows.extend([thinking, text]);
+        }
+        rows.push(AgentTraceEvent::SessionCompleted {
+            outcome: aleph_protocol::AgentTraceSessionOutcome::Completed,
+            iterations: 2,
+            tool_calls_made: 1,
+            total_tokens: 100,
+            hit_limit: false,
+            final_text: Some("Fixed the timezone handling.".into()),
+            terminate_reason: None,
+            duration_ms: Some(32_000),
+            token_breakdown: None,
+            tool_timeline: Vec::new(),
+        });
+        rows
+    }
+
+    fn full_run_trace() -> Vec<AgentTraceEvent> {
+        full_run_trace_with(true, false)
+    }
+
+    /// The live leg for the same run: the same trace frames interleaved
+    /// with the deltas and the lifecycle frames a client actually receives.
+    fn full_run_live(rows: Vec<AgentTraceEvent>) -> Vec<StreamEvent> {
+        let mut out = vec![accepted()];
+        for ev in rows {
+            match &ev {
+                AgentTraceEvent::ReasoningEmitted { text, .. } => {
+                    // deltas first, then the authoritative record
+                    let (a, b) = text.split_at(text.len() / 2);
+                    out.push(reasoning(a));
+                    out.push(reasoning(b));
+                    out.push(trace(ev));
+                }
+                AgentTraceEvent::TextEmitted { text, .. } => {
+                    let (a, b) = text.split_at(text.len() / 2);
+                    out.push(chunk(a));
+                    out.push(chunk(b));
+                    out.push(trace(ev));
+                }
+                AgentTraceEvent::ToolCallStarted { call, .. } => {
+                    out.push(StreamEvent::ToolStart {
+                        run_id: RUN.into(),
+                        seq: 0,
+                        tool_name: call.tool_name.clone(),
+                        tool_id: call.tool_id.clone(),
+                        params: call.input.clone(),
+                    });
+                    out.push(trace(ev));
+                }
+                AgentTraceEvent::ToolCallCompleted { call, .. } => {
+                    out.push(StreamEvent::ToolEnd {
+                        run_id: RUN.into(),
+                        seq: 0,
+                        tool_id: call.tool_id.clone(),
+                        result: ToolResult::success("fn a() {}"),
+                        duration_ms: call.duration_ms,
+                    });
+                    out.push(trace(ev));
+                }
+                _ => out.push(trace(ev)),
+            }
+        }
+        out.push(StreamEvent::RunComplete {
+            run_id: RUN.into(),
+            seq: 0,
+            summary: RunSummary {
+                loops: 2,
+                tool_summaries: vec![item("r1", "file_read", 12, true)],
+                final_response: Some("Fixed the timezone handling.".into()),
+                ..Default::default()
+            },
+            total_duration_ms: 32_000,
+        });
+        out
+    }
+
+    /// Clocks are the one thing the replay leg cannot know.
+    fn strip_clocks(entries: &[TranscriptEntry]) -> Vec<TranscriptEntry> {
+        entries
+            .iter()
+            .cloned()
+            .map(|e| match e {
+                TranscriptEntry::Step(mut s) => {
+                    s.started_ms = None;
+                    s.ended_ms = None;
+                    for r in &mut s.tools {
+                        r.started_ms = None;
+                        r.ended_ms = None;
+                        if let RowStatus::Running { since_ms } = &mut r.status {
+                            *since_ms = 0;
+                        }
+                    }
+                    TranscriptEntry::Step(s)
+                }
+                other => other,
+            })
+            .collect()
+    }
+
+    fn replay(rows: &[AgentTraceEvent]) -> Transcript {
+        let mut t = Transcript::new();
+        for ev in rows {
+            t.apply_replay(ev);
+        }
+        t.finish_replay();
+        t
+    }
+
+    /// G2. Two legs, one fold — in either within-turn order, and across the
+    /// salvage path's two records on one iteration.
+    #[test]
+    fn the_live_leg_and_the_replay_leg_fold_to_the_same_entries() {
+        for (text_first, salvage) in [(true, false), (false, false), (true, true)] {
+            let rows = full_run_trace_with(text_first, salvage);
+            let mut live = Transcript::new();
+            let live_changes = drive(&mut live, &full_run_live(rows.clone()));
+            assert!(
+                !live_changes.contains(&Change::NeedsResync),
+                "{live_changes:?}"
+            );
+            let replay = replay(&rows);
+
+            let (l, r) = (strip_clocks(live.entries()), strip_clocks(replay.entries()));
+            assert_eq!(
+                l, r,
+                "text_first={text_first} salvage={salvage}\nLIVE:   {l:#?}\nREPLAY: {r:#?}"
+            );
+        }
+
+        // And the shape is the one the surfaces will paint:
+        let replay = replay(&full_run_trace());
+        let s = steps(&replay);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].iteration, Some(1));
+        assert_eq!(s[0].tools[0].status, RowStatus::Ok { duration_ms: 12 });
+        assert_eq!(
+            s[1].thinking.as_ref().map(|b| b.text.as_str()),
+            Some("The timezone is the bug.")
+        );
+        assert_eq!(
+            finals(&replay),
+            vec!["Fixed the timezone handling.".to_string()]
+        );
+        assert_eq!(
+            step_headline(s[0], 80).map(|h| h.text),
+            Some("Look at the failing test first.".to_string())
+        );
+    }
+
+    #[test]
+    fn a_replayed_run_without_a_session_completed_row_is_pending_not_settled() {
+        let mut t = Transcript::new();
+        let rows = full_run_trace();
+        // The first four rows: TurnStarted 1, ReasoningEmitted 1,
+        // ToolCallStarted r1, ToolCallCompleted r1 — the log stops there.
+        for ev in &rows[..4] {
+            t.apply_replay(ev);
+        }
+        t.apply_replay(&AgentTraceEvent::TurnStarted { iteration: 2 });
+        t.apply_replay(&AgentTraceEvent::ToolCallStarted {
+            iteration: 2,
+            call: AgentTraceToolCallStart {
+                tool_id: "b".into(),
+                tool_name: "bash".into(),
+                input: json!({"command": "cargo test"}),
+            },
+        });
+        t.finish_replay();
+        let s = steps(&t);
+        assert_eq!(
+            s[0].status,
+            StepStatus::Settled,
+            "a step the next turn closed is settled"
+        );
+        assert_eq!(
+            s[1].status,
+            StepStatus::Pending,
+            "the last step never ended: unknown"
+        );
+        assert_eq!(
+            s[1].tools[0].status,
+            RowStatus::Pending,
+            "never a spinner from a log"
+        );
+        assert!(
+            finals(&t).is_empty(),
+            "no answer was recorded, none is invented"
+        );
+    }
+
+    #[test]
+    fn replay_rows_carry_no_clocks_but_the_recorded_durations() {
+        let t = replay(&full_run_trace());
+        let row = &steps(&t)[0].tools[0];
+        assert_eq!((row.started_ms, row.ended_ms), (None, None));
+        let summary = t.entries().iter().find_map(|e| match e {
+            TranscriptEntry::TurnSummary(s) => Some(s.duration_ms),
+            _ => None,
+        });
+        assert_eq!(summary, None, "one tool is below the turn-summary gate");
+        assert_eq!(step_tally(steps(&t)[0]).map(|s| s.duration_ms), Some(12));
+    }
+
+    /// One transcript holds a session's runs. The replay leg has no
+    /// `tool_summaries` list to filter by, so "all rows" must mean THIS
+    /// run's rows: a one-tool run after a two-tool run is still below the
+    /// turn-summary gate.
+    #[test]
+    fn a_replayed_run_counts_only_its_own_rows_in_the_turn_summary() {
+        let tool = |id: &str| {
+            [
+                AgentTraceEvent::ToolCallStarted {
+                    iteration: 1,
+                    call: AgentTraceToolCallStart {
+                        tool_id: id.into(),
+                        tool_name: "bash".into(),
+                        input: json!({"command": "ls"}),
+                    },
+                },
+                AgentTraceEvent::ToolCallCompleted {
+                    iteration: 1,
+                    call: AgentTraceToolCallEnd {
+                        tool_id: id.into(),
+                        tool_name: "bash".into(),
+                        input: json!({"command": "ls"}),
+                        duration_ms: 5,
+                        presentation: None,
+                    },
+                    result: AgentTraceToolResult::Success {
+                        output: json!("ok"),
+                    },
+                },
+            ]
+        };
+        let done = AgentTraceEvent::SessionCompleted {
+            outcome: aleph_protocol::AgentTraceSessionOutcome::Completed,
+            iterations: 1,
+            tool_calls_made: 1,
+            total_tokens: 1,
+            hit_limit: false,
+            final_text: None,
+            terminate_reason: None,
+            duration_ms: Some(1_000),
+            token_breakdown: None,
+            tool_timeline: Vec::new(),
+        };
+        let mut t = Transcript::new();
+        t.apply_replay(&AgentTraceEvent::TurnStarted { iteration: 1 });
+        for ev in tool("a1").iter().chain(tool("a2").iter()) {
+            t.apply_replay(ev);
+        }
+        t.apply_replay(&done);
+        t.finish_replay();
+        t.apply_replay(&AgentTraceEvent::TurnStarted { iteration: 1 });
+        for ev in &tool("b1") {
+            t.apply_replay(ev);
+        }
+        t.apply_replay(&done);
+        t.finish_replay();
+        let summaries = t
+            .entries()
+            .iter()
+            .filter(|e| matches!(e, TranscriptEntry::TurnSummary(_)))
+            .count();
+        assert_eq!(
+            summaries,
+            1,
+            "only the two-tool run earns one: {:?}",
+            t.entries()
+        );
     }
 }
