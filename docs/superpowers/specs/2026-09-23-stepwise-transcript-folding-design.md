@@ -206,7 +206,7 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 **裁定（PF-C11 + T2B-SPLIT，按生产者拆，不按 kind 过滤）**：
 
 - 孩子的 **harness** 事件（`TurnStarted` / `TextEmitted` / `ReasoningEmitted` / `ToolSummary` / `SessionCompleted` / worktree 与 MCP-scope 生命周期）**不再**到达父 run 的 `agent_trace` 帧与 `task_traces` 行。孩子的 harness 链是 `[UnattendedRedactingSink if unattended] → [ScratchpadProgressSink if armed] → NoopTraceSink`；后台孩子的进度仍经 `ForwardingTraceSink` 到达 tracker 侧信道。
-- 孩子的 **`MeteringProvider`** 仍握父 run 的链：`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下，但**只在父 run 的强 sender 还活着时上线**。机制：`AgentTraceEmitSink` 只存通道的 `WeakSender`、每个事件 upgrade 一次（§5.1 修订段，T2-WEAK）；run 结束、强 sender 全部释放后 upgrade 失败，于是**后台**孩子在那之后的这两种帧**只落库、不上线**（持久化叶子仍活着）。本分支之前 mpsc drain 握着 emitter，会照发——这是 T2-WEAK 的代价，接受为文档化行为，要不要让它们实时可见见 §7 清单（终审 H2）。落库的那份：`teams.usage`、Panel Usage、`team_usage` 工具、MoA advisor 账与 doctor 的缓存检查都按 agent 聚合它们，而 `task_traces.task_id` 对 `agent_tasks` 有外键，孩子无法自有行。整条切断会静默把子代理花费归零。
+- 孩子的 **`MeteringProvider`** 仍握父 run 的链：`ProviderUsage` / `CacheHealthDegraded` 照旧落在父任务下，但**只在父 run 的强 sender 还活着时上线**。机制：`AgentTraceEmitSink` 只存通道的 `WeakSender`、每个事件 upgrade 一次（§5.1 修订段，T2-WEAK）；run 结束、强 sender 全部释放后 upgrade 失败，于是**后台**孩子在那之后的这两种帧**只落库、不上线**（持久化叶子仍活着）。本分支之前 mpsc drain 握着 emitter，会照发——这是 T2-WEAK 的代价，接受为文档化行为，要不要让它们实时可见见 §7 清单（FR-1）。落库的那份：`teams.usage`、Panel Usage、`team_usage` 工具、MoA advisor 账与 doctor 的缓存检查都按 agent 聚合它们，而 `task_traces.task_id` 对 `agent_tasks` 有外键，孩子无法自有行。整条切断会静默把子代理花费归零。
 - 两条链在 `src/gateway/execution_engine/run_trace_sinks.rs::RunTraceSinks::build` **一处**构造，经字段私有的 `ChildTraceSinks` 交给 `SubagentTool`。
 - **对 §4 / §6 / §9 的后果**：两条腿都把 `ProviderUsage` / `CacheHealthDegraded` 当非 step 的 notice；父通道上的一个 `CacheHealthDegraded` 可能来自孩子（只影响归属）。孩子的生命周期事件**哪里都不落**（泄漏信号是 `tracing::error!`，见 `docs/reference/MULTI_AGENT_SYSTEM.md`）。孩子**自己的** run 级 `agent_trace` 流与持久化（嵌套 step）是 Phase T/P 的决定（§7 末尾）。
 - **守卫**：`a_childs_turn_started_is_not_persisted_under_the_parents_task` 与它的对照 `a_childs_provider_usage_is_still_persisted_under_the_parents_task`（`src/agents/subagent_tool/tests.rs`）· `a_childs_compactor_usage_is_still_persisted_under_the_parents_task`（`src/agents/subagent_spawner/tests.rs`）· `a_childs_text_reaches_the_scratchpad_sharer_masked_on_unattended_runs`（`run_trace_sinks.rs`）。
@@ -296,8 +296,8 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 - **只认单一位置的 TUI 扫描**：Step 有了生产者之后，这几处看不见 step 里的行——`interfaces/tui/src/tui/app/mod.rs` 的 `find_tool_mut` 与按工具名的 `find_map`、`app/tests.rs` 泄漏测试里的 `TranscriptEntry::Step(_) => ""` 臂、`widgets/chat_area.rs` 的 `content_fingerprint(&s.id)` 臂（78-L6，替换清单）。
 - **`TranscriptEntry::Reasoning` 的删除**（§4 修订段；PF-D16）。
 - **子代理自己的 run 级流**：孩子自己的 `agent_trace` 与它名下的 `trace.by_runs`（需要每个孩子一行 `agent_tasks`，因为 `task_traces.task_id` 有外键）——嵌套 step 是 T/P 的决定（§5.4；2b 遗留）。
-- **后台孩子的迟到账目帧不上线**：父 run 结束后，后台孩子的 `ProviderUsage` / `CacheHealthDegraded` 只落库、不上线（§5.4）；任何实时消费者在那之后都看不到它们，`teams.usage` 与 doctor 读的是落库行。要不要让它们实时可见由本期决定（终审 H2，T2-WEAK 的代价）。
-- **中途接管一个进行中的 run**：`apply_live` 只折由 `RunAccepted` 打开的 run；`finish_replay` 把 `run` 置空，于是重放之后仍在跑的那个 run 的实时帧也会被丢弃，reducer 没有 adopt 入口。TUI 的 `adopt_active_run` 与 Panel 第二个标签页加入都是这个形状，「先重放、再接实时」需要一个 reducer 入口；设计问题是半成品行与后续帧怎么接（终审 M3）。
+- **后台孩子的迟到账目帧不上线**：父 run 结束后，后台孩子的 `ProviderUsage` / `CacheHealthDegraded` 只落库、不上线（§5.4）；任何实时消费者在那之后都看不到它们，`teams.usage` 与 doctor 读的是落库行。要不要让它们实时可见由本期决定（FR-1，T2-WEAK 的代价）。
+- **中途接管一个进行中的 run**：`apply_live` 只折由 `RunAccepted` 打开的 run；`finish_replay` 把 `run` 置空，于是重放之后仍在跑的那个 run 的实时帧也会被丢弃，reducer 没有 adopt 入口。TUI 的 `adopt_active_run` 与 Panel 第二个标签页加入都是这个形状，「先重放、再接实时」需要一个 reducer 入口；设计问题是半成品行与后续帧怎么接。
 
 ---
 
