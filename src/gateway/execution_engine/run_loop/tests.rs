@@ -1970,6 +1970,29 @@ fn layer_4_discriminates_the_answer_and_only_the_answer() {
 /// the one field `mcp_handler_admitted` reads.
 struct McpHandlerOf(&'static str);
 
+/// A registry holding a project-keyed plugin `proj` (rooted at `proj`), as
+/// the extension manager publishes it after a load.
+async fn manager_with_project_plugin(
+    proj: &std::path::Path,
+) -> Arc<crate::extension::ExtensionManager> {
+    use crate::extension::visibility::ScopeKey;
+    use crate::extension::{ExtensionManager, PluginKind, PluginOrigin, PluginRecord};
+    let manager = ExtensionManager::with_defaults().await.unwrap();
+    {
+        let mut registry = manager.get_plugin_registry_mut().await;
+        let mut record = PluginRecord::new(
+            "proj".into(),
+            "P".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Workspace,
+        );
+        record.scope_key = ScopeKey::project(proj);
+        registry.register_plugin(record);
+    }
+    manager.sync_runtime_snapshots().await;
+    Arc::new(manager)
+}
+
 #[async_trait::async_trait]
 impl crate::tools::handlers::ToolHandler for McpHandlerOf {
     async fn invoke(
@@ -1996,12 +2019,13 @@ impl crate::tools::handlers::ToolHandler for McpHandlerOf {
 #[test]
 fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
     let nowhere = crate::extension::visibility::VisibilityCtx { project_root: None };
+    let visible = visible_mcp_servers(nowhere, None);
     assert!(
-        mcp_handler_admitted(&McpHandlerOf("github"), &nowhere, None),
+        mcp_handler_admitted(&McpHandlerOf("github"), &visible),
         "non-plugin server passes"
     );
     assert!(
-        !mcp_handler_admitted(&McpHandlerOf("plugin:proj/srv"), &nowhere, None),
+        !mcp_handler_admitted(&McpHandlerOf("plugin:proj/srv"), &visible),
         "owned + no manager ⇒ refused"
     );
 }
@@ -2011,39 +2035,129 @@ fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
 /// non-plugin server is admitted in both.
 #[tokio::test]
 async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
-    use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
-    use crate::extension::{ExtensionManager, PluginKind, PluginOrigin, PluginRecord};
+    use crate::extension::visibility::{canonical_root, VisibilityCtx};
     let _home = crate::utils::paths::IsolatedAlephHome::new();
     let proj = tempdir().unwrap();
-    let manager = ExtensionManager::with_defaults().await.unwrap();
-    {
-        let mut registry = manager.get_plugin_registry_mut().await;
-        let mut record = PluginRecord::new(
-            "proj".into(),
-            "P".into(),
-            PluginKind::Mcp,
-            PluginOrigin::Workspace,
-        );
-        record.scope_key = ScopeKey::project(proj.path());
-        registry.register_plugin(record);
+    let manager = manager_with_project_plugin(proj.path()).await;
+
+    let here = visible_mcp_servers(
+        VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        },
+        Some(Arc::clone(&manager)),
+    );
+    let elsewhere = visible_mcp_servers(
+        VisibilityCtx { project_root: None },
+        Some(Arc::clone(&manager)),
+    );
+    let owned = McpHandlerOf("plugin:proj/srv");
+    assert!(
+        mcp_handler_admitted(&owned, &here),
+        "owner visible from its project ⇒ admitted"
+    );
+    assert!(
+        !mcp_handler_admitted(&owned, &elsewhere),
+        "owner invisible outside its project ⇒ refused"
+    );
+    assert!(
+        mcp_handler_admitted(&McpHandlerOf("github"), &elsewhere),
+        "a server no plugin declared is not gated"
+    );
+}
+
+/// Face ⑤ at its fire site: the MCP join itself, over a registry the REAL
+/// bridge populated — one plugin-owned tool, one user tool, and the
+/// capability builtins the bridge switched on because both servers advertise
+/// resources — with the predicate built from a real extension manager.
+///
+/// Outside the plugin's project its tool is absent from the loop registry AND
+/// from the allow-set, while the user tool and the builtin join; and the
+/// joined `mcp_list_resources` never asks the manager about the plugin's
+/// server (the builtin is bound to this run's servers, not the registered
+/// see-nothing form, nor every server). Inside the project, all of it.
+#[tokio::test]
+async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run() {
+    use crate::extension::visibility::{canonical_root, VisibilityCtx};
+    use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
+    use crate::mcp::tool_bridge::{spawn_tool_bridge, RESOURCE_LIST_TOOL, RESOURCE_TOOL};
+    const OWNED: &str = "plugin:proj/srv";
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let proj = tempdir().unwrap();
+    let manager = manager_with_project_plugin(proj.path()).await;
+
+    let fake = fake_manager(vec![capable_server(OWNED), capable_server("github")]);
+    let bridged = Arc::new(crate::tools::ToolHandlerRegistry::new());
+    let bridge = spawn_tool_bridge(fake.handle.clone(), Arc::clone(&bridged), None);
+    // RESOURCE_TOOL is the last of the resource cluster the reconcile installs.
+    let mut settled = false;
+    for _ in 0..100 {
+        if bridged.snapshot().contains_key(RESOURCE_TOOL) {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    manager.sync_runtime_snapshots().await;
+    bridge.abort();
+    assert!(
+        settled,
+        "premise: the bridge switched the resource builtins on"
+    );
+    for (name, server) in [("plugin_proj_srv__t", OWNED), ("github__t", "github")] {
+        bridged
+            .register(name.into(), Arc::new(McpHandlerOf(server)))
+            .unwrap();
+    }
 
     let here = VisibilityCtx {
         project_root: Some(canonical_root(proj.path())),
     };
     let elsewhere = VisibilityCtx { project_root: None };
-    let owned = McpHandlerOf("plugin:proj/srv");
-    assert!(
-        mcp_handler_admitted(&owned, &here, Some(&manager)),
-        "owner visible from its project ⇒ admitted"
-    );
-    assert!(
-        !mcp_handler_admitted(&owned, &elsewhere, Some(&manager)),
-        "owner invisible outside its project ⇒ refused"
-    );
-    assert!(
-        mcp_handler_admitted(&McpHandlerOf("github"), &elsewhere, Some(&manager)),
-        "a server no plugin declared is not gated"
-    );
+    for (ctx, in_project) in [(elsewhere, false), (here, true)] {
+        let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+        let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
+        let joined = join_mcp_tools(
+            &bridged.snapshot(),
+            &mut registry,
+            |_| true,
+            &visible_mcp_servers(ctx, Some(Arc::clone(&manager))),
+            &mut allowed,
+        );
+
+        let owned_joined = registry.get("plugin_proj_srv__t").is_some();
+        assert_eq!(owned_joined, in_project, "plugin tool in the loop registry");
+        assert_eq!(
+            allowed.contains("plugin_proj_srv__t"),
+            in_project,
+            "plugin tool in the allow-set"
+        );
+        assert_eq!(joined.contains("plugin_proj_srv__t"), in_project);
+        for name in ["github__t", RESOURCE_LIST_TOOL] {
+            assert!(
+                registry.get(name).is_some(),
+                "{name} joins in every project"
+            );
+            assert!(allowed.contains(name), "{name} widens the allow-set");
+        }
+
+        fake.forget_asked();
+        let listed = registry
+            .get(RESOURCE_LIST_TOOL)
+            .unwrap()
+            .execute(serde_json::json!({}), CancellationToken::new())
+            .await;
+        assert!(
+            matches!(listed, crate::tools::runtime::ToolResult::Success { .. }),
+            "the joined lister runs: {listed:?}"
+        );
+        let asked = fake.asked();
+        assert!(
+            asked.iter().any(|id| id == "github"),
+            "the lister reaches the user server: {asked:?}"
+        );
+        assert_eq!(
+            asked.iter().any(|id| id == OWNED),
+            in_project,
+            "the lister reaches the plugin's server only from its project: {asked:?}"
+        );
+    }
 }

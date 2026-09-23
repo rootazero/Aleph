@@ -338,11 +338,13 @@ impl HookExecutor {
     /// Every hook carries a [`ScopeKey`](crate::extension::visibility::ScopeKey)
     /// stamped by its producer; this is the hook face of the one visibility
     /// predicate ([`visible_to`](crate::extension::visibility::visible_to)) the
-    /// tool index, skills, sub-agents, slash list and MCP bridge share. The
-    /// daemon serves every registered project from one process, so all
-    /// project hooks live in one executor — without this gate a hook checked
-    /// into project A would fire while the agent works inside project B (an
-    /// isolation / arbitrary-command-execution leak).
+    /// five capability faces share: tool index, skills, sub-agents, slash list
+    /// and MCP (the request-time MCP join, the capability builtins it binds,
+    /// and the MCP catalog / slash rows). The daemon serves every registered
+    /// project from one process, so all project hooks live in one executor —
+    /// without this gate a hook checked into project A would fire while the
+    /// agent works inside project B (an isolation / arbitrary-command-execution
+    /// leak).
     ///
     /// `ctx` is computed once per fire-site call, not per hook, so a batch of
     /// interceptors is judged against one answer.

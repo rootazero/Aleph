@@ -12,14 +12,28 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::session::events::ToolOutput;
+use crate::sync_primitives::Arc;
 use crate::tools::service::{ToolDefinition, ToolError};
 
 pub mod builtin;
 pub mod mcp;
 pub mod registration;
 
+/// Which MCP servers one run may see, by server id: face ⑤ of
+/// `extension::visibility`, built once per run by the run loop's MCP join.
+pub(crate) type McpServerFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 #[async_trait]
 pub trait ToolHandler: Send + Sync + 'static {
     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError>;
     fn definition(&self) -> ToolDefinition;
+
+    /// This handler bound to the MCP servers one run may see, for a handler
+    /// whose behaviour depends on that set. Only the MCP bridge's capability
+    /// builtins answer `Some` (they enumerate or resolve servers at call
+    /// time); a per-server MCP tool is gated whole at the join instead, and
+    /// every other handler never touches a server. `None` = join as-is.
+    fn bind_visible_servers(&self, _visible: &McpServerFilter) -> Option<Arc<dyn ToolHandler>> {
+        None
+    }
 }

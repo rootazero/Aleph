@@ -157,7 +157,9 @@ pub(crate) fn plugin_server_id(plugin_id: &str, server_name: &str) -> String {
 /// `/`: plugin ids are `[a-z0-9-]` (`manifest::validate_plugin_id` /
 /// `sanitize_plugin_id`), so the first slash is always the separator.
 ///
-/// Feed it ONLY a `ToolSource::Mcp { server_id }`. Other `plugin:`-prefixed
+/// Feed it ONLY an MCP server id — the handler side's
+/// `tools::service::ToolSource::Mcp { server_id }` or the catalog side's
+/// `tool_metadata::ToolSource::Mcp { server }`. Other `plugin:`-prefixed
 /// id spaces use a colon grammar (`plugin:{id}:{name}` tool ids,
 /// `plugin:{id}` usage / visibility groups) — same prefix, different
 /// grammar — and decoding one of those here names the wrong thing.
@@ -315,6 +317,9 @@ mod tests {
         assert_eq!(owning_plugin_of_server_id("github"), None);
         assert_eq!(owning_plugin_of_server_id("plugin:"), None);
         assert_eq!(owning_plugin_of_server_id("plugin:nosl"), None);
+        // An empty plugin id names no plugin (the only input that reaches
+        // the empty-id guard: the two above exit at the `/` split).
+        assert_eq!(owning_plugin_of_server_id("plugin:/srv"), None);
         // Same prefix, different grammar: the colon-form tool ids
         // (`plugin:{id}:{name}`) are not server ids and must not decode.
         assert_eq!(owning_plugin_of_server_id("plugin:x:tool"), None);

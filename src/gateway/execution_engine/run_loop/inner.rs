@@ -790,70 +790,42 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
-            // Collector for MCP tool names joined this request — used below to
-            // build the deferred exposure tier when `defer_mcp_tools` is on.
-            let mut mcp_tool_names: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-
             // External MCP tools: snapshot the bridge-maintained registry
             // (boot installs it via `set_mcp_tool_registry`) and join each
-            // entry into this request's LoopToolRegistry. This is the
-            // consumer side of `mcp::spawn_tool_bridge` — the bridge keeps
-            // the ToolHandlerRegistry in sync with every connected server's
-            // tools/list; here those handlers become LLM-visible LoopTools.
-            // Gating mirrors the builtin path above: per-agent allowlist, plus
+            // entry into this request's LoopToolRegistry (`join_mcp_tools`).
+            // The allow-set is the builtin path's: per-agent allowlist plus
             // `slash_skill_scope` — the SAME set the builtin retain used, not a
-            // second parse of the same metadata key — plus the owning plugin's
-            // visibility for a plugin-declared server (face ⑤).
-            // Existing names are never overwritten (builtins win collisions).
-            if let Some(mcp_registry) = super::super::tool_service_builder::mcp_tool_registry() {
-                let mut joined = 0usize;
-                for (name, handler) in mcp_registry.snapshot().iter() {
-                    if !agent.is_tool_allowed(name) {
-                        continue;
-                    }
-                    if !super::super::slash_skill_scope::admits(slash_skill_scope.as_ref(), name) {
-                        continue;
-                    }
-                    // Face ⑤ of `extension::visibility`: a server a plugin
-                    // declared joins only when that plugin is visible to this
-                    // run. The server PROCESS stays global (one manager, one
-                    // spawn); only its tools' presence on this run's surface is
-                    // per-project. `visibility` is the value derived once near
-                    // the top of this function for the plugin tool index.
-                    if !mcp_handler_admitted(
-                        handler.as_ref(),
-                        &visibility,
-                        extension_manager.as_deref(),
-                    ) {
-                        continue;
-                    }
-                    if loop_registry_inner.get(name).is_some() {
-                        continue;
-                    }
-                    loop_registry_inner.register(Box::new(
-                        crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                            name,
-                            Arc::clone(handler),
-                        ),
-                    ));
-                    mcp_tool_names.insert(name.clone());
-                    // Only widen a non-empty allow-set; an empty set already
-                    // means allow-all in ScopedToolService and inserting
-                    // names would flip it to restrictive.
-                    if !allowed_names.is_empty() {
-                        allowed_names.insert(name.clone());
-                    }
-                    joined += 1;
-                }
-                if joined > 0 {
-                    info!(
-                        run_id = run_id,
-                        count = joined,
-                        "MCP tools joined tool surface"
+            // second parse of the same metadata key. Face ⑤ is this run's
+            // visible servers, built from `visibility` — the value derived once
+            // near the top of this function for the plugin tool index. The
+            // joined names feed the deferred exposure tier below when
+            // `defer_mcp_tools` is on.
+            let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
+                Some(mcp_registry) => {
+                    let joined = join_mcp_tools(
+                        &mcp_registry.snapshot(),
+                        &mut loop_registry_inner,
+                        |name| {
+                            agent.is_tool_allowed(name)
+                                && super::super::slash_skill_scope::admits(
+                                    slash_skill_scope.as_ref(),
+                                    name,
+                                )
+                        },
+                        &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
+                        &mut allowed_names,
                     );
+                    if !joined.is_empty() {
+                        info!(
+                            run_id = run_id,
+                            count = joined.len(),
+                            "MCP tools joined tool surface"
+                        );
+                    }
+                    joined
                 }
-            }
+                None => std::collections::BTreeSet::new(),
+            };
 
             // Markdown CLI skills join at the same seam, for the same reason:
             // the registry is rebuilt per request, so an install that landed
@@ -1757,23 +1729,85 @@ fn publish_artifact_invalidation(
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
 }
 
-/// Face ⑤ gate. Non-plugin servers pass; a plugin-owned server passes iff
-/// the extension manager can see its owner from `visibility`. No manager ⇒
-/// an owned server is refused: the manager is the only authority on where a
-/// plugin came from, and "I cannot tell" is not "yes".
+/// The consumer side of `mcp::spawn_tool_bridge`: every entry of the
+/// bridge-maintained registry `snapshot` (kept in sync with every connected
+/// server's `tools/list`) becomes an LLM-visible `LoopTool` in `registry`.
+/// Its own function so a test can drive it against a real
+/// `ToolHandlerRegistry`: inline, deleting a gate here reddened nothing.
+///
+/// Gates, in order: `is_allowed` (the run's allow-set); face ⑤ of
+/// `extension::visibility` — a server a plugin declared joins only when
+/// `visible` admits it (the server PROCESS stays global, one manager, one
+/// spawn; only its tools' presence on this run's surface is per-project); then
+/// builtins win collisions (an existing name is never overwritten). A
+/// capability builtin joins bound to `visible` (`bind_visible_servers`): it
+/// enumerates or resolves servers at call time, so the same predicate decides
+/// what it sees. `allowed_names` is only widened when already non-empty — an
+/// empty set means allow-all in `ScopedToolService`, and inserting names would
+/// flip it restrictive. Returns the joined names.
+pub(super) fn join_mcp_tools(
+    snapshot: &std::collections::HashMap<String, Arc<dyn crate::tools::handlers::ToolHandler>>,
+    registry: &mut crate::tools::runtime::LoopToolRegistry,
+    is_allowed: impl Fn(&str) -> bool,
+    visible: &crate::tools::handlers::McpServerFilter,
+    allowed_names: &mut std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut joined = std::collections::BTreeSet::new();
+    for (name, handler) in snapshot {
+        if !is_allowed(name) {
+            continue;
+        }
+        if !mcp_handler_admitted(handler.as_ref(), visible) {
+            continue;
+        }
+        if registry.get(name).is_some() {
+            continue;
+        }
+        let handler = handler
+            .bind_visible_servers(visible)
+            .unwrap_or_else(|| Arc::clone(handler));
+        registry.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(name, handler),
+        ));
+        if !allowed_names.is_empty() {
+            allowed_names.insert(name.clone());
+        }
+        joined.insert(name.clone());
+    }
+    joined
+}
+
+/// Face ⑤ gate. A per-server MCP tool passes iff `visible` admits its server;
+/// every other handler passes (a capability builtin is bound to `visible`
+/// instead of being gated whole — see [`join_mcp_tools`]).
 pub(super) fn mcp_handler_admitted(
     handler: &dyn crate::tools::handlers::ToolHandler,
-    visibility: &crate::extension::visibility::VisibilityCtx,
-    ext: Option<&crate::extension::ExtensionManager>,
+    visible: &crate::tools::handlers::McpServerFilter,
 ) -> bool {
-    let def = handler.definition();
-    let crate::tools::service::ToolSource::Mcp { server_id } = &def.source else {
-        return true;
-    };
-    match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
-        None => true,
-        Some(owner) => crate::extension::visibility::owner_visible_via(ext, owner, visibility),
+    match &handler.definition().source {
+        crate::tools::service::ToolSource::Mcp { server_id } => visible(server_id),
+        _ => true,
     }
+}
+
+/// Face ⑤, the one derivation of "may this run see MCP server `server_id`",
+/// built once per run: the join's gate and every capability builtin read this
+/// one value. A server no plugin declared is visible; a plugin-owned one iff
+/// the extension manager can see its owner from `visibility`. No manager ⇒ an
+/// owned server is refused: the manager is the only authority on where a
+/// plugin came from, and "I cannot tell" is not "yes".
+pub(super) fn visible_mcp_servers(
+    visibility: crate::extension::visibility::VisibilityCtx,
+    ext: Option<Arc<crate::extension::ExtensionManager>>,
+) -> crate::tools::handlers::McpServerFilter {
+    Arc::new(move |server_id| {
+        match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
+            None => true,
+            Some(owner) => {
+                crate::extension::visibility::owner_visible_via(ext.as_deref(), owner, &visibility)
+            }
+        }
+    })
 }
 
 /// RAII guard for the per-session media cache.
