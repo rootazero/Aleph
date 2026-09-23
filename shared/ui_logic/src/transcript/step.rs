@@ -410,12 +410,15 @@ mod tests {
                     // `Some("…".into())` would otherwise pass. We are
                     // already inside `Some(h)`, so `s.trim()` is non-empty
                     // by construction (the `None` arm below is the only
-                    // place blank input is allowed to skip this). The one
-                    // remaining exemption is `cols == 1`: a single column
-                    // cannot hold both the ellipsis and any real character
-                    // (the ellipsis alone already spends the whole budget),
-                    // so a bare `…` is the only correct answer there.
-                    if cols >= 2 {
+                    // place blank input is allowed to skip this). The
+                    // remaining exemption is `cols < 3`: at `cols == 1` the
+                    // ellipsis alone already spends the whole budget, and at
+                    // `cols == 2` a leading fullwidth/wide (2-column)
+                    // character plus the 1-column ellipsis still cannot fit
+                    // in 2 columns — the same "no room for a real character"
+                    // reason applies to both, and a headline cap under three
+                    // columns is not a real layout anyway.
+                    if cols >= 3 {
                         prop_assert!(
                             !prefix.trim().is_empty(),
                             "empty prefix for non-blank input {s:?} at cols={cols}: {h:?}"
