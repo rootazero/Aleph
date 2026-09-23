@@ -44,10 +44,15 @@ pub enum Change {
     /// `TurnStarted` frames for (something was dropped on the way), or when a
     /// thinking record names an iteration other than the open step's. The
     /// entries are NOT patched — no step is minted to hold the frame and
-    /// none is renumbered. The client's move is to rebuild through the
-    /// replay leg: a fresh `Transcript`, each `trace.by_runs` row through
-    /// `apply_replay`, then `finish_replay` per run (spec §5.1, §9). The
-    /// other producers are fail-closed branches no input reaches today.
+    /// none is renumbered.
+    ///
+    /// The client's move: discard the whole transcript and rebuild it from
+    /// the session's replay — the user messages from the session log, then
+    /// each run's `trace.by_runs` rows through `apply_replay` and
+    /// `finish_replay` (spec §5.1, §9). A resync raised mid-run keeps what
+    /// is shown, marked stale, until the run ends. Phase T implements that
+    /// client side; this type offers no replace-run surface. The other
+    /// producers are fail-closed branches no input reaches today.
     NeedsResync,
 }
 
@@ -64,9 +69,6 @@ struct RunState {
     /// Deltas vs records for the open step's thinking and text.
     thinking: RecordCursor,
     text: RecordCursor,
-    /// Whether any assistant text was rendered this run (gates the
-    /// `final_response` fallback at `RunComplete`).
-    text_rendered: bool,
     /// `TurnStarted` frames seen — compared with `RunSummary.loops`.
     steps_seen: u32,
     /// Replay leg only: whether a `SessionCompleted` row arrived, and its
@@ -276,13 +278,7 @@ impl Transcript {
                 None => Vec::new(),
             },
             AgentTraceEvent::SessionCompleted { final_text, .. } => {
-                let has_text = self
-                    .open_step_ref()
-                    .is_some_and(|s| s.text.as_deref().is_some_and(|t| !t.trim().is_empty()));
-                match final_text.as_deref().filter(|t| !t.trim().is_empty()) {
-                    Some(t) if !has_text => self.append_text(t, now_ms),
-                    _ => Vec::new(),
-                }
+                self.record_final_text(final_text.as_deref(), now_ms)
             }
             // `ProviderUsage` too may come from a child's metering: accounting,
             // not a step.

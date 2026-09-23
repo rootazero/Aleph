@@ -106,6 +106,45 @@ enum Grace {
     /// partial text that no record covers and that are NOT prefixes of
     /// the grace turn's records.
     AfterPartial,
+    /// A halted Think streamed partial text and NO text record ever came
+    /// (no grace turn): the rows carry no `TextEmitted` on the last
+    /// iteration, and the run's final text is present or absent
+    /// (`SessionCompleted.final_text` on replay, `final_response` live).
+    Halted { final_text: bool },
+}
+
+/// `rows` with the last iteration's text record removed, as a halted Think
+/// with no grace turn leaves them; the session's final text kept or not.
+fn halted(rows: Vec<AgentTraceEvent>, keep_final: bool) -> Vec<AgentTraceEvent> {
+    rows.into_iter()
+        .filter(|r| !matches!(r, AgentTraceEvent::TextEmitted { .. }))
+        .map(|r| match r {
+            AgentTraceEvent::SessionCompleted {
+                outcome,
+                iterations,
+                tool_calls_made,
+                total_tokens,
+                hit_limit,
+                final_text,
+                terminate_reason,
+                duration_ms,
+                token_breakdown,
+                tool_timeline,
+            } => AgentTraceEvent::SessionCompleted {
+                outcome,
+                iterations,
+                tool_calls_made,
+                total_tokens,
+                hit_limit,
+                final_text: final_text.filter(|_| keep_final),
+                terminate_reason,
+                duration_ms,
+                token_breakdown,
+                tool_timeline,
+            },
+            other => other,
+        })
+        .collect()
 }
 
 /// The live leg for the same run: the same trace frames interleaved
@@ -119,10 +158,16 @@ fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
             vec![text.to_string()]
         }
     };
+    // What `RunComplete` carries is what the log's `SessionCompleted` says.
+    let final_response = rows.iter().find_map(|r| match r {
+        AgentTraceEvent::SessionCompleted { final_text, .. } => final_text.clone(),
+        _ => None,
+    });
+    let partial = matches!(grace, Grace::AfterPartial | Grace::Halted { .. });
     let mut out = vec![accepted()];
     for ev in rows {
         match &ev {
-            AgentTraceEvent::TurnStarted { iteration: 2 } if grace == Grace::AfterPartial => {
+            AgentTraceEvent::TurnStarted { iteration: 2 } if partial => {
                 out.push(trace(ev));
                 out.push(reasoning("Maybe the parser drops"));
                 out.push(chunk("I think the bug is in the par"));
@@ -168,7 +213,7 @@ fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
                 item("r1", "file_read", 12, true),
                 item("r2", "file_read", 8, true),
             ],
-            final_response: Some("Fixed the timezone handling.".into()),
+            final_response,
             ..Default::default()
         },
         total_duration_ms: 32_000,
@@ -219,9 +264,18 @@ fn the_live_leg_and_the_replay_leg_fold_to_the_same_entries() {
         (true, true, Grace::No),
         (true, false, Grace::Clean),
         (true, false, Grace::AfterPartial),
+        (true, false, Grace::Halted { final_text: true }),
+        (true, false, Grace::Halted { final_text: false }),
     ];
     for (text_first, salvage, grace) in shapes {
-        let rows = full_run_trace_with(text_first, salvage);
+        let rows = match grace {
+            Grace::Halted { final_text } => {
+                halted(full_run_trace_with(text_first, salvage), final_text)
+            }
+            Grace::No | Grace::Clean | Grace::AfterPartial => {
+                full_run_trace_with(text_first, salvage)
+            }
+        };
         let mut live = Transcript::new();
         let live_changes = drive(&mut live, &full_run_live(rows.clone(), grace));
         assert!(

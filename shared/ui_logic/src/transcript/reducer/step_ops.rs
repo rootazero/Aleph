@@ -17,6 +17,8 @@ const RECORD_JOIN: &str = "\n\n";
 /// every delta streamed since the previous record and is appended after any
 /// earlier record of the same step — so the live leg converges to exactly
 /// what the replay leg (records only) shows, whatever the deltas were.
+/// Text deltas no record covers are provisional: a live run's end keeps
+/// only the recorded text (`settle_provisional_text`, ruling T910-N1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct RecordCursor {
     /// Bytes at the head of the field that came from records.
@@ -50,7 +52,7 @@ impl RecordCursor {
 }
 
 impl Transcript {
-    pub(super) fn open_step_ref(&self) -> Option<&StepEntry> {
+    fn open_step_ref(&self) -> Option<&StepEntry> {
         let idx = self.run.as_ref()?.open_step?;
         match self.entries.get(idx) {
             Some(TranscriptEntry::Step(s)) => Some(s),
@@ -271,8 +273,8 @@ impl Transcript {
         changes
     }
 
-    /// A `ResponseChunk` delta, or text the record supplies when the stream
-    /// rendered none (`SessionCompleted.final_text`, `final_response`).
+    /// A `ResponseChunk` delta. Provisional until a record covers it (see
+    /// `settle_provisional_text`).
     pub(super) fn append_text(&mut self, s: &str, now_ms: Option<u64>) -> Vec<Change> {
         if s.is_empty() {
             return Vec::new();
@@ -286,10 +288,58 @@ impl Transcript {
         });
         if applied {
             if let Some(r) = self.run.as_mut() {
-                r.text_rendered = true;
                 r.text.streamed = true;
             }
         }
+        changes
+    }
+
+    /// The run's final text (`SessionCompleted.final_text`, or
+    /// `RunSummary.final_response` live) is the server's record of the answer.
+    /// It becomes the open step's text — replacing any uncovered deltas —
+    /// when that step holds no `TextEmitted` record; otherwise the record
+    /// already there wins. Empty or absent: nothing.
+    pub(super) fn record_final_text(
+        &mut self,
+        final_text: Option<&str>,
+        now_ms: Option<u64>,
+    ) -> Vec<Change> {
+        let has_record = self.run.as_ref().is_some_and(|r| r.text.record_len > 0);
+        match final_text.filter(|t| !t.trim().is_empty()) {
+            Some(t) if !has_record => self.record_text(t.trim_end(), now_ms),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Ruling T910-N1, at a live run's end: streamed text no record covers
+    /// is provisional. The open step keeps only its recorded text; a step
+    /// with no text record takes the run's final text when there is one
+    /// (`record_final_text`), else keeps none — exactly what replay (records
+    /// only) shows.
+    pub(super) fn settle_provisional_text(
+        &mut self,
+        final_text: Option<&str>,
+        now_ms: Option<u64>,
+    ) -> Vec<Change> {
+        let record_len = self.run.as_ref().map_or(0, |r| r.text.record_len);
+        let mut changes = Vec::new();
+        if let Some(step) = self.open_step_mut() {
+            if step.text.as_deref().map_or(0, str::len) > record_len {
+                // `record_len` is a length `record_text` wrote, so a boundary;
+                // a miss means the text is unknown.
+                match step.text.as_deref().and_then(|t| t.get(..record_len)) {
+                    Some(kept) => {
+                        step.text = (!kept.is_empty()).then(|| kept.to_string());
+                        changes.push(Change::Updated(step.id.clone()));
+                    }
+                    None => changes.push(Change::NeedsResync),
+                }
+            }
+        }
+        if let Some(r) = self.run.as_mut() {
+            r.text.streamed = false;
+        }
+        changes.extend(self.record_final_text(final_text, now_ms));
         changes
     }
 
@@ -314,7 +364,6 @@ impl Transcript {
         });
         if applied {
             if let Some(r) = self.run.as_mut() {
-                r.text_rendered = true;
                 r.text = RecordCursor {
                     record_len: kept_len,
                     streamed: false,

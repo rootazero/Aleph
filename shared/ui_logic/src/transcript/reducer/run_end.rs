@@ -35,13 +35,9 @@ impl Transcript {
         let mut changes = self.reconcile_from_record(summary, now_ms);
         // 2. Nothing spins after the run ended.
         changes.extend(self.settle_orphans());
-        // 3. A run that streamed no text still has an answer in the record.
-        let rendered = self.run.as_ref().is_some_and(|r| r.text_rendered);
-        if !rendered {
-            if let Some(t) = summary.final_response.as_deref() {
-                changes.extend(self.append_text(t.trim_end(), now_ms));
-            }
-        }
+        // 3. Uncovered streamed text is provisional (T910-N1): the open step
+        //    keeps its recorded text, or takes the record's final response.
+        changes.extend(self.settle_provisional_text(summary.final_response.as_deref(), now_ms));
         // 4. The last step's text IS the answer: hoist it out (ruling R5).
         changes.extend(self.hoist_open_step_text(now_ms));
         // 5. The trailers, over every row of this run — the same input the
@@ -106,6 +102,8 @@ impl Transcript {
 
     pub(super) fn fail_run(&mut self, error: &str, now_ms: Option<u64>) -> Vec<Change> {
         let mut changes = self.settle_orphans();
+        // An error carries no final text: only recorded text survives.
+        changes.extend(self.settle_provisional_text(None, now_ms));
         changes.extend(self.hoist_open_step_text(now_ms));
         changes.push(self.push_notice(format!("Error: {error}")));
         self.run = None;
