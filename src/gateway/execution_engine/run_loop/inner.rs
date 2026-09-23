@@ -803,7 +803,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // tools/list; here those handlers become LLM-visible LoopTools.
             // Gating mirrors the builtin path above: per-agent allowlist, plus
             // `slash_skill_scope` — the SAME set the builtin retain used, not a
-            // second parse of the same metadata key.
+            // second parse of the same metadata key — plus the owning plugin's
+            // visibility for a plugin-declared server (face ⑤).
             // Existing names are never overwritten (builtins win collisions).
             if let Some(mcp_registry) = super::super::tool_service_builder::mcp_tool_registry() {
                 let mut joined = 0usize;
@@ -812,6 +813,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         continue;
                     }
                     if !super::super::slash_skill_scope::admits(slash_skill_scope.as_ref(), name) {
+                        continue;
+                    }
+                    // Face ⑤ of `extension::visibility`: a server a plugin
+                    // declared joins only when that plugin is visible to this
+                    // run. The server PROCESS stays global (one manager, one
+                    // spawn); only its tools' presence on this run's surface is
+                    // per-project. `visibility` is the value derived once near
+                    // the top of this function for the plugin tool index.
+                    if !mcp_handler_admitted(
+                        handler.as_ref(),
+                        &visibility,
+                        extension_manager.as_deref(),
+                    ) {
                         continue;
                     }
                     if loop_registry_inner.get(name).is_some() {
@@ -1741,6 +1755,25 @@ fn publish_artifact_invalidation(
 ) {
     let Some(bus) = event_bus else { return };
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
+}
+
+/// Face ⑤ gate. Non-plugin servers pass; a plugin-owned server passes iff
+/// the extension manager can see its owner from `visibility`. No manager ⇒
+/// an owned server is refused: the manager is the only authority on where a
+/// plugin came from, and "I cannot tell" is not "yes".
+pub(super) fn mcp_handler_admitted(
+    handler: &dyn crate::tools::handlers::ToolHandler,
+    visibility: &crate::extension::visibility::VisibilityCtx,
+    ext: Option<&crate::extension::ExtensionManager>,
+) -> bool {
+    let def = handler.definition();
+    let crate::tools::service::ToolSource::Mcp { server_id } = &def.source else {
+        return true;
+    };
+    match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
+        None => true,
+        Some(owner) => crate::extension::visibility::owner_visible_via(ext, owner, visibility),
+    }
 }
 
 /// RAII guard for the per-session media cache.

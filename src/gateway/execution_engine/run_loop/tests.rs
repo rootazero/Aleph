@@ -1965,3 +1965,85 @@ fn layer_4_discriminates_the_answer_and_only_the_answer() {
          block is measuring a room upgrade that never happened"
     );
 }
+
+/// A handler whose only observable is the server id its definition names —
+/// the one field `mcp_handler_admitted` reads.
+struct McpHandlerOf(&'static str);
+
+#[async_trait::async_trait]
+impl crate::tools::handlers::ToolHandler for McpHandlerOf {
+    async fn invoke(
+        &self,
+        _: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        unreachable!("the join gate never invokes a handler")
+    }
+    fn definition(&self) -> crate::tools::service::ToolDefinition {
+        crate::tools::service::ToolDefinition {
+            name: "t".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            source: crate::tools::service::ToolSource::Mcp {
+                server_id: self.0.into(),
+            },
+            metadata: Default::default(),
+        }
+    }
+}
+
+/// Face ⑤, refuse arm: a non-plugin server passes; with no extension
+/// manager an owned server is refused (fail-closed).
+#[test]
+fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
+    let nowhere = crate::extension::visibility::VisibilityCtx { project_root: None };
+    assert!(
+        mcp_handler_admitted(&McpHandlerOf("github"), &nowhere, None),
+        "non-plugin server passes"
+    );
+    assert!(
+        !mcp_handler_admitted(&McpHandlerOf("plugin:proj/srv"), &nowhere, None),
+        "owned + no manager ⇒ refused"
+    );
+}
+
+/// Face ⑤, both arms through a real manager: a project-keyed plugin's
+/// server is admitted in its project and refused elsewhere, and a
+/// non-plugin server is admitted in both.
+#[tokio::test]
+async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
+    use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+    use crate::extension::{ExtensionManager, PluginKind, PluginOrigin, PluginRecord};
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let proj = tempdir().unwrap();
+    let manager = ExtensionManager::with_defaults().await.unwrap();
+    {
+        let mut registry = manager.get_plugin_registry_mut().await;
+        let mut record = PluginRecord::new(
+            "proj".into(),
+            "P".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Workspace,
+        );
+        record.scope_key = ScopeKey::project(proj.path());
+        registry.register_plugin(record);
+    }
+    manager.sync_runtime_snapshots().await;
+
+    let here = VisibilityCtx {
+        project_root: Some(canonical_root(proj.path())),
+    };
+    let elsewhere = VisibilityCtx { project_root: None };
+    let owned = McpHandlerOf("plugin:proj/srv");
+    assert!(
+        mcp_handler_admitted(&owned, &here, Some(&manager)),
+        "owner visible from its project ⇒ admitted"
+    );
+    assert!(
+        !mcp_handler_admitted(&owned, &elsewhere, Some(&manager)),
+        "owner invisible outside its project ⇒ refused"
+    );
+    assert!(
+        mcp_handler_admitted(&McpHandlerOf("github"), &elsewhere, Some(&manager)),
+        "a server no plugin declared is not gated"
+    );
+}

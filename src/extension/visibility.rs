@@ -8,9 +8,10 @@
 //!   given where a plugin was *found*, which sessions may see it.
 //!
 //! `visible_to` is the single predicate every capability face uses (tool
-//! index, skills index, sub-agents, slash list, MCP bridge, hooks). It has
-//! exactly two shapes: `Global` is visible everywhere; `Project(root)` is
-//! visible only to a session whose project root is that directory. A session
+//! index, skills index, sub-agents, slash list, request-time MCP join,
+//! hooks). It has exactly two shapes: `Global` is visible everywhere;
+//! `Project(root)` is visible only to a session whose project root is that
+//! directory. A session
 //! bound to no project sees `Global` only — fail-closed, and a behaviour
 //! change from the union-of-all-projects discovery that preceded this round.
 
@@ -180,11 +181,18 @@ pub fn retain_visible_plugin_skills(
     )
 }
 
-/// Face ④ (list): the owner of a catalog row, if a plugin registered it.
-fn catalog_owner(tool: &crate::tool_metadata::UnifiedTool) -> Option<&str> {
+/// Face ④: the owner of a catalog row, if a plugin registered it — the one
+/// derivation both slash faces read (the list filter below, and
+/// `CommandParser::parse_async`'s `owning_plugin`, which the dispatch gate
+/// [`slash_owner_admits`] judges). A plugin-declared MCP server's tools are
+/// owned through the same codec the run loop's MCP join (face ⑤) decodes.
+pub(crate) fn catalog_owner(tool: &crate::tool_metadata::UnifiedTool) -> Option<&str> {
     match &tool.source {
         crate::tool_metadata::ToolSource::Plugin { plugin_id } => Some(plugin_id.as_str()),
         crate::tool_metadata::ToolSource::Skill { plugin_id, .. } => plugin_id.as_deref(),
+        crate::tool_metadata::ToolSource::Mcp { server } => {
+            crate::extension::mcp_config::owning_plugin_of_server_id(server)
+        }
         _ => None,
     }
 }
@@ -212,11 +220,29 @@ pub fn retain_visible_owned_commands(
 /// path's `slash_owner_admits` (`execution_engine/slash_command.rs`) and
 /// `/help`'s `render_command_help` (`inbound_router/command_handler.rs`). A
 /// fourth face calls this rather than re-spelling it; tests pass their own
-/// closures.
+/// closures. The body is [`owner_visible_via`] on the process global.
 pub fn manager_backed_owner_visible() -> impl Fn(&str, &VisibilityCtx) -> bool {
     |owner: &str, ctx: &VisibilityCtx| {
-        crate::extension::try_extension_manager().is_some_and(|m| m.plugin_visible(owner, ctx))
+        owner_visible_via(
+            crate::extension::try_extension_manager().map(|m| m.as_ref()),
+            owner,
+            ctx,
+        )
     }
+}
+
+/// The one spelling of "may `ctx` see this owner": no manager ⇒ no, else
+/// `plugin_visible`. [`manager_backed_owner_visible`] hands it the process
+/// global; the run loop's MCP join (face ⑤) hands it the manager
+/// `run_agent_loop` already resolved for that run, the same one face ① of
+/// that run reads.
+#[must_use]
+pub(crate) fn owner_visible_via(
+    ext: Option<&crate::extension::ExtensionManager>,
+    owner: &str,
+    ctx: &VisibilityCtx,
+) -> bool {
+    ext.is_some_and(|m| m.plugin_visible(owner, ctx))
 }
 
 /// Face ④ (dispatch): admit a resolved slash command unless its owner is a
@@ -562,6 +588,20 @@ mod tests {
                     plugin_id: "glob".into(),
                 },
             ),
+            // Face ⑤ reaching face ④: a plugin-declared MCP server's tool is
+            // owned by that plugin; a user `mcp.json` server's is not.
+            owned_tool(
+                "mcp:plugin:proj/srv:srv__t",
+                ToolSource::Mcp {
+                    server: "plugin:proj/srv".into(),
+                },
+            ),
+            owned_tool(
+                "mcp:github:gh__t",
+                ToolSource::Mcp {
+                    server: "github".into(),
+                },
+            ),
         ];
         let visible = |id: &str, ctx: &VisibilityCtx| match id {
             "proj" => visible_to(&ScopeKey::project(p.path()), ctx),
@@ -585,13 +625,42 @@ mod tests {
                 "skill:user-skill",
                 "skill:proj:cmd",
                 "plugin:proj:tool",
-                "plugin:glob:tool"
+                "plugin:glob:tool",
+                "mcp:plugin:proj/srv:srv__t",
+                "mcp:github:gh__t"
             ]
         );
         assert_eq!(
             ids(&nowhere),
-            vec!["builtin:help", "skill:user-skill", "plugin:glob:tool"]
+            vec![
+                "builtin:help",
+                "skill:user-skill",
+                "plugin:glob:tool",
+                "mcp:github:gh__t"
+            ]
         );
+    }
+
+    /// The one derivation of a catalog row's owner names the plugin behind
+    /// a plugin-declared MCP server through the same codec the run loop's
+    /// MCP join uses, and nobody behind a user server.
+    #[test]
+    fn catalog_owner_decodes_plugin_mcp_servers_with_the_join_codec() {
+        use crate::tool_metadata::ToolSource;
+        let owned = owned_tool(
+            "mcp:plugin:proj/srv:t",
+            ToolSource::Mcp {
+                server: crate::extension::mcp_config::plugin_server_id("proj", "srv"),
+            },
+        );
+        assert_eq!(catalog_owner(&owned), Some("proj"));
+        let user = owned_tool(
+            "mcp:github:t",
+            ToolSource::Mcp {
+                server: "github".into(),
+            },
+        );
+        assert_eq!(catalog_owner(&user), None);
     }
 
     #[test]

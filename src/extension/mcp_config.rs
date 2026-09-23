@@ -113,7 +113,8 @@ fn default_transport() -> String {
 /// Read `.mcp.json` from a plugin directory and return MCP manager configs.
 ///
 /// Each server config has environment variables substituted and is keyed by
-/// `plugin_id/server_name` to avoid collisions across plugins.
+/// [`plugin_server_id`] (`plugin:{plugin_id}/{server_name}`) to avoid
+/// collisions across plugins.
 ///
 /// # Arguments
 ///
@@ -140,6 +141,31 @@ pub fn read_mcp_json(
 
     parse_mcp_json_content(&content, plugin_dir, plugin_id, settings)
         .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {e}")))
+}
+
+/// The transient server id of a plugin-declared MCP server. The plugin id is
+/// embedded so every consumer that only has the server id (the tool bridge,
+/// the request-time MCP join) can name the owner without a side table.
+/// [`owning_plugin_of_server_id`] is the inverse; keep them together.
+#[must_use]
+pub(crate) fn plugin_server_id(plugin_id: &str, server_name: &str) -> String {
+    format!("plugin:{plugin_id}/{server_name}")
+}
+
+/// Inverse of [`plugin_server_id`]. `None` for a server no plugin declared
+/// (user `mcp.json` servers have no `plugin:` prefix). Splits at the FIRST
+/// `/`: plugin ids are `[a-z0-9-]` (`manifest::validate_plugin_id` /
+/// `sanitize_plugin_id`), so the first slash is always the separator.
+///
+/// Feed it ONLY a `ToolSource::Mcp { server_id }`. Other `plugin:`-prefixed
+/// id spaces use a colon grammar (`plugin:{id}:{name}` tool ids,
+/// `plugin:{id}` usage / visibility groups) — same prefix, different
+/// grammar — and decoding one of those here names the wrong thing.
+#[must_use]
+pub(crate) fn owning_plugin_of_server_id(server_id: &str) -> Option<&str> {
+    let rest = server_id.strip_prefix("plugin:")?;
+    let (plugin_id, _server_name) = rest.split_once('/')?;
+    (!plugin_id.is_empty()).then_some(plugin_id)
 }
 
 /// Parse .mcp.json content and return MCP manager configs.
@@ -179,7 +205,7 @@ fn parse_mcp_json_content(
     let mut result = HashMap::new();
 
     for (server_name, entry) in file.mcp_servers {
-        let server_id = format!("plugin:{plugin_id}/{server_name}");
+        let server_id = plugin_server_id(plugin_id, &server_name);
         let display_name = format!("{server_name} ({plugin_id})");
 
         let transport = match entry.transport.as_str() {
@@ -276,6 +302,37 @@ fn references_plugin_data(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_server_id_round_trips_through_its_decoder() {
+        let id = plugin_server_id("media-office", "office");
+        assert_eq!(id, "plugin:media-office/office");
+        assert_eq!(owning_plugin_of_server_id(&id), Some("media-office"));
+        // A server name with a slash still decodes to the plugin id: the
+        // plugin id itself cannot contain one (`validate_plugin_id`).
+        assert_eq!(owning_plugin_of_server_id("plugin:x/a/b"), Some("x"));
+        // Not plugin-owned.
+        assert_eq!(owning_plugin_of_server_id("github"), None);
+        assert_eq!(owning_plugin_of_server_id("plugin:"), None);
+        assert_eq!(owning_plugin_of_server_id("plugin:nosl"), None);
+        // Same prefix, different grammar: the colon-form tool ids
+        // (`plugin:{id}:{name}`) are not server ids and must not decode.
+        assert_eq!(owning_plugin_of_server_id("plugin:x:tool"), None);
+    }
+
+    /// `.mcp.json` parsing uses the encoder, not its own `format!`.
+    #[test]
+    fn parsed_server_ids_come_from_the_encoder() {
+        let dir = tempfile::tempdir().unwrap();
+        let configs = parse_mcp_json_content(
+            r#"{"mcpServers":{"srv":{"command":"true"}}}"#,
+            dir.path(),
+            "plug",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
+        assert!(configs.contains_key(&plugin_server_id("plug", "srv")));
+    }
 
     #[test]
     fn test_parse_mcp_json_basic() {

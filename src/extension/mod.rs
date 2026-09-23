@@ -969,8 +969,8 @@ impl ExtensionManager {
     /// Fail-closed on an unknown id: the registry is the only authority on
     /// where a plugin came from, and a plugin it cannot name has no key to
     /// compare. Every capability face (tool index, skills, sub-agents, slash
-    /// list, MCP bridge) asks this; hooks compare their own stamped key with
-    /// the same `visible_to`.
+    /// list, request-time MCP join) asks this; hooks compare their own
+    /// stamped key with the same `visible_to`.
     pub fn plugin_visible(&self, plugin_id: &str, ctx: &visibility::VisibilityCtx) -> bool {
         self.plugin_scope_key(plugin_id)
             .is_some_and(|key| visibility::visible_to(&key, ctx))
@@ -1704,6 +1704,38 @@ mod tests {
         assert_eq!(names(&nowhere), vec!["p2_global_tool"]);
         // The unfiltered snapshot still holds both: the filter is per request.
         assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
+    }
+
+    /// Face ⑤: the owner decoded from a plugin server id is a key the
+    /// manager answers for — a project-keyed plugin's server is visible in
+    /// its project and nowhere else.
+    #[tokio::test]
+    async fn plugin_visible_decides_the_mcp_join_for_owned_servers() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut record = PluginRecord::new(
+                "proj".into(),
+                "P".into(),
+                PluginKind::Mcp,
+                PluginOrigin::Workspace,
+            );
+            record.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(record);
+        }
+        manager.sync_runtime_snapshots().await;
+        let server_id = crate::extension::mcp_config::plugin_server_id("proj", "srv");
+        let owner = crate::extension::mcp_config::owning_plugin_of_server_id(&server_id).unwrap();
+        assert!(manager.plugin_visible(
+            owner,
+            &VisibilityCtx {
+                project_root: Some(canonical_root(proj.path()))
+            }
+        ));
+        assert!(!manager.plugin_visible(owner, &VisibilityCtx { project_root: None }));
     }
 
     /// The projection publishes each plugin's skills dir WITH its key: the

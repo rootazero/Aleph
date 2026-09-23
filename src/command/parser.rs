@@ -31,9 +31,11 @@ pub struct ParsedCommand {
     pub arguments: Option<String>,
     /// Command-specific context
     pub context: CommandContext,
-    /// The plugin that owns the resolved entry (`ToolSource::Plugin` or a
-    /// plugin-registered `ToolSource::Skill`), for the visibility gate at the
-    /// mode consumer. `None` = not plugin-owned.
+    /// The plugin that owns the resolved entry, as
+    /// `extension::visibility::catalog_owner` derives it (`ToolSource::Plugin`,
+    /// a plugin-registered `ToolSource::Skill`, or a plugin-declared MCP
+    /// server), for the visibility gate at the mode consumer. `None` = not
+    /// plugin-owned.
     pub owning_plugin: Option<String>,
 }
 
@@ -109,11 +111,10 @@ impl CommandParser {
         // the tool, so those two fields are cloned once; every other field
         // moves into the `CommandContext` without cloning.
         let source_type = ToolSourceType::from(&resolved.tool.source);
-        let owning_plugin = match &resolved.tool.source {
-            ToolSource::Plugin { plugin_id } => Some(plugin_id.clone()),
-            ToolSource::Skill { plugin_id, .. } => plugin_id.clone(),
-            _ => None,
-        };
+        // The list faces filter on the same derivation, so what `/help`
+        // offers and what the fast path admits cannot disagree.
+        let owning_plugin =
+            crate::extension::visibility::catalog_owner(&resolved.tool).map(str::to_owned);
         let command_name = resolved.tool.name.clone();
         let tool_id = resolved.tool.id.clone();
         let context = tool_to_command_context(resolved.tool);
@@ -257,8 +258,9 @@ mod tests {
     }
 
     /// Face ④ of `extension::visibility`: the catalog row is the one object
-    /// every slash surface shares, so the owner recorded on it (`Plugin` or a
-    /// plugin-registered `Skill`) must survive resolution onto the
+    /// every slash surface shares, so the owner recorded on it (`Plugin`, a
+    /// plugin-registered `Skill`, or a plugin-declared MCP server) must
+    /// survive resolution onto the
     /// `ParsedCommand` the mode serializer reads. A skill nobody owns says so
     /// with `None`, never with an empty string.
     #[tokio::test]
@@ -289,6 +291,20 @@ mod tests {
                     plugin_id: None,
                 },
             ),
+            (
+                "mcp:plugin:proj/srv:srv__t",
+                "srv__t",
+                ToolSource::Mcp {
+                    server: "plugin:proj/srv".into(),
+                },
+            ),
+            (
+                "mcp:github:gh__t",
+                "gh__t",
+                ToolSource::Mcp {
+                    server: "github".into(),
+                },
+            ),
         ] {
             catalog
                 .register_with_conflict_resolution(UnifiedTool::new(id, name, "d", source))
@@ -315,6 +331,21 @@ mod tests {
         );
         assert_eq!(
             parser.parse_async("/plain").await.unwrap().owning_plugin,
+            None
+        );
+        // A plugin-declared MCP server's tool carries its plugin onto the
+        // mode JSON, so the fast path's `slash_owner_admits` judges it.
+        assert_eq!(
+            parser
+                .parse_async("/srv__t")
+                .await
+                .unwrap()
+                .owning_plugin
+                .as_deref(),
+            Some("proj")
+        );
+        assert_eq!(
+            parser.parse_async("/gh__t").await.unwrap().owning_plugin,
             None
         );
     }
