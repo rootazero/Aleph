@@ -37,6 +37,9 @@ pub use view_model::{
     READ_ONLY_DISPLAY_NAMES,
 };
 
+mod detail;
+pub use detail::{effective_open, DetailLevel};
+
 mod diff_view;
 pub use diff_view::{
     diff_rows, stats_label, word_spans, DiffRow, DiffRows, DiffView, Span, COLLAPSED_DIFF_ROWS,
