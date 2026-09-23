@@ -17,7 +17,7 @@
 | **模型 pin Model Pin** | 任意 model id（+可选 provider） | 这个对话此后用哪个模型（下一 run 起生效） | **只有 `select_model` 工具**（R8 对话式）——`sessions.patch` 明确拒绝该键。TUI 的 `/providers` 选择器**不是第二个写者**：它确认时发 `/model <id>` 这条网关命令，仍然落到同一个工具。Panel 的 `ModelPicker` **只显示不设置**（无 per-turn override 时 pill 印的就是 pin，否则它会报出用户刚换掉的那个模型） | `src/providers/session_model_handle.rs` + `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` |
 | **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
 
-> **显示密度 `brief`/`full` 刻意不是会话旋钮**（spec 2026-09-23 的用户裁定 R7，不是本仓红线 R7）：它是客户端 chrome，落点是每台设备（Panel `appearance` 的 localStorage 轴、TUI `<aleph_home>/tui-detail`——由 Phase T/P 建，2026-09-23 时两处都还不存在），取值与默认在 `shared_ui_logic::transcript::detail`（`DetailLevel`）。哪天要 R8 会话式入口，落点见 [spec 2026-09-23 §13](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)——先记落点，不预建。
+> **显示密度 `brief`/`full` 刻意不是会话旋钮**（spec 2026-09-23 的用户裁定 R7，不是本仓红线 R7）：它是客户端 chrome，落点是每台设备（Panel `appearance` 的 localStorage 轴、TUI `<aleph_home>/tui-detail`——由 Phase T/P 建，2026-09-23 时两处都还不存在），取值与默认在 `shared_ui_logic::transcript::detail`（`DetailLevel`）。哪天要按本仓红线 R8 做一个会话式（对话即管理面板）入口，落点见 [spec 2026-09-23 §13](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)——先记落点，不预建。
 
 > **别急着给 Busy Input 加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
 
