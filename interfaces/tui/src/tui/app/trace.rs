@@ -295,6 +295,11 @@ impl AppState {
                     self.append_assistant_content(fresh);
                 }
             },
+            // Phase S: the per-iteration reasoning record. The live deltas
+            // already reached the transcript through `StreamEvent::Reasoning`;
+            // until Phase T folds steps, the authoritative copy is ignored
+            // here rather than appended twice.
+            AgentTraceEvent::ReasoningEmitted { .. } => {}
             // ToolSummary carries an agent-authored summary sentence — use it
             // verbatim instead of the "Tool summary: " decorated form.
             AgentTraceEvent::ToolSummary { summary, .. } => {

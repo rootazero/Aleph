@@ -468,6 +468,17 @@ pub enum AgentTraceEvent {
         stream: AgentTraceTextKind,
         text: String,
     },
+    /// The model's thinking for one Think iteration, authoritative and whole
+    /// (the provider's summarized reasoning where the provider summarizes;
+    /// raw chain-of-thought otherwise — the wire cannot tell). Emitted beside
+    /// `TextEmitted{Final}` by the same two producers, only when the block is
+    /// non-empty. Live thinking still streams as `StreamEvent::Reasoning`
+    /// deltas; this is the per-iteration record a replay reconstructs a
+    /// folded step from. Absent on runs recorded before 2026-09-23.
+    ReasoningEmitted {
+        iteration: usize,
+        text: String,
+    },
     ToolCallStarted {
         iteration: usize,
         call: AgentTraceToolCallStart,
@@ -625,6 +636,7 @@ impl AgentTraceEvent {
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnStateEntered { .. } => "turn_state_entered",
             Self::TextEmitted { .. } => "text_emitted",
+            Self::ReasoningEmitted { .. } => "reasoning_emitted",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
             Self::ToolSummary { .. } => "tool_summary",
@@ -1135,6 +1147,20 @@ mod tests {
             other => panic!("expected ContextGauge, got {other:?}"),
         }
         assert_eq!(event.run_id(), "run-7");
+    }
+
+    #[test]
+    fn reasoning_emitted_round_trips_with_its_kind_tag() {
+        let event = AgentTraceEvent::ReasoningEmitted {
+            iteration: 4,
+            text: "Considering the timezone bug first.".into(),
+        };
+        assert_eq!(event.kind(), "reasoning_emitted");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"kind\":\"reasoning_emitted\""), "{json}");
+        assert!(json.contains("\"iteration\":4"), "{json}");
+        let back: AgentTraceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
     }
 
     #[test]
