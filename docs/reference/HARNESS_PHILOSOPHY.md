@@ -123,29 +123,27 @@ loop {
 经 P0–P7 共 8 阶段 dissolution，`src/harness/` 从 **16 文件 / 3712 行** 瘦身到 9 文件。2026-07-04 的跨层收口任务（Tasks 5–8）在此基础上把 `agent.rs` 按 Think/Act/Guardrails/Prompt 拆成 `agent/` 子目录四文件、把 nudge 文案与压缩派发下沉出 harness、把内联测试搬去 `src/harness/tests/`，当前物理边界固化为 **12 文件**（与 [src/harness/CLAUDE.md](../../src/harness/CLAUDE.md) 的硬边界一致）：
 
 ```
-src/harness/                            # 笨循环编排核心 (Thin Core)
-├── mod.rs                  (20)        # 导出 AgentHarness
-├── agent.rs              (1037)        # AgentHarness struct + run() 顶层循环 + 救援 CAS 槽
-├── deps.rs                (228)        # HarnessDeps: DI 容器
-├── trait_def.rs           (156)        # HarnessError + TurnState
-├── callback.rs             (86)        # HarnessCallback (编排级事件)
-├── chain_context.rs        (79)        # turn 间状态接力
-├── trace.rs               (244)        # 编排 trace 收集（线协议 DTO 已迁出）
-├── trace_sink.rs           (23)        # Trace 输出抽象
-└── agent/                              # Task 7 拆分（原 agent.rs 单文件 1713 行）
-    ├── think.rs          (1509)        # Think：LLM 调用 + 守卫 + 验证（救援簇已迁出）
-    ├── act.rs            (1120)        # Act：工具执行 + 资源域并行调度
-    ├── guardrails.rs       (84)        # 输入/输出/工具调用护栏挂载
-    └── prompt.rs          (451)        # 逐轮消息组装
-                          ─────
-                   TOTAL   5037 行
+src/harness/                  # 笨循环编排核心 (Thin Core)
+├── mod.rs                    # 导出 AgentHarness
+├── agent.rs                  # AgentHarness struct + run() 顶层循环 + 救援 CAS 槽
+├── deps.rs                   # HarnessDeps: DI 容器
+├── trait_def.rs              # HarnessError + TurnState
+├── callback.rs               # HarnessCallback (编排级事件)
+├── chain_context.rs          # turn 间状态接力
+├── trace.rs                  # 编排 trace 收集（线协议 DTO 已迁出）
+├── trace_sink.rs             # Trace 输出抽象
+└── agent/                    # Task 7 拆分（原 agent.rs 单文件 1713 行）
+    ├── think.rs              # Think：LLM 调用 + 守卫 + 验证（救援簇已迁出）
+    ├── act.rs                # Act：工具执行 + 资源域并行调度
+    ├── guardrails.rs         # 输入/输出/工具调用护栏挂载
+    └── prompt.rs             # 逐轮消息组装
 ```
 
-只有这些（+ `src/harness/tests/*` 的内联测试外置，不计入预算）。其它一切搬走。
+只有这些（+ `src/harness/tests/*` 的内联测试外置，不计入预算）。其它一切搬走。逐文件行数与总数不在这里抄——`src/harness/tests/budget.rs` 实测产出（口径见下）。
 
 **口径**：每个文件的行数取"文件开头到该文件内第一个**顶层（第 0 列）** `#[cfg(test)]` 之前"——测试代码不计入 12 文件预算，这也是 Task 7 把 `agent.rs` 内联测试搬到 `src/harness/tests/agent.rs` 的动机。
 
-> ⚠️ **"顶层"二字是口径的全部**。本表上一版写着 `agent.rs (212)` / `TOTAL 5077`，那是**错的**：`agent.rs` 在生产 `impl` 中间挂着一个**缩进的** `#[cfg(test)]`（4 行测试专用取值器），朴素的"第一个 `#[cfg(test)]`"读法在那里截断，静默丢掉 846 行生产代码。当年"超红线 177 行"的结论因此是粉饰过的。**这些数字现在一律由 `src/harness/tests/budget.rs` 实测产出，不再手算**——那个测试就是本表的唯一来源。
+> ⚠️ **"顶层"二字是口径的全部**。本表上一版写着 `agent.rs (212)` / `TOTAL 5077`，那是**错的**：`agent.rs` 在生产 `impl` 中间挂着一个**缩进的** `#[cfg(test)]`（4 行测试专用取值器），朴素的"第一个 `#[cfg(test)]`"读法在那里截断，静默丢掉 846 行生产代码。当年"超红线 177 行"的结论因此是粉饰过的。**这些数字现在一律由 `src/harness/tests/budget.rs` 实测产出，不再手算**——那个测试就是这些数字的唯一来源。
 
 **已不存在 `loop_callback.rs`**——本节此前记为第 9 个文件（`LoopCallback` turn 级钩子），该类型已在更早的重构中删除/合并进 `callback.rs`，此前的表格是未跟进的过时残留，2026-07-04 一并订正。
 
