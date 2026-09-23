@@ -39,8 +39,20 @@ fn load_plugins(
         match state.rpc_call("plugins.list", json!({})).await {
             Ok(result) => {
                 if let Some(list) = result.get("plugins") {
-                    if let Ok(parsed) = serde_json::from_value::<Vec<PluginInfo>>(list.clone()) {
-                        plugins.set(parsed);
+                    match serde_json::from_value::<Vec<PluginInfo>>(list.clone()) {
+                        Ok(parsed) => plugins.set(parsed),
+                        Err(e) => {
+                            // A shape we cannot read is also not an empty
+                            // list (判据 §8) — the silent `if let Ok` this
+                            // replaces rendered a decode failure identically
+                            // to "no plugins installed".
+                            plugins.set(Vec::new());
+                            error.set(Some(crate::components::admin_refusal::settings_load_error(
+                                i18n,
+                                &e.to_string(),
+                                |e| format!("Failed to read plugin list: {e}"),
+                            )));
+                        }
                     }
                 }
                 loading.set(false);

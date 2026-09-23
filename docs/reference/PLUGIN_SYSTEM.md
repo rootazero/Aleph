@@ -163,9 +163,9 @@ sensitive = true
 > doc 声称它「Surfaced in `extensions.stat`」，实际零消费者）。
 >
 > 现在 `error` / `blocked` 有了 registry 行 + `status_detail`。**`overridden` 从未有过生产者**：
-> registry 按 id 键控，输家（被遮蔽的副本）拿不到自己的行，`load_all`（现
-> `discover_and_mount`，`src/extension/lifecycle.rs`）只在赢家的 registry 上记一条 `shadowed`
-> 诊断（`PluginDiagnostic`，不是 registry 行）——这一节曾写「现在三者都有 registry 行」，
+> registry 按 id 键控，输家（被遮蔽的副本）拿不到自己的行，`load_all` → `discover_and_mount`
+> （`src/extension/lifecycle.rs`，前者调用后者，不是被它取代）只在赢家的 registry 上记一条
+> `shadowed` 诊断（`PluginDiagnostic`，不是 registry 行）——这一节曾写「现在三者都有 registry 行」，
 > 那句是假的；变体已于 2026-09 删除，新增的 `pending` 走的是第三条路：既不进 `errors`
 > 计数也不是诊断，而是 `PluginRecord.status` 本身。状态词表的单一源是
 > `aleph_protocol::plugins::PluginRuntimeStatus`。

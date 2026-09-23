@@ -146,6 +146,12 @@ pub struct PluginRow {
 /// winner's registry instead gains a `shadowed` diagnostic, recorded by
 /// `discover_and_mount` in `src/extension/lifecycle.rs`, which is not a status
 /// the loser could ever carry).
+///
+/// `Error` also carries `#[serde(other)]`: a label this build's enum does not
+/// know (an older client reading a newer server's vocabulary, or vice versa)
+/// deserialises as `Error` rather than failing the whole decode. Without it,
+/// one unrecognised status word takes down the entire `plugins.list` response
+/// for every plugin, not just the one with the unfamiliar label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginRuntimeStatus {
@@ -155,8 +161,6 @@ pub enum PluginRuntimeStatus {
     /// The operator turned it off (`<data_dir>/plugins.toml`). Registered and
     /// listable so it can be turned back on, but invisible to the model.
     Disabled,
-    /// The manifest could not be parsed. `status_detail` carries the error.
-    Error,
     /// The owner-trust policy refused this origin. Distinct from `Disabled`:
     /// the remedy is an allowlist entry, not a toggle.
     Blocked,
@@ -165,6 +169,14 @@ pub enum PluginRuntimeStatus {
     /// `status_detail` carries `waiting on …`. Active: the plugin's other
     /// capabilities are live.
     Pending,
+    /// The manifest could not be parsed. `status_detail` carries the error.
+    ///
+    /// Also the fallback for a status label this build's enum does not
+    /// recognise (`#[serde(other)]`, which serde requires to sit on the last
+    /// variant) — an unfamiliar word must never decode-fail the whole
+    /// response, and must never read as healthy.
+    #[serde(other)]
+    Error,
 }
 
 impl PluginRuntimeStatus {
@@ -576,6 +588,13 @@ mod tests {
             wire.get("plugins").is_some(),
             "`aleph plugin info` read this as a bare array and found nothing, ever"
         );
+    }
+
+    #[test]
+    fn an_unrecognised_status_label_decodes_as_error() {
+        let status: PluginRuntimeStatus =
+            serde_json::from_str("\"some-future-status\"").expect("unknown labels must decode");
+        assert_eq!(status, PluginRuntimeStatus::Error);
     }
 
     #[test]

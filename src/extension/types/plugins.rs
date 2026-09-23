@@ -491,6 +491,14 @@ impl PluginRecord {
     /// Not `inactive`: a pending plugin's other capabilities stay live (see
     /// [`PluginStatus::is_active`]). The detail is the operator's window onto
     /// WHAT is being waited for, so it lists every entry.
+    ///
+    /// The empty-list check below is `assert!`, not `inactive`'s
+    /// `debug_assert!`: an empty `waiting_on` is not "an unusual status to
+    /// pass" the way a caller-supplied `PluginStatus` might be, it is a
+    /// contradiction in terms ("pending on nothing" — 判据 §2, a predicate
+    /// that can never go red). No runtime-data path calls this with a list it
+    /// did not itself derive as non-empty; if one ever does, that is a
+    /// programmer error this build should catch, release or not.
     #[must_use]
     pub fn with_pending(mut self, mut waiting_on: Vec<String>) -> Self {
         assert!(
