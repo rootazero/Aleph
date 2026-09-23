@@ -392,19 +392,6 @@ impl StreamEvent {
             suggested_action,
         }
     }
-
-    /// Create a new structured agent trace event
-    pub fn agent_trace(
-        run_id: impl Into<String>,
-        seq: u64,
-        event: crate::harness::trace::LoopTraceEvent,
-    ) -> Self {
-        Self::AgentTrace {
-            run_id: run_id.into(),
-            seq,
-            event: event.into(),
-        }
-    }
 }
 
 /// Result of a tool execution — the wire type itself, not a gateway twin.

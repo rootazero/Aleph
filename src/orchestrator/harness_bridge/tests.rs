@@ -1218,3 +1218,66 @@ fn no_site_records_a_completed_terminate_reason() {
          an empty set"
     );
 }
+
+/// G1b. Program order — thinking, then the turn boundary, then text —
+/// survives into seq order through the one drain, with every frame produced
+/// by its REAL producer: `BroadcastCallback` for the reasoning and text
+/// frames, `AgentTraceEmitSink::on_trace` for the turn boundary. The three
+/// calls run back to back on this current-thread runtime with no `.await`
+/// between them, so the channel's delivery order is the emission order, and
+/// the drain stamps `seq` in that order.
+///
+/// What makes it red: any producer that defers its send to another task. The
+/// pre-2026-09-23 sink queued trace events on its own mpsc and emitted them
+/// from a spawned task, so the `agent_trace` frame took its seq there — absent
+/// from this drain, or stamped after the `response_chunk` it should precede.
+/// Lives here rather than beside the sink because `BroadcastCallback` is
+/// private to `harness_bridge`; the sink and the drain are crate-visible.
+#[tokio::test]
+async fn trace_frames_keep_their_place_in_the_run_seq_order() {
+    use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter, StreamEvent};
+    use crate::gateway::execution_engine::event_drain::{emit_flow_event, DrainState};
+    use crate::gateway::execution_engine::AgentTraceEmitSink;
+    use crate::harness::trace::LoopTraceEvent;
+    use crate::harness::{NoopTraceSink, TraceSink};
+    use crate::orchestrator::flow_event_channel;
+
+    let (tx, mut rx) = flow_event_channel();
+    let mut cb = super::callback::BroadcastCallback::new(tx.clone(), 200_000);
+    let sink = AgentTraceEmitSink::new(Arc::new(NoopTraceSink), &tx);
+
+    cb.on_reasoning("thinking");
+    sink.on_trace(&LoopTraceEvent::TurnStarted { iteration: 2 });
+    cb.on_delta("hello");
+
+    let inner = Arc::new(CollectingEventEmitter::new());
+    let emitter: Arc<dyn EventEmitter> = inner.clone();
+    let state = Arc::new(Mutex::new(DrainState::default()));
+    while let Ok(ev) = rx.try_recv() {
+        emit_flow_event(ev, &emitter, "run-order", &state)
+            .await
+            .expect("drain ok");
+    }
+
+    let frames: Vec<(&str, u64)> = inner
+        .events()
+        .await
+        .iter()
+        .map(|e| match e {
+            StreamEvent::Reasoning { seq, .. } => ("reasoning", *seq),
+            StreamEvent::AgentTrace { seq, .. } => ("agent_trace", *seq),
+            StreamEvent::ResponseChunk { seq, .. } => ("response_chunk", *seq),
+            other => panic!("unexpected frame {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        frames.iter().map(|f| f.0).collect::<Vec<_>>(),
+        ["reasoning", "agent_trace", "response_chunk"],
+        "{frames:?}"
+    );
+    assert!(
+        frames.windows(2).all(|w| w[0].1 < w[1].1),
+        "seq must be strictly increasing in emission order: {frames:?}"
+    );
+    drop((cb, sink, tx));
+}
