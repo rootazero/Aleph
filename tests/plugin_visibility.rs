@@ -23,9 +23,9 @@
 //! wiring (tool index, slash list, MCP join). Those have no fire-site test in
 //! this file; face ①/②a/③a/④/⑤ are unit-tested at their own chokepoints
 //! (`src/extension/mod.rs`, `src/agents/registry.rs`, `src/mcp/*`), and the
-//! prompt-index sides of ②/③ are intended to be observed on a real daemon by
-//! the planned `qa/plugins/run.sh visibility` stage (not written as of this
-//! task).
+//! prompt-index sides of ②/③ — plus face ⑤'s request-time MCP join — are
+//! observed on a real daemon by `qa/plugins/run.sh visibility`, through the
+//! mock provider's request log.
 //!
 //! ONE test in this file on purpose: it pins `ALEPH_HOME` (and `HOME`) for
 //! the whole process — `ProjectStore::shared()` and the plugin discovery

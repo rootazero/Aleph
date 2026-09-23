@@ -14,6 +14,9 @@
 #                                  # mount ran before its handle was installed
 #   ./qa/plugins/run.sh panel      # BOOTS AND WAITS: the same surface through
 #                                  # the browser, plus the source classifier
+#   ./qa/plugins/run.sh visibility # a project's .aleph/plugins/<p> plugin (skill,
+#                                  # agent, MCP tool) reaches the model only for
+#                                  # a run bound to that project
 #
 # `marketplaces` drives WebSocket-RPC; `panel` is the DOM half of the same
 # screen and is deliberately separate. The RPC fixture cannot see anything the
@@ -59,7 +62,14 @@ BUSY="$HERE/../busy_input"
 QA_ROOT="${QA_ROOT:-$(mktemp -d "/tmp/aleph-qa-plg-XXXXXX")}"
 KEEP="${KEEP:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-18801}"
-MOCK_PORT="${MOCK_PORT:-18802}"   # nothing listens; the config must merely not name a real provider
+# Only `visibility` runs a mock provider here; for every other stage nothing
+# listens, and the config must merely not name a real provider.
+MOCK_PORT="${MOCK_PORT:-18802}"
+# Where `start_server` launches the daemon. It matters to exactly one rule: a
+# run bound to no project takes the daemon's CWD as its project root
+# (`VisibilityCtx::from_project_root`), so the CWD decides which project
+# plugins a project-less run sees. `visibility` points it at $QA_ROOT.
+SERVER_CWD="${SERVER_CWD:-$REPO}"
 
 # Build BEFORE HOME is redirected: cargo's registry, git cache and rustup
 # toolchain all live under the real HOME, and a build launched with the scratch
@@ -79,6 +89,7 @@ MARKETPLACES="$QA_ROOT/marketplaces"
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 
 SERVER_PID=""
+MOCK_PID=""
 say() { printf '\n=== %s ===\n' "$*"; }
 stop_server() {
   [ -n "$SERVER_PID" ] || return 0
@@ -93,6 +104,7 @@ stop_server() {
 }
 cleanup() {
   stop_server
+  [ -n "$MOCK_PID" ] && { kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; }
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -138,8 +150,9 @@ python3 "$BUSY/patch_config.py" "$CONFIG" \
 start_server() {
   # stdout is not a TTY here, so tracing goes to $ALEPH_HOME/logs/ -- the
   # redirect below catches only the startup banner. "No output" is not
-  # "nothing happened".
-  "$BIN" start >>"$QA_ROOT/server.log" 2>&1 &
+  # "nothing happened". The subshell `exec`s, so `$!` is the server itself
+  # (a `( cd …; start_server )` around the caller would lose SERVER_PID).
+  ( cd "$SERVER_CWD" && exec "$BIN" start ) >>"$QA_ROOT/server.log" 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 1 90); do
     curl -sf -o /dev/null "http://127.0.0.1:$GATEWAY_PORT/health" 2>/dev/null && return 0
@@ -466,8 +479,56 @@ CHECKLIST
   # Park in the foreground so the server outlives the checklist.
   while kill -0 "$SERVER_PID" 2>/dev/null; do sleep 5; done
   ;;
+
+visibility)
+  # The claim is about what the MODEL is shown, so the oracle is the mock
+  # provider's request log — `plugins.list` shows every row regardless (the
+  # management face is not project-gated) and cannot tell the two runs apart.
+  #
+  # Two facts make the "no project" run genuinely project-less: the daemon is
+  # started from $QA_ROOT (the CWD fallback then names a directory with no
+  # `.aleph/plugins`), and the project is registered through `projects.add`,
+  # which is the very producer `collect_plugin_dirs` reads — a plugin planted
+  # anywhere else would prove discovery, not visibility.
+  PROJECT="$QA_ROOT/proj-vis"
+  REQ_LOG="$QA_ROOT/requests.jsonl"
+  say "plant a project plugin: one skill, one agent, one MCP server"
+  python3 "$HERE/plant_visibility.py" "$PROJECT" "$HERE/mcp_mock_server.py" || exit 1
+
+  say "start mock provider (single-shot plan, recording every request)"
+  python3 "$BUSY/mock_anthropic.py" "$MOCK_PORT" /etc/hostname single-shot "" "$REQ_LOG" \
+    >"$QA_ROOT/mock.log" 2>&1 &
+  MOCK_PID=$!
+  for _ in $(seq 1 20); do
+    curl -sf -o /dev/null "http://127.0.0.1:$MOCK_PORT/v1/models" 2>/dev/null && break
+    sleep 0.5
+  done
+
+  say "start server from a non-project directory and register the project"
+  SERVER_CWD="$QA_ROOT"
+  start_server || exit 1
+  python3 "$HERE/drive_visibility.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PROJECT" "$REQ_LOG" register || RC=$?
+
+  say "restart so discovery walks the registered project's .aleph/plugins"
+  # Load-bearing, not caution: `ExtensionManager::ensure_loaded` scans the
+  # registered projects once per process, and `projects.add` does not rescan.
+  stop_server
+  start_server || exit 1
+  # A `Simulated` daemon never calls the mock, so every negative arm below
+  # would hold vacuously. The drive's controls catch that as a symptom; this
+  # line names the cause first.
+  MODE_LINE="$(grep "Mode:" "$QA_ROOT/server.log" | tail -1)"
+  echo "  ${MODE_LINE:-(no Mode: line in the server log)}"
+  case "$MODE_LINE" in
+    *"Real AgentLoop"*) echo "  [PASS] the daemon runs a real agent loop against the mock provider" ;;
+    *) echo "  [FAIL] the daemon is not in real mode — no run below would reach the mock"; RC=1 ;;
+  esac
+
+  say "probe: one run inside the project, one run with no project"
+  python3 "$HERE/drive_visibility.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PROJECT" "$REQ_LOG" probe || RC=$?
+  ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

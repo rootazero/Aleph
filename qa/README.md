@@ -622,6 +622,12 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+./qa/plugins/run.sh visibility   # a plugin under a registered project's .aleph/plugins
+                                 # reaches the model — skill index, agent catalog, joined MCP
+                                 # tool — only for a run bound to that project; the oracle is
+                                 # the mock provider's request log, never plugins.list. The
+                                 # daemon starts from $QA_ROOT so the project-less run's CWD
+                                 # fallback names no project
 ./qa/plugins/run.sh scope        # MCP plugin enable → disable → enable through `plugin_manage`;
                                  # the slash entry AND the server's tool leave and re-enter
                                  # `tools.catalog` each time (polled — the mount enqueues the
