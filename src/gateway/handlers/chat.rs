@@ -1468,7 +1468,10 @@ mod tests {
         }
 
         async fn alice_session(store: &Arc<dyn SessionStore>) -> SessionKey {
-            let key = SessionKey::from_key_string("agent:alicechatvis:main").unwrap();
+            // Unique per call: see `alice_session_hands_every_caller_a_distinct_key`.
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let key = SessionKey::from_key_string(&format!("agent:alicechatvis{n}:main")).unwrap();
             with_scope(
                 Some(ScopeAttribution::personal("u-alice")),
                 store.get_or_create(&key),
@@ -1485,6 +1488,19 @@ mod tests {
                 params: Some(params),
                 id: Some(json!(1)),
             }
+        }
+
+        /// Every test in this module gets its OWN session key. The stores are
+        /// per-test tempdirs, but `busy_queue` and `scratchpad_registry` are
+        /// process-global and keyed by the canonical session key — a shared
+        /// literal made three of these tests read each other's plan bindings
+        /// (FL §5.22 round-9 ⓪; red once in four full runs, green alone).
+        #[tokio::test]
+        async fn alice_session_hands_every_caller_a_distinct_key() {
+            let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+            let first = alice_session(&store(&a)).await;
+            let second = alice_session(&store(&b)).await;
+            assert_ne!(first.to_key_string(), second.to_key_string());
         }
 
         /// `chat.abort` with a foreign `session_key`: denied, and the
@@ -1555,12 +1571,9 @@ mod tests {
         /// one waiting, which is the bug this test exists to catch (see the
         /// call site's own comment).
         ///
-        /// Uses its own session key rather than `alice_session`'s shared
-        /// literal: `busy_queue` is a process-global lane keyed by that same
-        /// string, and `chat_abort_denies_a_foreign_session_key` above also
-        /// registers a ticket on it — tests run in parallel, so sharing the
-        /// key would make this test's own lane depth depend on whether that
-        /// other test's `TicketGuard` has dropped yet.
+        /// Uses its own, differently-cased key rather than `alice_session`:
+        /// the casing is the point of this test (see above). `alice_session`
+        /// hands out a unique key per call, so no lane is shared either way.
         #[tokio::test]
         async fn chat_history_reports_the_sessions_pending_lane() {
             let temp = tempfile::tempdir().unwrap();
@@ -1771,13 +1784,6 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             let store = store(&temp);
             let alice_key = alice_session(&store).await;
-            // The scratchpad registry is a process-global; a sibling test in
-            // this module may have bound the same canonical key and never
-            // cleared it (or, more subtly, the static is keyed by canonical
-            // session key, which is the same across this whole `mod`). Drop
-            // any pre-existing binding first so we actually exercise the
-            // "never bound" arm this test pins.
-            crate::builtin_tools::scratchpad_registry::clear(&alice_key.to_key_string());
 
             let resp = CALLER_USER
                 .scope(
