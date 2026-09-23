@@ -191,10 +191,13 @@ pub struct Goal {
     /// requester, which in a project room differs from
     /// [`Self::owner_user_id`] (the room's creator). Stamped once at
     /// `goal(action='set')` from the creating run's room-author task-local
-    /// (`scope::current_room_author`, seeded from `AUTHOR_USER_KEY`) and
-    /// re-emitted into hook-less wake continuations
-    /// (`goal_wait::rehydrate_owner_scope`), where fire-time authority is
-    /// resolved against THIS person. Claim-pipeline-owned like `owner_user_id`.
+    /// (`scope::current_room_author`, seeded from `AUTHOR_USER_KEY`). When set,
+    /// it is the `AUTHOR_USER_KEY` of BOTH goal continuation paths — the
+    /// hook-less wake (`goal_wait::rehydrate_owner_scope`) and the post-run
+    /// hook (`goal_continuation::goal_continuation_policy`, which overwrites
+    /// the completing turn's author) — so fire-time authority is resolved
+    /// against THIS person. Loops store no author: a loop tick's author is
+    /// always the completing turn's. Claim-pipeline-owned like `owner_user_id`.
     /// `#[serde(default)]` → pre-round-11 payloads read `None` (authority then
     /// falls back to the owner); `skip_serializing_if` → they round-trip
     /// byte-identical.

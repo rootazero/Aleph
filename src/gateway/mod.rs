@@ -27,12 +27,12 @@ pub mod link;
 
 pub mod admin_api;
 pub mod announce_delivery;
-pub(crate) mod fire_gate;
 pub mod btw;
 pub mod credential_planner;
 pub mod event_bus;
 pub mod event_emitter;
 pub mod events;
+pub(crate) mod fire_gate;
 pub mod formatter;
 pub mod handlers;
 pub mod mdns_broadcaster;

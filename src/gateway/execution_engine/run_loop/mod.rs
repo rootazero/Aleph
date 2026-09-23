@@ -239,9 +239,12 @@ fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
 /// speaker as task-locals for `fut`'s duration, both derived from
 /// `request.metadata` — see [`crate::scope::stamp_metadata`] and
 /// [`super::AUTHOR_USER_KEY`]. `author_census::ORIGIN_SITES` (this module's
-/// `author_census` submodule) is the enumerated list of production writers of
-/// that key, kept there rather than repeated here so this doc cannot drift
-/// out of sync with the count the way it once did — a prior revision named
+/// `author_census` submodule) names the origin writers of that key the census
+/// pins by name. It is not every writer: later origins are pinned by unit
+/// tests at their own sites (the census's module doc says which), and the
+/// continuation paths forward or rehydrate the key rather than originate it.
+/// The list lives there rather than here so this doc cannot drift out of
+/// sync with it the way it once did — a prior revision named
 /// only two producers (`build_run_request`, the channel inbound router's
 /// `execute_for_context_inner`) while two more (the team broadcast and
 /// dispatcher child-run builders) had already existed for over a week.

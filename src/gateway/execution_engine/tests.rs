@@ -2205,6 +2205,75 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     );
 }
 
+/// R-b, hook path: a goal's continuation acts for the person who SET the
+/// goal, not for whoever's turn completed last. Carol typing in the session
+/// must not make Bob's goal a Carol continuation — the wake path already
+/// answers from the stored author, and one goal must judge one person.
+#[tokio::test]
+async fn a_goal_hook_continuation_acts_for_the_stored_author_not_the_last_speaker() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{Goal, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = goal_store_global();
+
+    let session = SessionKey::main("r11-hook-author");
+    let session_str = session.to_key_string();
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, 0)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+                .with_author(Some("u-bob".into())),
+        )
+        .unwrap();
+
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> =
+        test_session_manager(&temp);
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+    let agent = registry
+        .get(session.agent_id())
+        .await
+        .expect("agent registered");
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let deps = super::ContinuationDeps {
+        registry,
+        adapter: Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+        gate: None,
+        event_bus: None,
+    };
+    // The completing turn was Carol's.
+    let mut completing = HashMap::new();
+    completing.insert(super::AUTHOR_USER_KEY.to_string(), "u-carol".to_string());
+
+    super::goal_continuation::post_run(&deps, &Some(sessions), &session, &agent, &completing, None)
+        .await;
+
+    let request = adapter
+        .await_one()
+        .await
+        .expect("an Active goal with runway must fire a continuation");
+    assert_eq!(
+        request
+            .metadata
+            .get(super::AUTHOR_USER_KEY)
+            .map(String::as_str),
+        Some("u-bob"),
+        "the continuation must act for the goal's stored author"
+    );
+}
+
 /// A refused goal continuation BLOCKS the goal with the reason as its note
 /// (the agent-miss arm's `block_if_active`), so `goal(action='list')` stops
 /// showing a live pursuit that can never run.
@@ -2222,6 +2291,7 @@ async fn a_refused_goal_continuation_blocks_the_goal_with_the_reason() {
     super::execute::halt_on_refused_authority(
         super::execute::ContinuationKind::Goal { wake_ms: 0 },
         session,
+        crate::scope::authority::RefusalReason::Gone,
         "principal gone",
         None,
     )
@@ -2234,6 +2304,13 @@ async fn a_refused_goal_continuation_blocks_the_goal_with_the_reason() {
             .as_deref()
             .is_some_and(|n| n.contains("principal gone")),
         "the blocked note must name why: {:?}",
+        goal.note
+    );
+    assert!(
+        goal.note
+            .as_deref()
+            .is_some_and(|n| n.contains("no longer exists") && !n.contains("reactivate")),
+        "a deleted person cannot be reactivated — the remedy must say so: {:?}",
         goal.note
     );
 }

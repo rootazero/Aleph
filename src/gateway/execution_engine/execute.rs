@@ -1414,8 +1414,12 @@ fn continuation_request(
 /// [`admit_continuation`] returns as the admitted request instead).
 #[derive(Debug)]
 enum ContinuationStop {
-    /// Deactivated / deleted — halt the pursuit and say why.
-    Refused(String),
+    /// Deactivated / deleted — halt the pursuit and say why. `why` picks the
+    /// remedy the user is told; `reason` is the verdict's own text.
+    Refused {
+        why: crate::scope::authority::RefusalReason,
+        reason: String,
+    },
     /// The users store errored (R-a) — re-arm the same step, never a failure.
     Unknown(String),
 }
@@ -1430,10 +1434,22 @@ fn admit_continuation(
     mut request: RunRequest,
 ) -> Result<RunRequest, ContinuationStop> {
     use crate::gateway::fire_gate::FireVerdict;
-    match crate::gateway::fire_gate::apply(authority, &mut request.metadata) {
-        FireVerdict::Proceed => Ok(request),
-        FireVerdict::Refused(reason) => Err(ContinuationStop::Refused(reason)),
-        FireVerdict::Unknown(reason) => Err(ContinuationStop::Unknown(reason)),
+    use crate::scope::authority::FireAuthority;
+    let refusal = match &authority {
+        FireAuthority::Refused(why) => Some(*why),
+        _ => None,
+    };
+    match (
+        crate::gateway::fire_gate::apply(authority, &mut request.metadata),
+        refusal,
+    ) {
+        (FireVerdict::Proceed, _) => Ok(request),
+        (FireVerdict::Refused(reason), Some(why)) => Err(ContinuationStop::Refused { why, reason }),
+        (FireVerdict::Unknown(reason), _) => Err(ContinuationStop::Unknown(reason)),
+        // `apply` answers Refused only for a Refused authority. Should that
+        // ever stop holding, a refusal nobody can explain is "I do not know",
+        // which re-arms rather than halts (criterion §8).
+        (FireVerdict::Refused(reason), None) => Err(ContinuationStop::Unknown(reason)),
     }
 }
 
@@ -1665,10 +1681,11 @@ pub(super) fn spawn_continuation_run(
         );
         let cont_request = match admit_continuation(authority, cont_request) {
             Ok(admitted) => admitted,
-            Err(ContinuationStop::Refused(reason)) => {
+            Err(ContinuationStop::Refused { why, reason }) => {
                 warn!(session = %session_key_str, kind = ?kind, reason = %reason,
                     "continuation: authority refused at fire time; halting");
-                halt_on_refused_authority(kind, &session_key_str, &reason, origin.as_ref()).await;
+                halt_on_refused_authority(kind, &session_key_str, why, &reason, origin.as_ref())
+                    .await;
                 return;
             }
             Err(ContinuationStop::Unknown(reason)) => {
@@ -1904,22 +1921,31 @@ pub(super) async fn rearm_loop_after_busy(
 /// - the welded strategy is kept for the same reason.
 ///
 /// Both push the reason to the origin channel (R5 — an autonomous ending is
-/// never silent).
+/// never silent), with the remedy that fits `why`: a deactivated person can be
+/// reactivated; a deleted one cannot, so the work must be reassigned or
+/// stopped.
 pub(super) async fn halt_on_refused_authority(
     kind: ContinuationKind,
     session_key_str: &str,
+    why: crate::scope::authority::RefusalReason,
     reason: &str,
     origin: Option<&OriginRoute>,
 ) {
+    use crate::scope::authority::RefusalReason;
     match kind {
         ContinuationKind::Loop { .. } => {
             let Some(reg) = crate::looping::global() else {
                 return;
             };
-            let note = format!(
-                "Paused: {reason}. An administrator must reactivate that person before this \
-                 loop can resume."
-            );
+            let note = match why {
+                RefusalReason::Deactivated => format!(
+                    "Paused: {reason}. An administrator must reactivate that person before \
+                     this loop can resume."
+                ),
+                RefusalReason::Gone => format!(
+                    "Paused: {reason}. That person no longer exists; reassign or stop this loop."
+                ),
+            };
             if matches!(
                 reg.transition(
                     session_key_str,
@@ -1935,10 +1961,16 @@ pub(super) async fn halt_on_refused_authority(
             let Some(store) = crate::goal::global() else {
                 return;
             };
-            let note = format!(
-                "Autonomous pursuit halted: {reason}. An administrator must reactivate that \
-                 person, then set the goal back to active, before it can continue."
-            );
+            let note = match why {
+                RefusalReason::Deactivated => format!(
+                    "Autonomous pursuit halted: {reason}. An administrator must reactivate \
+                     that person, then set the goal back to active, before it can continue."
+                ),
+                RefusalReason::Gone => format!(
+                    "Autonomous pursuit halted: {reason}. That person no longer exists; \
+                     reassign or stop this goal."
+                ),
+            };
             match store.block_if_active(session_key_str, &note, super::goal_continuation::now_ms())
             {
                 Ok(true) => notify_origin(origin, format!("⏹ {note}")).await,
@@ -2696,6 +2728,7 @@ mod fire_authority_tests {
         halt_on_refused_authority(
             ContinuationKind::Loop { wake_ms: 0 },
             session,
+            crate::scope::authority::RefusalReason::Deactivated,
             "principal deactivated",
             None,
         )
@@ -2709,6 +2742,14 @@ mod fire_authority_tests {
                 .as_deref()
                 .is_some_and(|r| r.contains("principal deactivated")),
             "the reason must be on the row: {:?}",
+            state.stop_reason
+        );
+        assert!(
+            state
+                .stop_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("reactivate")),
+            "a deactivated person's remedy is reactivation: {:?}",
             state.stop_reason
         );
     }
@@ -2815,7 +2856,7 @@ mod fire_authority_tests {
             request,
         ) {
             Err(ContinuationStop::Unknown(reason)) => assert!(reason.contains("disk I/O error")),
-            Err(ContinuationStop::Refused(reason)) => {
+            Err(ContinuationStop::Refused { reason, .. }) => {
                 panic!("an unknown authority must not read as refused: {reason}")
             }
             Ok(_) => panic!("an unknown authority must not run the continuation"),

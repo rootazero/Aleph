@@ -12,8 +12,8 @@
 //!
 //! The `resolve` call itself stays at each executor's own site on purpose: the
 //! `RunRequest` producer census
-//! (`execution_engine::run_loop::tests::every_run_producer_answers_the_fire_time_authority_question`)
-//! checks for it per file.
+//! (`execution_engine::run_loop::tests::every_run_producer_answers_the_fire_time_authority_question`,
+//! added by T09) checks for it per file.
 
 use std::collections::HashMap;
 
@@ -148,6 +148,37 @@ mod tests {
         let verdict = apply(FireAuthority::Unknown("disk I/O error".into()), &mut meta);
         assert!(matches!(verdict, FireVerdict::Unknown(ref r) if r.contains("disk I/O error")));
         assert_eq!(meta, before);
+    }
+
+    /// The role only ever goes DOWN: a guest's continuation stays guest even
+    /// though the person behind it is now a Member. Pins that the subject
+    /// carries `caller_role` — read as absent, the resolver would take the
+    /// carry for operator and stamp `member`, RAISING a guest.
+    #[test]
+    fn a_guest_carry_is_never_raised_to_the_authors_role() {
+        let store = users();
+        let mut meta = room_policy("u-bob");
+        meta.insert("caller_role".to_string(), "guest".to_string());
+        let authority = resolve_with(Some(&store), &subject_from_metadata(&meta));
+        assert_eq!(apply(authority, &mut meta), FireVerdict::Proceed);
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("guest"));
+    }
+
+    /// The owner fallback: a continuation with no author (a pre-round-11 goal,
+    /// or a turn with no room author) is judged against the carried OWNER.
+    #[test]
+    fn with_no_author_the_deactivated_owner_is_refused() {
+        let store = users();
+        store
+            .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let mut meta = room_policy("u-bob");
+        meta.remove(crate::gateway::execution_engine::AUTHOR_USER_KEY);
+        let authority = resolve_with(Some(&store), &subject_from_metadata(&meta));
+        assert!(
+            matches!(apply(authority, &mut meta), FireVerdict::Refused(_)),
+            "the owner is the person checked when no author is carried"
+        );
     }
 
     /// Legacy is byte-identical to HEAD: no key is added or removed.

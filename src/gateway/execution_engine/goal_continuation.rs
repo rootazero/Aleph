@@ -150,6 +150,9 @@ pub(super) async fn notify_goal_stop(
 /// to the spawned continuation AND recorded on the goal row by the claim
 /// pipeline, so hook-less wakes (`GoalWakeService`) rebuild the run in the
 /// same project instead of silently falling back to the agent workspace.
+///
+/// The one key NOT taken from the completing run when the goal has its own
+/// answer is `AUTHOR_USER_KEY` — see [`goal_continuation_policy`].
 pub(super) async fn post_run(
     deps: &ContinuationDeps,
     session_manager: &SessionManager,
@@ -174,6 +177,7 @@ pub(super) async fn post_run(
             return;
         }
     };
+    let policy_meta = goal_continuation_policy(&peek, policy_meta);
     let gate_configured = deps.gate.is_some() || peek.gate_command.is_some();
     let tokens = live_tokens(session_manager, session_key, &peek).await;
     let now = now_ms();
@@ -283,12 +287,34 @@ pub(super) async fn post_run(
                 &goal,
                 tokens.unwrap_or(0),
                 now,
-                policy_meta,
+                &policy_meta,
                 workspace,
             )
             .await;
         }
     }
+}
+
+/// The policy map a HOOK-path goal continuation runs under: the completing
+/// run's carried keys, with `AUTHOR_USER_KEY` overwritten by the goal's stored
+/// [`crate::goal::Goal::author_user_id`] when it has one (round 11, R-b).
+///
+/// The goal pursues the objective of whoever SET it, not of whoever's turn
+/// happened to complete last — and the wake path (`goal_wait::rehydrate_owner_scope`)
+/// already answers from the stored author, so without this the two paths of
+/// ONE goal judged fire-time authority against two different people. A goal
+/// with no stored author (pre-round-11) keeps the completing turn's author.
+/// `caller_role` stays the completing turn's: fire-time resolution only ever
+/// lowers a role, so the lower of the two still wins.
+fn goal_continuation_policy(
+    goal: &crate::goal::Goal,
+    carried: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut policy_meta = carried.clone();
+    if let Some(author) = goal.author_user_id.as_deref() {
+        policy_meta.insert(super::AUTHOR_USER_KEY.to_string(), author.to_string());
+    }
+    policy_meta
 }
 
 /// Read the gate's aggregate as a completion verdict — FAIL CLOSED.
