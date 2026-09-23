@@ -154,8 +154,9 @@ struct DiscoveredExtensionDir {
 
 /// Extension Manager - main entry point for the extension system
 pub struct ExtensionManager {
-    /// Discovery manager
-    discovery: DiscoveryManager,
+    /// Discovery manager. Shared (`Arc`) because it is one of the
+    /// [`projection::Views`] handles the server-start watcher captures.
+    discovery: Arc<DiscoveryManager>,
 
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
@@ -193,8 +194,10 @@ pub struct ExtensionManager {
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
 
-    /// Guard to serialize concurrent `load_all()` calls
-    load_guard: Mutex<()>,
+    /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
+    /// and a server-start watcher's final readiness write + view recompute
+    /// (`lifecycle.rs::watch_server_starts`) — which is why it is shared.
+    load_guard: Arc<Mutex<()>>,
 
     /// Memory extension registry (Spec 4 Task 11).
     /// When set, `mount` registers a plugin's `[memory]` section as a
@@ -332,7 +335,7 @@ impl ExtensionManager {
 
     /// Create a new extension manager
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
-        let discovery = DiscoveryManager::new(config.discovery.clone())?;
+        let discovery = Arc::new(DiscoveryManager::new(config.discovery.clone())?);
         let hook_executor = Arc::new(RwLock::new(
             HookExecutor::empty().with_consent(ShellHookConsent::shared()),
         ));
@@ -378,7 +381,7 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
-            load_guard: Mutex::new(()),
+            load_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
             mcp_handle: crate::sync_primitives::RwLock::new(None),
             tool_catalog: crate::sync_primitives::RwLock::new(None),
@@ -512,7 +515,7 @@ impl ExtensionManager {
     /// - `Skill` → no-op (delegated to the already-wired `SkillWatcher`
     ///   which does per-skill targeted reloads — full `reload()` here would
     ///   double-fire).
-    /// - `HooksConfig` → [`Self::sync_user_hooks`] only (cheap, no plugin
+    /// - `HooksConfig` → `Views::sync_user_hooks` only (cheap, no plugin
     ///   re-discovery).
     /// - everything else → full [`Self::reload`].
     pub async fn start_watcher(
@@ -586,7 +589,7 @@ impl ExtensionManager {
                             paths = ?effective.changed_paths,
                             "Extension watcher: hooks config changed, reloading user hooks"
                         );
-                        mgr.sync_user_hooks().await;
+                        mgr.views().sync_user_hooks().await;
                     });
                 }
                 _ => {
@@ -731,7 +734,12 @@ impl ExtensionManager {
 
         Ok(result)
     }
+}
 
+/// The hook and tool-index halves of the view recomputation
+/// (`lifecycle.rs::Views::after_transition`); the skill / sub-agent half is
+/// in `projection.rs`.
+impl projection::Views {
     /// Layer user-level hook configs (`~/.aleph/hooks.json`, project files)
     /// on top of the plugin-registered hooks. Runs after
     /// [`Self::sync_hooks_from_registry`] so user entries are evaluated in
@@ -920,10 +928,12 @@ impl ExtensionManager {
             .unwrap_or_else(|e| e.into_inner()) = scope_keys;
         self.plugin_tool_revision.fetch_add(1, Ordering::SeqCst);
     }
+}
 
+impl ExtensionManager {
     /// Refresh sync runtime caches derived from the async plugin registry.
     pub async fn sync_runtime_snapshots(&self) {
-        self.refresh_active_plugin_tools().await;
+        self.views().refresh_active_plugin_tools().await;
     }
 
     /// Monotonic revision for active plugin tool metadata.

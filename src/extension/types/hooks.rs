@@ -405,7 +405,7 @@ pub struct HookConfig {
 
     /// Who may see this hook fire: stamped by the producer that knows where
     /// the hook came from (`hooks::load_user_hooks` for `~/.aleph/hooks.json`
-    /// and project files, `ExtensionManager::sync_hooks_from_registry` for
+    /// and project files, `extension/mod.rs::sync_hooks_from_registry` for
     /// plugin-shipped hooks, from the owning plugin's registry row). The
     /// executor compares it with `extension::visibility::visible_to`. There is
     /// deliberately no `Default`: a hook constructed without saying where it

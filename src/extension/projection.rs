@@ -29,9 +29,13 @@
 //!     same place.)
 //!
 //! **One function derives the whole view set from the registry, and exactly
-//! one trigger calls it: `lifecycle.rs::after_transition`, once at the end of
-//! every public lifecycle primitive** (`mount` / `unmount` / `reload_plugin` /
-//! `reload` / `load_all`). Guard:
+//! one trigger calls it: `lifecycle.rs::after_transition`**, once at the end of
+//! every public lifecycle primitive (`mount` / `unmount` / `reload_plugin` /
+//! `reload` / `load_all`) and once from the server-start watcher when a
+//! readiness write changes a plugin's activity (`Pending` → `Error`) — the
+//! one activation change that happens after a primitive returned. Both run
+//! under `load_guard`. The trigger's inputs are [`Views`], so the watcher (a
+//! spawned task, no `&ExtensionManager`) runs the same function. Guard:
 //! `tests::publishing_plugin_projections_has_exactly_one_author` (G3) pins
 //! both the publish calls to this file and the trigger to `lifecycle.rs`.
 //!
@@ -63,11 +67,50 @@
 //! So a boot (or any `reload()`, which the file watcher triggers) published the
 //! skills and sub-agents of plugins that were **disabled, shadowed, or failed to
 //! load** while a runtime toggle used the correct predicate. The predicate is
-//! stated once, in [`ExtensionManager::derive_plugin_projection`].
+//! stated once, in [`Views::derive_plugin_projection`].
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::ExtensionManager;
+use tokio::sync::RwLock;
+
+use super::hooks::HookExecutor;
+use super::visibility::ScopeKey;
+use super::{ExtensionManager, PluginRegistry, ToolRegistration};
+use crate::discovery::DiscoveryManager;
+use crate::sync_primitives::{Arc, AtomicU64, RwLock as StdRwLock};
+
+/// The handles the views are derived from and published to — exactly what
+/// `lifecycle.rs::after_transition` touches, and nothing else of the manager.
+/// Cloned out of the [`ExtensionManager`] (every field is a shared handle, so
+/// a clone is the same state, not a copy of it) so the server-start watcher,
+/// a spawned task that holds no `&ExtensionManager`, can run the same
+/// recomputation when its readiness write changes a plugin's activity.
+#[derive(Clone)]
+pub(super) struct Views {
+    pub(super) hook_executor: Arc<RwLock<HookExecutor>>,
+    pub(super) plugin_registry: Arc<RwLock<PluginRegistry>>,
+    pub(super) discovery: Arc<DiscoveryManager>,
+    pub(super) skill_system: crate::skill::SkillSystem,
+    pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
+    pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
+    pub(super) plugin_tool_revision: Arc<AtomicU64>,
+}
+
+impl ExtensionManager {
+    /// This manager's [`Views`] handles.
+    pub(super) fn views(&self) -> Views {
+        Views {
+            hook_executor: Arc::clone(&self.hook_executor),
+            plugin_registry: Arc::clone(&self.plugin_registry),
+            discovery: Arc::clone(&self.discovery),
+            skill_system: self.skill_system.clone(),
+            active_plugin_tools: Arc::clone(&self.active_plugin_tools),
+            plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
+            plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
+        }
+    }
+}
 
 /// Everything a plugin set projects onto process-global state.
 ///
@@ -91,7 +134,7 @@ pub(crate) struct PluginProjection {
     pub(crate) subagents: Vec<crate::agents::PluginSubagent>,
 }
 
-impl ExtensionManager {
+impl Views {
     /// Derive the projection from the registry under one read lock.
     ///
     /// Every active plugin's existing `<root>/skills` is published — there is
@@ -160,7 +203,7 @@ impl ExtensionManager {
     /// retraction path: a plugin that stopped being active simply is not in the
     /// new vector. Called from exactly one place,
     /// `lifecycle.rs::after_transition` (G3 pins it); do not add a second
-    /// caller — route the new path through a lifecycle primitive instead.
+    /// caller — route the new path through `after_transition` instead.
     ///
     /// Returns the projection that was installed, for logging and tests.
     pub(crate) async fn republish_plugin_projections(&self) -> PluginProjection {
@@ -211,8 +254,10 @@ mod tests {
     /// two process-global publish calls); `republish_plugin_projections(`,
     /// `sync_hooks_from_registry(`, and `after_transition(` may appear only
     /// in `lifecycle.rs` (after P1.9 the view recomputation has exactly one
-    /// trigger, `after_transition`, and every public primitive ends with it
-    /// — spec §3.2).
+    /// trigger, `after_transition`: every public primitive ends with it, and
+    /// the server-start watcher calls it when a readiness write changes a
+    /// plugin's activity — spec §3.2). The pins are per FILE (`>= 1` hit in
+    /// the owner, zero elsewhere); they do not count call sites.
     ///
     /// This has to be a source scan, not a runtime assertion: at runtime a
     /// second author looks exactly like the first one running twice. The

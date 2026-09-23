@@ -8,10 +8,12 @@
 //! | [`ExtensionManager::reload_plugin`] | unmount + mount of one id |
 //! | [`ExtensionManager::reload`] | unmount everything, rediscover, mount every admitted plugin |
 //!
-//! Every public primitive ends, on success, with exactly one [`ExtensionManager::after_transition`],
+//! Every public primitive ends, on success, with exactly one [`Views::after_transition`],
 //! which is the ONLY caller of `republish_plugin_projections` and
 //! `sync_hooks_from_registry` (guarded by
 //! `projection::tests::publishing_plugin_projections_has_exactly_one_author`).
+//! Its one other caller is the server-start watcher, when a readiness write
+//! changes a plugin's activity after the mount returned (`Pending` → `Error`).
 //!
 //! Effects vs views: an effect has an inverse and lives in the plugin's
 //! [`EffectScope`]; a view is recomputed from the registry here. The test for
@@ -20,8 +22,9 @@
 //!
 //! Transitions serialise on `load_guard` (the same mutex `ensure_loaded` and
 //! `reload` already shared), so two toggles of one id cannot interleave and a
-//! reload cannot run under a mount. `scopes` is a std mutex that is never held
-//! across an `await`: a scope is removed under the lock and disposed after.
+//! reload cannot run under a mount; a watcher's final readiness write and
+//! recompute take it too. `scopes` is a std mutex that is never held across
+//! an `await`: a scope is removed under the lock and disposed after.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -31,6 +34,7 @@ use super::error::ExtensionResult;
 use super::hooks::{HookExecutor, ShellHookConsent};
 use super::manifest::adapter::AdapterOutput;
 use super::manifest::PluginManifest;
+use super::projection::Views;
 use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
@@ -101,7 +105,7 @@ impl ExtensionManager {
     pub async fn mount(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
         let status = self.mount_inner(id).await?;
-        self.after_transition().await;
+        self.views().after_transition().await;
         Ok(status)
     }
 
@@ -110,7 +114,7 @@ impl ExtensionManager {
     pub async fn unmount(&self, id: &str) -> Result<DisposeReport, UnmountError> {
         let _guard = self.load_guard.lock().await;
         let report = self.unmount_inner(id).await?;
-        self.after_transition().await;
+        self.views().after_transition().await;
         Ok(report)
     }
 
@@ -123,7 +127,7 @@ impl ExtensionManager {
             Err(UnmountError::NotFound(_)) => return Err(MountError::NotFound(id.to_string())),
         }
         let result = self.mount_inner(id).await;
-        self.after_transition().await;
+        self.views().after_transition().await;
         result
     }
 
@@ -153,7 +157,7 @@ impl ExtensionManager {
     /// `load_all` for a caller that already holds `load_guard`.
     pub(super) async fn load_all_locked(&self) -> ExtensionResult<LoadOutcome> {
         let out = self.discover_and_mount().await?;
-        self.after_transition().await;
+        self.views().after_transition().await;
         self.cache_state.write().await.loaded = true;
         tracing::info!(
             "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
@@ -163,25 +167,6 @@ impl ExtensionManager {
             out.summary.hooks_loaded,
         );
         Ok(out)
-    }
-
-    // ── The one view recomputation ────────────────────────────────────────
-
-    /// Re-derive every view after a transition: hook executor (rebuilt from
-    /// the registry, then user hooks re-layered) and the process-global
-    /// projections (skill dirs, sub-agents, tool index). Called exactly once
-    /// per public primitive.
-    async fn after_transition(&self) {
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-        self.sync_hooks_from_registry().await;
-        self.sync_user_hooks().await;
-        let projection = self.republish_plugin_projections().await;
-        tracing::debug!(
-            plugin_skill_dirs = projection.plugin_skill_dirs.len(),
-            plugin_subagents = projection.subagents.len(),
-            "published plugin projections"
-        );
     }
 
     // ── Discovery ─────────────────────────────────────────────────────────
@@ -641,7 +626,9 @@ impl ExtensionManager {
             }
         }
         // The no-handle moment of readiness: an MCP plugin whose `mcp_server`
-        // step could not run is pending on the manager, not loaded.
+        // step could not run is pending on the manager, not loaded. (Loaded →
+        // Pending keeps the plugin active; the mount's own `after_transition`
+        // derives the views anyway.)
         if scope
             .skipped()
             .iter()
@@ -706,10 +693,12 @@ impl ExtensionManager {
     /// handed back, logs each outcome, and writes the plugin's readiness
     /// twice: `Pending { mcp:<id>… }` before the task exists (so no caller of
     /// `mount` can observe `Loaded` for servers still starting) and the
-    /// terminal status once every receiver has answered. The handle is kept
-    /// so [`Self::activation_settled`] can wait for it; the returned
-    /// [`WatcherStop`] goes into the step's disposer ([`stop_watcher_then`]),
-    /// so the task never outlives the mount whose row it writes.
+    /// terminal status once every receiver has answered — under `load_guard`,
+    /// followed by [`Views::after_transition`] when that write changed the
+    /// plugin's activity. The handle is kept so [`Self::activation_settled`]
+    /// can wait for it; the returned [`WatcherStop`] goes into the step's
+    /// disposer ([`stop_watcher_then`]), so the task never outlives the mount
+    /// whose row it writes.
     async fn watch_server_starts(
         &self,
         plugin_id: &str,
@@ -718,7 +707,8 @@ impl ExtensionManager {
         if receivers.is_empty() {
             return None;
         }
-        // Moment 2: enqueued, unanswered.
+        // Moment 2: enqueued, unanswered. Inside the mount, like moment 1: no
+        // activity change, and the mount's `after_transition` follows.
         let unanswered: Vec<(String, readiness::ServerStart)> = receivers
             .iter()
             .map(|(id, _)| (id.clone(), readiness::ServerStart::Unanswered))
@@ -733,7 +723,8 @@ impl ExtensionManager {
         )
         .await;
 
-        let registry = Arc::clone(&self.plugin_registry);
+        let views = self.views();
+        let transitions = Arc::clone(&self.load_guard);
         let plugin_id = plugin_id.to_string();
         let (alive, gone) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
@@ -759,16 +750,25 @@ impl ExtensionManager {
                 };
                 servers.push((server_id, report));
             }
-            // Moment 3: every receiver settled.
-            readiness::write_readiness(
-                &registry,
-                &plugin_id,
-                readiness::derive_readiness(&readiness::ReadinessInputs {
-                    manager_attached: true,
-                    servers: &servers,
-                }),
-            )
-            .await;
+            // Moment 3: every receiver settled. Written under the transition
+            // lock like a primitive, so the row and the views it may
+            // invalidate change together. The lock is AWAITED here — a
+            // cancellation point — so a transition that holds it while
+            // disposing this mount ends this task (`stop_watcher_then`)
+            // instead of deadlocking with it.
+            let _transition = transitions.lock().await;
+            let status = readiness::derive_readiness(&readiness::ReadinessInputs {
+                manager_attached: true,
+                servers: &servers,
+            });
+            // The registry write lock is released inside `write_readiness`,
+            // before the recompute takes its own locks.
+            if readiness::write_readiness(&views.plugin_registry, &plugin_id, status).await {
+                // Pending/Loaded → Error: the plugin's skills, agents, hooks and
+                // tools leave the views. Pending → Loaded keeps the plugin
+                // active and changes no view, so it recomputes nothing.
+                views.after_transition().await;
+            }
         });
         let stop = WatcherStop {
             abort: handle.abort_handle(),
@@ -789,7 +789,8 @@ impl ExtensionManager {
     /// (or was ended by its mount's disposer). No timer: each receiver is
     /// bounded by the actor's own handshake cap (`external/connection.rs:348`,
     /// 60 s per step). A watcher spawned while this is waiting is awaited too
-    /// (the loop re-checks).
+    /// (the loop re-checks). Never await this while holding `load_guard`: a
+    /// watcher's final write takes that lock, so it would wait for you.
     pub async fn activation_settled(&self) {
         loop {
             let pending: Vec<tokio::task::JoinHandle<()>> = {
@@ -883,6 +884,30 @@ impl ExtensionManager {
     }
 }
 
+// ── The one view recomputation ────────────────────────────────────────────
+
+impl Views {
+    /// Re-derive every view after a transition: hook executor (rebuilt from
+    /// the registry, then user hooks re-layered) and the process-global
+    /// projections (skill dirs, sub-agents, tool index). Called exactly once
+    /// per public primitive, and by the server-start watcher when its
+    /// readiness write changes a plugin's activity. The caller holds
+    /// `load_guard`: the executor reset + resync below is not atomic, so two
+    /// runs must not interleave.
+    pub(super) async fn after_transition(&self) {
+        *self.hook_executor.write().await =
+            HookExecutor::empty().with_consent(ShellHookConsent::shared());
+        self.sync_hooks_from_registry().await;
+        self.sync_user_hooks().await;
+        let projection = self.republish_plugin_projections().await;
+        tracing::debug!(
+            plugin_skill_dirs = projection.plugin_skill_dirs.len(),
+            plugin_subagents = projection.subagents.len(),
+            "published plugin projections"
+        );
+    }
+}
+
 // ── A watcher's lifetime is its mount's ──────────────────────────────────
 
 /// How the `mcp_server` step's disposer ends the server-start watcher of its
@@ -899,7 +924,11 @@ struct WatcherStop {
 /// runs after this disposer (it precedes `registry_row` in reverse order),
 /// so a verdict about this mount's servers cannot land on a later row.
 /// Awaiting `gone` and not only aborting closes the window where the task is
-/// mid-poll on another worker when `abort` is called.
+/// mid-poll on another worker when `abort` is called. The wait cannot
+/// deadlock: every disposer runs under `load_guard`; while the watcher holds
+/// that lock (its final write + recompute) no disposer can be running, and
+/// while it does not, it waits only on its receivers or on the lock itself —
+/// both cancellation points — so the abort ends it wherever it is parked.
 fn stop_watcher_then(watcher: Option<WatcherStop>, remove_servers: Disposer) -> Disposer {
     let Some(WatcherStop { abort, gone }) = watcher else {
         return remove_servers;
@@ -1875,18 +1904,19 @@ priority = 60
     /// would write `Loaded` — a verdict about a server that was removed — over
     /// mount #2's `Error`, on a row it does not own, and nothing after it
     /// would ever correct the row.
-    #[tokio::test]
-    async fn a_disposed_mounts_watcher_never_writes_onto_the_next_mounts_row() {
-        use crate::mcp::manager::{McpCommand, McpManagerHandle};
-        use std::time::Duration;
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
-        let dir = tempfile::tempdir().unwrap();
-        write_mcp_project_plugin(dir.path(), "p3-stale");
-        let (manager, _cfg) = isolated_manager(dir.path()).await;
+    /// The reply channel of one enqueued start, held by the test.
+    type StartReply = tokio::sync::oneshot::Sender<Result<(), String>>;
 
+    /// A scripted MCP actor: removes are answered at once, every start
+    /// request is handed to the test, so the order of answers is the test's.
+    fn scripted_mcp_actor() -> (
+        crate::mcp::manager::McpManagerHandle,
+        tokio::sync::mpsc::UnboundedReceiver<StartReply>,
+    ) {
+        use crate::mcp::manager::{McpCommand, McpManagerHandle};
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<McpCommand>(8);
-        let (event_tx, _events) = tokio::sync::broadcast::channel(8);
-        let (start_tx, mut starts) = tokio::sync::mpsc::unbounded_channel();
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        let (start_tx, starts) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
@@ -1896,21 +1926,36 @@ priority = 60
                     McpCommand::RemoveTransientServer { respond_to, .. } => {
                         let _ = respond_to.send(Ok(()));
                     }
-                    // Nothing else is sent on this path; dropping the reply
+                    // Nothing else is sent on these paths; dropping the reply
                     // channel answers "actor gone" if that ever changes.
                     _ => {}
                 }
             }
         });
-        manager.set_mcp_handle(McpManagerHandle::new(cmd_tx, event_tx));
-        let wait = Duration::from_secs(10);
+        (McpManagerHandle::new(cmd_tx, event_tx), starts)
+    }
+
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    #[tokio::test]
+    async fn a_disposed_mounts_watcher_never_writes_onto_the_next_mounts_row() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-stale");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (handle, mut starts) = scripted_mcp_actor();
+        manager.set_mcp_handle(handle);
+        let wait = WAIT;
 
         manager.load_all().await.unwrap();
         let first = tokio::time::timeout(wait, starts.recv())
             .await
             .expect("mount #1 enqueued its start")
             .unwrap();
-        manager.reload_plugin("p3-stale").await.unwrap();
+        tokio::time::timeout(wait, manager.reload_plugin("p3-stale"))
+            .await
+            .expect("disposing mount #1 must not wait on its unanswered watcher")
+            .unwrap();
         let second = tokio::time::timeout(wait, starts.recv())
             .await
             .expect("mount #2 enqueued its start")
@@ -1942,5 +1987,139 @@ priority = 60
             PluginStatus::Error(e) => assert!(e.contains("the second mount's answer"), "{e}"),
             other => panic!("mount #1's late answer overwrote mount #2's row: {other:?}"),
         }
+    }
+
+    // ── A readiness write that changes activity recomputes the views ──────
+
+    /// `write_mcp_project_plugin` plus a skill and a command hook, so the
+    /// plugin shows on two views: the published skill dirs (the set the
+    /// `skill_read` / `<available_skills>` faces read) and the hook executor.
+    fn write_mcp_plugin_with_skill_and_hook(root: &Path, id: &str) {
+        write_mcp_project_plugin(root, id);
+        let plugin_dir = root.join("plugins").join(id);
+        std::fs::create_dir_all(plugin_dir.join("skills/hello")).unwrap();
+        std::fs::write(
+            plugin_dir.join("skills/hello/SKILL.md"),
+            "---\nname: hello\ndescription: hi\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(plugin_dir.join("hooks")).unwrap();
+        std::fs::write(
+            plugin_dir.join("hooks/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"echo qa"}]}]}}"#,
+        )
+        .unwrap();
+    }
+
+    /// Whether `id`'s skill dir is published and its hook is in the executor.
+    async fn on_the_views(manager: &ExtensionManager, id: &str) -> (bool, bool) {
+        let skill = crate::utils::paths::plugin_skill_dirs()
+            .iter()
+            .any(|d| d.plugin_id == id);
+        let hook = manager
+            .hook_executor_snapshot()
+            .await
+            .inventory()
+            .iter()
+            .any(|h| h.source == id);
+        (skill, hook)
+    }
+
+    /// Spec §3.2: every path that can change a plugin's activation re-derives
+    /// the views. A server that fails to start turns `Pending` (active) into
+    /// `Error` (inactive) long after the mount's own `after_transition` ran;
+    /// the watcher's write must take the plugin's skill and hook off the
+    /// views too, or the model keeps seeing a plugin the row calls broken.
+    /// (`IsolatedAlephHome` also serialises this test against every sibling
+    /// that republishes the process-global skill dirs.)
+    #[tokio::test]
+    async fn a_failed_server_start_takes_the_plugins_skills_and_hooks_off_the_views() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_plugin_with_skill_and_hook(dir.path(), "p3-views");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (handle, mut starts) = scripted_mcp_actor();
+        manager.set_mcp_handle(handle);
+
+        manager.load_all().await.unwrap();
+        let start = tokio::time::timeout(WAIT, starts.recv())
+            .await
+            .expect("the mount enqueued its start")
+            .unwrap();
+        assert!(matches!(
+            manager.get_plugin_record("p3-views").await.unwrap().status,
+            PluginStatus::Pending { .. }
+        ));
+        assert_eq!(
+            on_the_views(&manager, "p3-views").await,
+            (true, true),
+            "Pending is active: skill and hook are live while the server starts"
+        );
+
+        start.send(Err("spawn: ENOENT".into())).unwrap();
+        tokio::time::timeout(WAIT, manager.activation_settled())
+            .await
+            .expect("the watcher finished");
+        assert!(matches!(
+            manager.get_plugin_record("p3-views").await.unwrap().status,
+            PluginStatus::Error(_)
+        ));
+        assert_eq!(
+            on_the_views(&manager, "p3-views").await,
+            (false, false),
+            "the row says error, so neither its skill nor its hook may stay on the views"
+        );
+    }
+
+    /// The watcher's final write waits for a transition in progress (it takes
+    /// `load_guard` like a primitive), and a transition that disposes the
+    /// mount ends a watcher parked on that lock instead of deadlocking with
+    /// it: the lock is awaited, so aborting the parked task drops it.
+    #[tokio::test]
+    async fn a_watcher_parked_on_the_transition_lock_is_ended_by_the_transition_holding_it() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-parked");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (handle, mut starts) = scripted_mcp_actor();
+        manager.set_mcp_handle(handle);
+
+        manager.load_all().await.unwrap();
+        let start = tokio::time::timeout(WAIT, starts.recv())
+            .await
+            .expect("the mount enqueued its start")
+            .unwrap();
+
+        // A transition is in progress: it holds the lock the final write takes.
+        let transition = manager.load_guard.lock().await;
+        start.send(Ok(())).unwrap();
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            matches!(
+                manager.get_plugin_record("p3-parked").await.unwrap().status,
+                PluginStatus::Pending { .. }
+            ),
+            "the answer is in, but the write waits for the transition"
+        );
+
+        // That transition disposes this mount (what `unmount` does under the lock).
+        let report = tokio::time::timeout(WAIT, manager.unmount_inner("p3-parked"))
+            .await
+            .expect(
+                "disposing a mount whose watcher waits on the transition lock must not deadlock",
+            )
+            .unwrap();
+        assert!(report.all_ok(), "{report:?}");
+        drop(transition);
+        tokio::time::timeout(WAIT, manager.activation_settled())
+            .await
+            .expect("the ended watcher is settled");
+        assert_eq!(
+            manager.get_plugin_record("p3-parked").await.unwrap().status,
+            PluginStatus::Disabled,
+            "the ended watcher wrote nothing after its mount"
+        );
     }
 }

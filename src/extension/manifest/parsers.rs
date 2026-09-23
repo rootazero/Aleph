@@ -36,8 +36,9 @@ use crate::extension::types::{HookEvent, McpServerConfig};
 ///    key here would have been a parse that reports success and changes
 ///    nothing.
 /// 2. **The same file is already parsed by the path that can enforce it.**
-///    `ExtensionManager::republish_plugin_projections` feeds every active
-///    plugin's `<root>/skills` into `SkillSystem::init`, so
+///    `projection.rs::republish_plugin_projections` publishes every active
+///    plugin's `<root>/skills`, which the `SkillSystem` scan reads
+///    (`SkillSystem::scan_roots`), so
 ///    `{plugin_dir}/skills/*/SKILL.md` is scanned by `skill::manifest` too —
 ///    and *that* reading honours `allowed-tools`, including the comma-scalar
 ///    shape.

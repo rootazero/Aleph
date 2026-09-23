@@ -81,6 +81,10 @@ pub fn derive_readiness(i: &ReadinessInputs<'_>) -> PluginStatus {
 /// `Disabled` / `Blocked` outrank readiness: the operator's and the policy's
 /// answers are not dependency reports and are left alone.
 ///
+/// Returns whether the write changed the row's [`PluginStatus::is_active`]
+/// — the caller's cue to re-derive the views (`lifecycle.rs::after_transition`);
+/// `false` when nothing was written.
+///
 /// A free function over the registry handle — not a method — because the
 /// task `lifecycle.rs::watch_server_starts` spawns has captured that
 /// `Arc`, not the manager; `mount_parsed` calls it with `&self.plugin_registry`.
@@ -88,18 +92,19 @@ pub async fn write_readiness(
     registry: &Arc<RwLock<PluginRegistry>>,
     plugin_id: &str,
     status: PluginStatus,
-) {
+) -> bool {
     let mut reg = registry.write().await;
     let Some(row) = reg.get_plugin_mut(plugin_id) else {
-        return;
+        return false;
     };
     // Exhaustive on the CURRENT status: the operator's / policy's answer
     // stands. No wildcard, so a new variant does not build until it says
     // whether readiness may overwrite it.
     match row.status {
-        PluginStatus::Disabled | PluginStatus::Blocked(_) => return,
+        PluginStatus::Disabled | PluginStatus::Blocked(_) => return false,
         PluginStatus::Loaded | PluginStatus::Error(_) | PluginStatus::Pending { .. } => {}
     }
+    let was_active = row.status.is_active();
     if row.status != status {
         tracing::info!(plugin = %plugin_id, from = %row.status.label(), to = %status.label(), "plugin readiness");
     }
@@ -116,6 +121,7 @@ pub async fn write_readiness(
         }
         other @ (PluginStatus::Disabled | PluginStatus::Blocked(_)) => row.status = other,
     }
+    was_active != row.status.is_active()
 }
 
 #[cfg(test)]
@@ -254,6 +260,53 @@ mod tests {
         assert_eq!(
             registry.read().await.get_plugin("w").unwrap().status,
             PluginStatus::Disabled
+        );
+    }
+
+    /// The return value is the recompute cue: `true` exactly when
+    /// `is_active()` flipped. `Pending` and `Loaded` are both active, so
+    /// moving between them re-derives nothing.
+    #[tokio::test]
+    async fn write_readiness_reports_only_a_change_of_activity() {
+        use crate::extension::{PluginKind, PluginOrigin, PluginRecord, PluginRegistry};
+        use crate::sync_primitives::Arc;
+        let registry = Arc::new(tokio::sync::RwLock::new(PluginRegistry::new()));
+        registry.write().await.register_plugin(PluginRecord::new(
+            "w".into(),
+            "W".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Global,
+        ));
+        let pending = || PluginStatus::Pending {
+            waiting_on: vec!["mcp:plugin:w/a".into()],
+        };
+        let error = || PluginStatus::Error("mcp:plugin:w/a: ENOENT".into());
+        let steps = [
+            (pending(), false, "Loaded -> Pending: both active"),
+            (
+                PluginStatus::Loaded,
+                false,
+                "Pending -> Loaded: both active",
+            ),
+            (error(), true, "Loaded -> Error: leaves the views"),
+            (error(), false, "Error -> Error: no change"),
+            (
+                PluginStatus::Loaded,
+                true,
+                "Error -> Loaded: back on the views",
+            ),
+        ];
+        for (status, want, why) in steps {
+            assert_eq!(write_readiness(&registry, "w", status).await, want, "{why}");
+        }
+        registry.write().await.get_plugin_mut("w").unwrap().status = PluginStatus::Disabled;
+        assert!(
+            !write_readiness(&registry, "w", error()).await,
+            "nothing written"
+        );
+        assert!(
+            !write_readiness(&registry, "missing", error()).await,
+            "no row"
         );
     }
 }

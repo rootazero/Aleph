@@ -26,7 +26,7 @@ impl ExtensionManager {
     }
 
     /// Get the discovery manager
-    pub const fn discovery(&self) -> &crate::discovery::DiscoveryManager {
+    pub fn discovery(&self) -> &crate::discovery::DiscoveryManager {
         &self.discovery
     }
 

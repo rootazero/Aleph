@@ -5,7 +5,7 @@
 //! owns it inside the plugin's [`EffectScope`]; unmount = run the list in
 //! reverse. Anything that has no inverse but can be re-derived from the
 //! registry (skill dirs, sub-agents, tool index, hook executor) is a *view*
-//! and is recomputed by `ExtensionManager::after_transition`, not disposed.
+//! and is recomputed by `lifecycle.rs::after_transition`, not disposed.
 //!
 //! Absorbed from Cordis `fiber.ts:418-561` / dsh AGENTS.md "Registrations are
 //! effects" as an ownership rule only: no DI container, no Proxy context, no
