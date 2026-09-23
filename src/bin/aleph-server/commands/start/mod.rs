@@ -218,7 +218,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the MCP tool bridge below WRITES it as external servers advertise /
     // drop tools, and `run_loop` READS its snapshot per request (via
     // `set_mcp_tool_registry` just below) so every connected server's
-    // tools join the agent's LoopToolRegistry and become LLM-callable.
+    // tools, minus plugin servers invisible to the run (face ⑤,
+    // `join_mcp_tools`), join the agent's LoopToolRegistry and become
+    // LLM-callable.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolHandlerRegistry::new());
 
     // Consumer-side install: hand the registry to the execution engine's

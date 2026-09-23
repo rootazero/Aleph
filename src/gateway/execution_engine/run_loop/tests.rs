@@ -2074,7 +2074,8 @@ async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
 /// from the allow-set, while the user tool and the builtin join; and the
 /// joined `mcp_list_resources` never asks the manager about the plugin's
 /// server (the builtin is bound to this run's servers, not the registered
-/// see-nothing form, nor every server). Inside the project, all of it.
+/// see-nothing form, nor every server). Inside the project, all of it. And an
+/// empty (allow-all) allow-set stays empty while the tools still join.
 #[tokio::test]
 async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run() {
     use crate::extension::visibility::{canonical_root, VisibilityCtx};
@@ -2158,6 +2159,32 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
             asked.iter().any(|id| id == OWNED),
             in_project,
             "the lister reaches the plugin's server only from its project: {asked:?}"
+        );
+    }
+
+    // An empty allow-set means allow-all in `ScopedToolService`: the join must
+    // leave it empty (one inserted name would flip the whole surface
+    // restrictive) while every admitted tool still joins the loop registry.
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = std::collections::BTreeSet::new();
+    let here = VisibilityCtx {
+        project_root: Some(canonical_root(proj.path())),
+    };
+    let joined = join_mcp_tools(
+        &bridged.snapshot(),
+        &mut registry,
+        |_| true,
+        &visible_mcp_servers(here, Some(Arc::clone(&manager))),
+        &mut allowed,
+    );
+    assert!(
+        allowed.is_empty(),
+        "an empty allow-set stays empty: {allowed:?}"
+    );
+    for name in ["plugin_proj_srv__t", "github__t", RESOURCE_LIST_TOOL] {
+        assert!(
+            registry.get(name).is_some() && joined.contains(name),
+            "{name} still joins under an allow-all set"
         );
     }
 }
