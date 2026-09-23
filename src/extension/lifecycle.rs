@@ -1858,6 +1858,66 @@ priority = 60
         assert_eq!(manager.scope_skipped("p3-mcp").unwrap()[0].0, "mcp_server");
     }
 
+    /// 判据 §8 / spec §3.3: `Pending` changes only when a dependency reports.
+    /// Advance a paused tokio clock by an hour with NO dependency report and
+    /// the status is byte-identical. Mutation record: a
+    /// `tokio::spawn(async { sleep(10min); flip Pending→Error })` inside
+    /// `watch_server_starts` (or `write_readiness`) turns this red.
+    #[tokio::test(start_paused = true)]
+    async fn pending_never_times_out_into_error() {
+        // Same isolation as every sibling `write_mcp_project_plugin` test in
+        // this module: `mount_parsed` reads `ALEPH_HOME`-scoped global state
+        // (`plugin_settings_for_runtime` → `SharedTokenManager::global()`,
+        // `manifest::parse_manifest_from_dir_cached_global`) even on the
+        // no-handle path this test exercises, and `cargo test` runs this
+        // module's tests concurrently.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-patient");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        // No MCP handle: the mount records the `mcp_server` skip and the row
+        // is `Pending { ["mcp:manager"] }` (P3.3, moment 1). Nothing will ever
+        // report for it in this test — the exact situation a timeout would
+        // be tempted to "resolve".
+        manager.load_all().await.unwrap();
+        let before = manager
+            .get_plugin_record("p3-patient")
+            .await
+            .unwrap()
+            .status;
+        assert_eq!(
+            before,
+            PluginStatus::Pending {
+                waiting_on: vec!["mcp:manager".into()]
+            }
+        );
+
+        // Let any background task `mount_parsed` may have spawned reach its
+        // first suspension point (e.g. register a `sleep`) BEFORE the clock
+        // moves: `tokio::time::advance` jumps the clock in one step and then
+        // yields exactly once (`tokio-1.53.1/src/time/clock.rs:270-281`) — a
+        // task that has not been polled even once yet has no timer
+        // registered for `advance` to fire, so a timer mutation racing the
+        // uncontended, single-poll `load_all()` call above would go
+        // undetected without this.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::advance(std::time::Duration::from_secs(60 * 60)).await;
+        tokio::task::yield_now().await;
+
+        let after = manager
+            .get_plugin_record("p3-patient")
+            .await
+            .unwrap()
+            .status;
+        assert_eq!(
+            after, before,
+            "an hour of silence is still silence, not failure"
+        );
+    }
+
     /// A static plugin has no dependency to wait on: `Loaded` after mount.
     #[tokio::test]
     async fn mount_of_a_static_plugin_is_loaded() {

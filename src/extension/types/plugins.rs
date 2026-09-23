@@ -575,6 +575,49 @@ mod tests {
         )
         .with_pending(Vec::new());
     }
+
+    /// G6: the activation gate's "terminal" set is derived from the enum.
+    /// This test lists every variant ONCE with the expected answer; adding
+    /// a variant to the enum without adding a row here does not compile
+    /// (the `match` below has no wildcard), and adding a row with the wrong
+    /// answer fails the assertion. Mutation record: adding `Paused` to the
+    /// enum turned this red with `non-exhaustive patterns` before any row
+    /// was written for it.
+    #[test]
+    fn g6_terminal_set_is_derived_from_the_enum() {
+        let rows = [
+            (PluginStatus::Loaded, true),
+            (PluginStatus::Disabled, true),
+            (PluginStatus::Error("e".into()), true),
+            (PluginStatus::Blocked("b".into()), true),
+            (
+                PluginStatus::Pending {
+                    waiting_on: vec!["mcp:manager".into()],
+                },
+                false,
+            ),
+        ];
+        for (status, expected) in &rows {
+            // The match is the census: every variant must appear.
+            let by_match = match status {
+                PluginStatus::Loaded
+                | PluginStatus::Disabled
+                | PluginStatus::Error(_)
+                | PluginStatus::Blocked(_) => true,
+                PluginStatus::Pending { .. } => false,
+            };
+            assert_eq!(status.is_terminal(), *expected, "{status:?}");
+            assert_eq!(
+                by_match, *expected,
+                "{status:?}: the test's own census disagrees with is_terminal"
+            );
+        }
+        assert_eq!(
+            rows.len(),
+            5,
+            "one row per variant — update when the enum changes"
+        );
+    }
 }
 
 #[cfg(test)]
