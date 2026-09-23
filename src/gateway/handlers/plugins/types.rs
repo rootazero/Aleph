@@ -62,8 +62,8 @@ fn parse_status(label: &str) -> PluginRuntimeStatus {
     match label {
         "loaded" => PluginRuntimeStatus::Loaded,
         "disabled" => PluginRuntimeStatus::Disabled,
-        "overridden" => PluginRuntimeStatus::Overridden,
         "blocked" => PluginRuntimeStatus::Blocked,
+        "pending" => PluginRuntimeStatus::Pending,
         _ => PluginRuntimeStatus::Error,
     }
 }
@@ -165,4 +165,30 @@ pub struct ExecuteCommandParams {
     /// Arguments to pass to the command handler
     #[serde(default)]
     pub args: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every core label maps onto a wire variant of the SAME name, and an
+    /// unknown label still lands on `Error`, never `Loaded`.
+    #[test]
+    fn parse_status_covers_every_core_label() {
+        use crate::extension::PluginStatus;
+        let core = [
+            PluginStatus::Loaded,
+            PluginStatus::Disabled,
+            PluginStatus::Error("e".into()),
+            PluginStatus::Blocked("b".into()),
+            PluginStatus::Pending {
+                waiting_on: vec!["mcp:manager".into()],
+            },
+        ];
+        for s in core {
+            assert_eq!(parse_status(s.label()).label(), s.label(), "{s:?}");
+        }
+        assert_eq!(parse_status("overridden"), PluginRuntimeStatus::Error);
+        assert_eq!(parse_status("garbage"), PluginRuntimeStatus::Error);
+    }
 }

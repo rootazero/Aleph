@@ -152,9 +152,9 @@ sensitive = true
 |--------|------|------|
 | `loaded` | 活跃，capability 对模型可见 | — |
 | `disabled` | operator 关掉了（`plugins.toml`）| `aleph plugin enable <name>` |
-| `overridden` | 同 id 被更高优先级 scope 的副本遮蔽 | `status_detail` 给出胜出路径 |
 | `error` | manifest 解析失败 | `status_detail` 给出解析错误 |
 | `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |
+| `pending` | 已 mount，但某个声明的依赖尚未到达终态（MCP manager 未接上 / server 未完成 `initialize` / 运行时未 provision）| `status_detail` 列出 `waiting on …`；`aleph doctor` 的 `extension/plugins-activated` 逐个点名 |
 
 > **2026-08-16 之前只有前两个是真的。** `Overridden` / `Error` 是**零生产者**的枚举变体：
 > 重名插件在 `load_all` 里被 `continue` 静默丢弃，manifest 解析失败只有一句 `debug!`，
@@ -162,7 +162,12 @@ sensitive = true
 > 而 operator 手里没有任何可修的东西。owner trust 拒绝同理（`skipped_by_trust` 计数器的
 > doc 声称它「Surfaced in `extensions.stat`」，实际零消费者）。
 >
-> 现在三者都有 registry 行 + `status_detail`。状态词表的单一源是
+> 现在 `error` / `blocked` 有了 registry 行 + `status_detail`。**`overridden` 从未有过生产者**：
+> registry 按 id 键控，输家（被遮蔽的副本）拿不到自己的行，`load_all`（现
+> `discover_and_mount`，`src/extension/lifecycle.rs`）只在赢家的 registry 上记一条 `shadowed`
+> 诊断（`PluginDiagnostic`，不是 registry 行）——这一节曾写「现在三者都有 registry 行」，
+> 那句是假的；变体已于 2026-09 删除，新增的 `pending` 走的是第三条路：既不进 `errors`
+> 计数也不是诊断，而是 `PluginRecord.status` 本身。状态词表的单一源是
 > `aleph_protocol::plugins::PluginRuntimeStatus`。
 >
 > **`blocked` 直到 2026-08-19 仍然产生不出来**——不是因为它没有 registry 行，而是

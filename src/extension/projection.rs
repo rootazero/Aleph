@@ -103,10 +103,11 @@ impl ExtensionManager {
     /// its base dirs), not the projection's.
     ///
     /// **The activation predicate lives here and nowhere else.** `is_active()`
-    /// is true only for [`PluginStatus::Loaded`](crate::extension::PluginStatus),
-    /// so `Disabled` / `Overridden` / `Error` plugins contribute nothing — which
-    /// is the whole point: an inactive plugin must be invisible to the model,
-    /// not merely absent from the management list.
+    /// is true for [`PluginStatus::Loaded`](crate::extension::PluginStatus) and
+    /// `Pending` (a pending plugin's non-dependent capabilities are already
+    /// live), so only `Disabled` / `Blocked` / `Error` plugins contribute
+    /// nothing — which is the whole point: an inactive plugin must be
+    /// invisible to the model, not merely absent from the management list.
     async fn derive_plugin_projection(&self) -> PluginProjection {
         let registry = self.plugin_registry.read().await;
 

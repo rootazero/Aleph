@@ -36,7 +36,7 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "-".repeat(90));
         for plugin in &plugins {
             let version = plugin.version.clone().unwrap_or_else(|| "-".to_string());
-            // Surface the real runtime status (loaded/disabled/overridden/error)
+            // Surface the real runtime status (loaded/disabled/blocked/pending/error)
             // instead of collapsing everything to enabled/disabled. Older
             // records without a status fall back to the enabled flag.
             let status = if plugin.status.is_empty() {

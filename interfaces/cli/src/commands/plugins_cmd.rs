@@ -492,7 +492,7 @@ mod tests {
     }
 
     /// A non-`loaded` status must reach the operator with its reason attached —
-    /// "overridden" alone names a problem and no remedy.
+    /// "blocked" alone names a problem and no remedy.
     #[test]
     fn a_blocked_row_renders_its_reason() {
         let row = PluginRow {
