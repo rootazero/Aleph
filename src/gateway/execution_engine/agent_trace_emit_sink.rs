@@ -5,8 +5,8 @@
 //!
 //! The harness emits a structured trace stream (`TurnStarted`, `TextEmitted`,
 //! `ToolCallStarted/Completed`, …) via the [`TraceSink`] for persistence and
-//! channel progress. The Panel's per-step segmentation and the TUI's step
-//! folding consume those events on the wire as `agent_trace` notifications
+//! channel progress. The Panel's per-step segmentation and the TUI's tool
+//! rows consume those events on the wire as `agent_trace` notifications
 //! (each carries an `iteration`, the per-step key). The gateway run path
 //! drains the *separate* `FlowStreamEvent` stream into `response_chunk` /
 //! `tool_start` / `tool_end`; without this sink no `agent_trace` frame would
@@ -42,8 +42,8 @@
 //!   the trace stream, filtered by [`is_step_event`].
 //! * It never blocks: `broadcast::send` is synchronous and lossless for the
 //!   sender; a receiver that falls behind sees `Lagged`, which the drain
-//!   logs (`helpers.rs`) and the client catches at `run_complete` via
-//!   `RunSummary.loops`.
+//!   logs (`helpers.rs`); the shared reducer's `RunSummary.loops` gate flags a
+//!   lost `TurnStarted` (`NeedsResync`), but no client acts on it before Phase T.
 //! * A send with zero receivers (the drain already returned) is ignored,
 //!   exactly as `BroadcastCallback` ignores it.
 //! * It always forwards the original event to the inner sink, so trace
