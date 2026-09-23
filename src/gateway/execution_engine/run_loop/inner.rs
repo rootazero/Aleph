@@ -1006,17 +1006,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 };
 
             // Forward the harness trace stream to this run's WebSocket as
-            // `agent_trace` notifications so the WebChat Panel can segment the
-            // chat per Think→Act step and populate the workspace timeline.
-            // Forwards to the inner (persistence + scratchpad) sink unchanged;
-            // on unattended runs the redacting sink below wraps OUTSIDE this
-            // one, so every event is masked before reaching any of them.
+            // `agent_trace` notifications so the clients can segment the
+            // transcript per Think→Act step. The sink publishes on the run's
+            // OWN flow channel (created here, handed to `dispatch` through
+            // `FlowRequest.event_tx`) so trace frames take their `seq` from
+            // the same serial drain as the text and tool frames — a second
+            // channel is the ordering race this replaced. Forwards to the
+            // inner (persistence + scratchpad) sink unchanged; on unattended
+            // runs the redacting sink below wraps OUTSIDE this one, so every
+            // event is masked before it is published.
+            //
+            // Sender-lifetime invariant: the only STRONG senders of this
+            // channel are the request's (`event_tx`, moved by value into the
+            // `FlowRequest` below, dropped when `dispatch` returns) and
+            // dispatch's own clone for the harness task; the sink holds a
+            // weak half only. Keeping a strong clone in this scope — which
+            // awaits the drain — would hang the drain on a harness that
+            // returns without `Complete` (`helpers.rs`, the `Ok(Err(_))` arm),
+            // waiting for a `Closed` this scope itself prevents. The initial
+            // receiver is dropped at once; `dispatch` subscribes its own.
+            let (event_tx, initial_rx) = crate::orchestrator::flow_event_channel();
+            drop(initial_rx);
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::super::AgentTraceEmitSink::new(
-                    trace_sink,
-                    Arc::clone(&emitter),
-                    run_id.to_string(),
-                ));
+                Arc::new(super::super::AgentTraceEmitSink::new(trace_sink, &event_tx));
 
             // Unattended security-tax (observability side): when no human is
             // watching, redact model-authored text before it reaches
@@ -1379,6 +1391,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 depth: 0,
                 tool_service: Some(tool_service),
                 trace_sink: Some(trace_sink),
+                // Moved, never cloned: see the sender-lifetime invariant at
+                // the channel's creation above.
+                event_tx: Some(event_tx),
                 interaction_manifest,
                 // G2 — forward the per-run sandbox override so the team
                 // dispatcher's WorktreeSandbox replaces the orchestrator's

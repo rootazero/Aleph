@@ -20,8 +20,8 @@ pub use deps_builder::{
 };
 
 pub use dispatch::{
-    FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner, Orchestrator,
-    TerminateReason,
+    flow_event_channel, FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner,
+    Orchestrator, TerminateReason,
 };
 // `ExecTier` / `SessionMode` appear in the public `crate::thinker::TurnEnvelope`
 // fields (`exec_tier`, `session_mode`), and the crate root keeps `config`

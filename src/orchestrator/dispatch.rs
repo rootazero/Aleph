@@ -489,6 +489,21 @@ pub struct FlowRequest {
     /// Gateway-side observability sink. `None` is a no-op.
     /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
     pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    /// The run's flow-event channel, when the caller already publishes on it.
+    /// The gateway's `AgentTraceEmitSink` must send `FlowStreamEvent::Trace`
+    /// on the same channel the harness callback uses, or trace frames lose
+    /// their place in the run's `seq` order — and that sink is built in
+    /// `run_loop/inner.rs`, INSIDE the unattended redacting wrap, before
+    /// `dispatch` runs. `None` = `dispatch` creates the channel itself
+    /// (tests, callers with no trace mirror). Always from
+    /// [`flow_event_channel`], so the capacity is one number.
+    ///
+    /// This is a STRONG sender and it dies with the request (when `dispatch`
+    /// returns) — the caller must not keep a clone, or a harness that returns
+    /// without a terminal `Complete` leaves the gateway drain waiting for a
+    /// `Closed` that never comes. The emit sink holds only a weak half.
+    /// Not included in `Debug` output.
+    pub event_tx: Option<broadcast::Sender<FlowStreamEvent>>,
     /// Phase 4 (F4): channel-aware interaction envelope. When `Some`, the
     /// harness bridge threads this `InteractionManifest` into the
     /// `ResolvedContext` used for prompt assembly, so per-channel
@@ -596,6 +611,20 @@ impl std::fmt::Debug for FlowRequest {
 /// 256 is a deliberate balance: large enough for bursts of rapid tool calls,
 /// small enough to bound memory overhead per active flow.
 const CHANNEL_BUFFER_SIZE: usize = 256;
+
+/// The run's flow-event channel, at the one capacity every run uses.
+///
+/// Callers that must publish onto the run's channel BEFORE `dispatch` runs
+/// (the gateway's `AgentTraceEmitSink`, built in `run_loop/inner.rs` inside
+/// the unattended redacting wrap) create the channel here and hand the sender
+/// through [`FlowRequest::event_tx`]; `dispatch` subscribes to it instead of
+/// creating its own. One channel per run, never two.
+pub fn flow_event_channel() -> (
+    broadcast::Sender<FlowStreamEvent>,
+    broadcast::Receiver<FlowStreamEvent>,
+) {
+    broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE)
+}
 
 /// Orchestrator dependencies. Most are behind `Arc<dyn Trait>` so the struct
 /// itself is cheap to share. Per-session lock is an internal `Mutex<HashSet>`.
@@ -1054,7 +1083,18 @@ impl Orchestrator {
         };
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
-        let (event_tx, event_rx) = broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE);
+        // One channel per run. A caller that already publishes on it (the
+        // gateway's trace mirror) hands the sender in; we subscribe. The
+        // subscription must happen before the harness task starts — a
+        // broadcast receiver only sees sends made after it exists.
+        // rust-doctor-disable-next-line excessive-clone
+        let (event_tx, event_rx) = match req.event_tx.clone() {
+            Some(tx) => {
+                let rx = tx.subscribe();
+                (tx, rx)
+            }
+            None => flow_event_channel(),
+        };
         let (done_tx, done_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
 
