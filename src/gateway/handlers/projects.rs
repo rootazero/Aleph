@@ -341,7 +341,10 @@ pub async fn handle_list(
 
     let actor = visibility::visible_owner_filter();
     // One admin lookup per listing, not per row: `manageable` is
-    // `is_owner(p, actor, is_active_admin(..))` by definition.
+    // `manageable_given(p, actor, is_active_admin(..))` by definition, and
+    // this calls the SAME `manageable_given` `authz::manageable` calls — not
+    // a hand-inlined copy of its body — so a list row cannot drift from what
+    // `projects.get` (and the gates) answer for the same caller.
     let actor_is_admin = crate::projects::authz::is_active_admin(Some(&users), actor.as_deref());
 
     let view: Vec<ProjectView> = projects
@@ -350,7 +353,8 @@ pub async fn handle_list(
         .filter(|p| visibility::project_visible(&p.id))
         .map(|p| {
             let members = rosters.remove(&p.id).unwrap_or_default();
-            let manageable = crate::projects::authz::is_owner(&p, actor.as_deref(), actor_is_admin);
+            let manageable =
+                crate::projects::authz::manageable_given(&p, actor.as_deref(), actor_is_admin);
             render_project(p, members, manageable)
         })
         .collect();
@@ -2500,15 +2504,45 @@ mod tests {
     #[tokio::test]
     async fn list_rows_carry_the_callers_manageable_too() {
         let (store, users, project, _guard) = room();
-        let listed = CALLER_USER
-            .scope(
-                Some("u-bob".to_string()),
-                handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
-            )
-            .await;
-        let parsed: aleph_protocol::projects::ProjectListResult =
-            serde_json::from_value(listed.result.expect("list succeeds")).unwrap();
-        let row = parsed.projects.iter().find(|p| p.id == project.id).expect("bob sees it");
-        assert!(!row.manageable, "a plain member may not manage the room");
+        store.add_member(&project.id, "u-carol").unwrap();
+
+        // `handle_list` derives each row's `manageable` through the SAME
+        // `authz::manageable_given` that `handle_get` (via `authz::manageable`)
+        // does, not a hand-inlined copy of its body — so for every caller, the
+        // list row and the single-project response must agree, not merely
+        // both be individually plausible.
+        for (who, expected) in [("u-alice", true), ("u-bob", false), ("u-carol", true)] {
+            let listed = CALLER_USER
+                .scope(
+                    Some(who.to_string()),
+                    handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
+                )
+                .await;
+            let parsed: aleph_protocol::projects::ProjectListResult =
+                serde_json::from_value(listed.result.expect("list succeeds")).unwrap();
+            let row = parsed
+                .projects
+                .iter()
+                .find(|p| p.id == project.id)
+                .unwrap_or_else(|| panic!("{who} sees it"));
+            assert_eq!(row.manageable, expected, "{who}: list row");
+
+            let got = CALLER_USER
+                .scope(
+                    Some(who.to_string()),
+                    handle_get(
+                        rpc("projects.get", json!({ "id": project.id })),
+                        store.clone(),
+                        users.clone(),
+                    ),
+                )
+                .await;
+            let got_parsed: aleph_protocol::projects::ProjectResult =
+                serde_json::from_value(got.result.expect("get succeeds")).unwrap();
+            assert_eq!(
+                row.manageable, got_parsed.project.manageable,
+                "{who}: list and get must agree on manageable"
+            );
+        }
     }
 }

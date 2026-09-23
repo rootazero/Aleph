@@ -44,7 +44,16 @@ pub fn project_for(store: &ProjectStore, id: &str, actor: Option<&str>) -> Optio
     }
 }
 
-/// Whether `actor` may reconfigure `project` (rename, archive, roster, bind).
+/// Whether `actor` may reconfigure `project` (rename, archive, roster, bind),
+/// GIVEN whether the actor is already known to be an active admin.
+///
+/// This is [`manageable`]'s body with the admin lookup factored out — the
+/// shared core both `manageable` (single-project responses, the `require_owner`
+/// gates) and `handlers/projects.rs::handle_list` call, so a list row's
+/// `manageable` and `projects.get`'s cannot drift apart by one of the two call
+/// sites hand-inlining this logic instead of naming it (criteria §1/§9).
+/// `handle_list` looks up admin status ONCE per listing rather than once per
+/// row, which is why it needs this half rather than [`manageable`] itself.
 ///
 /// Assumes visibility already passed — this answers "is this room yours to
 /// reconfigure", not "may you see it". Calling it alone would answer a
@@ -56,7 +65,7 @@ pub fn project_for(store: &ProjectStore, id: &str, actor: Option<&str>) -> Optio
 /// own — [`is_active_principal`] below takes one by parameter for the same
 /// reason.
 #[must_use]
-pub fn is_owner(project: &Project, actor: Option<&str>, actor_is_admin: bool) -> bool {
+pub(crate) fn manageable_given(project: &Project, actor: Option<&str>, actor_is_admin: bool) -> bool {
     let Some(caller) = actor else {
         return true;
     };
@@ -88,8 +97,8 @@ pub fn is_active_admin(
     }
 }
 
-/// Whether `actor` may reconfigure `project` — [`is_owner`] with the admin
-/// escalation resolved. What the owner-level gates enforce AND what
+/// Whether `actor` may reconfigure `project` — [`manageable_given`] with the
+/// admin escalation resolved. What the owner-level gates enforce AND what
 /// `ProjectRow.manageable` reports; one function so the two cannot disagree.
 #[must_use]
 pub fn manageable(
@@ -97,7 +106,7 @@ pub fn manageable(
     actor: Option<&str>,
     users: Option<&crate::gateway::security::store::SecurityStore>,
 ) -> bool {
-    is_owner(project, actor, is_active_admin(users, actor))
+    manageable_given(project, actor, is_active_admin(users, actor))
 }
 
 /// The refusal both faces give for removing a room's owner, verbatim.
@@ -115,7 +124,7 @@ pub const OWNER_REMOVAL_REFUSAL: &str = "cannot remove the project owner from it
 /// nobody — not even the org admin who could archive it. Hand the room over
 /// first (an admin operation), then remove.
 ///
-/// **Target-based, deliberately not caller-based.** [`is_owner`] answers a
+/// **Target-based, deliberately not caller-based.** [`manageable_given`] answers a
 /// question about the CALLER and returns `true` for `actor: None`, the
 /// unattributed run every spawned tool call is. A caller-shaped spelling of
 /// this rule would therefore leave that arm open on the one mutation that can
@@ -382,13 +391,13 @@ mod tests {
     #[test]
     fn only_the_owner_or_an_admin_may_reconfigure() {
         let (_store, project, _g) = store_with_room();
-        assert!(is_owner(&project, Some("u-alice"), false), "the owner");
-        assert!(is_owner(&project, Some("u-carol"), true), "an org admin");
+        assert!(manageable_given(&project, Some("u-alice"), false), "the owner");
+        assert!(manageable_given(&project, Some("u-carol"), true), "an org admin");
         assert!(
-            !is_owner(&project, Some("u-bob"), false),
+            !manageable_given(&project, Some("u-bob"), false),
             "a plain member may not reconfigure"
         );
-        assert!(is_owner(&project, None, false), "unrestricted passes");
+        assert!(manageable_given(&project, None, false), "unrestricted passes");
     }
 
     #[test]

@@ -438,6 +438,28 @@ mod tests {
         .is_err());
     }
 
+    /// No production call site in this file hand-extracts `"project"` from a
+    /// raw `Value` any more — every single-project method parses through
+    /// `ProjectResult` (see the five methods above), so the envelope's key
+    /// has exactly one reader. A `.get("project")` reappearing here is the
+    /// same regression `ProjectResult` was added to close: it parses the
+    /// same value today, but drifts silently the day the envelope grows a
+    /// second field only `ProjectResult` knows to expect.
+    #[test]
+    fn no_method_hand_extracts_the_project_envelope() {
+        let src = crate::i18n_census::production_lines(include_str!("projects.rs"))
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !src.contains(".get(\"project\")"),
+            "a production call site reverted to hand-extracting the envelope \
+             instead of parsing `ProjectResult` — see this file's five \
+             `serde_json::from_value::<ProjectResult>` call sites"
+        );
+    }
+
     /// A server-side rename of the roster key is an ERROR here, not an empty
     /// roster.
     ///
