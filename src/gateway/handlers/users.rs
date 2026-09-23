@@ -1273,7 +1273,7 @@ mod tests {
     /// connection into `.connections` to pin the demote half from this call
     /// site too. The physical socket-*close* reaction to the `DeviceRevoked`
     /// event (severing the WS) is separate — it lives in the WS dispatch
-    /// loop (`server/handler.rs::device_revoked_should_close`), already
+    /// loop (`server/connection/forward.rs::device_revoked_should_close`), already
     /// covered by that module's own tests, and isn't exercised here.
     fn test_kick_sink() -> UserDeactivationKick {
         kick_with_pairing(Arc::new(

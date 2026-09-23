@@ -455,7 +455,7 @@ mod tests {
     use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
 
     /// Fed the SERVER's own refusal — `aleph_protocol`'s constant, which
-    /// `gateway::server::handler` emits verbatim — not a local transcription of
+    /// `gateway::server::connection::dispatch::process_request` emits verbatim — not a local transcription of
     /// it. That is what makes this assertion able to fail: if this page's
     /// recognition ever drifts away from the words the server actually sends,
     /// the refusal falls through to the raw string and `assert_ne!` fires.

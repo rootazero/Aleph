@@ -5,7 +5,7 @@
 //! The middleware chain runs between JSON-RPC parsing and `HandlerRegistry` dispatch:
 //!
 //! ```text
-//! process_request (handler.rs)
+//! process_request (server/connection/dispatch.rs)
 //!   → parse JSON
 //!   → MiddlewareChain
 //!       → TraceLayer      (logs request_id, method, duration)

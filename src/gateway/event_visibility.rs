@@ -1,7 +1,7 @@
 //! Owner-scoped WS event delivery (P1 data isolation, spec §5.4).
 //!
 //! Sibling of `visibility.rs` for the event-bus fan-out path rather than RPC
-//! responses: `EventScopeGuard` (filter #1 in `server::handler`'s
+//! responses: `EventScopeGuard` (filter #1 in `server::connection::handle_connection`'s
 //! `should_forward` chain) is role-based — it gates a handful of admin-only
 //! topic prefixes and is default-**allow** for everything else, including
 //! every ordinary session/chat/agent-run event. So today every connected
@@ -160,7 +160,7 @@ use crate::utils::fifo_cache::{forget, remember};
 use aleph_protocol::team_topic::team_topic_id;
 
 /// Which session (if any) a delivered event frame is attributable to, keyed
-/// off the SAME wire strings `server::handler`'s filter chain already
+/// off the SAME wire strings `server::connection::handle_connection`'s filter chain already
 /// extracts (`topic` for `TopicEvent`-form frames, `method` for `stream.*`
 /// JSON-RPC notification frames — see `event_bus.rs::publish_frame`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,7 +454,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // the double-nested `{"method":"event","params":{"topic":...}}`
         // envelope this producer uses read as topic `"event"` before the
         // `extract_topic_and_data` fix (fix round 1) — see that function's
-        // doc in `server::handler`.
+        // doc in `server::connection::forward`.
         aleph_protocol::subagent_tree::TOPIC => match subagent_tree_root_session(data) {
             Some(k) => SessionIdentity::BySessionKey(k),
             None => SessionIdentity::Global,
@@ -3334,7 +3334,7 @@ mod tests {
     /// the run→session seed and the delivery loop then asked
     /// `event_admits_for` — which resolves those two topics THROUGH that seed.
     ///
-    /// The calls below are in the production order (`handler.rs`'s delivery
+    /// The calls below are in the production order (`server/connection/mod.rs`'s delivery
     /// loop: note, then filter). Re-adding the eviction arm turns this red.
     #[tokio::test]
     async fn terminal_frames_survive_their_own_note_frame() {
@@ -3458,7 +3458,7 @@ mod tests {
             serde_json::from_str(&rx.try_recv().expect("publish_frame delivers synchronously"))
                 .unwrap();
 
-        // Exactly the two strings `server::handler`'s delivery loop derives.
+        // Exactly the two strings `server::connection::handle_connection`'s delivery loop derives.
         let topic = wire["method"].as_str().expect("stream-form frame");
         let payload = wire.get("params");
         assert_eq!(
@@ -3657,7 +3657,7 @@ mod tests {
     /// STREAM wire form, because that is what makes the projection land on the
     /// bytes that go out.
     ///
-    /// `server::handler::event_wire_form` inserts the projected payload at
+    /// `server::connection::forward::event_wire_form` inserts the projected payload at
     /// `.params` unconditionally — correct for a stream-form frame, whose
     /// payload already lives there. Lose the `stream_method()` and
     /// `event_bus::publish_frame` emits the bare `{topic, data}` form instead:

@@ -693,7 +693,7 @@ mod tests {
     // ─── The agent-admission gate ────────────────────────────────────────────
     //
     // These go through `resume_named_session` itself, under the same task-local
-    // nesting a real dispatch applies (`server::handler::
+    // nesting a real dispatch applies (`server::connection::dispatch::
     // dispatch_with_caller_context`), because the gate's whole subject is what
     // those task-locals hold — calling `caller_may_act_as_agent` directly would
     // test `agent_admits_user`, which already has its own tests, and would stay

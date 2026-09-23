@@ -384,10 +384,12 @@ fn directory_is_a_test_module(dir: &std::path::Path) -> bool {
 }
 
 /// A leading `pub`, `pub(crate)`, `pub(super)` or `pub(in path)`, removed.
+/// `pub(crate)` so `gateway::source_census`'s const table strips visibility
+/// with this walk's rule rather than a third copy of it.
 ///
 /// Returns the input unchanged when there is none, so a caller can compare
 /// against the bare form either way.
-fn strip_visibility(line: &str) -> &str {
+pub(crate) fn strip_visibility(line: &str) -> &str {
     let Some(rest) = line.strip_prefix("pub") else {
         return line;
     };
@@ -2534,8 +2536,8 @@ pub fn after() {}
     ///
     /// Task 3 migrated 36 sites onto [`production_prefix`] and closed with
     /// "zero offenders". That was true of the three spellings it searched for.
-    /// Widening the search to the rule (above) found these five, all older
-    /// than that round. They are registered rather than migrated because
+    /// Widening the search to the rule (above) found five, all older
+    /// than that round (r11 T01 migrated `session/steer_signal.rs`). The rest are registered rather than migrated because
     /// migrating each is a behaviour question of its own, not a rename:
     ///
     /// **This list may only shrink**, and the assertion below pins its size so
@@ -2562,10 +2564,6 @@ pub fn after() {}
              production_prefix on a file with a gated non-mod item.",
         ),
         (
-            "src/session/steer_signal.rs",
-            "splits on `\"#[cfg(test)]\\nmod \"` — same shape as run_loop's.",
-        ),
-        (
             "src/harness/tests/budget.rs",
             "counts budgeted LINES for the R10 harness ratchet rather than \
              extracting text. Swapping the cut moves that ratchet's number, \
@@ -2576,7 +2574,7 @@ pub fn after() {}
     /// Guard 3 — no second author.
     ///
     /// The detector is a rule ([`opens_a_cfg_test_literal`]), not a list of
-    /// spellings; the list it does carry ([`KNOWN_UNMIGRATED_CUTS`]) is five
+    /// spellings; the list it does carry ([`KNOWN_UNMIGRATED_CUTS`]) is the
     /// registered sites the rule found and Task 3's three-spelling search never
     /// could, size-pinned so it cannot grow into a licence. Read both docs
     /// before touching either: the previous version of this comment claimed

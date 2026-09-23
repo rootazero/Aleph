@@ -12,7 +12,7 @@
 //! drive nodes through these primitives. Trust model is LAN-trust: nodes hold no
 //! tokens, connection identity is declared by the connect frame's parameter shape
 //! (`commands` + `tags`) (see `node_connect_claim` in
-//! `src/gateway/server/handler.rs`), and registration itself happens within
+//! `src/gateway/server/connection/auth.rs`), and registration itself happens within
 //! `connect` (see [`admit_node`]). For the full engineering
 //! picture see `docs/reference/CLUSTER.md`.
 //!

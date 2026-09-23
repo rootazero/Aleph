@@ -20,7 +20,7 @@
 //!
 //! `handle_connect` returns only the session baseline. The actual authorization
 //! decision needs the per-connection client IP (loopback?) and access to the
-//! token managers, both of which live in `server::handler`; it calls
+//! token managers, both of which live in `server::connection`; it calls
 //! [`resolve_connect_auth`] at the handshake and stamps the resolved role onto
 //! the connection state.
 
@@ -230,7 +230,7 @@ pub const fn should_audit_connect_failure(authorized: bool, is_loopback: bool) -
     !authorized && !is_loopback
 }
 
-/// Handle "connect" — returns the session baseline. `server::handler` overlays
+/// Handle "connect" — returns the session baseline. `server::connection::handle_connection` overlays
 /// the authorization verdict (`role` / `authorized` / `needs_token`) computed
 /// via [`resolve_connect_auth`]; the `role` here is just a default for any path
 /// that bypasses that overlay.
@@ -354,7 +354,7 @@ mod tests {
         let resp = handle_connect(req, ctx()).await;
         assert!(resp.is_success(), "{resp:?}");
         let result = resp.result.unwrap();
-        // Baseline role; the real verdict is overlaid by server::handler.
+        // Baseline role; the real verdict is overlaid by server::connection::handle_connection.
         assert_eq!(
             result.get("role").and_then(|v| v.as_str()),
             Some("operator")

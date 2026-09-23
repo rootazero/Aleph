@@ -16,7 +16,7 @@
   `connect::resolve_connection_identity` 把已授权连接进一步解析成 `(Option<user_id>, role)`
   （`"operator"` / `"member"` / `"guest"`），member 由 `method_admin.rs` 闸在 `process_request`
   单点强制（P0 身份基础，`src/gateway/caller_identity.rs` 模块 doc 有完整链路）。
-  ⚠️ **两道闸别混**：登录墙 `handler.rs::wall_admits` 是**访客墙**，`operator` 与 `member`
+  ⚠️ **两道闸别混**：登录墙 `server/connection/auth.rs::wall_admits` 是**访客墙**，`operator` 与 `member`
   **都放行全部方法**；admin/member 的分野是**更深处**那道 `method_admin.rs` 闸。把 member
   写进登录墙的拒绝分支，等于真 member 每一帧都吃 `AUTH_REQUIRED` 并被 flood-guard 当滥用者
   踢掉，而所有把 task-local scope 在墙**下面**的测试都会保持全绿。另：`connect` 回包里的
@@ -25,7 +25,7 @@
   在墙上寸步难行。
 - **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
   cluster 节点不受影响）+ **强踢全部远程 socket**（`start/mod.rs` 发 `TokenRotated` 事件 →
-  `handler.rs` 的 `is_token_rotated_frame` 关闭远程 session）。② `gateway.devices.revoke
+  `server/connection/forward.rs` 的 `is_token_rotated_frame` 关闭远程 session）。② `gateway.devices.revoke
   {device_id}` = 单设备，**同样立即生效**，且是 `users.update` 停用用户时吊销其全部设备**共用
   的同一条**管线（P0 身份基础 Task 5，2026-08-04）——顺序、单一源、capability 注入的位置见下方
   地雷 2。清单 `gateway.devices.list`（仅 `device_type='panel'`，带 `connected` 实时位）。
@@ -77,7 +77,7 @@
 
 ## 两道护栏
 
-- **登录墙**（`server::handler` + `handlers::connect::resolve_connect_auth` 4 级，
+- **登录墙**（`server::connection` + `handlers::connect::resolve_connect_auth` 4 级，
   `connect_authorized` 为无 device-mgr 时的 legacy 回退）：远程未授权连接只能发 `connect`；
   授权（loopback 或有效凭据）= operator 全权，与本地一致。**审计**：远程失败连接记
   `AuditEventType::AuthFailure`，flood-guard 关连接记 `RateLimited`，入
