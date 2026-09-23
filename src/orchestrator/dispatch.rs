@@ -492,10 +492,10 @@ pub struct FlowRequest {
     /// The run's flow-event channel, when the caller already publishes on it.
     /// The gateway's `AgentTraceEmitSink` must send `FlowStreamEvent::Trace`
     /// on the same channel the harness callback uses, or trace frames lose
-    /// their place in the run's `seq` order — and that sink is built in
-    /// `run_loop/inner.rs`, INSIDE the unattended redacting wrap, before
-    /// `dispatch` runs. `None` = `dispatch` creates the channel itself
-    /// (tests, callers with no trace mirror). Always from
+    /// their place in the run's `seq` order — and that sink is built by
+    /// `execution_engine/run_trace_sinks.rs::RunTraceSinks::build`, INSIDE the
+    /// unattended redacting wrap, before `dispatch` runs. `None` = `dispatch`
+    /// creates the channel itself (tests, callers with no trace mirror). Always from
     /// [`flow_event_channel`], so the capacity is one number.
     ///
     /// This is a STRONG sender and it dies with the request (when `dispatch`
@@ -615,8 +615,9 @@ const CHANNEL_BUFFER_SIZE: usize = 256;
 /// The run's flow-event channel, at the one capacity every run uses.
 ///
 /// Callers that must publish onto the run's channel BEFORE `dispatch` runs
-/// (the gateway's `AgentTraceEmitSink`, built in `run_loop/inner.rs` inside
-/// the unattended redacting wrap) create the channel here and hand the sender
+/// (the gateway's `AgentTraceEmitSink`, built by
+/// `execution_engine/run_trace_sinks.rs::RunTraceSinks::build` inside the
+/// unattended redacting wrap) create the channel here and hand the sender
 /// through [`FlowRequest::event_tx`]; `dispatch` subscribes to it instead of
 /// creating its own. One channel per run, never two.
 pub fn flow_event_channel() -> (
