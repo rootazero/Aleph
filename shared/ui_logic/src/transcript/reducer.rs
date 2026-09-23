@@ -25,10 +25,10 @@ use super::step::{Note, NoteKind, StepEntry, StepStatus, ThinkingBlock};
 use super::turn_summary::summarize_turn;
 use super::view_model::{RowBody, RowStatus, ToolRow, TranscriptEntry, TuiAttachment};
 
-/// Between two `ReasoningEmitted` records of one iteration (the
-/// verifier-halt salvage path re-runs Think on the same iteration and emits
-/// a second record), and before a delta segment that follows a record.
-const THINKING_JOIN: &str = "\n\n";
+/// Between two records of one field on one iteration (the verifier-halt
+/// salvage path re-runs Think on the same iteration and records again), and
+/// before a delta segment that follows a record.
+const RECORD_JOIN: &str = "\n\n";
 
 /// What a fold step changed, by entry id — enough for a keyed re-render.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,35 +36,69 @@ pub enum Change {
     Inserted(String),
     Updated(String),
     Removed(String),
-    /// The fold cannot vouch for what it holds, so the client should re-pull
-    /// the run through `trace.by_runs` and replace it (spec §5.1, §9). Two
-    /// causes: `RunSummary.loops` counted more iterations than this
-    /// transcript saw `TurnStarted` frames for (something was dropped on the
-    /// way), or a frame that needed the open step could not reach one (a
-    /// thinking record for another iteration, a trace event outside any run).
-    /// The entries are NOT patched either way — no step is minted to hold the
-    /// frame and none is renumbered.
+    /// The fold cannot vouch for what it holds. Raised when
+    /// `RunSummary.loops` counted more iterations than this transcript saw
+    /// `TurnStarted` frames for (something was dropped on the way), or when a
+    /// thinking record names an iteration other than the open step's. The
+    /// entries are NOT patched — no step is minted to hold the frame and
+    /// none is renumbered. The client's move is to rebuild through the
+    /// replay leg: a fresh `Transcript`, each `trace.by_runs` row through
+    /// `apply_replay`, then `finish_replay` per run (spec §5.1, §9). The
+    /// other producers are fail-closed branches no input reaches today.
     NeedsResync,
+}
+
+/// One field of the open step (its thinking, or its text) fed by two
+/// sources: streamed deltas, and the authoritative records the trace later
+/// writes for them (`ReasoningEmitted`, `TextEmitted`). A record replaces
+/// every delta streamed since the previous record and is appended after any
+/// earlier record of the same step — so the live leg converges to exactly
+/// what the replay leg (records only) shows, whatever the deltas were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct RecordCursor {
+    /// Bytes at the head of the field that came from records.
+    record_len: usize,
+    /// Whether deltas were appended since the last record.
+    streamed: bool,
+}
+
+impl RecordCursor {
+    /// What a delta is prefixed with: a delta segment that follows a record
+    /// starts a new paragraph, joined the way the record covering it will be.
+    const fn delta_prefix(self) -> &'static str {
+        if self.record_len > 0 && !self.streamed {
+            RECORD_JOIN
+        } else {
+            ""
+        }
+    }
+
+    /// `current`'s records followed by `record`, the deltas after them
+    /// dropped. `None` when `record_len` is not a boundary of `current`:
+    /// something else rewrote the field and the earlier records are unknown.
+    fn fold(self, current: &str, record: &str) -> Option<String> {
+        let prior = current.get(..self.record_len)?;
+        Some(if prior.is_empty() {
+            record.to_string()
+        } else {
+            format!("{prior}{RECORD_JOIN}{record}")
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct RunState {
     run_id: String,
     /// Index into `entries` where this run's entries begin. A transcript
-    /// holds a session's runs; the run-end trailers count only this run's
-    /// rows. Nothing before it is ever removed while the run is open.
+    /// holds a session's runs; tool lookup, orphan settling and the run-end
+    /// trailers see only this run's entries. Nothing before it is ever
+    /// removed while the run is open.
     first_entry: usize,
     /// Index into `entries` of the `Live` step, if any.
     open_step: Option<usize>,
-    /// Bytes of `ResponseChunk` text appended to the open step; the trace's
-    /// authoritative `TextEmitted` is de-duplicated against it.
-    turn_streamed_len: usize,
-    /// Bytes at the head of the open step's thinking that came from
-    /// `ReasoningEmitted` records. Everything after them is streamed deltas,
-    /// which the next record replaces.
-    thinking_record_len: usize,
-    /// Whether `Reasoning` deltas were appended since the last record.
-    thinking_streamed: bool,
+    /// Deltas vs records for the open step's thinking and text.
+    thinking: RecordCursor,
+    text: RecordCursor,
     /// Whether any assistant text was rendered this run (gates the
     /// `final_response` fallback at `RunComplete`).
     text_rendered: bool,
@@ -88,9 +122,8 @@ impl RunState {
 
     /// The per-step bookkeeping, cleared whenever the open step changes.
     fn reset_step_state(&mut self) {
-        self.turn_streamed_len = 0;
-        self.thinking_record_len = 0;
-        self.thinking_streamed = false;
+        self.thinking = RecordCursor::default();
+        self.text = RecordCursor::default();
     }
 }
 
@@ -137,8 +170,9 @@ impl Transcript {
 
     pub fn apply_live(&mut self, ev: &StreamEvent, now_ms: u64) -> Vec<Change> {
         if let StreamEvent::RunAccepted { run_id, .. } = ev {
+            let changes = self.abandon_open_run(now_ms);
             self.run = Some(RunState::starting_at(self.entries.len(), run_id.clone()));
-            return Vec::new();
+            return changes;
         }
         // Frames of a run this transcript was not told about (another run,
         // or a client that attached after `RunAccepted`) are not folded:
@@ -151,7 +185,7 @@ impl Transcript {
         match ev {
             StreamEvent::Reasoning { content, .. }
             | StreamEvent::ReasoningBlock { content, .. } => self.append_thinking(content, now),
-            StreamEvent::ResponseChunk { content, .. } => self.append_text(content, now, true),
+            StreamEvent::ResponseChunk { content, .. } => self.append_text(content, now),
             StreamEvent::ToolStart {
                 tool_id,
                 tool_name,
@@ -186,6 +220,20 @@ impl Transcript {
         }
     }
 
+    /// A new run was accepted while the previous one never reported its end
+    /// (a dropped terminal frame, a reconnect). How it ended is unknown: its
+    /// rows stop spinning and its open step closes `Pending`, never `Live`
+    /// forever and never a fabricated `Settled`.
+    fn abandon_open_run(&mut self, now_ms: u64) -> Vec<Change> {
+        if self.run.is_none() {
+            return Vec::new();
+        }
+        let mut changes = self.settle_orphans();
+        changes.extend(self.close_open_step(StepStatus::Pending, Some(now_ms)));
+        self.run = None;
+        changes
+    }
+
     // ---- replay leg ------------------------------------------------------
 
     /// One `trace.by_runs` row. The same `apply_trace` the live leg uses;
@@ -216,7 +264,7 @@ impl Transcript {
         let mut changes = self.settle_orphans();
         if completed {
             changes.extend(self.hoist_open_step_text(None));
-            let rows = self.run_rows_where(|_| true);
+            let rows = self.run_rows();
             changes.extend(self.push_trailers(&rows, duration_ms));
         } else {
             changes.extend(self.close_open_step(StepStatus::Pending, None));
@@ -243,11 +291,7 @@ impl Transcript {
             AgentTraceEvent::ReasoningEmitted { iteration, text } => {
                 self.record_thinking(*iteration, text, now_ms)
             }
-            AgentTraceEvent::TextEmitted { text, .. } => {
-                let streamed = self.run.as_ref().map_or(0, |r| r.turn_streamed_len);
-                let fresh = text.get(streamed..).unwrap_or("");
-                self.append_text(fresh, now_ms, false)
-            }
+            AgentTraceEvent::TextEmitted { text, .. } => self.record_text(text, now_ms),
             AgentTraceEvent::ToolCallStarted { call, .. } => {
                 self.start_tool(&call.tool_id, &call.tool_name, &call.input, now_ms)
             }
@@ -285,7 +329,7 @@ impl Transcript {
                     .open_step_ref()
                     .is_some_and(|s| s.text.as_deref().is_some_and(|t| !t.trim().is_empty()));
                 match final_text.as_deref().filter(|t| !t.trim().is_empty()) {
-                    Some(t) if !has_text => self.append_text(t, now_ms, false),
+                    Some(t) if !has_text => self.append_text(t, now_ms),
                     _ => Vec::new(),
                 }
             }
@@ -371,18 +415,22 @@ impl Transcript {
     }
 
     /// Apply `edit` to the open step (opening an unnumbered one if the run
-    /// has none). A miss is `NeedsResync`, never a silently minted step.
-    /// The flag says whether `edit` ran.
+    /// has none). `edit` returns whether it changed the step. A miss — no
+    /// step reachable, or an edit that could not apply — is `NeedsResync`,
+    /// never a silently minted step and never an `Updated` for a step that
+    /// did not change. The flag says whether the edit applied.
     fn edit_open_step(
         &mut self,
         now_ms: Option<u64>,
-        edit: impl FnOnce(&mut StepEntry),
+        edit: impl FnOnce(&mut StepEntry) -> bool,
     ) -> (Vec<Change>, bool) {
         let mut changes = self.ensure_open_step(now_ms);
-        match self.open_step_mut() {
-            Some(step) => {
-                edit(step);
-                changes.push(Change::Updated(step.id.clone()));
+        let updated = self
+            .open_step_mut()
+            .and_then(|step| edit(step).then(|| step.id.clone()));
+        match updated {
+            Some(id) => {
+                changes.push(Change::Updated(id));
                 (changes, true)
             }
             None => {
@@ -445,40 +493,32 @@ impl Transcript {
         }
     }
 
-    /// A `Reasoning` / `ReasoningBlock` delta. A delta segment that follows
-    /// a record starts a new paragraph, the way the record that later covers
-    /// it is joined.
+    /// A `Reasoning` / `ReasoningBlock` delta.
     fn append_thinking(&mut self, s: &str, now_ms: Option<u64>) -> Vec<Change> {
         if s.is_empty() {
             return Vec::new();
         }
-        let (record_len, streamed) = self
-            .run
-            .as_ref()
-            .map_or((0, false), |r| (r.thinking_record_len, r.thinking_streamed));
-        let (changes, reached) = self.edit_open_step(now_ms, |step| {
+        let prefix = self.run.as_ref().map_or("", |r| r.thinking.delta_prefix());
+        let (changes, applied) = self.edit_open_step(now_ms, |step| {
             let block = step.thinking.get_or_insert_with(|| ThinkingBlock {
                 text: String::new(),
                 streaming: true,
             });
-            if record_len > 0 && !streamed {
-                block.text.push_str(THINKING_JOIN);
-            }
+            block.text.push_str(prefix);
             block.text.push_str(s);
             block.streaming = true;
+            true
         });
-        if reached {
+        if applied {
             if let Some(r) = self.run.as_mut() {
-                r.thinking_streamed = true;
+                r.thinking.streamed = true;
             }
         }
         changes
     }
 
-    /// A `ReasoningEmitted` record: authoritative for the deltas streamed
-    /// since the previous record, which it replaces; appended after any
-    /// earlier record of the same iteration, in arrival order. It never
-    /// assumes it precedes the iteration's text (production emits
+    /// A `ReasoningEmitted` record (`RecordCursor::fold`). It never assumes
+    /// it precedes the iteration's text (production emits
     /// `TextEmitted{Final}` first). A record for an iteration other than a
     /// numbered open step's cannot be placed: `NeedsResync`, nothing moves.
     fn record_thinking(
@@ -496,55 +536,79 @@ impl Transcript {
                 return vec![Change::NeedsResync];
             }
         }
-        let record_len = self.run.as_ref().map_or(0, |r| r.thinking_record_len);
-        let mut kept_len = None;
-        let (mut changes, reached) = self.edit_open_step(now_ms, |step| {
+        let cursor = self.run.as_ref().map(|r| r.thinking).unwrap_or_default();
+        let mut kept_len = 0;
+        let (changes, applied) = self.edit_open_step(now_ms, |step| {
             let current = step.thinking.as_ref().map_or("", |b| b.text.as_str());
-            // `record_len` is a length this function wrote, so it is a char
-            // boundary of the text it measured; a miss means something else
-            // rewrote the text and the prior records are unknown.
-            let Some(prior) = current.get(..record_len) else {
-                return;
+            let Some(joined) = cursor.fold(current, text) else {
+                return false;
             };
-            let joined = if prior.is_empty() {
-                text.to_string()
-            } else {
-                format!("{prior}{THINKING_JOIN}{text}")
-            };
-            kept_len = Some(joined.len());
+            kept_len = joined.len();
             step.thinking = Some(ThinkingBlock {
                 text: joined,
                 streaming: false,
             });
+            true
         });
-        match (reached, kept_len) {
-            (true, Some(len)) => {
-                if let Some(r) = self.run.as_mut() {
-                    r.thinking_record_len = len;
-                    r.thinking_streamed = false;
-                }
+        if applied {
+            if let Some(r) = self.run.as_mut() {
+                r.thinking = RecordCursor {
+                    record_len: kept_len,
+                    streamed: false,
+                };
             }
-            (true, None) => changes.push(Change::NeedsResync),
-            (false, _) => {}
         }
         changes
     }
 
-    /// `streamed` marks a `ResponseChunk` delta, whose bytes the trace's
-    /// `TextEmitted` is later de-duplicated against.
-    fn append_text(&mut self, s: &str, now_ms: Option<u64>, streamed: bool) -> Vec<Change> {
+    /// A `ResponseChunk` delta, or text the record supplies when the stream
+    /// rendered none (`SessionCompleted.final_text`, `final_response`).
+    fn append_text(&mut self, s: &str, now_ms: Option<u64>) -> Vec<Change> {
         if s.is_empty() {
             return Vec::new();
         }
-        let (changes, reached) = self.edit_open_step(now_ms, |step| {
-            step.text.get_or_insert_with(String::new).push_str(s);
+        let prefix = self.run.as_ref().map_or("", |r| r.text.delta_prefix());
+        let (changes, applied) = self.edit_open_step(now_ms, |step| {
+            let text = step.text.get_or_insert_with(String::new);
+            text.push_str(prefix);
+            text.push_str(s);
+            true
         });
-        if reached {
+        if applied {
             if let Some(r) = self.run.as_mut() {
                 r.text_rendered = true;
-                if streamed {
-                    r.turn_streamed_len += s.len();
-                }
+                r.text.streamed = true;
+            }
+        }
+        changes
+    }
+
+    /// A `TextEmitted` record: authoritative for the text exactly as
+    /// `ReasoningEmitted` is for thinking (spec §5.2) — it replaces whatever
+    /// was streamed since the previous record, so a grace turn's record
+    /// after a halted Think's partial text, or a rescued call re-streamed
+    /// from the start, both converge to what replay shows.
+    fn record_text(&mut self, text: &str, now_ms: Option<u64>) -> Vec<Change> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let cursor = self.run.as_ref().map(|r| r.text).unwrap_or_default();
+        let mut kept_len = 0;
+        let (changes, applied) = self.edit_open_step(now_ms, |step| {
+            let Some(joined) = cursor.fold(step.text.as_deref().unwrap_or(""), text) else {
+                return false;
+            };
+            kept_len = joined.len();
+            step.text = Some(joined);
+            true
+        });
+        if applied {
+            if let Some(r) = self.run.as_mut() {
+                r.text_rendered = true;
+                r.text = RecordCursor {
+                    record_len: kept_len,
+                    streamed: false,
+                };
             }
         }
         changes
@@ -556,8 +620,11 @@ impl Transcript {
         let Some(text) = presentation_text(ev) else {
             return Vec::new();
         };
-        self.edit_open_step(now_ms, |step| step.notes.push(Note { kind, text }))
-            .0
+        self.edit_open_step(now_ms, |step| {
+            step.notes.push(Note { kind, text });
+            true
+        })
+        .0
     }
 
     fn push_notice(&mut self, text: String) -> Change {
@@ -569,16 +636,26 @@ impl Transcript {
         Change::Inserted(id)
     }
 
-    // ---- tool rows (flat scan over every step: ids are unique per run) ---
+    // ---- tool rows (scan over THIS run's steps: a provider may repeat an
+    // ---- id across runs, never within one) --------------------------------
+
+    fn run_first_entry(&self) -> usize {
+        self.run.as_ref().map_or(0, |r| r.first_entry)
+    }
 
     fn find_tool(&mut self, tool_id: &str) -> Option<(String, &mut ToolRow)> {
-        self.entries.iter_mut().rev().find_map(|e| match e {
-            TranscriptEntry::Step(s) => {
-                let id = s.id.clone();
-                s.find_tool_mut(tool_id).map(|r| (id, r))
-            }
-            _ => None,
-        })
+        let first = self.run_first_entry();
+        self.entries
+            .get_mut(first..)?
+            .iter_mut()
+            .rev()
+            .find_map(|e| match e {
+                TranscriptEntry::Step(s) => {
+                    let id = s.id.clone();
+                    s.find_tool_mut(tool_id).map(|r| (id, r))
+                }
+                _ => None,
+            })
     }
 
     fn start_tool(
@@ -600,7 +677,11 @@ impl Transcript {
         }
         let mut row = ToolRow::new(tool_id, tool_name, args);
         start_row(&mut row, now_ms);
-        self.edit_open_step(now_ms, |step| step.tools.push(row)).0
+        self.edit_open_step(now_ms, |step| {
+            step.tools.push(row);
+            true
+        })
+        .0
     }
 
     fn update_tool(&mut self, tool_id: &str, progress: &str) -> Vec<Change> {
@@ -633,7 +714,11 @@ impl Transcript {
         };
         let mut row = ToolRow::new(tool_id, name, &serde_json::Value::Null);
         finish_row(&mut row, result, duration_ms, now_ms);
-        self.edit_open_step(now_ms, |step| step.tools.push(row)).0
+        self.edit_open_step(now_ms, |step| {
+            step.tools.push(row);
+            true
+        })
+        .0
     }
 
     // ---- run end ---------------------------------------------------------
@@ -687,14 +772,15 @@ impl Transcript {
         let rendered = self.run.as_ref().is_some_and(|r| r.text_rendered);
         if !rendered {
             if let Some(t) = summary.final_response.as_deref() {
-                changes.extend(self.append_text(t.trim_end(), now_ms, false));
+                changes.extend(self.append_text(t.trim_end(), now_ms));
             }
         }
         // 4. The last step's text IS the answer: hoist it out (ruling R5).
         changes.extend(self.hoist_open_step_text(now_ms));
-        // 5. The trailers, over the rows the record names.
-        let rows =
-            self.run_rows_where(|r| summary.tool_summaries.iter().any(|i| i.tool_id == r.id));
+        // 5. The trailers, over every row of this run — the same input the
+        //    replay leg uses (ruling T910-SUM); `tool_summaries` only
+        //    reconciled the rows above.
+        let rows = self.run_rows();
         changes.extend(self.push_trailers(&rows, Some(total_ms)));
         // 6. Effect reached? Fewer turn boundaries than the loop counted
         //    means frames were lost — say so, patch nothing. `<`, not `≠`:
@@ -717,11 +803,11 @@ impl Transcript {
         changes
     }
 
-    /// Every row of THIS run's steps that `keep` accepts, in entry order.
-    fn run_rows_where(&self, keep: impl Fn(&ToolRow) -> bool) -> Vec<ToolRow> {
-        let first = self.run.as_ref().map_or(0, |r| r.first_entry);
+    /// Every row of THIS run's steps, in entry order: the trailer's input on
+    /// both legs.
+    fn run_rows(&self) -> Vec<ToolRow> {
         self.entries
-            .get(first..)
+            .get(self.run_first_entry()..)
             .unwrap_or_default()
             .iter()
             .filter_map(|e| match e {
@@ -729,7 +815,6 @@ impl Transcript {
                 _ => None,
             })
             .flatten()
-            .filter(|r| keep(r))
             .cloned()
             .collect()
     }
@@ -753,9 +838,12 @@ impl Transcript {
         changes
     }
 
+    /// Nothing spins after its run ended: THIS run's `Running` rows settle
+    /// to `Pending`.
     fn settle_orphans(&mut self) -> Vec<Change> {
+        let first = self.run_first_entry();
         let mut changes = Vec::new();
-        for e in &mut self.entries {
+        for e in self.entries.get_mut(first..).unwrap_or_default() {
             if let TranscriptEntry::Step(s) = e {
                 let mut touched = false;
                 for r in &mut s.tools {
@@ -1581,6 +1669,259 @@ mod tests {
         assert_eq!(row.status, RowStatus::Ok { duration_ms: 9 });
     }
 
+    // ---- fix round 1 ----------------------------------------------------
+
+    fn text_record(i: usize, text: &str) -> StreamEvent {
+        trace(AgentTraceEvent::TextEmitted {
+            iteration: i,
+            stream: AgentTraceTextKind::Final,
+            text: text.into(),
+        })
+    }
+
+    /// The same frame, addressed to another run.
+    fn in_run(run: &str, ev: StreamEvent) -> StreamEvent {
+        let run_id = run.to_string();
+        match ev {
+            StreamEvent::RunAccepted {
+                session_key,
+                accepted_at,
+                ..
+            } => StreamEvent::RunAccepted {
+                run_id,
+                session_key,
+                accepted_at,
+            },
+            StreamEvent::AgentTrace { seq, event, .. } => {
+                StreamEvent::AgentTrace { run_id, seq, event }
+            }
+            StreamEvent::ToolStart {
+                seq,
+                tool_name,
+                tool_id,
+                params,
+                ..
+            } => StreamEvent::ToolStart {
+                run_id,
+                seq,
+                tool_name,
+                tool_id,
+                params,
+            },
+            StreamEvent::ToolEnd {
+                seq,
+                tool_id,
+                result,
+                duration_ms,
+                ..
+            } => StreamEvent::ToolEnd {
+                run_id,
+                seq,
+                tool_id,
+                result,
+                duration_ms,
+            },
+            StreamEvent::RunComplete {
+                seq,
+                summary,
+                total_duration_ms,
+                ..
+            } => StreamEvent::RunComplete {
+                run_id,
+                seq,
+                summary,
+                total_duration_ms,
+            },
+            other => panic!("in_run: no arm for {other:?}"),
+        }
+    }
+
+    /// F1(a): the boundary grace turn records a different text on the halted
+    /// iteration after that Think streamed a partial one. The record is the
+    /// text — it replaces the streamed segment instead of being dropped.
+    #[test]
+    fn a_text_record_replaces_a_halted_turns_partial_text() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                chunk("I think the bug is in the par"),
+                chunk("The timezone handling was wrong."),
+                text_record(1, "The timezone handling was wrong."),
+            ],
+        );
+        assert_eq!(
+            steps(&t)[0].text.as_deref(),
+            Some("The timezone handling was wrong.")
+        );
+        t.apply_live(&complete(1, vec![]), 9_000);
+        assert_eq!(
+            finals(&t),
+            vec!["The timezone handling was wrong.".to_string()]
+        );
+    }
+
+    /// F1(b): deltas that ARE the record converge to it with no duplication.
+    #[test]
+    fn streamed_text_that_spells_the_record_converges_without_duplication() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                chunk("Hello "),
+                chunk("world"),
+                text_record(1, "Hello world"),
+            ],
+        );
+        assert_eq!(steps(&t)[0].text.as_deref(), Some("Hello world"));
+    }
+
+    /// F1(c): a streaming call failed mid-stream and was rescued without
+    /// streaming; the rescue's full text is delta'd again from the start.
+    #[test]
+    fn a_rescued_call_restreamed_from_the_start_converges_to_the_record() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                chunk("Fixed the ti"),
+                chunk("Fixed the timezone."),
+                text_record(1, "Fixed the timezone."),
+            ],
+        );
+        assert_eq!(steps(&t)[0].text.as_deref(), Some("Fixed the timezone."));
+    }
+
+    /// Ruling T910-SUM: the trailer counts every row of the run on the live
+    /// leg too — the record's `tool_summaries` only reconciles rows the
+    /// client missed.
+    #[test]
+    fn the_turn_summary_counts_every_row_of_the_run_not_only_the_records_list() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                tool_start("a", "bash"),
+                tool_end("a", 10),
+                tool_start("b", "bash"),
+                tool_end("b", 20),
+                chunk("Done."),
+                complete(1, vec![item("a", "bash", 10, true)]),
+            ],
+        );
+        let summary = t.entries().iter().find_map(|e| match e {
+            TranscriptEntry::TurnSummary(s) => Some(s.clone()),
+            _ => None,
+        });
+        let summary = summary.expect("two rows cross the gate");
+        assert_eq!((summary.commands, summary.duration_ms), (2, 30));
+    }
+
+    /// F2: thinking that was only ever streamed stops streaming when its step
+    /// closes — at the next `TurnStarted` and at the run's end.
+    #[test]
+    fn a_delta_only_thinking_step_stops_streaming_when_it_closes() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                reasoning("first"),
+                turn(2),
+                reasoning("second"),
+                complete(2, vec![]),
+            ],
+        );
+        let s = steps(&t);
+        assert_eq!(s.len(), 2, "{:?}", t.entries());
+        assert!(s
+            .iter()
+            .all(|s| s.thinking.as_ref().is_some_and(|b| !b.streaming)));
+    }
+
+    /// F11: mid-stream, a delta segment after a record starts a new
+    /// paragraph — the join the next record will use.
+    #[test]
+    fn a_delta_after_a_record_starts_a_new_paragraph_mid_stream() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[accepted(), turn(1), thought(1, "First."), reasoning("Sec")],
+        );
+        let b = steps(&t)[0].thinking.clone().unwrap();
+        assert_eq!(b.text, "First.\n\nSec");
+        assert!(b.streaming);
+    }
+
+    /// F4: a provider may repeat a tool id across runs. The next run gets its
+    /// own row; the earlier run's finished row is not touched.
+    #[test]
+    fn a_tool_id_repeated_by_the_next_run_gets_its_own_row() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                tool_start("t1", "bash"),
+                tool_end("t1", 5),
+                complete(1, vec![item("t1", "bash", 5, true)]),
+            ],
+        );
+        let second: Vec<StreamEvent> = [
+            accepted(),
+            turn(1),
+            tool_start("t1", "bash"),
+            tool_end("t1", 9),
+            complete(1, vec![item("t1", "bash", 9, true)]),
+        ]
+        .into_iter()
+        .map(|f| in_run("run-2", f))
+        .collect();
+        drive(&mut t, &second);
+        let s = steps(&t);
+        assert_eq!(s.len(), 2, "{:?}", t.entries());
+        assert_eq!(s[0].tools.len(), 1);
+        assert_eq!(s[0].tools[0].status, RowStatus::Ok { duration_ms: 5 });
+        assert_eq!(s[1].tools.len(), 1);
+        assert_eq!(s[1].tools[0].status, RowStatus::Ok { duration_ms: 9 });
+    }
+
+    /// F5: a run accepted while the previous one never reported its end.
+    /// How that run ended is unknown: its step closes `Pending` and its rows
+    /// stop spinning; the new run folds into a step of its own.
+    #[test]
+    fn a_run_accepted_over_an_open_run_closes_it_pending() {
+        let mut t = Transcript::new();
+        drive(
+            &mut t,
+            &[
+                accepted(),
+                turn(1),
+                reasoning("thinking"),
+                tool_start("a", "bash"),
+            ],
+        );
+        let changes = t.apply_live(&in_run("run-2", accepted()), 5_000);
+        assert!(!changes.is_empty(), "the old step's change is reported");
+        t.apply_live(&in_run("run-2", turn(1)), 5_001);
+        let s = steps(&t);
+        assert_eq!(s.len(), 2, "{:?}", t.entries());
+        assert_eq!(s[0].status, StepStatus::Pending);
+        assert_eq!(s[0].tools[0].status, RowStatus::Pending);
+        assert!(s[0].thinking.as_ref().is_some_and(|b| !b.streaming));
+        assert_eq!(s[1].status, StepStatus::Live);
+    }
+
     // ---- replay leg + G2 -------------------------------------------------
 
     /// A replay row is the same `AgentTraceEvent` a live `agent_trace`
@@ -1591,8 +1932,35 @@ mod tests {
     /// `text_first` puts iteration 2's `TextEmitted{Final}` before its
     /// `ReasoningEmitted` — the order production emits them in; the fold
     /// must not depend on either. `salvage` adds the verifier-halt salvage
-    /// path's second `ReasoningEmitted` on iteration 1.
+    /// path's second `ReasoningEmitted` on iteration 1. Iteration 1 reads
+    /// two files, so the run crosses the turn-summary gate and both legs'
+    /// trailer inputs are compared.
     fn full_run_trace_with(text_first: bool, salvage: bool) -> Vec<AgentTraceEvent> {
+        let read = |id: &str, path: &str, ms: u64| {
+            [
+                AgentTraceEvent::ToolCallStarted {
+                    iteration: 1,
+                    call: AgentTraceToolCallStart {
+                        tool_id: id.into(),
+                        tool_name: "file_read".into(),
+                        input: json!({ "path": path }),
+                    },
+                },
+                AgentTraceEvent::ToolCallCompleted {
+                    iteration: 1,
+                    call: AgentTraceToolCallEnd {
+                        tool_id: id.into(),
+                        tool_name: "file_read".into(),
+                        input: json!({ "path": path }),
+                        duration_ms: ms,
+                        presentation: None,
+                    },
+                    result: AgentTraceToolResult::Success {
+                        output: json!("fn a() {}"),
+                    },
+                },
+            ]
+        };
         let mut rows = vec![
             AgentTraceEvent::TurnStarted { iteration: 1 },
             AgentTraceEvent::ReasoningEmitted {
@@ -1606,30 +1974,9 @@ mod tests {
                 text: "The veto says a box is unchecked.".into(),
             });
         }
-        rows.extend([
-            AgentTraceEvent::ToolCallStarted {
-                iteration: 1,
-                call: AgentTraceToolCallStart {
-                    tool_id: "r1".into(),
-                    tool_name: "file_read".into(),
-                    input: json!({"path": "tests/a.rs"}),
-                },
-            },
-            AgentTraceEvent::ToolCallCompleted {
-                iteration: 1,
-                call: AgentTraceToolCallEnd {
-                    tool_id: "r1".into(),
-                    tool_name: "file_read".into(),
-                    input: json!({"path": "tests/a.rs"}),
-                    duration_ms: 12,
-                    presentation: None,
-                },
-                result: AgentTraceToolResult::Success {
-                    output: json!("fn a() {}"),
-                },
-            },
-            AgentTraceEvent::TurnStarted { iteration: 2 },
-        ]);
+        rows.extend(read("r1", "tests/a.rs", 12));
+        rows.extend(read("r2", "src/b.rs", 8));
+        rows.push(AgentTraceEvent::TurnStarted { iteration: 2 });
         let thinking = AgentTraceEvent::ReasoningEmitted {
             iteration: 2,
             text: "The timezone is the bug.".into(),
@@ -1663,23 +2010,48 @@ mod tests {
         full_run_trace_with(true, false)
     }
 
+    /// How the last iteration's records reached the live leg.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Grace {
+        /// A normal Think: each record's deltas, split in two, then it.
+        No,
+        /// The boundary grace turn (`fire_boundary_grace_turn`): no
+        /// `TurnStarted` of its own, its text and thinking streamed as ONE
+        /// delta each, then `TextEmitted{Final}` + `ReasoningEmitted` on the
+        /// halted iteration. The halted Think streamed nothing.
+        Clean,
+        /// The same, after the halted Think had streamed partial thinking and
+        /// partial text that no record covers and that are NOT prefixes of
+        /// the grace turn's records.
+        AfterPartial,
+    }
+
     /// The live leg for the same run: the same trace frames interleaved
     /// with the deltas and the lifecycle frames a client actually receives.
-    fn full_run_live(rows: Vec<AgentTraceEvent>) -> Vec<StreamEvent> {
+    fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
+        let deltas = |text: &str| -> Vec<String> {
+            if grace == Grace::No {
+                let (a, b) = text.split_at(text.len() / 2);
+                vec![a.to_string(), b.to_string()]
+            } else {
+                vec![text.to_string()]
+            }
+        };
         let mut out = vec![accepted()];
         for ev in rows {
             match &ev {
+                AgentTraceEvent::TurnStarted { iteration: 2 } if grace == Grace::AfterPartial => {
+                    out.push(trace(ev));
+                    out.push(reasoning("Maybe the parser drops"));
+                    out.push(chunk("I think the bug is in the par"));
+                }
                 AgentTraceEvent::ReasoningEmitted { text, .. } => {
                     // deltas first, then the authoritative record
-                    let (a, b) = text.split_at(text.len() / 2);
-                    out.push(reasoning(a));
-                    out.push(reasoning(b));
+                    out.extend(deltas(text).iter().map(|d| reasoning(d)));
                     out.push(trace(ev));
                 }
                 AgentTraceEvent::TextEmitted { text, .. } => {
-                    let (a, b) = text.split_at(text.len() / 2);
-                    out.push(chunk(a));
-                    out.push(chunk(b));
+                    out.extend(deltas(text).iter().map(|d| chunk(d)));
                     out.push(trace(ev));
                 }
                 AgentTraceEvent::ToolCallStarted { call, .. } => {
@@ -1692,12 +2064,12 @@ mod tests {
                     });
                     out.push(trace(ev));
                 }
-                AgentTraceEvent::ToolCallCompleted { call, .. } => {
+                AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
                     out.push(StreamEvent::ToolEnd {
                         run_id: RUN.into(),
                         seq: 0,
                         tool_id: call.tool_id.clone(),
-                        result: ToolResult::success("fn a() {}"),
+                        result: trace_result_to_wire(result, call.presentation.as_ref()),
                         duration_ms: call.duration_ms,
                     });
                     out.push(trace(ev));
@@ -1710,7 +2082,10 @@ mod tests {
             seq: 0,
             summary: RunSummary {
                 loops: 2,
-                tool_summaries: vec![item("r1", "file_read", 12, true)],
+                tool_summaries: vec![
+                    item("r1", "file_read", 12, true),
+                    item("r2", "file_read", 8, true),
+                ],
                 final_response: Some("Fixed the timezone handling.".into()),
                 ..Default::default()
             },
@@ -1751,14 +2126,22 @@ mod tests {
         t
     }
 
-    /// G2. Two legs, one fold — in either within-turn order, and across the
-    /// salvage path's two records on one iteration.
+    /// G2. Two legs, one fold — in either within-turn order, across the
+    /// salvage path's two records on one iteration, and across the boundary
+    /// grace turn with and without a halted Think's partial stream.
     #[test]
     fn the_live_leg_and_the_replay_leg_fold_to_the_same_entries() {
-        for (text_first, salvage) in [(true, false), (false, false), (true, true)] {
+        let shapes = [
+            (true, false, Grace::No),
+            (false, false, Grace::No),
+            (true, true, Grace::No),
+            (true, false, Grace::Clean),
+            (true, false, Grace::AfterPartial),
+        ];
+        for (text_first, salvage, grace) in shapes {
             let rows = full_run_trace_with(text_first, salvage);
             let mut live = Transcript::new();
-            let live_changes = drive(&mut live, &full_run_live(rows.clone()));
+            let live_changes = drive(&mut live, &full_run_live(rows.clone(), grace));
             assert!(
                 !live_changes.contains(&Change::NeedsResync),
                 "{live_changes:?}"
@@ -1768,7 +2151,12 @@ mod tests {
             let (l, r) = (strip_clocks(live.entries()), strip_clocks(replay.entries()));
             assert_eq!(
                 l, r,
-                "text_first={text_first} salvage={salvage}\nLIVE:   {l:#?}\nREPLAY: {r:#?}"
+                "text_first={text_first} salvage={salvage} grace={grace:?}\nLIVE:   {l:#?}\nREPLAY: {r:#?}"
+            );
+            assert!(
+                l.iter()
+                    .any(|e| matches!(e, TranscriptEntry::TurnSummary(_))),
+                "the fixture must cross the turn-summary gate: {l:#?}"
             );
         }
 
@@ -1778,6 +2166,7 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].iteration, Some(1));
         assert_eq!(s[0].tools[0].status, RowStatus::Ok { duration_ms: 12 });
+        assert_eq!(s[0].tools.len(), 2);
         assert_eq!(
             s[1].thinking.as_ref().map(|b| b.text.as_str()),
             Some("The timezone is the bug.")
@@ -1842,8 +2231,8 @@ mod tests {
             TranscriptEntry::TurnSummary(s) => Some(s.duration_ms),
             _ => None,
         });
-        assert_eq!(summary, None, "one tool is below the turn-summary gate");
-        assert_eq!(step_tally(steps(&t)[0]).map(|s| s.duration_ms), Some(12));
+        assert_eq!(summary, Some(20), "the recorded durations, 12 + 8");
+        assert_eq!(step_tally(steps(&t)[0]).map(|s| s.duration_ms), Some(20));
     }
 
     /// One transcript holds a session's runs. The replay leg has no
