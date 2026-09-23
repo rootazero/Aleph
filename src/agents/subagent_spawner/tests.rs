@@ -1427,6 +1427,99 @@ mod tests {
         );
     }
 
+    /// A child's compaction spend (`compactor:<id>`, its metered cheap
+    /// summarizer) is persisted under the PARENT's task, like its turn spend,
+    /// so `teams.usage` and the doctor still count it. Red if
+    /// `child_context_triple` meters the cheap summarizer onto the harness
+    /// sink: that is the child chain, which ends at the subagent boundary, so
+    /// no row appears. The sinks are the production pair from
+    /// `RunTraceSinks`, over the real persistence leaf. The compaction is
+    /// driven through the real compactor's `summarize_slice` (the entry the
+    /// session-split seed and `/compact` use), not by pushing a live child run
+    /// over its context budget.
+    #[tokio::test]
+    async fn a_childs_compactor_usage_is_still_persisted_under_the_parents_task() {
+        let db = Arc::new(crate::resilience::StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&crate::resilience::AgentTask::new(
+            "parent-run",
+            "session-1",
+            "main",
+            "parent turn",
+            crate::resilience::RiskLevel::High,
+        ))
+        .await
+        .unwrap();
+        let probe =
+            crate::gateway::execution_engine::PersistenceProbe::new(db.clone(), "parent-run");
+        let (tx, _rx) = crate::orchestrator::flow_event_channel();
+        let sinks = crate::gateway::execution_engine::RunTraceSinks::build(
+            probe.sink(),
+            None,
+            &tx,
+            false,
+        );
+        let (harness, accounting) = sinks.child_sinks().into_parts();
+
+        let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
+        let mut base = make_base(provider.clone());
+        base.trace_sink = Some(harness);
+        base.accounting_sink = Some(accounting);
+        base.cheap_summary_provider = Some(Arc::new(UsageProvider));
+        base.context_budget_config = Some(crate::context::budget::ContextBudgetConfig {
+            token_budget: 200_000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 4.0,
+            fresh_tail_count: 2,
+            summarizer_input_budget: 48_000,
+            circuit_breaker_max: 10,
+            max_splits: 3,
+        });
+
+        let (_budget, compactor, _pipeline) = super::super::child_context_triple(
+            &base,
+            &provider,
+            "child-agent",
+            &ephemeral_for("child-agent", None),
+            CancellationToken::new(),
+        );
+        let compactor = compactor.expect("a context budget config arms the child's compactor");
+        let _ = compactor
+            .summarize_slice(
+                &[crate::providers::message::UnifiedMessage::user(
+                    "summarize this child turn",
+                )],
+                None,
+                None,
+            )
+            .await;
+
+        let mut rows: Vec<aleph_protocol::AgentTraceEvent> = Vec::new();
+        for _ in 0..100 {
+            probe.drain().await;
+            rows = db
+                .get_traces_by_task("parent-run")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|t| t.event)
+                .collect();
+            if !rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            rows.iter().any(|e| matches!(
+                e,
+                aleph_protocol::AgentTraceEvent::ProviderUsage { agent_id, .. }
+                    if agent_id == "compactor:child-agent"
+            )),
+            "the child's compactor usage must be persisted under the parent's task: {rows:?}"
+        );
+        drop(tx);
+    }
+
     // -- VESR v1.1 (b): routing capture helpers ------------------------------
 
     struct NoopTraceSink;

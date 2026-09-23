@@ -1491,7 +1491,10 @@ async fn foreground_subagent_inherits_trace_sink() {
         in_mem_session(),
         Arc::new(NoopTestToolService),
     )
-    .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+    .with_child_sinks(crate::gateway::execution_engine::ChildTraceSinks::for_test(
+        sink.clone() as Arc<dyn crate::harness::TraceSink>,
+        Arc::new(crate::harness::NoopTraceSink),
+    ));
 
     let _ = tool
         .execute(
@@ -1508,12 +1511,12 @@ async fn foreground_subagent_inherits_trace_sink() {
 }
 
 /// A background child's harness loop emits into the harness sink the tool was
-/// handed, through `ForwardingTraceSink`. In production that sink is the
-/// child chain `RunTraceSinks` builds, which ends at the subagent boundary —
-/// NOT the parent run's own chain (pinned by the
+/// handed, through `ForwardingTraceSink`, which also feeds the tracker. In
+/// production that sink is the child chain `RunTraceSinks` builds, which ends
+/// at the subagent boundary — NOT the parent run's own chain (pinned by the
 /// `a_*_never_reaches_the_parents_flow_channel` guards below).
 #[tokio::test]
-async fn background_subagent_forwards_trace_to_parent_sink() {
+async fn background_subagent_forwards_trace_to_its_harness_sink_and_the_tracker() {
     let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
     let chain = crate::harness::chain_context::ChainContext::new();
     let tracker = make_tracker();
@@ -1525,7 +1528,10 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
         in_mem_session(),
         Arc::new(NoopTestToolService),
     )
-    .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+    .with_child_sinks(crate::gateway::execution_engine::ChildTraceSinks::for_test(
+        sink.clone() as Arc<dyn crate::harness::TraceSink>,
+        Arc::new(crate::harness::NoopTraceSink),
+    ));
 
     let out = tool
         .execute(
@@ -1549,6 +1555,10 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+    assert!(
+        !tracker.progress_snapshot(&rid, 50).is_empty(),
+        "ForwardingTraceSink must feed the child's progress to the tracker"
+    );
     let events = sink.0.lock().unwrap();
     assert!(
         !events.is_empty(),

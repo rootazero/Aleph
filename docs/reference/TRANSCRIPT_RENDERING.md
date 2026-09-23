@@ -208,7 +208,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 ### 2.3 ⚠️ attended / unattended 的不对称——已知开口
 
-写时那条脱敏**只包 unattended run**：`run_loop/inner.rs` 的 `if unattended` 同时包住 trace sink 与 **event emitter**。
+写时那条脱敏**只包 unattended run**，两处读的是**同一个** `unattended` 布尔：trace sink 一侧在 `execution_engine/run_trace_sinks.rs` 的 `redact_if`（`run_loop/inner.rs` 只把这个 bool 传给 `RunTraceSinks::build`，它同时包住 run 自己的链与子代理的 harness 链），**event emitter** 一侧仍是 `run_loop/inner.rs` 的 `if unattended`。
 所以纠正过的不变量是：
 
 > **unattended run 在实时帧与写盘两处都脱敏；attended run 两处都不脱敏。**

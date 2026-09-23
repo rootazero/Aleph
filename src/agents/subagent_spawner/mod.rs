@@ -851,26 +851,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             base.default_max_iterations.unwrap_or(0),
         ));
 
-        // The cheap summarizer is built raw (`deps_builder::summary`), so
-        // without this wrap its spend emitted no `ProviderUsage` at all —
-        // invisible to the traces DB, Panel Usage and team rollups. Labelled
-        // `compactor:<agent>` so rollups can tell compression spend from turn
-        // spend. The main `llm` above is already metered (Stage J-pre);
-        // wrapping that one again would double-count.
-        // rust-doctor-disable-next-line excessive-clone
-        let metered_cheap: Option<Arc<dyn AiProvider>> =
-            base.cheap_summary_provider.as_ref().map(|cheap| {
-                Arc::new(crate::providers::MeteringProvider::new(
-                    cheap.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    base.accounting_sink.clone(),
-                    format!("compactor:{}", req.agent_def.id),
-                )) as Arc<dyn AiProvider>
-            });
-        let (context_budget, context_compactor, preflight_pipeline) = build_context_triple(
-            base.context_budget_config.as_ref(),
+        let (context_budget, context_compactor, preflight_pipeline) = child_context_triple(
+            base,
             &llm,
-            metered_cheap.as_ref(),
             &req.agent_def.id,
             &child_id,
             // rust-doctor-disable-next-line excessive-clone
@@ -1366,6 +1349,44 @@ pub fn parent_session_id_of(raw: &str) -> Option<SessionId> {
 /// (`preflight_pipeline` is `None` exactly when `context_compactor` is): a
 /// compactor without a preflight pipeline would pay for LLM summarisation where
 /// free structural pruning was available.
+/// The child's context triple, with its cheap summarizer metered.
+///
+/// The cheap summarizer is built raw (`deps_builder::summary`), so without
+/// this wrap its spend emitted no `ProviderUsage` at all — invisible to the
+/// traces DB, Panel Usage and team rollups. Labelled `compactor:<agent>` so
+/// rollups can tell compression spend from turn spend. The main `llm` is
+/// already metered by the caller; wrapping it again would double-count.
+///
+/// The usage goes to the ACCOUNTING sink, not the harness sink: a child's
+/// compaction spend stays on the parent run's chain (persisted under the
+/// parent's task) while the child's loop events stop at the subagent
+/// boundary.
+fn child_context_triple(
+    base: &SpawnerBase,
+    llm: &Arc<dyn AiProvider>,
+    agent_id: &str,
+    child_id: &SessionId,
+    cancel: CancellationToken,
+) -> ContextTriple {
+    let metered_cheap: Option<Arc<dyn AiProvider>> =
+        base.cheap_summary_provider.as_ref().map(|cheap| {
+            Arc::new(crate::providers::MeteringProvider::new(
+                cheap.clone(),
+                // rust-doctor-disable-next-line excessive-clone
+                base.accounting_sink.clone(),
+                format!("compactor:{agent_id}"),
+            )) as Arc<dyn AiProvider>
+        });
+    build_context_triple(
+        base.context_budget_config.as_ref(),
+        llm,
+        metered_cheap.as_ref(),
+        agent_id,
+        child_id,
+        cancel,
+    )
+}
+
 type ContextTriple = (
     Option<Arc<tokio::sync::Mutex<crate::context::budget::ContextBudget>>>,
     Option<Arc<crate::context::compact::compactor::ContextCompactor>>,

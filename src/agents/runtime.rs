@@ -389,8 +389,9 @@ impl AgentRuntime {
     }
 
     // Stage A (P1) — resilience builders threaded into SpawnerBase →
-    // HarnessDeps. `SubagentTool` applies them via `build_runtime`; `trace_sink`
-    // is wired in production at the run_loop.rs construction site.
+    // HarnessDeps. `SubagentTool` applies them via `build_runtime`; the
+    // `trace_sink` / `accounting_sink` pair is chosen in production by
+    // `gateway/execution_engine/run_trace_sinks.rs` (`RunTraceSinks`).
 
     /// Stage A (P1) — wire the stall watchdog config.
     #[must_use]

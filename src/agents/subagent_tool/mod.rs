@@ -430,19 +430,23 @@ impl SubagentTool {
         self
     }
 
-    /// The sink a spawned child's HARNESS LOOP emits into, on both spawn
-    /// paths; the background path wraps it in `ForwardingTraceSink` for
-    /// progress observation. In production this is NOT the parent run's own
-    /// chain — see `gateway/execution_engine/run_trace_sinks.rs`.
-    pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
-        self.trace.trace_sink = Some(sink);
-        self
-    }
-
-    /// The sink a spawned child's `MeteringProvider`s emit into. Unset, a
-    /// child's provider usage is recorded nowhere.
-    pub fn with_accounting_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
-        self.trace.accounting_sink = Some(sink);
+    /// The sinks a spawned child writes into: the harness sink its loop emits
+    /// into on both spawn paths (the background path wraps it in
+    /// `ForwardingTraceSink` for progress observation), and the accounting
+    /// sink its `MeteringProvider`s emit into.
+    ///
+    /// This is the ONLY way to give a child any sink, and `ChildTraceSinks` is
+    /// minted only by `RunTraceSinks` (its fields are private to
+    /// `gateway/execution_engine/run_trace_sinks.rs`), so no caller can hand a
+    /// child's harness loop the parent run's own chain. Unset, a child's
+    /// events and its provider usage are recorded nowhere.
+    pub(crate) fn with_child_sinks(
+        mut self,
+        sinks: crate::gateway::execution_engine::ChildTraceSinks,
+    ) -> Self {
+        let (harness, accounting) = sinks.into_parts();
+        self.trace.trace_sink = Some(harness);
+        self.trace.accounting_sink = Some(accounting);
         self
     }
 

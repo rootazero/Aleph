@@ -983,13 +983,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // bound.
             let scratchpad_target =
                 if self.config.scratchpad_progress_push && !turn_context.channel_id.is_empty() {
-                    self.channel_registry
-                        .get()
-                        .map(|registry| super::super::ScratchpadTarget {
+                    self.channel_registry.get().map(|registry| {
+                        super::super::run_trace_sinks::ScratchpadTarget {
                             registry: registry.clone(),
                             channel_id: turn_context.channel_id.clone(),
                             chat_id: turn_context.conversation_id.clone(),
-                        })
+                        }
+                    })
                 } else {
                     None
                 };

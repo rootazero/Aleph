@@ -81,7 +81,15 @@ Subagents inherit the following from their parent via `SpawnerBase`:
 - `guardrails` (Stage 5a) — Input/Output/ToolCall checks
 - `fallback_llm` (Stage A, 2026-05-08) — Stage 5b single-step fallback
 - `stall_config`, `consecutive_failure_cap`, `turn_timeout` (Stage A) — P0 stability triple
-- `trace_sink` (Stage A) — observability sink
+- `trace_sink` (Stage A) — the sink the child's harness loop emits into. It
+  stops at the subagent boundary: a child's turns never reach the parent run's
+  `agent_trace` frames or the parent's persisted trace
+  (`src/gateway/execution_engine/run_trace_sinks.rs`)
+- `accounting_sink` (2026-09-23) — a second inherited sink, read only by the
+  child's `MeteringProvider`s (turn and `compactor:<id>` spend). It is the parent
+  run's own chain, so a child's `ProviderUsage` / `CacheHealthDegraded` still
+  reach the live wire and persist under the parent's task for `teams.usage` and
+  the doctor
 - `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
   spawner builds the child's **own** budget + compactor + preflight pipeline
 - `cheap_summary_provider` (2026-08-04) — the `[generation] cheap_model` tier, so the
@@ -1710,9 +1718,14 @@ is a follow-up.
 ### Trace events
 
 `LoopTraceEvent::WorktreeCreated { path }` and
-`LoopTraceEvent::WorktreeCleanedUp { path, leaked: bool }` flow into
-the parent's `trace_sink`. Use `leaked` to distinguish explicit cleanup
-from Drop safety-net cleanup in monitoring dashboards.
+`LoopTraceEvent::WorktreeCleanedUp { path, leaked: bool }` go to the
+child's harness `trace_sink`. That is the child chain built in
+`src/gateway/execution_engine/run_trace_sinks.rs`, which ends at
+`NoopTraceSink`, so these events are **neither persisted nor published**:
+no `task_traces` row and no `agent_trace` frame carries them, and a
+dashboard built on `worktree_cleaned_up` rows will always read zero. The
+leak signal is the `tracing::error!("WorktreeHandle leaked — Drop
+safety-net removing")` in `src/sandbox/worktree.rs`.
 
 ### Performance contract
 
@@ -1777,6 +1790,11 @@ recursion guard (Stage B) and per-agent denylist still apply on top.
 - `LoopTraceEvent::McpScopeCleaned { agent_id, leaked }`
 
 Both bridge to `aleph_protocol::AgentTraceEvent` with the same field shape.
+A subagent's scope emits them into the child's harness `trace_sink`, which
+ends at `NoopTraceSink` (`src/gateway/execution_engine/run_trace_sinks.rs`),
+so they are **neither persisted nor published**. The leak signal is the
+`tracing::error!("McpScope leaked — …")` in
+`src/extension/registrar/mcp_registrar.rs`.
 
 ### Failure modes
 
