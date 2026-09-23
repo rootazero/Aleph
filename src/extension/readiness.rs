@@ -109,12 +109,10 @@ pub async fn write_readiness(
         tracing::info!(plugin = %plugin_id, from = %row.status.label(), to = %status.label(), "plugin readiness");
     }
     match status {
-        // `with_pending` owns the detail's wording and the never-empty assert.
+        // The record's own builders own each row's wording (status + detail):
+        // `with_pending` also asserts the list is never empty.
         PluginStatus::Pending { waiting_on } => *row = row.clone().with_pending(waiting_on),
-        PluginStatus::Error(e) => {
-            row.error = Some(e.clone());
-            row.status = PluginStatus::Error(e);
-        }
+        PluginStatus::Error(e) => *row = row.clone().with_error(e),
         PluginStatus::Loaded => {
             row.error = None;
             row.status = PluginStatus::Loaded;

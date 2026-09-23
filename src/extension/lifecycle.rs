@@ -771,7 +771,7 @@ impl ExtensionManager {
             }
         });
         let stop = WatcherStop {
-            abort: handle.abort_handle(),
+            abort: AbortOnDrop(Some(handle.abort_handle())),
             gone,
         };
         let mut watchers = self
@@ -914,8 +914,31 @@ impl Views {
 /// mount. `gone` resolves when the task drops its sender — on completion or
 /// on abort — so once it has been awaited the task can no longer write.
 struct WatcherStop {
-    abort: tokio::task::AbortHandle,
+    abort: AbortOnDrop,
     gone: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// The watcher's `AbortHandle`, aborting on drop unless disarmed. The
+/// `mcp_server` disposer disarms it and aborts + waits itself; when that
+/// disposer is dropped UNRUN — the scope of a mount whose future was
+/// cancelled is dropped, never disposed — the drop still ends the watcher,
+/// so no verdict of that abandoned mount lands on a later row. `Drop` cannot
+/// await `gone`, so on a multi-thread runtime a watcher that is mid-poll at
+/// that instant may still finish one write.
+struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+
+impl AbortOnDrop {
+    fn disarm(mut self) -> Option<tokio::task::AbortHandle> {
+        self.0.take()
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
 }
 
 /// The `mcp_server` step's disposer: end the mount's watcher, wait until it
@@ -934,7 +957,9 @@ fn stop_watcher_then(watcher: Option<WatcherStop>, remove_servers: Disposer) -> 
         return remove_servers;
     };
     async_disposer(move || async move {
-        abort.abort();
+        if let Some(handle) = abort.disarm() {
+            handle.abort();
+        }
         // `Err(RecvError)` is the expected answer: the sender was dropped.
         let _ = gone.await;
         remove_servers().await
@@ -1213,9 +1238,30 @@ mod tests {
             "---\ndescription: bye\n---\nBye\n",
         )
         .unwrap();
+        // ...and the edited hook replaces the old one on the hook VIEW, which
+        // only `reload_plugin`'s own `after_transition` re-derives (the
+        // registry rows alone would not show a missing recompute).
+        std::fs::write(
+            tmp.path().join("plugins/alpha/hooks/hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"echo reloaded"}]}]}}"#,
+        )
+        .unwrap();
         let status = manager.reload_plugin("alpha").await.unwrap();
         assert!(status.is_active());
         assert_eq!(manager.get_plugin_registry().await.list_skills().len(), 2);
+        let actions: Vec<String> = manager
+            .hook_executor_snapshot()
+            .await
+            .inventory()
+            .into_iter()
+            .filter(|h| h.source == "alpha")
+            .flat_map(|h| h.actions)
+            .collect();
+        assert!(
+            actions.iter().any(|a| a.contains("echo reloaded"))
+                && !actions.iter().any(|a| a.contains("echo qa")),
+            "the hook view is re-derived by the reload: {actions:?}"
+        );
         assert!(matches!(
             manager.reload_plugin("nope").await,
             Err(MountError::NotFound(_))
@@ -1895,15 +1941,6 @@ priority = 60
         );
     }
 
-    /// A watcher lives exactly as long as the mount that spawned it (判据 §13,
-    /// §15). A scripted actor answers removes at once and hands every start
-    /// request to the test, so the order of answers is the test's: mount #1
-    /// of `p3-stale` enqueues a start; `reload_plugin` disposes mount #1 and
-    /// mounts #2, which enqueues its own. Mount #2's answer is written first;
-    /// THEN mount #1's late answer arrives. A watcher that outlived its mount
-    /// would write `Loaded` — a verdict about a server that was removed — over
-    /// mount #2's `Error`, on a row it does not own, and nothing after it
-    /// would ever correct the row.
     /// The reply channel of one enqueued start, held by the test.
     type StartReply = tokio::sync::oneshot::Sender<Result<(), String>>;
 
@@ -1937,6 +1974,15 @@ priority = 60
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+    /// A watcher lives exactly as long as the mount that spawned it (判据 §13,
+    /// §15). A scripted actor answers removes at once and hands every start
+    /// request to the test, so the order of answers is the test's: mount #1
+    /// of `p3-stale` enqueues a start; `reload_plugin` disposes mount #1 and
+    /// mounts #2, which enqueues its own. Mount #2's answer is written first;
+    /// THEN mount #1's late answer arrives. A watcher that outlived its mount
+    /// would write `Loaded` — a verdict about a server that was removed — over
+    /// mount #2's `Error`, on a row it does not own, and nothing after it
+    /// would ever correct the row.
     #[tokio::test]
     async fn a_disposed_mounts_watcher_never_writes_onto_the_next_mounts_row() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
@@ -2120,6 +2166,56 @@ priority = 60
             manager.get_plugin_record("p3-parked").await.unwrap().status,
             PluginStatus::Disabled,
             "the ended watcher wrote nothing after its mount"
+        );
+    }
+
+    /// A scope dropped without `dispose` — what a cancelled mount future
+    /// leaves behind: its `mcp_server` disposer is dropped unrun — still ends
+    /// the watcher (`AbortOnDrop`). The late answer then writes nothing: the
+    /// row keeps the `Pending` it had when the scope was abandoned.
+    #[tokio::test]
+    async fn a_scope_dropped_without_dispose_still_ends_its_watcher() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-dropped");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (handle, mut starts) = scripted_mcp_actor();
+        manager.set_mcp_handle(handle);
+
+        manager.load_all().await.unwrap();
+        let start = tokio::time::timeout(WAIT, starts.recv())
+            .await
+            .expect("the mount enqueued its start")
+            .unwrap();
+        let before = manager
+            .get_plugin_record("p3-dropped")
+            .await
+            .unwrap()
+            .status;
+        assert!(matches!(before, PluginStatus::Pending { .. }), "{before:?}");
+
+        let scope = manager
+            .scopes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove("p3-dropped")
+            .expect("mounted");
+        drop(scope); // never disposed
+
+        // The receiver may or may not be gone yet (the abort is processed
+        // on the task's next poll); either way nothing may be written.
+        let _ = start.send(Ok(()));
+        tokio::time::timeout(WAIT, manager.activation_settled())
+            .await
+            .expect("the watcher is settled");
+        assert_eq!(
+            manager
+                .get_plugin_record("p3-dropped")
+                .await
+                .unwrap()
+                .status,
+            before,
+            "the abandoned mount's watcher wrote its verdict anyway"
         );
     }
 }
