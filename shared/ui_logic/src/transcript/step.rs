@@ -168,14 +168,29 @@ pub fn first_sentence(s: &str, max_cols: u16) -> Option<String> {
 /// than the sum of their parts, matching how a string-width renderer such
 /// as ratatui lays them out. A per-character sum would under-count such a
 /// sequence and fail to clip a headline the renderer lays out over budget.
+///
+/// The scan below is bounded to `4 * max_cols` characters regardless of
+/// their measured width. A candidate prefix that still needs more than
+/// that many characters to reach `max_cols` columns is pathological for a
+/// headline — it would take that many near-zero-width characters in a
+/// row, such as a run of combining marks or U+FE0F selectors — and is
+/// clipped there on purpose rather than scanned to the end. Without this
+/// bound, recomputing the whole prefix's string width on every character
+/// makes the loop quadratic in the length of such a run; with it, the
+/// whole function's cost is bounded by `cols²`, independent of `s`'s
+/// length.
 fn clip_cols(s: &str, max_cols: u16) -> String {
     let max = usize::from(max_cols.max(1));
     if s.width() <= max {
         return s.to_string();
     }
     let budget = max.saturating_sub(1);
+    let max_scan_chars = max.saturating_mul(4);
     let mut cut = 0usize;
-    for (i, c) in s.char_indices() {
+    for (n, (i, c)) in s.char_indices().enumerate() {
+        if n >= max_scan_chars {
+            break;
+        }
         let candidate_end = i + c.len_utf8();
         let candidate = s.get(..candidate_end).unwrap_or("");
         if candidate.width() > budget {
@@ -349,6 +364,26 @@ mod tests {
         assert!(cols <= 12, "{cols} columns: {clipped}");
     }
 
+    #[test]
+    fn clip_cols_bounds_its_scan_against_a_pathological_run_of_combining_marks() {
+        // 2000 zero-width combining marks, then enough real letters to push
+        // the total past the 10-column budget: an unbounded scan would
+        // recompute the whole growing prefix's string width on every one of
+        // those 2000 marks before ever reaching a letter — quadratic in the
+        // run's length even though the marks contribute no width at all.
+        // The scan is bounded to 4 * max_cols (40) characters, so the
+        // clipped prefix can be at most 40 characters however many
+        // zero-width marks lead it.
+        let pathological = format!("{}{}", "\u{0301}".repeat(2000), "a".repeat(20));
+        let clipped = first_sentence(&pathological, 10).unwrap();
+        assert!(clipped.ends_with('…'), "{clipped}");
+        let prefix_chars = clipped.strip_suffix('…').unwrap().chars().count();
+        assert!(
+            prefix_chars <= 40,
+            "{prefix_chars} chars in the clipped prefix (expected <= 4 * max_cols = 40)"
+        );
+    }
+
     proptest! {
         /// Any input: no panic, never over budget, never a half character,
         /// `None` exactly when the input is blank, and the returned text
@@ -369,6 +404,23 @@ mod tests {
                         s.trim().starts_with(prefix),
                         "{h:?} is not a prefix of {:?}", s.trim()
                     );
+                    // Vacuous-property guard: `strip_suffix('…').unwrap_or`
+                    // on a bare `"…"` yields `""`, and `starts_with("")` is
+                    // always true, so an implementation that always answers
+                    // `Some("…".into())` would otherwise pass. We are
+                    // already inside `Some(h)`, so `s.trim()` is non-empty
+                    // by construction (the `None` arm below is the only
+                    // place blank input is allowed to skip this). The one
+                    // remaining exemption is `cols == 1`: a single column
+                    // cannot hold both the ellipsis and any real character
+                    // (the ellipsis alone already spends the whole budget),
+                    // so a bare `…` is the only correct answer there.
+                    if cols >= 2 {
+                        prop_assert!(
+                            !prefix.trim().is_empty(),
+                            "empty prefix for non-blank input {s:?} at cols={cols}: {h:?}"
+                        );
+                    }
                 }
                 None => prop_assert!(s.trim().is_empty()),
             }
