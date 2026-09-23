@@ -2,7 +2,7 @@
 //! (spec §4): thinking + interstitial text + the tool rows it issued + the
 //! loop's own notes about that iteration. Both surfaces paint a settled step
 //! as one line (`step_headline`) and expand it on demand; the reducer
-//! (`reducer.rs`) is the only writer.
+//! (the `reducer` module) is the only writer.
 
 use unicode_width::UnicodeWidthStr;
 

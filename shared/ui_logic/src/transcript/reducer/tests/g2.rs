@@ -106,6 +106,46 @@ enum Grace {
     /// partial text that no record covers and that are NOT prefixes of
     /// the grace turn's records.
     AfterPartial,
+    /// A halted Think streamed partial text and NO text record ever came
+    /// (no grace turn): the rows carry no `TextEmitted` on the last
+    /// iteration, and the run's final text is present or absent
+    /// (`SessionCompleted.final_text` on replay, `final_response` live).
+    Halted { final_text: bool },
+}
+
+/// `rows` with EVERY `TextEmitted` removed (for this fixture only the last
+/// iteration has one), as a halted Think with no grace turn leaves them; the
+/// session's final text kept or not.
+fn halted(rows: Vec<AgentTraceEvent>, keep_final: bool) -> Vec<AgentTraceEvent> {
+    rows.into_iter()
+        .filter(|r| !matches!(r, AgentTraceEvent::TextEmitted { .. }))
+        .map(|r| match r {
+            AgentTraceEvent::SessionCompleted {
+                outcome,
+                iterations,
+                tool_calls_made,
+                total_tokens,
+                hit_limit,
+                final_text,
+                terminate_reason,
+                duration_ms,
+                token_breakdown,
+                tool_timeline,
+            } => AgentTraceEvent::SessionCompleted {
+                outcome,
+                iterations,
+                tool_calls_made,
+                total_tokens,
+                hit_limit,
+                final_text: final_text.filter(|_| keep_final),
+                terminate_reason,
+                duration_ms,
+                token_breakdown,
+                tool_timeline,
+            },
+            other => other,
+        })
+        .collect()
 }
 
 /// The live leg for the same run: the same trace frames interleaved
@@ -119,10 +159,34 @@ fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
             vec![text.to_string()]
         }
     };
+    // What `RunComplete` carries is what the rows say: the log's final
+    // text, the iterations it counted, the calls it made.
+    let final_response = rows.iter().find_map(|r| match r {
+        AgentTraceEvent::SessionCompleted { final_text, .. } => final_text.clone(),
+        _ => None,
+    });
+    let loops = rows
+        .iter()
+        .filter(|r| matches!(r, AgentTraceEvent::TurnStarted { .. }))
+        .count();
+    let loops = u32::try_from(loops).expect("a test fixture's turn count fits u32");
+    let tool_summaries: Vec<ToolSummaryItem> = rows
+        .iter()
+        .filter_map(|r| match r {
+            AgentTraceEvent::ToolCallCompleted { call, result, .. } => Some(item(
+                &call.tool_id,
+                &call.tool_name,
+                call.duration_ms,
+                result.is_success(),
+            )),
+            _ => None,
+        })
+        .collect();
+    let partial = matches!(grace, Grace::AfterPartial | Grace::Halted { .. });
     let mut out = vec![accepted()];
     for ev in rows {
         match &ev {
-            AgentTraceEvent::TurnStarted { iteration: 2 } if grace == Grace::AfterPartial => {
+            AgentTraceEvent::TurnStarted { iteration: 2 } if partial => {
                 out.push(trace(ev));
                 out.push(reasoning("Maybe the parser drops"));
                 out.push(chunk("I think the bug is in the par"));
@@ -156,6 +220,12 @@ fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
                 });
                 out.push(trace(ev));
             }
+            // Production never publishes `SessionCompleted` as a live frame:
+            // `is_step_event` in
+            // `src/gateway/execution_engine/agent_trace_emit_sink.rs` does
+            // not list it, and `drops_non_step_events` there pins that. The
+            // live leg learns the final text from `RunComplete` instead.
+            AgentTraceEvent::SessionCompleted { .. } => {}
             _ => out.push(trace(ev)),
         }
     }
@@ -163,12 +233,9 @@ fn full_run_live(rows: Vec<AgentTraceEvent>, grace: Grace) -> Vec<StreamEvent> {
         run_id: RUN.into(),
         seq: 0,
         summary: RunSummary {
-            loops: 2,
-            tool_summaries: vec![
-                item("r1", "file_read", 12, true),
-                item("r2", "file_read", 8, true),
-            ],
-            final_response: Some("Fixed the timezone handling.".into()),
+            loops,
+            tool_summaries,
+            final_response,
             ..Default::default()
         },
         total_duration_ms: 32_000,
@@ -219,9 +286,18 @@ fn the_live_leg_and_the_replay_leg_fold_to_the_same_entries() {
         (true, true, Grace::No),
         (true, false, Grace::Clean),
         (true, false, Grace::AfterPartial),
+        (true, false, Grace::Halted { final_text: true }),
+        (true, false, Grace::Halted { final_text: false }),
     ];
     for (text_first, salvage, grace) in shapes {
-        let rows = full_run_trace_with(text_first, salvage);
+        let rows = match grace {
+            Grace::Halted { final_text } => {
+                halted(full_run_trace_with(text_first, salvage), final_text)
+            }
+            Grace::No | Grace::Clean | Grace::AfterPartial => {
+                full_run_trace_with(text_first, salvage)
+            }
+        };
         let mut live = Transcript::new();
         let live_changes = drive(&mut live, &full_run_live(rows.clone(), grace));
         assert!(
@@ -384,4 +460,136 @@ fn a_replayed_run_counts_only_its_own_rows_in_the_turn_summary() {
         "only the two-tool run earns one: {:?}",
         t.entries()
     );
+}
+
+// ---- round 3: the final-text fill ----------------------------------------
+
+fn bash_call(iteration: usize, id: &str) -> [AgentTraceEvent; 2] {
+    [
+        AgentTraceEvent::ToolCallStarted {
+            iteration,
+            call: AgentTraceToolCallStart {
+                tool_id: id.into(),
+                tool_name: "bash".into(),
+                input: json!({"command": "ls"}),
+            },
+        },
+        AgentTraceEvent::ToolCallCompleted {
+            iteration,
+            call: AgentTraceToolCallEnd {
+                tool_id: id.into(),
+                tool_name: "bash".into(),
+                input: json!({"command": "ls"}),
+                duration_ms: 5,
+                presentation: None,
+            },
+            result: AgentTraceToolResult::Success {
+                output: json!("ok"),
+            },
+        },
+    ]
+}
+
+fn session_completed(
+    outcome: aleph_protocol::AgentTraceSessionOutcome,
+    final_text: &str,
+) -> AgentTraceEvent {
+    AgentTraceEvent::SessionCompleted {
+        outcome,
+        iterations: 2,
+        tool_calls_made: 2,
+        total_tokens: 1,
+        hit_limit: outcome == aleph_protocol::AgentTraceSessionOutcome::HitLimit,
+        final_text: Some(final_text.into()),
+        terminate_reason: None,
+        duration_ms: Some(32_000),
+        token_breakdown: None,
+        tool_timeline: Vec::new(),
+    }
+}
+
+/// Ruling T910-N1b: the fill is RUN-scoped. Step 1 recorded `A`; step 2
+/// (thinking and a tool, no text) ends the run at the cap with the server's
+/// final text `A`. The answer is already on screen in step 1, so it is not
+/// repeated — not as step 2's text, not as a new answer — on either leg.
+#[test]
+fn a_final_text_an_earlier_step_already_recorded_is_not_repeated() {
+    let mut rows = vec![
+        AgentTraceEvent::TurnStarted { iteration: 1 },
+        AgentTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: AgentTraceTextKind::Final,
+            text: "A".into(),
+        },
+    ];
+    rows.extend(bash_call(1, "t1"));
+    rows.push(AgentTraceEvent::TurnStarted { iteration: 2 });
+    rows.push(AgentTraceEvent::ReasoningEmitted {
+        iteration: 2,
+        text: "T2".into(),
+    });
+    rows.extend(bash_call(2, "t2"));
+    rows.push(session_completed(
+        aleph_protocol::AgentTraceSessionOutcome::HitLimit,
+        "A",
+    ));
+
+    let mut live = Transcript::new();
+    drive(&mut live, &full_run_live(rows.clone(), Grace::No));
+    let replay = replay(&rows);
+    for (leg, t) in [("live", &live), ("replay", &replay)] {
+        let s = steps(t);
+        assert_eq!(s.len(), 2, "{leg}: {:?}", t.entries());
+        assert_eq!(s[0].text.as_deref(), Some("A"), "{leg}");
+        assert_eq!(s[1].text, None, "{leg}: step 2 never produced text");
+        assert!(
+            finals(t).is_empty(),
+            "{leg}: no answer entry: {:?}",
+            t.entries()
+        );
+        let shown = t
+            .entries()
+            .iter()
+            .filter(|e| match e {
+                TranscriptEntry::Step(s) => s.text.as_deref() == Some("A"),
+                TranscriptEntry::AssistantText { markdown, .. } => markdown == "A",
+                _ => false,
+            })
+            .count();
+        assert_eq!(shown, 1, "{leg}: `A` appears once");
+    }
+    assert_eq!(strip_clocks(live.entries()), strip_clocks(replay.entries()));
+}
+
+/// Ruling T910-NEW1 (reducer half): a replayed `SessionCompleted` fills only
+/// for outcomes whose live run end is established to carry the same final
+/// text (`Completed`, `HitLimit`). `Failed` and `Cancelled` take none — on a
+/// run with no text record, the log's final text does not become an answer.
+#[test]
+fn a_replayed_run_that_failed_or_was_cancelled_takes_no_final_text() {
+    use aleph_protocol::AgentTraceSessionOutcome as O;
+    let rows_for = |outcome| {
+        let mut rows = vec![
+            AgentTraceEvent::TurnStarted { iteration: 1 },
+            AgentTraceEvent::ReasoningEmitted {
+                iteration: 1,
+                text: "T1".into(),
+            },
+        ];
+        rows.extend(bash_call(1, "t1"));
+        rows.push(session_completed(outcome, "T1"));
+        rows
+    };
+    for outcome in [O::Failed, O::Cancelled] {
+        let t = replay(&rows_for(outcome));
+        assert!(finals(&t).is_empty(), "{outcome:?}: {:?}", t.entries());
+        let s = steps(&t);
+        assert_eq!(s.len(), 1, "{outcome:?}: kept for its thinking and tool");
+        assert_eq!(s[0].text, None, "{outcome:?}");
+    }
+    // The control: the two outcomes that do fill.
+    for outcome in [O::Completed, O::HitLimit] {
+        let t = replay(&rows_for(outcome));
+        assert_eq!(finals(&t), vec!["T1".to_string()], "{outcome:?}");
+    }
 }

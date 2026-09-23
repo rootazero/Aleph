@@ -212,7 +212,7 @@ pub enum TranscriptEntry {
     },
     Tool(ToolRow),
     ToolGroup(ToolGroup),
-    /// One Think→Act iteration (spec §4). Phase S's reducer (`reducer.rs`)
+    /// One Think→Act iteration (spec §4). Phase S's reducer (`reducer/`)
     /// is its producer; Phase T is its first renderer.
     Step(StepEntry),
     TurnSummary(TurnSummaryEntry),

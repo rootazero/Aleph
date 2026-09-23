@@ -239,7 +239,7 @@ fn a_reasoning_record_for_another_iteration_asks_for_a_resync_and_changes_nothin
 }
 
 #[test]
-fn final_text_from_the_trace_is_deduplicated_against_the_streamed_chunks() {
+fn the_text_record_replaces_the_streamed_segment_it_covers() {
     let mut t = Transcript::new();
     drive(
         &mut t,
@@ -324,6 +324,7 @@ fn run_complete_hoists_the_final_text_and_keeps_a_thinking_only_step() {
             turn(2),
             reasoning("second"),
             chunk("Done."),
+            text_record(2, "Done."),
             complete(2, vec![]),
         ],
     );
@@ -360,6 +361,7 @@ fn run_complete_removes_a_step_that_held_only_the_hoisted_text() {
             accepted(),
             turn(1),
             chunk("Just an answer."),
+            text_record(1, "Just an answer."),
             complete(1, vec![]),
         ],
     );
@@ -382,6 +384,7 @@ fn run_complete_drops_a_step_that_held_nothing() {
             turn(1),
             turn(2),
             chunk("Answer."),
+            text_record(2, "Answer."),
             complete(2, vec![]),
         ],
     );
@@ -453,6 +456,7 @@ fn run_complete_with_thinking_and_text_keeps_the_thinking_row_beside_the_answer(
             turn(1),
             reasoning("why"),
             chunk("Answer."),
+            text_record(1, "Answer."),
             complete(1, vec![]),
         ],
     );
@@ -545,7 +549,13 @@ fn fewer_turn_starts_than_summary_loops_reports_needs_resync_without_touching_en
     let mut t = Transcript::new();
     drive(
         &mut t,
-        &[accepted(), turn(1), reasoning("weigh"), chunk("a")],
+        &[
+            accepted(),
+            turn(1),
+            reasoning("weigh"),
+            chunk("a"),
+            text_record(1, "a"),
+        ],
     );
     let before = step_skeleton(&t);
     assert_eq!(before.len(), 1, "fixture: one step that survives the hoist");
@@ -568,8 +578,11 @@ fn a_run_with_zero_loops_never_asks_for_a_resync() {
     assert!(!changes.contains(&Change::NeedsResync));
 }
 
+/// Ruling T910-N1: a partial answer no record covers is provisional. The
+/// error ends the run with no final text, so it is dropped — the step stays
+/// for its tool row; the replay leg (records only) never had that text.
 #[test]
-fn run_error_settles_rows_hoists_the_partial_answer_and_leaves_a_notice() {
+fn run_error_settles_rows_drops_the_uncovered_partial_answer_and_leaves_a_notice() {
     let mut t = Transcript::new();
     drive(
         &mut t,
@@ -592,7 +605,8 @@ fn run_error_settles_rows_hoists_the_partial_answer_and_leaves_a_notice() {
         RowStatus::Pending,
         "never a spinner after the run ended"
     );
-    assert_eq!(finals(&t), vec!["half an ans".to_string()]);
+    assert!(finals(&t).is_empty(), "{:?}", t.entries());
+    assert_eq!(steps(&t)[0].text, None);
     let notice = t.entries().iter().rev().find_map(|e| match e {
         TranscriptEntry::SystemNotice { text, .. } => Some(text.clone()),
         _ => None,
@@ -964,6 +978,85 @@ fn a_run_accepted_over_an_open_run_closes_it_pending() {
     assert_eq!(s[0].tools[0].status, RowStatus::Pending);
     assert!(s[0].thinking.as_ref().is_some_and(|b| !b.streaming));
     assert_eq!(s[1].status, StepStatus::Live);
+}
+
+// ---- fix round 2 --------------------------------------------------------
+
+fn complete_with_final(loops: u32, final_response: Option<&str>) -> StreamEvent {
+    StreamEvent::RunComplete {
+        run_id: RUN.into(),
+        seq: 0,
+        summary: RunSummary {
+            loops,
+            final_response: final_response.map(str::to_string),
+            ..Default::default()
+        },
+        total_duration_ms: 1_000,
+    }
+}
+
+/// T910-N1(a): a Think halted mid-stream, no text record ever came, and the
+/// run's record names the final text. That text — the server's record —
+/// replaces the uncovered deltas and is the answer.
+#[test]
+fn a_halted_stream_with_no_record_takes_the_runs_final_response() {
+    let mut t = Transcript::new();
+    drive(
+        &mut t,
+        &[
+            accepted(),
+            turn(1),
+            reasoning("look"),
+            chunk("I think the bu"),
+        ],
+    );
+    let changes = t.apply_live(
+        &complete_with_final(1, Some("The bug is the timezone.")),
+        9_000,
+    );
+    assert!(!changes.contains(&Change::NeedsResync), "{changes:?}");
+    assert_eq!(finals(&t), vec!["The bug is the timezone.".to_string()]);
+    let s = steps(&t);
+    assert_eq!(s.len(), 1, "kept for its thinking: {:?}", t.entries());
+    assert_eq!(s[0].text, None, "the answer was hoisted out of the step");
+}
+
+/// T910-N1(b): no record and no final text. The uncovered text is gone; a
+/// step with thinking stays for it, a step with nothing else is dropped.
+#[test]
+fn a_halted_stream_with_no_record_and_no_final_text_drops_the_uncovered_text() {
+    let mut with_thinking = Transcript::new();
+    drive(
+        &mut with_thinking,
+        &[
+            accepted(),
+            turn(1),
+            reasoning("look"),
+            chunk("I think the bu"),
+            complete_with_final(1, None),
+        ],
+    );
+    assert!(
+        finals(&with_thinking).is_empty(),
+        "{:?}",
+        with_thinking.entries()
+    );
+    let s = steps(&with_thinking);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].text, None);
+
+    let mut text_only = Transcript::new();
+    drive(
+        &mut text_only,
+        &[
+            accepted(),
+            turn(1),
+            chunk("I think the bu"),
+            complete_with_final(1, None),
+        ],
+    );
+    assert!(finals(&text_only).is_empty(), "{:?}", text_only.entries());
+    assert!(steps(&text_only).is_empty(), "{:?}", text_only.entries());
 }
 
 mod g2;

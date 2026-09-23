@@ -25,7 +25,7 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
 /// fail-closed direction. Duration is the wire's `duration_ms` carried on
 /// `RowStatus`, not `ended_ms - started_ms`: a row restored from a replay
 /// has no clocks and must still add up to the same number a live row does
-/// (the two-legs guard in `reducer.rs` compares them).
+/// (the two-legs guard G2 in `reducer/tests/g2.rs` compares them).
 #[must_use]
 pub fn summarize_rows(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     let mut e = TurnSummaryEntry {
