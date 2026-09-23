@@ -534,7 +534,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 - **别把 `context.breakdown` 改成读时重新派生**——那正是它存在的理由的反面（§3.2）。
 - **别调 `capability::census` 的那个数字**（§5.5）。
 - **改了 `shared/ui_logic/src/transcript/` 就跑 `just test-shared`**：共享核的测试（reducer、G2、step 的性质测试）由它与 CI 的
-  `Run shared crate tests` 步骤跑，alephcore 的命令编译不到它们——为什么见 CLAUDE.md「最小可信验证集」。
+  `Run shared crate tests` 步骤跑，alephcore 的命令编译不到它们——为什么见 `scripts/test-shared.sh` 的头注释。
 - **数字带谓词**：本文里每一个计数都写了它数的是什么、以及测于哪个 commit。复述之前重数一遍，包括重数我的
   （附录 C.1）。
 
