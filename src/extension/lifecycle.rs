@@ -892,13 +892,25 @@ impl Views {
     /// projections (skill dirs, sub-agents, tool index). Called exactly once
     /// per public primitive, and by the server-start watcher when its
     /// readiness write changes a plugin's activity. The caller holds
-    /// `load_guard`: the executor reset + resync below is not atomic, so two
-    /// runs must not interleave.
+    /// `load_guard`, which serialises writers of this method against each
+    /// other; it says nothing about readers.
+    ///
+    /// The next executor is built OFF-lock in a local value — plugin hooks
+    /// (`sync_hooks_from_registry`) first, then `user:` hooks
+    /// (`Views::user_hook_configs`), same order and stamping as always — and
+    /// installed with exactly ONE write to `hook_executor`. A reader that
+    /// takes the lock at any point during this call therefore observes
+    /// either the complete previous executor or the complete next one, never
+    /// a partially-rebuilt one (a run that snapshots mid-rebuild used to be
+    /// able to see zero or plugin-only hooks and execute its whole turn
+    /// without the user's blocking hooks — fail-open).
     pub(super) async fn after_transition(&self) {
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-        self.sync_hooks_from_registry().await;
-        self.sync_user_hooks().await;
+        let mut next_hook_executor = HookExecutor::empty().with_consent(ShellHookConsent::shared());
+        self.sync_hooks_from_registry(&mut next_hook_executor).await;
+        for hook in Self::user_hook_configs() {
+            next_hook_executor.add_hook(hook);
+        }
+        *self.hook_executor.write().await = next_hook_executor;
         let projection = self.republish_plugin_projections().await;
         tracing::debug!(
             plugin_skill_dirs = projection.plugin_skill_dirs.len(),
@@ -1790,6 +1802,81 @@ priority = 60
                 .to_string(),
         );
         assert!(mine.iter().all(|root| *root == want), "got {mine:?}");
+    }
+
+    // ── P3.3a: the next executor is installed in one write, never torn ────
+
+    /// 判据 §8: a reader must never observe the hook executor mid-rebuild —
+    /// not the empty state a full reset leaves behind, not a plugin-only
+    /// state with the user's layer still missing. A run that snapshots into
+    /// either would execute its whole turn without the hooks it should have
+    /// had, silently (fail-open).
+    ///
+    /// Shape: hold a READ guard across the whole rebuild, spawn
+    /// `after_transition`, let it run until it blocks on ITS first write
+    /// (queued behind the guard), drop the guard, then IMMEDIATELY queue a
+    /// second read — no `.await` in between, so it registers as a waiter
+    /// before `after_transition`'s NEXT write (if the body still has one)
+    /// gets a chance to queue behind it.
+    ///
+    /// This relies on tokio's `RwLock` being fair (write-preferring FIFO):
+    /// verified against `tokio` 1.52.3 (the version this workspace locks,
+    /// `Cargo.lock`), `src/sync/rwlock.rs:40-46`: "The priority policy of
+    /// Tokio's read-write lock is _fair_ (or _write-preferring_) … Fairness
+    /// is ensured using a first-in, first-out queue for the tasks awaiting
+    /// the lock; a read lock will not be given out until all write lock
+    /// requests that were queued before it have been acquired and
+    /// released." Traced through `batch_semaphore.rs::add_permits_locked`:
+    /// releasing the guard hands the freed permit straight to the head of
+    /// the wait queue and dequeues it SYNCHRONOUSLY inside that `drop` call
+    /// — before any other task's poll runs — so on the old three-write body
+    /// the second read is already queued behind the reset write and ahead of
+    /// the two refill writes (which `after_transition`'s still-suspended
+    /// task has not tried to queue yet at that instant): it is granted right
+    /// after the reset write releases and lands on the empty executor. On
+    /// the new one-write body there is only one write to land after.
+    #[tokio::test]
+    async fn after_transition_installs_the_next_executor_in_one_write_a_reader_never_sees_it_torn()
+    {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_static_plugin(dir.path(), "p3a-hooky");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+
+        let before = manager.hook_executor_snapshot().await.hook_count();
+        assert!(before > 0, "fixture must seed at least one hook");
+
+        let views = manager.views();
+        let hook_executor = Arc::clone(&views.hook_executor);
+
+        // Hold a reader across the whole rebuild.
+        let read_guard = hook_executor.read().await;
+
+        // Run `after_transition` up to (and blocked on) its first write.
+        let spawned = views.clone();
+        let handle = tokio::spawn(async move {
+            spawned.after_transition().await;
+        });
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        // Release the guard, then IMMEDIATELY queue a second read.
+        drop(read_guard);
+        let mid_rebuild = hook_executor.read().await.hook_count();
+
+        assert_eq!(
+            mid_rebuild, before,
+            "a reader observed a torn executor mid-rebuild ({mid_rebuild} hooks, expected \
+             {before}) — a run snapshotting at this instant would execute its whole turn with \
+             the wrong hook set, silently"
+        );
+
+        tokio::time::timeout(WAIT, handle)
+            .await
+            .expect("after_transition must finish")
+            .unwrap();
     }
 
     // ── P3.3: readiness is written at the three moments ───────────────────

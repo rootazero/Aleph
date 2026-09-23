@@ -741,17 +741,15 @@ impl ExtensionManager {
 /// (`lifecycle.rs::Views::after_transition`); the skill / sub-agent half is
 /// in `projection.rs`.
 impl projection::Views {
-    /// Layer user-level hook configs (`~/.aleph/hooks.json`, project files)
-    /// on top of the plugin-registered hooks. Runs after
-    /// [`Self::sync_hooks_from_registry`] so user entries are evaluated in
-    /// the same executor pass — priority + matcher determine ordering, not
-    /// load order.
-    ///
-    /// Idempotent: every prior entry tagged with the `user:` plugin prefix
-    /// is dropped before the freshly-parsed config is appended. This lets the
-    /// hot-reload watcher call this method on every `hooks.json` change
-    /// without leaking duplicate registrations.
-    pub(crate) async fn sync_user_hooks(&self) {
+    /// Compute the user-level hook configs (`~/.aleph/hooks.json`, project
+    /// files) fresh from disk. Pure derivation — does not touch
+    /// `hook_executor`. Shared by [`Self::sync_user_hooks`] (the file-watcher
+    /// path below, which installs the result incrementally under its own
+    /// lock) and `lifecycle.rs::after_transition` (which layers the result
+    /// into a freshly built executor off-lock, then installs it with one
+    /// write) so there is one derivation of "what are the user hooks right
+    /// now", not two (判据 §12).
+    fn user_hook_configs() -> Vec<HookConfig> {
         let cwd = std::env::current_dir().ok();
         // App mode: the daemon CWD is meaningless, so also load hooks from
         // every registered project folder. The executor gates each project
@@ -767,7 +765,27 @@ impl projection::Views {
                     .collect()
             })
             .unwrap_or_default();
-        let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots);
+        crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots)
+    }
+
+    /// Layer user-level hook configs on top of whatever `hook_executor`
+    /// currently holds, under ONE write lock. Called ALONE by the hot-reload
+    /// watcher on every `hooks.json` change (no `load_guard`, no registry
+    /// involvement), so it must stay atomic on its own: this is an
+    /// incremental swap, not a rebuild — every prior entry tagged with the
+    /// `user:` plugin prefix is dropped, then the freshly-parsed set is
+    /// appended, both under the same guard. Idempotent, so repeat calls never
+    /// leak duplicate registrations.
+    ///
+    /// `after_transition` does NOT call this method: it builds a whole next
+    /// executor off-lock (registry hooks via
+    /// [`Self::sync_hooks_from_registry`], then [`Self::user_hook_configs`])
+    /// and installs it with one write instead (see its doc). Both paths
+    /// derive the user hooks through `user_hook_configs`, so there is one
+    /// source for "what are the user hooks right now" even though the two
+    /// callers install the result differently.
+    pub(crate) async fn sync_user_hooks(&self) {
+        let user_hooks = Self::user_hook_configs();
         let mut executor = self.hook_executor.write().await;
         let removed = executor.remove_by_plugin_prefix("user:");
         if user_hooks.is_empty() {
@@ -783,14 +801,20 @@ impl projection::Views {
         tracing::info!(count, removed, "Loaded user-level hook configs");
     }
 
-    /// Sync hooks from `PluginRegistry` to `HookExecutor`.
+    /// Derive `HookConfig`s from `PluginRegistry`'s hook registrations and
+    /// add them to the CALLER-OWNED `executor`.
     ///
     /// Reads `HookRegistration` entries from the registry and converts them
     /// to `HookConfig` entries that `HookExecutor` understands. Each hook is
     /// stamped with the OWNING ROW's `scope_key`: a hook shipped by a
     /// project-local plugin is visible only inside that project, exactly
     /// like the plugin itself.
-    async fn sync_hooks_from_registry(&self) {
+    ///
+    /// Takes `executor` by `&mut` instead of writing `self.hook_executor`
+    /// directly so `after_transition` can build the whole next executor
+    /// off-lock — this call and the `user:` layer that follows it both land
+    /// on the same local value — and install it with exactly one write.
+    async fn sync_hooks_from_registry(&self, executor: &mut HookExecutor) {
         let hook_regs: Vec<(HookRegistration, visibility::ScopeKey)> = {
             let registry = self.plugin_registry.read().await;
             registry
@@ -805,8 +829,6 @@ impl projection::Views {
                 .collect()
         };
 
-        let mut executor = self.hook_executor.write().await;
-        // HookExecutor was already reset by `lifecycle.rs::after_transition`.
         // Convert HookRegistration → HookConfig for the executor, consuming
         // each registration by value so its fields move into the config.
         for (hr, scope_key) in hook_regs {
