@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use super::effects::{DisposeReport, EffectScope};
+use super::effects::{async_disposer, DisposeReport, Disposer, EffectScope};
 use super::error::ExtensionResult;
 use super::hooks::{HookExecutor, ShellHookConsent};
 use super::manifest::adapter::AdapterOutput;
@@ -35,7 +35,7 @@ use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 use super::visibility::ScopeKey;
-use super::{loader, manifest, mcp_config, registrar, slash_effect, ExtensionManager};
+use super::{loader, manifest, mcp_config, readiness, registrar, slash_effect, ExtensionManager};
 use crate::extension::capability::CapabilityDeclaration;
 use crate::sync_primitives::Arc;
 
@@ -95,6 +95,9 @@ impl ExtensionManager {
     /// Mount one discovered plugin: admission gates, manifest parse, then
     /// the six effects. All-or-none: a failing step disposes what was
     /// registered and writes `PluginStatus::Error("<step>: <reason>")`.
+    /// `Ok` carries the row's status when the mount returns: `Pending` while
+    /// a declared MCP dependency has not reported, else what it reported
+    /// (`readiness`) — `Loaded` for a plugin with nothing to wait on.
     pub async fn mount(&self, id: &str) -> Result<PluginStatus, MountError> {
         let _guard = self.load_guard.lock().await;
         let status = self.mount_inner(id).await?;
@@ -469,7 +472,8 @@ impl ExtensionManager {
     }
 
     /// The six effects, in [`super::effects::STEP_LABELS`] order. `record`
-    /// already carries root_dir / origin / kind.
+    /// already carries root_dir / origin / kind. Returns the row's status
+    /// after the effects (see [`Self::mount`]).
     async fn mount_parsed(
         &self,
         output: AdapterOutput,
@@ -556,8 +560,12 @@ impl ExtensionManager {
                         match registrar::mcp_registrar::register_transient_servers(h, configs).await
                         {
                             Ok((d, receivers)) => {
-                                scope.effect("mcp_server", d);
-                                self.watch_server_starts(&id, receivers);
+                                // Writes `Pending { mcp:<id>… }` now and the terminal
+                                // status when the actor has answered every start. The
+                                // watcher ends in this step's disposer, so its verdict
+                                // never lands on the row of a later mount of this id.
+                                let watcher = self.watch_server_starts(&id, receivers).await;
+                                scope.effect("mcp_server", stop_watcher_then(watcher, d));
                             }
                             Err(e) => {
                                 return Err(self.fail_mount(scope, shell, "mcp_server", e).await)
@@ -632,13 +640,32 @@ impl ExtensionManager {
                 });
             }
         }
+        // The no-handle moment of readiness: an MCP plugin whose `mcp_server`
+        // step could not run is pending on the manager, not loaded.
+        if scope
+            .skipped()
+            .iter()
+            .any(|(step, _)| *step == "mcp_server")
+        {
+            let status = readiness::derive_readiness(&readiness::ReadinessInputs {
+                manager_attached: false,
+                servers: &[],
+            });
+            readiness::write_readiness(&self.plugin_registry, &id, status).await;
+        }
 
         self.scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), scope);
-        tracing::info!(plugin_id = %id, kind = ?kind, "plugin mounted");
-        Ok(PluginStatus::Loaded)
+        let status = self
+            .plugin_registry
+            .read()
+            .await
+            .get_plugin(&id)
+            .map_or(PluginStatus::Loaded, |r| r.status.clone());
+        tracing::info!(plugin_id = %id, kind = ?kind, status = %status.label(), "plugin mounted");
+        Ok(status)
     }
 
     /// All-or-none: dispose what `mount_parsed` registered so far, then
@@ -676,29 +703,77 @@ impl ExtensionManager {
     // ── Server-start watchers (R1.1) ──────────────────────────────────────
 
     /// One task per plugin that awaits every receiver the `mcp_server` step
-    /// handed back and logs each outcome. The handle is kept so
-    /// [`Self::activation_settled`] can wait for it. P3.3 turns this into
-    /// the readiness writer (`Pending { waiting_on }` before, terminal after).
-    fn watch_server_starts(&self, plugin_id: &str, receivers: Vec<(String, ServerStartReceiver)>) {
+    /// handed back, logs each outcome, and writes the plugin's readiness
+    /// twice: `Pending { mcp:<id>… }` before the task exists (so no caller of
+    /// `mount` can observe `Loaded` for servers still starting) and the
+    /// terminal status once every receiver has answered. The handle is kept
+    /// so [`Self::activation_settled`] can wait for it; the returned
+    /// [`WatcherStop`] goes into the step's disposer ([`stop_watcher_then`]),
+    /// so the task never outlives the mount whose row it writes.
+    async fn watch_server_starts(
+        &self,
+        plugin_id: &str,
+        receivers: Vec<(String, ServerStartReceiver)>,
+    ) -> Option<WatcherStop> {
         if receivers.is_empty() {
-            return;
+            return None;
         }
+        // Moment 2: enqueued, unanswered.
+        let unanswered: Vec<(String, readiness::ServerStart)> = receivers
+            .iter()
+            .map(|(id, _)| (id.clone(), readiness::ServerStart::Unanswered))
+            .collect();
+        readiness::write_readiness(
+            &self.plugin_registry,
+            plugin_id,
+            readiness::derive_readiness(&readiness::ReadinessInputs {
+                manager_attached: true,
+                servers: &unanswered,
+            }),
+        )
+        .await;
+
+        let registry = Arc::clone(&self.plugin_registry);
         let plugin_id = plugin_id.to_string();
+        let (alive, gone) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
+            // Dropped with this future — on completion or on abort — which is
+            // what `WatcherStop::gone` waits for.
+            let _alive = alive;
+            let mut servers: Vec<(String, readiness::ServerStart)> =
+                Vec::with_capacity(receivers.len());
             for (server_id, rx) in receivers {
-                match rx.await {
+                let report = match rx.await {
                     Ok(Ok(())) => {
                         tracing::info!(plugin_id = %plugin_id, server_id = %server_id, "plugin MCP server registered (transient)");
+                        readiness::ServerStart::Started
                     }
                     Ok(Err(e)) => {
                         tracing::warn!(plugin_id = %plugin_id, server_id = %server_id, error = %e, "plugin MCP server failed to start");
+                        readiness::ServerStart::Failed(e)
                     }
                     Err(_) => {
                         tracing::warn!(plugin_id = %plugin_id, server_id = %server_id, "MCP manager dropped the start request");
+                        readiness::ServerStart::Unanswered
                     }
-                }
+                };
+                servers.push((server_id, report));
             }
+            // Moment 3: every receiver settled.
+            readiness::write_readiness(
+                &registry,
+                &plugin_id,
+                readiness::derive_readiness(&readiness::ReadinessInputs {
+                    manager_attached: true,
+                    servers: &servers,
+                }),
+            )
+            .await;
         });
+        let stop = WatcherStop {
+            abort: handle.abort_handle(),
+            gone,
+        };
         let mut watchers = self
             .activation_watchers
             .lock()
@@ -707,12 +782,14 @@ impl ExtensionManager {
         // that nobody ever `activation_settled()`s does not grow the vector.
         watchers.retain(|h| !h.is_finished());
         watchers.push(handle);
+        Some(stop)
     }
 
-    /// Completes when every server-start watcher spawned so far has finished.
-    /// No timer: each receiver is bounded by the actor's own handshake cap
-    /// (`external/connection.rs:348`, 60 s per step). A watcher spawned while
-    /// this is waiting is awaited too (the loop re-checks).
+    /// Completes when every server-start watcher spawned so far has finished
+    /// (or was ended by its mount's disposer). No timer: each receiver is
+    /// bounded by the actor's own handshake cap (`external/connection.rs:348`,
+    /// 60 s per step). A watcher spawned while this is waiting is awaited too
+    /// (the loop re-checks).
     pub async fn activation_settled(&self) {
         loop {
             let pending: Vec<tokio::task::JoinHandle<()>> = {
@@ -726,8 +803,12 @@ impl ExtensionManager {
                 return;
             }
             for h in pending {
-                if let Err(e) = h.await {
-                    tracing::warn!(error = %e, "server-start watcher task failed");
+                match h.await {
+                    Ok(()) => {}
+                    // Its mount was disposed: `stop_watcher_then` ended it on
+                    // purpose, and that mount's verdict is moot.
+                    Err(e) if e.is_cancelled() => {}
+                    Err(e) => tracing::warn!(error = %e, "server-start watcher task failed"),
                 }
             }
         }
@@ -800,6 +881,35 @@ impl ExtensionManager {
             .get(id)
             .map(|s| s.skipped().to_vec())
     }
+}
+
+// ── A watcher's lifetime is its mount's ──────────────────────────────────
+
+/// How the `mcp_server` step's disposer ends the server-start watcher of its
+/// mount. `gone` resolves when the task drops its sender — on completion or
+/// on abort — so once it has been awaited the task can no longer write.
+struct WatcherStop {
+    abort: tokio::task::AbortHandle,
+    gone: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// The `mcp_server` step's disposer: end the mount's watcher, wait until it
+/// is gone, then remove the servers. Every path that puts a new row under
+/// this id — unmount's `Disabled` put-back, `write_failed_row`, a remount —
+/// runs after this disposer (it precedes `registry_row` in reverse order),
+/// so a verdict about this mount's servers cannot land on a later row.
+/// Awaiting `gone` and not only aborting closes the window where the task is
+/// mid-poll on another worker when `abort` is called.
+fn stop_watcher_then(watcher: Option<WatcherStop>, remove_servers: Disposer) -> Disposer {
+    let Some(WatcherStop { abort, gone }) = watcher else {
+        return remove_servers;
+    };
+    async_disposer(move || async move {
+        abort.abort();
+        // `Err(RecvError)` is the expected answer: the sender was dropped.
+        let _ = gone.await;
+        remove_servers().await
+    })
 }
 
 #[cfg(test)]
@@ -1431,7 +1541,10 @@ priority = 60
         assert_eq!(
             during.rows,
             vec![
-                ("qa-mcp".to_string(), "loaded".to_string()),
+                // The actor answered `Err` for the nonexistent binary, and the
+                // watcher wrote it (readiness moment 3). Still mounted: the
+                // other effects are on the surfaces below.
+                ("qa-mcp".to_string(), "error".to_string()),
                 ("qa-wasm".to_string(), "loaded".to_string())
             ]
         );
@@ -1470,9 +1583,14 @@ priority = 60
         let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
         manager.set_plugin_enabled("qa-wasm", true).await;
         manager.set_plugin_enabled("qa-mcp", true).await;
+        // Settle before each snapshot: qa-mcp's row reads `pending` until the
+        // actor answers and `error` after, and which one a bare snapshot sees
+        // is the scheduler's choice.
+        manager.activation_settled().await;
         let mounted = snapshot(&manager, &memory, &catalog).await;
         let report = manager.reload().await.unwrap();
         assert!(report.failed.is_empty(), "{:?}", report.failed);
+        manager.activation_settled().await;
         assert_eq!(snapshot(&manager, &memory, &catalog).await, mounted);
     }
 
@@ -1597,5 +1715,232 @@ priority = 60
                 .to_string(),
         );
         assert!(mine.iter().all(|root| *root == want), "got {mine:?}");
+    }
+
+    // ── P3.3: readiness is written at the three moments ───────────────────
+
+    /// Same body as `mod.rs::tests::write_project_plugin`, duplicated for the
+    /// reason `isolated_manager` is.
+    fn write_project_plugin(root: &Path, id: &str) {
+        let plugin_dir = root.join("plugins").join(id);
+        std::fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin_dir.join(".claude-plugin/plugin.toml"),
+            format!("name = \"{id}\"\nversion = \"1.0.0\"\n"),
+        )
+        .unwrap();
+    }
+
+    fn write_mcp_project_plugin(root: &Path, id: &str) {
+        let plugin_dir = root.join("plugins").join(id);
+        std::fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        // `[aleph] runtime = "mcp"` → PluginKind::Mcp (`cc_plugin_toml.rs::runtime_to_kind`);
+        // `.mcp.json` → one McpServer capability (`component_source.rs`).
+        std::fs::write(
+            plugin_dir.join(".claude-plugin/plugin.toml"),
+            format!("name = \"{id}\"\nversion = \"1.0.0\"\n[aleph]\nruntime = \"mcp\"\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join(".mcp.json"),
+            r#"{"mcpServers":{"srv":{"command":"qa-nonexistent-mcp-binary-9f3a"}}}"#,
+        )
+        .unwrap();
+    }
+
+    /// No MCP handle attached (CLI paths, this test): the `mcp_server` step is
+    /// a recorded skip (P1), and the row says so — `Pending` on the manager,
+    /// not `Loaded`. Before this round the row said `loaded` for a plugin
+    /// whose servers had never been spawned (evidence `scan-aleph-plugins.md`
+    /// §2.5 row "MCP servers").
+    #[tokio::test]
+    async fn mount_without_an_mcp_handle_is_pending_on_the_manager() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-mcp");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let rec = manager
+            .get_plugin_record("p3-mcp")
+            .await
+            .expect("registered");
+        assert_eq!(
+            rec.kind,
+            PluginKind::Mcp,
+            "the [aleph] runtime override must have applied"
+        );
+        assert_eq!(
+            rec.status,
+            PluginStatus::Pending {
+                waiting_on: vec!["mcp:manager".into()]
+            }
+        );
+        assert_eq!(rec.error.as_deref(), Some("waiting on mcp:manager"));
+        assert!(
+            rec.status.is_active(),
+            "its skills/agents/hooks are live meanwhile"
+        );
+        assert_eq!(manager.scope_skipped("p3-mcp").unwrap()[0].0, "mcp_server");
+    }
+
+    /// A static plugin has no dependency to wait on: `Loaded` after mount.
+    #[tokio::test]
+    async fn mount_of_a_static_plugin_is_loaded() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_project_plugin(dir.path(), "p3-static");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        assert_eq!(
+            manager.get_plugin_record("p3-static").await.unwrap().status,
+            PluginStatus::Loaded
+        );
+    }
+
+    /// Moment 2, observed deterministically: the actor exists (its command
+    /// channel accepts the enqueue — capacity 32, `actor.rs:113`) but is never
+    /// run, so no receiver can be answered. The row is `Pending` on the
+    /// server. Then the actor is dropped: every receiver resolves `Err`
+    /// (sender gone) — "I don't know", which stays a wait, never a failure
+    /// (判据 §8) — and `activation_settled` completes because the watcher has
+    /// nothing left to await.
+    #[tokio::test]
+    async fn mount_with_a_silent_manager_is_pending_on_the_server_and_a_dropped_answer_stays_a_wait(
+    ) {
+        use crate::mcp::manager::McpManagerActor;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-quiet");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
+            .await
+            .unwrap();
+        manager.set_mcp_handle(handle);
+
+        manager.load_all().await.unwrap();
+        let want = PluginStatus::Pending {
+            waiting_on: vec!["mcp:plugin:p3-quiet/srv".into()],
+        };
+        assert_eq!(
+            manager.get_plugin_record("p3-quiet").await.unwrap().status,
+            want,
+            "enqueued, unanswered"
+        );
+
+        drop(actor);
+        manager.activation_settled().await;
+        assert_eq!(
+            manager.get_plugin_record("p3-quiet").await.unwrap().status,
+            want,
+            "a dropped sender is not a report; the plugin is still waiting on the server"
+        );
+    }
+
+    /// Moment 3 with a running actor: the binary does not exist, so the
+    /// actor answers `Err` and the watcher writes `Error` naming the server.
+    /// `activation_settled` is how the test — and the boot gate — waits for
+    /// that without a timer.
+    #[tokio::test]
+    async fn mount_with_a_running_manager_ends_terminal_when_the_actor_answers() {
+        use crate::mcp::manager::McpManagerActor;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-live");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
+            .await
+            .unwrap();
+        tokio::spawn(actor.run());
+        manager.set_mcp_handle(handle);
+
+        manager.load_all().await.unwrap();
+        manager.activation_settled().await;
+        let end = manager.get_plugin_record("p3-live").await.unwrap();
+        match end.status {
+            PluginStatus::Error(ref e) => assert!(e.contains("plugin:p3-live/srv"), "{e}"),
+            other => panic!("a nonexistent binary must end in Error, got {other:?}"),
+        }
+        assert_eq!(
+            end.error.as_deref().map(|e| e.contains("p3-live/srv")),
+            Some(true)
+        );
+    }
+
+    /// A watcher lives exactly as long as the mount that spawned it (判据 §13,
+    /// §15). A scripted actor answers removes at once and hands every start
+    /// request to the test, so the order of answers is the test's: mount #1
+    /// of `p3-stale` enqueues a start; `reload_plugin` disposes mount #1 and
+    /// mounts #2, which enqueues its own. Mount #2's answer is written first;
+    /// THEN mount #1's late answer arrives. A watcher that outlived its mount
+    /// would write `Loaded` — a verdict about a server that was removed — over
+    /// mount #2's `Error`, on a row it does not own, and nothing after it
+    /// would ever correct the row.
+    #[tokio::test]
+    async fn a_disposed_mounts_watcher_never_writes_onto_the_next_mounts_row() {
+        use crate::mcp::manager::{McpCommand, McpManagerHandle};
+        use std::time::Duration;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(dir.path(), "p3-stale");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<McpCommand>(8);
+        let (event_tx, _events) = tokio::sync::broadcast::channel(8);
+        let (start_tx, mut starts) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    McpCommand::AddTransientServer { respond_to, .. } => {
+                        let _ = start_tx.send(respond_to);
+                    }
+                    McpCommand::RemoveTransientServer { respond_to, .. } => {
+                        let _ = respond_to.send(Ok(()));
+                    }
+                    // Nothing else is sent on this path; dropping the reply
+                    // channel answers "actor gone" if that ever changes.
+                    _ => {}
+                }
+            }
+        });
+        manager.set_mcp_handle(McpManagerHandle::new(cmd_tx, event_tx));
+        let wait = Duration::from_secs(10);
+
+        manager.load_all().await.unwrap();
+        let first = tokio::time::timeout(wait, starts.recv())
+            .await
+            .expect("mount #1 enqueued its start")
+            .unwrap();
+        manager.reload_plugin("p3-stale").await.unwrap();
+        let second = tokio::time::timeout(wait, starts.recv())
+            .await
+            .expect("mount #2 enqueued its start")
+            .unwrap();
+
+        second
+            .send(Err("the second mount's answer".into()))
+            .unwrap();
+        tokio::time::timeout(wait, async {
+            loop {
+                let status = manager.get_plugin_record("p3-stale").await.unwrap().status;
+                if matches!(status, PluginStatus::Error(_)) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("mount #2's watcher wrote its answer");
+
+        // The late answer for the disposed mount. Its receiver is gone when
+        // the watcher ended with its mount, so the send may fail — that IS
+        // the outcome under test.
+        let _ = first.send(Ok(()));
+        tokio::time::timeout(wait, manager.activation_settled())
+            .await
+            .expect("every watcher finished");
+        match manager.get_plugin_record("p3-stale").await.unwrap().status {
+            PluginStatus::Error(e) => assert!(e.contains("the second mount's answer"), "{e}"),
+            other => panic!("mount #1's late answer overwrote mount #2's row: {other:?}"),
+        }
     }
 }

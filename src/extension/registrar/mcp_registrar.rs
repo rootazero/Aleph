@@ -393,10 +393,11 @@ pub type ServerStartReceiver = oneshot::Receiver<Result<(), String>>;
 /// Each add is *enqueued*, not awaited (see
 /// `McpManagerHandle::add_transient_server_detached`). The receivers are
 /// returned to the caller — `lifecycle.rs::watch_server_starts` awaits them
-/// on one task per plugin and logs each outcome; P3 turns that watcher into
-/// the readiness (`Pending`) writer. A failed start is therefore NOT a mount
-/// failure — the same warn-and-continue contract the boot-time sync it
-/// replaced had — but a closed command channel is, because then nothing can
+/// on one task per plugin, logs each outcome and writes the plugin's
+/// readiness from them via `readiness::write_readiness` (`Pending` while a
+/// start is unanswered, `Error` if one failed, else `Loaded`). A failed start
+/// is therefore NOT a mount failure — the plugin stays mounted and its row
+/// says why — but a closed command channel is, because then nothing can
 /// ever start.
 ///
 /// Partial failure is all-or-none at this step's granularity: if the k-th
