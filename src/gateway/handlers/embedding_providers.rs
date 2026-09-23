@@ -16,7 +16,7 @@
 
 use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
 use crate::config::Config;
-use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
@@ -24,6 +24,12 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
+
+/// Topic every embedding-provider config change is published on (a
+/// [`TopicEvent`]; `data` = `{action, provider_id}`). Operator-only on the
+/// event plane: `event_visibility::classify` names it, so the raw-producer
+/// census sees every publish site.
+pub const EMBEDDING_PROVIDERS_CHANGED_TOPIC: &str = "config.embedding.providers.changed";
 
 /// Get preset defaults for an embedding provider based on its preset field.
 /// Returns (`default_api_base`, `default_model`).
@@ -229,11 +235,13 @@ pub async fn handle_add(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.embedding.providers.changed",
-        "action": "added",
-        "provider_id": provider_config.id,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "added",
+            "provider_id": provider_config.id,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -310,11 +318,13 @@ pub async fn handle_update(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.embedding.providers.changed",
-        "action": "updated",
-        "provider_id": params.id,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "updated",
+            "provider_id": params.id,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -385,11 +395,13 @@ pub async fn handle_remove(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.embedding.providers.changed",
-        "action": "removed",
-        "provider_id": params.id,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "removed",
+            "provider_id": params.id,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -458,11 +470,13 @@ pub async fn handle_set_active(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.embedding.providers.changed",
-        "action": "set_active",
-        "provider_id": params.id,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "set_active",
+            "provider_id": params.id,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }

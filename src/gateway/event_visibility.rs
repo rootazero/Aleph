@@ -672,6 +672,20 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         | "agent.lifecycle.bound"
         | "agent.lifecycle.unbound" => SessionIdentity::Global,
 
+        // Provider-registry config changes (`handlers::embedding_providers`,
+        // `handlers::generation_providers`): install-level configuration, so the
+        // audience `EventScopeGuard`'s `config.changed` rule gives that family —
+        // the operator's. That rule's prefix does not reach these two
+        // (`config.embedding.…` does not start with `config.changed`), and they
+        // were hand-built `json!({"topic": …})` envelopes the raw-producer census
+        // could not see, so until r11 they reached every member through the
+        // default arm. A provider belongs to no conversation: `OperatorOnly`,
+        // not a session key.
+        crate::gateway::handlers::embedding_providers::EMBEDDING_PROVIDERS_CHANGED_TOPIC
+        | crate::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC => {
+            SessionIdentity::OperatorOnly
+        }
+
         // The `workspace.` RPC family is admin-gated in `method_admin.rs` so a
         // member cannot enumerate workspaces; broadcasting the ids on the event
         // plane would hand back exactly what that gate withholds. `OperatorOnly`
@@ -1996,9 +2010,9 @@ mod tests {
     ///
     /// Not covered, stated so no one reads this as exhaustive: hand-built
     /// `json!({"topic": …})` envelopes (`publish_team_event` — see
-    /// `no_published_team_topic_suffix_classifies_as_global` — the provider
-    /// handlers' `config.*.providers.changed`, `overflow_warning_frame`), and
-    /// `GatewayEventFrame`s (that is `every_frame_variant_is_classified`).
+    /// `no_published_team_topic_suffix_classifies_as_global` — and
+    /// `overflow_warning_frame`), and `GatewayEventFrame`s (that is
+    /// `every_frame_variant_is_classified`).
     #[test]
     fn every_raw_topic_producer_has_an_explicit_arm() {
         let producers = source_census::all_topic_producers();
@@ -2088,6 +2102,48 @@ mod tests {
                 .await,
             "a keyless artifact ping stays with the operator"
         );
+    }
+
+    /// r11 (C2): the provider-registry config topics are install-level
+    /// configuration — the operator's, as `config.changed` is. They used to be
+    /// hand-built envelopes outside the raw-producer census and fell to
+    /// `Global`, reaching every member. Driven through `event_admits` with the
+    /// payload shape the producers publish.
+    #[tokio::test]
+    async fn provider_config_changes_reach_operators_only() {
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        for (topic, data) in [
+            (
+                crate::gateway::handlers::embedding_providers::EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+                serde_json::json!({ "action": "set_active", "provider_id": "p1" }),
+            ),
+            (
+                crate::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC,
+                serde_json::json!({ "action": "created", "provider": "p1" }),
+            ),
+        ] {
+            assert_eq!(
+                classify(topic, Some(&data)),
+                Some(SessionIdentity::OperatorOnly),
+                "`{topic}` is install-level config and must be named by an \
+                 operator-only arm, not fall to the default"
+            );
+            assert!(
+                !index
+                    .event_admits(topic, Some(&data), Some("bob"), false, &store, None)
+                    .await,
+                "`{topic}` must not reach a member"
+            );
+            assert!(
+                index
+                    .event_admits(topic, Some(&data), Some(OWNER_USER_ID), true, &store, None)
+                    .await,
+                "`{topic}` must still reach the operator"
+            );
+        }
     }
 
     // ── the `team.<id>.*` plane ─────────────────────────────────────────
