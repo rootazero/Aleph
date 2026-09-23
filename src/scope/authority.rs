@@ -136,11 +136,17 @@ impl FireAuthority {
     /// Human-readable reason for a verdict that stops a fire; `None` for
     /// verdicts that let it run. Written verbatim into fire logs / tick
     /// results — a stop that does not say why is fail-dead (判据 §14).
+    ///
+    /// "principal", not "owner": the person checked is the author when one
+    /// is carried, so for a member's work in someone else's room the owner
+    /// is the wrong person to name.
     #[must_use]
     pub fn reason(&self) -> Option<String> {
         match self {
-            Self::Refused(RefusalReason::Deactivated) => Some("owner deactivated".to_string()),
-            Self::Refused(RefusalReason::Gone) => Some("owner gone".to_string()),
+            Self::Refused(RefusalReason::Deactivated) => {
+                Some("principal deactivated".to_string())
+            }
+            Self::Refused(RefusalReason::Gone) => Some("principal gone".to_string()),
             Self::Unknown(err) => Some(format!("authority unknown: {err}")),
             Self::Legacy | Self::Granted(_) => None,
         }
@@ -149,9 +155,15 @@ impl FireAuthority {
 
 /// Resolve against an explicit store. `None` store ⇒ `Legacy` — the
 /// `FailsOpen` contract of `security/users-store`, stated at the slot.
+///
+/// An empty author or owner is read as absent: a malformed
+/// `AUTHOR_USER_KEY` of `""` falls back to the owner instead of being looked
+/// up (and refused as `Gone`), and both empty is `Legacy`.
 #[must_use]
 pub fn resolve_with(users: Option<&SecurityStore>, subject: &FireSubject<'_>) -> FireAuthority {
-    let Some(person) = subject.author.or(subject.owner) else {
+    let author = subject.author.filter(|s| !s.is_empty());
+    let owner = subject.owner.filter(|s| !s.is_empty());
+    let Some(person) = author.or(owner) else {
         return FireAuthority::Legacy;
     };
     let Some(users) = users else {
@@ -235,11 +247,14 @@ mod tests {
 
     #[test]
     fn an_active_admin_stamps_nothing_beyond_the_scope() {
-        let g = granted(resolve_with(
-            Some(&store()),
-            &owned(OWNER_USER_ID, "personal:u-owner"),
-        ));
+        let subject = owned(OWNER_USER_ID, "personal:u-owner");
+        let g = granted(resolve_with(Some(&store()), &subject));
         assert_eq!(g.role_ceiling, None);
+        assert_eq!(
+            g,
+            Granted::legacy(&subject),
+            "ruling C3: an active admin's attribution is exactly the legacy one"
+        );
         let mut m = HashMap::new();
         g.stamp(&mut m);
         let mut keys: Vec<&str> = m.keys().map(String::as_str).collect();
@@ -284,14 +299,14 @@ mod tests {
     fn a_deactivated_person_is_refused() {
         let v = resolve_with(Some(&store()), &owned("u-walled", "personal:u-walled"));
         assert_eq!(v, FireAuthority::Refused(RefusalReason::Deactivated));
-        assert_eq!(v.reason().as_deref(), Some("owner deactivated"));
+        assert_eq!(v.reason().as_deref(), Some("principal deactivated"));
     }
 
     #[test]
     fn a_person_with_no_row_is_refused_as_gone() {
         let v = resolve_with(Some(&store()), &owned("u-ghost", "personal:u-ghost"));
         assert_eq!(v, FireAuthority::Refused(RefusalReason::Gone));
-        assert_eq!(v.reason().as_deref(), Some("owner gone"));
+        assert_eq!(v.reason().as_deref(), Some("principal gone"));
     }
 
     /// R-a: a read error is "I do not know", never "refused".
@@ -341,6 +356,50 @@ mod tests {
             Granted::legacy(&FireSubject::default()).scope,
             None,
             "an unowned subject stamps nothing"
+        );
+        let guest = Granted::legacy(&FireSubject {
+            carried_role: Some("guest"),
+            ..owned("u-alice", "personal:u-alice")
+        });
+        assert_eq!(
+            guest.carried_role.as_deref(),
+            Some("guest"),
+            "legacy must keep the carried role, or carried() publishes an \
+             absent (= operator) role for a guest's work"
+        );
+    }
+
+    /// A malformed empty author is absent, not a person named "": the
+    /// owner is checked instead (and is found), rather than `Gone`.
+    #[test]
+    fn an_empty_author_falls_back_to_the_owner() {
+        let s = store();
+        let subject = FireSubject {
+            author: Some(""),
+            ..owned("u-alice", "personal:u-alice")
+        };
+        let g = granted(resolve_with(Some(&s), &subject));
+        assert_eq!(g.role_ceiling, Some("member"), "u-alice (a member) was checked");
+        let walled = FireSubject {
+            author: Some(""),
+            ..owned("u-walled", "personal:u-walled")
+        };
+        assert_eq!(
+            resolve_with(Some(&s), &walled),
+            FireAuthority::Refused(RefusalReason::Deactivated),
+            "the owner is the person checked when the author is empty"
+        );
+        assert_eq!(
+            resolve_with(
+                Some(&s),
+                &FireSubject {
+                    owner: Some(""),
+                    author: Some(""),
+                    ..FireSubject::default()
+                }
+            ),
+            FireAuthority::Legacy,
+            "both empty: nobody to check"
         );
     }
 
