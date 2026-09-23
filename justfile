@@ -441,16 +441,10 @@ test-desktop-integration:
 # Run all desktop-related tests
 test-desktop-all: test-desktop test-desktop-macos test-desktop-integration
 
-# Run the shared crates' own tests. `cargo test -p alephcore` compiles only
-# alephcore's test targets, never a dependency's `#[cfg(test)]` modules, so the
-# transcript reducer and its guards (shared-ui-logic), aleph-protocol, aleph-tui
-# and aleph-cli are tested here or nowhere. shared-ui-logic runs in both feature
-# shapes: the TUI and the CLI build it with default features off, the Panel on.
-# CI's "Run shared crate tests" step runs the same three commands.
+# Run the shared crates' own tests (what and why: the header of
+# scripts/test-shared.sh, which CI calls too)
 test-shared:
-    cargo test -p shared-ui-logic --no-default-features
-    cargo test -p shared-ui-logic
-    cargo test -p aleph-protocol -p aleph-tui -p aleph-cli
+    bash scripts/test-shared.sh
 
 # Run proptest with high coverage (1024 cases per test)
 test-proptest:
