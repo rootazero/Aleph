@@ -144,6 +144,11 @@ impl SkillSystem {
     /// it, so a disabled plugin's `<root>/skills` would be rescanned for the
     /// life of the process (D-5). `ensure_dir_registered` is the idempotent
     /// single-dir variant.
+    ///
+    /// The merge dedups only against the dirs already held — `existing` is
+    /// snapshotted before the loop — so a caller that passes the same dir
+    /// twice in ONE `dirs` batch gets it twice. Callers that union several
+    /// sources dedup their own batch.
     pub async fn init(&self, dirs: Vec<PathBuf>) {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
@@ -806,10 +811,14 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
 /// spellings are compared — the literal `starts_with` first, then both sides
 /// canonicalised. `SkillSystem::scan_roots` and `get_all_skills_dirs` both
 /// hand out the published dirs verbatim (the published list is their one
-/// plugin source), so the literal comparison is the common case; the
-/// canonical fallback covers a caller that hands a resolved spelling of the
-/// same dir (`/var` vs `/private/var`, a literal `$HOME` vs a canonicalised
-/// root). `None` = no published dir covers `path`.
+/// plugin source), so the literal comparison is the common case. The
+/// canonical branch fires for a caller that arrives with a path of its own
+/// rather than one derived from the published list: today that is
+/// [`SkillSystem::reload_file`], which classifies the exact `SKILL.md` path
+/// its caller wrote (`builtin_tools::skill_manage` — an authoring root
+/// resolved through `ALEPH_HOME` / the project dir, so `/var` vs
+/// `/private/var` or a literal `$HOME` vs a canonicalised root are both
+/// reachable). `None` = no published dir covers `path`.
 fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
     let published = crate::utils::paths::plugin_skill_dirs();
     if published.is_empty() {
