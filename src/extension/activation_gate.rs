@@ -75,15 +75,34 @@ pub enum GatePosture {
     Fatal,
 }
 
+/// Classify a raw `ALEPH_ACTIVATION_GATE` value, trimmed and compared
+/// case-insensitively: `Some(posture)` for the two recognised words,
+/// `None` for anything else — including `None` itself (unset), the empty
+/// string, and a typo (`"Fatel"`, `"1"`, `"yes"`).
+///
+/// Split out from [`posture_from_env`] so recognition is a pure, testable
+/// predicate, separate from what a caller does when it comes back `None`
+/// (the boot call site logs it; this function stays free of I/O so a test
+/// can assert on the classification directly rather than on log output).
+#[must_use]
+pub fn classify_env_value(value: Option<&str>) -> Option<GatePosture> {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("fatal") => Some(GatePosture::Fatal),
+        Some("log") => Some(GatePosture::Log),
+        _ => None,
+    }
+}
+
 /// `ALEPH_ACTIVATION_GATE`: only the word `fatal` (any case) is fatal;
 /// anything else, including a typo, is `Log` — a misspelling must not be
-/// able to kill a daemon.
+/// able to kill a daemon. An unrecognised value (as opposed to unset or
+/// the word `log`) is logged by the caller — see the boot call site in
+/// `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`, which
+/// calls [`classify_env_value`] itself to tell "unset"/"log" apart from a
+/// typo before falling back to this function's default.
 #[must_use]
 pub fn posture_from_env(value: Option<&str>) -> GatePosture {
-    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-        Some("fatal") => GatePosture::Fatal,
-        _ => GatePosture::Log,
-    }
+    classify_env_value(value).unwrap_or(GatePosture::Log)
 }
 
 #[cfg(test)]
@@ -160,5 +179,33 @@ mod tests {
         // become "log": it is logged as unrecognised by the caller; here it
         // maps to Log so a typo cannot kill a daemon.
         assert!(matches!(posture_from_env(Some("yes")), GatePosture::Log));
+    }
+
+    /// `posture_from_env`'s default (previous test) hides WHETHER a value
+    /// was recognised behind the single `Log` result it shares with "unset"
+    /// and the word `log` itself — the caller needs to tell those apart to
+    /// log an unrecognised value instead of swallowing it silently.
+    /// `classify_env_value` is the pure predicate that makes that
+    /// distinguishable and testable without capturing log output.
+    #[test]
+    fn classify_env_value_tells_unrecognised_apart_from_unset_and_log() {
+        assert_eq!(classify_env_value(None), None);
+        assert_eq!(classify_env_value(Some("log")), Some(GatePosture::Log));
+        assert_eq!(classify_env_value(Some("LOG")), Some(GatePosture::Log));
+        assert_eq!(classify_env_value(Some("fatal")), Some(GatePosture::Fatal));
+        assert_eq!(
+            classify_env_value(Some(" Fatal  ")),
+            Some(GatePosture::Fatal)
+        );
+        // The unrecognised arm: a typo, a stray truthy-looking value, and
+        // the empty string are all `None` — never coerced into either
+        // recognised posture.
+        for bogus in ["Fatel", "1", "yes", "true", ""] {
+            assert_eq!(
+                classify_env_value(Some(bogus)),
+                None,
+                "{bogus:?} must classify as unrecognised, not silently default"
+            );
+        }
     }
 }

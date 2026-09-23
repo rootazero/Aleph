@@ -638,7 +638,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let gate_manager = std::sync::Arc::clone(ext_manager);
                 tokio::spawn(async move {
                     use alephcore::extension::activation_gate::{
-                        assess, posture_from_env, GatePosture,
+                        assess, classify_env_value, GatePosture,
                     };
                     gate_manager.activation_settled().await;
                     let gate_registry = gate_manager.get_plugin_registry().await;
@@ -647,8 +647,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         tracing::info!("activation gate: every plugin reached a terminal status");
                         return;
                     }
-                    let posture =
-                        posture_from_env(std::env::var("ALEPH_ACTIVATION_GATE").ok().as_deref());
+                    // `classify_env_value` returns `None` for BOTH "unset" and
+                    // "set to something we don't recognise" — the two must not
+                    // be silently conflated (a typo like `Fatel` must not look
+                    // identical to never having set the variable at all), so
+                    // the raw value is inspected here and a typo gets a warn!
+                    // naming it before the same `Log` default takes over.
+                    let raw_gate_env = std::env::var("ALEPH_ACTIVATION_GATE").ok();
+                    let posture = classify_env_value(raw_gate_env.as_deref()).unwrap_or_else(|| {
+                        if let Some(v) = raw_gate_env.as_deref() {
+                            tracing::warn!(
+                                value = %v,
+                                "ALEPH_ACTIVATION_GATE: unrecognised value (expected `log` or `fatal`), defaulting to log"
+                            );
+                        }
+                        GatePosture::Log
+                    });
                     for line in report.render_lines() {
                         match posture {
                             GatePosture::Log => {

@@ -195,9 +195,10 @@ mod tests {
     /// `None`) `inspect_args()`'s tests use — rather than a literal restated
     /// by hand. A literal needed a manual edit, in the SAME commit, every time
     /// a check was added to either half of the sum it names (`default_
-    /// registry()`, or one of the four `with_*` calls `build_engine()` always
+    /// registry()`, or one of the five `with_*` calls `build_engine()` always
     /// chains: `ext/idle-extensions`, `core/capability-wiring`, `core/
-    /// projection-holes`, `core/session-log`); it went red for a reason
+    /// projection-holes`, `core/session-log`, `extension/plugins-activated`);
+    /// it went red for a reason
     /// unrelated to what these tests check the moment either side moved and
     /// the literal did not move with it — twice, once per side, before this
     /// derivation (a Task 7 fix-round regression: `browser/chromium-missing`
@@ -209,7 +210,7 @@ mod tests {
     /// something else, coincidentally the same size, appeared". Identity is
     /// asserted directly instead, by
     /// [`the_daemon_path_still_reports_capability_wiring`] and
-    /// [`the_daemon_path_still_reports_the_two_log_backed_checks`]; this
+    /// [`the_daemon_path_still_reports_the_three_handle_backed_checks`]; this
     /// function only holds the total, so that a check dropping out of the
     /// battery is still a red — the derivation removes the "did I remember to
     /// bump the literal" failure mode, not the identity gap those two cover.
