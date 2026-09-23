@@ -1585,10 +1585,12 @@ mod tests {
             stream: AgentTraceTextKind::Final,
             text: "Fixed.".into(),
         };
-        db.insert_trace(&TaskTrace::new("run-reason", 0, reasoning.clone()))
+        // Production order: the harness emits `TextEmitted{Final}` first and
+        // `ReasoningEmitted` second for the same iteration.
+        db.insert_trace(&TaskTrace::new("run-reason", 0, final_text.clone()))
             .await
             .unwrap();
-        db.insert_trace(&TaskTrace::new("run-reason", 1, final_text.clone()))
+        db.insert_trace(&TaskTrace::new("run-reason", 1, reasoning.clone()))
             .await
             .unwrap();
 
@@ -1621,10 +1623,10 @@ mod tests {
         assert_eq!(events.len(), 2, "{events:?}");
         // The kind tags come from the shared crate, not a local literal: the
         // client decodes with that crate, so that is the spelling that counts.
-        assert_eq!(events[0]["kind"], reasoning.kind());
-        assert_eq!(events[0]["iteration"], 1);
-        assert_eq!(events[0]["text"], "Checking the timezone handling first.");
-        assert_eq!(events[1]["kind"], final_text.kind());
+        assert_eq!(events[0]["kind"], final_text.kind());
+        assert_eq!(events[1]["kind"], reasoning.kind());
+        assert_eq!(events[1]["iteration"], 1);
+        assert_eq!(events[1]["text"], "Checking the timezone handling first.");
     }
 
     /// End to end on an unattended run: a PEM-bearing thinking block goes

@@ -295,10 +295,11 @@ impl AppState {
                     self.append_assistant_content(fresh);
                 }
             },
-            // Phase S: the per-iteration reasoning record. The live deltas
-            // already reached the transcript through `StreamEvent::Reasoning`;
-            // until Phase T folds steps, the authoritative copy is ignored
-            // here rather than appended twice.
+            // Phase S: the per-iteration reasoning record, ignored here until
+            // Phase T folds steps. On a streamed live turn the deltas already
+            // reached the transcript through `StreamEvent::Reasoning`, so this
+            // avoids appending them twice; a replay (`load_trace_replay`) and a
+            // non-streamed turn show no thinking at all until Phase T.
             AgentTraceEvent::ReasoningEmitted { .. } => {}
             // ToolSummary carries an agent-authored summary sentence — use it
             // verbatim instead of the "Tool summary: " decorated form.

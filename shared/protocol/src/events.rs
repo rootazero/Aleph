@@ -468,13 +468,16 @@ pub enum AgentTraceEvent {
         stream: AgentTraceTextKind,
         text: String,
     },
-    /// The model's thinking for one Think iteration, authoritative and whole
+    /// The model's thinking for a Think iteration, authoritative and whole
     /// (the provider's summarized reasoning where the provider summarizes;
-    /// raw chain-of-thought otherwise — the wire cannot tell). Emitted beside
-    /// `TextEmitted{Final}` by the same two producers, only when the block is
-    /// non-empty. Live thinking still streams as `StreamEvent::Reasoning`
-    /// deltas; this is the per-iteration record a replay reconstructs a
-    /// folded step from. Absent on runs recorded before 2026-09-23.
+    /// raw chain-of-thought otherwise — the wire cannot tell). Only a
+    /// non-blank block is recorded. Normally one record per iteration: emitted
+    /// after `TextEmitted{Final}` when the turn has text, and alone on a
+    /// tool-only turn. The verifier-halt salvage turn may add a second record
+    /// on the SAME iteration, so consumers append, never replace. Live
+    /// thinking still streams as `StreamEvent::Reasoning` deltas; this is the
+    /// record a replay reconstructs a folded step from. Absent on runs
+    /// recorded before 2026-09-23.
     ReasoningEmitted {
         iteration: usize,
         text: String,
@@ -1159,6 +1162,7 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"kind\":\"reasoning_emitted\""), "{json}");
         assert!(json.contains("\"iteration\":4"), "{json}");
+        assert!(json.contains("\"text\":"), "{json}");
         let back: AgentTraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);
     }

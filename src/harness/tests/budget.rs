@@ -690,19 +690,16 @@ const BUDGETED: [&str; 12] = [
 ///     producers (the Think turn and the boundary grace turn). It records a
 ///     response's non-empty thinking block under the loop's iteration counter.
 ///
-///     Three questions: (1) **why not outside `src/harness/`** — which
-///     iteration a thinking block belongs to is a fact only the loop's own
-///     counter holds, and the producers are the two `TextEmitted{Final}` sites
-///     that already live here; a sink downstream sees events, not iterations,
-///     and a Skill/MCP is not in the loop at all. (2) **which of the 5 "don'ts"**
-///     — none is touched: it copies the provider's block verbatim, judges no
-///     intent, filters no tool, decides no completion, scores no content and
-///     picks no recovery (masking stays in the gateway's
-///     `UnattendedRedactingSink`). (3) **consumers** — today the `task_traces`
-///     persistence leaf (replayed by `trace.by_runs`) and the run's flow-channel
-///     drain, which receives it through `AgentTraceEmitSink::is_step_event` and
-///     publishes it as `agent_trace`; next, Phase S Task 9's shared step reducer
-///     folds it into a step's thinking. Nothing was deleted to absorb it.
+///     Three questions: (1) **scaffolding** — it copies the provider's block
+///     verbatim under the loop's counter and judges nothing (masking stays in
+///     the gateway's `UnattendedRedactingSink`). (2) **yes** — which iteration
+///     a thinking block belongs to is a runtime fact of the loop, not a
+///     capability a stronger model absorbs. (3) **consumers today** — the
+///     Panel Agent Trace replay view (`agent_trace_model.rs`) and CLI
+///     `aleph trace get`, both through the shared presentation arm; next,
+///     Phase S Task 9's shared step reducer. Nothing was deleted to absorb it.
+///     (Corrected in the review follow-up: the first version of this entry
+///     answered a different three questions and left (2) unanswered.)
 const CEILING: usize = 5266;
 
 fn repo_root() -> PathBuf {

@@ -28,8 +28,8 @@ pub enum LoopTraceEvent {
         stream: LoopTraceTextKind,
         text: String,
     },
-    /// The model's whole thinking block for this iteration (see the
-    /// protocol twin's doc). Emitted only when non-empty.
+    /// A response's whole non-blank thinking block, keyed by iteration; one
+    /// iteration may hold two (see the protocol twin's doc for the contract).
     ReasoningEmitted { iteration: usize, text: String },
     /// Tool call started
     ToolCallStarted {

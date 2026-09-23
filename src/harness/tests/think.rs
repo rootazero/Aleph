@@ -376,8 +376,9 @@ async fn a_think_turn_with_thinking_emits_one_reasoning_record() {
     );
 }
 
-/// `Some("")` — a provider that sends an empty thinking block — must not
-/// produce a record that would later render as "Thought for 0s".
+/// A blank thinking block — whitespace only, which also covers `Some("")` —
+/// must not produce a record that would later render as "Thought for 0s".
+/// Same notion of blank as `is_empty_response` (`trim()`).
 #[tokio::test]
 async fn an_empty_thinking_block_emits_no_reasoning_event() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
@@ -385,7 +386,7 @@ async fn an_empty_thinking_block_emits_no_reasoning_event() {
     let provider = Arc::new(FixedProvider {
         response: ProviderResponse {
             text: Some("hi".into()),
-            thinking: Some(String::new()),
+            thinking: Some(" \n\n ".into()),
             ..Default::default()
         },
     });
@@ -428,6 +429,82 @@ async fn an_empty_thinking_block_emits_no_reasoning_event() {
             .iter()
             .any(|e| matches!(e, LoopTraceEvent::ReasoningEmitted { .. })),
         "an empty thinking block must not be recorded: {events:?}"
+    );
+}
+
+/// A tool-only turn (tool calls, no text) still records its thinking: the
+/// dominant step shape the fold is built for. Red if the emit moves inside
+/// the `if !text.is_empty()` block that guards `TextEmitted{Final}`.
+#[tokio::test]
+async fn a_tool_only_turn_with_thinking_still_records_its_reasoning() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let (sink, recorded) = super::stability::RecordingTraceSink::new();
+    let provider = Arc::new(FixedProvider {
+        response: ProviderResponse {
+            text: None,
+            thinking: Some("List the directory before editing.".into()),
+            tool_calls: vec![NativeToolCall {
+                thought_signature: None,
+                id: "call-1".to_string(),
+                name: "echo".to_string(),
+                arguments: serde_json::json!({}),
+            }],
+            ..Default::default()
+        },
+    });
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(EmptyTools),
+        llm: provider,
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let _state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    let events = recorded.lock().unwrap_or_else(|e| e.into_inner());
+    // Precondition: the turn really had no text, so no TextEmitted fired.
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::TextEmitted { .. })),
+        "the fixture must be a tool-only turn: {events:?}"
+    );
+    let reasoning: Vec<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            LoopTraceEvent::ReasoningEmitted { iteration, text } => {
+                Some((*iteration, text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning,
+        vec![(1, "List the directory before editing.".to_string())],
+        "a tool-only turn records exactly one reasoning record, on iteration 1: {events:?}"
     );
 }
 

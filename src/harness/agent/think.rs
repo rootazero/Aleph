@@ -290,10 +290,10 @@ impl AgentHarness {
         self.accumulate_token_breakdown(&response.usage);
     }
 
-    /// Record a response's thinking block for `iteration`, beside its
-    /// `TextEmitted{Final}` (both producers call this). Empty records nothing.
+    /// Record a response's thinking block for `iteration`, after its text if
+    /// any (both `TextEmitted{Final}` producers call this). Blank records nothing.
     fn emit_reasoning(&self, iteration: usize, thinking: Option<&str>) {
-        if let Some(text) = thinking.filter(|t| !t.is_empty()) {
+        if let Some(text) = thinking.filter(|t| !t.trim().is_empty()) {
             self.emit(|| crate::harness::trace::LoopTraceEvent::ReasoningEmitted {
                 iteration,
                 text: text.to_string(),
