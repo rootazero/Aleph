@@ -3336,18 +3336,13 @@ attribution, and a bound workspace as the room's default cwd.
      claim, and only as honest as `list_sessions` is complete. Both backends
      can under-report, and they do it differently:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
-       shipped default is `"file"`, see
-       `config::types::general::default_session_store_backend`, dispatched in
-       `bin/aleph-server/commands/start/helpers.rs::initialize_session_store`)**
-       — `session_manager::ops::query::list_sessions` collects with
-       `rows.filter_map(|r| r.ok())`. A row whose column mapping fails is
-       dropped in **complete silence**, so one damaged `sessions` row yields
-       `NothingToMove`. **Deliberately not fixed in round-9**: it is
-       pre-existing, has other callers, and re-classifying it is its own
-       task. **More severe in kind** -- it drops the row with no diagnostic at
-       all, where the file backend at least warned on one arm -- but
-       **smaller in blast radius, because it is opt-in**. Round-9 fixed the
-       half a stock install actually runs.
+       shipped default is `"file"`)** — **closed in round-11 (D1)**.
+       `session_manager::ops::query::collect_rows` fails `list_sessions` /
+       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
+       (`search_messages`, `get_session_preview`) use the lossy
+       `collect_rows_lossy`, which drops and counts, loudly. Pinned by
+       `a_damaged_sqlite_row_reports_unknown_not_nothing_to_move`.
      - **File backend** — the same class, now loud on both arms. An
        unparseable `metadata.json` was already skipped with a named `warn!`;
        an **unreadable** one was skipped in silence six lines above that
