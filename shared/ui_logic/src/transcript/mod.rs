@@ -25,9 +25,11 @@ pub use summarize::{
 };
 
 mod group;
+mod reducer;
 mod step;
 mod view_model;
 pub use group::{group_entries, group_tool_rows, MAX_GAP_TEXT, MIN_GROUP};
+pub use reducer::{trace_result_to_wire, Change, Transcript};
 pub use step::{
     first_sentence, step_headline, step_tally, Headline, HeadlineSource, Note, NoteKind, StepEntry,
     StepStatus, StepTool, ThinkingBlock, HEADLINE_MAX_COLS,

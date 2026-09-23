@@ -10,39 +10,11 @@ use aleph_protocol::{
     AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind, AgentTraceToolResult,
 };
 
-use super::{Action, AppState, Focus, RowBody, ToolRow, TranscriptEntry};
+// One definition, two consumers: the shared reducer settles its rows through
+// the same join (判据 §1).
+use shared_ui_logic::transcript::trace_result_to_wire;
 
-/// One trace tool-end, as the wire result shape the view model consumes.
-///
-/// The trace event splits what the wire keeps together: the outcome is in
-/// `AgentTraceToolResult`, the `presentation` side-channel is on
-/// `AgentTraceToolCallEnd` beside it. Joining them here — rather than at each
-/// call site — is what stops the diff from being dropped on this path while
-/// the live `tool_end` path carries it (判据 §9: one verb, two faces, one
-/// derivation).
-fn trace_result_to_wire(
-    result: &AgentTraceToolResult,
-    presentation: Option<&aleph_protocol::file_change::Presentation>,
-) -> aleph_protocol::ToolResult {
-    let (success, output, error) = match result {
-        AgentTraceToolResult::Success { output } => (
-            true,
-            match output {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Null => None,
-                other => Some(other.to_string()),
-            },
-            None,
-        ),
-        AgentTraceToolResult::Error { error, .. } => (false, None, Some(error.clone())),
-    };
-    aleph_protocol::ToolResult {
-        success,
-        output,
-        error,
-        presentation: presentation.cloned(),
-    }
-}
+use super::{Action, AppState, Focus, RowBody, ToolRow, TranscriptEntry};
 
 impl AppState {
     /// Append to the trailing reasoning entry, or start one.

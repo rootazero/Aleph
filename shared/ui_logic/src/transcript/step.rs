@@ -13,8 +13,11 @@ use super::view_model::{ToolGroup, ToolRow, TurnSummaryEntry};
 pub const HEADLINE_MAX_COLS: u16 = 80;
 
 /// The provider's thinking for one iteration. `streaming` is true while
-/// `Reasoning` deltas are still arriving; the authoritative
-/// `ReasoningEmitted` record replaces the text and clears it.
+/// `Reasoning` deltas are still arriving. Each authoritative
+/// `ReasoningEmitted` record replaces the deltas streamed since the previous
+/// record, is appended after any earlier record of the same iteration
+/// (blank-line joined, arrival order — the verifier-halt salvage path emits
+/// a second one), and clears `streaming`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThinkingBlock {
     pub text: String,
