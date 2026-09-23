@@ -1361,14 +1361,12 @@ child's harness `trace_sink` exclusively for background subagents. It:
 
 A child's harness events never reach the parent run's `agent_trace` frames or
 the parent's persisted trace: `src/gateway/execution_engine/run_trace_sinks.rs`
-builds a separate child chain and hands it to both spawn paths. The one
-exception is accounting — a child's `MeteringProvider`s (`ProviderUsage` /
-`CacheHealthDegraded`) emit into the parent run's own chain, so subagent spend
-is persisted under the parent's task for `teams.usage` and the doctor's cache
-checks. It reaches the live wire only while the parent run's strong senders are
-alive; a background child's later usage is persisted only, because the emit
-sink's weak sender no longer upgrades
-([spec §5.4](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md)).
+builds a separate child chain and hands it to both spawn paths. A child gets
+sinks only through `SubagentTool::with_child_sinks` (`pub(crate)`), whose
+`ChildTraceSinks` only `RunTraceSinks` mints, so no other caller can hand a
+child's loop the parent's chain. The one exception is accounting — see
+`accounting_sink` under HarnessDeps inheritance above (the owner of the whole
+split is `run_trace_sinks.rs`'s module doc).
 
 Other LoopTraceEvent variants pass through untranslated. Adding new translation
 cases does not require harness changes.
@@ -1835,19 +1833,26 @@ The `MeteringProvider` decorator (`src/providers/metering.rs`) wraps every
 LLM-facing `Arc<dyn AiProvider>` and emits a `LoopTraceEvent::ProviderUsage`
 event after each `process()` call. The event carries:
 
-- `agent_id` — `"root"` for the top-level harness, or the subagent's
-  `agent_def.id` when emitted from within a spawned subagent
+- `agent_id` — the label the decorator was built with: the run's own agent
+  (`spec.agent`) for the top-level harness, the subagent's `agent_def.id` in a
+  spawned subagent, `compactor:<agent>` for the cheap compaction provider, and
+  `moa:<i>:<provider>:<model>` for a MoA advisor
 - `input_tokens` / `output_tokens` — total tokens charged
 - `cache_read_tokens` / `cache_creation_tokens` — Anthropic prompt-cache
   fields (other providers leave these `None` until they extend their
   protocols)
 - `thinking_tokens` — Gemini extended-thinking tokens (where applicable)
 
-The decorator is wrapped at exactly two sites:
+The decorator is wrapped in these modules (census:
+`rg "MeteringProvider::new\("` outside test modules):
 
-- `src/bin/aleph-server/commands/start/orchestrator_init.rs` — root
-  provider, label `"root"`
-- `src/agents/subagent_spawner.rs` — per-spawn, label `req.agent_def.id`
+- `src/orchestrator/harness_bridge/runner_impl.rs` — the run's turn provider,
+  its side-channel provider when MoA is armed, and the cheap compaction
+  provider when one is configured, all on the run's trace sink
+- `src/agents/subagent_spawner/mod.rs` — per spawn (label
+  `req.agent_def.id`) and the child's cheap compaction provider, both on the
+  parent run's accounting sink
+- `src/providers/moa/provider.rs` — one per MoA advisor
 
 This gives every consumer of the trace stream (gateway, log sink, future
 cost dashboard) the data needed to compute root vs subagent cache-hit
