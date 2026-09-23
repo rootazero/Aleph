@@ -718,15 +718,6 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new structured agent trace event
-    pub fn agent_trace(run_id: impl Into<String>, seq: u64, event: AgentTraceEvent) -> Self {
-        Self::AgentTrace {
-            run_id: run_id.into(),
-            seq,
-            event,
-        }
-    }
-
     /// Get the `run_id` from any event variant
     #[must_use]
     pub fn run_id(&self) -> &str {
@@ -1186,10 +1177,10 @@ mod tests {
 
     #[test]
     fn test_agent_trace_serialization() {
-        let event = StreamEvent::agent_trace(
-            "run-123",
-            2,
-            AgentTraceEvent::ToolCallCompleted {
+        let event = StreamEvent::AgentTrace {
+            run_id: "run-123".to_string(),
+            seq: 2,
+            event: AgentTraceEvent::ToolCallCompleted {
                 iteration: 3,
                 call: AgentTraceToolCallEnd {
                     tool_id: "tool-1".to_string(),
@@ -1202,12 +1193,19 @@ mod tests {
                     output: serde_json::json!({"ok": true}),
                 },
             },
-        );
+        };
 
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("agent_trace"));
-        assert!(json.contains("tool_call_completed"));
-        assert!(json.contains("read_file"));
+        // The frame's envelope keys and the inner `kind` tag are the wire contract.
+        let value = serde_json::to_value(&event).unwrap();
+        let envelope = value.as_object().unwrap();
+        let mut keys: Vec<&str> = envelope.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["event", "run_id", "seq", "type"]);
+        assert_eq!(value["type"], "agent_trace");
+        assert_eq!(value["run_id"], "run-123");
+        assert_eq!(value["seq"], 2);
+        assert_eq!(value["event"]["kind"], "tool_call_completed");
+        assert_eq!(value["event"]["call"]["tool_name"], "read_file");
     }
 
     #[test]
