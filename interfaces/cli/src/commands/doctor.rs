@@ -407,14 +407,14 @@ fn check_cli_binary() -> DoctorCheck {
         Ok(exe) => DoctorCheck::ok(
             "system",
             "aleph-cli",
-            "Path of the running aleph binary",
+            "Path of the running CLI binary",
             true,
             format!("{} (v{})", exe.display(), env!("ALEPH_VERSION")),
         ),
         Err(e) => DoctorCheck::fail(
             "system",
             "aleph-cli",
-            "Path of the running aleph binary",
+            "Path of the running CLI binary",
             true,
             format!("current_exe() failed: {e}"),
         ),

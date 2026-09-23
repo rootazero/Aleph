@@ -1,4 +1,5 @@
-// Build script for the `aleph` CLI binary.
+// Build script for the CLI package (the `al` and `aleph` binaries and the
+// library they both wrap).
 //
 // `aleph-cli` deliberately does NOT depend on `alephcore` (it is a reference
 // client), so it cannot inherit `ALEPH_VERSION` from the core build script.

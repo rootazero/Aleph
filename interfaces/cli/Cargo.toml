@@ -13,6 +13,13 @@ keywords = ["aleph", "cli", "assistant", "automation"]
 # It serves as a reference implementation showing how to build
 # a client using only the protocol types.
 
+# Two names for one program: `al` is the primary command, `aleph` the long
+# name. Both are one-line shims over `aleph_cli::main` (src/lib.rs), so they
+# cannot drift; `cargo install --path interfaces/cli` installs both.
+[[bin]]
+name = "al"
+path = "src/bin/al.rs"
+
 [[bin]]
 name = "aleph"
 path = "src/main.rs"
