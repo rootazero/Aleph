@@ -26,7 +26,7 @@ mod tool_rows;
 use aleph_protocol::trace_presentation::{
     present_agent_trace_event_with_preset, AgentTracePresentationPreset,
 };
-use aleph_protocol::{AgentTraceEvent, StreamEvent};
+use aleph_protocol::{AgentTraceEvent, AgentTraceSessionOutcome, StreamEvent};
 
 use super::step::{NoteKind, StepStatus};
 use super::view_model::{TranscriptEntry, TuiAttachment};
@@ -71,6 +71,11 @@ struct RunState {
     text: RecordCursor,
     /// `TurnStarted` frames seen — compared with `RunSummary.loops`.
     steps_seen: u32,
+    /// Whether any step of THIS run holds a `TextEmitted` record. Run-scoped
+    /// (never cleared by `reset_step_state`): it gates the final-text fill,
+    /// which must not repeat an answer an earlier step already shows
+    /// (ruling T910-N1b).
+    text_recorded: bool,
     /// Replay leg only: whether a `SessionCompleted` row arrived, and its
     /// wall clock. `finish_replay` reads both; the live leg ends on
     /// `RunComplete` instead.
@@ -277,9 +282,43 @@ impl Transcript {
                 Some(text) => vec![self.push_notice(text)],
                 None => Vec::new(),
             },
-            AgentTraceEvent::SessionCompleted { final_text, .. } => {
-                self.record_final_text(final_text.as_deref(), now_ms)
-            }
+            // Reached on the replay leg only: the live sink never publishes
+            // this event (`is_step_event`). It fills only for an outcome whose
+            // LIVE run end is established to carry the same final text
+            // (ruling T910-NEW1), traced per variant by reading the server:
+            //
+            // - `Completed` / `HitLimit`: `src/harness/agent.rs` breaks
+            //   `Ok(..)` and emits this event on the `Ok` arm;
+            //   `src/orchestrator/harness_bridge/runner_impl.rs` then
+            //   broadcasts `Complete` (`on_complete_with_outcome`) with the
+            //   run-bounded final-text scan, and
+            //   `src/gateway/execution_engine/helpers.rs` forwards it as the
+            //   `RunComplete` whose `final_response` the live leg fills
+            //   from. FILLS.
+            // - `Failed` (any `HarnessError` but `Cancelled`, agent.rs `Err`
+            //   arm): runner_impl broadcasts `Complete` on both arms, but
+            //   helpers.rs then sends one of three things: the held real
+            //   `RunComplete`; nothing (`may_retry` + transient: superseded
+            //   by the retry); or the synthetic `pre_outcome_summary`
+            //   `RunComplete` whose `final_response` is the error receipt.
+            //   `execution_engine/execute.rs` follows with `RunError`. The
+            //   live final text is not established. EXCLUDED.
+            // - `Cancelled` (`HarnessError::Cancelled`): the helpers.rs drain
+            //   returns before `Complete` when it sees the cancel token first,
+            //   so the live terminal is the real frame or the synthetic
+            //   receipt by race. Not established. EXCLUDED.
+            AgentTraceEvent::SessionCompleted {
+                outcome,
+                final_text,
+                ..
+            } => match outcome {
+                AgentTraceSessionOutcome::Completed | AgentTraceSessionOutcome::HitLimit => {
+                    self.record_final_text(final_text.as_deref(), now_ms)
+                }
+                AgentTraceSessionOutcome::Failed | AgentTraceSessionOutcome::Cancelled => {
+                    Vec::new()
+                }
+            },
             // `ProviderUsage` too may come from a child's metering: accounting,
             // not a step.
             AgentTraceEvent::TurnStateEntered { .. }

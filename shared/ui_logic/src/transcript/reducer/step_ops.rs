@@ -15,10 +15,12 @@ const RECORD_JOIN: &str = "\n\n";
 /// sources: streamed deltas, and the authoritative records the trace later
 /// writes for them (`ReasoningEmitted`, `TextEmitted`). A record replaces
 /// every delta streamed since the previous record and is appended after any
-/// earlier record of the same step — so the live leg converges to exactly
-/// what the replay leg (records only) shows, whatever the deltas were.
-/// Text deltas no record covers are provisional: a live run's end keeps
+/// earlier record of the same step. For TEXT the live leg converges to
+/// exactly what the replay leg (records only) shows, whatever the deltas
+/// were: deltas no record covers are provisional and a live run's end keeps
 /// only the recorded text (`settle_provisional_text`, ruling T910-N1).
+/// Thinking deltas no `ReasoningEmitted` covers are not settled that way —
+/// they stay on the live leg only, which replay cannot show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct RecordCursor {
     /// Bytes at the head of the field that came from records.
@@ -297,25 +299,27 @@ impl Transcript {
     /// The run's final text (`SessionCompleted.final_text`, or
     /// `RunSummary.final_response` live) is the server's record of the answer.
     /// It becomes the open step's text — replacing any uncovered deltas —
-    /// when that step holds no `TextEmitted` record; otherwise the record
-    /// already there wins. Empty or absent: nothing.
+    /// only when this run holds no text record (ruling T910-N1b): once any
+    /// step recorded text, the server's final text repeats something already
+    /// shown, and repeating it would label a step with text it never
+    /// produced. Empty or absent: nothing.
     pub(super) fn record_final_text(
         &mut self,
         final_text: Option<&str>,
         now_ms: Option<u64>,
     ) -> Vec<Change> {
-        let has_record = self.run.as_ref().is_some_and(|r| r.text.record_len > 0);
+        let text_recorded = self.run.as_ref().is_some_and(|r| r.text_recorded);
         match final_text.filter(|t| !t.trim().is_empty()) {
-            Some(t) if !has_record => self.record_text(t.trim_end(), now_ms),
+            Some(t) if !text_recorded => self.record_text(t.trim_end(), now_ms),
             _ => Vec::new(),
         }
     }
 
     /// Ruling T910-N1, at a live run's end: streamed text no record covers
-    /// is provisional. The open step keeps only its recorded text; a step
-    /// with no text record takes the run's final text when there is one
-    /// (`record_final_text`), else keeps none — exactly what replay (records
-    /// only) shows.
+    /// is provisional. The open step keeps only its recorded text; when this
+    /// run holds no text record, the open step takes the run's final text if
+    /// there is one (`record_final_text`), else keeps none — exactly what
+    /// replay (records only) shows.
     pub(super) fn settle_provisional_text(
         &mut self,
         final_text: Option<&str>,
@@ -368,6 +372,7 @@ impl Transcript {
                     record_len: kept_len,
                     streamed: false,
                 };
+                r.text_recorded = true;
             }
         }
         changes
