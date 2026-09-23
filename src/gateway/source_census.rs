@@ -20,6 +20,14 @@
 //! top-level comma: an earlier scraper required the quote to sit right after
 //! the paren and saw 2 of the 4 topics once rustfmt wrapped the call.
 //!
+//! A first argument that is neither a literal nor a resolvable `&str`
+//! constant comes back as `topic: None` — "this scan cannot say", never "no
+//! topic". Each such producer is registered in [`COMPOSED_TOPICS`] with the
+//! reason and a function that derives its topics from the code that owns
+//! them, so `event_visibility`'s classification census still checks them; an
+//! unregistered one is reported there as unresolved (red), and a row that no
+//! longer matches a producer is red in this module's own self-check.
+//!
 //! It sees `TopicEvent::new` producers only: an envelope built by hand as
 //! `json!({"topic": …})` is out of its view, stated so no one reads this
 //! census as exhaustive.
@@ -38,19 +46,6 @@ use std::path::Path;
 use crate::utils::source_scan::{
     code_keeping_literals, production_text, rust_sources_under, strip_visibility,
 };
-
-/// Every topic literal in a `TopicEvent::new("…", …)` call in `src`.
-///
-/// The literal-only view of [`topic_event_first_args`] — one scanner, so the
-/// two cannot disagree about where an argument ends. Pass
-/// [`production_prefix`] output, not the raw file.
-pub(crate) fn topic_event_literals(src: &str) -> Vec<String> {
-    topic_event_first_args(src)
-        .iter()
-        .filter_map(|arg| literal_payload(arg))
-        .map(str::to_string)
-        .collect()
-}
 
 /// One `TopicEvent::new(<topic>, …)` call in the production half of a file
 /// under `src/`.
@@ -97,6 +92,53 @@ pub(crate) fn all_topic_producers() -> Vec<TopicProducer> {
         }
     }
     out
+}
+
+/// A `TopicEvent::new` whose first argument no scan can turn into a string,
+/// registered with WHY and with where its topics come from instead — so the
+/// classification census still checks them. Keyed by `(file, expr)`;
+/// `every_composed_topic_row_still_describes_a_producer` keeps every row
+/// matching a live producer.
+pub(crate) struct ComposedTopic {
+    pub(crate) file: &'static str,
+    pub(crate) expr: &'static str,
+    pub(crate) reason: &'static str,
+    /// The topics this producer can publish, derived from the code that owns
+    /// them — not listed here.
+    pub(crate) topics: fn() -> Vec<String>,
+}
+
+pub(crate) const COMPOSED_TOPICS: &[ComposedTopic] = &[
+    ComposedTopic {
+        file: "src/gateway/agent_lifecycle.rs",
+        expr: "self.topic()",
+        reason: "AgentLifecycleEvent::publish — the topic is the variant's own topic()",
+        topics: agent_lifecycle_topics,
+    },
+    ComposedTopic {
+        file: "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs",
+        expr: "lifecycle_event.topic()",
+        reason: "boot-time `Registered` publish; hand-rolls the TopicEvent wrap \
+                 AgentLifecycleEvent::publish already owns",
+        topics: agent_lifecycle_topics,
+    },
+];
+
+/// The row for `producer`, if it is a registered composed producer.
+pub(crate) fn composed_topic_for(producer: &TopicProducer) -> Option<&'static ComposedTopic> {
+    COMPOSED_TOPICS
+        .iter()
+        .find(|row| row.file == producer.file && row.expr == producer.expr)
+}
+
+/// Every string literal in `AgentLifecycleEvent::topic`'s body — the match
+/// that decides each variant's topic, read rather than restated.
+fn agent_lifecycle_topics() -> Vec<String> {
+    const FILE: &str = "src/gateway/agent_lifecycle.rs";
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(FILE))
+        .unwrap_or_else(|e| panic!("{FILE}: {e}"));
+    let code = code_keeping_literals(&production_text(Path::new(FILE), &text));
+    crate::utils::source_scan::string_literals_in_fn(&code, "pub const fn topic(&self)").1
 }
 
 /// `(repo-relative path, production code with comments removed and literal
@@ -284,16 +326,38 @@ mod tests {
         );
     }
 
+    /// The exemption table describes the tree, both ways: every row still
+    /// matches a composed producer, every row's topic derivation finds
+    /// something, and no `(file, expr)` is registered twice. A stale row is
+    /// the thing that later hides a real composed producer.
     #[test]
-    fn the_scanner_sees_a_literal_wrapped_onto_the_next_line() {
-        let src = "publish(&TopicEvent::new(\n    \"node.connected\",\n    data,\n));\n\
-                   publish(&TopicEvent::new(\"presence.joined\", data));\n\
-                   publish(&TopicEvent::new(&composed, data));";
-        assert_eq!(
-            topic_event_literals(src),
-            vec!["node.connected".to_string(), "presence.joined".to_string()],
-            "a wrapped literal counts and a composed topic is skipped"
-        );
+    fn every_composed_topic_row_still_describes_a_producer() {
+        let producers = all_topic_producers();
+        for row in COMPOSED_TOPICS {
+            assert!(
+                producers
+                    .iter()
+                    .any(|p| p.topic.is_none() && p.file == row.file && p.expr == row.expr),
+                "stale exemption: no composed `TopicEvent::new({}, …)` in {} any more — \
+                 delete the row ({})",
+                row.expr,
+                row.file,
+                row.reason
+            );
+            assert!(
+                !(row.topics)().is_empty(),
+                "{}: the topic derivation for `{}` found nothing — it is pointed at the \
+                 wrong code and every classification check through it passes vacuously",
+                row.file,
+                row.expr
+            );
+        }
+        let mut keys: Vec<(&str, &str)> =
+            COMPOSED_TOPICS.iter().map(|r| (r.file, r.expr)).collect();
+        let rows = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), rows, "a (file, expr) pair is registered twice");
     }
 
     #[test]
@@ -371,12 +435,21 @@ mod tests {
         // named-file pins could not see, or a constant spelling they skipped.
         for (file, topic) in [
             ("src/gateway/server/connection/mod.rs", "node.connected"),
-            ("src/gateway/server/connection/cleanup.rs", "node.disconnected"),
+            (
+                "src/gateway/server/connection/cleanup.rs",
+                "node.disconnected",
+            ),
             ("src/cluster/enrollment.rs", "node.disconnected"),
             ("src/gateway/pty/manager.rs", "pty.screen"),
             ("src/gateway/subagent_tree_relay.rs", "run.subagent_tree"),
-            ("src/gateway/event_emitter/artifact_ping.rs", "session.artifact"),
-            ("src/gateway/handlers/runtimes.rs", "runtimes.install.progress"),
+            (
+                "src/gateway/event_emitter/artifact_ping.rs",
+                "session.artifact",
+            ),
+            (
+                "src/gateway/handlers/runtimes.rs",
+                "runtimes.install.progress",
+            ),
         ] {
             assert!(
                 has(file, topic),
