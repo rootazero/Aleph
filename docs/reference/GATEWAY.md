@@ -319,7 +319,7 @@ Subscribe to events using glob patterns:
 |---------|--------|
 | `stream.*` | All streaming events |
 | `stream.chunk` | Text chunks |
-| `stream.agent_trace` | Structured loop-originated execution trace |
+| `stream.agent_trace` | Structured loop-originated execution trace; best-effort (a lagging drain drops frames), and since 2026-09-23 `seq`-ordered with the run's other `stream.*` frames → [TRANSCRIPT_RENDERING §7](TRANSCRIPT_RENDERING.md) |
 | `stream.tool_start` | Tool execution start |
 | `stream.tool_end` | Tool execution end |
 | `agent.*` | Agent lifecycle events |
