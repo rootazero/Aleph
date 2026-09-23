@@ -3,7 +3,7 @@
 **Date:** 2026-09-23
 **Branch:** main（单分支开发；三期各自在 worktree 里做、各自合并）
 **Scope:** `src/gateway/execution_engine/agent_trace_emit_sink.rs` · `src/orchestrator/dispatch.rs` · `src/gateway/handlers/trace_replay.rs` · `shared/ui_logic/src/transcript/` · `interfaces/tui/` · `interfaces/webchat/`
-**Status:** 七节设计逐节获用户认可（2026-09-23），待 spec 文件审阅
+**Status:** 已审阅；Phase S 实施中（计划 `docs/superpowers/plans/2026-09-23-stepwise-fold-phase-s-server-and-shared-core.md`）。Phase S 的裁定已回写进各节，每处带 `〔amended 2026-09-23 (Phase S)〕` 标记；逐条台账在 `.superpowers/sdd/2026-09-23-stepwise-fold-phase-s-server-and-shared-core/rulings.md`
 **Supersedes (partially):** [`2026-09-06-cc-style-transcript-rendering-design.md`](2026-09-06-cc-style-transcript-rendering-design.md) — 见 §10
 **Reference:** [`docs/reference/TRANSCRIPT_RENDERING.md`](../../reference/TRANSCRIPT_RENDERING.md) · FEATURE_LOCATOR §6.13 · `docs/reference/SESSION_KNOBS.md`
 
@@ -18,6 +18,12 @@
 > can no longer arrive after the text it precedes), and the replay RPC learns to return the
 > thinking that the session log already stores per iteration. Three phases: S server + shared
 > core, T TUI, P Panel.
+>
+> 〔amended 2026-09-23 (Phase S)〕 The last server change above rested on a false premise (§1: the
+> session log's `turn_id` is the user turn, not the iteration). Ruling R9 replaced it: the harness
+> emits a new trace variant, `ReasoningEmitted { iteration, text }`, which `task_traces` persists
+> and `trace.by_runs` replays with no new code. So the `StreamEvent` frame set is unchanged, and the
+> `AgentTraceEvent` event set gains one variant (§5).
 
 ---
 
@@ -100,6 +106,14 @@ StepEntry {
 NoteKind = ToolSummary | VerifierVeto | ReactiveCompaction | MoaAdvisor | MoaAggregating | MoaSpend
 ```
 
+〔amended 2026-09-23 (Phase S)〕 落地形状（`shared/ui_logic/src/transcript/step.rs`）与上面的草图有五处不同，各有裁定：
+
+- `id: String`——仓里没有 `EntryId` 类型；`effective_open` 因此是 `(level, &HashSet<String>, &str)`（D5）。
+- `ThinkingBlock { text, streaming }`，**没有** `unavailable` 字段：thinking 在写时被**原地**脱敏（`mask_trace_event`），wire 零改动，reducer 拿不到「被脱敏过」这个信号，所以不借 `Unavailable::Redacted`、不画原因芯片——折叠正文显示的就是打过码的文字（D1/D2；§5.3 G3 与 §9 同改）。
+- `tools: Vec<ToolRow>`——分组是**绘制时**的投影（`group::group_tool_rows` → `StepTool`），不是存储形状（D3）。
+- `NoteKind::MoaAdvisorSpend`，与协议变体同名（D4）。
+- `TranscriptEntry::Reasoning` 在 Phase S **保留**：它的 TUI 渲染器要活到 Step 能被画出来为止，删除归 Phase T（D16；§12 的「本轮」指 S+T+P 这一整轮）。
+
 **标题派生**（纯函数，一处实现，R1 的三级退化）：
 
 ```
@@ -109,9 +123,20 @@ first_sentence(s, max_cols): 第一个 。！？.!? 或换行之前；超宽按 
 tally(&StepEntry) -> Option<TurnSummaryEntry>: 复用 turn_summary::summarize_turn（改成也能吃一个 step）
 ```
 
+〔amended 2026-09-23 (Phase S)〕 落地的规则：
+
+- **句末**：`first_sentence` **保留**终止符；ASCII `.` `!` `?` 只在后面是空白（`char::is_whitespace`）或文本结尾时才算句末——`src/parse.rs`、`a != b`、`?q=` 都不切；全角 `。！？` 无条件；换行与单独的 `\r` 也是句末（D6 · T78-M1：一个太长的标题比一个切错的标题便宜）。
+- **宽度**：候选前缀**整体**的字符串宽度（`UnicodeWidthStr::width`），不是逐字符求和——多码点序列（emoji + `U+FE0F`）的字符串宽度大于各字符之和，而 ratatui 按字符串宽度排版；截断扫描上限 `4 × max_cols` 个字符，超出即故意早截（T78-M2 · T78-R2b）。
+- **tally** = `step_tally`，经 `turn_summary::summarize_rows`，没有最少工具数门槛；run 级的 `summarize_turn` 保留原样（D5）。
+- **`step_headline` 可以是 `None`**：没有 thinking/text 首句、也没有终态工具行时（只有 notes，或只有 running/pending 的工具）。Phase S **没有第四级退化**——一个这样的活 step 怎么起标题是 Phase T 的绘制决定（§9「什么都没产出」那一行；T78-H1）。
+
 **最终回答的判定**：`RunComplete` 时，当前打开的 step 的 `text` **提升**为顶层 `AssistantText`；该 step 若还剩 thinking / notes 就留下作一行折叠（`💭 Thought for 4s · 首句`），什么都不剩就删除。纯聊天一轮（思考 + 回答、无工具）因此渲染为一行折叠 + 完整回答，与 Claude Code 一致。
 
+〔amended 2026-09-23 (Phase S)〕 **记录是权威的，未被记录覆盖的流式文字是临时的**。`TextEmitted{Final}` 替换它所覆盖的那一段流式文字，正如 `ReasoningEmitted` 替换流式 thinking（§5.2；T910-F1）——实时腿因此在 grace 轮与救援路径上也收敛到重放腿，这种情形**永不**报 `NeedsResync`。没有任何 `TextEmitted{Final}` 覆盖的流式 delta 在 run 结束时被丢弃：打开的 step 的文字截回到记录为止；一个没有记录的 step，若 run 带着最终文字（实时腿 `RunSummary.final_response`，重放腿 `SessionCompleted.final_text`）就取它，否则不留文字（T910-N1）。理由是 R4：重放永远看不到未覆盖的 delta，实时腿就不能把它们当作回答呈现。代价：一次被叫停的流里没被确认的半截文字，在 run 结束时消失。
+
 **run 作用域 vs step 作用域**：`CacheHealthDegraded` / `SessionCompleted` 等不属于某一步的旁白走顶层 `SystemNotice`（既有变体），不进 step。
+
+〔amended 2026-09-23 (Phase S)〕 落地（`reducer/mod.rs::apply_trace`）：`CacheHealthDegraded` → 顶层 `SystemNotice`，它可能来自子代理的 metering（§5.4），只影响归属；`ProviderUsage` 是账不是 step，不产条目；`SessionCompleted { final_text }` 在重放腿上是**最终回答的兜底**——打开的 step 没有文字而 `final_text` 非空时追加给它，随后照常提升；它的 `duration_ms` 只供 run 结束的摘要行（D7）。
 
 **档位与展开**：
 
@@ -122,7 +147,11 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 
 两级两键：**翻 step**（Enter / 单击 step 行）与 **翻工具正文**（Ctrl+O，09-06 裁定不变），不混用。
 
+〔amended 2026-09-23 (Phase S)〕 `DetailLevel::parse` 对读不懂的值返回 `None`，由**各端表面**静默退到 `Brief`（T78-M4）。覆盖集合是相对档位默认值的 XOR，所以一个记住的展开 / 折叠在切换档位后会**反转**——这符合上面的定义；切档时要不要清空覆盖集，列在 §7 末尾的交接清单里。
+
 **归属规则（实时腿）**：每个内联帧归到"最近一次 `TurnStarted` 的迭代"。§5 修完后这一定成立；对着旧服务端的 TUI 遇到没开 step 就来了帧，开一个 `iteration: None` 的 step，标题只用计数，**永不**被后来的 `TurnStarted` 追认成某一步。
+
+〔amended 2026-09-23 (Phase S)〕 reducer 里只有 `ReasoningEmitted` 核对迭代号：它与打开的、带编号的 step 不符即 `NeedsResync`，什么都不移动（`reducer/step_ops.rs::record_thinking`）。其余帧按到达顺序落进打开的 step——上面那句「归到最近一次 `TurnStarted`」是**意图**，它与实际有没有分歧由 Phase T 的真机阶段去量（§7 末尾）。
 
 ---
 
@@ -133,21 +162,53 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 `AgentTraceEmitSink::on_trace` 不再 `try_send` 进自己的 mpsc + `tokio::spawn` 排水，而是把 step 事件 `send` 进 `FlowStreamEvent` 那条 broadcast 管道（新变体 `FlowStreamEvent::Trace(aleph_protocol::AgentTraceEvent)`，在 sink 里先过 `is_step_event` 再 `.into()` 转成协议类型），由 `event_drain` 原地 `next_seq()` 后发 `StreamEvent::AgentTrace`。harness 调 `on_trace` 与调 `on_delta` 是同一线程同一程序序，所以 `seq` 从此就是逻辑序。`is_step_event` 过滤不变、帧内容不变、`frame_census` 不动、`UnattendedRedactingSink` 仍包在最外层先看到一切。
 
 - **计划期已核（2026-09-23）**：sink 在 `run_loop/inner.rs:1014-1019` 构造并随 `FlowRequest.trace_sink` 进 dispatch，而 broadcast 发送端在 `orchestrator/dispatch.rs:1048` 之后才创建——两处**拿不到**同一个 `Sender`。裁定的落点：`FlowRequest` 加 `event_tx: Option<broadcast::Sender<FlowStreamEvent>>`，由 inner.rs 用 `flow_event_channel()` 创建后同时交给 sink 与请求；`dispatch` 有则 `subscribe()`、无则自建。脱敏 sink 仍包在 emit sink 外层（`redacting.rs:453` 那条读源码的测试钉着这个顺序）。**不准**开第二条管道。
+  - 〔amended 2026-09-23 (Phase S)〕 **sink 不持有这条通道**：`AgentTraceEmitSink` 只存 `broadcast::WeakSender<FlowStreamEvent>`，每个事件 `upgrade` 一次，upgrade 失败即丢弃（run 已结束）。`inner.rs` 创建通道，**当场 drop 初始 receiver**，把强 sender **按值**移进 `FlowRequest.event_tx`（sink 先取它的弱半边）。理由：gateway 的 drain 在 harness 没发 `Complete` 就返回的那条臂上无界等待，只在 `Closed` 时退出，而后台子代理**有意**活过 run、经父链握着这个 sink——一个强 sender 会让 drain 等到每个后台孩子结束（T2-WEAK；否掉的两条是「每条提前返回补一个 `Complete`」与「给 await 加上限」）。守卫：`no_sender_outlives_dispatch` · `a_live_sink_does_not_keep_the_channel_open` · G1a/G1b（§5.3）。
+  - 〔amended 2026-09-23 (Phase S)〕 一条链一个构造点：run 的 trace 链与子代理的链都在 `src/gateway/execution_engine/run_trace_sinks.rs::RunTraceSinks::build` 里建（§5.4）。
 - `FlowStreamEvent` 加变体会让每个穷尽 `match` 编译不过——那是穷尽匹配替我们数消费者，逐处答，不加 `_ =>`。
 - **承重后的丢帧**：broadcast 接收端 `Lagged(n)` 丢掉的事件**没分配过 seq**，客户端的 `MissedSeqs` 看不见这种洞。step 事件每迭代约 2 条，缓冲按文字 delta 算本来就够；真正的闸在终局——`RunSummary.loops` 必须等于客户端数出的 step 数，不等就 `NeedsResync`（§9）。drain 遇到 `Lagged(n)` 时 `warn!` 带 run_id + 丢弃数。
+  - 〔amended 2026-09-23 (Phase S)〕 **名字订正**：仓里的 `MissedSeqs` 是服务端 session 投影器对**事件日志** seq 的追踪（`src/gateway/session_projector/projector_sub/missed_seqs.rs`），与线上帧的 `seq` 无关；今天的聊天流客户端本来就**没有**线上帧的缺号检测。结论不变：`Lagged` 丢的帧没有 `seq`，任何按 `seq` 连续性查洞的检测都看不见它们。
+  - 〔amended 2026-09-23 (Phase S)〕 **闸的方向**：落地的是 `summary.loops > 0 && steps_seen < summary.loops`，不是 `≠`（`reducer/run_end.rs::complete_run`；PF-D8）。grace 轮上 `loops` 与 `TurnStarted` 个数的关系没测过，一个会误报的闸比一个少报的更贵；Phase T 在第一次真 run 上量，量得精确就收紧成 `≠`。「不修补」指不铸 step、不重新编号——终局提升与摘要行照常追加。
 - 不经 harness 的路径（`execution_engine/simple.rs` / `slash_command.rs` / `openai_api/completions/agent.rs`）本来就没有 `TurnStarted`，它们的 reasoning 落进 `iteration: None` step，不改。
 
 ### 5.2 重放腿 = 一个 trace 变体（R9；`src/harness/trace.rs` · `src/harness/agent/think.rs` · `src/gateway/trace_protocol.rs` · `shared/protocol/src/events.rs`）
 
 `LoopTraceEvent::ReasoningEmitted { iteration, text }` 与协议侧 `AgentTraceEvent::ReasoningEmitted { iteration, text }`（`kind = "reasoning_emitted"`）。harness 在 `TextEmitted{Final}` 的**两个**生产点旁各发一次（正常 Think 轮 + grace 轮），只在 `response.thinking` 非空时发。它经既有链路落地：`GatewayTraceSink` → `task_traces`（`trace.by_runs` 原样回放，**零新代码**）；`is_step_event` 放行 → 实时 `agent_trace` 帧（reducer 用它把流式 thinking 替换成权威全文，与 `TextEmitted` 对文字的关系相同）；无人值守时 `mask_trace_event` 的新臂在写前脱敏（那个 match 是穷尽的，少一臂编译不过——机制而非纪律）。原稿"从 session 日志派生"的整段作废（§1）。
 
+〔amended 2026-09-23 (Phase S)〕 **契约**（落地在协议变体 `AgentTraceEvent::ReasoningEmitted` 的 doc 上，`shared/protocol/src/events.rs`；harness 侧经一个私有 `emit_reasoning`，`src/harness/agent/think.rs`）：
+
+- 只记**非空白**的 thinking（纯空白不记）。
+- 通常**一次 Think 迭代一条**：有文字时发在 `TextEmitted{Final}` 之后，纯工具轮单独发。**verifier 叫停之后的 salvage 轮可以在同一个迭代号上再加一条**——消费者**追加**（空行连接），从不替换（T456-M2：给 salvage 轮单独编号是 R10 棘轮下的 harness 语义改动；丢掉任一条都是丢掉真实的推理）。
+- `max_output_tokens` 续写时只记**最后一段**的 thinking，与 `AssistantMessage.thinking` 相同。
+- **`TextEmitted{Final}` 对文字同样是权威的**（§4 的修订段；T910-F1）。
+- 脱敏规则与 `TextEmitted` 相同：无人值守 run 写前打码；**有人值守 run 的 reasoning 行不打码落盘**（同一个 run 的属主）。受护栏的 run 上，reasoning 现在不经输出护栏就到达实时 `agent_trace` 与 `task_traces`——是否要这道闸是产品决定，列在 §7 末尾。
+
 **穷尽 match 的连带**：`AgentTraceEvent` 不是 `non_exhaustive`，新变体让每个穷尽 match 编译不过——这正是它替我们数消费者。已知的：`trace_protocol.rs` 的 `From`、`unattended_redacting_sink.rs::mask_trace_event`、`events.rs::kind()`、`shared/protocol/src/trace_presentation.rs`、`interfaces/tui/src/tui/app/trace.rs`。TUI 的那一臂在 Phase S 里只求编译（追加为 thinking），Phase T 再接进 step。**没有一处允许 `_ =>`**。
+
+〔amended 2026-09-23 (Phase S)〕 TUI 那一臂落地为 `=> {}`（`interfaces/tui/src/tui/app/trace.rs::append_trace_debug_entry`），**不是**「追加为 thinking」：TUI 已经在渲染实时的 `StreamEvent::Reasoning`，再追加一次就画两遍（PF-D14）。后果：重放与非流式轮次在 Phase T 之前**不显示** thinking。Panel 侧是字符串 `kind` 分派而不是穷尽 match：聊天转录的 `chat/events.rs::apply_trace_event` 落进 `_ => {}`；agent-trace 检查视图（`agent_trace_model.rs::map_node_type`）把它映成 Thinking 节点。
 
 ### 5.3 守卫（各答"什么时候红"）
 
 - **G1 顺序**：单线程 runtime 下连发 `on_reasoning → on_trace(TurnStarted 2) → on_delta` 不 `await`，断言记录到的 seq 顺序 = 调用顺序。旧代码的 spawn 任务在测试让出前跑不了，`TurnStarted` 排到最后 ⇒ **旧代码确定性红**。
 - **G2 两腿同构**：同一条录好的会话，实时帧折出的 `Vec<TranscriptEntry>` 与 `trace.by_runs` 折出的**逐字段相等**（判据 §9：共用判据也要共用推导）。住在 alephcore 集成测试里，用 `shared-ui-logic`（它是 alephcore 的 dev-dependency）。
 - **G3 脱敏**：thinking 里塞一段 PEM，重放腿返回 `Unavailable::Redacted`。
+
+〔amended 2026-09-23 (Phase S)〕 三个守卫的落地：
+
+- **G1 拆成两条**：G1a `on_trace_publishes_onto_the_flow_channel_before_returning`（`agent_trace_emit_sink.rs`，一次**不带 runtime** 的 `try_recv` 必须已经看到帧——确定性的那半）；G1b `trace_frames_keep_their_place_in_the_run_seq_order`（`src/orchestrator/harness_bridge/tests.rs`，经真 `BroadcastCallback` 与真 sink 发、经真 drain 取号，断言 `seq` 序——驱动生产者而不是通道，PF-D13）。G1b 单独存在时能不能抓住「推迟到别的任务再发」，取决于测试里的让出点，所以 G1a 不可省。
+- **G2 位置**：Phase S 的 G2 是共享核里的单元测试，两条腿都是手工构造的 fixture（`shared/ui_logic/src/transcript/reducer/tests/g2.rs::the_live_leg_and_the_replay_leg_fold_to_the_same_entries`，去掉时钟后比整份条目，覆盖两种轮内顺序、salvage 的两条记录、grace 轮）。**集成层的 G2**（真 drain 帧 vs 真 `trace.by_runs` 行）推迟到 Phase T 的 `qa/transcript_fold` 真机阶段，两条腿都来自活的服务端（PF-D12）。
+- **G3 = 打过码的文字，没有芯片**（§4 的修订段）：`reasoning_emitted_is_masked_before_persistence_on_unattended_runs`（`unattended_redacting_sink.rs`）与 `a_reasoning_row_replays_masked_on_the_by_runs_leg`（`trace_replay.rs`，PEM 经真 `UnattendedRedactingSink` → 持久化链写入，`trace.by_runs` 返回的文字不含 PEM、带打码占位）。
+
+### 5.4 子代理边界〔amended 2026-09-23 (Phase S)：原稿没有这一节〕
+
+计划期发现（PF-C11）：子代理的 harness trace 事件原样流进父 run 的 trace 链——同步孩子在 spawn 时直接拿父 sink，后台孩子经 `ForwardingTraceSink` 转发——于是孩子的 `TurnStarted` 以父 run 的 `run_id` 成为**父**的 `agent_trace` 帧、落在父任务的 `task_traces` 下，`AgentTraceEvent` 上没有字段分得出来。一个孩子的迭代会被折成父的一步。
+
+**裁定（PF-C11 + T2B-SPLIT，按生产者拆，不按 kind 过滤）**：
+
+- 孩子的 **harness** 事件（`TurnStarted` / `TextEmitted` / `ReasoningEmitted` / `ToolSummary` / `SessionCompleted` / worktree 与 MCP-scope 生命周期）**不再**到达父 run 的 `agent_trace` 帧与 `task_traces` 行。孩子的 harness 链是 `[UnattendedRedactingSink if unattended] → [ScratchpadProgressSink if armed] → NoopTraceSink`；后台孩子的进度仍经 `ForwardingTraceSink` 到达 tracker 侧信道。
+- 孩子的 **`MeteringProvider`** 仍握父 run 的链：`ProviderUsage` / `CacheHealthDegraded` 照旧上线、照旧落在父任务下——`teams.usage`、Panel Usage、`team_usage` 工具、MoA advisor 账与 doctor 的缓存检查都按 agent 聚合它们，而 `task_traces.task_id` 对 `agent_tasks` 有外键，孩子无法自有行。整条切断会静默把子代理花费归零。
+- 两条链在 `src/gateway/execution_engine/run_trace_sinks.rs::RunTraceSinks::build` **一处**构造，经字段私有的 `ChildTraceSinks` 交给 `SubagentTool`。
+- **对 §4 / §6 / §9 的后果**：两条腿都把 `ProviderUsage` / `CacheHealthDegraded` 当非 step 的 notice；父通道上的一个 `CacheHealthDegraded` 可能来自孩子（只影响归属）。孩子的生命周期事件**哪里都不落**（泄漏信号是 `tracing::error!`，见 `docs/reference/MULTI_AGENT_SYSTEM.md`）。孩子**自己的** run 级 `agent_trace` 流与持久化（嵌套 step）是 Phase T/P 的决定（§7 末尾）。
+- **守卫**：`a_childs_turn_started_is_not_persisted_under_the_parents_task` 与它的对照 `a_childs_provider_usage_is_still_persisted_under_the_parents_task`（`src/agents/subagent_tool/tests.rs`）· `a_childs_compactor_usage_is_still_persisted_under_the_parents_task`（`src/agents/subagent_spawner/tests.rs`）· `a_childs_text_reaches_the_scratchpad_sharer_masked_on_unattended_runs`（`run_trace_sinks.rs`）。
 
 ---
 
@@ -161,13 +222,22 @@ effective_open(level, overrides: &HashSet<EntryId>, id) -> bool   // = level.def
 
 reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`（`push_reasoning` / `append_assistant_content` / `start_tool_execution`）与 Panel `ChatState` 的 `begin_step` / `append_chunk` / `set_step_text` / `update_tool` 一族。`settle_resumed` 的"恢复后永不转圈"、`ToolRow` 状态机、两张脸（`ToolStart` vs `AgentTrace::ToolCallStarted`）按 `tool_id` 的去重都搬进来，不复制。`RunComplete` 时它是 `TurnSummary`（`✻ Worked for 32s · 3 steps`）的**唯一生产者**——B6 发现的"有渲染器没生产者"就此闭合。
 
+〔amended 2026-09-23 (Phase S)〕 落地：
+
+- **文件**：`reducer.rs` 已按职责拆成 `reducer/{mod,step_ops,tool_rows,run_end}.rs`（测试在 `reducer/tests.rs` 与 `reducer/tests/g2.rs`）——生产代码过了 P2 的文件上限，在 Phase T 建在它上面之前拆开（T910-SPLIT）。
+- **搬，不复制**：`trace_result_to_wire` 从 TUI `app/trace.rs` 搬进 `reducer/tool_rows.rs`，TUI 改为 import 共享的那一份（PF-C3/D15）。reducer/折叠器的其余部分仍是 Phase T 的替换工作。
+- **`NeedsResync` 的客户端动作**（T910-N2）：丢弃整份转录，从 session 的重放重建——用户消息来自 session 日志，每个 run 的 `trace.by_runs` 行逐条 `apply_replay`、再 `finish_replay`。run 进行中收到它时保留当前显示、标为陈旧，等 run 结束再重建。reducer 没有「替换某个 run」的接口，Phase S 也不加。
+- **摘要行的输入**（T910-SUM）：两条腿都是**这个 run 的全部工具行**（行就是记录）；实时腿漏掉的行仍先经 `RunSummary.tool_summaries` 对账补建。摘要行**按 run** 计（`RunState.first_entry` 圈出这个 run 的条目），不是按整份转录。`TurnSummaryEntry` 没有 id 字段，它的 `Change::Inserted` 用 `next_id` 铸的 `summary-N`——一个按键重绘的消费者要么按位置作键、要么届时加字段（PF-C9，归 Phase T/P）。
+- **`RunError` / 中止**：`fail_run` 把打开的 step 的文字提升为普通的顶层 `AssistantText`，另推一条 `SystemNotice("Error: …")`——`AssistantText` 没有 error 字段（D10；§9 同改）。
+- **下标 fail-closed**：打开的 step 经 `get_mut` 取得，取不到即 `NeedsResync`，不用会 panic 的下标；越界的线上迭代号读作「未知」，不截断（PF-C5/C10 · PF-C6）。
+
 **约束**：`default-features = false` 下必须编译（TUI 构建），不许碰 leptos / web-sys；输入是 `aleph_protocol` 的**类型化**帧。`md_enhance` / `fold` / `diff_view` / `group` 原样在 step 内部复用。在 reducer 自己的状态上就地更新是这个 crate 的既有习惯（`ToolRow::start/finish`），本轮沿用，不为不可变性另造一层拷贝。
 
 **守卫**：
 - `first_sentence` proptest：任意 UTF-8 输入不 panic、不切半个字、宽度不超限；CJK 与英文标点各有用例。
 - 没开 step 就来了 `Reasoning` → `iteration: None`，断言它**永远不会**被后来的 `TurnStarted` 追认。
 - `RunComplete` 提升：{有 thinking, 无 thinking} × {有 text, 无 text} 四种组合各一个用例（无 text 无 thinking 无 tools 无 notes ⇒ 消失）。
-- `summary.loops ≠ 数出的 step 数` → 返回 `NeedsResync`，且**不**自行修补。
+- `summary.loops ≠ 数出的 step 数` → 返回 `NeedsResync`，且**不**自行修补。〔amended 2026-09-23 (Phase S)：落地为 `loops > 0 && steps_seen < loops`，见 §5.1 的修订段；守卫断言 step 条目在 `complete_run` 前后逐字段相同，非 step 的提升与摘要行照常追加（PF-C7）。〕
 - 一次迭代内并行工具调用（多个 `ToolStart` 先于任何 `ToolEnd`）落在同一个 step。
 
 ---
@@ -190,7 +260,7 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 **`/detail brief|full`**：设档位并持久化到 `<aleph_home>/tui-detail`，与 `/theme` 同一套机制（`aleph_protocol::paths::aleph_home`、`ALEPH_TUI_DETAIL` 单次覆盖、`cfg(test)` 下不读文件）。
 
-**冷加载 / 重连**：`trace.by_runs` → `apply_replay`；`NeedsResync` → 只重拉那个 run 并**整段替换**它的条目。
+**冷加载 / 重连**：`trace.by_runs` → `apply_replay`；`NeedsResync` → 只重拉那个 run 并**整段替换**它的条目。〔amended 2026-09-23 (Phase S)：reducer 没有「替换一个 run」的接口；`NeedsResync` 的动作是丢弃整份转录、从 session 重放重建（§6 的修订段，T910-N2）。下面守卫里的「整段替换」按此读。〕
 
 **删除（CUT，不注释）**：`app/trace.rs` 整个；`chat_area.rs` 的 `render_reasoning`、`MessageKind::Reasoning`、`reasoning_shown_only_in_verbose` 测试；`AppState.verbose` + `/verbose`；`ToolProgressMode` + `/tools off|new|all|verbose`（brief 下工具行本在折叠里，`off` 失去意义；进度行已是运行中工具行的正文）；`current_run_uses_agent_trace`（去重进 reducer）。
 
@@ -200,6 +270,27 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 - 旧服务端：无 `TurnStarted` 的 `Reasoning` 渲染成没有步号的行，且**不含**"Step N"字样。
 - `summary.loops` 不等 → 条目被重放结果整段替换（断言替换后的内容来自 replay fixture，不是断言"发了请求"）。
 - `cargo build -p aleph-tui` 与 `cargo test` 都跑（B7：测试读遍每个字段，看不见死字段）。
+
+### Phase S 交给本期（与 Phase P）的清单〔amended 2026-09-23 (Phase S)〕
+
+每行一件事，括号里是发现它的复核条目（台账在 `.superpowers/sdd/2026-09-23-stepwise-fold-phase-s-server-and-shared-core/`）：
+
+- **消费 `Change::NeedsResync`**：实现 §6 修订段里的整份重建（910-F7）。
+- **`apply_replay` 撞上一个打开的实时 run**：今天它折进那个 run；fail-closed 的选项是报 `NeedsResync`（910-F9）。
+- **只有 `ReasoningEmitted` 核对迭代号**：真机阶段量「归到最近一次 `TurnStarted`」与实际有没有分歧，含 salvage 形状（没有新的 `TurnStarted`，被叫停那一轮的迭代上来 text + reasoning）（910 concern 2/4）。
+- **集成层 G2**：`qa/transcript_fold`，真 drain 帧 vs 真 `trace.by_runs` 行（§5.3 修订段；Task 10）。
+- **`<` 收紧成 `≠`**：在第一次真 run 上量 grace 轮的 `loops` 与 `TurnStarted` 个数（§5.1 修订段；PF-D8）。
+- **活 step 的空标题**：只有 running/pending 工具或只有 notes 的 step，`step_headline` 是 `None`，怎么画由本期定（§4 修订段；T78-H1）。
+- **两条记录的 step**：标题取第一条记录（910-F13）；要不要给 salvage 那条加标签（T456-M2）。
+- **切档与覆盖集**：XOR 覆盖在切档后反转，要不要切档即清（§4 修订段；T78-L5）。
+- **摘要行措辞**：零 loop 路径上的 `· 1 steps` / `· 0 steps`（910-F12）；`TurnSummaryEntry` 的键（PF-C9）。
+- **续写轮的 thinking**：一个 step 的 thinking 会从第 1 段（流式）翻成第 N 段（记录）（456-L3）。
+- **reasoning 第二份持久副本没有字节上限**：`task_traces` 里的 thinking 不设上限，`trace.by_runs` 一次最多服务 `MAX_RUNS` 个 run、不截断（456-L8）。
+- **受护栏的 run**：reasoning 不经输出护栏到达实时 `agent_trace` 与 `task_traces`；有人值守 run 的 reasoning 不打码落盘（与 `TextEmitted` 同规则、同属主）——产品决定（456-L2）。
+- **截断切开 ZWJ 序列**：纯外观（78-L4）。
+- **只认单一位置的 TUI 扫描**：Step 有了生产者之后，这几处看不见 step 里的行——`interfaces/tui/src/tui/app/mod.rs` 的 `find_tool_mut` 与按工具名的 `find_map`、`app/tests.rs` 泄漏测试里的 `TranscriptEntry::Step(_) => ""` 臂、`widgets/chat_area.rs` 的 `content_fingerprint(&s.id)` 臂（78-L6，替换清单）。
+- **`TranscriptEntry::Reasoning` 的删除**（§4 修订段；PF-D16）。
+- **子代理自己的 run 级流**：孩子自己的 `agent_trace` 与它名下的 `trace.by_runs`（需要每个孩子一行 `agent_tasks`，因为 `task_traces.task_id` 有外键）——嵌套 step 是 T/P 的决定（§5.4；2b 遗留）。
 
 ---
 
@@ -220,7 +311,7 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 **守卫**：
 - 同一 run 只渲染一次：history + replay 双源 fixture，按 run_id 计数 = 1。
 - 回收后 step k 的打字机**停止**订阅 tick（`has_reveal == false`），不泄漏动画帧。
-- `detail` 轴 localStorage 往返；`summary.loops` 不等 → 整段替换（同 TUI）。
+- `detail` 轴 localStorage 往返；`summary.loops` 不等 → 整段替换（同 TUI）。〔amended 2026-09-23 (Phase S)：「整段」= 整份转录从 session 重放重建，见 §6 修订段（T910-N2）。〕
 - `cargo test -p aleph-panel --lib` + `just wasm`（唯一编译出厂形态的命令）。
 
 ---
@@ -230,16 +321,16 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 | 情形 | 行为 |
 |---|---|
 | 帧前面没有 `TurnStarted` | `iteration: None` step，标题只用计数，**永不**被追认步号 |
-| `summary.loops ≠ 数出的 step 数` | `NeedsResync` → 重拉该 run 整段替换；重拉也失败 → 保留实时条目 + 顶层 `SystemNotice`「过程可能不完整」，**不**装作完整 |
+| `summary.loops ≠ 数出的 step 数` | `NeedsResync` → 重拉该 run 整段替换；重拉也失败 → 保留实时条目 + 顶层 `SystemNotice`「过程可能不完整」，**不**装作完整。〔amended 2026-09-23 (Phase S)：条件落地为 `loops > 0 && steps_seen < loops`（§5.1）；重建的是整份转录，run 进行中则先标陈旧、run 结束再建（§6，T910-N2）〕 |
 | 重放行无结束事件 | `Pending`，不转圈（沿用 `settle_resumed`） |
 | 一次迭代什么都没产出（thinking/text/tools/notes 全空） | 不渲染——"Step 3：（无）"是在断言什么都没发生 |
-| thinking 被脱敏 | 正文显示 `Unavailable::Redacted` 原因芯片，标题退到 text → 计数 |
+| thinking 被脱敏 | 正文显示 `Unavailable::Redacted` 原因芯片，标题退到 text → 计数。〔amended 2026-09-23 (Phase S)：没有芯片——thinking 在写时原地打码，reducer 不知道它被打过码；正文与标题都是打过码的文字（§4 修订段，D1/D2）。标题里出现打码占位符还是退到 text，由 Phase T 定〕 |
 | provider 给的是原始 CoT | wire 分不出来，正文照显、首句可能弱；写进文档，不加启发式猜 |
-| `RunError` / 中止时 step 还开着 | 已流出的 text **提升**为顶层回答并带既有的 error 标记——用户已经看见了它，藏回折叠里才是撒谎 |
+| `RunError` / 中止时 step 还开着 | 已流出的 text **提升**为顶层回答并带既有的 error 标记——用户已经看见了它，藏回折叠里才是撒谎。〔amended 2026-09-23 (Phase S)：`AssistantText` 没有 error 字段，落地为普通 `AssistantText` + 一条 `SystemNotice("Error: …")`（D10）〕 |
 | `tui-detail` 读不了 / localStorage 不可用 | 退 `Brief`，静默 |
 | drain 遇到 broadcast `Lagged(n)` | `warn!` 带 run_id + 丢弃数；终局由 `loops` 闸兜底 |
 | 新 TUI 对旧 server | wire 没变 ⇒ 只是没有 `TurnStarted`，落第一行 |
-| 无人值守 run | 实时腿 `redacting.rs` 已脱敏 reasoning；重放腿无条件脱敏——不变 |
+| 无人值守 run | 实时腿 `redacting.rs` 已脱敏 reasoning；重放腿无条件脱敏——不变。〔amended 2026-09-23 (Phase S)：`ReasoningEmitted` 行在**写时**由 `mask_trace_event` 打码；重放腿对 trace 行没有自己的 masker，返回的就是写下的那一份（「无条件脱敏」指的是 `presentation`，见 `TRANSCRIPT_RENDERING.md` §2.3）〕 |
 
 ---
 
@@ -257,7 +348,7 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 其余**照旧有效**：cc-tui 折叠规则、diff、mermaid、TUI 身份、主题、`/context` 覆盖层。做法：旧 spec 顶部加一条横幅指向本文，**不**逐行改它（一个事实一个家）。
 
-**文档落点**（完成后独立 commit）：`TRANSCRIPT_RENDERING.md` 新增 §7（Step · reducer · 重放腿 · 单管道），§5.1「没有渲染器」那笔债关闭；`FEATURE_LOCATOR §6.13` 更新，新的判据实例进附录 D/E；`SESSION_KNOBS.md` 加一行"显示密度**刻意不是**会话旋钮，住在客户端"；`CLAUDE.md` 路由表那一行只在事实变了时改（`trace.tool_output` 仍零客户端，本轮不动）。
+**文档落点**（完成后独立 commit）：`TRANSCRIPT_RENDERING.md` 新增 §7（Step · reducer · 重放腿 · 单管道），§5.1「没有渲染器」那笔债关闭；`FEATURE_LOCATOR §6.13` 更新，〔amended 2026-09-23 (Phase S)：Phase S 不关闭 §5.1 那笔债——它的形状在 TRANSCRIPT_RENDERING §7.3 以新的日期复现，Phase T 关闭它；FEATURE_LOCATOR 的 `### 6.13` 从未存在过（十一处指针悬空），这一轮是**创建**它〕新的判据实例进附录 D/E；`SESSION_KNOBS.md` 加一行"显示密度**刻意不是**会话旋钮，住在客户端"；`CLAUDE.md` 路由表那一行只在事实变了时改（`trace.tool_output` 仍零客户端，本轮不动）。
 
 ---
 
@@ -285,8 +376,8 @@ reducer **替换**今天的两份客户端私有折叠器：TUI `app/trace.rs`�
 
 - TUI：`app/trace.rs` · `render_reasoning` · `MessageKind::Reasoning` · `AppState.verbose` + `/verbose` · `ToolProgressMode` + `/tools` · `current_run_uses_agent_trace`
 - Panel：`reasoning.rs` · `reasoning_text` / `append_reasoning` / `apply_reasoning_block` · `begin_step` / `set_step_text` / `text_finalized` · `ChatMessage.{is_intermediate, iteration, is_final}` · "workspace-timeline cards" 注释
-- 共享核：`TranscriptEntry::Reasoning`（含零读者的 `collapsed` 字段）
-- 服务端：`AgentTraceEmitSink` 的 mpsc + spawn
+- 共享核：`TranscriptEntry::Reasoning`（含零读者的 `collapsed` 字段）〔amended 2026-09-23 (Phase S)：归 Phase T；「本轮」= S+T+P 整轮（PF-D16）〕
+- 服务端：`AgentTraceEmitSink` 的 mpsc + spawn〔amended 2026-09-23 (Phase S)：已 CUT，连同只服务它的 `emit_agent_trace`〕
 
 ---
 
