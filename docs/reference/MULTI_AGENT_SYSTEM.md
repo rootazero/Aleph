@@ -1727,6 +1727,11 @@ dashboard built on `worktree_cleaned_up` rows will always read zero. The
 leak signal is the `tracing::error!("WorktreeHandle leaked — Drop
 safety-net removing")` in `src/sandbox/worktree.rs`.
 
+This paragraph covers the **subagent** worktree path only. A team member's
+worktree (`src/teams/dispatcher/runner.rs::provision_worktree`) is created
+with no trace sink at all (`worktree::create(.., None)`), so it emits neither
+event to begin with; its leak signal is the same `tracing::error!`.
+
 ### Performance contract
 
 - `create`: ≤ 200ms typical (`git worktree add` cost)

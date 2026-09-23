@@ -518,7 +518,7 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 ## 6. 改这一层之前 / Working notes
 
 - **「diff 没显示出来」先问是哪一段断了**：工具挂没挂 `_presentation`（普查 C 方向）· hoist 有没有跑
-  （`apply_layer_two`）· 哪条腿（实时帧 vs `trace.by_runs` 重放）· 还是**根本没有渲染器**（§5.1，今天最可能的答案）。
+  （`apply_layer_two`）· 哪条腿（实时帧 vs `trace.by_runs` 重放）· 还是**这个客户端根本没有渲染器**（§5.1：TUI 自 2026-09-11 起经 `widgets/tool_row.rs` 调 `diff_rows`；Panel 至 2026-09-23 仍没有——在 Panel 上这是最可能的答案）。
 - **要给 `Presentation` / `FileChange` / `Hunk` / `HunkLine` 加字段**：`mask_presentation` 会编译不过。
   那是设计好的机制——把新字段**加进那个走查**，不要加 `..`。
 - **要给 `Unavailable` 加成员**：先答两句——「现有的哪一个都不是真的，为什么」，以及「**谁产它**」。
