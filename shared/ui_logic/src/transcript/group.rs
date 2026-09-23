@@ -168,7 +168,18 @@ mod tests {
             r
         };
         let out = group_tool_rows(&[read("r1"), read("r2"), edit, read("r3")]);
-        assert!(matches!(&out[0], StepTool::Group(g) if g.rows.len() == 2));
+        let StepTool::Group(g) = &out[0] else {
+            panic!("expected a group")
+        };
+        assert_eq!(g.rows.len(), 2);
+        assert_eq!(
+            g.rows[0].id, "r1",
+            "row order inside the group is preserved"
+        );
+        assert_eq!(
+            g.rows[1].id, "r2",
+            "row order inside the group is preserved"
+        );
         assert!(matches!(&out[1], StepTool::Row(r) if r.id == "e"));
         assert!(
             matches!(&out[2], StepTool::Row(r) if r.id == "r3"),

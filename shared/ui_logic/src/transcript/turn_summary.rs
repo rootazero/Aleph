@@ -165,15 +165,15 @@ mod tests {
         assert!(summarize_turn(&[row("file_read", json!({"path": "a"}), true)]).is_none());
     }
     #[test]
-    fn a_pending_row_with_a_stale_ended_ms_contributes_zero_duration() {
+    fn a_pending_rows_stale_ended_ms_is_never_read() {
         // `settle_resumed` deliberately leaves `ended_ms` set on a row it
         // settles to `Pending` (an outcome it refuses to vouch for) — see
         // view_model.rs's own `a_running_row_with_ended_ms_set_still_settles_to_pending_not_a_fabricated_ok`.
-        // Billing wall-clock time for that row would report a duration for
-        // something we just said we cannot claim. Must match
-        // `ToolGroup::headline`'s existing rule: only terminal (Ok/Err) rows
-        // contribute duration — one derivation for "how long did this take",
-        // shared by both call sites.
+        // `summarize_rows` no longer reads `started_ms`/`ended_ms` at all —
+        // it dispatches on `RowStatus`, and `Pending` rows are skipped
+        // outright — so a stale `ended_ms` left on a `Pending` row can never
+        // leak into `duration_ms`, even if a future change reintroduced a
+        // clock read for some other status.
         let mut pending = ToolRow::new("id", "file_read", &json!({"path": "a.rs"}));
         pending.started_ms = Some(0);
         pending.ended_ms = Some(9_000);

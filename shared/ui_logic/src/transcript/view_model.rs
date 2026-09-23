@@ -212,8 +212,8 @@ pub enum TranscriptEntry {
     },
     Tool(ToolRow),
     ToolGroup(ToolGroup),
-    /// One Think→Act iteration (spec §4). Phase S adds the variant; Phase T
-    /// is its first producer and renderer.
+    /// One Think→Act iteration (spec §4). Phase S's reducer (`reducer.rs`)
+    /// is its producer; Phase T is its first renderer.
     Step(StepEntry),
     TurnSummary(TurnSummaryEntry),
     SystemNotice {

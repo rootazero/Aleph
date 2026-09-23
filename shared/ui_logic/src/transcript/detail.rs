@@ -25,9 +25,12 @@ impl DetailLevel {
         }
     }
 
-    /// `None` for anything but the two names — an unreadable preference file
-    /// falls back to the default at the CALLER, which must not read `None`
-    /// as `Brief` silently without saying so.
+    /// `None` for anything but the two names. Spec §9 is binding here: an
+    /// unreadable or unparseable stored level falls back to `Brief`
+    /// SILENTLY, but that fallback is the CALLER's job (the surface reading
+    /// its `localStorage` / `tui-detail` file) — this function itself keeps
+    /// reporting the honest `None` for unknown input rather than
+    /// pre-applying the fallback.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim() {

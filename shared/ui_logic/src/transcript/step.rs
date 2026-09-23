@@ -4,7 +4,7 @@
 //! as one line (`step_headline`) and expand it on demand; the reducer
 //! (`reducer.rs`) is the only writer.
 
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use super::turn_summary::summarize_rows;
 use super::view_model::{ToolGroup, ToolRow, TurnSummaryEntry};
@@ -112,10 +112,14 @@ pub struct Headline {
 
 /// The first sentence of `s`, clipped to `max_cols` columns.
 ///
-/// A sentence ends at `。！？!?`, at a newline, or at a `.` that is followed
-/// by whitespace or the end (so `src/parse.rs` is not a sentence end).
-/// `None` for blank input — a blank headline would read as "nothing was
-/// thought", which is not known.
+/// A sentence ends at the fullwidth `。！？` (always a boundary), at a `.`,
+/// `!` or `?` that is followed by whitespace or the end (so `src/parse.rs`
+/// and `a != b` are not sentence ends — the ASCII trio shares one rule),
+/// or at a newline or a lone `\r` (old Mac line endings). "Followed by
+/// whitespace" means `char::is_whitespace` — not just `' '`/`'\t'`/`'\n'`
+/// — so a fullwidth space (U+3000) or an NBSP after the terminator also
+/// counts. `None` for blank input — a blank headline would read as
+/// "nothing was thought", which is not known.
 #[must_use]
 pub fn first_sentence(s: &str, max_cols: u16) -> Option<String> {
     let s = s.trim();
@@ -126,16 +130,19 @@ pub fn first_sentence(s: &str, max_cols: u16) -> Option<String> {
     let mut chars = s.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         match c {
-            '\n' => {
+            '\n' | '\r' => {
                 end = i;
                 break;
             }
-            '。' | '！' | '？' | '!' | '?' => {
+            '。' | '！' | '？' => {
                 end = i + c.len_utf8();
                 break;
             }
-            '.' => {
-                let next_is_break = matches!(chars.peek(), None | Some((_, ' ' | '\t' | '\n')));
+            '.' | '!' | '?' => {
+                let next_is_break = match chars.peek() {
+                    None => true,
+                    Some((_, next)) => next.is_whitespace(),
+                };
                 if next_is_break {
                     end = i + c.len_utf8();
                     break;
@@ -151,24 +158,30 @@ pub fn first_sentence(s: &str, max_cols: u16) -> Option<String> {
     Some(clip_cols(sentence, max_cols))
 }
 
-/// Clip to `max_cols` display columns, ending in `…` (one column) when
-/// anything was removed. Never splits a character.
+/// Clip to `max_cols` display columns (clamped to at least 1), ending in
+/// `…` (one column) when anything was removed. Never splits a character.
+///
+/// Width is measured with [`UnicodeWidthStr::width`] on each candidate
+/// PREFIX as a whole, not as a sum of each character's own width:
+/// unicode-width reports some multi-codepoint sequences (an emoji base
+/// character plus its U+FE0F variation selector, for example) as wider
+/// than the sum of their parts, matching how a string-width renderer such
+/// as ratatui lays them out. A per-character sum would under-count such a
+/// sequence and fail to clip a headline the renderer lays out over budget.
 fn clip_cols(s: &str, max_cols: u16) -> String {
     let max = usize::from(max_cols.max(1));
-    let total: usize = s.chars().map(|c| c.width().unwrap_or(0)).sum();
-    if total <= max {
+    if s.width() <= max {
         return s.to_string();
     }
     let budget = max.saturating_sub(1);
-    let mut width = 0usize;
     let mut cut = 0usize;
     for (i, c) in s.char_indices() {
-        let w = c.width().unwrap_or(0);
-        if width + w > budget {
+        let candidate_end = i + c.len_utf8();
+        let candidate = s.get(..candidate_end).unwrap_or("");
+        if candidate.width() > budget {
             break;
         }
-        width += w;
-        cut = i + c.len_utf8();
+        cut = candidate_end;
     }
     format!("{}…", s.get(..cut).unwrap_or(""))
 }
@@ -182,7 +195,11 @@ pub fn step_tally(step: &StepEntry) -> Option<TurnSummaryEntry> {
 }
 
 /// Ruling R1: thinking's first sentence → text's first sentence → the tool
-/// tally. `None` only for an empty step.
+/// tally. `None` when the step has no thinking/text sentence and no
+/// terminal tool row to tally — not only for an empty step: a step with
+/// only notes, or only running/pending tools, also returns `None` here.
+/// There is no fourth fallback in Phase S; how such a step is rendered is
+/// a Phase T decision (recorded in the spec).
 #[must_use]
 pub fn step_headline(step: &StepEntry, max_cols: u16) -> Option<Headline> {
     if let Some(text) = step
@@ -218,7 +235,7 @@ mod tests {
     use aleph_protocol::ToolResult;
     use proptest::prelude::*;
     use serde_json::json;
-    use unicode_width::UnicodeWidthChar;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
     fn finished(id: &str, tool: &str, args: serde_json::Value, ok: bool, ms: u64) -> ToolRow {
         let mut r = ToolRow::new(id, tool, &args);
@@ -268,6 +285,48 @@ mod tests {
     }
 
     #[test]
+    fn first_sentence_treats_ascii_bang_and_question_like_the_dot_rule() {
+        // `!`/`?` are boundaries only when followed by whitespace or the
+        // end, the same rule `.` already gets — so `!=` and a `?` inside a
+        // URL query string are not sentence ends.
+        assert_eq!(
+            first_sentence("Check a != b first. Then go.", 80).as_deref(),
+            Some("Check a != b first."),
+            "the `!` in `!=` is not followed by whitespace"
+        );
+        assert_eq!(
+            first_sentence("Fetch https://x.io/a?b=1 now. Done.", 80).as_deref(),
+            Some("Fetch https://x.io/a?b=1 now."),
+            "the `?` inside the URL query string is not followed by whitespace"
+        );
+        assert_eq!(
+            first_sentence("Really? Yes.", 80).as_deref(),
+            Some("Really?"),
+            "a `?` followed by whitespace is still a boundary"
+        );
+    }
+
+    #[test]
+    fn first_sentence_treats_full_width_space_as_whitespace_after_a_terminator() {
+        // `char::is_whitespace` covers U+3000 (IDEOGRAPHIC SPACE), not just
+        // `' '`/`'\t'`/`'\n'` — so a `.` before it is still a boundary.
+        assert_eq!(
+            first_sentence("完成.\u{3000}下一步", 80).as_deref(),
+            Some("完成.")
+        );
+    }
+
+    #[test]
+    fn first_sentence_treats_a_lone_carriage_return_as_a_line_break() {
+        // Old Mac line endings use a lone `\r` with no `\n`; it must break
+        // the sentence the same way `\n` does, not reach the headline.
+        assert_eq!(
+            first_sentence("first line\rsecond line", 80).as_deref(),
+            Some("first line")
+        );
+    }
+
+    #[test]
     fn first_sentence_clips_to_the_column_budget_with_an_ellipsis() {
         let h = first_sentence(&"很长的一句话".repeat(20), 12).unwrap();
         assert!(h.ends_with('…'), "{h}");
@@ -275,16 +334,41 @@ mod tests {
         assert!(cols <= 12, "{cols} columns: {h}");
     }
 
+    #[test]
+    fn clipping_measures_string_width_not_a_per_char_sum() {
+        // U+2764 HEAVY BLACK HEART + U+FE0F VARIATION SELECTOR-16: as a
+        // whole "emoji presentation sequence" unicode-width reports this
+        // pair as 2 columns, while summing each char's own width gives 1
+        // (1 + 0). A per-character sum would under-count a headline of
+        // these and fail to clip it to a string-width renderer's layout
+        // (ratatui measures spans by string width).
+        let hearts = "\u{2764}\u{FE0F}".repeat(50); // 50 sequences, 100 columns by string width
+        let clipped = first_sentence(&hearts, 12).unwrap();
+        assert!(clipped.ends_with('…'), "{clipped}");
+        let cols = clipped.width();
+        assert!(cols <= 12, "{cols} columns: {clipped}");
+    }
+
     proptest! {
         /// Any input: no panic, never over budget, never a half character,
-        /// `None` exactly when the input is blank.
+        /// `None` exactly when the input is blank, and the returned text
+        /// (with any clipping `…` stripped) is always a genuine prefix of
+        /// the trimmed input — never a fabricated string.
         #[test]
-        fn first_sentence_never_panics_and_respects_the_width(s in "\\PC*", cols in 1u16..120) {
+        fn first_sentence_never_panics_and_respects_the_width(
+            s in "[\\PC\\n\\t\\r ]*",
+            cols in 1u16..120,
+        ) {
             match first_sentence(&s, cols) {
                 Some(h) => {
-                    let w: usize = h.chars().map(|c| c.width().unwrap_or(0)).sum();
+                    let w = h.width();
                     prop_assert!(w <= usize::from(cols), "{w} > {cols}: {h:?}");
                     prop_assert!(!h.trim().is_empty());
+                    let prefix = h.strip_suffix('…').unwrap_or(&h);
+                    prop_assert!(
+                        s.trim().starts_with(prefix),
+                        "{h:?} is not a prefix of {:?}", s.trim()
+                    );
                 }
                 None => prop_assert!(s.trim().is_empty()),
             }
@@ -346,17 +430,52 @@ mod tests {
     }
 
     #[test]
-    fn step_tally_counts_one_tool_where_the_turn_summary_would_not() {
+    fn is_empty_is_false_when_only_tools_are_present() {
         let s = step(
             None,
             None,
-            vec![finished("t1", "bash", json!({"command": "ls"}), true, 40)],
+            vec![finished("t1", "bash", json!({"command": "ls"}), true, 1)],
         );
+        assert!(
+            !s.is_empty(),
+            "a step with a tool row has something to show"
+        );
+    }
+
+    #[test]
+    fn is_empty_is_false_when_only_text_is_present() {
+        let s = step(None, Some("Just a note."), Vec::new());
+        assert!(
+            !s.is_empty(),
+            "a step with interstitial text has something to show"
+        );
+    }
+
+    #[test]
+    fn is_empty_is_false_when_thinking_has_real_text() {
+        let s = step(Some("Actually thinking here."), None, Vec::new());
+        assert!(
+            !s.is_empty(),
+            "non-blank thinking is not the same as no thinking at all"
+        );
+    }
+
+    #[test]
+    fn step_tally_counts_one_tool_where_the_turn_summary_would_not() {
+        // The clocks deliberately disagree with the status here (started at
+        // 1_000, "finished" at a clock 9_000 ms later than a consistent
+        // fixture would use, while the wire's duration_ms stays 40): if
+        // summarize_rows ever reverted to ended_ms - started_ms, this
+        // assertion would see 9_040, not 40, and go red.
+        let mut r = ToolRow::new("t1", "bash", &json!({"command": "ls"}));
+        r.start(1_000);
+        r.finish(&ToolResult::success("out"), 40, 1_000 + 40 + 9_000);
+        let s = step(None, None, vec![r]);
         let t = step_tally(&s).expect("one tool is enough for a step tally");
         assert_eq!(t.commands, 1);
         assert_eq!(
             t.duration_ms, 40,
-            "duration comes from RowStatus, not the clocks"
+            "duration comes from RowStatus, not the clocks (which disagree with it here on purpose)"
         );
     }
 
