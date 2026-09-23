@@ -45,6 +45,7 @@ pub mod plugin_state;
 pub mod plugin_trust;
 pub mod plugin_vars;
 mod projection;
+pub mod readiness;
 pub mod registry;
 mod service_manager;
 mod service_ops;
