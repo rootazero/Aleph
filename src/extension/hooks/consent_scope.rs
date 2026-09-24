@@ -334,3 +334,86 @@ async fn an_approval_is_bound_to_the_root_it_was_reviewed_from() {
     fire_in(&at_second, second.path()).await;
     assert!(second.path().join("ran").exists());
 }
+
+// ── The script's content (review Q1) ──────────────────────────────────────
+//
+// `TEMPLATE` names its script through `${CLAUDE_PLUGIN_ROOT}`, the way a
+// Claude Code hook does. Until the consent resolver learned the path
+// variables, such an approval bound no content at all.
+
+/// Approve, then rewrite the script — a `git pull` — and fire again: the
+/// approval was for the old content, so the new script does not run and the
+/// hook reads as pending.
+#[tokio::test]
+async fn an_approved_hook_whose_script_is_rewritten_does_not_run() {
+    let (repo, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write_project(repo.path());
+    let hook_root = repo.path().join(".aleph");
+    let consent = consent_in(state.path());
+    let exec = HookExecutor::new(project_hooks(&[repo.path().to_path_buf()]))
+        .with_consent(consent.clone());
+
+    fire_in(&exec, repo.path()).await;
+    let recorded = consent.entries().remove(0);
+    consent
+        .approve(&recorded.fingerprint, recorded.plugin_root.as_deref())
+        .unwrap();
+    fire_in(&exec, repo.path()).await;
+    assert!(hook_root.join("ran").exists(), "approved: runs");
+
+    std::fs::remove_file(hook_root.join("ran")).unwrap();
+    std::fs::write(
+        hook_root.join("hooks/lint.sh"),
+        "touch ran; touch rewritten\n",
+    )
+    .unwrap();
+    fire_in(&exec, repo.path()).await;
+
+    assert!(
+        !hook_root.join("rewritten").exists(),
+        "the rewritten script ran under the old approval"
+    );
+    assert!(!hook_root.join("ran").exists());
+    assert_eq!(exec.inventory()[0].consent.as_deref(), Some("pending"));
+}
+
+/// An approval given while the script could not be hashed — every approval
+/// of a `${…}` script before the resolver learned the path variables —
+/// attests to no content. Once the script can be hashed it is refused, and
+/// the fire withdraws it to pending, so `aleph hooks test` reviews and binds
+/// what runs now.
+#[tokio::test]
+async fn an_approval_that_attests_to_no_script_is_withdrawn_once_the_script_can_be_hashed() {
+    let (repo, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write_project(repo.path());
+    let hook_root = repo.path().join(".aleph");
+    let project = canonical_root(repo.path());
+    // The entry a P4.4d-era approval of this hook left behind: bound to the
+    // project and the root, with no script fingerprint.
+    let fp = ShellHookConsent::fingerprint("user:project", Some(&project), TEMPLATE);
+    let unbound = serde_json::json!({ "version": 1, "entries": [{
+        "fingerprint": fp, "plugin_name": "user:project",
+        "project_root": project, "command": TEMPLATE, "event": "PreToolUse",
+        "plugin_root": hook_root, "status": "approved",
+        "first_seen": 1, "approved_at": 2
+    }] });
+    std::fs::write(state.path().join("allowlist.json"), unbound.to_string()).unwrap();
+    let consent = consent_in(state.path());
+    let exec = HookExecutor::new(project_hooks(&[repo.path().to_path_buf()]))
+        .with_consent(consent.clone());
+
+    fire_in(&exec, repo.path()).await;
+    assert!(
+        !hook_root.join("ran").exists(),
+        "an approval that attests to no content ran the script"
+    );
+    let entry = consent.entries().remove(0);
+    assert_eq!(entry.status, ConsentStatus::Pending, "withdrawn for review");
+    assert!(entry.script_fingerprint.is_some());
+
+    consent
+        .approve(&entry.fingerprint, entry.plugin_root.as_deref())
+        .unwrap();
+    fire_in(&exec, repo.path()).await;
+    assert!(hook_root.join("ran").exists(), "re-approved: runs");
+}
