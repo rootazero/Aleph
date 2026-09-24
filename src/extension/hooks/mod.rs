@@ -61,7 +61,7 @@ mod user_settings;
 
 pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry};
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
-pub(crate) use executor::read_capped;
+pub(crate) use executor::{bounded_env_value, read_capped};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};

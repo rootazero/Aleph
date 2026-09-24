@@ -71,7 +71,8 @@ pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
 pub use template::{
-    inline_shell_command, split_arguments, InlineArgs, InlineShell, SkillTemplate, TemplateCtx,
+    inline_shell_command, split_arguments, InlineArgs, InlineShell, InlineSite, SkillTemplate,
+    TemplateCtx,
 };
 pub use types::*;
 

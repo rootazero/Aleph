@@ -67,25 +67,30 @@ pub(crate) async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: u64) -> (Ve
     (buf, truncated)
 }
 
-/// Max bytes for a single payload-mirroring env var (`ARGUMENTS` /
-/// `TOOL_INPUT`). Comfortably under every platform's `ARG_MAX` (Linux 128KB
-/// per string, macOS 256KB total) so setting it can never push the spawn
-/// over the limit. The full value is always available on stdin.
+/// Max bytes for a single payload-mirroring env var (a hook's `ARGUMENTS` /
+/// `TOOL_INPUT`, an inline command's `ARGUMENTS`). Comfortably under every
+/// platform's `ARG_MAX` (Linux 128KB per string, macOS 256KB total) so
+/// setting it can never push the spawn over the limit. The value stays
+/// readable elsewhere — the marker says where.
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 /// `value` for the env var `key`, or a placeholder for any value past
 /// [`MAX_ENV_VALUE_BYTES`] — an oversized env var can make `spawn` fail with
-/// E2BIG, which on an interceptor seam fails closed and blocks the tool.
-fn bounded_env_value(key: &str, value: &str) -> String {
+/// E2BIG, which on an interceptor seam fails closed and blocks the tool, and
+/// for an inline command fails every command in the body. `read_instead`
+/// names where the child can still read it (a hook: `stdin JSON`; an inline
+/// command: its positional parameters), and is all the marker says.
+pub(crate) fn bounded_env_value(key: &str, value: &str, read_instead: &str) -> String {
     if value.len() <= MAX_ENV_VALUE_BYTES {
         return value.to_string();
     }
     debug!(
         key,
         len = value.len(),
-        "hook env value exceeds cap; omitting from env (full value is on stdin)"
+        read_instead,
+        "env value exceeds cap; replaced by a marker"
     );
-    format!("[{} bytes — read from stdin JSON]", value.len())
+    format!("[{} bytes — read from {read_instead}]", value.len())
 }
 
 /// A command hook's child process, derived once from the action: the shell
@@ -226,14 +231,14 @@ pub fn command_hook_invocation(
         context
             .arguments
             .as_deref()
-            .map(|v| bounded_env_value("ARGUMENTS", v).into()),
+            .map(|v| bounded_env_value("ARGUMENTS", v, "stdin JSON").into()),
     );
     set(
         "TOOL_INPUT",
         context
             .tool_input
             .as_deref()
-            .map(|v| bounded_env_value("TOOL_INPUT", v).into()),
+            .map(|v| bounded_env_value("TOOL_INPUT", v, "stdin JSON").into()),
     );
     set("SESSION_ID", Some(context.session_id.clone().into()));
     // The event's own variables, last: a key here (e.g. `TOOL_NAME` from

@@ -6,12 +6,17 @@
 //! - `$ARGUMENTS`, `$@` - the whole argument string
 //! - `` !`cmd` `` - inline shell, run by the caller's [`InlineShell`] with the
 //!   arguments as data ([`inline_shell_command`])
-//! - `@./path` - relative file reference (from skill directory)
-//! - `@/path` - absolute file reference: rejected
+//! - `@./path` - relative file reference (from skill directory), expanded only
+//!   where the `@` is the template's own text; one that cannot be read stays
+//!   as written
+//! - `@/path` - absolute file reference: rejected (left as written)
 
 use super::error::{ExtensionError, ExtensionResult};
+use super::hooks::{bounded_env_value, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES};
+use super::plugin_vars::PluginVars;
 use once_cell::sync::OnceCell;
 use regex::Regex;
+use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -57,11 +62,11 @@ const ARGUMENTS_VAR: &str = "ARGUMENTS";
 ///
 /// The template knows nothing about consent, cwd or timeouts — the caller
 /// (the gateway's slash-command seam) owns those and hands in an
-/// implementation, which spawns [`inline_shell_command`]. `cmd` is the
-/// plugin's text as written and never contains argument text; the arguments
-/// arrive beside it in `args`. `Err(text)` is substituted verbatim: a withheld
-/// or failed expansion must be visible to the model as such, never a silent
-/// blank.
+/// implementation, which spawns [`inline_shell_command`] with the command's
+/// [`InlineSite`]. `cmd` is the plugin's text as written and never contains
+/// argument text; the arguments arrive beside it in `args`. `Err(text)` is
+/// substituted verbatim: a withheld or failed expansion must be visible to the
+/// model as such, never a silent blank.
 #[async_trait::async_trait]
 pub trait InlineShell: Send + Sync {
     async fn run(&self, cmd: &str, args: &InlineArgs<'_>) -> Result<String, String>;
@@ -92,6 +97,22 @@ pub fn split_arguments(args: &str) -> Vec<String> {
     args.split_whitespace().map(str::to_string).collect()
 }
 
+/// Where an inline command runs and which plugin ships it: what its twin, a
+/// plugin's command hook, is told through the same variables
+/// ([`command_hook_invocation`](crate::extension::hooks::command_hook_invocation)).
+#[derive(Debug, Clone, Copy)]
+pub struct InlineSite<'a> {
+    /// The run's directory: the child's working directory AND
+    /// `CLAUDE_PROJECT_DIR` — one value, so the two cannot disagree. There is
+    /// no default: a caller that does not know it must not spawn.
+    pub cwd: &'a Path,
+    /// The plugin that ships the command: its id and its install root (not
+    /// its `commands/` directory). Sets `CLAUDE_PLUGIN_ROOT` and every
+    /// spelling of it and, for a valid plugin id, the `_DATA` pair. `None`:
+    /// all of them are removed.
+    pub plugin: Option<(&'a str, &'a Path)>,
+}
+
 /// The process for one `` !`cmd` ``: `cmd` is the shell's source, the
 /// arguments are its data.
 ///
@@ -99,18 +120,33 @@ pub fn split_arguments(args: &str) -> Vec<String> {
 /// `${2:-x}`, `$@`, `$#` and `$ARGUMENTS` are shell parameters — expanded as
 /// values, never parsed: a `/cmd $(…)` is text to the command, not code.
 /// `ARGUMENTS` is set even when empty, so the daemon's own value is never
-/// inherited. Inside an inline command the shell's rules apply, not the
-/// template's: `$10` is `${1}0` (write `${10}`), and a single-quoted `'$1'`
-/// stays literal.
+/// inherited; past the hook executor's env cap it holds only the marker
+/// `[N bytes — read from $1 … $N]` (an oversized value would make the spawn
+/// fail for every inline command in the body) while the positional
+/// parameters keep every word. Inside an inline command the shell's rules
+/// apply, not the template's: `$10` is `${1}0` (write `${10}`), and a
+/// single-quoted `'$1'` stays literal.
 ///
 /// On Windows (`cmd /C`) there are no positional parameters, anything passed
 /// after the command is appended to its line, and `%VAR%` is expanded before
 /// the line is parsed — so no argument reaches an inline command there:
 /// nothing is appended and `ARGUMENTS` is removed, not exported.
 ///
-/// The caller sets the directory, stdio and timeout.
+/// The environment otherwise mirrors a plugin command hook's: every spelling
+/// of the plugin root and data directory, and `CLAUDE_PROJECT_DIR`, is set
+/// from `site` when known and removed when not — never the daemon's own value
+/// (a daemon launched from inside a Claude Code session has them). The data
+/// directory is created when the command names it, as for a hook.
+///
+/// The child runs in `site.cwd` with stdin closed (`/dev/null`) and is killed
+/// when the handle is dropped, so a timeout does not orphan it. The caller
+/// sets stdout / stderr and the timeout.
 #[must_use]
-pub fn inline_shell_command(cmd: &str, args: &InlineArgs<'_>) -> tokio::process::Command {
+pub fn inline_shell_command(
+    cmd: &str,
+    args: &InlineArgs<'_>,
+    site: &InlineSite<'_>,
+) -> tokio::process::Command {
     use crate::utils::no_window::NoWindow;
     let mut command = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
@@ -118,34 +154,87 @@ pub fn inline_shell_command(cmd: &str, args: &InlineArgs<'_>) -> tokio::process:
         c
     } else {
         let mut c = tokio::process::Command::new("sh");
-        c.args(["-c", cmd, "sh"])
-            .args(args.positional)
-            .env(ARGUMENTS_VAR, args.raw);
+        c.args(["-c", cmd, "sh"]).args(args.positional).env(
+            ARGUMENTS_VAR,
+            bounded_env_value(ARGUMENTS_VAR, args.raw, "$1 … $N"),
+        );
         c
     };
-    command.no_window();
+    // A data directory for plugin-owned commands only, as for a hook: a
+    // label that is not a plugin id has none.
+    let vars = site
+        .plugin
+        .filter(|(id, _)| crate::extension::manifest::validate_plugin_id(id).is_ok())
+        .map(|(id, root)| PluginVars::new(id, root));
+    if let Some(vars) = &vars {
+        vars.ensure_data_dir_if_referenced(cmd);
+    }
+    set_or_remove(
+        &mut command,
+        &PLUGIN_ROOT_VARIABLES,
+        site.plugin.map(|(_, root)| root),
+    );
+    set_or_remove(
+        &mut command,
+        &PLUGIN_DATA_VARIABLES,
+        vars.as_ref().map(PluginVars::data_dir),
+    );
+    command
+        .env("CLAUDE_PROJECT_DIR", site.cwd)
+        .current_dir(site.cwd)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .no_window();
     command
 }
 
+/// Every name in `names` set to `value`, or removed when there is none.
+fn set_or_remove(command: &mut tokio::process::Command, names: &[&str], value: Option<&Path>) {
+    for name in names {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+}
+
 /// `${N:-default}`, `$N` (1-based; out of range → the default, else empty),
-/// `$ARGUMENTS` and `$@` over one stretch of template text.
-fn substitute_arguments(text: &str, args: &InlineArgs<'_>) -> String {
-    ARGUMENT_REGEX
-        .replace_all(text, |cap: &regex::Captures<'_>| {
-            let (index, default) = match (cap.get(1), cap.get(3)) {
-                (Some(n), _) => (n.as_str(), cap.get(2).map_or("", |d| d.as_str())),
-                (None, Some(n)) => (n.as_str(), ""),
-                // `$ARGUMENTS` / `$@`
-                (None, None) => return args.raw.to_string(),
-            };
-            index
-                .parse::<usize>()
-                .ok()
-                .and_then(|i| i.checked_sub(1))
-                .and_then(|i| args.positional.get(i))
-                .map_or_else(|| default.to_string(), Clone::clone)
-        })
-        .into_owned()
+/// `$ARGUMENTS` and `$@` over one stretch of template text, in one pass.
+/// Also returns the byte ranges of the result that are inserted argument
+/// text: data, never read as template syntax again (a `@` there is not a
+/// file reference).
+fn substitute_arguments(text: &str, args: &InlineArgs<'_>) -> (String, Vec<Range<usize>>) {
+    let mut out = String::with_capacity(text.len());
+    let mut inserted = Vec::new();
+    let mut last = 0;
+    for cap in ARGUMENT_REGEX.captures_iter(text) {
+        let Some(whole) = cap.get(0) else {
+            continue;
+        };
+        out.push_str(text.get(last..whole.start()).unwrap_or_default());
+        let start = out.len();
+        out.push_str(&argument_value(&cap, args));
+        inserted.push(start..out.len());
+        last = whole.end();
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    (out, inserted)
+}
+
+/// The value one [`ARGUMENT_REGEX`] match stands for.
+fn argument_value(cap: &regex::Captures<'_>, args: &InlineArgs<'_>) -> String {
+    let (index, default) = match (cap.get(1), cap.get(3)) {
+        (Some(n), _) => (n.as_str(), cap.get(2).map_or("", |d| d.as_str())),
+        (None, Some(n)) => (n.as_str(), ""),
+        // `$ARGUMENTS` / `$@`
+        (None, None) => return args.raw.to_string(),
+    };
+    index
+        .parse::<usize>()
+        .ok()
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| args.positional.get(i))
+        .map_or_else(|| default.to_string(), Clone::clone)
 }
 
 /// One inline command's expansion: its stdout, the runner's placeholder, or —
@@ -212,14 +301,19 @@ impl SkillTemplate {
     /// 2. The text around them gets `${N:-default}`, `$N` (1-based over
     ///    [`split_arguments`]; out of range → the default, else empty),
     ///    `$ARGUMENTS` and `$@` in one pass.
-    /// 3. `@./file` references are expanded over the result, so `@$1` names a
-    ///    file by argument.
+    /// 3. `@./file` references are expanded in that text where the `@` is the
+    ///    template's own: an argument may complete the path (`@./$1`), but an
+    ///    `@` inside argument text or an inline command's output is data and
+    ///    stays as it is. A reference that cannot be read — absolute,
+    ///    escaping the base directory, missing — stays as written and is
+    ///    logged; it does not fail the render.
     ///
     /// Claude Code and pi substitute the arguments into the whole body first,
     /// so `` !`gh pr view $1` `` runs with the argument spliced into its text.
     /// Here the command reads `$1` as a shell parameter: the same result for
-    /// a plain argument, text rather than code for one holding `$(…)`, `;` or
-    /// a backtick.
+    /// a plain argument (one with no shell syntax — no quotes, `~`, `$`,
+    /// backtick or `;`, which reach the command as literal characters), text
+    /// rather than code for one holding `$(…)`, `;` or a backtick.
     pub async fn render(&self, arguments: &str, ctx: &TemplateCtx<'_>) -> ExtensionResult<String> {
         let positional = split_arguments(arguments);
         let args = InlineArgs {
@@ -232,59 +326,92 @@ impl SkillTemplate {
             .captures_iter(&self.content)
             .filter_map(|cap| Some((cap.get(0)?.range(), cap.get(1)?.as_str().trim())))
             .collect();
-        let text = |range: std::ops::Range<usize>| self.content.get(range).unwrap_or_default();
+        let text = |range: Range<usize>| self.content.get(range).unwrap_or_default();
+        // File references attempted so far, across every stretch of the render.
+        let mut refs = 0;
         let mut out = String::with_capacity(self.content.len());
         let mut last = 0;
         for (whole, cmd) in commands {
-            out.push_str(&substitute_arguments(text(last..whole.start), &args));
+            out.push_str(
+                &self
+                    .render_text(text(last..whole.start), &args, &mut refs)
+                    .await?,
+            );
             out.push_str(&run_inline(cmd, &args, ctx).await);
             last = whole.end;
         }
-        out.push_str(&substitute_arguments(text(last..self.content.len()), &args));
-        self.expand_file_refs(&out).await
+        out.push_str(
+            &self
+                .render_text(text(last..self.content.len()), &args, &mut refs)
+                .await?,
+        );
+        Ok(out)
     }
 
-    /// Expand all file references in the content
-    async fn expand_file_refs(&self, content: &str) -> ExtensionResult<String> {
-        let mut result = content.to_string();
-        let mut replacements = Vec::new();
+    /// Steps 2 and 3 of [`Self::render`] over one stretch of template text.
+    async fn render_text(
+        &self,
+        text: &str,
+        args: &InlineArgs<'_>,
+        refs: &mut usize,
+    ) -> ExtensionResult<String> {
+        let (substituted, inserted) = substitute_arguments(text, args);
+        self.expand_file_refs(&substituted, &inserted, refs).await
+    }
 
-        // Find all file references
+    /// Expand the file references in `content` whose `@` is template text —
+    /// one starting inside an `inserted` range (argument text) is data and is
+    /// left alone. A reference that cannot be resolved or read stays as
+    /// written and is logged. `refs` counts the references attempted across
+    /// the whole render; past [`MAX_FILE_REFS`] the render fails (the
+    /// template's own references are the only ones counted).
+    async fn expand_file_refs(
+        &self,
+        content: &str,
+        inserted: &[Range<usize>],
+        refs: &mut usize,
+    ) -> ExtensionResult<String> {
+        // Collected before the first `.await`, as in `render`.
+        let mut found = Vec::new();
         for cap in file_ref_regex()?.captures_iter(content) {
-            if replacements.len() >= MAX_FILE_REFS {
+            let (Some(full_match), Some(path)) = (cap.get(0), cap.get(1)) else {
+                continue;
+            };
+            if inserted.iter().any(|r| r.contains(&full_match.start())) {
+                continue;
+            }
+            if *refs >= MAX_FILE_REFS {
                 return Err(ExtensionError::template_error(format!(
                     "too many file references (cap {MAX_FILE_REFS})"
                 )));
             }
-            let full_match = cap
-                .get(0)
-                .ok_or_else(|| ExtensionError::template_error("regex capture group 0 missing"))?;
-            let path_str = cap
-                .get(1)
-                .ok_or_else(|| {
-                    ExtensionError::template_error("regex capture group 1 missing for file refs")
-                })?
-                .as_str();
+            *refs += 1;
+            found.push((full_match.range(), path.as_str()));
+        }
 
-            // Resolve the path
-            let resolved_path = self.resolve_path(path_str)?;
-
-            // Read file content
-            let file_content = self.read_file(&resolved_path).await?;
-
-            replacements.push((
-                full_match.start(),
-                full_match.end(),
-                full_match.as_str().to_string(),
-                file_content,
-            ));
+        let mut replacements = Vec::new();
+        for (range, path_str) in found {
+            let read = match self.resolve_path(path_str) {
+                Ok(path) => self.read_file(&path).await,
+                Err(e) => Err(e),
+            };
+            match read {
+                Ok(file_content) => replacements.push((range, file_content)),
+                Err(e) => tracing::warn!(
+                    reference = content.get(range).unwrap_or_default(),
+                    base_dir = %self.base_dir.display(),
+                    error = %e,
+                    "file reference not read; left as written"
+                ),
+            }
         }
 
         // Apply replacements in reverse order to preserve positions.
         // Use positional replacement (single occurrence) to avoid corrupting
         // file contents that may contain the same reference pattern.
-        for (start, end, _, replacement) in replacements.into_iter().rev() {
-            result.replace_range(start..end, &replacement);
+        let mut result = content.to_string();
+        for (range, replacement) in replacements.into_iter().rev() {
+            result.replace_range(range, &replacement);
         }
 
         Ok(result)
@@ -425,29 +552,49 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         tokio::fs::write(&file_path, "Test content").await.unwrap();
 
-        let template = SkillTemplate::with_base_dir(
-            &format!("Content: @{}", file_path.display()),
-            PathBuf::from("/other"),
-        );
+        let body = format!("Content: @{}", file_path.display());
+        let template = SkillTemplate::with_base_dir(&body, temp.path().to_path_buf());
 
-        // Absolute paths must be rejected
-        let result = template.render("", &no_shell()).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, ExtensionError::FileReference { .. }));
+        // Absolute paths are never read — even one inside the base directory.
+        // Not an error either: the reference stays as written.
+        let result = template.render("", &no_shell()).await.unwrap();
+        assert_eq!(result, body, "an absolute reference was read");
     }
 
+    /// Base dir `<tmp>/skill`, a real file at `<tmp>/outside.txt`: `..` does
+    /// not reach it, and the render goes on with the reference as written.
     #[tokio::test]
     async fn test_path_traversal_blocked() {
-        let template = SkillTemplate::with_base_dir(
-            "Content: @./../../../etc/passwd",
-            PathBuf::from("/test/skill"),
-        );
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("skill");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::write(temp.path().join("outside.txt"), "OUTSIDE").unwrap();
+        let template = SkillTemplate::with_base_dir("Content: @./../outside.txt", base);
 
-        let result = template.render("", &no_shell()).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, ExtensionError::FileReference { .. }));
+        let result = template.render("", &no_shell()).await.unwrap();
+        assert_eq!(
+            result, "Content: @./../outside.txt",
+            "`..` escaped the base directory"
+        );
+    }
+
+    /// A symlink inside the base directory that points out of it is not
+    /// followed.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_symlink_out_of_the_base_directory_is_not_read() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("skill");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::write(temp.path().join("outside.txt"), "OUTSIDE").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("outside.txt"), base.join("link.txt")).unwrap();
+        let template = SkillTemplate::with_base_dir("Content: @./link.txt", base);
+
+        let result = template.render("", &no_shell()).await.unwrap();
+        assert_eq!(
+            result, "Content: @./link.txt",
+            "a symlink escaped the base directory"
+        );
     }
 
     #[tokio::test]
@@ -457,8 +604,55 @@ mod tests {
             PathBuf::from("/test/skill"),
         );
 
-        let result = template.render("", &no_shell()).await;
-        assert!(result.is_err());
+        let result = template.render("", &no_shell()).await.unwrap();
+        assert_eq!(result, "Content: @./nonexistent.txt");
+    }
+
+    /// One reference that cannot be read does not cost the others, or the
+    /// render: the `@/` import alias of a Next.js / Vite codebase, a missing
+    /// file and a readable one, side by side.
+    #[tokio::test]
+    async fn an_unreadable_reference_stays_as_written_and_the_render_goes_on() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("ok.txt"), "OK").unwrap();
+        let template = SkillTemplate::with_base_dir(
+            "a @/lib/utils b @./missing.txt c @./ok.txt d",
+            temp.path().to_path_buf(),
+        );
+        assert_eq!(
+            template.render("", &no_shell()).await.unwrap(),
+            "a @/lib/utils b @./missing.txt c OK d"
+        );
+    }
+
+    /// The path of a template reference may come from an argument
+    /// (`@./$1`, `@$1`): the `@` is the template's.
+    #[tokio::test]
+    async fn an_argument_may_complete_a_template_reference() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("notes.txt"), "NOTES").unwrap();
+        let template = SkillTemplate::with_base_dir("[@./$1] [@$2]", temp.path().to_path_buf());
+        assert_eq!(
+            template
+                .render("notes.txt ./notes.txt", &no_shell())
+                .await
+                .unwrap(),
+            "[NOTES] [NOTES]"
+        );
+    }
+
+    /// An `@` the arguments bring is data: not read, even when the file is
+    /// there.
+    #[tokio::test]
+    async fn a_file_reference_in_argument_text_is_not_read() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("notes.txt"), "NOTES").unwrap();
+        let template =
+            SkillTemplate::with_base_dir("Q: $ARGUMENTS [$1]", temp.path().to_path_buf());
+        assert_eq!(
+            template.render("@./notes.txt", &no_shell()).await.unwrap(),
+            "Q: @./notes.txt [@./notes.txt]"
+        );
     }
 
     #[test]
@@ -657,6 +851,10 @@ mod tests {
                 raw: "",
                 positional: &none,
             },
+            &InlineSite {
+                cwd: Path::new("/"),
+                plugin: None,
+            },
         );
         let env: Vec<_> = cmd.as_std().get_envs().collect();
         assert!(
@@ -668,6 +866,34 @@ mod tests {
         );
     }
 
+    /// The builder, not its caller, closes stdin and kills the child when the
+    /// handle is dropped (a timeout must not orphan it), and runs it in the
+    /// site's directory. `{:#?}` is the only reader std offers for a
+    /// command's stdin; it prints the field only when it was set.
+    #[test]
+    fn the_builder_closes_stdin_and_kills_on_drop() {
+        let none: [String; 0] = [];
+        let cwd = std::env::temp_dir();
+        let cmd = inline_shell_command(
+            "true",
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite {
+                cwd: &cwd,
+                plugin: None,
+            },
+        );
+        assert!(cmd.get_kill_on_drop(), "kill_on_drop is not set");
+        let shown = format!("{:#?}", cmd.as_std());
+        assert!(
+            shown.contains("stdin: Some(") && shown.contains("Null"),
+            "stdin is not closed: {shown}"
+        );
+        assert_eq!(cmd.as_std().get_current_dir(), Some(cwd.as_path()));
+    }
+
     /// The production process builder behind a minimal runner: what P4.7c's
     /// consent-gated runner spawns, without the consent and the timeout.
     #[cfg(unix)]
@@ -677,14 +903,185 @@ mod tests {
     #[async_trait::async_trait]
     impl InlineShell for Sh {
         async fn run(&self, cmd: &str, args: &InlineArgs<'_>) -> Result<String, String> {
-            let out = inline_shell_command(cmd, args)
-                .current_dir(&self.0)
-                .stdin(std::process::Stdio::null())
+            let site = InlineSite {
+                cwd: &self.0,
+                plugin: None,
+            };
+            let out = inline_shell_command(cmd, args, &site)
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         }
+    }
+
+    /// Output is data. A PR body read through `` !`gh pr view $1` `` is
+    /// written by whoever opened the PR: an inline command, `$` syntax or a
+    /// file reference in it is neither run, substituted nor read.
+    #[tokio::test]
+    async fn inline_output_is_never_rescanned() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("notes.txt"), "NOTES").unwrap();
+        let shell = RecordingShell(
+            Default::default(),
+            Ok("!`touch X` $1 ${1:-d} $ARGUMENTS @./notes.txt @/lib/utils".into()),
+        );
+        let t = SkillTemplate::with_base_dir("[!`gh pr view $1`]", temp.path().to_path_buf());
+        let out = t
+            .render(
+                "ARG",
+                &TemplateCtx {
+                    shell: Some(&shell),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            "[!`touch X` $1 ${1:-d} $ARGUMENTS @./notes.txt @/lib/utils]"
+        );
+        assert_eq!(
+            shell.calls(),
+            [Call {
+                cmd: "gh pr view $1".into(),
+                raw: "ARG".into(),
+                positional: vec!["ARG".into()],
+            }],
+            "the output was run as an inline command"
+        );
+    }
+
+    /// Past the env cap `ARGUMENTS` holds a marker that says where the words
+    /// still are, and the positional parameters keep them all.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn an_oversized_argument_string_is_a_marker_in_arguments() {
+        let dir = TempDir::new().unwrap();
+        let shell = Sh(dir.path().to_path_buf());
+        let long = "a".repeat(40 * 1024);
+        let t = SkillTemplate::new(
+            r#"[!`printf '%s|%s|%s' "$ARGUMENTS" "${#1}" "$2"`]"#,
+            Path::new("/x/cmd.md"),
+        );
+        let out = t
+            .render(
+                &format!("{long} b"),
+                &TemplateCtx {
+                    shell: Some(&shell),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(out, "[[40962 bytes — read from $1 … $N]|40960|b]");
+    }
+
+    /// The daemon-side values an inline command must never see as its own.
+    #[cfg(unix)]
+    const DAEMON_ENV: [&str; 6] = [
+        "PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_ROOT",
+        "ALEPH_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_DATA",
+        "ALEPH_PLUGIN_DATA",
+        "CLAUDE_PROJECT_DIR",
+    ];
+
+    /// Runs `printf` over [`DAEMON_ENV`] (`unset` when a name is not set) in
+    /// `cwd` for `plugin`.
+    #[cfg(unix)]
+    async fn shown_env(cwd: &Path, plugin: Option<(&str, &Path)>) -> Vec<String> {
+        let none: [String; 0] = [];
+        let shown: Vec<String> = DAEMON_ENV
+            .iter()
+            .map(|key| format!("\"${{{key}-unset}}\""))
+            .collect();
+        let out = inline_shell_command(
+            &format!("printf '%s\\n' {}", shown.join(" ")),
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite { cwd, plugin },
+        )
+        .output()
+        .await
+        .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The site's plugin root, data directory and run directory reach the
+    /// command under every spelling a plugin command hook gets.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn the_path_variables_come_from_the_site() {
+        let cwd = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let shown = shown_env(cwd.path(), Some(("plug", root.path()))).await;
+        let root = root.path().to_string_lossy().to_string();
+        assert_eq!(shown[..3], [root.clone(), root.clone(), root], "{shown:?}");
+        for data in &shown[3..5] {
+            assert!(
+                Path::new(data).ends_with("data/plug"),
+                "not the plugin's data directory: {shown:?}"
+            );
+        }
+        assert_eq!(shown[5], cwd.path().to_string_lossy(), "{shown:?}");
+    }
+
+    /// A name the site does not know is removed, not inherited from the
+    /// daemon — whose `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` are real
+    /// values when it was launched from inside a Claude Code session. A
+    /// label that is not a plugin id has a root but no data directory.
+    #[tokio::test]
+    #[cfg(unix)]
+    #[serial_test::serial] // writes process env a spawned child reads
+    async fn a_path_variable_the_site_lacks_is_not_inherited_from_the_daemon() {
+        /// Sets the daemon-side values for the test and removes them after.
+        struct DaemonEnv;
+        impl Drop for DaemonEnv {
+            fn drop(&mut self) {
+                for key in DAEMON_ENV {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+        let _daemon = DaemonEnv;
+        for key in DAEMON_ENV {
+            std::env::set_var(key, "from-the-daemon");
+        }
+        let cwd = TempDir::new().unwrap();
+        let here = cwd.path().to_string_lossy().to_string();
+
+        assert_eq!(
+            shown_env(cwd.path(), None).await,
+            ["unset", "unset", "unset", "unset", "unset", here.as_str()]
+        );
+        let root = TempDir::new().unwrap();
+        let root_text = root.path().to_string_lossy().to_string();
+        assert_eq!(
+            shown_env(cwd.path(), Some(("user:project", root.path()))).await,
+            [
+                root_text.as_str(),
+                root_text.as_str(),
+                root_text.as_str(),
+                "unset",
+                "unset",
+                here.as_str()
+            ]
+        );
+    }
+
+    /// The gateway awaits a render inside a spawned task.
+    #[test]
+    fn a_render_is_send() {
+        fn assert_send<T: Send>(_: &T) {}
+        let t = SkillTemplate::new("x", Path::new("/x/cmd.md"));
+        let ctx = no_shell();
+        let render = t.render("", &ctx);
+        assert_send(&render);
     }
 
     /// `/cmd $(touch M)` on a body that echoes its arguments: the shell reads
