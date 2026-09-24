@@ -1829,8 +1829,8 @@ async fn a_childs_turn_started_is_not_persisted_under_the_parents_task() {
 }
 
 /// CONTROL — the other direction of the same gate: a child's ACCOUNTING
-/// events (its `MeteringProvider`s' `ProviderUsage`) keep today's route and
-/// are still persisted under the parent's task, where `teams.usage` and the
+/// events (its `MeteringProvider`s' `ProviderUsage`) keep the parent-task
+/// route and are still persisted under the parent's task, where `teams.usage` and the
 /// doctor's cache checks count them. Green before and after the cut by
 /// design; red if the cut takes the accounting route with it (the child's
 /// metering handed the child chain, or no accounting sink at all).

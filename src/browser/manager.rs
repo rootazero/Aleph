@@ -1713,7 +1713,7 @@ mod tests {
         let src = include_str!("manager.rs").replace('\r', "");
         // `code_text` on top of the `#[cfg(test)]` bound, matching the two
         // sibling pins (`engine_handle_is_built_in_exactly_one_production_place`
-        // and `both_daemon_exit_paths_reap_background_jobs_and_browsers`, whose
+        // and `both_daemon_exit_paths_run_every_reaper`, whose
         // own comment documents this hazard). Without it a COMMENT spelling the
         // call satisfies the assertion, so deleting the statement and leaving a
         // `// engines.shutdown_all()` behind would stay green — a guard a
@@ -2236,7 +2236,7 @@ mod tests {
     /// production half is `cfg(not(test))` — it reads the real `$ALEPH_HOME`
     /// and kills pids, so no unit test may run it — which leaves the wire
     /// itself unobservable at runtime. Same shape and the same reason as
-    /// `both_daemon_exit_paths_reap_background_jobs_and_browsers`. Deleting the
+    /// `both_daemon_exit_paths_run_every_reaper`. Deleting the
     /// call then fails a test by name, instead of silently letting every
     /// crashed daemon's Chromium survive forever.
     #[test]

@@ -952,9 +952,9 @@ where
         //
         // `Ok` arm: released right AFTER `stamp_run_meta` returns. While the
         // claim is held, no queued run on this session can append its
-        // `RunStarted` ahead of this run's `AssistantRunMeta`. Released before
-        // the meta — where the single drop used to sit, above this match —
-        // a queued run's opener landed first; the projector then anchored the
+        // `RunStarted` ahead of this run's `AssistantRunMeta`. Before the fix,
+        // the claim was released before the meta, by a single drop above this
+        // match. A queued run's opener then landed first; the projector anchored the
         // meta on THAT opener, found no assistant row in the range, finalised
         // it `NoRowInRange`, and this run went unbilled until the next boot,
         // where the heal synthesizes a stamp from the run's own messages —
