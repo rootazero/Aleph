@@ -13,7 +13,9 @@
 //! The `resolve` call itself stays at each executor's own site on purpose: the
 //! `RunRequest` producer census
 //! (`execution_engine::run_loop::tests::every_run_producer_answers_the_fire_time_authority_question`,
-//! added by T09) checks for it per file.
+//! added by T09) checks for it per file. The one resolve that lives HERE is
+//! [`session_may_act`], a pre-check that returns no grant — see its doc for
+//! why it must not sit in the producer's own file.
 
 use std::collections::HashMap;
 
@@ -130,6 +132,34 @@ where
         }),
         other => other,
     }
+}
+
+/// Whether the person behind a session row may act at all — the question a
+/// boot or on-demand resume asks BEFORE it repairs the log or spends a
+/// crash-loop attempt (ruling a, §15). `Refused` names the person checked,
+/// exactly as [`authorize_session_run`] does, because it IS that call.
+///
+/// Returns a verdict and NO grant, deliberately. The grant a resumed run
+/// executes under is resolved and applied once, in
+/// `ResumeCoordinator::retrigger`, against the run's FINAL metadata: the
+/// carried `caller_role` that `stamp_origin_identity` restores for a channel
+/// origin decides the ceiling, and a grant computed here, without it, would
+/// stamp `member` over a `guest` — raising it.
+///
+/// Lives here rather than in `resume_coordinator.rs` so that file's
+/// `authority::resolve(` and `authorize_session_run(` are `retrigger`'s
+/// alone: the producer census reads those tokens per file, and a second
+/// spelling beside the one that APPLIES the grant would keep the census green
+/// with that call deleted (T09 re-review, N1).
+#[must_use]
+pub(crate) fn session_may_act(
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+) -> FireVerdict {
+    authorize_session_run(
+        |subject| crate::scope::authority::resolve(&subject),
+        row,
+        &mut HashMap::new(),
+    )
 }
 
 #[cfg(test)]

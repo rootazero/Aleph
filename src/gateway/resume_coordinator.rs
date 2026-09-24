@@ -342,10 +342,13 @@ pub enum ResumeRefusal {
     /// Settled for good, and without spending a crash-loop attempt: the
     /// candidate is asked BEFORE the repair and the intent stamp
     /// (`attempt_gate`), and a refusal closes the run once with
-    /// `RunFinished { Abandoned }` under that same sentence, so the next boot
-    /// does not re-ask it. (The `retrigger` backstop can still report this
-    /// word for the one case the pre-check cannot see — the person refused
-    /// between the pre-check and the retrigger.)
+    /// `RunFinished { Abandoned }`, so the next boot does not re-ask it. That
+    /// settle is also counted under `abandoned` and this detail adds the next
+    /// step (send the message again once the account may act); the
+    /// conversation itself reads a sentence that names nobody
+    /// (`record_refused_settle`). (The `retrigger` backstop can still report
+    /// this word for the one case the pre-check cannot see — the person
+    /// refused between the pre-check and the retrigger.)
     AuthorityRefused(String),
     /// Fire-time authority could not be established (the users store or the
     /// session row could not be read, ruling R-a). Nothing is written: no
@@ -963,6 +966,39 @@ fn attempt_gate(
         FireVerdict::Proceed if attempts >= max_attempts => AttemptGate::CrashLoopCap,
         FireVerdict::Proceed => AttemptGate::Stamp(attempts.saturating_add(1)),
     }
+}
+
+/// What the conversation reads when a resume is settled for a refused
+/// authority: names nobody and discloses no account status. The notice goes
+/// in-band and to the origin channel, and in a room both are read by every
+/// participant — "`u-bob` was deactivated" is not theirs to learn (T09
+/// re-review, N5). The operator's copy, with the person and the reason, is in
+/// the report and the log.
+const REFUSED_SETTLE_NOTICE: &str = "the account it was running for can no longer run it";
+
+/// Record a refused-authority settle in `report` and return the sentence the
+/// conversation may read.
+///
+/// The run is CLOSED (`RunFinished { Abandoned }`), so it counts under
+/// `abandoned` — the `agent.resume` receipt then reads `abandoned`, not
+/// `not_resumed`, whose own wording says "retry" (T09 re-review, N4). The
+/// refusal entry keeps the full reason for the operator and says what the
+/// user can do next: nothing is left to resume, the message has to be sent
+/// again once the account may act.
+pub(crate) fn record_refused_settle(
+    session_id: &SessionId,
+    reason: &str,
+    report: &mut ResumeReport,
+) -> String {
+    report.abandoned += 1;
+    report.refused.push((
+        session_id.clone(),
+        ResumeRefusal::AuthorityRefused(format!(
+            "{reason}. The run was closed, not left pending: once the account is \
+             reactivated, send the message again."
+        )),
+    ));
+    REFUSED_SETTLE_NOTICE.to_string()
 }
 
 /// When this candidate was last *alive*, in recording time.
@@ -1960,9 +1996,7 @@ impl ResumeCoordinator {
 
     /// Fire-time authority for this session, asked before any attempt is
     /// spent: the durable row's owner (no author rides a resume — see
-    /// `retrigger`), through the same seam `retrigger` and the busy-queue
-    /// reinjection use. An unreadable row is `Unknown` (R-a), never "no
-    /// owner".
+    /// `retrigger`). An unreadable row is `Unknown` (R-a), never "no owner".
     async fn authority_preflight(
         &self,
         session_id: &SessionId,
@@ -1971,11 +2005,10 @@ impl ResumeCoordinator {
             Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
                 "session row unreadable: {e}"
             )),
-            Ok(row) => crate::gateway::fire_gate::authorize_session_run(
-                |subject| crate::scope::authority::resolve(&subject),
-                row.as_ref(),
-                &mut HashMap::new(),
-            ),
+            // A verdict, not a grant: the grant is resolved and applied in
+            // `retrigger`, against the run's final metadata — see
+            // `fire_gate::session_may_act` for why it cannot be computed here.
+            Ok(row) => crate::gateway::fire_gate::session_may_act(row.as_ref()),
         }
     }
 
@@ -1991,9 +2024,10 @@ impl ResumeCoordinator {
             .push((session_id.clone(), ResumeRefusal::AuthorityUnknown(reason)));
     }
 
-    /// [`AttemptGate::SettleRefused`]: close the run once under the refusal's
-    /// own sentence (which names the person and whether they were deactivated
-    /// or are gone), and report the refusal. No intent stamp is written.
+    /// [`AttemptGate::SettleRefused`]: close the run once and record it (see
+    /// [`record_refused_settle`]). No intent stamp is written. The full reason
+    /// — the person, deactivated or gone — goes to the log and the report;
+    /// the conversation reads only the private sentence.
     async fn settle_refused(
         &self,
         session_id: &SessionId,
@@ -2006,10 +2040,8 @@ impl ResumeCoordinator {
             reason = %reason,
             "resume: fire-time authority refused; settling the candidate (no attempt spent)"
         );
-        self.abandon(session_id, what, &reason).await;
-        report
-            .refused
-            .push((session_id.clone(), ResumeRefusal::AuthorityRefused(reason)));
+        let notice = record_refused_settle(session_id, &reason, report);
+        self.abandon(session_id, what, &notice).await;
     }
 
     /// Terminate an abandoned candidate honestly: emit `RunFinished {
@@ -3362,6 +3394,44 @@ mod tests {
                 "attempts = {attempts}: an unknown authority must neither stamp nor abandon"
             );
         }
+    }
+
+    /// N4: a refused-authority settle is counted CLOSED (`abandoned`, which is
+    /// what the run is after its `RunFinished { Abandoned }`), and its refusal
+    /// entry keeps the full reason plus what the user can do next.
+    #[test]
+    fn a_refused_settle_is_counted_closed_and_says_what_to_do_next() {
+        let session = SessionId::main("main");
+        let mut report = ResumeReport::default();
+        let _ = record_refused_settle(
+            &session,
+            "principal deactivated — session owner `u-bob`",
+            &mut report,
+        );
+        assert_eq!(report.abandoned, 1, "a settled run is closed, not pending");
+        let [(_, ResumeRefusal::AuthorityRefused(detail))] = report.refused.as_slice() else {
+            panic!("one AuthorityRefused entry expected, got {:?}", report.refused);
+        };
+        assert!(detail.contains("principal deactivated — session owner `u-bob`"), "{detail}");
+        assert!(detail.contains("send the message again"), "{detail}");
+    }
+
+    /// N5: the sentence the conversation reads — in-band and on the origin
+    /// channel, i.e. by every room participant — names nobody and discloses
+    /// no account status; the operator's copy is the report entry above.
+    #[test]
+    fn the_refused_settle_notice_names_nobody() {
+        let mut report = ResumeReport::default();
+        let notice = record_refused_settle(
+            &SessionId::main("main"),
+            "principal deactivated — session owner `u-bob`",
+            &mut report,
+        );
+        for private in ["u-bob", "deactivated", "gone", "principal"] {
+            assert!(!notice.contains(private), "the public notice leaks {private:?}: {notice}");
+        }
+        let rendered = Abandoned::InterruptedRun.notice(&notice);
+        assert!(!rendered.contains("u-bob"), "{rendered}");
     }
 
     /// I1: a refused authority settles the candidate under its own reason —

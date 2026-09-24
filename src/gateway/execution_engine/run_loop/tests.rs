@@ -369,7 +369,9 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "orphan-burst rescue clones the interrupted request's metadata",
         ingress: Ingress::Machine,
         ingress_why: "rescue of an already-admitted request. A real steering message is a different path — it reached `build_run_request` on its way in and stamped there",
-        authority: Authority::InheritsRun { seam: "request.metadata.clone()" },
+        authority: Authority::InheritsRun {
+            seam: "let mut metadata = request.metadata.clone();",
+        },
         authority_why: "no person is live here: rescue of the ENCLOSING run's orphaned steering burst — the request this process admitted moments earlier — whose already-resolved metadata it clones",
     },
     RunProducer {
@@ -500,6 +502,34 @@ fn seam_used(code: &str, seam: &str) -> bool {
 /// The call a `Resolves` / `ResolvedUpstream` answer must still contain.
 /// Path-qualified on purpose: `resolve_with` (test injection) must not count.
 const AUTHORITY_RESOLVE: &str = "authority::resolve(";
+
+/// `seam_used`'s two exclusions, pinned: an import and the seam's own
+/// definition must NOT count as a use, or the old always-green shapes (an
+/// error-type import under an auth module path, a producer's own function
+/// name) come straight back (T09 re-review, N2).
+#[test]
+fn seam_used_does_not_count_a_use_import() {
+    let import = "use crate::gateway::caller_identity::current_caller_role;\n\
+                  pub(crate) use crate::gateway::caller_identity::current_caller_role;\n";
+    assert!(
+        !seam_used(import, "current_caller_role"),
+        "an import proves the name exists, not that anything reads the live caller"
+    );
+    let call = format!("{import}    let role = current_caller_role();\n");
+    assert!(seam_used(&call, "current_caller_role"), "a call is a use");
+}
+
+#[test]
+fn seam_used_does_not_count_the_seams_own_definition() {
+    let definition = "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
+                      pub(crate) fn build_sub_metadata(parent: Option<&str>) -> Meta {\n}\n";
+    assert!(
+        !seam_used(definition, "build_sub_metadata("),
+        "a producer's own definition proves nothing about what it carries"
+    );
+    let call = format!("{definition}    let sub = build_sub_metadata(None);\n");
+    assert!(seam_used(&call, "build_sub_metadata("), "a call is a use");
+}
 
 /// Evidence that a producer APPLIES the grant it resolved, rather than only
 /// asking for it: the seam that resolves-and-stamps, the verdict mapping that
@@ -776,15 +806,30 @@ fn every_run_producer_answers_the_fire_time_authority_question() {
     for p in RUN_REQUEST_PRODUCERS {
         match p.authority {
             Authority::Resolves => {
-                if code_of(p.file).contains(AUTHORITY_RESOLVE) {
-                    resolved += 1;
-                } else {
+                let code = code_of(p.file);
+                if !code.contains(AUTHORITY_RESOLVE) {
                     wrong.push(format!(
                         "{} is classified `Resolves` but its production code no longer calls \
                          {AUTHORITY_RESOLVE} — every run it starts executes under whatever \
                          authority was frozen at creation. Recorded reason: {}",
                         p.file, p.authority_why
                     ));
+                } else if !GRANT_APPLIED.iter().any(|token| code.contains(token)) {
+                    // Resolving is half the answer: a producer that asks and
+                    // then drops the grant runs under the frozen authority all
+                    // the same. `resume_coordinator.rs`'s only spelling of
+                    // either half is `retrigger`'s (its pre-check resolves
+                    // through `fire_gate::session_may_act`), so deleting the
+                    // call that applies the grant turns this red (T09
+                    // re-review, N1).
+                    wrong.push(format!(
+                        "{} resolves fire-time authority but its production code applies no grant \
+                         (none of {GRANT_APPLIED:?}) — the verdict is asked for and dropped. \
+                         Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                } else {
+                    resolved += 1;
                 }
             }
             Authority::ResolvedUpstream { resolver } => {

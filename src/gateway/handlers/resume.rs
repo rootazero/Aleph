@@ -459,6 +459,23 @@ mod tests {
         assert_eq!(status_of(&report(1, 0, 0, 0)), "not_resumed");
     }
 
+    /// T09 re-review N4: a resume settled for a refused authority CLOSED the
+    /// run, so the receipt reads `abandoned` — never `not_resumed`, whose
+    /// wording tells the operator to retry something that no longer exists.
+    #[test]
+    fn a_settled_authority_refusal_reads_abandoned_not_not_resumed() {
+        let mut report = ResumeReport {
+            scanned: 1,
+            ..ResumeReport::default()
+        };
+        let _ = crate::gateway::resume_coordinator::record_refused_settle(
+            &crate::routing::session_key::SessionKey::ephemeral("settled"),
+            "principal gone — session owner `u-ghost`",
+            &mut report,
+        );
+        assert_eq!(status_of(&report), ResumeReceipt::ABANDONED);
+    }
+
     /// Only the log-contradiction refusal gets the word. A missing agent or a
     /// failed re-trigger IS "we tried and nothing happened", and telling the
     /// operator to run `doctor` for it would send them to the wrong place.
