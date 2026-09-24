@@ -109,7 +109,7 @@ use super::super::protocol::{
 use super::parse_params;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::ChangeKind;
-use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+use crate::gateway::security::store::{SecurityStore, UserRole};
 use crate::gateway::visibility;
 use crate::projects::{self, Project, ProjectError, ProjectStatus, ProjectStore};
 use crate::sync_primitives::Arc;
@@ -125,8 +125,8 @@ use crate::sync_primitives::Arc;
 /// this same row, and a hand-copied client row is how `aleph providers list`
 /// came to render two columns (`type`, `default`) the server had never sent.
 ///
-/// The alias is deliberately kept: this name is what the seven construction
-/// sites below and `builtin_tools::project_manage` already read, and the
+/// The alias is deliberately kept: this name is what the construction sites
+/// below and `builtin_tools::project_manage` already read, and the
 /// direction that matters is that the response is **built from** the contract
 /// type. A test that only parses a response proves the client's fields are a
 /// subset of what was sent, never that the two are the same set.
@@ -151,7 +151,7 @@ pub type ProjectView = aleph_protocol::projects::ProjectRow;
 /// A free function rather than `ProjectView::render`, because Rust does not
 /// allow an inherent impl on a type from another crate. Same body, same
 /// callers.
-pub(crate) fn render_project(p: Project, member_ids: Vec<String>) -> ProjectView {
+pub(crate) fn render_project(p: Project, member_ids: Vec<String>, manageable: bool) -> ProjectView {
     ProjectView {
         id: p.id,
         name: p.name,
@@ -164,7 +164,26 @@ pub(crate) fn render_project(p: Project, member_ids: Vec<String>) -> ProjectView
         created_at: p.created_at,
         updated_at: p.updated_at,
         last_used_at: p.last_used_at,
+        manageable,
     }
+}
+
+/// The one construction of a single-project response: the row, its roster,
+/// and `manageable` for THIS caller, inside [`aleph_protocol::projects::ProjectResult`].
+fn project_response(
+    id: Option<Value>,
+    users: &SecurityStore,
+    project: Project,
+    members: Vec<String>,
+) -> JsonRpcResponse {
+    let actor = visibility::visible_owner_filter();
+    let manageable = crate::projects::authz::manageable(&project, actor.as_deref(), Some(users));
+    JsonRpcResponse::success(
+        id,
+        json!(aleph_protocol::projects::ProjectResult {
+            project: render_project(project, members, manageable),
+        }),
+    )
 }
 
 // ============================================================================
@@ -214,8 +233,8 @@ pub(super) fn gate_project(
 /// Org admins pass for any room (spec §6.3: owner changes are an admin
 /// operation). An unrestricted caller — cron, A2A, an in-process test — passes
 /// unconditionally, the same first arm every P1 predicate opens with. The
-/// admin lookup lives here rather than in `authz` so that module depends on
-/// nothing but the project row.
+/// admin lookup is `authz::manageable`'s, shared with the tool face and with
+/// `ProjectRow.manageable`.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_owner(
     users: &SecurityStore,
@@ -223,13 +242,7 @@ fn require_owner(
     project: &Project,
 ) -> Result<(), JsonRpcResponse> {
     let actor = visibility::visible_owner_filter();
-    let is_admin = actor.as_deref().is_some_and(|caller| {
-        matches!(
-            users.get_user(caller),
-            Ok(Some(u)) if u.role == UserRole::Admin && u.status == UserStatus::Active
-        )
-    });
-    if crate::projects::authz::is_owner(project, actor.as_deref(), is_admin) {
+    if crate::projects::authz::manageable(project, actor.as_deref(), Some(users)) {
         return Ok(());
     }
     Err(JsonRpcResponse::error(
@@ -303,7 +316,11 @@ pub struct ListParams {
     pub include_archived: bool,
 }
 
-pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
+) -> JsonRpcResponse {
     let params: ListParams = if request.params.is_some() {
         match parse_params(&request) {
             Ok(p) => p,
@@ -322,13 +339,23 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> J
         Err(e) => return project_error_response(request.id, e),
     };
 
+    let actor = visibility::visible_owner_filter();
+    // One admin lookup per listing, not per row: `manageable` is
+    // `manageable_given(p, actor, is_active_admin(..))` by definition, and
+    // this calls the SAME `manageable_given` `authz::manageable` calls — not
+    // a hand-inlined copy of its body — so a list row cannot drift from what
+    // `projects.get` (and the gates) answer for the same caller.
+    let actor_is_admin = crate::projects::authz::is_active_admin(Some(&users), actor.as_deref());
+
     let view: Vec<ProjectView> = projects
         .into_iter()
         .filter(|p| params.include_archived || p.status == ProjectStatus::Active)
         .filter(|p| visibility::project_visible(&p.id))
         .map(|p| {
             let members = rosters.remove(&p.id).unwrap_or_default();
-            render_project(p, members)
+            let manageable =
+                crate::projects::authz::manageable_given(&p, actor.as_deref(), actor_is_admin);
+            render_project(p, members, manageable)
         })
         .collect();
     // The envelope is a wire key too, and it is usually the last hand-copied
@@ -358,6 +385,7 @@ pub struct CreateParams {
 pub async fn handle_create(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
@@ -369,10 +397,7 @@ pub async fn handle_create(
         Ok(project) => {
             let members = store.members(&project.id).unwrap_or_default();
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "project": render_project(project, members) }),
-            )
+            project_response(request.id, &users, project, members)
         }
         Err(e) => project_error_response(request.id, e),
     }
@@ -402,6 +427,7 @@ pub struct AddParams {
 pub async fn handle_add(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: AddParams = match parse_params(&request) {
@@ -420,10 +446,7 @@ pub async fn handle_add(
             // than insert a new one, so `Created` would overclaim on the
             // common "re-add a folder already in the picker" path.
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Updated, None);
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "project": render_project(project, members) }),
-            )
+            project_response(request.id, &users, project, members)
         }
         Err(e) => project_error_response(request.id, e),
     }
@@ -444,6 +467,7 @@ pub struct CreateBlankParams {
 pub async fn handle_create_blank(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: CreateBlankParams = match parse_params(&request) {
@@ -458,10 +482,7 @@ pub async fn handle_create_blank(
         Ok(project) => {
             let members = store.members(&project.id).unwrap_or_default();
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "project": render_project(project, members) }),
-            )
+            project_response(request.id, &users, project, members)
         }
         Err(e) => project_error_response(request.id, e),
     }
@@ -476,7 +497,11 @@ pub struct GetParams {
     pub id: String,
 }
 
-pub async fn handle_get(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+    users: Arc<SecurityStore>,
+) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -489,10 +514,7 @@ pub async fn handle_get(request: JsonRpcRequest, store: Arc<ProjectStore>) -> Js
         Ok(m) => m,
         Err(e) => return project_error_response(request.id, e),
     };
-    JsonRpcResponse::success(
-        request.id,
-        json!({ "project": render_project(project, members) }),
-    )
+    project_response(request.id, &users, project, members)
 }
 
 // ============================================================================
@@ -526,10 +548,7 @@ pub async fn handle_rename(
         Ok(renamed) => {
             let members = store.members(&renamed.id).unwrap_or_default();
             projects::events::publish_changed(&event_bus, &renamed.id, ChangeKind::Updated, None);
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "project": render_project(renamed, members) }),
-            )
+            project_response(request.id, &users, renamed, members)
         }
         Err(e) => project_error_response(request.id, e),
     }
@@ -641,10 +660,7 @@ pub async fn handle_bind_workspace(
         Ok(bound) => {
             let members = store.members(&bound.id).unwrap_or_default();
             projects::events::publish_changed(&event_bus, &bound.id, ChangeKind::Updated, None);
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "project": render_project(bound, members) }),
-            )
+            project_response(request.id, &users, bound, members)
         }
         Err(e) => project_error_response(request.id, e),
     }
@@ -1252,7 +1268,7 @@ mod tests {
     /// must be indistinguishable from an id that was never minted.
     #[tokio::test]
     async fn a_foreign_project_reads_exactly_like_a_missing_one() {
-        let (store, _users, project, _guard) = room();
+        let (store, users, project, _guard) = room();
 
         let foreign = CALLER_USER
             .scope(
@@ -1260,6 +1276,7 @@ mod tests {
                 handle_get(
                     rpc("projects.get", json!({ "id": project.id })),
                     store.clone(),
+                    users.clone(),
                 ),
             )
             .await;
@@ -1269,6 +1286,7 @@ mod tests {
                 handle_get(
                     rpc("projects.get", json!({ "id": "p-does-not-exist" })),
                     store.clone(),
+                    users.clone(),
                 ),
             )
             .await;
@@ -1287,7 +1305,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_shows_only_the_projects_i_am_on() {
-        let (store, _users, project, _guard) = room();
+        let (store, users, project, _guard) = room();
 
         let ids = |resp: JsonRpcResponse| -> Vec<String> {
             resp.result.expect("list never errors on visibility")["projects"]
@@ -1302,7 +1320,7 @@ mod tests {
             let seen = ids(CALLER_USER
                 .scope(
                     Some(member.to_string()),
-                    handle_list(rpc("projects.list", json!({})), store.clone()),
+                    handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
                 )
                 .await);
             assert_eq!(seen, vec![project.id.clone()], "{member} is on the roster");
@@ -1311,7 +1329,7 @@ mod tests {
         let stranger = ids(CALLER_USER
             .scope(
                 Some("u-mallory".to_string()),
-                handle_list(rpc("projects.list", json!({})), store.clone()),
+                handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
             )
             .await);
         assert!(
@@ -1320,7 +1338,7 @@ mod tests {
         );
 
         // An unrestricted (internal) caller keeps the pre-P2 whole view.
-        let all = ids(handle_list(rpc("projects.list", json!({})), store).await);
+        let all = ids(handle_list(rpc("projects.list", json!({})), store, users).await);
         assert_eq!(all, vec![project.id]);
     }
 
@@ -1458,7 +1476,7 @@ mod tests {
                         json!({ "id": project.id, "user_id": "u-bob" }),
                     ),
                     store.clone(),
-                    users,
+                    users.clone(),
                     test_event_bus(),
                 ),
             )
@@ -1471,6 +1489,7 @@ mod tests {
                 handle_get(
                     rpc("projects.get", json!({ "id": project.id })),
                     store.clone(),
+                    users,
                 ),
             )
             .await;
@@ -1694,18 +1713,18 @@ mod tests {
                 handle_archive(
                     rpc("projects.archive", json!({ "id": project.id })),
                     store.clone(),
-                    users,
+                    users.clone(),
                     test_event_bus(),
                 ),
             )
             .await;
         assert!(archived.error.is_none(), "{:?}", archived.error);
 
-        let listed = |params: Value, store: Arc<ProjectStore>| async move {
+        let listed = |params: Value, store: Arc<ProjectStore>, users: Arc<SecurityStore>| async move {
             CALLER_USER
                 .scope(
                     Some("u-alice".to_string()),
-                    handle_list(rpc("projects.list", params), store),
+                    handle_list(rpc("projects.list", params), store, users),
                 )
                 .await
                 .result
@@ -1714,9 +1733,9 @@ mod tests {
                 .expect("array")
                 .len()
         };
-        assert_eq!(listed(json!({}), store.clone()).await, 0);
+        assert_eq!(listed(json!({}), store.clone(), users.clone()).await, 0);
         assert_eq!(
-            listed(json!({ "include_archived": true }), store.clone()).await,
+            listed(json!({ "include_archived": true }), store.clone(), users.clone()).await,
             1
         );
         assert_eq!(store.members(&project.id).unwrap().len(), 2);
@@ -1732,6 +1751,7 @@ mod tests {
         let got = handle_get(
             rpc("projects.get", json!({ "id": project.id })),
             store.clone(),
+            users.clone(),
         )
         .await;
         assert!(got.error.is_none(), "{:?}", got.error);
@@ -1754,8 +1774,13 @@ mod tests {
     /// distinguish from a folder whose path failed to render.
     #[tokio::test]
     async fn an_unbound_room_renders_a_null_workspace_path() {
-        let (store, _users, project, _guard) = room();
-        let got = handle_get(rpc("projects.get", json!({ "id": project.id })), store).await;
+        let (store, users, project, _guard) = room();
+        let got = handle_get(
+            rpc("projects.get", json!({ "id": project.id })),
+            store,
+            users,
+        )
+        .await;
         let view = &got.result.expect("success")["project"];
         assert!(view["workspace_path"].is_null());
         assert_eq!(view["status"], "active");
@@ -1956,7 +1981,7 @@ mod tests {
     /// it a working directory.
     #[tokio::test]
     async fn the_other_two_workspace_writers_carry_the_same_gate() {
-        let (store, _users, _project, _guard) = room();
+        let (store, users, _project, _guard) = room();
         let dir = a_real_dir();
 
         let added = as_caller(
@@ -1966,6 +1991,7 @@ mod tests {
             handle_add(
                 rpc("projects.add", json!({ "path": dir.display().to_string() })),
                 store.clone(),
+                users.clone(),
                 test_event_bus(),
             ),
         )
@@ -1985,6 +2011,7 @@ mod tests {
                     json!({ "parent": parent.path().display().to_string(), "name": "escalation" }),
                 ),
                 store.clone(),
+                users,
                 test_event_bus(),
             ),
         )
@@ -2004,7 +2031,7 @@ mod tests {
     /// address. Zero-config single-machine use must not have regressed.
     #[tokio::test]
     async fn the_local_panel_still_registers_folders() {
-        let (store, _users, _project, _guard) = room();
+        let (store, users, _project, _guard) = room();
 
         let added = as_caller(
             "u-alice",
@@ -2016,6 +2043,7 @@ mod tests {
                     json!({ "path": a_real_dir().display().to_string() }),
                 ),
                 store,
+                users,
                 test_event_bus(),
             ),
         )
@@ -2444,5 +2472,77 @@ mod tests {
             RESOURCE_NOT_FOUND,
             "a denied file must be indistinguishable from an absent one"
         );
+    }
+
+    /// D3: every single-project response is BUILT from `ProjectResult`, and
+    /// `manageable` is the same derivation `require_owner` enforces. Parsing
+    /// alone proves only a superset, so the parsed value is serialized back
+    /// and compared whole.
+    #[tokio::test]
+    async fn a_single_project_response_is_the_contract_and_says_who_may_manage_it() {
+        let (store, users, project, _guard) = room();
+        for (who, expected) in [("u-alice", true), ("u-bob", false), ("u-carol", true)] {
+            store.add_member(&project.id, "u-carol").unwrap();
+            let resp = CALLER_USER
+                .scope(
+                    Some(who.to_string()),
+                    handle_get(
+                        rpc("projects.get", json!({ "id": project.id })),
+                        store.clone(),
+                        users.clone(),
+                    ),
+                )
+                .await;
+            let raw = resp.result.expect("a roster member reads the room");
+            let parsed: aleph_protocol::projects::ProjectResult =
+                serde_json::from_value(raw.clone()).expect("the response is a ProjectResult");
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), raw, "{who}: same key set");
+            assert_eq!(parsed.project.manageable, expected, "{who}");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_rows_carry_the_callers_manageable_too() {
+        let (store, users, project, _guard) = room();
+        store.add_member(&project.id, "u-carol").unwrap();
+
+        // `handle_list` derives each row's `manageable` through the SAME
+        // `authz::manageable_given` that `handle_get` (via `authz::manageable`)
+        // does, not a hand-inlined copy of its body — so for every caller, the
+        // list row and the single-project response must agree, not merely
+        // both be individually plausible.
+        for (who, expected) in [("u-alice", true), ("u-bob", false), ("u-carol", true)] {
+            let listed = CALLER_USER
+                .scope(
+                    Some(who.to_string()),
+                    handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
+                )
+                .await;
+            let parsed: aleph_protocol::projects::ProjectListResult =
+                serde_json::from_value(listed.result.expect("list succeeds")).unwrap();
+            let row = parsed
+                .projects
+                .iter()
+                .find(|p| p.id == project.id)
+                .unwrap_or_else(|| panic!("{who} sees it"));
+            assert_eq!(row.manageable, expected, "{who}: list row");
+
+            let got = CALLER_USER
+                .scope(
+                    Some(who.to_string()),
+                    handle_get(
+                        rpc("projects.get", json!({ "id": project.id })),
+                        store.clone(),
+                        users.clone(),
+                    ),
+                )
+                .await;
+            let got_parsed: aleph_protocol::projects::ProjectResult =
+                serde_json::from_value(got.result.expect("get succeeds")).unwrap();
+            assert_eq!(
+                row.manageable, got_parsed.project.manageable,
+                "{who}: list and get must agree on manageable"
+            );
+        }
     }
 }

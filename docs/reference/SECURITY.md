@@ -3311,9 +3311,11 @@ attribution, and a bound workspace as the room's default cwd.
        group is readable by every member's recall. Pre-existing
        adoption-by-absence shape, unchanged by this round; recorded here
        because binding a group is what makes strangers reach it.
-     - **A re-bind with no `--label` silently clears the stored label.**
-       `bind` otherwise reads as an idempotent no-op; this half is not. The
-       fixture records it as a fact rather than asserting it.
+     - ~~A re-bind with no `--label` silently clears the stored label.~~
+       **Closed in round-11 (D2, Ruling R-e)**: omitted keeps, `--label ""`
+       clears, a value replaces; the receipt reports the stored label
+       (`RETURNING`). The Panel can keep or replace but has no clear
+       affordance (an empty box sends no label).
   3. `resume_coordinator::retrigger` does not re-check the binding: a
      resumed room run whose folder vanished degrades to the agent workspace
      (background sweep, nobody to tell) where `build_run_request` refuses
@@ -3336,18 +3338,13 @@ attribution, and a bound workspace as the room's default cwd.
      claim, and only as honest as `list_sessions` is complete. Both backends
      can under-report, and they do it differently:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
-       shipped default is `"file"`, see
-       `config::types::general::default_session_store_backend`, dispatched in
-       `bin/aleph-server/commands/start/helpers.rs::initialize_session_store`)**
-       — `session_manager::ops::query::list_sessions` collects with
-       `rows.filter_map(|r| r.ok())`. A row whose column mapping fails is
-       dropped in **complete silence**, so one damaged `sessions` row yields
-       `NothingToMove`. **Deliberately not fixed in round-9**: it is
-       pre-existing, has other callers, and re-classifying it is its own
-       task. **More severe in kind** -- it drops the row with no diagnostic at
-       all, where the file backend at least warned on one arm -- but
-       **smaller in blast radius, because it is opt-in**. Round-9 fixed the
-       half a stock install actually runs.
+       shipped default is `"file"`)** — **closed in round-11 (D1)**.
+       `session_manager::ops::query::collect_rows` fails `list_sessions` /
+       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
+       (`search_messages`, `get_session_preview`) use the lossy
+       `collect_rows_lossy`, which drops and counts, loudly. Pinned by
+       `a_damaged_sqlite_row_reports_unknown_not_nothing_to_move`.
      - **File backend** — the same class, now loud on both arms. An
        unparseable `metadata.json` was already skipped with a named `warn!`;
        an **unreadable** one was skipped in silence six lines above that
@@ -3371,7 +3368,7 @@ attribution, and a bound workspace as the room's default cwd.
        only NULL rows. The window is milliseconds and the remedy is free:
        re-running `bind` on the same room is a documented no-op that re-runs
        the scan.
-  7. **Single-project RPC responses have no typed envelope** (Ruling BD).
+  7. ~~**Single-project RPC responses have no typed envelope** (Ruling BD).
      `projects.list` gained `ProjectListResult`; the single-project
      responses did not — the server writes the literal
      `json!({ "project": … })` in **6** places and the Panel reads
@@ -3380,7 +3377,12 @@ attribution, and a bound workspace as the room's default cwd.
      the list change applies verbatim (信封也是 wire key，而且它通常是最后一个
      没被类型化的部分). Deferred because 11 sites across two crates is a task
      rather than a nit, and it is pre-existing. **Counts re-verified
-     2026-08-30 and unmoved; re-verify again before acting.**
+     2026-08-30 and unmoved; re-verify again before acting.**~~
+     **Closed in round-11 (D3):** `aleph_protocol::projects::ProjectResult`
+     is built by `handlers/projects.rs::project_response` at all 6 sites and
+     parsed by all 5 Panel sites; `ProjectRow.manageable` is derived by
+     `projects::authz::manageable`, which both faces' `require_owner` now
+     call.
   8. **`AuthorityChange` is used more broadly than its own doc describes**
      (Ruling BJ). `daemon.shutdown` is logged as an `AuthorityChange`, while
      that variant's doc says it covers "changes who can do what". The ruling
@@ -3389,6 +3391,11 @@ attribution, and a bound workspace as the room's default cwd.
      to do anything by any reading not purely about grants. The census row
      is accurate and stays; narrowing prose beside a broader practice is
      this repo's most common drift shape.
+
+     **Round-11 (D4):** the variant's doc no longer lists verbs; it points at
+     `security::audit::tests::AUTHORITY_VERBS`, a per-call-site census
+     (25 call sites / 22 verbs at `a3993672c`) compared against a scan of the
+     source, so the list cannot narrow silently again.
 
 ### Network boundary = reachability
 
