@@ -537,14 +537,22 @@ impl HookExecutor {
             None => return false, // No tool name, can't match
         };
 
+        // Test the regex against the Aleph name AND every Claude Code spelling
+        // of it (`Edit` for `file_edit`, `mcp__srv__tool` for `srv__tool`), so
+        // a matcher copied from a CC `settings.json` selects the tool it names.
+        let candidates: Vec<String> = std::iter::once(tool_name.clone())
+            .chain(super::cc_spellings(tool_name))
+            .collect();
+        let hit = |re: &regex::Regex| candidates.iter().any(|c| re.is_match(c));
+
         // Look up compiled regex from cache
         match self.regex_cache.get(matcher.as_str()) {
-            Some(Some(re)) => re.is_match(tool_name),
+            Some(Some(re)) => hit(re),
             Some(None) => false, // Invalid regex, logged at cache time
             None => {
                 // Fallback: compile on the fly (should not happen if add_hook was used)
                 match crate::security::safe_regex::bounded_builder(matcher).build() {
-                    Ok(re) => re.is_match(tool_name),
+                    Ok(re) => hit(&re),
                     Err(e) => {
                         warn!("Invalid hook matcher regex '{}': {}", matcher, e);
                         false
@@ -1496,6 +1504,71 @@ mod tests {
         assert_eq!(entry.source, "user:global");
         // No consent gate attached → nothing to report.
         assert!(entry.consent.is_none());
+    }
+
+    #[test]
+    fn a_claude_code_matcher_selects_the_aleph_tool() {
+        let mut hook = dummy_hook("user:global");
+        hook.event = HookEvent::BeforeToolCall;
+        hook.matcher = Some("Edit|Write".into());
+        let exec = HookExecutor::new(vec![hook.clone()]);
+        assert!(exec.matches_pattern(&hook, &HookContext::new("s").with_tool_name("file_write")));
+        assert!(exec.matches_pattern(&hook, &HookContext::new("s").with_tool_name("file_edit")));
+        assert!(!exec.matches_pattern(&hook, &HookContext::new("s").with_tool_name("file_read")));
+        // An MCP tool under its CC spelling.
+        let mut mcp = dummy_hook("user:global");
+        mcp.event = HookEvent::BeforeToolCall;
+        mcp.matcher = Some("mcp__.*__delete.*".into());
+        let exec = HookExecutor::new(vec![mcp.clone()]);
+        assert!(exec.matches_pattern(
+            &mcp,
+            &HookContext::new("s").with_tool_name("github__delete_repo")
+        ));
+        assert!(!exec.matches_pattern(
+            &mcp,
+            &HookContext::new("s").with_tool_name("github__list_repos")
+        ));
+    }
+
+    /// Same claim as `a_claude_code_matcher_selects_the_aleph_tool`, but
+    /// driven through the real `execute_interceptors` fire site rather than
+    /// calling `matches_pattern` directly — so bypassing `cc_spellings` at
+    /// the fire site (not just breaking `CC_TOOL_ALIASES`) goes red here
+    /// (判据 §4, mirrors the project-scope fire-site tests below).
+    #[tokio::test]
+    async fn execute_interceptors_fires_on_a_claude_code_spelled_matcher() {
+        let mut hook = dummy_hook("plugin:foo");
+        hook.event = HookEvent::BeforeToolCall;
+        hook.kind = HookKind::Interceptor;
+        hook.matcher = Some("Edit|Write".into());
+        hook.actions = vec![HookAction::Prompt {
+            prompt: "gated".into(),
+        }];
+        let exec = HookExecutor::new(vec![hook]);
+
+        let (_, fired) = exec
+            .execute_interceptors(
+                HookEvent::BeforeToolCall,
+                HookContext::new("s").with_tool_name("file_write"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fired.hooks_executed, 1,
+            "CC `Write` matcher must select Aleph's file_write via execute_interceptors"
+        );
+
+        let (_, skipped) = exec
+            .execute_interceptors(
+                HookEvent::BeforeToolCall,
+                HookContext::new("s").with_tool_name("file_read"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            skipped.hooks_executed, 0,
+            "CC `Edit|Write` matcher must not select file_read"
+        );
     }
 
     #[test]

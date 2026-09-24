@@ -47,6 +47,7 @@
 //! executor.execute_observers(HookEvent::AfterToolCall, &ctx).await;
 //! ```
 
+mod cc_tool_aliases;
 mod consent;
 #[cfg(all(test, unix))]
 mod consent_scope;
@@ -58,6 +59,15 @@ mod producer_census;
 mod session_facts;
 mod user_settings;
 
+// `cc_spellings` is the only reader wired up so far (the `matches_pattern`
+// fire site in `executor.rs`). `aleph_name`, `normalize_cc_tool_entry` and
+// `CC_TOOL_ALIASES` are the same table's other two readers — a command's
+// `allowed-tools:` (P4.7b) and an agent's `tools:` (P4.8) — not yet landed;
+// delete this attribute when either does.
+#[allow(unused_imports)]
+pub(crate) use cc_tool_aliases::{
+    aleph_name, cc_spellings, normalize_cc_tool_entry, CC_TOOL_ALIASES,
+};
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub(crate) use executor::read_capped;
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
