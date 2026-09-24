@@ -18,6 +18,7 @@ async fn default_agent_roundtrip() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "main".into(),
+            run_id: "e2e-run".into(),
             input: FlowInput::Prompt("what is the answer?".into()),
             channel: Some("openai-api-client".into()),
             session_hint: Some("e2e-session-1".into()),
@@ -84,6 +85,7 @@ async fn an_agent_without_its_own_flow_runs_in_the_callers_session() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "researcher".into(),
+            run_id: "e2e-run".into(),
             input: FlowInput::Prompt("go look it up".into()),
             channel: None,
             session_hint: Some("e2e-session-fallback".into()),
