@@ -46,9 +46,42 @@ impl HooksConsentCheck {
 
         let mut findings = Vec::new();
 
+        // Approvals given under the shared `user:project` label before
+        // approvals were bound to a project. No project hook is looked up
+        // under one, so each authorises nothing — and the hook it was given
+        // for does not run, a blocking guard included (it stops blocking),
+        // until its project's own pending entry is approved. The registry
+        // never deletes them, so they are counted here rather than as
+        // approvals; revoking one acknowledges it and clears this finding.
+        let superseded = entries
+            .iter()
+            .filter(|e| e.status == ConsentStatus::Approved && e.predates_project_binding())
+            .count();
+        if superseded > 0 {
+            findings.push(
+                Finding::problem(
+                    ID,
+                    Severity::Warning,
+                    "Project-hook approvals no longer apply",
+                    format!(
+                        "{superseded} project-hook approval(s) predate project binding and \
+                         authorise nothing — those hooks, blocking ones included, are not \
+                         running; approve each project's pending entry."
+                    ),
+                )
+                .with_fix_hint(
+                    "`aleph hooks list` marks the old entries. Review each project's pending \
+                     entry with `aleph hooks test <fingerprint>`, then \
+                     `aleph hooks revoke <old fingerprint>` to clear this warning.",
+                ),
+            );
+        }
+
+        // An old `user:project*` entry never fires again, so one left pending
+        // is not awaiting anything.
         let pending = entries
             .iter()
-            .filter(|e| e.status == ConsentStatus::Pending)
+            .filter(|e| e.status == ConsentStatus::Pending && !e.predates_project_binding())
             .count();
         if pending > 0 {
             findings.push(
@@ -96,14 +129,22 @@ impl HooksConsentCheck {
         }
 
         if findings.is_empty() {
-            findings.push(Finding::ok(
-                ID,
-                "Hooks consent OK",
-                format!(
+            // Old `user:project*` entries left pending are not hooks anyone
+            // can approve into running; they are not "all approved".
+            let (kept, live): (Vec<_>, Vec<_>) =
+                entries.iter().partition(|e| e.predates_project_binding());
+            let detail = match kept.len() {
+                0 => format!(
                     "{} hook(s) recorded, all approved and consistent.",
-                    entries.len()
+                    live.len()
                 ),
-            ));
+                n => format!(
+                    "{} hook(s) recorded, all approved and consistent; {n} older project \
+                     entr(ies) are kept on disk and authorise nothing.",
+                    live.len()
+                ),
+            };
+            findings.push(Finding::ok(ID, "Hooks consent OK", detail));
         }
         findings
     }
@@ -149,6 +190,59 @@ mod tests {
         assert!(
             findings.iter().all(|f| f.title != "Stale fingerprint"),
             "{findings:?}"
+        );
+    }
+
+    /// After the project binding, an approval given under the shared
+    /// `user:project` label authorises nothing, and the hook it was for — a
+    /// blocking guard included — is not running. The doctor says so, counts
+    /// it as neither approved nor awaiting approval, and stops once it is
+    /// revoked.
+    #[test]
+    fn a_project_approval_from_before_project_binding_is_reported_as_not_running() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("allowlist.json");
+        let entry = |owner: &str, command: &str, status: &str| {
+            serde_json::json!({
+                "fingerprint": ShellHookConsent::fingerprint(owner, None, command),
+                "plugin_name": owner, "command": command, "plugin_root": "/r",
+                "status": status, "first_seen": 1,
+            })
+        };
+        let registry = serde_json::json!({ "version": 1, "entries": [
+            entry("user:project", "guard", "approved"),
+            entry("user:project", "old", "pending"),
+            entry("user:global", "live", "approved"),
+        ] });
+        std::fs::write(&path, registry.to_string()).expect("seed registry");
+        let diagnose = || HooksConsentCheck::new(ShellHookConsent::with_path(&path)).diagnose();
+
+        let findings = diagnose();
+        let lapsed = findings
+            .iter()
+            .find(|f| f.title == "Project-hook approvals no longer apply")
+            .unwrap_or_else(|| panic!("no finding for the lapsed approval: {findings:?}"));
+        assert!(lapsed.is_problem());
+        assert!(
+            lapsed.detail.starts_with(
+                "1 project-hook approval(s) predate project binding and authorise nothing"
+            ),
+            "{}",
+            lapsed.detail
+        );
+        assert!(
+            findings.iter().all(|f| f.title != "Hooks await approval"),
+            "an old project entry is not awaiting approval: {findings:?}"
+        );
+
+        let guard = ShellHookConsent::fingerprint("user:project", None, "guard");
+        ShellHookConsent::with_path(&path)
+            .revoke(&guard)
+            .expect("revoke")
+            .expect("entry");
+        assert!(
+            diagnose().iter().all(|f| !f.is_problem()),
+            "revoking the old approval clears the warning"
         );
     }
 }

@@ -322,14 +322,19 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     println!("  Exists:  {}", path.exists());
 
     let entries = consent.entries();
-    let approved = entries
+    // An old `user:project*` entry authorises nothing and never fires again:
+    // counted apart, not as an approval or as awaiting one.
+    let (kept, live): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.predates_project_binding());
+    let approved = live
         .iter()
         .filter(|e| e.status == ConsentStatus::Approved)
         .count();
-    let pending = entries.len() - approved;
+    let pending = live.len() - approved;
     println!(
-        "  Entries: {} ({approved} approved, {pending} pending)",
-        entries.len()
+        "  Entries: {} ({approved} approved, {pending} pending, {} from before project \
+         binding — authorise nothing)",
+        entries.len(),
+        kept.len()
     );
 
     // Issue detection is owned by the unified diagnostics check so that

@@ -50,8 +50,14 @@
 //! project. It is kept on disk as it is — never rewritten, never deleted —
 //! but a project hook is never looked up under it, so it authorises
 //! nothing: each project's hooks come back as `pending` once and are
-//! approved again, per project. `aleph hooks list` / `test` mark such a
-//! `user:project*` entry ([`ConsentEntry::predates_project_binding`]). An
+//! approved again, per project. An unapproved hook does not run, and a
+//! skipped interceptor decides nothing — so every approved project GUARD
+//! (a `PreToolUse` hook that denies edits to `.env`, blocks `rm -rf` …)
+//! stops blocking from the upgrade on: the tool calls it stopped go through
+//! until its project's pending entry is approved. `aleph doctor` reports the
+//! old approvals (`core/hooks-consent`, "Project-hook approvals no longer
+//! apply"); `aleph hooks list` / `test` mark such a `user:project*` entry
+//! ([`ConsentEntry::predates_project_binding`]). An
 //! approval of a hook that fires everywhere, recorded before roots were
 //! recorded, keeps working from any root until it is revoked, fires once
 //! (which records its root) and is approved again — unless the script it
