@@ -145,7 +145,8 @@ pub async fn handle_update_task(
                 let existing = existing
                     .map(|t| t.metadata)
                     .unwrap_or(serde_json::Value::Null);
-                Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                // Boundary merge: the task author is pinned (round 11) — see merge_boundary_metadata_patch.
+                Some(crate::agents::swarm::tasks::merge_boundary_metadata_patch(
                     &existing, patch,
                 ))
             }

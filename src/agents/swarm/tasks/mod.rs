@@ -282,8 +282,9 @@ pub struct CoordTaskUpdate {
 /// preserved. A non-object `patch` (or non-object `existing`) replaces
 /// wholesale — the caller explicitly sent a scalar and gets literal
 /// behaviour. Pure; the single source both metadata-patching boundaries
-/// (`task_update` tool, `teams.update_task` RPC) share so their semantics
-/// cannot drift.
+/// (`task_update` tool, `teams.update_task` RPC) share — through
+/// [`merge_boundary_metadata_patch`], which adds the author pin — so their
+/// semantics cannot drift.
 #[must_use]
 pub fn merge_metadata_patch(
     existing: &serde_json::Value,
@@ -304,6 +305,78 @@ pub fn merge_metadata_patch(
         }
     }
     serde_json::Value::Object(merged)
+}
+
+/// The person a coordination task is authored by, as the ambient context
+/// knows it — the room speaker, else the owner (`CALLER_USER` for an RPC, the
+/// run's scope owner for a tool call).
+///
+/// Deliberately NOT `visibility::ambient_actor()`: its third fallback is the
+/// TURN_CONTEXT **agent id**, and an agent id stamped as an author makes the
+/// dispatcher's fire-time `scope::authority::resolve` look up e.g. `"main"`
+/// in the users table and pause the task as "principal gone".
+fn ambient_task_author() -> Option<String> {
+    crate::gateway::visibility::ambient_principal()
+}
+
+/// Stamp [`AUTHOR_USER_KEY`](crate::gateway::execution_engine::AUTHOR_USER_KEY)
+/// onto a new task's metadata (round 11, N1). The single entry point is
+/// `CoordTaskStore::create_task`, which covers every `NewCoordTask { .. }`
+/// producer without touching them — the same "stamp at the store" precedent
+/// `SqliteTeamStore::create_team` uses for the team owner.
+///
+/// The ambient person ALWAYS overwrites: `teams.create_task` passes the
+/// caller's free-form `metadata` straight through, and a caller-supplied
+/// author would let a member borrow an admin's authority. A supplied value
+/// survives only when there is no ambient person (an internal producer).
+/// A non-object metadata cannot carry keys and is left alone; such a task is
+/// not dispatcher-managed (`managed_by` is a key too) and so never fires.
+pub fn stamp_task_author(metadata: &mut serde_json::Value) {
+    let Some(author) = ambient_task_author() else {
+        return;
+    };
+    let key = crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string();
+    match metadata {
+        serde_json::Value::Object(map) => {
+            map.insert(key, serde_json::Value::String(author));
+        }
+        serde_json::Value::Null => {
+            let mut map = serde_json::Map::new();
+            map.insert(key, serde_json::Value::String(author));
+            *metadata = serde_json::Value::Object(map);
+        }
+        _ => {}
+    }
+}
+
+/// [`merge_metadata_patch`] for the two UNTRUSTED boundaries (`task_update`
+/// tool, `teams.update_task` RPC). The author is pinned: a patch can neither
+/// set nor clear it. A task that has no author yet is stamped with the
+/// patching person — otherwise "strip the author (scalar patch), re-add
+/// `managed_by`" is a two-step path to the team owner's authority, each step
+/// legal on its own (criterion §14).
+#[must_use]
+pub fn merge_boundary_metadata_patch(
+    existing: &serde_json::Value,
+    patch: serde_json::Value,
+) -> serde_json::Value {
+    let key = crate::gateway::execution_engine::AUTHOR_USER_KEY;
+    let pinned = existing.get(key).cloned();
+    let mut merged = merge_metadata_patch(existing, patch);
+    if let serde_json::Value::Object(map) = &mut merged {
+        match pinned {
+            Some(author) => {
+                map.insert(key.to_string(), author);
+            }
+            None => {
+                map.remove(key);
+                if let Some(author) = ambient_task_author() {
+                    map.insert(key.to_string(), serde_json::Value::String(author));
+                }
+            }
+        }
+    }
+    merged
 }
 
 /// Metadata key stamped when a pause parks a task from a status that a plain
@@ -754,6 +827,40 @@ pub trait CoordTaskStore: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two metadata-patch boundaries cannot rewrite or clear the author.
+    #[test]
+    fn a_boundary_patch_cannot_rewrite_or_clear_the_task_author() {
+        let key = crate::gateway::execution_engine::AUTHOR_USER_KEY;
+        let existing = serde_json::json!({ key: "u-bob", "managed_by": "dispatcher" });
+        let rewritten =
+            merge_boundary_metadata_patch(&existing, serde_json::json!({ key: "u-admin" }));
+        assert_eq!(rewritten[key], "u-bob");
+        let cleared = merge_boundary_metadata_patch(&existing, serde_json::json!({ key: null }));
+        assert_eq!(cleared[key], "u-bob");
+        let other = merge_boundary_metadata_patch(&existing, serde_json::json!({ "note": "hi" }));
+        assert_eq!(other["note"], "hi");
+        assert_eq!(other[key], "u-bob");
+    }
+
+    /// An authorless task patched by a person becomes that person's: the only
+    /// other reading (the team owner's authority) is the two-step bypass
+    /// "strip the author, re-add managed_by".
+    #[tokio::test]
+    async fn an_authorless_task_patched_by_a_person_is_stamped_with_that_person() {
+        let key = crate::gateway::execution_engine::AUTHOR_USER_KEY;
+        let merged = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-bob")),
+            async {
+                merge_boundary_metadata_patch(
+                    &serde_json::json!({ "note": "x" }),
+                    serde_json::json!({ "managed_by": "dispatcher" }),
+                )
+            },
+        )
+        .await;
+        assert_eq!(merged[key], "u-bob");
+    }
 
     #[test]
     fn merge_metadata_patch_preserves_unmentioned_keys() {

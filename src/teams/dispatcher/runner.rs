@@ -194,10 +194,14 @@ pub struct MemberRunOutcome {
 /// NULL/NULL (adopted by the operator), skipped the exec-tier ceiling
 /// (`role_is_operator(None)` is `true` by design), and in a room answered
 /// "who is asking" with the room OWNER. The autonomous dispatcher
-/// (`schedule/mod.rs`) spawns bare, so every read there is `None`, nothing is
-/// stamped, and behaviour is byte-identical to before — that path genuinely
-/// has no live caller.
-fn task_run_metadata(
+/// (`schedule/mod.rs`) has no live caller either, but since round 11 it does
+/// not spawn bare: it resolves the task's fire-time authority
+/// (`scope::authority::resolve` over the task author and the team row's
+/// owner/scope) and launches `run_task` through `spawn_under_authority`,
+/// which re-establishes the granted scope, role ceiling and author — so these
+/// reads are live there too. Only a Legacy task (no owner, no author) reads
+/// `None` everywhere and stamps nothing, byte-identical to before.
+pub(in crate::teams::dispatcher) fn task_run_metadata(
     team_id: &str,
     task_id: &str,
     think_level: Option<&str>,
@@ -986,12 +990,96 @@ mod tests {
         );
     }
 
-    /// The autonomous dispatcher (`schedule/mod.rs`) spawns bare: no scope,
-    /// no turn context, no role — nothing may be stamped, byte-identical to
-    /// the pre-fix behaviour.
+    /// A call with no live task-locals (a Legacy dispatcher task, or any
+    /// caller outside a run) stamps nothing — byte-identical to the pre-fix
+    /// behaviour.
     #[test]
     fn task_run_metadata_without_a_caller_stamps_nothing() {
         let m = task_run_metadata("t1", "task-9", None, None);
+        assert!(crate::scope::scope_from_metadata(&m).is_none());
+        assert!(!m.contains_key("caller_role"));
+        assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
+    }
+
+    /// N1 (HIGH), end to end through the production seams: a dispatcher task
+    /// that Bob (member) authored in Alice's (admin) room is resolved at claim
+    /// time, launched through `spawn_under_authority`, and inside it
+    /// `task_run_metadata` stamps Bob as a MEMBER and the agent's
+    /// `allowed_users` fence sees Bob — not "no actor", which it admits
+    /// unconditionally. Mutation target: drop `reestablish` in
+    /// `spawn_under_authority` and every assertion below goes red.
+    #[tokio::test]
+    async fn a_member_authored_dispatcher_task_runs_as_the_member_and_the_agent_fence_refuses_it() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::scope::authority::{resolve_with, FireAuthority, FireSubject};
+
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let room = crate::scope::ScopeId::Project("p-room".into()).render();
+        let FireAuthority::Granted(granted) = resolve_with(
+            Some(&users),
+            &FireSubject {
+                owner: Some("u-alice"),
+                scope: Some(&room),
+                author: Some("u-bob"),
+                carried_role: None,
+            },
+        ) else {
+            panic!("an active member author must be Granted");
+        };
+
+        let (metadata, admitted) = crate::teams::dispatcher::schedule::spawn_under_authority(
+            Some(granted.carried()),
+            async {
+                let m = task_run_metadata("t1", "task-9", None, None);
+                // The same expression the Agent arm of `execute_member_task`
+                // evaluates (runner.rs, "The agent axis" block).
+                let allowed = vec!["u-alice".to_string()];
+                let actor = crate::gateway::visibility::ambient_actor();
+                let admitted = crate::config::types::agent_admits_user(
+                    Some(allowed.as_slice()),
+                    actor.as_deref(),
+                );
+                (m, admitted)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            metadata.get("caller_role").map(String::as_str),
+            Some("member"),
+            "the member run must carry the member ceiling, not the operator default"
+        );
+        assert_eq!(
+            metadata
+                .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+                .map(String::as_str),
+            Some("u-bob")
+        );
+        assert_eq!(
+            crate::scope::scope_from_metadata(&metadata).map(|a| a.owner_user_id),
+            Some("u-alice".to_string()),
+            "the session row is the ROOM's, not NULL/NULL adopted by the operator"
+        );
+        assert!(
+            !admitted,
+            "an agent whose allowed_users names only Alice must refuse Bob's task"
+        );
+    }
+
+    /// Legacy (no owner, no author): the dispatcher still spawns bare and
+    /// stamps nothing — byte-identical to HEAD.
+    #[tokio::test]
+    async fn a_legacy_dispatcher_task_still_stamps_nothing() {
+        let m = crate::teams::dispatcher::schedule::spawn_under_authority(None, async {
+            task_run_metadata("t1", "task-9", None, None)
+        })
+        .await
+        .unwrap();
         assert!(crate::scope::scope_from_metadata(&m).is_none());
         assert!(!m.contains_key("caller_role"));
         assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));

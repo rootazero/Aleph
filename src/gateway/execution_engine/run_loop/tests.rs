@@ -366,7 +366,7 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
     RunProducer {
         file: "src/teams/dispatcher/runner.rs",
         attribution: "stamps",
-        attribution_why: "from the ambient scope/turn-context when a live caller exists (team_delegate reaches task_run_metadata before the spawn); the autonomous dispatcher reads None and stamps nothing — MU4-03 adjudicated 2026-08-18",
+        attribution_why: "from the ambient scope/turn-context: team_delegate reaches task_run_metadata with the leader run's task-locals live; the autonomous dispatcher re-establishes the task's resolved authority around the spawn (schedule/mod.rs, round 11 N1) — only a Legacy task stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "dispatched work, autonomous in the case that matters; the delegating turn stamped if a human drove it",
     },

@@ -126,6 +126,20 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
+/// The PRINCIPAL the current execution context acts for — a user id, never an
+/// agent id — or `None` for an unrestricted internal caller.
+///
+/// [`ambient_actor`] minus its last arm. That arm falls back to the turn's
+/// AGENT id (`main`), which is harmless for predicates that compare it with a
+/// partition suffix (an agent id never equals `u-*`) and wrong for a caller
+/// that COMPOSES with the answer: a browser profile keyed `default__main`, or
+/// a legacy-row admission granted to "main", names a principal that does not
+/// exist.
+#[must_use]
+pub fn ambient_principal() -> Option<String> {
+    crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner)
+}
+
 /// The user a visibility check made from INSIDE an agent run acts for — the
 /// run-side twin of [`visible_owner_filter`].
 ///
@@ -157,8 +171,7 @@ pub fn ambient_actor() -> Option<String> {
     // unchanged. Returning `None` here remains the explicit way to
     // opt into the unrestricted arm — tests, cron, and A2A paths that
     // do not yet plumb an actor continue to fall through.
-    crate::scope::ambient_room_author()
-        .or_else(crate::scope::ambient_owner)
+    ambient_principal()
         .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
 }
 
@@ -469,6 +482,28 @@ mod tests {
     use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use tempfile::TempDir;
+
+    /// `ambient_actor` falls back to the turn's AGENT id when no principal is
+    /// in scope; `ambient_principal` must not — a caller that composes with
+    /// the answer would otherwise mint `default__main`.
+    #[test]
+    fn ambient_principal_never_answers_with_an_agent_id() {
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("main"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        let (actor, principal) = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn, || (ambient_actor(), ambient_principal()));
+        assert_eq!(actor.as_deref(), Some("main"));
+        assert_eq!(principal, None);
+    }
 
     #[test]
     fn stamped_row_reads_its_own_owner() {

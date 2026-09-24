@@ -5,11 +5,13 @@
 //! reasoning** — task decomposition and routing are the leader LLM's job
 //! (done via `task_create`); this only drives the DAG mechanically.
 
+mod authority;
 mod failure;
 mod reclaim;
 mod select;
 mod settle;
 
+pub(in crate::teams::dispatcher) use authority::spawn_under_authority;
 pub use select::{
     is_dispatcher_managed, is_zombie, orphan_reset_status, select_schedulable,
     MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
@@ -154,6 +156,37 @@ impl TeamDispatcher {
                 }
             };
 
+            // Fire-time authority (round 11, N1). Resolved BEFORE the claim so
+            // a refused or unknown task never takes the lock or a run record:
+            // Unknown leaves it Pending for the next tick (R-a), Refused parks
+            // it Paused with the reason, Granted re-establishes the author's
+            // attribution around the spawn below.
+            let facts = match authority::task_fire_facts(
+                self.team_store.as_ref(),
+                self.context.session_store().as_ref(),
+                &task,
+            )
+            .await
+            {
+                Ok(facts) => facts,
+                Err(e) => {
+                    tracing::warn!(task_id = %task.id, error = %e,
+                        "dispatcher: authority unknown (owner row unreadable); task left pending");
+                    continue;
+                }
+            };
+            let verdict = crate::scope::authority::resolve(&facts.subject());
+            let carried = match authority::claim_authority(
+                verdict,
+                self.coord_store.as_ref(),
+                &task.id,
+            )
+            .await
+            {
+                authority::ClaimAuthority::Launch { carried } => carried,
+                authority::ClaimAuthority::Hold => continue,
+            };
+
             // Atomic claim — loses harmlessly to a racing claimer.
             if let Err(e) = self.coord_store.acquire_lock(&task.id, &owner).await {
                 tracing::debug!(task_id = %task.id, error = %e, "dispatcher: task already claimed");
@@ -192,7 +225,10 @@ impl TeamDispatcher {
             // a phantom running-map entry that only clears at the zombie
             // sweep (TEAMS-003, high) — the user sees a task that "never
             // completed" but the dispatcher loop keeps running.
-            tokio::spawn(async move {
+            // Spawned under the task's resolved authority: a bare spawn loses
+            // every task-local, and the member run then executed as an
+            // unscoped operator (N1).
+            spawn_under_authority(carried, async move {
                 if let Err(panic_payload) = AssertUnwindSafe(async {
                     dispatcher
                         .run_task(task, owner, dispatch_target, permit)
