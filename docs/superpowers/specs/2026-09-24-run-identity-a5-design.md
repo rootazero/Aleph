@@ -198,7 +198,7 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 
 | 期 | 内容 | 依赖 |
 |---|---|---|
-| **P1** | §2：`FlowRequest.run_id`、bridge / hookstop / split / abandon 统一、F14 过滤、`snap` 最近匹配 | V3 V4 |
+| **P1** | §2：`FlowRequest.run_id`、bridge / hookstop / split / abandon 统一、F14 过滤、`snap` 最近匹配 —— **已落地 `ef4902932`** | V3 V4 |
 | **P2** | §3：`adopt`、多键释放与唤醒、父段 partial meta、收尾 meta 落最终会话、F29 重开 —— **延后（U4）** | P1（重开沿用 R）· V1 V2 V5 V8 |
 | **P3** | §4：`stamp_and_bill_in_range` 两后端、`BillOutcome` | 与 P1/P2 无代码依赖，可并行或先做 · V6 |
 

@@ -1402,6 +1402,27 @@ async function cmdHoles(phase = "before") {
     `held ${held} (${total === null ? "page rows — the reply carried no total" : "server total"}) < projectable ${projectable}`,
   );
 
+  // Run identity (spec 2026-09-24 §2): every live meta names the run whose
+  // opener precedes it. Read off the log the real binary wrote, so it covers
+  // the one link no unit test drives — the engine handing its run id to the
+  // bridge. At least one meta, or the claim is vacuous and says so.
+  const starts = rowsOfKind(key, "run_started");
+  const metas = rowsOfKind(key, "assistant_run_meta");
+  const mismatched = metas.filter((m) => {
+    const opener = [...starts].reverse().find((s) => s.seq < m.seq);
+    return !opener || opener.payload.run_id !== m.payload.run_id;
+  });
+  check(
+    metas.length > 0,
+    `[${phase}] the burst session carries at least one run meta to join`,
+    `metas ${metas.length}`,
+  );
+  check(
+    mismatched.length === 0,
+    `[${phase}] every run meta carries the run id of the opener before it`,
+    show(mismatched.map((m) => ({ seq: m.seq, run_id: m.payload.run_id })), 300),
+  );
+
   const stateFile = path.join(QA_ROOT, "holes_before.json");
   if (phase === "before") {
     check(
