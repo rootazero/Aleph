@@ -475,7 +475,10 @@ pub(super) fn hook_stop_receipt(
     text: &str,
 ) -> Vec<SessionEvent> {
     let at = now_ms();
-    let run_id = format!("hookstop-{}", uuid::Uuid::new_v4());
+    // The engine's id: this path returns `Ok`, so `execute()` stamps an
+    // `AssistantRunMeta` under `request.run_id` for it — a minted id here
+    // would leave that meta unjoinable to this bracket (F1).
+    let run_id = request.run_id.clone();
     // `Some` exactly when this batch opens the turn it files the receipt under.
     let seeded_turn = (!request.is_resume()).then(TurnId::new_v4);
     let mut events = Vec::with_capacity(5);
@@ -944,9 +947,10 @@ mod hook_stop_tests {
             panic!("run bracket around the receipt, got {:?}", kinds(&evs));
         };
         assert_eq!(r0, r1, "the bracket names one run");
-        assert!(
-            r0.starts_with("hookstop-"),
-            "a locally-minted marker id, got {r0}"
+        assert_eq!(
+            r0, "test-run",
+            "the bracket carries the engine's run id — the meta `execute()` \
+             stamps for this Ok run carries the same one"
         );
         assert!(envelope.is_none(), "this writer resolved no knobs");
         assert_eq!(
