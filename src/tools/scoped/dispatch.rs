@@ -158,8 +158,11 @@ impl ScopedToolService {
     /// no gate could make: a `PermissionDenied` leaving here fires the
     /// `PermissionDenied` hook observers. Placed on the way OUT rather than
     /// at each deny arm (tier / policy rule, operator gate ×2, hook `deny:`)
-    /// so a new arm is covered without knowing this seam exists. The input
-    /// is cloned only when a hook executor with hooks is attached.
+    /// so a new arm is covered without knowing this seam exists. Which
+    /// refusals that is — and which it is not — is the variant's doc
+    /// (`HookEvent::PermissionDenied`). The input is cloned only when a
+    /// `PermissionDenied` hook is registered: a Write call's whole body is
+    /// not copied on every dispatch for an event nobody listens to.
     pub(super) async fn execute_inner(
         &self,
         name: &str,
@@ -169,7 +172,7 @@ impl ScopedToolService {
         let for_hook = self
             .hook_executor
             .as_ref()
-            .filter(|e| e.hook_count() > 0)
+            .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
             .map(|e| (e.clone(), input.clone()));
         let result = self.execute_gated(name, input, cancel).await;
         if let (

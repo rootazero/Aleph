@@ -472,7 +472,7 @@ impl ToolService for ScopedToolService {
         input: &Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
         use crate::tools::concurrency::ConcurrencyClaim;
-        // Canonicalize the emitted name first, mirroring `execute_inner`:
+        // Canonicalize the emitted name first, mirroring `execute_gated`:
         // the gates below and the inner claim lookup must judge the SAME
         // spelling the registry will actually execute. Without this the two
         // sides diverge on alias forms (`file.ops` vs `file_ops`) — the

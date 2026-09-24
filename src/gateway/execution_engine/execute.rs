@@ -882,12 +882,14 @@ where
         let occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>> =
             Arc::new(std::sync::Mutex::new(None));
 
-        // Every hook fired inside the run — whichever executor fires it — reads
+        // Hooks fired in this task and in the harness task
+        // `orchestrator::dispatch` spawns (which carries it across) read
         // `transcript_path` from THIS store (`extension::hooks::session_facts`),
         // so the SQLite backend answers `None` instead of a re-derived
         // file-backend path. Published outside `run_agent_loop` so its
-        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too; the
-        // harness task `orchestrator::dispatch` spawns carries it across.
+        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
+        // Sub-work spawned through `CarriedAttribution` (batch legs,
+        // background sub-agents) does not carry it and omits the key.
         let result: Result<String, ExecutionError> = tokio::select! {
             result = crate::extension::hooks::with_transcript_source(
                 Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(

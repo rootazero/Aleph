@@ -2844,7 +2844,7 @@ async fn approval_gates_no_longer_force_global_claims() {
     }
 }
 
-/// Claims must judge the CANONICAL name, mirroring `execute_inner`: an alias
+/// Claims must judge the CANONICAL name, mirroring `execute_gated`: an alias
 /// spelling (`file.ops`) must resolve to the same inner tool and yield the
 /// same bounded claim the canonical spelling gets — otherwise the alias falls
 /// to the conservative `Global` and over-serializes.
@@ -3251,7 +3251,7 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
 // Extension usage recording at the chokepoint
 //
 // These assert the EFFECT (a row exists in the sidecar), not that a function
-// was called: delete the `record_call_detached` line in `execute_inner` and
+// was called: delete the `record_call_detached` line in `execute_gated` and
 // they go red. A test that only counted calls would stay green if the write
 // were routed to a store nobody reads.
 // -------------------------------------------------------------------------

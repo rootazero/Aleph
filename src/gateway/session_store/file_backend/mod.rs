@@ -437,7 +437,7 @@ impl FileSessionStore {
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
         })?;
-        let path = dir.join("transcript.jsonl");
+        let path = self.transcript_path(key);
         let line = serde_json::to_string(msg).map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to serialize message: {e}"))
         })?;

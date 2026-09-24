@@ -404,7 +404,7 @@ pub const DEFERRED_TOOL_RESULT_REASON: &str =
      re-issue this call if it is still needed";
 
 // `STALLED_CALL_CAUSE` and `budget_overrun_cause` lived here until the Act-period
-// wall clock moved out of the harness and into `ScopedToolService::execute_inner`
+// wall clock moved out of the harness and into `ScopedToolService::execute_gated`
 // (below the approval gate, where the human's wait can no longer be billed to the
 // tool). Both are now spoken by `ToolError::Timeout`'s own Display, which is also
 // the variant `is_retryable()` reads — so the model is told to retry AND allowed

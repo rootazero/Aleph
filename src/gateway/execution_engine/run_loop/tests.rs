@@ -2188,3 +2188,121 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         );
     }
 }
+
+/// The two turn-start producers of `permission_mode` (`SessionStart`,
+/// `UserPromptSubmit` in `run_agent_loop_inner`) are the only hook faces
+/// besides tool dispatch that know the tier. Driven through the real run:
+/// a `SessionStart` observer and a `UserPromptSubmit` interceptor each
+/// capture their stdin, and the interceptor denies — so the run returns
+/// before any provider call. Each payload must name the tier the turn
+/// resolved, in Claude Code's spelling.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
+    use crate::extension::{HookAction, HookConfig, HookKind, HookPriority};
+
+    let temp = tempdir().unwrap();
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
+        crate::gateway::session_manager::SessionManager::new(
+            crate::gateway::session_manager::SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            },
+        )
+        .expect("session manager"),
+    );
+    let agent = Arc::new(
+        AgentInstance::new(
+            crate::gateway::agent_instance::AgentInstanceConfig {
+                agent_id: "test-agent".to_string(),
+                workspace: temp.path().join("workspace"),
+                agent_dir: temp.path().join("agents/test-agent"),
+                ..Default::default()
+            },
+            sessions,
+        )
+        .expect("agent instance"),
+    );
+    let engine = ExecutionEngine::new(
+        Default::default(),
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        Arc::new(super::super::tests::EmptyToolRegistry),
+        Vec::new(),
+        None,
+    );
+
+    let hook = |event: HookEvent, kind: HookKind, command: String| HookConfig {
+        event,
+        kind,
+        priority: HookPriority::Normal,
+        matcher: None,
+        actions: vec![HookAction::Command { command }],
+        plugin_name: "turn-start-test".to_string(),
+        plugin_root: temp.path().to_path_buf(),
+        handler: None,
+        timeout_secs: None,
+        declared_event: None,
+        scope_key: crate::extension::visibility::ScopeKey::Global,
+    };
+    let start = temp.path().join("session_start.json");
+    let prompt = temp.path().join("user_prompt_submit.json");
+    let executor = HookExecutor::new(vec![
+        hook(
+            HookEvent::SessionStart,
+            HookKind::Observer,
+            format!("cat > '{}'", start.display()),
+        ),
+        hook(
+            HookEvent::UserPromptSubmit,
+            HookKind::Interceptor,
+            format!(
+                "cat > '{}'; echo 'deny: stopped by the test'",
+                prompt.display()
+            ),
+        ),
+    ]);
+
+    let mut request = minimal_request(std::collections::HashMap::new());
+    request.input = "hello".to_string();
+    request.session_key =
+        crate::routing::session_key::SessionKey::main("turn-start-permission-mode");
+    let expected = engine
+        .resolve_turn_permissions(&request, &agent)
+        .await
+        .tier
+        .cc_permission_mode();
+
+    let result = engine
+        .run_agent_loop_inner(
+            "run-turn-start",
+            &request,
+            Arc::clone(&agent),
+            Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            )),
+            None,
+            CancellationToken::new(),
+            None,
+            Some(Arc::new(executor)),
+            "turn-start-permission-mode".to_string(),
+            Arc::new(std::sync::Mutex::new(None)),
+        )
+        .await;
+    assert!(
+        matches!(&result, Err(ExecutionError::Failed(m)) if m.contains("stopped by the test")),
+        "the UserPromptSubmit deny ends the run before any provider call: {result:?}"
+    );
+
+    let read = |path: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("the hook ran")).unwrap()
+    };
+    assert_eq!(read(&start)["permission_mode"], expected, "SessionStart");
+    assert_eq!(
+        read(&prompt)["permission_mode"],
+        expected,
+        "UserPromptSubmit"
+    );
+}
