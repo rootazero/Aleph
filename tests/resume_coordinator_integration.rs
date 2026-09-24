@@ -852,6 +852,49 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     );
 }
 
+/// An abandoned interrupted run is closed under ITS OWN run id, so a by-id
+/// reader (`snap_out_of_open_run`) pairs the closer with its opener. The old
+/// `abandoned-<uuid>` closer paired with nothing.
+#[tokio::test]
+async fn an_abandoned_interrupted_run_is_closed_under_its_own_run_id() {
+    let store = store();
+    let sid = SessionKey::main("abandon-id-agent");
+    seed_crash_looped_run(&store, &sid, 3).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.abandoned, 1, "{report:?}");
+
+    let closers: Vec<String> = store
+        .load_all_events(&sid)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.event {
+            SessionEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::Abandoned,
+                ..
+            } => Some(run_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        closers,
+        vec!["r1".to_string()],
+        "the abandon closer names the run it closes"
+    );
+}
+
 /// §5.1 / §5.6: three boots whose retrigger never reaches `RunStarted` — the
 /// adapter records the call and writes nothing, i.e. a crash in admit / hook /
 /// seed. Under the old counter `trailing_starts` never moved and this looped

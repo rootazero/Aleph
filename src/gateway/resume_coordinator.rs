@@ -1574,6 +1574,7 @@ impl ResumeCoordinator {
             self.abandon(
                 session_id,
                 Abandoned::InterruptedRun,
+                reduction.open_run.as_ref().map(|o| o.run_id.as_str()),
                 "the interrupted run was too old to resume safely",
             )
             .await;
@@ -1594,6 +1595,7 @@ impl ResumeCoordinator {
             self.abandon(
                 session_id,
                 Abandoned::InterruptedRun,
+                reduction.open_run.as_ref().map(|o| o.run_id.as_str()),
                 "it kept crashing on every resume attempt",
             )
             .await;
@@ -1832,6 +1834,7 @@ impl ResumeCoordinator {
             self.abandon(
                 session_id,
                 Abandoned::UnansweredMessage,
+                None,
                 "the unanswered message was too old to retry safely",
             )
             .await;
@@ -1848,6 +1851,7 @@ impl ResumeCoordinator {
             self.abandon(
                 session_id,
                 Abandoned::UnansweredMessage,
+                None,
                 "it kept crashing before the run could start",
             )
             .await;
@@ -1898,9 +1902,24 @@ impl ResumeCoordinator {
     ///
     /// `what` names the thing being given up on — the two arms write the
     /// same closer but must not say the same sentence to the user.
-    async fn abandon(&self, session_id: &SessionId, what: Abandoned, reason: &str) {
+    ///
+    /// `closes` is the open run's own id when there is one — the same
+    /// derivation `marker_balance` and `boundary_repair` use — so a by-id
+    /// reader pairs the closer with its opener. The unanswered arm has no open
+    /// run (it gives up on a user message nobody answered), so its closer keeps
+    /// a synthesized id that pairs with nothing, by design.
+    async fn abandon(
+        &self,
+        session_id: &SessionId,
+        what: Abandoned,
+        closes: Option<&str>,
+        reason: &str,
+    ) {
         let ev = SessionEvent::RunFinished {
-            run_id: format!("abandoned-{}", uuid::Uuid::new_v4()),
+            run_id: closes.map_or_else(
+                || format!("abandoned-{}", uuid::Uuid::new_v4()),
+                str::to_string,
+            ),
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
