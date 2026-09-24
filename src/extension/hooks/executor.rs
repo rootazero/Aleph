@@ -112,8 +112,10 @@ pub struct CommandHookInvocation {
     /// plugin root. `None` only when neither is known.
     pub current_dir: Option<std::path::PathBuf>,
     /// Environment changes, in the order they are applied. `Some` sets the
-    /// variable; `None` removes it, so a field this event does not have is
-    /// never inherited from the daemon's own environment.
+    /// variable; `None` removes it, so a fixed field or path variable this
+    /// hook does not have is never inherited from the daemon's own
+    /// environment. An event `env` key appears only when the event carries
+    /// it; a name the event lacks is not listed, and so is inherited.
     pub env: Vec<(String, Option<std::ffi::OsString>)>,
     /// The event as JSON, written to the child's stdin.
     pub stdin: String,
@@ -212,10 +214,12 @@ pub fn command_hook_invocation(
     for name in PLUGIN_DATA_VARIABLES {
         set(name, data.clone());
     }
-    // A data field this event does not carry is removed, not left to the
-    // daemon's environment: a daemon started with `FILE` or `ARGUMENTS`
+    // A fixed data field this event does not carry is removed, not left to
+    // the daemon's environment: a daemon started with `FILE` or `ARGUMENTS`
     // exported would otherwise hand that value to every hook as if it were
     // the event's (the `CLAUDE_PROJECT_DIR` rule above, for the data half).
+    // The `context.env` keys below have no such list: each is set when the
+    // event carries it, and a name it lacks is inherited.
     set("TOOL_NAME", context.tool_name.clone().map(Into::into));
     set(
         "ARGUMENTS",
@@ -2050,8 +2054,8 @@ mod tests {
         assert_eq!(rebuilt["hook_event_name"], hook.event_name());
     }
 
-    /// A data field this event does not carry is removed from the command's
-    /// environment — not inherited from the daemon's, where a variable of the
+    /// A fixed data field this event does not carry is removed from the
+    /// command's environment — not inherited from the daemon's, where a variable of the
     /// same name would read as the event's value. `CLAUDE_PROJECT_DIR` is the
     /// same rule for the run directory (unknown outside a run).
     #[cfg(unix)]

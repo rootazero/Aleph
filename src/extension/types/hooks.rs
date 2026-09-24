@@ -437,8 +437,13 @@ pub enum HookAction {
     ///   expanded at all. An `ARGUMENTS` / `TOOL_INPUT` value over the
     ///   executor's env cap (`MAX_ENV_VALUE_BYTES`) is replaced by the marker
     ///   `[N bytes — read from stdin JSON]`, which is then all the variable
-    ///   holds. A field the event does not carry (no tool, no file) is
-    ///   removed from the environment, never inherited from the daemon's.
+    ///   holds. A fixed field the event does not carry — `TOOL_NAME` /
+    ///   `ARGUMENTS` / `TOOL_INPUT` / `FILE` with no tool or file,
+    ///   `CLAUDE_PROJECT_DIR` outside a run — is removed from the
+    ///   environment, never inherited from the daemon's. An `env` key is set
+    ///   only on the events that carry it: on any other event a variable of
+    ///   that name is whatever the daemon's environment holds, so a script
+    ///   that reads `"$DENY_REASON"` should check `hook_event_name` first.
     ///
     /// `aleph hooks test` builds its run by the same derivation, so a command
     /// reviewed there sees these same variables (on a synthetic tool call).
