@@ -839,12 +839,39 @@ mod tests {
     /// the source: the claim loop hands exactly `scope::authority::resolve`
     /// to `authorize_claim` and launches the member run through the
     /// `AuthorizedLaunch` it returned — whose carrier it cannot construct or
-    /// replace. A bare `tokio::spawn` (the N1 shape), a direct
-    /// `spawn_under_authority` or any other resolver goes red here.
-    /// Whitespace is stripped first so formatting cannot move the pin.
+    /// replace.
+    ///
+    /// What goes red here, and nothing wider: in `dispatch_once`'s body a
+    /// bare `tokio::spawn` (the N1 shape), a direct `spawn_under_authority`,
+    /// or a second `authority::resolve(` call; anywhere in `schedule/mod.rs`'s
+    /// production code a second `authorize_claim(` call, whatever resolver it
+    /// passes; and a caller of `authorize_claim` in any other file of this
+    /// module (`pub(super)`, so `schedule/` is everywhere it is visible). The
+    /// body checks strip whitespace first so formatting cannot move the pin.
     #[test]
     fn dispatch_once_launches_every_claimed_task_under_its_resolved_authority() {
         let src = include_str!("mod.rs");
+        let production = crate::utils::source_scan::code_text(
+            &crate::utils::source_scan::production_prefix(src),
+        );
+        assert_eq!(
+            production.matches("authorize_claim(").count(),
+            1,
+            "schedule/mod.rs must authorize a claim at exactly one site — a second \
+             `authorize_claim(` call can pass any resolver it likes"
+        );
+        let schedule_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/teams/dispatcher/schedule");
+        assert_eq!(
+            crate::utils::source_scan::files_whose_production_code_reads(
+                &schedule_dir,
+                "authorize_claim"
+            )
+            .into_iter()
+            .collect::<Vec<_>>(),
+            vec!["src/teams/dispatcher/schedule/mod.rs".to_string()],
+            "only the claim loop may call authorize_claim"
+        );
         let start = src
             .find("pub(crate) async fn dispatch_once")
             .expect("dispatch_once present");
