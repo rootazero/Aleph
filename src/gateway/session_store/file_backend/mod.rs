@@ -1594,7 +1594,7 @@ impl SessionStore for FileSessionStore {
                 "no metadata.json for {key_str}; the run is not billed and its row is not stamped"
             )));
         }
-        let previous = std::mem::replace(&mut messages[idx].metadata, Some(metadata.clone()));
+        let previous = messages[idx].metadata.replace(metadata.clone());
         self.write_transcript_locked(&guard, &key_str, &messages)
             .await?;
         let Some(bill) = bill else {
