@@ -3,7 +3,7 @@
 **Date:** 2026-09-24
 **Branch:** main（单分支开发；实施时每期一个 worktree、各自合并）
 **Scope:** `src/orchestrator/{dispatch.rs,harness_bridge/runner_impl.rs}` · `src/gateway/execution_engine/{execute.rs,helpers.rs,gate.rs,session_run_registry.rs,run_loop/}` · `src/context/compact/{session_split.rs,directive.rs,event_snap.rs}` · `src/session/epoch_registrar.rs` · `src/gateway/resume_coordinator.rs` · `src/gateway/session_projector.rs` + `projector_sub/run_span.rs` · `src/gateway/session_store/{mod.rs,sqlite_backend,file_backend}`
-**Status:** 待审阅
+**Status:** 已审阅（2026-09-24）。**P1 + P3 实施**（计划 [`2026-09-24-run-identity-a5-p1-p3.md`](../plans/2026-09-24-run-identity-a5-p1-p3.md)）；**P2 延后**（U4）。写计划时核实的结果已回写各节，标 〔amended 2026-09-24 (plan)〕
 **Source:** persistence-r3 计划的 FOLLOW-UP F1 · F10 · F14 · F26 · F29 · F30（[`2026-09-12-persistence-wal-recovery-r3.md`](../plans/2026-09-12-persistence-wal-recovery-r3.md) 「FOLLOW-UP 清单」）
 **Criteria:** CLAUDE.md 判据 #1 #4 #7 #8 #13 #14 #15 #16 #19
 
@@ -29,6 +29,8 @@
 | **U1** | 历史日志（id 永不相等的旧 span、F1 在 `027eeb7d9..26c08d6ef` 间翻倍过的 dev/QA home） | **只管往后**。读侧永久容忍两种形状，历史双计不修，写进 RELEASE NOTE |
 | **U2** | 两个 id 由谁统一 | **引擎 id 下行**：bridge 与 split 都沿用 `RunRequest.run_id` |
 | **U3** | file 后端（出厂默认）两次落盘之间的崩溃窗 | **接受，先戳后计**：只在进程崩溃恰落两写之间时少计一次，方向是少计不重计；写进已知限制与 RELEASE NOTE |
+| **U4** | 出厂默认（file 后端）没有 epoch registrar，session split **从不发生**；P2 只服务 `session_store_backend = "sqlite"` | **P1 + P3 现在做，P2 延后**。§3 原样保留为延后设计；触发条件：SQLite 成为默认，或 file 后端接上 registrar。F26 / F29 / F30 随 P2 一起延后 |
+| **U5** | 〔amended 2026-09-24 (plan)〕P1 之后合成戳与迟到的 meta 同 id：doctor 修复先合成（只计 token），meta 随后到达读作 `AlreadyStamped` ⇒ 该 run 的 cost / model / 仪表**丢失** | **接受并写明**。token 恰好计一次（F1 关闭的就是重计）；丢的是美元与仪表，只发生在「`RunFinished` 与 meta 之间的一次 append 宽窗口里恰好有人跑 `request_repair`」。进已知限制与 RELEASE NOTE |
 
 ---
 
@@ -55,6 +57,11 @@
 | projector meta 臂与孪生 `synthesize_missing_stamps` 都是**先戳、后计**，戳是计的幂等闸；`billed` 只活在内存里 | `session_projector.rs:799-850` · `run_span.rs:220-250` | 读 | F10 的机制（§4） |
 | `bill_run_from_fold` 的 `cost_usd: None` 走 `unwrap_or(0.0)`：只计 token，不标「未定价」 | `session_projector.rs:960-969` | 读 | 父段 partial meta 可以不带 cost（§3） |
 | **出厂默认 session store 是 `file`**；它的戳（transcript JSONL 整文件重写）与计（`metadata.json`）在**同一把** `lock_metadata` 下，但是两个文件 | `start/helpers.rs:218-235` · `file_backend/mod.rs:1398-1424,1488-1545` | 读 | §4 的 file 臂与 U3 |
+| 〔amended 2026-09-24 (plan)〕file 分支返回 `(store, None)`：没有 `SessionManager` ⇒ 没有 epoch registrar ⇒ `directive.rs` 的 `(compactor, registrar)` 匹配落到 compact-to-fit——**默认配置下 split 从不发生** | `start/helpers.rs:300` · `start/mod.rs:386-400` · `context/compact/directive.rs` `SplitSession` 臂 | 读 | U4 |
+| 〔amended〕引擎 run 内的重试循环每次重建 `FlowRequest` 并重新 dispatch（`MAX_FALLBACK_ATTEMPTS`）⇒ P1 之后**同一会话日志可有多组 `R` 开闭**（判据 #19） | `run_loop/inner.rs:680,1413,1534-1581` | 读 | 按 id 的消费者须取**最近**的一个（§2） |
+| 〔amended〕subagent spawner 直接 `AgentHarness::run`，不经 `HarnessRunner`、**不写 run marker**（`recovery.rs` 里的 `RunStarted` 全在 `:894` 起的测试模块） | `agents/subagent_spawner/mod.rs:1002` · `agents/subagent_tool/recovery.rs:894` | 读 | V3 结论：P1 不覆盖、也无须覆盖 |
+| 〔amended〕`HarnessRunner` 有 8 个实现者：生产 1（`runner_impl.rs:26`）、测试 7 | `handlers/chat.rs:1991` · `handlers/flow_admin.rs:140` · `orchestrator/tests/dispatch.rs:22,354,479,687` · `tests/gateway_chat_common/mod.rs:127` | 读 | P1 加参数的触及面 |
+| 〔amended〕生产里的 `SessionStore` 实现者只有两个后端，没有转发装饰器 | `file_backend/mod.rs:483` · `sqlite_backend/mod.rs:51` | 读 | §4 的方法改名不会被一层默认实现吞掉（判据 #7） |
 
 ---
 
@@ -75,11 +82,13 @@
 
 **判据 #19——这一笔把什么变成了复数：** 同一个 run id 从此出现在**两个会话**里。已知的按 id 消费者都是会话作用域（`already_stamped_by` 按行、`snap` 与 `runner_impl:1106` 扫单个会话的日志）。**日志之外**以 `run_id` 为键的东西（tracker、`agent.run_*` 事件、Panel、`task_traces`）今天已用引擎 id，不变——但由 V4 普查逐个核对，不靠推断。
 
-**`snap_out_of_open_run` 的一处加固：** §3 的 F29 重开会让父日志出现 `R 开 → R 闭 → R 开`；它按 `position` 取**第一个**匹配的 opener，可能往回切过头。改成取 cut 之前**最近**的那个匹配，配一个测试。
+**`snap_out_of_open_run` 的一处加固：** 引擎的重试循环（§1）——以及延后的 §3 F29 重开——会让同一日志出现 `R 开 → R 闭 → R 开`；它按 `position` 取**第一个**匹配的 opener，会往回切过头。〔amended 2026-09-24 (plan)〕原稿写「取 cut 之前最近的那个匹配」——对**多个 id** 是错的：cut 之后若闭了 `a` 和 `b` 两个 run，「最近的任一匹配」是 `b` 的 opener，会把 `a` 的 opener 留在 cut 之前被退休。正确的推导：**对 cut 之后闭合的每一个 id，取 cut 之前该 id 的最后一个 opener（它才是那个闭所配的开）；返回这些位置里的最小值**，没有则 `cut`。两个测试：同 id 重用（旧代码回退到 0）、两个 id（钉住朴素 `rposition`）。
 
 ---
 
-## 3. 设计二：认领跟着 run 走进被收养的子会话（F30 · F26 · F29）
+## 3. 设计二：认领跟着 run 走进被收养的子会话（F30 · F26 · F29）——**延后（U4）**
+
+> 〔amended 2026-09-24 (plan)〕本节不在 P1 + P3 计划内。它依赖的 V1 V2 V5 V8 随之延后。重启时先重读 §1 的 U4 行：触发条件成立之前，split 在默认配置上不可达。
 
 ### 3.1 收养（F30）
 
@@ -129,8 +138,9 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 2. **`SessionStore::stamp_and_bill_in_range`** 取代两个孪生调用点（projector meta 臂、`synthesize_missing_stamps`）里的两步写（判据 #16：一个操作，两处共用）：
    - **SQLite：** 一个事务；任何一步失败整体回滚 ⇒ `Retry`。严格的恰好一次。
    - **file（出厂默认）：** 在它已持有的那一把 `MetaGuard` 下先重写 transcript（戳）、再 commit `metadata.json`（计）；计费出错 ⇒ 不写 transcript ⇒ `Retry`。
-   - 旧的两个方法：`update_session_usage` 仍有别的调用者（V6 普查），`stamp_assistant_metadata_in_range` 若再无生产调用者则删除（P6），它的测试迁到新方法上。
-3. **拆掉两义的 bool**：`Projected::Stamped { bill: BillOutcome }`，`BillOutcome::{Billed, NothingToBill, Unanchored}`。`Unanchored`（meta 前面没有 `RunStarted`，例如 opener 已被 `/compact` 退休）照旧只戳不计，但**报出来**、`warn!`，不再默默算作「没计」（判据 #8）。`RepairReport.usage_rebilled` 只数 `Billed`。
+   - 〔amended 2026-09-24 (plan)〕V6 结论：`stamp_assistant_metadata_in_range` 的生产调用者**恰好**是这两个孪生点 ⇒ 不新增方法，而是**把它改名为 `stamp_and_bill_in_range` 并加一个 `bill: Option<&RunBill>` 参数**（一个操作一个名字，不留旧名做死孪生）。`update_session_usage` 在本计划后没有生产调用者（`handlers/projects_channel.rs:1102` 是测试替身），但它有 6 个实现者；它的 SQL 抽成两处共用的 helper，trait 方法本身的去留**不在本计划内**（P6 另议）。
+   - 〔amended〕file 臂：计费（`metadata.json`）写失败时，**仍在同一把锁下**把行的旧 metadata 写回 transcript，再返回 `Err` ⇒ `Retry`。为此 `MetaGuard` 加一个不消耗 guard 的 `write_back(&mut self)`（`commit(self)` 会随返回放锁）。回滚本身也失败 ⇒ `warn!`，这一行是「已戳未计」——与 U3 的崩溃窗同一方向。
+3. **拆掉两义的 bool**：`Projected::Stamped { bill: BillOutcome }`，`BillOutcome::{Billed, NothingToBill, Unfoldable}`。〔amended〕`Unfoldable` 取代原稿的 `Unanchored`，覆盖两种「无从 fold」：meta 前面没有 `RunStarted`（例如 opener 已被 `/compact` 退休），或没有装 event log（`ProjectionCtx.events == None`）。照旧只戳不计，但**报出来**、`warn!`，不再默默算作「没计」（判据 #8）。fold 的**读失败**不属于它——那是 `Retry`。`RepairReport.usage_rebilled` 只数 `Billed`。
 
 **已知限制（U3）：** file 后端的两个文件各自原子写，彼此之间不原子。先戳后计 ⇒ 进程崩溃恰落两写之间时该 run 少计一次，永不重计。瞬时错误那一类已被第 2 条关掉。
 
@@ -153,11 +163,11 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 |---|---|---|
 | **V1** | split 之后，发给**父键**的 steer / busy 消息落进哪份日志（Panel 这类显式键的调用方会继续寻址父） | §3.2 的唤醒对象、以及父上是否会出现第二个 run |
 | **V2** | §3.3 父段 partial meta 的 `turn_id` 取哪一个；meta 臂与 fold 是否读它 | partial meta 的形状 |
-| **V3** | subagent 的 run 走不走 `runner_impl`；走的话它们拿到的是哪个 `RunRequest.run_id` | §2 的覆盖面 |
-| **V4** | 日志之外以 `run_id` 为键的全部位置（tracker、`agent.run_*`、`task_traces`、Panel、busy queue durable） | §2 的判据 #19 普查 |
+| **V3** | subagent 的 run 走不走 `runner_impl`；走的话它们拿到的是哪个 `RunRequest.run_id` | §2 的覆盖面 — 〔amended〕**已结**：不走，也不写 marker（§1） |
+| **V4** | 日志之外以 `run_id` 为键的全部位置（tracker、`agent.run_*`、`task_traces`、Panel、busy queue durable） | §2 的判据 #19 普查 — 〔amended〕计划 Task 1 执行，结论写回这里 |
 | **V5** | registry 里「键 ↔ 认领一一对应」的全部假设 | §3.5 的判据 #19 普查 |
-| **V6** | `update_session_usage` / `stamp_assistant_metadata_in_range` 的全部调用者（剥掉测试模块） | §4 第 2 条的删改范围 |
-| **V7** | 改动后 `harness/tests/budget.rs` 实测值 | §5 的「不动 harness」 |
+| **V6** | `update_session_usage` / `stamp_assistant_metadata_in_range` 的全部调用者（剥掉测试模块） | §4 第 2 条的删改范围 — 〔amended〕**已结**（§4 第 2 条） |
+| **V7** | 改动后 `harness/tests/budget.rs` 实测值 | §5 的「不动 harness」 — 〔amended〕计划 Task 1 量基线、Task 8 / Task 12 复量 |
 | **V8** | registry 用 `SessionKey`、split 用 `SessionId`——`adopt_run` 的生产实现在哪一层做转换 | §3.1 的接口形状 |
 
 ---
@@ -172,9 +182,11 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 - split 后：父段与子段在 run 结束**之前**就各自计了 token，cost 只在子上计一次（F26）。
 - 子 seed 失败：父日志 `R 开 → R 闭 → R 开`，崩溃重放读作可 resume（F29）；`snap` 取最近的 opener；收尾 meta 落在**父**上（指针没被移动过）；子键已从 T 摘下。
 - `adopt_run` 失败：不存在任何子日志，父上同样重开 R。
-- `stamp_and_bill_in_range`：两个后端上，计费一步注入失败 ⇒ 行**未**被戳、下次重放计费成功（F10）；`NothingToBill` / `Unanchored` 各有一例。
+- `stamp_and_bill_in_range`：两个后端上，计费一步注入失败 ⇒ 行**未**被戳、下次重放计费成功（F10）；`NothingToBill` / `Unfoldable` 各有一例。
 
-**要改写（不是删除）的旧钉子：** `session_projector.rs:2132`（夹具假设 marker ≠ 引擎 id）、`:2152` `:2179` `:2276`；`session_split.rs:933-946`（`split_run_id`）、`:1104`（复制的 opener）；`runner_impl.rs:1790` 的普查；`projection_reconciler.rs:1374` `:1436`。
+**要改写（不是删除）的旧钉子：** `session_split.rs:933-946`（`split_run_id`）、`:1104`（复制的 opener）；`run_loop/mod.rs:948`（`hookstop-` 前缀）；断言 `Projected::Stamped { billed }` 的**四**处（`session_projector.rs:1663` `:1841` `:1911` `:1964`——〔amended〕原稿数成三处，漏了 `an_unanchored_meta_stamps_but_does_not_bill`，它变成 `Unfoldable`）。
+
+〔amended 2026-09-24 (plan)〕原稿把 `session_projector.rs:2132` `:2152` `:2179` `:2276` 列为「要改写」——**错了**。它们钉的是 marker ≠ 引擎 id 的日志仍被正确读取，而 U1 让旧日志原样可读，所以它们**必须保持绿**；只改它们的注释（「生产的 id 形状」→「P1 之前写下的日志形状」），并在旁边加一个同 id 的新形状孪生。`projection_reconciler.rs:1374` `:1436` 同理保持绿。
 
 **变异检查：** 每期完成后，把该期的关键一笔撤掉（如：bridge 恢复自铸、`adopt` 改成 no-op、`stamp_and_bill` 拆回两步），确认红的**恰好**是预期那几条（判据 #18）。
 
@@ -187,7 +199,7 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 | 期 | 内容 | 依赖 |
 |---|---|---|
 | **P1** | §2：`FlowRequest.run_id`、bridge / hookstop / split / abandon 统一、F14 过滤、`snap` 最近匹配 | V3 V4 |
-| **P2** | §3：`adopt`、多键释放与唤醒、父段 partial meta、收尾 meta 落最终会话、F29 重开 | P1（重开沿用 R）· V1 V2 V5 V8 |
+| **P2** | §3：`adopt`、多键释放与唤醒、父段 partial meta、收尾 meta 落最终会话、F29 重开 —— **延后（U4）** | P1（重开沿用 R）· V1 V2 V5 V8 |
 | **P3** | §4：`stamp_and_bill_in_range` 两后端、`BillOutcome` | 与 P1/P2 无代码依赖，可并行或先做 · V6 |
 
 每期一个 worktree、各自合并；每期结束跑一次变异检查。
@@ -200,3 +212,5 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 - 跨越升级的那一个 run（旧标记、新计费记录）可能仍被多计一次；此前在 `027eeb7d9..26c08d6ef` 之间被翻倍计费的 dev / QA 数据不会被修正。
 - 上下文分裂（session split）之后，新会话在该 run 结束前不再接受并发的第二个 run；两段对话的用量在 run 进行中即入账。
 - 默认的 file 会话存储：进程若恰好在「标记」与「入账」两次写盘之间崩溃，该 run 的用量会少计一次（不会重复计）。
+- 〔amended 2026-09-24 (plan)〕若 `doctor` 的修复恰好在一个 run 结束与它的计费记录落盘之间运行，该 run 的 token 只计一次，但它的费用与模型名不会入账（U5）。
+- 〔amended〕上下文分裂只在 `session_store_backend = "sqlite"` 下发生；上面第三条（分裂后的排队与入账时点）随 P2 延后，本次发布**不含**。
