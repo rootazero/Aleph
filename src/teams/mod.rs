@@ -5,6 +5,7 @@
 //! task DAG dispatcher.
 
 pub mod artifacts;
+pub(crate) mod background;
 pub mod broadcast;
 pub mod context;
 pub mod dispatcher;
@@ -54,12 +55,14 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 ///
 /// `teams` is the RAW (unscoped) store: the freeze must see every team the
 /// deactivated principal owns, not the teams visible to the admin running it.
-/// That is also why [`background_stores`] is `pub(crate)` — this handle
-/// bypasses [`ScopedTeamStore`] and must not become a second way in.
+/// Both fields are private to this module, so that store never leaves
+/// `teams`: a holder can only ask the owner-filtered pause and count in
+/// [`background`] — never `list_teams` / `get_team` / `update_team` past
+/// [`ScopedTeamStore`]. Built with `TeamTaskStores::new`.
 #[derive(Clone)]
 pub struct TeamTaskStores {
-    pub teams: crate::sync_primitives::Arc<dyn TeamStore>,
-    pub tasks: crate::sync_primitives::Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
+    teams: crate::sync_primitives::Arc<dyn TeamStore>,
+    tasks: crate::sync_primitives::Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
 }
 
 /// `ConsumerDecides`: the one consumer (`handlers::users`) reads absence as

@@ -68,10 +68,12 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
     /// Team store for panel RPC handlers
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
-    /// The same store UNSCOPED — for the deactivation freeze's team-task leg
-    /// only (see `coord_stores::TeamStoreHandles::unscoped`). `Some` exactly
-    /// when `team_store` is.
-    pub team_store_unscoped: Option<Arc<dyn alephcore::teams::TeamStore>>,
+    /// The deactivation freeze's team-task handle (round 11, N2): the RAW
+    /// team store sealed together with the coord task store, so the raw store
+    /// is reachable only through the owner-filtered pause / count in
+    /// `alephcore::teams` (see `coord_stores::TeamStoreHandles::unscoped`).
+    /// `Some` exactly when both `team_store` and `coord_task_store` are.
+    pub background_team_stores: Option<alephcore::teams::TeamTaskStores>,
     /// Coord task store for team RPC handlers (unified task system)
     pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
     /// Wake handle for the autonomous team dispatcher, shared with the inbound
@@ -240,8 +242,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
 
     // Team store (teams.db).
-    let (team_store, team_store_unscoped) = match init_team_store(daemon).await {
-        Some(handles) => (Some(handles.scoped), Some(handles.unscoped)),
+    // The raw handle is sealed into the freeze's `TeamTaskStores` right here
+    // and travels no further.
+    let (team_store, background_team_stores) = match init_team_store(daemon).await {
+        Some(handles) => {
+            let background = coord_store.clone().map(|tasks| {
+                alephcore::teams::TeamTaskStores::new(handles.unscoped, tasks)
+            });
+            (Some(handles.scoped), background)
+        }
         None => (None, None),
     };
 
@@ -2013,7 +2022,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         generation_registry: Some(generation_registry),
         tool_registry: tool_reg_out,
         team_store,
-        team_store_unscoped,
+        background_team_stores,
         coord_task_store: coord_store,
         dispatch_signal: Some(dispatch_signal),
         snapshot_store,

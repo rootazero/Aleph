@@ -138,19 +138,35 @@ pub async fn show(
     Ok(())
 }
 
+/// Which question a leg table answers: what the principal OWNS (the
+/// `users.get` dossier) or what the deactivation FROZE (the receipt). The
+/// team leg is worded differently on the two: the freeze pauses only
+/// still-claimable (pending) team tasks and leaves in-flight runs to
+/// complete, while the dossier counts every non-terminal one.
+#[derive(Clone, Copy)]
+enum LegWording {
+    Owned,
+    Frozen,
+}
+
 /// Every background leg in display order: the plural noun for a quiet
 /// sentence, the unit for a count line, and the count — `None` when the
 /// server did NOT measure the leg. One table, so a sixth leg is one row here
 /// rather than another hand-written branch in two renderers.
 fn background_legs(
     work: &aleph_protocol::users::FrozenBackgroundWork,
+    wording: LegWording,
 ) -> [(&'static str, &'static str, Option<usize>); 5] {
+    let team = match wording {
+        LegWording::Owned => ("team tasks", "team task(s)"),
+        LegWording::Frozen => ("pending team tasks", "pending team task(s)"),
+    };
     [
         ("goals", "goal(s)", Some(work.goals)),
         ("loops", "loop(s)", Some(work.loops)),
         ("crons", "cron(s)", Some(work.crons)),
         ("heartbeat tasks", "heartbeat task(s)", work.heartbeats),
-        ("team tasks", "team task(s)", work.team_tasks),
+        (team.0, team.1, work.team_tasks),
     ]
 }
 
@@ -163,24 +179,24 @@ fn join_or(nouns: &[&str]) -> String {
     }
 }
 
-/// The measured legs' nouns and `"<n> <unit>"` strings, plus whether all of
-/// them are zero.
+/// The measured legs' nouns and `"<n> <unit>"` strings. Whether they are all
+/// zero is NOT decided here: that is `FrozenBackgroundWork::is_empty`, the
+/// one derivation both renderers call.
 fn measured_legs(
     work: &aleph_protocol::users::FrozenBackgroundWork,
-) -> (Vec<&'static str>, Vec<String>, bool) {
-    let legs = background_legs(work);
+    wording: LegWording,
+) -> (Vec<&'static str>, Vec<String>) {
+    let legs = background_legs(work, wording);
     let measured: Vec<(&'static str, &'static str, usize)> = legs
         .iter()
         .filter_map(|(noun, unit, n)| n.map(|n| (*noun, *unit, n)))
         .collect();
-    let all_zero = measured.iter().all(|(_, _, n)| *n == 0);
     (
         measured.iter().map(|(noun, _, _)| *noun).collect(),
         measured
             .iter()
             .map(|(_, unit, n)| format!("{n} {unit}"))
             .collect(),
-        all_zero,
     )
 }
 
@@ -233,8 +249,8 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
     }
 
     let work = detail.background_work;
-    let (nouns, counts, all_zero) = measured_legs(&work);
-    if all_zero {
+    let (nouns, counts) = measured_legs(&work, LegWording::Owned);
+    if work.is_empty() {
         lines.push(format!("  owns:     no {}", join_or(&nouns)));
     } else {
         lines.push(format!("  owns:     {}", counts.join(", ")));
@@ -252,8 +268,9 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
     }
     if work.team_tasks.is_none() {
         lines.push(
-            "            Team tasks were NOT counted: the team stores did not open on \
-             that server. Run `aleph doctor` — `core/capability-wiring` names the cause."
+            "            Team tasks were NOT counted: either the team stores are not \
+             open on that server or a scan failed — the server log says which. If a \
+             store did not open, `aleph doctor` (`core/capability-wiring`) names the cause."
                 .to_string(),
         );
     }
@@ -387,25 +404,40 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
         // What the freeze DID over the measured legs, then — separately — one
         // sentence per leg that never ran. An unmeasured leg is not a leg that
         // found nothing.
-        let (nouns, counts, all_zero) = measured_legs(&frozen);
-        if all_zero {
+        let (nouns, counts) = measured_legs(&frozen, LegWording::Frozen);
+        if frozen.is_empty() {
             lines.push(format!("They owned no running {}.", join_or(&nouns)));
         } else {
             lines.push(format!("Background work frozen: {}.", counts.join(", ")));
         }
+        if frozen.team_tasks.is_some() {
+            // The freeze pauses what could still be CLAIMED; it does not
+            // interrupt a run already under way.
+            lines.push(
+                "Team tasks already running were left to complete; tasks awaiting review \
+                 were left as they are."
+                    .to_string(),
+            );
+        }
+        // Cause-neutral on purpose: `None` is "not measured", and the wire
+        // cannot say whether the subsystem was absent or its sweep failed
+        // part-way. Naming one cause as fact sends the operator to a tool
+        // that then reports all is well.
         if frozen.heartbeats.is_none() {
             lines.push(
-                "Heartbeat tasks were NOT checked: no heartbeat service is running on \
-                 that server, so any heartbeat task they own is still armed. Run \
-                 `aleph doctor` — `core/capability-wiring` names the cause."
+                "Heartbeat tasks were NOT checked: either no heartbeat service is running \
+                 on that server or its sweep failed — the server log says which — so a \
+                 heartbeat task they own may still be armed. If the service is missing, \
+                 `aleph doctor` (`core/capability-wiring`) names the cause."
                     .to_string(),
             );
         }
         if frozen.team_tasks.is_none() {
             lines.push(
-                "Team tasks were NOT checked: the team stores did not open on that \
-                 server, so any team task they own can still be dispatched. Run \
-                 `aleph doctor` — `core/capability-wiring` names the cause."
+                "Team tasks were NOT checked: either the team stores are not open on that \
+                 server or a scan failed part-way — the server log says which — so a team \
+                 task they own can still be dispatched. If a store did not open, \
+                 `aleph doctor` (`core/capability-wiring`) names the cause."
                     .to_string(),
             );
         }
@@ -581,7 +613,7 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l
-                    == "They owned no running goals, loops, crons, heartbeat tasks or team tasks."),
+                    == "They owned no running goals, loops, crons, heartbeat tasks or pending team tasks."),
             "a measured zero on all five legs must say all five: {lines:?}"
         );
         assert!(
@@ -619,7 +651,7 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l
-                    == "Background work frozen: 1 goal(s), 0 loop(s), 0 cron(s), 0 team task(s)."),
+                    == "Background work frozen: 1 goal(s), 0 loop(s), 0 cron(s), 0 pending team task(s)."),
             "the legs that DID run are still reported: {lines:?}"
         );
     }
@@ -836,7 +868,16 @@ mod tests {
         ));
         assert!(
             lines.iter().any(|l| l
-                == "Background work frozen: 0 goal(s), 0 loop(s), 0 cron(s), 0 heartbeat task(s), 2 team task(s)."),
+                == "Background work frozen: 0 goal(s), 0 loop(s), 0 cron(s), 0 heartbeat task(s), 2 pending team task(s)."),
+            "{lines:?}"
+        );
+        // The freeze pauses what could still be claimed; a run already under
+        // way is not interrupted, and the receipt says so rather than letting
+        // "frozen" read as "stopped".
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("Team tasks already running were left to complete")),
             "{lines:?}"
         );
     }
@@ -860,8 +901,17 @@ mod tests {
         );
         assert!(
             lines.iter().any(|l| l.starts_with("Team tasks were NOT checked:")
-                && l.contains("can still be dispatched")),
-            "{lines:?}"
+                && l.contains("can still be dispatched")
+                && l.contains("or a scan failed")),
+            "an unmeasured leg names both causes, not one as fact: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("did not open on that server")),
+            "`None` also covers a scan failure; it must not assert a store failed: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("Team tasks already running")),
+            "the in-flight note belongs to a measured leg only: {lines:?}"
         );
         assert!(!lines.iter().any(|l| l.contains("team task(s)")), "{lines:?}");
     }

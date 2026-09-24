@@ -224,10 +224,12 @@ pub struct FrozenBackgroundWork {
     pub goals: usize,
     pub loops: usize,
     pub crons: usize,
-    /// `None` means this leg was **not measured**: the heartbeat service is
-    /// not running in this process (`[heartbeat] enabled = false`, or its
-    /// store failed to open), so any heartbeat task the principal owns is
-    /// still armed and the deactivation did not reach it.
+    /// `None` means this leg was **not measured** — "I do not know", with two
+    /// causes the field cannot tell apart: the heartbeat service is not
+    /// running in this process (`[heartbeat] enabled = false`, or its store
+    /// failed to open), or — on the deactivation receipt — its sweep failed,
+    /// so some of the principal's heartbeat tasks may still be armed. The
+    /// server log says which; a renderer must not name one cause as fact.
     ///
     /// A fail-closed answer is only allowed to say "I do not know". Folding it
     /// into `0` would make it read as "they owned none" — the same shape that
@@ -237,17 +239,24 @@ pub struct FrozenBackgroundWork {
     /// measured zero and an absent measurement are different answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeats: Option<usize>,
-    /// `None` means this leg was **not measured**: the team / coordination-task
-    /// stores are not open in this process, so any dispatcher-managed team task
-    /// the principal owns can still be dispatched. Same wire rule as
-    /// `heartbeats`: absent, never `null`, never `0`.
+    /// `None` means this leg was **not measured** — "I do not know", with two
+    /// causes the field cannot tell apart: the team / coordination-task stores
+    /// are not open in this process, or a scan failed part-way (on the
+    /// receipt, some tasks may already have been paused before it did, and the
+    /// count is withheld rather than under-reported). Either way some
+    /// dispatcher-managed team task the principal owns may still be
+    /// dispatched. The server log says which; a renderer must not name one
+    /// cause as fact. Same wire rule as `heartbeats`: absent, never `null`,
+    /// never `0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_tasks: Option<usize>,
 }
 
 impl FrozenBackgroundWork {
     /// Whether every leg that was **measured** came back zero — so a receipt
-    /// can stay quiet rather than printing four zeros.
+    /// (or the `users.get` dossier) can print one quiet sentence rather than a
+    /// zero per leg. The CLI's renderers call this; it is the one derivation
+    /// of "nothing measured was found".
     ///
     /// An unmeasured leg (`heartbeats: None` / `team_tasks: None`) does NOT
     /// make this false. It is not a freeze that found nothing, it is a freeze that never

@@ -2346,16 +2346,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // through this slot — the same two-store condition as the handlers below,
     // but over the UNSCOPED team store: the freeze must see every team the
     // deactivated principal owns, not the teams visible to the admin running
-    // it (`TeamStoreHandles::unscoped`).
-    let background_team_stores = agent_result
-        .team_store_unscoped
-        .clone()
-        .zip(agent_result.coord_task_store.clone());
-    if let Some((teams, tasks)) = background_team_stores {
-        alephcore::teams::install_background_stores(alephcore::teams::TeamTaskStores {
-            teams,
-            tasks,
-        });
+    // it (`TeamStoreHandles::unscoped`, sealed into `TeamTaskStores`).
+    let background_team_stores = agent_result.background_team_stores.clone();
+    if let Some(stores) = background_team_stores {
+        alephcore::teams::install_background_stores(stores);
     } else {
         alephcore::teams::decline_background_stores(
             "the team store or the coordination-task store did not open at boot (see the \

@@ -77,11 +77,12 @@ pub(super) async fn init_coord_and_snapshot(
 pub(super) struct TeamStoreHandles {
     /// The OWNERSHIP-SCOPED handle every RPC, tool and the dispatcher receive.
     pub scoped: Arc<dyn alephcore::teams::TeamStore>,
-    /// The raw handle. Exactly one consumer: the deactivation freeze's
-    /// team-task leg (`teams::install_background_stores`, round 11 N2), which
-    /// must see every team the deactivated principal owns — through the
-    /// scoped handle it would see only the teams visible to the admin running
-    /// the deactivation. Never hand it to an RPC or a tool.
+    /// The raw handle. Exactly one consumer: `register_agent_handlers` seals
+    /// it at once into `teams::TeamTaskStores` for the deactivation freeze's
+    /// team-task leg (round 11 N2), which must see every team the deactivated
+    /// principal owns — through the scoped handle it would see only the teams
+    /// visible to the admin running the deactivation. Never hand it to an RPC
+    /// or a tool.
     pub unscoped: Arc<dyn alephcore::teams::TeamStore>,
 }
 
