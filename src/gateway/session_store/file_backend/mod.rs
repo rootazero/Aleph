@@ -1453,7 +1453,8 @@ impl SessionStore for FileSessionStore {
                 model_provider: model_provider.map(str::to_string),
             };
             add_bill(meta, &bill);
-            guard.commit().await?;
+            let committed = guard.commit().await?;
+            self.emit_session_changed(&key_str, "usage", Some(&committed));
         }
         Ok(())
     }
@@ -1519,6 +1520,12 @@ impl SessionStore for FileSessionStore {
     /// of the whole transcript is a truncate-then-write, and the projector can
     /// append between the two halves — the same tear that cost this store its
     /// `metadata.json` (see `utils::atomic_write`).
+    ///
+    /// When a bill rides along, it is applied to `metadata.json` under the
+    /// SAME lock as the stamp, after the transcript write has landed. If
+    /// `metadata.json` then refuses the write, the transcript stamp is rolled
+    /// back under that same lock, so a replay finds the row unstamped again
+    /// and bills it (F10).
     async fn stamp_and_bill_in_range(
         &self,
         key: &SessionKey,
@@ -1545,14 +1552,6 @@ impl SessionStore for FileSessionStore {
         // which is the point (see `lock_metadata`'s doc: the discipline is a
         // module boundary, not a convention to remember).
         let mut guard = self.lock_metadata(&key_str).await?;
-        if bill.is_some() && guard.existing_mut().is_none() {
-            // Nothing to bill onto. Refuse BEFORE the stamp: a stamp is the
-            // bill's idempotence guard, and one landed without its bill could
-            // never be billed again.
-            return Err(SessionStoreError::NotFound(format!(
-                "no metadata.json for {key_str}; the run is not billed and its row is not stamped"
-            )));
-        }
         let mut messages = self.read_transcript(&key_str, None).await?;
         let run_id = metadata.get("run_id").and_then(|v| v.as_str());
         // The same range predicate as the SQLite twin, spelled over the row ids
@@ -1582,6 +1581,14 @@ impl SessionStore for FileSessionStore {
         ) {
             return Ok(StampOutcome::AlreadyStamped);
         }
+        if bill.is_some() && guard.existing_mut().is_none() {
+            // Nothing to bill onto. Refuse before any write — nothing has
+            // been written yet, so this leaves the row exactly as it was
+            // rather than landing a stamp that could never be billed again.
+            return Err(SessionStoreError::NotFound(format!(
+                "no metadata.json for {key_str}; the run is not billed and its row is not stamped"
+            )));
+        }
         let previous = std::mem::replace(&mut messages[idx].metadata, Some(metadata.clone()));
         self.write_transcript_locked(&guard, &key_str, &messages)
             .await?;
@@ -1608,6 +1615,9 @@ impl SessionStore for FileSessionStore {
                 );
             }
             return Err(e);
+        }
+        if let Some(meta) = guard.existing_mut() {
+            self.emit_session_changed(&key_str, "usage", Some(&*meta));
         }
         Ok(StampOutcome::Stamped)
     }
@@ -2065,6 +2075,19 @@ mod default_backend_parity_guards {
             .and_then(|m| m.get("run_id").and_then(|v| v.as_str()).map(str::to_string))
     }
 
+    async fn assistant_metadata(
+        store: &FileSessionStore,
+        key_str: &str,
+    ) -> Option<serde_json::Value> {
+        store
+            .read_transcript(key_str, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .and_then(|m| m.metadata)
+    }
+
     /// Review Focus 5 on the DEFAULT backend: stamp and bill in one call; a
     /// replay is `AlreadyStamped` and adds nothing.
     #[tokio::test]
@@ -2087,6 +2110,8 @@ mod default_backend_parity_guards {
             );
             let m = store.get_metadata(&key).await.unwrap().unwrap();
             assert_eq!((m.input_tokens, m.output_tokens), (45, 25), "pass {pass}");
+            assert_eq!(m.estimated_cost_usd, 0.12, "pass {pass}");
+            assert_eq!(m.model.as_deref(), Some("claude"), "pass {pass}");
         }
         assert_eq!(stamped_id(&store, key_str).await.as_deref(), Some("r"));
     }
@@ -2105,6 +2130,10 @@ mod default_backend_parity_guards {
             .await
             .is_err());
         assert_eq!(stamped_id(&store, key_str).await, None, "rolled back");
+        assert!(
+            assistant_metadata(&store, key_str).await.is_none(),
+            "rolled back to no metadata, not to a Null or empty object"
+        );
         assert_eq!(
             store
                 .get_metadata(&key)
@@ -2154,6 +2183,85 @@ mod default_backend_parity_guards {
             "{result:?}"
         );
         assert_eq!(stamped_id(&store, key_str).await, None);
+
+        // Once metadata.json exists again, the same call bills once — the
+        // refusal above did not consume the row's ability to be stamped.
+        store.get_or_create(&key).await.unwrap();
+        assert_eq!(
+            store
+                .stamp_and_bill_in_range(
+                    &key,
+                    1,
+                    4,
+                    &serde_json::json!({ "run_id": "r" }),
+                    Some(&file_bill()),
+                )
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        let m = store.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!((m.input_tokens, m.output_tokens), (45, 25));
+    }
+
+    /// §9 parity fix: a bill on the default backend publishes `SessionUpdated`
+    /// like the SQLite twin does, and a replay (which adds nothing) publishes
+    /// nothing.
+    #[tokio::test]
+    async fn a_billed_stamp_announces_but_an_already_stamped_replay_does_not() {
+        let key_str = "agent:filebillnotify:main";
+        let (store, _dir, key) = store_with_row(key_str).await;
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = store.with_event_bus(bus);
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = file_bill();
+
+        assert_eq!(
+            store
+                .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        let mut announced = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == key_str {
+                    announced += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced, 1,
+            "exactly one SessionUpdated must follow a billed stamp"
+        );
+
+        assert_eq!(
+            store
+                .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::AlreadyStamped
+        );
+        let mut announced_on_replay = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == key_str {
+                    announced_on_replay += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced_on_replay, 0,
+            "an AlreadyStamped replay adds nothing and must not announce"
+        );
     }
 }
 

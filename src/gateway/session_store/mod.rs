@@ -507,7 +507,7 @@ pub trait SessionStore: Send + Sync {
     /// of them by construction (a stub with no transcript has no row in any
     /// range). **Both production backends override it**: SQLite with a
     /// `source_seq`-ranged `ORDER BY source_seq DESC LIMIT 1`, the file backend
-    /// with a locked `rfind` over the same range. It is deliberately NOT
+    /// with a locked `rposition` over the same range. It is deliberately NOT
     /// `Stamped`: a default that claims the write happened would let the caller
     /// bill a session against a store that wrote nothing.
     async fn stamp_and_bill_in_range(
