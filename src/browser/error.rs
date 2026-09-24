@@ -248,6 +248,32 @@ pub enum BrowserError {
     )]
     StaleRef { ref_id: String, reason: StaleReason },
 
+    /// The engine ACCEPTED the dispatch, but the effect probe's one-shot
+    /// listener saw no matching event arrive at the target element.
+    ///
+    /// A dedicated variant rather than `ActionFailed(String)` plus a message
+    /// prefix — a deliberate, approved deviation from spec §3: the tool
+    /// layer's failure classifier (browser_tools::recovery, Task B1) is an
+    /// EXHAUSTIVE match over these variants, so smuggling this verdict
+    /// through a string would force the classifier to string-match inside
+    /// `classify` — exactly the 判据 violation the enum exists to prevent.
+    /// The failure category gains a 15th variant `EffectNotDelivered` there.
+    ///
+    /// The distinction this variant protects: the engine answered (so this is
+    /// NOT `EngineBusy`, NOT `Cdp`) and the dispatch went out — but the page
+    /// never saw the effect. 「它答了」和「它答的是真的」是两个问题, and this
+    /// is the second one answered in the negative. `verb` names the tool verb
+    /// (`browser_click` / `browser_type` / `browser_fill_form`); `detail`
+    /// says what the probe observed instead. The most common cause is an
+    /// element that moved or was replaced mid-dispatch, so the door named is
+    /// a fresh snapshot.
+    #[error(
+        "{verb}: the engine accepted the dispatch, but no matching event arrived at the \
+         target element ({detail}). The element may have moved or been replaced \
+         mid-dispatch. Re-run browser_snapshot and retry with a fresh ref."
+    )]
+    EffectNotDelivered { verb: &'static str, detail: String },
+
     /// The engine answered the CDP call with a protocol error.
     ///
     /// Verbatim, both halves: the code is what a reader looks up against the
@@ -589,6 +615,10 @@ mod tests {
             // a diagnosis, which is what separates this from `Cdp`.
             BrowserError::EngineMismatch { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::StaleRef { .. } => RecoverySignal::VerbOnly,
+            // Names `browser_snapshot` — the common cause is an element that
+            // moved mid-dispatch. No engine field: the verdict is about the
+            // page, and the recovery is the same on both engines.
+            BrowserError::EffectNotDelivered { .. } => RecoverySignal::VerbOnly,
             BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
             // Names the engine and NO verb, on purpose: the profile is already
             // where the caller asked to be, so there is nothing for it to
@@ -690,6 +720,14 @@ mod tests {
                 BrowserError::StaleRef {
                     ref_id: "e12".into(),
                     reason: StaleReason::Navigated,
+                },
+                BrowserSnapshotTool::NAME,
+                RecoverySignal::VerbOnly,
+            ),
+            (
+                BrowserError::EffectNotDelivered {
+                    verb: "browser_click",
+                    detail: "no 'click' event arrived at the probed element".into(),
                 },
                 BrowserSnapshotTool::NAME,
                 RecoverySignal::VerbOnly,
@@ -888,6 +926,38 @@ mod tests {
         .to_string();
         assert!(!bare.contains("last seen"), "no URL was recorded: {bare}");
         assert!(bare.contains("T-1"), "{bare}");
+    }
+
+    /// The effect probe's negative verdict names the verb whose dispatch was
+    /// accepted, says what the probe saw instead, and names the door — a fresh
+    /// snapshot, because the common cause is an element that moved or was
+    /// replaced mid-dispatch. It must NOT read as a transport failure: the
+    /// engine answered; the effect did not arrive (判据 §8 — those are
+    /// different facts with different recoveries).
+    #[test]
+    fn effect_not_delivered_names_the_verb_the_observation_and_the_door() {
+        use crate::builtin_tools::browser_tools::snapshot::BrowserSnapshotTool;
+        use crate::tools::AlephTool;
+
+        let err = BrowserError::EffectNotDelivered {
+            verb: "browser_type",
+            detail: "no 'input' event arrived at the probed element".into(),
+        };
+        assert_eq!(spec_7_1_signal(&err), RecoverySignal::VerbOnly);
+        let text = err.to_string();
+        assert!(text.contains("browser_type"), "the verb is named: {text}");
+        assert!(
+            text.contains("no 'input' event arrived"),
+            "the probe's observation is carried, not paraphrased away: {text}"
+        );
+        assert!(
+            text.contains(BrowserSnapshotTool::NAME),
+            "a fail-closed answer names the door that reopens it (判据 §14): {text}"
+        );
+        assert!(
+            !text.contains("did not answer"),
+            "the engine DID answer — this is not a busy-engine verdict: {text}"
+        );
     }
 
     /// The one-sided trait defaults used to name Chrome DevTools MCP by hand,
