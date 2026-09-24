@@ -63,13 +63,15 @@ impl RunSpan {
 /// That is what lets the stamp range and the usage fold agree by
 /// construction: the fold anchors on the last `RunStarted` in the slice it
 /// is given, and over `[start, end)` that is `start`. A split child's log
-/// carries the parent's opener copied inside the tail and the child's own
-/// opener last (`session_split`); the copied one opens a span that is never
-/// closed, and so is never synthesized. The split's meta lands on the
+/// carries the child's own opener as its only one: `session_split` leaves the
+/// parent's opener out of the copied tail (F14). On a log written before
+/// that, the copied opener opens a span that is never closed, and so is
+/// never synthesized. The split's meta lands on the
 /// PARENT: `execute()` stamps `request.session_key` and never learns the
 /// adopted child (`final_session_id()` is read only by the harness bridge,
-/// for the `RunFinished`), so the parent's `RunStarted(p) … RunFinished {
-/// R } … AssistantRunMeta` is a span WITH a meta — billed live by
+/// for the `RunFinished`), so the parent's `RunStarted { R } … RunFinished {
+/// R } … AssistantRunMeta` (before F1 the opener carried a marker id of its
+/// own) is a span WITH a meta — billed live by
 /// the meta arm for its pre-split tokens plus the whole run's `cost_usd` and
 /// model. The CHILD's own span, `RunStarted { R } … RunFinished` (split
 /// reuses the parent run's id), is the meta-less one: synthesized and billed
@@ -80,9 +82,9 @@ impl RunSpan {
 /// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
 /// older logs' markers carry a harness-minted id that is never the meta's;
 /// newer logs carry the engine id on both (F1). The join below is positional
-/// and reads both, so an id join never matched: every finished run read as
-/// meta-less at boot, a stamp was synthesized and billed on EVERY boot, and
-/// the two
+/// and reads both. On older logs an id join never matched: every finished
+/// run read as meta-less at boot, a stamp was synthesized and billed on EVERY
+/// boot, and the two
 /// stamps then overwrote each other's `run_id` so the next boot re-applied
 /// both — session totals doubled per restart (44 → 88 → 176 on the real
 /// machine). Position is the same derivation the projector's meta arm uses

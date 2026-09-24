@@ -417,9 +417,10 @@ enum HealScope {
     /// routinely on live sessions, inside that window as a matter of course,
     /// and from a floor that can cut a run in half; this scope runs at boot
     /// before any run is live, or on a rare explicit request, and reads every
-    /// span from its opener. Stamping inside the window bills the run twice:
-    /// the real meta carries a different id from the synthesized stamp and
-    /// overwrites it (`synthesize_missing_stamps`'s race note).
+    /// span from its opener. Stamping inside the window loses the run's cost
+    /// and model: the synthesized stamp carries the run's own id since F1, so
+    /// the late meta reads `AlreadyStamped` and bills nothing (ruling U5); on
+    /// a log written before F1 it still double-bills (U1).
     WholeSession,
 }
 
