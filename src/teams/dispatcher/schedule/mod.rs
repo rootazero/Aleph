@@ -75,6 +75,14 @@ impl TeamDispatcher {
         //     (runs before step 3, so re-delivery can happen this very tick).
         self.redeliver_stalled_clarify().await;
 
+        // 2h. Fail clarify questions that were delivered but never answered
+        //     past the grace window — the no-answer twin of 2e. Without this
+        //     a user who walks away leaves a workflow run parked forever with
+        //     its dependents stuck in `Blocked`; runs after 2e so a row that
+        //     gets re-delivered (and therefore has its delivery stamp reset)
+        //     is not also failed in the same tick.
+        self.fail_unanswered_clarify().await;
+
         // 2f. Close `running` run rows whose worker is gone (keyed on the
         //     runs table, not task status — the only pass that can see
         //     cancel-then-crash orphans on already-terminal tasks).
