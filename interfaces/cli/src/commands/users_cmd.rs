@@ -426,9 +426,10 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
         if frozen.heartbeats.is_none() {
             lines.push(
                 "Heartbeat tasks were NOT checked: either no heartbeat service is running \
-                 on that server or its sweep failed — the server log says which — so a \
-                 heartbeat task they own may still be armed. If the service is missing, \
-                 `aleph doctor` (`core/capability-wiring`) names the cause."
+                 on that server or its sweep failed — the server log says which — so any \
+                 heartbeat task they own that it did not reach is still armed. If the \
+                 service is missing, `aleph doctor` (`core/capability-wiring`) names the \
+                 cause."
                     .to_string(),
             );
         }
