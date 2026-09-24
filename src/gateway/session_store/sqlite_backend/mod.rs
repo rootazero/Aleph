@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::ops::{map_session_metadata, NewMessage, SESSION_COLUMNS};
@@ -612,7 +612,12 @@ impl SessionStore for SessionManager {
             // One transaction: the stamp and the bill land together or not at
             // all. Every early return below drops `tx` uncommitted — a rollback
             // of whatever it did, which on those paths is nothing or the stamp.
-            let tx = conn.transaction().map_err(db)?;
+            //
+            // IMMEDIATE, not the default DEFERRED: take the write lock up front
+            // so the read-then-write cannot fail BUSY on upgrade.
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db)?;
             let target: Option<(i64, Option<String>)> = tx
                 .query_row(
                     "SELECT id, metadata FROM messages
@@ -931,10 +936,11 @@ mod tests {
             .unwrap();
         let meta = serde_json::json!({ "run_id": "r" });
         let bill = stamp_bill(45, 25);
+        let result =
+            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill)).await;
         assert!(
-            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
-                .await
-                .is_err()
+            matches!(&result, Err(SessionStoreError::DatabaseError(msg)) if msg.contains("injected bill failure")),
+            "{result:?}"
         );
         assert_eq!(
             row_run_id(&store, &key).await,
