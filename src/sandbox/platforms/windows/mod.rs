@@ -32,3 +32,4 @@ pub mod driver;
 mod job;
 
 pub use driver::WindowsSandboxDriver;
+pub(crate) use job::kill_on_this_process_exit;
