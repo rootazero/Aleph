@@ -627,13 +627,20 @@ mod tests {
         let roots = vec![proj.path().to_path_buf()];
         let hooks = load_user_hooks(Some(cwd.path()), &roots);
         assert_eq!(count_project_hooks(&hooks), 1);
+        // Picked by layer, not by position: the global layer loads first and
+        // reads the real config dir, which may hold a `hooks.json` of its own
+        // (another test's isolated home, or a developer's `~/.aleph`).
+        let project_hook = hooks
+            .iter()
+            .find(|h| h.plugin_name == "user:project")
+            .expect("the project hook");
         assert_eq!(
-            hooks[0].plugin_root,
+            project_hook.plugin_root,
             proj.path().join(".aleph"),
             "project hook must carry its own .aleph as plugin_root for variable substitution"
         );
         assert_eq!(
-            hooks[0].scope_key,
+            project_hook.scope_key,
             ScopeKey::project(proj.path()),
             "project hook must carry its project's key for the fire-time gate"
         );

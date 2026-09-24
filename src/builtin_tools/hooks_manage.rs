@@ -324,8 +324,12 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     )
     .map_err(AlephError::tool)?;
 
+    // Written under the spelling given, not the canonical one: the key is
+    // what the hook's payload echoes on `hook_event_name` (a `PreToolUse`
+    // script branches on `PreToolUse`) — the same thing `hooks.add` and a
+    // hand-edited file do. `event` (canonical) only validates and reports.
     crate::gateway::handlers::hooks_admin::append_user_hook(
-        &event,
+        event_raw,
         action,
         args.matcher.as_deref(),
     )
@@ -334,7 +338,7 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     // Say the awkward part out loud rather than letting the model report
     // success: a gated hook that was just written is NOT live.
     let gated = args.command.is_some() || args.url.is_some();
-    let mut summary = format!("Added a hook on {event}.");
+    let mut summary = format!("Added a hook on {event_raw}.");
     if gated {
         summary.push_str(
             " It will NOT run yet: shell and HTTP hooks stay pending until the operator \
@@ -351,7 +355,7 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
 
     Ok(HooksManageOutput {
         summary,
-        data: serde_json::json!({ "event": event, "pending_consent": gated }),
+        data: serde_json::json!({ "event": event_raw, "pending_consent": gated }),
     })
 }
 
@@ -382,7 +386,10 @@ fn remove(args: &HooksManageArgs) -> Result<HooksManageOutput> {
             )
         })?;
 
-    let removed = crate::gateway::handlers::hooks_admin::remove_user_hooks(&event, Some(needle))
+    // Across every spelling the file uses for this event: `add` writes the
+    // key as given, so `PreToolUse` and `before_tool_call` groups can both
+    // exist and either name must reach both.
+    let removed = crate::gateway::handlers::hooks_admin::remove_user_hooks(event_raw, Some(needle))
         .map_err(AlephError::tool)?;
 
     Ok(HooksManageOutput {
@@ -406,7 +413,7 @@ fn events() -> HooksManageOutput {
         .iter()
         .map(|e| {
             serde_json::json!({
-                "event": event_name(*e),
+                "event": e.canonical_name(),
                 "supports_matcher": e.supports_matcher(),
                 "supports_interceptor": e.supports_interceptor(),
             })
@@ -425,30 +432,17 @@ fn events() -> HooksManageOutput {
 
 // -- helpers -----------------------------------------------------------------
 
-fn event_name(event: crate::extension::HookEvent) -> String {
-    serde_json::to_value(event)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{event:?}"))
-}
-
 /// Parse a user/model-supplied event name into its canonical form, accepting
 /// both Claude-Code (`PreToolUse`) and Aleph (`before_tool_call`) spellings —
-/// the same aliases `user_settings.rs` accepts, so a name that works here
-/// works in the config file too.
+/// through the loader's own parser (`hooks::parse_event`), so a name that
+/// works here works in the config file too.
 fn parse_event_name(raw: &str) -> Option<String> {
-    let attempts = [raw.to_string(), raw.to_lowercase().replace('-', "_")];
-    for s in &attempts {
-        if let Ok(ev) = serde_json::from_str::<crate::extension::HookEvent>(&format!("\"{s}\"")) {
-            return Some(event_name(ev));
-        }
-    }
-    None
+    crate::extension::hooks::parse_event(raw).map(crate::extension::HookEvent::canonical_name)
 }
 
 fn supports_matcher(canonical: &str) -> bool {
-    serde_json::from_str::<crate::extension::HookEvent>(&format!("\"{canonical}\""))
-        .is_ok_and(|e| e.supports_matcher())
+    crate::extension::hooks::parse_event(canonical)
+        .is_some_and(crate::extension::HookEvent::supports_matcher)
 }
 
 fn unknown_event(raw: &str) -> AlephError {
@@ -553,6 +547,43 @@ mod tests {
             err.to_string().contains("EVERY hook"),
             "the error must explain the danger: {err}"
         );
+    }
+
+    /// `add` files the hook under the spelling given — the name its payload
+    /// echoes on `hook_event_name` — and `remove` reaches it under either
+    /// spelling of the same event.
+    #[tokio::test]
+    async fn add_keeps_the_event_spelling_and_remove_finds_it_under_either_name() {
+        use crate::gateway::handlers::hooks_admin::read_user_hooks_file;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let args = |action: HooksAction, event: &str| HooksManageArgs {
+            action,
+            event: Some(event.into()),
+            command: Some("echo cc".into()),
+            prompt: None,
+            agent: None,
+            url: None,
+            matcher: None,
+            timeout_secs: None,
+            filter_event: None,
+            only_unreachable: None,
+        };
+
+        HooksManageTool::new()
+            .call(args(HooksAction::Add, "PreToolUse"))
+            .await
+            .expect("add");
+        let (_, _, events) = read_user_hooks_file().unwrap();
+        let keys: Vec<&String> = events.keys().collect();
+        assert_eq!(keys, vec!["PreToolUse"]);
+
+        let out = HooksManageTool::new()
+            .call(args(HooksAction::Remove, "before_tool_call"))
+            .await
+            .expect("remove");
+        assert_eq!(out.data["removed"], 1);
+        let (_, _, events) = read_user_hooks_file().unwrap();
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[tokio::test]

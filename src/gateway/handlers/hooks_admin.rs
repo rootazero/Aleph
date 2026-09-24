@@ -232,26 +232,40 @@ pub(crate) fn append_user_hook(
     Ok(())
 }
 
-/// Drop entries from `event`. `needle` filters by substring across the
-/// group's action fields; `None` removes every entry for the event. Returns
-/// how many groups were removed.
+/// Drop entries from `event`, under EVERY key of the file that names the
+/// same event: keys are written as given (`PreToolUse` and
+/// `before_tool_call` can both exist), so an exact-key lookup would miss
+/// the groups filed under the other spelling. `needle` filters by
+/// substring across the group's action fields; `None` removes every entry
+/// for the event. Returns how many groups were removed.
 pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    let target = crate::extension::hooks::parse_event(event)
+        .ok_or_else(|| format!("unknown event: {event}"))?;
     let (path, _exists, mut events) = read_hooks_file()?;
-    let arr = events
-        .get_mut(event)
-        .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| format!("no entries for event {event}"))?;
-
-    let before = arr.len();
-    match needle {
-        Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
-        None => arr.clear(),
+    let keys: Vec<String> = events
+        .keys()
+        .filter(|key| crate::extension::hooks::parse_event(key) == Some(target))
+        .cloned()
+        .collect();
+    if keys.is_empty() {
+        return Err(format!("no entries for event {event}"));
     }
-    let removed = before - arr.len();
 
-    // Don't leave empty arrays cluttering the file.
-    if arr.is_empty() {
-        events.remove(event);
+    let mut removed = 0;
+    for key in keys {
+        let Some(arr) = events.get_mut(&key).and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        let before = arr.len();
+        match needle {
+            Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
+            None => arr.clear(),
+        }
+        removed += before - arr.len();
+        // Don't leave empty arrays cluttering the file.
+        if arr.is_empty() {
+            events.remove(&key);
+        }
     }
     write_hooks_file(&path, &events)?;
     trigger_reload();
@@ -444,20 +458,12 @@ pub async fn handle_hooks_reload(request: JsonRpcRequest) -> JsonRpcResponse {
 }
 
 pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
-    // Round-trip each canonical name through serde so the wire surface
-    // exactly matches what user_settings.rs accepts. The event list itself
+    // Each event's canonical name (`HookEvent::canonical_name`, serde's
+    // rename), which the loader's parser accepts. The event list itself
     // comes from `HookEvent::ALL` — previously this handler kept its own
     // hand-maintained copy, which is how a new variant ends up missing from
     // one surface but not another.
-    let events: Vec<String> = HookEvent::ALL
-        .iter()
-        .map(|e| {
-            serde_json::to_string(e)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string()
-        })
-        .collect();
+    let events: Vec<String> = HookEvent::ALL.iter().map(|e| e.canonical_name()).collect();
     JsonRpcResponse::success(request.id, json!({ "events": events }))
 }
 
@@ -492,17 +498,12 @@ pub async fn handle_hooks_registry(request: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
-/// Cheap check: try to parse the event name via the same serde path that
-/// `user_settings` uses. Accepts both `snake_case` (`before_tool_call`) and
-/// `PascalCase` aliases (`PreToolUse`).
+/// Whether `name` is an event the loader accepts — asked of the loader's own
+/// parser (`hooks::parse_event`), so this face and the file cannot disagree.
+/// Accepts both `snake_case` (`before_tool_call`) and `PascalCase` aliases
+/// (`PreToolUse`).
 fn is_known_event(name: &str) -> bool {
-    let attempts = [
-        format!("\"{name}\""),
-        format!("\"{}\"", name.to_lowercase().replace('-', "_")),
-    ];
-    attempts
-        .iter()
-        .any(|s| serde_json::from_str::<HookEvent>(s).is_ok())
+    crate::extension::hooks::parse_event(name).is_some()
 }
 
 /// Best-effort: schedule a reload on the global manager if it exists.
