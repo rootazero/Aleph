@@ -220,7 +220,17 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
     // is the case where it is wrong.
     let landed = outcome.url.unwrap_or_else(|| url.to_string());
     apply_document_boundary(&handle, tab_id, loader.as_deref(), Some(&landed)).await;
-
+    // This function deliberately records NO identity into the tab registry.
+    // The audit below re-lists the tabs, and `list_tabs`'s discovery sweep
+    // records every row — including this tab's just-written `entry.url` — so
+    // a `record_tab` here would write the identical value one call earlier
+    // and NOTHING can redden it (measured: deleting it left every test green,
+    // because the sweep masks it). A guard that cannot go red is not a guard
+    // (判据 §2). The audit-skipped gap (its `list_tabs` failed) is accepted:
+    // that failure means the engine handle is gone, and a missed observation
+    // is honest — `last_url` keeps the previous record rather than inventing
+    // one. `history` below is the different case: it is deliberately NOT
+    // audited, so it must and does record for itself.
     // The post-navigation audit runs even when the load barrier elapsed: a
     // redirect onto a blocked origin has already happened by then, and the tab
     // must be quarantined whether or not the page finished rendering. The
@@ -309,6 +319,10 @@ pub(super) async fn history(
         outcome.url.as_deref(),
     )
     .await;
+    // Same contract as `navigate`: whatever URL the history move landed on is
+    // this tab's last-seen observation. `None` (no URL in the outcome)
+    // merges to keep the previous record, per `record_identity`.
+    be.record_tab(tab_id, outcome.url.as_deref());
 
     // Deliberately NOT audited: `post_nav`'s module doc says history and
     // interaction ops are covered by the read-time guard in the tool layer, and
@@ -496,6 +510,77 @@ mod tests {
             methods(&server).iter().any(|m| m == "Target.closeTarget"),
             "the blocked tab must be quarantined, not merely reported: {:?}",
             methods(&server)
+        );
+    }
+
+    /// `history` is deliberately NOT audited (`post_nav`'s module doc owns
+    /// that ruling), so its own `record_tab` is the ONLY writer of the
+    /// landed-URL observation on this path — nothing downstream re-lists.
+    /// This is the test that reddens when that record is dropped.
+    #[tokio::test]
+    async fn history_records_the_landed_url_as_the_tabs_last_observation() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Page.getNavigationHistory",
+            Responder::Reply(json!({
+                "currentIndex": 1,
+                "entries": [
+                    {"id": 11, "url": "https://a.example/", "title": "A"},
+                    {"id": 21, "url": "https://b.example/", "title": "B"}
+                ]
+            })),
+        );
+        server.on("Page.navigateToHistoryEntry", Responder::Reply(json!({})));
+        server.on(
+            "Page.getFrameTree",
+            Responder::Reply(json!({
+                "frameTree": { "frame": { "id": "F1", "loaderId": "L1", "url": "https://a.example/" } }
+            })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("pre-seeded handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach ok");
+
+        // The history path learns the landed URL from `Page.frameNavigated`
+        // and nowhere else (the `navigateToHistoryEntry` response carries
+        // none), so the fake must EMIT it — from a task, because `history`
+        // opens its event subscription only once it is running and a
+        // broadcast has no replay.
+        let server = std::sync::Arc::new(server);
+        let emitter = {
+            let server = std::sync::Arc::clone(&server);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                server.push_event(json!({
+                    "sessionId": "S1",
+                    "method": "Page.frameNavigated",
+                    "params": { "frame": {
+                        "id": "F1", "loaderId": "L0",
+                        "url": "https://a.example/"
+                    }}
+                }));
+                server.push_event(json!({
+                    "sessionId": "S1",
+                    "method": "Page.loadEventFired",
+                    "params": {}
+                }));
+            })
+        };
+
+        backend
+            .history("T1", crate::browser::types::HistoryNav::Back)
+            .await
+            .expect("the history move completes");
+        emitter.await.expect("the emitter task must not panic");
+
+        assert_eq!(
+            backend.tab_identities.last_url("default", "T1").as_deref(),
+            Some("https://a.example/"),
+            "the URL the history move landed on is this tab's last observation"
         );
     }
 

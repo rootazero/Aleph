@@ -52,7 +52,7 @@ use super::engine::{
 };
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
-use super::tab_registry::TabLine;
+use super::tab_registry::{TabLine, TabRegistry};
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
     ScrollDirection, SnapshotOutput, TabId,
@@ -82,6 +82,13 @@ pub struct CdpBackend {
     req: LaunchRequest,
     ssrf_guard: Arc<BrowserSsrfGuard>,
     command_timeout: Duration,
+    /// The profile-manager-owned tab identity registry. This backend is
+    /// rebuilt per call, so the mappings it discovers (tab id ↔ CDP
+    /// targetId, last-seen URL) are recorded THERE — the record outlives the
+    /// backend, which is what lets `TabRegistry::resolve_identity` answer
+    /// "that target is gone" after a re-attach instead of guessing from a
+    /// listing's row order (附录 D.9.19).
+    tab_identities: Arc<TabRegistry>,
 }
 
 impl CdpBackend {
@@ -92,6 +99,7 @@ impl CdpBackend {
         profile: impl Into<String>,
         ssrf_guard: Arc<BrowserSsrfGuard>,
         command_timeout: Duration,
+        tab_identities: Arc<TabRegistry>,
     ) -> Self {
         // ONE spelling of "which profile this backend drives". The registry
         // keys on `req.profile`, so a second `profile` field free to disagree
@@ -120,6 +128,7 @@ impl CdpBackend {
             req,
             ssrf_guard,
             command_timeout,
+            tab_identities,
         }
     }
 
@@ -168,6 +177,32 @@ impl CdpBackend {
     /// made that the one spelling of "which profile this backend drives".
     pub(crate) fn profile_name(&self) -> &str {
         &self.req.profile
+    }
+
+    /// Record `tab_id`'s identity in the shared registry. On this backend a
+    /// tab id IS the CDP `targetId` (`tabs.rs`'s module doc), which is what
+    /// lets the registry answer `TabGone` structurally later: the target is
+    /// either in the next enumeration or it is not.
+    ///
+    /// Every point below that learns "tab X has targetId Y / is at URL Z"
+    /// calls this — `open_tab`, `switch_tab`, `list_tabs`, `navigate`,
+    /// `history`. Popup adoption and the launch's first tab are covered
+    /// transitively: the next `list_tabs` records every tab in the table.
+    pub(crate) fn record_tab(&self, tab_id: &str, url: Option<&str>) {
+        self.tab_identities.record_identity(
+            &self.req.profile,
+            tab_id,
+            Some(tab_id.to_string()),
+            url.map(str::to_string),
+        );
+    }
+
+    /// The deliberate-close half of [`Self::record_tab`]: a tab WE closed is
+    /// forgotten, so a later `resolve_identity` answers `TabNotFound` ("we
+    /// closed it, that id is ours no more") and `TabGone` keeps meaning
+    /// "gone WITHOUT us closing it".
+    pub(crate) fn forget_tab(&self, tab_id: &str) {
+        self.tab_identities.forget(&self.req.profile, tab_id);
     }
 }
 
@@ -537,6 +572,7 @@ pub(crate) mod test_support {
             "default",
             guard,
             TEST_TIMEOUT,
+            std::sync::Arc::new(crate::browser::tab_registry::TabRegistry::new()),
         );
         (registry, backend)
     }

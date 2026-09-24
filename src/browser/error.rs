@@ -53,6 +53,26 @@ pub enum BrowserError {
     #[error("Tab not found: {0}")]
     TabNotFound(String),
 
+    /// A tab this profile previously recorded is gone from the browser: its
+    /// targetId is absent from the live target enumeration.
+    ///
+    /// Distinct from [`Self::TabNotFound`], which means "this registry never
+    /// heard of that id" (判据 §8 — the two answers license different
+    /// recoveries). `TabGone` carries the last URL we recorded so the reader
+    /// can recognise WHICH page vanished; it never claims anything about the
+    /// page's state beyond that last observation.
+    ///
+    /// Produced by [`super::tab_registry::TabRegistry::resolve_identity`] when
+    /// a recorded target is absent from a fresh enumeration — the page's own
+    /// `window.close`, a browser restart, a re-attach onto a browser whose
+    /// tabs changed. The recovery it names is a fresh listing, because every
+    /// id the model holds may be stale, not only this one.
+    #[error("{}", tab_gone_text(tab_id, last_url))]
+    TabGone {
+        tab_id: String,
+        last_url: Option<String>,
+    },
+
     #[error("Navigation failed: {0}")]
     NavigationFailed(String),
 
@@ -252,6 +272,24 @@ pub enum BrowserError {
         code: i64,
         message: String,
     },
+}
+
+/// The sentence for [`BrowserError::TabGone`]. Names the tab and, when we
+/// recorded one, the last URL we saw it at — QUOTED, because that URL is a
+/// page-influenced observation (a redirect target is the page's choice, R40).
+/// The page's own state is never claimed: "gone" is a fact about the target
+/// enumeration, not about what the page contains now.
+fn tab_gone_text(tab_id: &str, last_url: &Option<String>) -> String {
+    let seen = match last_url {
+        Some(url) => format!(", last seen at {}", crate::browser::page_state::quote(url)),
+        None => String::new(),
+    };
+    format!(
+        "tab {tab_id}{seen} is gone — the browser no longer has that target (the page \
+         may have closed itself, or the engine was restarted). Run \
+         browser_tabs{{action:\"list\"}} to see what is open now, and use an id from \
+         that listing: every id captured before this error may be stale."
+    )
 }
 
 /// The sentence for [`BrowserError::UnsupportedByEngine`].
@@ -533,6 +571,10 @@ mod tests {
 
             BrowserError::EngineUnavailable { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::EngineBusy { .. } => RecoverySignal::VerbAndEngine,
+            // Names `browser_tabs{action:"list"}` — the fresh listing whose
+            // ids replace every stale one the model holds. No engine field:
+            // the answer and the recovery are the same on both engines.
+            BrowserError::TabGone { .. } => RecoverySignal::VerbOnly,
             BrowserError::UnsupportedByEngine {
                 supported_by: Some(_),
                 ..
@@ -604,6 +646,7 @@ mod tests {
     fn every_engine_error_names_the_engine_and_a_verb_the_model_can_call() {
         use crate::builtin_tools::browser_tools::{
             open::BrowserOpenTool, session::BrowserSessionTool, snapshot::BrowserSnapshotTool,
+            tabs::BrowserTabsTool,
         };
         use crate::tools::AlephTool;
 
@@ -649,6 +692,14 @@ mod tests {
                     reason: StaleReason::Navigated,
                 },
                 BrowserSnapshotTool::NAME,
+                RecoverySignal::VerbOnly,
+            ),
+            (
+                BrowserError::TabGone {
+                    tab_id: "T-9".into(),
+                    last_url: Some("https://a/".into()),
+                },
+                BrowserTabsTool::NAME,
                 RecoverySignal::VerbOnly,
             ),
         ];
@@ -800,6 +851,43 @@ mod tests {
                  the model back to the call that just refused: {already}"
             );
         }
+    }
+
+    /// `TabGone` names the tab and the last URL we recorded — the two facts
+    /// that let the model recognise WHICH page vanished — plus the door that
+    /// re-lists what is open. It must NOT say anything about the page's
+    /// current state: the target is absent, so no such observation exists
+    /// (判据 §8). And the URL is quoted: it is a page-influenced observation
+    /// (a redirect target is the page's choice), so it goes through the same
+    /// `page_state::quote` every other rendered page string does (R40).
+    #[test]
+    fn tab_gone_names_the_tab_and_last_url_without_claiming_page_state() {
+        use crate::builtin_tools::browser_tools::tabs::BrowserTabsTool;
+        use crate::tools::AlephTool;
+
+        let err = BrowserError::TabGone {
+            tab_id: "T-9".into(),
+            last_url: Some("https://a/".into()),
+        };
+        let text = err.to_string();
+        assert!(text.contains("T-9"), "the tab is named: {text}");
+        assert!(
+            text.contains(&crate::browser::page_state::quote("https://a/")),
+            "the last recorded URL is carried, quoted: {text}"
+        );
+        assert!(
+            text.contains(BrowserTabsTool::NAME),
+            "a fail-closed answer names the door that reopens it (判据 §14): {text}"
+        );
+
+        // No recorded URL: the sentence must not invent one.
+        let bare = BrowserError::TabGone {
+            tab_id: "T-1".into(),
+            last_url: None,
+        }
+        .to_string();
+        assert!(!bare.contains("last seen"), "no URL was recorded: {bare}");
+        assert!(bare.contains("T-1"), "{bare}");
     }
 
     /// The one-sided trait defaults used to name Chrome DevTools MCP by hand,

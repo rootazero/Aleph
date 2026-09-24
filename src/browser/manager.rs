@@ -127,8 +127,11 @@ pub struct ProfileManager {
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
     playwright_cli_driver: Arc<PlaywrightCliDriver>,
     idle_reaper_started: AtomicBool,
-    /// Per-tab lifecycle tracking for Managed profiles (idle reclamation + cap).
-    tab_registry: TabRegistry,
+    /// Per-tab lifecycle tracking for Managed/Cdp profiles (idle reclamation
+    /// + cap) AND the tab-identity registry (targetId / last-url per tab).
+    /// An `Arc` because the cdp backend — constructed per call — records the
+    /// identities it discovers straight into it.
+    tab_registry: Arc<TabRegistry>,
     /// The live CDP engines, for `driver = "cdp"` profiles.
     ///
     /// An `Arc` because [`Self::get_backend`] is SYNCHRONOUS (and the idle
@@ -298,7 +301,7 @@ impl ProfileManager {
             chrome_mcp_driver,
             playwright_cli_driver,
             idle_reaper_started: AtomicBool::new(false),
-            tab_registry: TabRegistry::new(),
+            tab_registry: Arc::new(TabRegistry::new()),
             engines,
         }
     }
@@ -537,6 +540,11 @@ impl ProfileManager {
                     // action without a restart.
                     self.ssrf_guard.load_full(),
                     self.cdp_command_timeout(),
+                    // The shared identity registry: the backend records every
+                    // tab↔targetId mapping it discovers into it, so the answer
+                    // to "is this tab still that tab" survives the per-call
+                    // backend itself.
+                    self.tab_registry.clone(),
                 )))
             }
         }
@@ -549,6 +557,13 @@ impl ProfileManager {
     #[must_use]
     pub const fn engines(&self) -> &Arc<EngineRegistry> {
         &self.engines
+    }
+
+    /// The shared tab-identity + activity registry. The cdp backend records
+    /// into it; the tool layer reads `resolve_identity` / `last_url` from it.
+    #[must_use]
+    pub const fn tab_registry(&self) -> &Arc<TabRegistry> {
+        &self.tab_registry
     }
 
     /// The per-command CDP timeout both engines are driven with.
@@ -1274,6 +1289,16 @@ impl ProfileManager {
                 }
             };
             let live_ids = tab_ids(&tabs);
+            // The sweep's `list_tabs` is also the OLD drivers' identity
+            // discovery point (the cdp backend records into the same registry
+            // itself, from inside the verbs). A listing row knows no targetId,
+            // so `None` is recorded for it — and because `record_identity`
+            // merges rather than replaces, that `None` never erases a
+            // targetId the cdp backend recorded.
+            for line in &tabs {
+                self.tab_registry
+                    .record_identity(&profile, &line.id, None, Some(line.url.clone()));
+            }
             let victims = self.tab_registry.select_victims(
                 &profile,
                 &live_ids,
@@ -2370,6 +2395,58 @@ mod tests {
         let manager = ProfileManager::new(config);
         // No live sessions exist → nothing to tear down.
         assert_eq!(manager.reap_idle().await, 0);
+    }
+
+    /// The sweep's `list_tabs` is the OLD drivers' identity discovery point:
+    /// a `Managed` profile's backend holds no registry handle, so the sweep
+    /// loop is the sole writer of what those tabs were last seen at. This is
+    /// the test that reddens when the loop is dropped (判据 §6: count the
+    /// writers — for the old drivers there is exactly one, here).
+    ///
+    /// The CLI is a script that answers `tab-list` with a real
+    /// playwright-format listing and exits 0 for everything else; no browser
+    /// exists, which is fine — the fake's exit-0 is what `LaunchPolicy::Refuse`
+    /// needs, and the listing is the subject, not the browser.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_sweep_records_a_managed_profiles_tab_identities() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = tmp.path().join("fake-playwright-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\n\
+             case \" $* \" in\n\
+             *\" tab-list \"*) printf '%s\\n' '### Result' '- 0: (current) [Example Domain](https://example.com/)' '- 1: [Other](https://other.example/)' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .expect("write the fake playwright-cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod the fake playwright-cli");
+
+        let manager = ProfileManager::new(managed_config(Some(&cli)));
+        // A tracked tab makes the profile a sweep candidate; both listed tabs
+        // are fresh and under the cap, so nothing is closed.
+        manager.touch_tab("default", "0");
+        assert_eq!(manager.reap_idle_tabs().await, 0, "no victims");
+
+        let registry = manager.tab_registry();
+        assert_eq!(
+            registry.last_url("default", "0").as_deref(),
+            Some("https://example.com/"),
+            "the listing's URL observation reached the registry"
+        );
+        // The old-driver shape: no targetId was ever learnable, so the
+        // registry holds the URL and must NOT be able to call the tab gone
+        // (判据 §8 — 'I cannot tell' is not a verdict).
+        let identity = registry
+            .resolve_identity("default", "1", &[])
+            .expect("a recorded identity without a targetId resolves, never TabGone");
+        assert_eq!(identity.target_id, None);
+        assert_eq!(identity.last_url.as_deref(), Some("https://other.example/"));
     }
 
     #[tokio::test]
