@@ -42,6 +42,73 @@ pub use types::{
     TeamSummary,
 };
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
+
+/// The two stores the deactivation freeze (and the `users.get` preview) need
+/// to reach a principal's team tasks (round 11, N2).
+///
+/// A slot rather than a handler parameter: the `users.*` handlers are
+/// registered at boot BEFORE the team stores exist, and
+/// `BackgroundWorkHandles::from_globals` reads process globals for every
+/// other leg.
+///
+/// `teams` is the RAW (unscoped) store: the freeze must see every team the
+/// deactivated principal owns, not the teams visible to the admin running it.
+/// That is also why [`background_stores`] is `pub(crate)` — this handle
+/// bypasses [`ScopedTeamStore`] and must not become a second way in.
+#[derive(Clone)]
+pub struct TeamTaskStores {
+    pub teams: crate::sync_primitives::Arc<dyn TeamStore>,
+    pub tasks: crate::sync_primitives::Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
+}
+
+/// `ConsumerDecides`: the one consumer (`handlers::users`) reads absence as
+/// "leg not measured" (`FrozenBackgroundWork::team_tasks: None`), which the
+/// receipt and the CLI both say in their own sentence.
+static BACKGROUND_STORES: CapabilitySlot<TeamTaskStores> =
+    CapabilitySlot::new("teams/background-stores", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster.
+pub(crate) const fn background_stores_slot() -> &'static dyn SlotStatus {
+    &BACKGROUND_STORES
+}
+
+/// Install at boot, once both stores opened. Idempotent.
+pub fn install_background_stores(stores: TeamTaskStores) {
+    let _ = BACKGROUND_STORES.install(stores);
+}
+
+/// Record that boot reached this slot and one of the two stores did not open.
+pub fn decline_background_stores(because: &'static str) {
+    BACKGROUND_STORES.decline(because);
+}
+
+/// Read the stores, if installed.
+#[must_use]
+pub(crate) fn background_stores() -> Option<TeamTaskStores> {
+    BACKGROUND_STORES.get().cloned()
+}
+
+#[cfg(test)]
+mod background_stores_slot_tests {
+    use super::*;
+
+    /// The roster id and the missing semantics the one consumer relies on:
+    /// absence must read as "leg not measured", not fail anything open.
+    #[test]
+    fn the_background_stores_slot_pins_its_id_and_missing_semantics() {
+        assert_eq!(background_stores_slot().id(), "teams/background-stores");
+        assert!(
+            matches!(
+                background_stores_slot().missing(),
+                MissingSemantics::ConsumerDecides
+            ),
+            "`teams/background-stores` is ConsumerDecides: `handlers::users` reports an \
+             absent slot as an unmeasured leg"
+        );
+    }
+}
+
 #[cfg(test)]
 mod agent_axis_census {
     /// Every teams face that RUNS an agent must ask that agent's

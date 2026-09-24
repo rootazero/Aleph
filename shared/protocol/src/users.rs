@@ -192,7 +192,7 @@ pub fn owned_by(owner_user_id: Option<&str>, user_id: &str) -> bool {
     owner_user_id == Some(user_id)
 }
 
-/// The four background legs of one principal's holdings.
+/// The five background legs of one principal's holdings.
 ///
 /// Two callers, deliberately different filters, **same owner predicate**
 /// ([`owned_by`]):
@@ -214,6 +214,11 @@ pub fn owned_by(owner_user_id: Option<&str>, user_id: &str) -> bool {
 /// second admin's heartbeat tasks kept firing and kept delivering. A receipt
 /// that names three of four legs is worse than one that names none: the
 /// operator reads it as coverage.
+///
+/// Team tasks are the fifth leg (round 11, N2): dispatcher-managed
+/// coordination tasks on teams the principal owns. Like `heartbeats` it is an
+/// `Option`, because the team stores can fail to open at boot (a supported
+/// degraded boot), and "not measured" must not read as "owned none".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrozenBackgroundWork {
     pub goals: usize,
@@ -232,14 +237,20 @@ pub struct FrozenBackgroundWork {
     /// measured zero and an absent measurement are different answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeats: Option<usize>,
+    /// `None` means this leg was **not measured**: the team / coordination-task
+    /// stores are not open in this process, so any dispatcher-managed team task
+    /// the principal owns can still be dispatched. Same wire rule as
+    /// `heartbeats`: absent, never `null`, never `0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_tasks: Option<usize>,
 }
 
 impl FrozenBackgroundWork {
     /// Whether every leg that was **measured** came back zero — so a receipt
     /// can stay quiet rather than printing four zeros.
     ///
-    /// An unmeasured heartbeat leg (`heartbeats: None`) does NOT make this
-    /// false. It is not a freeze that found nothing, it is a freeze that never
+    /// An unmeasured leg (`heartbeats: None` / `team_tasks: None`) does NOT
+    /// make this false. It is not a freeze that found nothing, it is a freeze that never
     /// ran, and the renderer gives it its own sentence rather than letting it
     /// ride inside this one.
     #[must_use]
@@ -248,6 +259,7 @@ impl FrozenBackgroundWork {
             && self.loops == 0
             && self.crons == 0
             && matches!(self.heartbeats, None | Some(0))
+            && matches!(self.team_tasks, None | Some(0))
     }
 }
 
@@ -498,6 +510,7 @@ mod tests {
                 loops: 0,
                 crons: 2,
                 heartbeats: Some(3),
+                team_tasks: Some(2),
             },
         }
     }
@@ -530,6 +543,7 @@ mod tests {
         let original = detail(Some(row));
         let wire = serde_json::to_value(&original).unwrap();
         assert_eq!(wire["background_work"]["heartbeats"], 3);
+        assert_eq!(wire["background_work"]["team_tasks"], 2);
         assert_eq!(wire["spend"]["usd"], 1.25);
         assert_eq!(wire["live_panel_devices"], 2);
         let back: UserDetail = serde_json::from_value(wire).unwrap();
@@ -645,6 +659,7 @@ mod tests {
                 loops: 0,
                 crons: 3,
                 heartbeats: Some(2),
+                team_tasks: None,
             }),
             reactivation_effects: None,
         };
@@ -699,6 +714,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(1),
+            team_tasks: None,
         })
         .unwrap();
         assert_eq!(wire["heartbeats"], 1);
@@ -730,6 +746,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(3),
+                team_tasks: None,
             }
             .is_empty(),
             "3 disabled heartbeat tasks must not render as 'they owned nothing'"
@@ -739,6 +756,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(0),
+            team_tasks: None,
         }
         .is_empty());
         assert!(
@@ -746,5 +764,25 @@ mod tests {
             "an unmeasured leg is not a freeze; it gets its own sentence, so it \
              must not force the 'work was frozen' branch"
         );
+    }
+
+    #[test]
+    fn an_unmeasured_team_task_leg_is_absent_on_the_wire_and_not_a_zero() {
+        let work = FrozenBackgroundWork {
+            heartbeats: Some(0),
+            team_tasks: None,
+            ..Default::default()
+        };
+        let wire = serde_json::to_value(work).unwrap();
+        assert!(wire.get("team_tasks").is_none());
+        assert!(
+            work.is_empty(),
+            "an unmeasured leg does not make the measured legs non-empty"
+        );
+        let work = FrozenBackgroundWork {
+            team_tasks: Some(3),
+            ..Default::default()
+        };
+        assert!(!work.is_empty());
     }
 }

@@ -822,9 +822,9 @@ mod tests {
         // honestly red).
         assert_eq!(
             raw + slots,
-            50,
+            51,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             50. Never assert either side alone: raw shrinks and slots grows as \
+             51. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
@@ -832,7 +832,10 @@ mod tests {
              known to be one BELOW the live total (see the comment above); a \
              red of exactly one, with `main`'s unaccounted handle still \
              unfound, is the expected state and not evidence about your change. \
-             Last moved 2026-09-23: 49 -> 50 when `security/users-store` was \
+             Last moved 2026-09-24: 50 -> 51 when `teams/background-stores` was \
+             added, so `users.update`'s deactivation freeze had a fifth leg (the \
+             principal's dispatcher-managed team tasks) to reach. Before that, \
+             2026-09-23: 49 -> 50 when `security/users-store` was \
              added, so the fire-time authority resolver could re-read the users \
              table at every background trigger. Before that, 2026-09-06: 48 -> \
              49 when `thinker/prompt-size-registry` was added, so \
@@ -2973,13 +2976,15 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 17,
-            "examined {gates} gated blocks that install a capability; 17 were \
-             measured on 2026-09-04 (16 lexical + the orchestrator gate, which is \
+            gates, 18,
+            "examined {gates} gated blocks that install a capability; 18 were \
+             measured on 2026-09-24 (17 lexical + the orchestrator gate, which is \
              reached only through the one-hop rule). A count that moved without a capability \
              being added or removed means the block reader stopped matching — \
              which is how this guard would report 'all clear' about blocks it \
-             never opened. Last moved 2026-09-04: 16 -> 17, the `[heartbeat] \
+             never opened. Last moved 2026-09-24: 17 -> 18, the two-store gate at \
+             `start/mod.rs` that installs `teams/background-stores` (declined in \
+             its `else`). Before that, 2026-09-04: 16 -> 17, the `[heartbeat] \
              enabled` gate at `start/mod.rs` that now installs \
              `heartbeat/service`."
         );

@@ -138,6 +138,52 @@ pub async fn show(
     Ok(())
 }
 
+/// Every background leg in display order: the plural noun for a quiet
+/// sentence, the unit for a count line, and the count — `None` when the
+/// server did NOT measure the leg. One table, so a sixth leg is one row here
+/// rather than another hand-written branch in two renderers.
+fn background_legs(
+    work: &aleph_protocol::users::FrozenBackgroundWork,
+) -> [(&'static str, &'static str, Option<usize>); 5] {
+    [
+        ("goals", "goal(s)", Some(work.goals)),
+        ("loops", "loop(s)", Some(work.loops)),
+        ("crons", "cron(s)", Some(work.crons)),
+        ("heartbeat tasks", "heartbeat task(s)", work.heartbeats),
+        ("team tasks", "team task(s)", work.team_tasks),
+    ]
+}
+
+/// "a, b, c or d".
+fn join_or(nouns: &[&str]) -> String {
+    match nouns {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [init @ .., last] => format!("{} or {last}", init.join(", ")),
+    }
+}
+
+/// The measured legs' nouns and `"<n> <unit>"` strings, plus whether all of
+/// them are zero.
+fn measured_legs(
+    work: &aleph_protocol::users::FrozenBackgroundWork,
+) -> (Vec<&'static str>, Vec<String>, bool) {
+    let legs = background_legs(work);
+    let measured: Vec<(&'static str, &'static str, usize)> = legs
+        .iter()
+        .filter_map(|(noun, unit, n)| n.map(|n| (*noun, *unit, n)))
+        .collect();
+    let all_zero = measured.iter().all(|(_, _, n)| *n == 0);
+    (
+        measured.iter().map(|(noun, _, _)| *noun).collect(),
+        measured
+            .iter()
+            .map(|(_, unit, n)| format!("{n} {unit}"))
+            .collect(),
+        all_zero,
+    )
+}
+
 /// The lines [`show`] prints, as values — split out for the same reason
 /// [`update_effect_lines`] is: "the CLI prints the heartbeat count" is not
 /// something a test can check while the only way to observe it is stdout.
@@ -187,31 +233,29 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
     }
 
     let work = detail.background_work;
-    match work.heartbeats {
-        Some(heartbeats) => {
-            if work.is_empty() {
-                lines.push("  owns:     no goals, loops, crons or heartbeat tasks".to_string());
-            } else {
-                lines.push(format!(
-                    "  owns:     {} goal(s), {} loop(s), {} cron(s), {heartbeats} heartbeat task(s)",
-                    work.goals, work.loops, work.crons
-                ));
-            }
-        }
-        None => {
-            // Only three legs were measured, so only three may be named —
-            // the same two-sentence split the deactivation receipt makes.
-            lines.push(format!(
-                "  owns:     {} goal(s), {} loop(s), {} cron(s)",
-                work.goals, work.loops, work.crons
-            ));
-            lines.push(
-                "            Heartbeat tasks were NOT counted: no heartbeat service is \
-                 running on that server. Run `aleph doctor` — `core/capability-wiring` \
-                 names the cause."
-                    .to_string(),
-            );
-        }
+    let (nouns, counts, all_zero) = measured_legs(&work);
+    if all_zero {
+        lines.push(format!("  owns:     no {}", join_or(&nouns)));
+    } else {
+        lines.push(format!("  owns:     {}", counts.join(", ")));
+    }
+    // Only the measured legs may be named above; each unmeasured one gets
+    // its own sentence (criterion §8) — the same split the deactivation
+    // receipt makes.
+    if work.heartbeats.is_none() {
+        lines.push(
+            "            Heartbeat tasks were NOT counted: no heartbeat service is \
+             running on that server. Run `aleph doctor` — `core/capability-wiring` \
+             names the cause."
+                .to_string(),
+        );
+    }
+    if work.team_tasks.is_none() {
+        lines.push(
+            "            Team tasks were NOT counted: the team stores did not open on \
+             that server. Run `aleph doctor` — `core/capability-wiring` names the cause."
+                .to_string(),
+        );
     }
 
     lines.push(String::new());
@@ -340,40 +384,30 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
     }
 
     if let Some(frozen) = result.frozen_background_work {
-        // Two sentences, because there are two facts and folding them loses
-        // one: what the freeze DID, and — separately — whether the heartbeat
-        // leg ran at all. An unmeasured leg is not a leg that found nothing.
-        match frozen.heartbeats {
-            Some(heartbeats) => {
-                if frozen.is_empty() {
-                    lines.push(
-                        "They owned no running goals, loops, crons or heartbeat tasks.".to_string(),
-                    );
-                } else {
-                    lines.push(format!(
-                        "Background work frozen: {} goal(s), {} loop(s), {} cron(s), \
-                         {heartbeats} heartbeat task(s).",
-                        frozen.goals, frozen.loops, frozen.crons
-                    ));
-                }
-            }
-            None => {
-                // Only three legs were measured, so only three may be named.
-                if frozen.goals == 0 && frozen.loops == 0 && frozen.crons == 0 {
-                    lines.push("They owned no running goals, loops or crons.".to_string());
-                } else {
-                    lines.push(format!(
-                        "Background work frozen: {} goal(s), {} loop(s), {} cron(s).",
-                        frozen.goals, frozen.loops, frozen.crons
-                    ));
-                }
-                lines.push(
-                    "Heartbeat tasks were NOT checked: no heartbeat service is running on \
-                     that server, so any heartbeat task they own is still armed. Run \
-                     `aleph doctor` — `core/capability-wiring` names the cause."
-                        .to_string(),
-                );
-            }
+        // What the freeze DID over the measured legs, then — separately — one
+        // sentence per leg that never ran. An unmeasured leg is not a leg that
+        // found nothing.
+        let (nouns, counts, all_zero) = measured_legs(&frozen);
+        if all_zero {
+            lines.push(format!("They owned no running {}.", join_or(&nouns)));
+        } else {
+            lines.push(format!("Background work frozen: {}.", counts.join(", ")));
+        }
+        if frozen.heartbeats.is_none() {
+            lines.push(
+                "Heartbeat tasks were NOT checked: no heartbeat service is running on \
+                 that server, so any heartbeat task they own is still armed. Run \
+                 `aleph doctor` — `core/capability-wiring` names the cause."
+                    .to_string(),
+            );
+        }
+        if frozen.team_tasks.is_none() {
+            lines.push(
+                "Team tasks were NOT checked: the team stores did not open on that \
+                 server, so any team task they own can still be dispatched. Run \
+                 `aleph doctor` — `core/capability-wiring` names the cause."
+                    .to_string(),
+            );
         }
     }
 
@@ -447,6 +481,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(0),
+            team_tasks: Some(0),
         });
         receipt.revoked_bootstrap_tickets = Some(2);
         let lines = update_effect_lines(&receipt);
@@ -468,6 +503,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(0),
+                team_tasks: Some(0),
             },
         ));
         assert!(
@@ -489,6 +525,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(0),
+            team_tasks: Some(0),
         });
         receipt.revoked_devices = None;
         receipt.revoked_bootstrap_tickets = None;
@@ -512,6 +549,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(3),
+                team_tasks: Some(0),
             },
         ));
         let frozen_line = lines
@@ -536,13 +574,15 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(0),
+                team_tasks: Some(0),
             },
         ));
         assert!(
             lines
                 .iter()
-                .any(|l| l == "They owned no running goals, loops, crons or heartbeat tasks."),
-            "a measured zero on all four legs must say all four: {lines:?}"
+                .any(|l| l
+                    == "They owned no running goals, loops, crons, heartbeat tasks or team tasks."),
+            "a measured zero on all five legs must say all five: {lines:?}"
         );
         assert!(
             !lines.iter().any(|l| l.contains("NOT checked")),
@@ -561,6 +601,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: None,
+                team_tasks: Some(0),
             },
         ));
         assert!(
@@ -577,8 +618,9 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l == "Background work frozen: 1 goal(s), 0 loop(s), 0 cron(s)."),
-            "the three legs that DID run are still reported: {lines:?}"
+                .any(|l| l
+                    == "Background work frozen: 1 goal(s), 0 loop(s), 0 cron(s), 0 team task(s)."),
+            "the legs that DID run are still reported: {lines:?}"
         );
     }
 
@@ -593,6 +635,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(0),
+            team_tasks: Some(0),
         });
         receipt.frozen_background_work = None;
         receipt.revoked_devices = None;
@@ -647,6 +690,7 @@ mod tests {
                 loops: 2,
                 crons: 3,
                 heartbeats: Some(4),
+                team_tasks: Some(5),
             },
         ));
         let text = lines.join("\n");
@@ -660,6 +704,7 @@ mod tests {
             text.contains("1 goal(s), 2 loop(s), 3 cron(s), 4 heartbeat task(s)"),
             "every background leg must be named: {text}"
         );
+        assert!(text.contains("4 heartbeat task(s), 5 team task(s)"), "{text}");
     }
 
     /// The preview's cost statement must name every family the receipt
@@ -689,6 +734,7 @@ mod tests {
             loops: 0,
             crons: 0,
             heartbeats: Some(0),
+            team_tasks: Some(0),
         });
 
         let lines = detail_lines(&dossier(
@@ -698,6 +744,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(0),
+                team_tasks: Some(0),
             },
         ));
         let warning = lines
@@ -735,6 +782,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: Some(0),
+                team_tasks: Some(0),
             },
         ));
         assert!(
@@ -760,6 +808,7 @@ mod tests {
                 loops: 0,
                 crons: 0,
                 heartbeats: None,
+                team_tasks: Some(0),
             },
         ));
         assert!(
@@ -771,6 +820,73 @@ mod tests {
         assert!(
             !lines.iter().any(|l| l.contains("heartbeat task(s)")),
             "an unmeasured leg must not print a count of any kind: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_receipt_prints_the_frozen_team_task_count() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+                team_tasks: Some(2),
+            },
+        ));
+        assert!(
+            lines.iter().any(|l| l
+                == "Background work frozen: 0 goal(s), 0 loop(s), 0 cron(s), 0 heartbeat task(s), 2 team task(s)."),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_team_task_leg_gets_its_own_sentence_not_a_zero() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+                team_tasks: None,
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "They owned no running goals, loops, crons or heartbeat tasks."),
+            "only the measured legs may be named: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("Team tasks were NOT checked:")
+                && l.contains("can still be dispatched")),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|l| l.contains("team task(s)")), "{lines:?}");
+    }
+
+    #[test]
+    fn the_dossier_names_an_unmeasured_team_task_leg() {
+        let lines = detail_lines(&dossier(
+            None,
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 1,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+                team_tasks: None,
+            },
+        ));
+        assert!(
+            lines.iter().any(|l| l.contains("Team tasks were NOT counted")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "  owns:     1 goal(s), 0 loop(s), 0 cron(s), 0 heartbeat task(s)"),
+            "{lines:?}"
         );
     }
 }

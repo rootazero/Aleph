@@ -591,7 +591,7 @@ pub async fn handle_update(
                     aleph_protocol::users::ReactivationEffects {
                         devices: "remain revoked — issue a new bootstrap ticket (`pair --user`) per device".to_string(),
                         channel_senders: "remain withdrawn — re-approve via channel.pairing.approve".to_string(),
-                        background_work: "goals/loops/crons/heartbeat tasks remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle / heartbeat_toggle)".to_string(),
+                        background_work: "goals/loops/crons/heartbeat tasks/team tasks remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle / heartbeat_toggle / task_update status=pending)".to_string(),
                     }
                 }),
             };
@@ -905,7 +905,7 @@ async fn revoke_channel_bindings(
     }
 }
 
-/// The four background subsystems both the deactivation freeze and the
+/// The five background subsystems both the deactivation freeze and the
 /// `users.get` preview reach into.
 ///
 /// Taken as a parameter rather than read from the four process-globals at the
@@ -921,6 +921,7 @@ pub(crate) struct BackgroundWorkHandles {
     pub loops: Option<Arc<crate::looping::LoopRegistry>>,
     pub crons: Option<crate::tasks::cron::SharedCronService>,
     pub heartbeats: Option<crate::tasks::heartbeat::SharedHeartbeatService>,
+    pub teams: Option<crate::teams::TeamTaskStores>,
 }
 
 impl BackgroundWorkHandles {
@@ -931,6 +932,7 @@ impl BackgroundWorkHandles {
             loops: crate::looping::global(),
             crons: crate::tasks::cron::global(),
             heartbeats: crate::tasks::heartbeat::global(),
+            teams: crate::teams::background_stores(),
         }
     }
 }
@@ -968,11 +970,19 @@ impl BackgroundWorkHandles {
 /// said the same thing in two places, which is why the miss survived: an
 /// inventory that names three of four reads as coverage.
 ///
-/// One-way freeze for all four: reactivating the user does NOT auto-resume
-/// its goals, loops, crons or heartbeat tasks (spec is silent on auto-resume)
-/// — each owner session resumes its own via
+/// Team tasks are the FIFTH leg (round 11, N2) and the first one a MEMBER can
+/// own: `teams.create_task` is member-open and stamps `managed_by:
+/// dispatcher`, so a deactivated member's own teams kept dispatching work.
+/// Scope of the leg: dispatcher-managed, still-claimable tasks on teams the
+/// principal OWNS. Tasks they authored on other teams are refused by the
+/// dispatcher's fire-time authority check instead.
+///
+/// One-way freeze for all five: reactivating the user does NOT auto-resume
+/// its goals, loops, crons, heartbeat tasks or team tasks (spec is silent on
+/// auto-resume) — each owner session resumes its own via
 /// `goal(action='update', status='active')` / `loop(action='resume')` /
-/// `cron_manage(action='toggle')` / `heartbeat_toggle`.
+/// `cron_manage(action='toggle')` / `heartbeat_toggle` /
+/// `task_update(status='pending')`.
 ///
 /// **Fire-time backstop, both schedulers (round 11).** The sweep is the
 /// primary; each trigger also re-asks the users table through the one
@@ -1064,10 +1074,11 @@ async fn freeze_owned_background_work_with(
         }
     }
     report.heartbeats = freeze_owned_heartbeats(handles.heartbeats.clone(), user_id).await;
+    report.team_tasks = freeze_owned_team_tasks(handles.teams.as_ref(), user_id).await;
     report
 }
 
-/// What one principal OWNS across the same four background subsystems — the
+/// What one principal OWNS across the same five background subsystems — the
 /// read-only counterpart of [`freeze_owned_background_work`], and the
 /// `background_work` leg of `users.get`'s dossier.
 ///
@@ -1138,6 +1149,7 @@ async fn count_owned_background_work_with(
             None
         }
     };
+    report.team_tasks = count_owned_team_tasks(handles.teams.as_ref(), user_id).await;
     report
 }
 
@@ -1198,6 +1210,159 @@ async fn freeze_owned_heartbeats(
             None
         }
     }
+}
+
+/// Ids of the teams `user_id` owns, by the shared owner predicate
+/// ([`aleph_protocol::users::owned_by`]) — a legacy NULL-owner team belongs to
+/// nobody. Reads the RAW store: the freeze must see every team, not the ones
+/// visible to the admin running it.
+async fn owned_team_ids(
+    stores: &crate::teams::TeamTaskStores,
+    user_id: &str,
+) -> crate::error::Result<Vec<String>> {
+    Ok(stores
+        .teams
+        .list_teams()
+        .await?
+        .into_iter()
+        .filter(|t| aleph_protocol::users::owned_by(t.owner_user_id.as_deref(), user_id))
+        .map(|t| t.id)
+        .collect())
+}
+
+/// The fifth leg (round 11, N2): pause every dispatcher-managed task that
+/// could still be CLAIMED (`Pending`, or `Blocked` — stored `pending`, derived
+/// at read time) on teams the principal owns. `WaitingReview` is left alone:
+/// pausing it needs the `PAUSED_FROM_KEY` stamp and it is not claimable
+/// anyway.
+///
+/// Nulls `PAUSED_FROM_KEY` in the same write, like the dispatcher's
+/// refused-authority pause and the two pause surfaces it names: the task is
+/// Pending here, so a stale `paused_from` from an earlier pause→retry cycle
+/// would otherwise make a later resume restore it to WaitingReview.
+///
+/// Same `Option` discipline as [`freeze_owned_heartbeats`]: `None` when the
+/// stores are absent or a scan failed (tasks may or may not have been paused),
+/// never `Some(0)`.
+///
+/// A task authored by this principal on SOMEONE ELSE's team is not frozen
+/// here — it is refused at its next claim by the dispatcher's fire-time
+/// authority check (round 11, N1), which pauses it with the reason.
+async fn freeze_owned_team_tasks(
+    stores: Option<&crate::teams::TeamTaskStores>,
+    user_id: &str,
+) -> Option<usize> {
+    use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
+    let Some(stores) = stores else {
+        tracing::warn!(
+            user_id = %user_id,
+            "users.update: deactivation did NOT reach the team-task leg — the team stores \
+             are not open in this process, so any team task this principal owns can \
+             still be dispatched"
+        );
+        return None;
+    };
+    let team_ids = match owned_team_ids(stores, user_id).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "users.update: failed to list teams during deactivation"
+            );
+            return None;
+        }
+    };
+    let mut paused = 0usize;
+    for team_id in team_ids {
+        let tasks = match stores
+            .tasks
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team_id.clone()),
+                status: None,
+            })
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    team_id = %team_id,
+                    error = %e,
+                    "users.update: failed to list a team's tasks during deactivation"
+                );
+                return None;
+            }
+        };
+        for task in tasks.iter().filter(|t| {
+            crate::teams::dispatcher::is_dispatcher_managed(t)
+                && matches!(t.status, CoordTaskStatus::Pending | CoordTaskStatus::Blocked)
+        }) {
+            let update = CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Paused),
+                metadata: Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                    &task.metadata,
+                    serde_json::json!({
+                        crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                    }),
+                )),
+                ..Default::default()
+            };
+            match stores.tasks.update_task(&task.id, update).await {
+                Ok(_) => paused += 1,
+                Err(e) => tracing::warn!(
+                    user_id = %user_id,
+                    task_id = %task.id,
+                    error = %e,
+                    "users.update: failed to pause an owned team task during deactivation"
+                ),
+            }
+        }
+    }
+    if paused > 0 {
+        tracing::warn!(
+            user_id = %user_id,
+            count = paused,
+            "users.update: deactivation paused owned team tasks"
+        );
+    }
+    Some(paused)
+}
+
+/// The preview twin: every NON-TERMINAL dispatcher-managed task on teams the
+/// principal owns (paused ones included — the operator must see what they
+/// are about to strand). `None` on absence or a failed scan.
+async fn count_owned_team_tasks(
+    stores: Option<&crate::teams::TeamTaskStores>,
+    user_id: &str,
+) -> Option<usize> {
+    use crate::agents::swarm::tasks::CoordTaskFilter;
+    let Some(stores) = stores else {
+        tracing::warn!(
+            user_id = %user_id,
+            "users.get: the team-task leg was NOT measured — the team stores are not open"
+        );
+        return None;
+    };
+    let team_ids = owned_team_ids(stores, user_id).await.ok()?;
+    let mut owned = 0usize;
+    for team_id in team_ids {
+        let tasks = stores
+            .tasks
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team_id),
+                status: None,
+            })
+            .await
+            .ok()?;
+        owned += tasks
+            .iter()
+            .filter(|t| {
+                crate::teams::dispatcher::is_dispatcher_managed(t) && !t.status.is_terminal()
+            })
+            .count();
+    }
+    Some(owned)
 }
 
 #[cfg(test)]
@@ -2416,9 +2581,158 @@ mod tests {
                 loops: Some(loops),
                 crons: Some(crons),
                 heartbeats: Some(heartbeats),
+                teams: None,
             },
             dir,
         )
+    }
+
+    async fn team_stores() -> crate::teams::TeamTaskStores {
+        let teams =
+            crate::teams::SqliteTeamStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        teams.migrate().await.unwrap();
+        let tasks = crate::agents::swarm::tasks::store::SqliteCoordTaskStore::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        );
+        tasks.migrate().await.unwrap();
+        crate::teams::TeamTaskStores {
+            teams: Arc::new(teams),
+            tasks: Arc::new(tasks),
+        }
+    }
+
+    /// One team owned by `owner` (or legacy when `None`) with one task per
+    /// `(managed_by_dispatcher)` flag. Returns the created task ids.
+    async fn seed_team_tasks(
+        stores: &crate::teams::TeamTaskStores,
+        owner: Option<&str>,
+        managed: &[bool],
+    ) -> Vec<String> {
+        let create = stores.teams.create_team(crate::teams::types::NewTeam {
+            name: format!("team-{}", uuid::Uuid::new_v4()),
+            description: String::new(),
+            leader_id: "lead".into(),
+        });
+        let team = match owner {
+            Some(u) => {
+                crate::scope::with_scope(Some(crate::scope::ScopeAttribution::personal(u)), create)
+                    .await
+            }
+            None => create.await,
+        }
+        .unwrap();
+        let mut ids = Vec::new();
+        for m in managed {
+            let metadata = if *m {
+                serde_json::json!({ "managed_by": "dispatcher" })
+            } else {
+                serde_json::json!({})
+            };
+            let t = stores
+                .tasks
+                .create_task(crate::agents::swarm::tasks::NewCoordTask {
+                    team_id: Some(team.id.clone()),
+                    subject: "s".into(),
+                    description: String::new(),
+                    owner: Some("worker".into()),
+                    priority: crate::agents::swarm::tasks::Priority::Normal,
+                    blocked_by: vec![],
+                    metadata,
+                })
+                .await
+                .unwrap();
+            ids.push(t.id);
+        }
+        ids
+    }
+
+    /// Status of one coord task, read back from the store.
+    async fn task_status(
+        stores: &crate::teams::TeamTaskStores,
+        id: &str,
+    ) -> crate::agents::swarm::tasks::CoordTaskStatus {
+        stores.tasks.get_task(id).await.unwrap().unwrap().status
+    }
+
+    /// N2: the fifth leg pauses the Pending DISPATCHER-MANAGED tasks of teams
+    /// the principal owns, and reports the count it paused.
+    ///
+    /// The brief's single test is split in three (this one, the hand-tracked
+    /// one and the other-owner one below) so each production filter has a red
+    /// of its own: with one test, dropping any filter reddened the same name.
+    #[tokio::test]
+    async fn deactivation_pauses_pending_dispatcher_tasks_of_owned_teams() {
+        use crate::agents::swarm::tasks::CoordTaskStatus;
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        let alice = seed_team_tasks(&stores, Some("u-alice"), &[true]).await;
+
+        let frozen = freeze_owned_background_work_with(&handles, "u-alice").await;
+        assert_eq!(frozen.team_tasks, Some(1));
+        assert_eq!(task_status(&stores, &alice[0]).await, CoordTaskStatus::Paused);
+    }
+
+    /// A hand-tracked task (no `managed_by: dispatcher`) is never claimed by
+    /// the dispatcher, so the freeze leaves it alone.
+    #[tokio::test]
+    async fn deactivation_leaves_a_hand_tracked_team_task_alone() {
+        use crate::agents::swarm::tasks::CoordTaskStatus;
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        let alice = seed_team_tasks(&stores, Some("u-alice"), &[false]).await;
+
+        freeze_owned_background_work_with(&handles, "u-alice").await;
+        assert_eq!(
+            task_status(&stores, &alice[0]).await,
+            CoordTaskStatus::Pending,
+            "not dispatcher-managed"
+        );
+    }
+
+    /// Someone else's team, and a legacy (NULL-owner) team, are not hers:
+    /// the shared owner predicate reads a NULL owner as nobody's.
+    #[tokio::test]
+    async fn deactivation_leaves_other_and_legacy_teams_alone() {
+        use crate::agents::swarm::tasks::CoordTaskStatus;
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        let bob = seed_team_tasks(&stores, Some("u-bob"), &[true]).await;
+        let legacy = seed_team_tasks(&stores, None, &[true]).await;
+
+        let frozen = freeze_owned_background_work_with(&handles, "u-alice").await;
+        assert_eq!(
+            task_status(&stores, &bob[0]).await,
+            CoordTaskStatus::Pending,
+            "not her team"
+        );
+        assert_eq!(
+            task_status(&stores, &legacy[0]).await,
+            CoordTaskStatus::Pending,
+            "a legacy team belongs to nobody"
+        );
+        assert_eq!(frozen.team_tasks, Some(0), "a measured leg that found nothing");
+    }
+
+    /// Absent stores = NOT MEASURED (`None`), never `Some(0)` (criterion §8).
+    #[tokio::test]
+    async fn an_unreachable_team_store_reports_the_leg_unmeasured() {
+        let (handles, _dir) = background_fixture();
+        assert!(handles.teams.is_none());
+        assert_eq!(
+            freeze_owned_background_work_with(&handles, "u-alice")
+                .await
+                .team_tasks,
+            None
+        );
+        assert_eq!(
+            count_owned_background_work_with(&handles, "u-alice")
+                .await
+                .team_tasks,
+            None
+        );
     }
 
     fn seed_goal(handles: &BackgroundWorkHandles, session: &str, owner: Option<&str>) {
@@ -2473,7 +2787,10 @@ mod tests {
     /// other (criterion #1: one leg enumeration, two readers).
     #[tokio::test]
     async fn the_preview_and_the_freeze_report_the_same_struct_for_all_active_work() {
-        let (handles, _dir) = background_fixture();
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        seed_team_tasks(&stores, Some("u-alice"), &[true]).await;
         seed_goal(&handles, "s-alice", Some("u-alice"));
         seed_loop(&handles, "l-alice", Some("u-alice"));
         seed_cron(&handles, "c-alice", Some("u-alice")).await;
@@ -2486,6 +2803,7 @@ mod tests {
                 loops: 1,
                 crons: 1,
                 heartbeats: Some(0),
+                team_tasks: Some(1),
             }
         );
 

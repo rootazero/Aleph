@@ -73,8 +73,20 @@ pub(super) async fn init_coord_and_snapshot(
     }
 }
 
+/// The two handles over one `teams.db` store.
+pub(super) struct TeamStoreHandles {
+    /// The OWNERSHIP-SCOPED handle every RPC, tool and the dispatcher receive.
+    pub scoped: Arc<dyn alephcore::teams::TeamStore>,
+    /// The raw handle. Exactly one consumer: the deactivation freeze's
+    /// team-task leg (`teams::install_background_stores`, round 11 N2), which
+    /// must see every team the deactivated principal owns — through the
+    /// scoped handle it would see only the teams visible to the admin running
+    /// the deactivation. Never hand it to an RPC or a tool.
+    pub unscoped: Arc<dyn alephcore::teams::TeamStore>,
+}
+
 /// Open `teams.db`, create the `SqliteTeamStore`, run migrations.
-pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::teams::TeamStore>> {
+pub(super) async fn init_team_store(daemon: bool) -> Option<TeamStoreHandles> {
     use alephcore::teams::SqliteTeamStore;
     use alephcore::utils::paths::get_data_dir;
 
@@ -108,11 +120,16 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
                 println!("  Team store initialized (SQLite)");
             }
             // Every consumer — the 37 `teams.*` RPCs, the `team_*` tools, the
-            // dispatcher — receives the OWNERSHIP-SCOPED handle. This is the
-            // only place the raw store is visible; publishing it unwrapped is
+            // dispatcher — receives the OWNERSHIP-SCOPED handle. The raw
+            // store leaves this function only as `unscoped`, for the
+            // deactivation freeze; publishing it unwrapped anywhere else is
             // how the P1 team isolation gets bypassed (see
             // `teams::scoped::ScopedTeamStore`).
-            Some(alephcore::teams::ScopedTeamStore::wrap(store))
+            let unscoped: Arc<dyn alephcore::teams::TeamStore> = store.clone();
+            Some(TeamStoreHandles {
+                scoped: alephcore::teams::ScopedTeamStore::wrap(store),
+                unscoped,
+            })
         }
         Err(e) => {
             if !daemon {

@@ -2342,6 +2342,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.set_team_store(ts.clone());
     }
 
+    // The deactivation freeze's fifth leg (round 11, N2) reaches team tasks
+    // through this slot — the same two-store condition as the handlers below,
+    // but over the UNSCOPED team store: the freeze must see every team the
+    // deactivated principal owns, not the teams visible to the admin running
+    // it (`TeamStoreHandles::unscoped`).
+    let background_team_stores = agent_result
+        .team_store_unscoped
+        .clone()
+        .zip(agent_result.coord_task_store.clone());
+    if let Some((teams, tasks)) = background_team_stores {
+        alephcore::teams::install_background_stores(alephcore::teams::TeamTaskStores {
+            teams,
+            tasks,
+        });
+    } else {
+        alephcore::teams::decline_background_stores(
+            "the team store or the coordination-task store did not open at boot (see the \
+             warning `register_agent_handlers` logged), so a deactivation cannot pause the \
+             principal's team tasks and `users.get` cannot count them",
+        );
+    }
+
     // Team management (team store created inside register_agent_handlers).
     // `register_teams_handlers` genuinely needs both stores, so it — unlike the
     // resolver above — stays under the two-store condition.
@@ -4069,6 +4091,20 @@ mod tests {
                  registers it — it would resolve in test harnesses and be \
                  METHOD_NOT_FOUND on a real server"
             );
+        }
+    }
+
+    /// N2's fifth freeze leg reads the team stores through a boot-installed
+    /// slot; a boot that never installs it makes every deactivation report
+    /// the leg "not measured", forever, with nothing red.
+    #[test]
+    fn boot_installs_or_declines_the_team_background_stores() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(production.len() < src.len(), "the #[cfg(test)] split matched nothing");
+        let production = alephcore::utils::source_scan::code_text(&production);
+        for call in ["install_background_stores(", "decline_background_stores("] {
+            assert!(production.contains(call), "start/mod.rs must call teams::{call}");
         }
     }
 
