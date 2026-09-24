@@ -33,18 +33,29 @@
 //!
 //! Within its key, an approval also attests to what `aleph hooks test`
 //! reviewed: the hook's root directory ([`ConsentEntry::plugin_root`]) and
-//! the content of the script its command names — found through an absolute
-//! or `~/` path, a path variable (`${CLAUDE_PLUGIN_ROOT}` and its spellings,
-//! a plugin's `_DATA` pair), `$CLAUDE_PROJECT_DIR` in a project-bound hook,
-//! or a path relative to the hook's root; when it names several, the first.
-//! A script found only through `PATH`, through any other variable, or
-//! through `$CLAUDE_PROJECT_DIR` in a hook that fires everywhere (a different
-//! directory each session) is not content-bound: that approval is of the
-//! command string. The same key from another root, or an edited bound
-//! script, is refused until it is revoked and reviewed again
-//! ([`ShellHookConsent::is_approved`]). A pending entry is refreshed by every
-//! fire, so what the review runs is what production runs. No approval is
-//! ever minted without a root ([`ShellHookConsent::approve`]).
+//! the content of ONE script file — the first word of the command with a
+//! script extension, else the first path — when that word is an absolute or
+//! `~/` path, a path variable (`${CLAUDE_PLUGIN_ROOT}` and its spellings, a
+//! plugin's `_DATA` pair), `$CLAUDE_PROJECT_DIR` in a project-bound hook, or
+//! a path relative to the hook's root. Only the named file is hashed — what
+//! it sources, imports or reads is not. `$CLAUDE_PROJECT_DIR` is bound only
+//! in a session bound to that project: a run with no project of its own
+//! still fires the hooks of the project the daemon was started in, and
+//! there the child's `$CLAUDE_PROJECT_DIR` names another directory than the
+//! one hashed (the run's workspace), or none. Anything else is not
+//! content-bound, and the approval is of the command
+//! string alone — among it a script reached through `PATH` (`npx`, `uvx`, a
+//! bare name) or through any other variable, through command substitution
+//! or re-parsing (`$(…)`, backticks, `eval`, `sh -c "…"`), `python3 -m`, a
+//! quoted path containing a space (the words split: it binds nothing, or
+//! the wrong file), and a script over 1 MiB. So is `$CLAUDE_PROJECT_DIR` in
+//! a hook that fires everywhere: every project a session opens supplies its
+//! own script to that one approval, and it runs unreviewed. The same key
+//! from another root, or an edited bound script, is refused until it is
+//! revoked and reviewed again ([`ShellHookConsent::is_approved`]). A pending
+//! entry is refreshed by every fire, so what the review runs is what
+//! production runs. No approval is ever minted without a root
+//! ([`ShellHookConsent::approve`]).
 //!
 //! **Migration.** An entry recorded before the project binding carries no
 //! project. It is kept on disk as it is — never rewritten, never deleted —
@@ -55,15 +66,23 @@
 //! (a `PreToolUse` hook that denies edits to `.env`, blocks `rm -rf` …)
 //! stops blocking from the upgrade on: the tool calls it stopped go through
 //! until its project's pending entry is approved. `aleph doctor` reports the
-//! old approvals (`core/hooks-consent`, "Project-hook approvals no longer
-//! apply"); `aleph hooks list` / `test` mark such a `user:project*` entry
-//! ([`ConsentEntry::predates_project_binding`]). An
+//! old approvals from project hook files (`core/hooks-consent`, "Project-hook
+//! approvals no longer apply"); an old approval of a plugin installed inside
+//! a project cannot be told apart and is not counted — it shows as pending
+//! once the hook fires. `aleph hooks list` / `test` mark such a
+//! `user:project*` entry ([`ConsentEntry::predates_project_binding`]). An
 //! approval of a hook that fires everywhere, recorded before roots were
 //! recorded, keeps working from any root until it is revoked, fires once
 //! (which records its root) and is approved again — unless the script it
 //! runs can now be hashed and it recorded none: that approval attests to no
 //! content, so its next fire withdraws it to `pending` for review
-//! ([`ConsentEntry::script_fingerprint`]).
+//! ([`ConsentEntry::script_fingerprint`]). That second migration reaches
+//! every hook written the Claude Code way and approved before its script
+//! could be bound (`${CLAUDE_PLUGIN_ROOT}/…`, a relative script, a project
+//! hook's `$CLAUDE_PROJECT_DIR`), globally installed plugins included: from
+//! its first fire after the upgrade until it is approved again it does not
+//! run, so a guard among them stops blocking. The doctor does not count
+//! these; the hook shows as pending once it has fired.
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
@@ -140,18 +159,25 @@ pub struct ConsentEntry {
     /// Unix seconds when approved (absent while pending).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_at: Option<u64>,
-    /// `sha256` of the script file the command invokes, captured when the
-    /// entry was recorded / approved.
+    /// `sha256` of the ONE script file the command invokes — the first word
+    /// with a script extension, else the first path, resolved as the module
+    /// doc lists — captured when the entry was recorded / approved.
     ///
     /// The command STRING alone is a weak thing to consent to: approving
     /// `sh scripts/deploy.sh` once approves whatever that file contains
     /// forever, so an attacker who can write the script (or a `git pull`)
-    /// silently inherits the approval. Binding the content closes that
+    /// silently inherits the approval. Binding the content narrows that
     /// time-of-check/time-of-use window — [`ShellHookConsent::is_approved`]
-    /// re-hashes and refuses on drift.
+    /// re-hashes and refuses on drift — for that one file: only the named
+    /// file is hashed, and what it sources, imports or reads is not. A
+    /// command whose script cannot be resolved binds nothing: command
+    /// substitution, `python3 -m`, a quoted path containing a space, a
+    /// script over 1 MiB, anything reached through `PATH` or another
+    /// variable (the module doc has the full rule).
     ///
     /// `None` for commands with no resolvable script (`echo hi`), for
-    /// unreadable files, and for entries written before this field existed.
+    /// unreadable files and ones over 1 MiB, and for entries written before
+    /// this field existed.
     /// An approval with `None` keeps the command-string-only semantics only
     /// while the command still names no hashable script; once it does (the
     /// file appears, or it was a `${…}` / relative script approved before
