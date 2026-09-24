@@ -522,19 +522,19 @@ impl ProfileManager {
                 self.ssrf_guard.load_full(),
             ))),
             BrowserDriver::Cdp => {
-                // ONE source for both halves of the backend's identity, which
-                // is the question `CdpBackend::new`'s doc hands to this task.
+                // ONE source for both halves of the backend's identity:
                 // `launch_request_for` writes `req.profile` AND
                 // `req.session_key` from the same `profile_name` this call
-                // receives, so the registry key, the sidecar name and the
-                // argument agree by construction rather than by coincidence —
-                // there is no second string here free to drift (判据 §1).
+                // receives (already principal-scoped — the tool layer resolves
+                // `principal_profile` before calling in), so the registry key,
+                // the sidecar name and the profile agree by construction
+                // rather than by coincidence (判据 §1). `CdpBackend::new`
+                // takes no second profile argument to disagree with it.
                 let (engine, req) = self.launch_request_for(profile_name)?;
                 Ok(Arc::new(super::cdp_backend::CdpBackend::new(
                     self.engines.clone(),
                     engine,
                     req,
-                    profile_name,
                     // The LIVE guard, loaded per call: backends are built per
                     // call precisely so a `browser.update` reaches the next
                     // action without a restart.
