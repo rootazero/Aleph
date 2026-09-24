@@ -70,7 +70,9 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub use template::SkillTemplate;
+pub use template::{
+    inline_shell_command, split_arguments, InlineArgs, InlineShell, SkillTemplate, TemplateCtx,
+};
 pub use types::*;
 
 // Re-export marketplace types

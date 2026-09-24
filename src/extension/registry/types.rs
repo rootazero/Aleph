@@ -247,12 +247,6 @@ impl SkillRegistration {
             && self.skill_type == crate::extension::types::SkillType::Skill
     }
 
-    /// Substitute $ARGUMENTS placeholder
-    #[must_use]
-    pub fn with_arguments(&self, arguments: &str) -> String {
-        self.content.replace("$ARGUMENTS", arguments)
-    }
-
     /// Get the base directory for this skill (for file references)
     #[must_use]
     pub fn base_dir(&self) -> PathBuf {
