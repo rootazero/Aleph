@@ -395,9 +395,9 @@ pub struct ChatMessage {
 /// run settled while the row was still `running` and the authoritative
 /// end-of-run `tool_summaries` did not name it either.
 ///
-/// It exists because the `agent_trace` mirror is explicitly lossy —
-/// `AgentTraceEmitSink` pushes through a bounded `mpsc(256)` with `try_send`
-/// and drops on overflow. Without a fourth state a dropped
+/// It exists because live `agent_trace` frames are best-effort — a lagging
+/// receiver of the run's bounded broadcast flow channel (or of a WS
+/// connection's event stream) drops them. Without a fourth state a dropped
 /// `tool_call_completed` left the row pulsing `running` forever (permanent 1s
 /// tick subscription, and its `ExploreGroup` stuck on "Exploring…"). Settling
 /// to `unknown` is honest: we know the run is over, we do not know how the
@@ -1479,10 +1479,11 @@ impl ChatState {
     /// is started. Otherwise the trailing placeholder is reused — its iteration
     /// is simply updated to the incoming one. This covers the first turn (the
     /// placeholder is pre-stamped as step 1 in `start_assistant_message`) and
-    /// the race where `response_chunk` preview text lands before `turn_started`
-    /// (the two travel independent async pipelines — AgentTraceEmitSink spawns
-    /// a drain task), so the preview belongs to THIS step and must not be
-    /// orphaned into a duplicate intermediate bubble.
+    /// the order where `response_chunk` preview text lands before
+    /// `turn_started`: the preview then belongs to THIS step and must not be
+    /// orphaned into a duplicate intermediate bubble. The server no longer
+    /// produces that order (both frames share the run's one flow channel and
+    /// `seq`), but reusing the same-step placeholder is correct either way.
     pub fn begin_step(&self, run_id: &str, iteration: usize) {
         let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
@@ -2412,10 +2413,10 @@ mod step_tests {
 
     #[test]
     fn begin_step_reuses_placeholder_with_raced_preview() {
-        // Regression (double-render): `response_chunk` deltas and
-        // `agent_trace.turn_started` travel independent async pipelines
-        // (AgentTraceEmitSink spawns a drain task), so streamed preview text can
-        // land in the placeholder bubble BEFORE the first `turn_started`. The
+        // Regression (double-render): streamed preview text lands in the
+        // placeholder bubble BEFORE the first `turn_started`. The server now
+        // sequences both frames on one flow channel, so it no longer produces
+        // this order; the client must still handle it. The
         // late `begin_step` must REUSE the pre-stamped placeholder — its
         // content is THIS step's preview — not orphan it into a duplicate
         // `intermediate-` bubble that `set_step_text` then mirrors.

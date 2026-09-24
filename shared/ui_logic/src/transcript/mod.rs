@@ -25,12 +25,22 @@ pub use summarize::{
 };
 
 mod group;
+mod reducer;
+mod step;
 mod view_model;
-pub use group::{group_entries, MAX_GAP_TEXT, MIN_GROUP};
+pub use group::{group_entries, group_tool_rows, MAX_GAP_TEXT, MIN_GROUP};
+pub use reducer::{trace_result_to_wire, Change, Transcript};
+pub use step::{
+    first_sentence, step_headline, step_tally, Headline, HeadlineSource, Note, NoteKind, StepEntry,
+    StepStatus, StepTool, ThinkingBlock, HEADLINE_MAX_COLS,
+};
 pub use view_model::{
     RowBody, RowStatus, ToolGroup, ToolRow, TranscriptEntry, TuiAttachment, TurnSummaryEntry,
     READ_ONLY_DISPLAY_NAMES,
 };
+
+mod detail;
+pub use detail::{effective_open, DetailLevel};
 
 mod diff_view;
 pub use diff_view::{
@@ -55,4 +65,4 @@ pub use affordance::{
     SPINNER_FRAMES, SPINNER_PERIOD_MS, VERBS_EN, VERBS_ZH, VERB_REROLL_MS,
 };
 pub use context::{reconcile, ContextRow, ContextRows, PROVIDER_TOLERANCE};
-pub use turn_summary::{summarize_turn, turn_summary_text, MIN_TOOLS_FOR_SUMMARY};
+pub use turn_summary::{summarize_rows, summarize_turn, turn_summary_text, MIN_TOOLS_FOR_SUMMARY};

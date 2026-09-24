@@ -384,9 +384,9 @@ const BUDGETED: [&str; 12] = [
 ///     guardrail's `Block` arm was the only one that did not, so a blocked call
 ///     was absent from `tool_timeline` → `FlowOutcome` → `RunSummary
 ///     .tool_summaries`. That list is the AUTHORITATIVE terminal state
-///     consumers reconcile against precisely because the `agent_trace` mirror
-///     is deliberately lossy (`AgentTraceEmitSink` = bounded `mpsc(256)` +
-///     `try_send`); a block was therefore the one class of call with no
+///     consumers reconcile against precisely because live `agent_trace` frames
+///     are best-effort (a lagging receiver of the run's broadcast flow channel
+///     drops them); a block was therefore the one class of call with no
 ///     backstop — drop its single live frame and the Panel row stayed "running"
 ///     forever. The run digest under-counted and `deps.tool_signal_sink` (the
 ///     dream cycle's `insights.tools` feed) never saw the attempt either.
@@ -684,7 +684,23 @@ const BUDGETED: [&str; 12] = [
 ///     answered per the next failure message; nothing was deleted to
 ///     absorb the growth. Raise again only when a new reasoning concern
 ///     has no existing file to live in.
-const CEILING: usize = 5250;
+/// +16 (5250 → 5266, 2026-09-23, measured): `LoopTraceEvent::ReasoningEmitted`
+///     in `trace.rs` (+3) and, in `agent/think.rs` (+13), one private
+///     `emit_reasoning` helper called beside both `TextEmitted{Final}`
+///     producers (the Think turn and the boundary grace turn). It records a
+///     response's non-empty thinking block under the loop's iteration counter.
+///
+///     Three questions: (1) **scaffolding** — it copies the provider's block
+///     verbatim under the loop's counter and judges nothing (masking stays in
+///     the gateway's `UnattendedRedactingSink`). (2) **yes** — which iteration
+///     a thinking block belongs to is a runtime fact of the loop, not a
+///     capability a stronger model absorbs. (3) **consumers today** — the
+///     Panel Agent Trace view (`agent_trace_model.rs`) and CLI `aleph trace show`
+///     via the shared presentation arm; the shared step reducer folds it, which
+///     nothing renders before Phase T. Nothing was deleted to absorb it.
+///     (Corrected in the review follow-up: the first version of this entry
+///     answered a different three questions and left (2) unanswered.)
+const CEILING: usize = 5266;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

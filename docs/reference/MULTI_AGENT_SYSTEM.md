@@ -81,7 +81,17 @@ Subagents inherit the following from their parent via `SpawnerBase`:
 - `guardrails` (Stage 5a) — Input/Output/ToolCall checks
 - `fallback_llm` (Stage A, 2026-05-08) — Stage 5b single-step fallback
 - `stall_config`, `consecutive_failure_cap`, `turn_timeout` (Stage A) — P0 stability triple
-- `trace_sink` (Stage A) — observability sink
+- `trace_sink` (Stage A) — the sink the child's harness loop emits into. It
+  stops at the subagent boundary: a child's turns never reach the parent run's
+  `agent_trace` frames or the parent's persisted trace
+  (`src/gateway/execution_engine/run_trace_sinks.rs`)
+- `accounting_sink` (2026-09-23) — a second inherited sink, read only by the
+  child's `MeteringProvider`s (turn and `compactor:<id>` spend). It is the parent
+  run's own chain, so a child's `ProviderUsage` / `CacheHealthDegraded` persist
+  under the parent's task for `teams.usage` and the doctor, and reach the live
+  wire only while the parent run's strong senders are alive: a background
+  child's later usage is persisted only, because the emit sink's weak sender
+  no longer upgrades ([spec §5.4](../superpowers/specs/2026-09-23-stepwise-transcript-folding-design.md))
 - `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
   spawner builds the child's **own** budget + compactor + preflight pipeline
 - `cheap_summary_provider` (2026-08-04) — the `[generation] cheap_model` tier, so the
@@ -1339,15 +1349,25 @@ struct SubagentProgress {
 ### Wiring (R10-Safe Decorator)
 
 `ForwardingTraceSink` (in `src/agents/forwarding_trace_sink.rs`) wraps the
-parent-inherited `trace_sink` exclusively for background subagents. It:
+child's harness `trace_sink` exclusively for background subagents. It:
 
 1. Translates `LoopTraceEvent::ToolCallStarted` / `ToolCallCompleted` /
    `TurnStateEntered{Think}` / `SessionCompleted{Cancelled}` into
    `SubagentProgress`
 2. Pushes the translated event onto `BackgroundAgentTracker.progress` (FIFO,
    capped at 50)
-3. Always forwards the original event to the inner sink (preserves
-   gateway/disk trace flow)
+3. Always forwards the original event to the inner sink — the child chain,
+   which ends at the subagent boundary (`[unattended redaction] → [scratchpad
+   push] → nothing`)
+
+A child's harness events never reach the parent run's `agent_trace` frames or
+the parent's persisted trace: `src/gateway/execution_engine/run_trace_sinks.rs`
+builds a separate child chain and hands it to both spawn paths. A child gets
+sinks only through `SubagentTool::with_child_sinks` (`pub(crate)`), whose
+`ChildTraceSinks` only `RunTraceSinks` mints, so no other caller can hand a
+child's loop the parent's chain. The one exception is accounting — see
+`accounting_sink` under HarnessDeps inheritance above (the owner of the whole
+split is `run_trace_sinks.rs`'s module doc).
 
 Other LoopTraceEvent variants pass through untranslated. Adding new translation
 cases does not require harness changes.
@@ -1702,9 +1722,19 @@ is a follow-up.
 ### Trace events
 
 `LoopTraceEvent::WorktreeCreated { path }` and
-`LoopTraceEvent::WorktreeCleanedUp { path, leaked: bool }` flow into
-the parent's `trace_sink`. Use `leaked` to distinguish explicit cleanup
-from Drop safety-net cleanup in monitoring dashboards.
+`LoopTraceEvent::WorktreeCleanedUp { path, leaked: bool }` go to the
+child's harness `trace_sink`. That is the child chain built in
+`src/gateway/execution_engine/run_trace_sinks.rs`, which ends at
+`NoopTraceSink`, so these events are **neither persisted nor published**:
+no `task_traces` row and no `agent_trace` frame carries them, and a
+dashboard built on `worktree_cleaned_up` rows will always read zero. The
+leak signal is the `tracing::error!("WorktreeHandle leaked — Drop
+safety-net removing")` in `src/sandbox/worktree.rs`.
+
+This paragraph covers the **subagent** worktree path only. A team member's
+worktree (`src/teams/dispatcher/runner.rs::provision_worktree`) is created
+with no trace sink at all (`worktree::create(.., None)`), so it emits neither
+event to begin with; its leak signal is the same `tracing::error!`.
 
 ### Performance contract
 
@@ -1769,6 +1799,11 @@ recursion guard (Stage B) and per-agent denylist still apply on top.
 - `LoopTraceEvent::McpScopeCleaned { agent_id, leaked }`
 
 Both bridge to `aleph_protocol::AgentTraceEvent` with the same field shape.
+A subagent's scope emits them into the child's harness `trace_sink`, which
+ends at `NoopTraceSink` (`src/gateway/execution_engine/run_trace_sinks.rs`),
+so they are **neither persisted nor published**. The leak signal is the
+`tracing::error!("McpScope leaked — …")` in
+`src/extension/registrar/mcp_registrar.rs`.
 
 ### Failure modes
 
@@ -1799,19 +1834,26 @@ The `MeteringProvider` decorator (`src/providers/metering.rs`) wraps every
 LLM-facing `Arc<dyn AiProvider>` and emits a `LoopTraceEvent::ProviderUsage`
 event after each `process()` call. The event carries:
 
-- `agent_id` — `"root"` for the top-level harness, or the subagent's
-  `agent_def.id` when emitted from within a spawned subagent
+- `agent_id` — the label the decorator was built with: the run's own agent
+  (`spec.agent`) for the top-level harness, the subagent's `agent_def.id` in a
+  spawned subagent, `compactor:<agent>` for the cheap compaction provider, and
+  `moa:<i>:<provider>:<model>` for a MoA advisor
 - `input_tokens` / `output_tokens` — total tokens charged
 - `cache_read_tokens` / `cache_creation_tokens` — Anthropic prompt-cache
   fields (other providers leave these `None` until they extend their
   protocols)
 - `thinking_tokens` — Gemini extended-thinking tokens (where applicable)
 
-The decorator is wrapped at exactly two sites:
+The decorator is wrapped in these modules (census:
+`rg "MeteringProvider::new\("` outside test modules):
 
-- `src/bin/aleph-server/commands/start/orchestrator_init.rs` — root
-  provider, label `"root"`
-- `src/agents/subagent_spawner.rs` — per-spawn, label `req.agent_def.id`
+- `src/orchestrator/harness_bridge/runner_impl.rs` — the run's turn provider,
+  its side-channel provider when MoA is armed, and the cheap compaction
+  provider when one is configured, all on the run's trace sink
+- `src/agents/subagent_spawner/mod.rs` — per spawn (label
+  `req.agent_def.id`) and the child's cheap compaction provider, both on the
+  parent run's accounting sink
+- `src/providers/moa/provider.rs` — one per MoA advisor
 
 This gives every consumer of the trace stream (gateway, log sink, future
 cost dashboard) the data needed to compute root vs subagent cache-hit

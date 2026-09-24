@@ -50,6 +50,7 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             stream: _,
             text,
         } => mask_in_place(masker, text),
+        LoopTraceEvent::ReasoningEmitted { iteration: _, text } => mask_in_place(masker, text),
         LoopTraceEvent::ToolCallStarted {
             iteration: _,
             call:
@@ -78,8 +79,9 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             // Tool results are the highest-bandwidth secret channel in an
             // unattended run: a tool that read a credential echoes it in
             // `result` (which the scratchpad progress push sends to the bound
-            // channel and `AgentTraceEmitSink` puts on the WS), and the model
-            // can echo one into `call.input` (a scratchpad objective/plan).
+            // channel and `AgentTraceEmitSink` publishes to the run's flow
+            // channel), and the model can echo one into `call.input` (a
+            // scratchpad objective/plan).
             let mut changed = mask_json_strings(masker, input);
             changed |= mask_in_place(masker, tool_id);
             changed |= mask_in_place(masker, tool_name);
@@ -291,6 +293,31 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_emitted_is_masked_before_persistence_on_unattended_runs() {
+        let cap = Arc::new(CaptureSink::default());
+        let sink = UnattendedRedactingSink::new(cap.clone());
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nAAAA\n-----END RSA PRIVATE KEY-----";
+        sink.on_trace(&LoopTraceEvent::ReasoningEmitted {
+            iteration: 1,
+            text: format!("the key is {pem} and sk-ant-api03-AAAABBBBCCCCDDDD"),
+        });
+        let events = cap.events.lock().unwrap_or_else(|e| e.into_inner());
+        let text = match &events[0] {
+            LoopTraceEvent::ReasoningEmitted { text, .. } => text.clone(),
+            other => panic!("expected ReasoningEmitted, got {other:?}"),
+        };
+        assert!(
+            !text.contains("MIIEow"),
+            "PEM body must be masked as one string: {text}"
+        );
+        assert!(!text.contains("sk-ant-api03-AAAABBBBCCCCDDDD"), "{text}");
+        assert!(
+            text.contains("the key is"),
+            "non-secret prose survives: {text}"
+        );
+    }
+
+    #[test]
     fn passes_clean_text_through_unchanged() {
         let cap = Arc::new(CaptureSink::default());
         let sink = UnattendedRedactingSink::new(cap.clone());
@@ -417,6 +444,10 @@ mod tests {
                 iteration: 1,
                 stream: LoopTraceTextKind::Final,
                 text: format!("the key is {KEY}"),
+            },
+            LoopTraceEvent::ReasoningEmitted {
+                iteration: 1,
+                text: format!("thinking about {KEY}"),
             },
             LoopTraceEvent::ToolCallStarted {
                 iteration: 1,

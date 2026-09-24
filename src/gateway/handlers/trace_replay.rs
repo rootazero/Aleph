@@ -1559,4 +1559,173 @@ mod tests {
             "and the credential itself must be gone: {served}"
         );
     }
+
+    /// A persisted `ReasoningEmitted` row replays as its own `kind` beside
+    /// the text row of the same iteration. Nothing in this handler changed
+    /// for it — the assertion is that the row survives the trace store and
+    /// the handler's per-event serialization untouched.
+    #[tokio::test]
+    async fn by_runs_replays_a_persisted_reasoning_row() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&AgentTask::new(
+            "run-reason",
+            "s",
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+        let reasoning = AgentTraceEvent::ReasoningEmitted {
+            iteration: 1,
+            text: "Checking the timezone handling first.".into(),
+        };
+        let final_text = AgentTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: AgentTraceTextKind::Final,
+            text: "Fixed.".into(),
+        };
+        // Production order: the harness emits `TextEmitted{Final}` first and
+        // `ReasoningEmitted` second for the same iteration.
+        db.insert_trace(&TaskTrace::new("run-reason", 0, final_text.clone()))
+            .await
+            .unwrap();
+        db.insert_trace(&TaskTrace::new("run-reason", 1, reasoning.clone()))
+            .await
+            .unwrap();
+
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-reasoning");
+        seed_session(&sessions, &key, "u-alice", &["run-reason"]).await;
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_by_runs(
+                    req(json!({
+                        "session_key": key.to_key_string(),
+                        "run_ids": ["run-reason"],
+                    })),
+                    db,
+                    sessions,
+                ),
+            )
+            .await;
+
+        let result = resp.result.expect("success");
+        let events = result
+            .get("runs")
+            .and_then(|r| r.get("run-reason"))
+            .and_then(Value::as_array)
+            .expect("run present")
+            .clone();
+        assert_eq!(events.len(), 2, "{events:?}");
+        // The kind tags come from the shared crate, not a local literal: the
+        // client decodes with that crate, so that is the spelling that counts.
+        assert_eq!(events[0]["kind"], final_text.kind());
+        assert_eq!(events[1]["kind"], reasoning.kind());
+        assert_eq!(events[1]["iteration"], 1);
+        assert_eq!(events[1]["text"], "Checking the timezone handling first.");
+    }
+
+    /// End to end on an unattended run: a PEM-bearing thinking block goes
+    /// through the run's REAL trace chain (`RunTraceSinks::build(.., true)`:
+    /// `UnattendedRedactingSink` outermost, then the emit sink, then the
+    /// persistence leaf `run_loop/inner.rs` builds) and `trace.by_runs` serves
+    /// it back. Replay has no masker of its own for trace rows, so what the
+    /// row holds is what the client reads: the marker must be there and the
+    /// key body gone. Red if `mask_trace_event` stops masking the variant's
+    /// text, or if the variant stops reaching persistence.
+    #[tokio::test]
+    async fn a_reasoning_row_replays_masked_on_the_by_runs_leg() {
+        use crate::harness::trace::LoopTraceEvent;
+
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.insert_agent_task(&AgentTask::new(
+            "run-reason-secret",
+            "s",
+            "coder",
+            "x",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+        let probe = crate::gateway::execution_engine::PersistenceProbe::new(
+            db.clone(),
+            "run-reason-secret",
+        );
+        let (tx, _rx) = crate::orchestrator::flow_event_channel();
+        let sinks =
+            crate::gateway::execution_engine::RunTraceSinks::build(probe.sink(), None, &tx, true);
+        let pem =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
+        sinks
+            .run_sink()
+            .on_trace(&LoopTraceEvent::ReasoningEmitted {
+                iteration: 1,
+                text: format!("the key is {pem}, rotating it"),
+            });
+
+        let mut persisted = Vec::new();
+        for _ in 0..100 {
+            probe.drain().await;
+            persisted = db.get_traces_by_task("run-reason-secret").await.unwrap();
+            if !persisted.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            persisted.len(),
+            1,
+            "the reasoning row must persist: {persisted:?}"
+        );
+
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-reasoning-secret");
+        seed_session(&sessions, &key, "u-alice", &["run-reason-secret"]).await;
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_by_runs(
+                    req(json!({
+                        "session_key": key.to_key_string(),
+                        "run_ids": ["run-reason-secret"],
+                    })),
+                    db,
+                    sessions,
+                ),
+            )
+            .await;
+
+        let result = resp.result.expect("success");
+        let events = result
+            .get("runs")
+            .and_then(|r| r.get("run-reason-secret"))
+            .and_then(Value::as_array)
+            .expect("run present")
+            .clone();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let decoded: AgentTraceEvent =
+            serde_json::from_value(events[0].clone()).expect("the client's decoder accepts it");
+        let AgentTraceEvent::ReasoningEmitted { iteration, text } = &decoded else {
+            panic!("expected the reasoning row back, got {decoded:?}");
+        };
+        assert_eq!(*iteration, 1);
+        assert!(
+            text.contains("REDACTED"),
+            "the replayed thinking must carry the mask marker: {text}"
+        );
+        assert!(
+            !text.contains("MIIEowIBAAKCAQEA"),
+            "and the key body must be gone: {text}"
+        );
+        assert!(
+            text.contains("the key is"),
+            "non-secret prose survives: {text}"
+        );
+    }
 }

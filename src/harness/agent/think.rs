@@ -290,6 +290,17 @@ impl AgentHarness {
         self.accumulate_token_breakdown(&response.usage);
     }
 
+    /// Record a response's thinking block for `iteration`, after its text if
+    /// any (both `TextEmitted{Final}` producers call this). Blank records nothing.
+    fn emit_reasoning(&self, iteration: usize, thinking: Option<&str>) {
+        if let Some(text) = thinking.filter(|t| !t.trim().is_empty()) {
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ReasoningEmitted {
+                iteration,
+                text: text.to_string(),
+            });
+        }
+    }
+
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
@@ -899,6 +910,7 @@ impl AgentHarness {
                 text: text.clone(),
             });
         }
+        self.emit_reasoning(iterations, response.thinking.as_deref());
         let blocks = super::tool_use_blocks(&response.tool_calls);
         let assistant_event = SessionEvent::AssistantMessage {
             turn_id,
@@ -1336,6 +1348,7 @@ impl AgentHarness {
             stream: crate::harness::trace::LoopTraceTextKind::Final,
             text,
         });
+        self.emit_reasoning(iterations, resp.thinking.as_deref());
     }
 
     /// Close out `tool_use` blocks the model emitted on a turn the verifier then

@@ -6,11 +6,28 @@ use super::view_model::{RowStatus, ToolRow, TurnSummaryEntry};
 
 pub const MIN_TOOLS_FOR_SUMMARY: usize = 2;
 
+/// Run-level summary: needs at least [`MIN_TOOLS_FOR_SUMMARY`] rows (one
+/// tool is not a "turn worth summarizing" at the trailer), then defers to
+/// [`summarize_rows`].
 #[must_use]
 pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     if rows.len() < MIN_TOOLS_FOR_SUMMARY {
         return None;
     }
+    summarize_rows(rows)
+}
+
+/// Count what `rows` did, with no minimum — a single step's tally.
+///
+/// Every field is derived over the SAME row set: terminal (Ok/Err) rows
+/// only. A `Pending` row is an outcome we refuse to vouch for (see
+/// `ToolRow::settle_resumed`); it is skipped entirely — understating is the
+/// fail-closed direction. Duration is the wire's `duration_ms` carried on
+/// `RowStatus`, not `ended_ms - started_ms`: a row restored from a replay
+/// has no clocks and must still add up to the same number a live row does
+/// (the two-legs guard G2 in `reducer/tests/g2.rs` compares them).
+#[must_use]
+pub fn summarize_rows(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     let mut e = TurnSummaryEntry {
         commands: 0,
         reads: 0,
@@ -25,19 +42,10 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     let mut write_paths = std::collections::HashSet::new();
     let mut any_terminal = false;
     for r in rows {
-        // Every field on the entry answers one question — what actually
-        // happened this turn — so every count is derived over the SAME row
-        // set: terminal (Ok/Err) rows only, matching `ToolGroup::headline`'s
-        // existing rule for duration. A `Pending` row is an outcome we
-        // explicitly refuse to vouch for (see `ToolRow::settle_resumed`),
-        // even when a resume/replay caller left a stale `ended_ms` on it;
-        // it must not be silently folded into "read"/"ran"/"edited"/
-        // "wrote" — all past-tense, completion-implying words — nor into
-        // `duration_ms`. Skip it entirely; understating is the fail-closed
-        // direction.
-        if !r.is_terminal() {
-            continue;
-        }
+        let duration_ms = match &r.status {
+            RowStatus::Ok { duration_ms } | RowStatus::Err { duration_ms, .. } => *duration_ms,
+            RowStatus::Pending | RowStatus::Running { .. } => continue,
+        };
         any_terminal = true;
         match r.summary.display_name.as_str() {
             "Bash" => e.commands += 1,
@@ -55,13 +63,10 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
         if let RowStatus::Err { .. } = r.status {
             e.failed += 1;
         }
-        if let (Some(s), Some(t)) = (r.started_ms, r.ended_ms) {
-            e.duration_ms += t.saturating_sub(s);
-        }
+        e.duration_ms += duration_ms;
     }
     // Every row unresolved is "we don't know yet", not "nothing happened":
     // a zeroed entry ("Ran 0 commands · 0s") would assert the latter.
-    // Additional to (not a replacement for) the MIN_TOOLS_FOR_SUMMARY gate.
     if !any_terminal {
         return None;
     }
@@ -160,15 +165,15 @@ mod tests {
         assert!(summarize_turn(&[row("file_read", json!({"path": "a"}), true)]).is_none());
     }
     #[test]
-    fn a_pending_row_with_a_stale_ended_ms_contributes_zero_duration() {
+    fn a_pending_rows_stale_ended_ms_is_never_read() {
         // `settle_resumed` deliberately leaves `ended_ms` set on a row it
         // settles to `Pending` (an outcome it refuses to vouch for) — see
         // view_model.rs's own `a_running_row_with_ended_ms_set_still_settles_to_pending_not_a_fabricated_ok`.
-        // Billing wall-clock time for that row would report a duration for
-        // something we just said we cannot claim. Must match
-        // `ToolGroup::headline`'s existing rule: only terminal (Ok/Err) rows
-        // contribute duration — one derivation for "how long did this take",
-        // shared by both call sites.
+        // `summarize_rows` no longer reads `started_ms`/`ended_ms` at all —
+        // it dispatches on `RowStatus`, and `Pending` rows are skipped
+        // outright — so a stale `ended_ms` left on a `Pending` row can never
+        // leak into `duration_ms`, even if a future change reintroduced a
+        // clock read for some other status.
         let mut pending = ToolRow::new("id", "file_read", &json!({"path": "a.rs"}));
         pending.started_ms = Some(0);
         pending.ended_ms = Some(9_000);

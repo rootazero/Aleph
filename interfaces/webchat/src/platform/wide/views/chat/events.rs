@@ -1887,8 +1887,8 @@ mod projection_tests {
 
     // ---- end-of-run tool reconciliation ---------------------------------
     //
-    // The `agent_trace` mirror is best-effort by construction
-    // (`AgentTraceEmitSink` = bounded mpsc + `try_send`, drops on overflow), so
+    // Live `agent_trace` frames are best-effort (a lagging receiver of the
+    // run's bounded broadcast flow channel drops them — `Lagged`), so
     // these cover what the panel must repair from the authoritative
     // `run_complete` summary.
 

@@ -13,8 +13,9 @@
 //!   / `RunComplete{summary}`, and `OriginFanoutEmitter` handing the final
 //!   reply to the bound channel.
 //!
-//! `run_loop/inner.rs` wrapped the first and passed the second through
-//! unwrapped. The contradiction was observable inside a single run: the same
+//! `run_loop/inner.rs` wrapped the first (today that wrap is composed in
+//! `execution_engine/run_trace_sinks.rs::RunTraceSinks::build`) and passed the
+//! second through unwrapped. The contradiction was observable inside a single run: the same
 //! final text was masked on the trace leg (`SessionCompleted.final_text`) and
 //! delivered **in the clear** to Telegram/Slack by `OriginFanoutEmitter`, whose
 //! only filter is `sanitize_final_response` — a `<think>`/completion-marker
@@ -260,9 +261,9 @@ impl EventEmitter for RedactingEmitter {
             },
             // `AgentTrace` is already masked upstream: on an unattended run
             // `UnattendedRedactingSink` wraps OUTSIDE `AgentTraceEmitSink`
-            // (`run_loop/inner.rs`), so every event reaching this emitter has
-            // already been through it. Masking again would only cost a second
-            // regex pass over the same bytes.
+            // (`run_trace_sinks.rs::RunTraceSinks::build`), so every event
+            // reaching this emitter has already been through it. Masking again
+            // would only cost a second regex pass over the same bytes.
             //
             // ⚠️ This is a guarantee outsourced to another module, and it was
             // FALSE until 2026-08-29: that sink covered three variants and

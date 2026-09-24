@@ -468,6 +468,20 @@ pub enum AgentTraceEvent {
         stream: AgentTraceTextKind,
         text: String,
     },
+    /// The model's thinking for a Think iteration, authoritative and whole
+    /// (the provider's summarized reasoning where the provider summarizes;
+    /// raw chain-of-thought otherwise — the wire cannot tell). Only a
+    /// non-blank block is recorded. Normally one record per iteration: emitted
+    /// after `TextEmitted{Final}` when the turn has text, and alone on a
+    /// tool-only turn. The verifier-halt salvage turn may add a second record
+    /// on the SAME iteration, so consumers append, never replace. Live
+    /// thinking still streams as `StreamEvent::Reasoning` deltas; this is the
+    /// record a replay reconstructs a folded step from. Absent on runs
+    /// recorded before 2026-09-23.
+    ReasoningEmitted {
+        iteration: usize,
+        text: String,
+    },
     ToolCallStarted {
         iteration: usize,
         call: AgentTraceToolCallStart,
@@ -625,6 +639,7 @@ impl AgentTraceEvent {
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnStateEntered { .. } => "turn_state_entered",
             Self::TextEmitted { .. } => "text_emitted",
+            Self::ReasoningEmitted { .. } => "reasoning_emitted",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
             Self::ToolSummary { .. } => "tool_summary",
@@ -700,15 +715,6 @@ impl StreamEvent {
             seq,
             uncertainty: uncertainty.into(),
             suggested_action,
-        }
-    }
-
-    /// Create a new structured agent trace event
-    pub fn agent_trace(run_id: impl Into<String>, seq: u64, event: AgentTraceEvent) -> Self {
-        Self::AgentTrace {
-            run_id: run_id.into(),
-            seq,
-            event,
         }
     }
 
@@ -856,8 +862,9 @@ pub struct RunSummary {
     /// was active.
     ///
     /// Authoritative, for the same reason `tool_summaries` is: the live plan
-    /// frames ride `tool_call_completed` on the deliberately-lossy
-    /// `agent_trace` mirror (bounded mpsc + `try_send`), so a dropped frame
+    /// frames ride `tool_call_completed` `agent_trace` frames, which are
+    /// best-effort (a lagging receiver on the server's run channel or on a
+    /// connection's event stream drops them), so a dropped frame
     /// would otherwise leave a renderer stuck on a stale checklist forever
     /// with no repair path. Consumers reconcile against this at `run_complete`
     /// exactly as they do for tool rows.
@@ -1137,6 +1144,21 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_emitted_round_trips_with_its_kind_tag() {
+        let event = AgentTraceEvent::ReasoningEmitted {
+            iteration: 4,
+            text: "Considering the timezone bug first.".into(),
+        };
+        assert_eq!(event.kind(), "reasoning_emitted");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"kind\":\"reasoning_emitted\""), "{json}");
+        assert!(json.contains("\"iteration\":4"), "{json}");
+        assert!(json.contains("\"text\":"), "{json}");
+        let back: AgentTraceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
     fn test_reasoning_block_serialization() {
         let event = StreamEvent::reasoning_block(
             "run-123",
@@ -1155,10 +1177,10 @@ mod tests {
 
     #[test]
     fn test_agent_trace_serialization() {
-        let event = StreamEvent::agent_trace(
-            "run-123",
-            2,
-            AgentTraceEvent::ToolCallCompleted {
+        let event = StreamEvent::AgentTrace {
+            run_id: "run-123".to_string(),
+            seq: 2,
+            event: AgentTraceEvent::ToolCallCompleted {
                 iteration: 3,
                 call: AgentTraceToolCallEnd {
                     tool_id: "tool-1".to_string(),
@@ -1171,12 +1193,19 @@ mod tests {
                     output: serde_json::json!({"ok": true}),
                 },
             },
-        );
+        };
 
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("agent_trace"));
-        assert!(json.contains("tool_call_completed"));
-        assert!(json.contains("read_file"));
+        // The frame's envelope keys and the inner `kind` tag are the wire contract.
+        let value = serde_json::to_value(&event).unwrap();
+        let envelope = value.as_object().unwrap();
+        let mut keys: Vec<&str> = envelope.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["event", "run_id", "seq", "type"]);
+        assert_eq!(value["type"], "agent_trace");
+        assert_eq!(value["run_id"], "run-123");
+        assert_eq!(value["seq"], 2);
+        assert_eq!(value["event"]["kind"], "tool_call_completed");
+        assert_eq!(value["event"]["call"]["tool_name"], "read_file");
     }
 
     #[test]

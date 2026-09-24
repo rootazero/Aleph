@@ -30,6 +30,9 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 stream: stream.into(),
                 text,
             },
+            LoopTraceEvent::ReasoningEmitted { iteration, text } => {
+                Self::ReasoningEmitted { iteration, text }
+            }
             LoopTraceEvent::ToolCallStarted { iteration, call } => Self::ToolCallStarted {
                 iteration,
                 call: aleph_protocol::AgentTraceToolCallStart {
@@ -268,6 +271,22 @@ mod tests {
     use super::*;
     use crate::harness::trace::{ToolCallEndEvent, ToolCallStartEvent};
     use crate::orchestrator::dispatch::TerminateReason;
+
+    #[test]
+    fn reasoning_emitted_converts_field_for_field() {
+        let wire: aleph_protocol::AgentTraceEvent = LoopTraceEvent::ReasoningEmitted {
+            iteration: 7,
+            text: "why".into(),
+        }
+        .into();
+        assert_eq!(
+            wire,
+            aleph_protocol::AgentTraceEvent::ReasoningEmitted {
+                iteration: 7,
+                text: "why".into()
+            }
+        );
+    }
 
     #[test]
     fn session_completed_encodes_alephcore_types_as_opaque_json() {

@@ -441,6 +441,11 @@ test-desktop-integration:
 # Run all desktop-related tests
 test-desktop-all: test-desktop test-desktop-macos test-desktop-integration
 
+# Run the shared crates' own tests (what and why: the header of
+# scripts/test-shared.sh, which CI calls too)
+test-shared:
+    bash scripts/test-shared.sh
+
 # Run proptest with high coverage (1024 cases per test)
 test-proptest:
     PROPTEST_CASES=1024 cargo test -p alephcore --lib
@@ -452,8 +457,8 @@ test-loom:
 # Run full logic review suite (proptest + loom)
 test-logic: test-proptest test-loom
 
-# Run all tests (core + desktop + proptest)
-test-all: test test-desktop-all test-proptest check-phase5 check-wiring
+# Run all tests (core + desktop + proptest + shared crates)
+test-all: test test-desktop-all test-proptest test-shared check-phase5 check-wiring
 
 # Re-verify the tests marked `#[ignore]` because they pass in isolation but
 # flake under the full `cargo test --lib` parallel fan-out on a contended

@@ -21,7 +21,7 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 use super::super::engine::ExecutionEngine;
 
 // Submodule helpers used by the loop body.
-use super::super::callback::{CallbackStateFlushHandle, StreamCallbackState, TracePersistence};
+use super::super::callback::{StreamCallbackState, TracePersistence};
 use super::super::history::build_loop_history;
 use super::super::tool_refresh::active_plugin_tools_for_agent;
 
@@ -976,57 +976,68 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     self.tool_health.clone(),
                 );
 
-            // Trace sink — built before SubagentTool so it can be inherited by
-            // runtime-spawned subagents (B3): their run events flow into the
-            // same gateway sink as the main runner, and the background path's
-            // ForwardingTraceSink populates check_status progress.
-            let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::super::GatewayTraceSink::new(Arc::new(
-                    CallbackStateFlushHandle::new(callback_state.clone()),
-                )));
-
             // R5 progress side-channel: when enabled and this run is bound to a
-            // user channel, wrap the gateway sink so scratchpad progress +
-            // watchdog-boundary events mirror to that channel (Telegram /
-            // Panel / …). Pure I/O bypass; falls back to the inner sink when
-            // the channel registry isn't up yet or no channel is bound.
-            let trace_sink: Arc<dyn crate::harness::TraceSink> =
+            // user channel, scratchpad progress + watchdog-boundary events
+            // mirror to that channel (Telegram / Panel / …). Pure I/O bypass;
+            // absent when the channel registry isn't up yet or no channel is
+            // bound.
+            let scratchpad_target =
                 if self.config.scratchpad_progress_push && !turn_context.channel_id.is_empty() {
-                    match self.channel_registry.get() {
-                        Some(registry) => Arc::new(super::super::ScratchpadProgressSink::new(
-                            trace_sink,
-                            registry.clone(),
-                            turn_context.channel_id.clone(),
-                            turn_context.conversation_id.clone(),
-                        )),
-                        None => trace_sink,
-                    }
+                    self.channel_registry.get().map(|registry| {
+                        super::super::run_trace_sinks::ScratchpadTarget {
+                            registry: registry.clone(),
+                            channel_id: turn_context.channel_id.clone(),
+                            chat_id: turn_context.conversation_id.clone(),
+                        }
+                    })
                 } else {
-                    trace_sink
+                    None
                 };
 
-            // Forward the harness trace stream to this run's WebSocket as
-            // `agent_trace` notifications so the WebChat Panel can segment the
-            // chat per Think→Act step and populate the workspace timeline.
-            // Forwards to the inner (persistence + scratchpad) sink unchanged;
-            // on unattended runs the redacting sink below wraps OUTSIDE this
-            // one, so every event is masked before reaching any of them.
-            let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::super::AgentTraceEmitSink::new(
-                    trace_sink,
-                    Arc::clone(&emitter),
-                    run_id.to_string(),
-                ));
-
-            // Unattended security-tax (observability side): when no human is
-            // watching, redact model-authored text before it reaches
-            // persistence / the channel push / the WebSocket. Outermost wrap so
-            // it sees every event first; attended runs are never wrapped.
-            let trace_sink: Arc<dyn crate::harness::TraceSink> = if unattended {
-                Arc::new(super::super::UnattendedRedactingSink::new(trace_sink))
-            } else {
-                trace_sink
-            };
+            // Trace sinks — built before SubagentTool, which receives them.
+            // `RunTraceSinks::build` (`run_trace_sinks.rs`) is the ONE place
+            // that decides what this run and its spawned subagents write into:
+            //
+            // * this run: `[UnattendedRedactingSink if unattended] →
+            //   AgentTraceEmitSink → [ScratchpadProgressSink if armed] →
+            //   persistence`. The emit sink publishes `agent_trace` frames on
+            //   the run's OWN flow channel (created here, handed to `dispatch`
+            //   through `FlowRequest.event_tx`), so trace frames take their
+            //   `seq` from the same serial drain as the text and tool frames;
+            //   the redacting sink wraps OUTSIDE it, so every event is masked
+            //   before it is published or persisted.
+            // * a subagent's HARNESS LOOP (both spawn twins): `[redact if
+            //   unattended] → [scratchpad, sharing this run's queue, if armed]
+            //   → nothing`. A child's turns never reach this run's
+            //   `agent_trace` frames or its persisted trace — they are not this
+            //   run's steps. Background children's progress still reaches the
+            //   tracker through `ForwardingTraceSink`.
+            // * a subagent's `MeteringProvider`s (the accounting exception):
+            //   this run's own chain, so a child's `ProviderUsage` /
+            //   `CacheHealthDegraded` are persisted under this run's task for
+            //   `teams.usage` and the doctor, and published live only while
+            //   this run's strong senders live — a background child's later
+            //   usage is persisted only (`agent_trace_emit_sink.rs`, "Why it
+            //   holds a `WeakSender`").
+            //
+            // Sender-lifetime invariant: the only STRONG senders of this
+            // channel are the request's (`event_tx`, moved by value into the
+            // `FlowRequest` below, dropped when `dispatch` returns) and
+            // dispatch's own clone for the harness task; the sink holds a
+            // weak half only. Keeping a strong clone in this scope — which
+            // awaits the drain — would hang the drain on a harness that
+            // returns without `Complete` (`helpers.rs`, the `Ok(Err(_))` arm),
+            // waiting for a `Closed` this scope itself prevents. The initial
+            // receiver is dropped at once; `dispatch` subscribes its own.
+            let (event_tx, initial_rx) = crate::orchestrator::flow_event_channel();
+            drop(initial_rx);
+            let run_trace_sinks = super::super::RunTraceSinks::build(
+                super::super::run_trace_sinks::persistence_leaf(callback_state.clone()),
+                scratchpad_target,
+                &event_tx,
+                unattended,
+            );
+            let trace_sink = run_trace_sinks.run_sink();
 
             // SubagentTool construction
             let subagent_tool = {
@@ -1082,19 +1093,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         std::collections::HashMap::new(),
                     ),
                 };
-                let mut t = SubagentTool::new(
-                    sub_provider,
-                    run_chain,
-                    agent_registry,
-                    background_tracker,
-                    sub_session,
-                    parent_view_for_children,
-                )
-                .with_parent_agent_id(request.session_key.agent_id().to_string())
-                .with_parent_session_id(request.session_key.to_key_string())
-                .with_cancel_token(cancel_token.clone())
-                .with_trace_sink(trace_sink.clone())
-                .with_provider_overrides(agent_overrides);
+                let mut t = run_trace_sinks
+                    .hand_to_subagents(SubagentTool::new(
+                        sub_provider,
+                        run_chain,
+                        agent_registry,
+                        background_tracker,
+                        sub_session,
+                        parent_view_for_children,
+                    ))
+                    .with_parent_agent_id(request.session_key.agent_id().to_string())
+                    .with_parent_session_id(request.session_key.to_key_string())
+                    .with_cancel_token(cancel_token.clone())
+                    .with_provider_overrides(agent_overrides);
                 // Stage 5a (#9) — inherit the main harness's guardrail
                 // registry so spawned subagents enforce the same
                 // Input/Output/ToolCall checks. `None` (mocks / simple
@@ -1379,6 +1390,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 depth: 0,
                 tool_service: Some(tool_service),
                 trace_sink: Some(trace_sink),
+                // Moved, never cloned: see the sender-lifetime invariant at
+                // the channel's creation above.
+                event_tx: Some(event_tx),
                 interaction_manifest,
                 // G2 — forward the per-run sandbox override so the team
                 // dispatcher's WorktreeSandbox replaces the orchestrator's

@@ -59,6 +59,39 @@ pub fn group_entries(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
     out
 }
 
+use super::step::StepTool;
+use super::view_model::ToolRow;
+
+fn flush_run(run: &mut Vec<ToolRow>, out: &mut Vec<StepTool>) {
+    if run.len() >= MIN_GROUP {
+        out.push(StepTool::Group(ToolGroup {
+            rows: std::mem::take(run),
+            expanded: false,
+        }));
+    } else {
+        out.extend(run.drain(..).map(StepTool::Row));
+    }
+}
+
+/// The step-internal twin of [`group_entries`]: consecutive read-only rows
+/// (≥ [`MIN_GROUP`]) become one group; anything else breaks the run. There
+/// are no interleaved texts inside a step, so no gap rule applies.
+#[must_use]
+pub fn group_tool_rows(rows: &[ToolRow]) -> Vec<StepTool> {
+    let mut out = Vec::new();
+    let mut run: Vec<ToolRow> = Vec::new();
+    for r in rows {
+        if r.is_read_only() {
+            run.push(r.clone());
+        } else {
+            flush_run(&mut run, &mut out);
+            out.push(StepTool::Row(r.clone()));
+        }
+    }
+    flush_run(&mut run, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::view_model::{RowStatus, ToolRow};
@@ -120,5 +153,38 @@ mod tests {
             panic!("group")
         };
         assert_eq!(g.headline(), "Explored 2 calls · 0.2s");
+    }
+
+    #[test]
+    fn group_tool_rows_folds_consecutive_reads_and_breaks_on_an_edit() {
+        let read = |id: &str| {
+            let mut r = ToolRow::new(id, "file_read", &serde_json::json!({"path": "a.rs"}));
+            r.start(0);
+            r
+        };
+        let edit = {
+            let mut r = ToolRow::new("e", "file_edit", &serde_json::json!({"file_path": "a.rs"}));
+            r.start(0);
+            r
+        };
+        let out = group_tool_rows(&[read("r1"), read("r2"), edit, read("r3")]);
+        let StepTool::Group(g) = &out[0] else {
+            panic!("expected a group")
+        };
+        assert_eq!(g.rows.len(), 2);
+        assert_eq!(
+            g.rows[0].id, "r1",
+            "row order inside the group is preserved"
+        );
+        assert_eq!(
+            g.rows[1].id, "r2",
+            "row order inside the group is preserved"
+        );
+        assert!(matches!(&out[1], StepTool::Row(r) if r.id == "e"));
+        assert!(
+            matches!(&out[2], StepTool::Row(r) if r.id == "r3"),
+            "a run of one dissolves"
+        );
+        assert_eq!(out.len(), 3);
     }
 }

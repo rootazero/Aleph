@@ -6,6 +6,8 @@
 **Status:** 六节设计逐节获用户认可（2026-09-06），待 spec 文件审阅
 **Reference material:** pi 母体 `T:\Github\pi`（packages/tui · packages/coding-agent）、`pi-cc-extensions`、`pi-claude-code-tui`。`pi-tasks` / `pi-subagents` 本机不存在（真实包 `npm:@tintinweb/pi-{tasks,subagents}`），其**展示契约**由 pi-cc-extensions 自带的 Agent/Task 渲染器与 pi 示例 `subagent` / `todo` 扩展恢复。
 
+> ⚠️ **2026-09-23 更新**：本 spec 的 §5 `view_model` 条目集、§6 Phase B「转录模型」、§7 Phase C 的 `expanded_events` 键 /「刻意不做：reasoning 改逐消息」/「每轮摘要行」已被 [`2026-09-23-stepwise-transcript-folding-design.md`](2026-09-23-stepwise-transcript-folding-design.md) §10 **取代**（按迭代折叠的 `Step` 容器）。其余内容照旧有效。
+
 > English summary: Port the *ideas* of Claude-Code-style transcript rendering (one-line tool rows
 > with a folded `⎿` output slot, rich diffs, markdown enhancements incl. mermaid, click/keyboard
 > expand, back-to-bottom, a measured context breakdown, CC-style chrome) into Aleph. The design

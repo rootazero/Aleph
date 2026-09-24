@@ -174,6 +174,7 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         consecutive_failure_cap: None,
         turn_timeout: None,
         trace_sink: None,
+        accounting_sink: None,
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,
@@ -217,6 +218,7 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         consecutive_failure_cap: None,
         turn_timeout: Some(Duration::from_secs(2)),
         trace_sink: None,
+        accounting_sink: None,
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,

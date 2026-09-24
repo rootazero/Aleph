@@ -36,8 +36,8 @@ pub(crate) struct DrainState {
     scratchpad_calls: std::collections::HashMap<String, bool>,
     /// Terminal execution list for this run, latched from the last
     /// `scratchpad` result. Stamped onto `RunSummary.plan` so renderers can
-    /// reconcile a checklist whose live frames the lossy `agent_trace` WS
-    /// mirror dropped — the same authoritative-terminal-state contract
+    /// reconcile a checklist whose live `agent_trace` frames a lagging WS
+    /// forwarder dropped — the same authoritative-terminal-state contract
     /// `tool_summaries` already provides for tool rows. `Some(empty)` after a
     /// `clear`, so the panel hides rather than freezing on the last checklist.
     plan: Option<aleph_protocol::plan::PlanSnapshot>,
@@ -141,9 +141,11 @@ pub(crate) async fn emit_flow_event(
             presentation,
         } => {
             {
-                // Latch the terminal execution list. This drain is in-process
-                // and unbounded — unlike the WS `agent_trace` mirror it feeds —
-                // so what we capture here is authoritative.
+                // Latch the terminal execution list. The drain sees each frame
+                // before any per-connection WS forwarder can lag and drop it, so
+                // this latch is at least as complete as any client's live view;
+                // only a drain-side `Lagged` (logged in `helpers.rs`) costs it
+                // the frame.
                 let mut s = state.lock().await;
                 // A failed call changed nothing on disk, so it must not move
                 // the latch either — a rejected `clear` used to blank the strip.
@@ -227,6 +229,19 @@ pub(crate) async fn emit_flow_event(
                     error_code: Some("safety_block".to_string()),
                     // Post-admission: `RunAccepted` already seeded the index.
                     session_key: None,
+                })
+                .await?;
+        }
+
+        FlowStreamEvent::Trace(event) => {
+            // Same counter, same task as every other frame of this run: that
+            // is the whole reason the trace mirror moved onto this channel.
+            let seq = emitter.next_seq();
+            emitter
+                .emit(StreamEvent::AgentTrace {
+                    run_id: run_id.to_string(),
+                    seq,
+                    event,
                 })
                 .await?;
         }
@@ -641,6 +656,55 @@ mod tests {
                 assert_eq!(run_id, "run-1");
             }
             other => panic!("expected ResponseChunk, got {other:?}"),
+        }
+    }
+
+    /// A trace event on the flow channel becomes an `AgentTrace` frame with
+    /// the run's NEXT seq — the same counter the surrounding text/tool frames
+    /// draw from. Before this arm existed, trace frames took their seq on a
+    /// separate task and could land after the text they logically preceded.
+    #[tokio::test]
+    async fn trace_goes_to_emitter_agent_trace_with_the_next_seq() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::Delta("before".to_string()),
+            &emitter,
+            "run-1",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+        emit_flow_event(
+            FlowStreamEvent::Trace(aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 3 }),
+            &emitter,
+            "run-1",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+
+        let events = inner.events().await;
+        assert_eq!(events.len(), 2, "one chunk, one trace frame: {events:?}");
+        let chunk_seq = match &events[0] {
+            StreamEvent::ResponseChunk { seq, .. } => *seq,
+            other => panic!("expected ResponseChunk first, got {other:?}"),
+        };
+        match &events[1] {
+            StreamEvent::AgentTrace {
+                run_id,
+                seq,
+                event: aleph_protocol::AgentTraceEvent::TurnStarted { iteration },
+            } => {
+                assert_eq!(run_id, "run-1");
+                assert_eq!(*iteration, 3);
+                assert!(
+                    *seq > chunk_seq,
+                    "trace seq {seq} must follow the chunk's {chunk_seq}"
+                );
+            }
+            other => panic!("expected AgentTrace(TurnStarted), got {other:?}"),
         }
     }
 

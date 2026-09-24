@@ -47,3 +47,8 @@ wasm = [
     "dep:wasm-bindgen-futures",
     "dep:web-sys"
 ]
+
+[dev-dependencies]
+# Same 1.4 alephcore pins as a dev-dep (root Cargo.toml `[dev-dependencies]`).
+# Only `transcript::step`'s width/boundary property tests use it.
+proptest = "1.4"

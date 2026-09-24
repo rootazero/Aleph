@@ -150,10 +150,10 @@ fn test_deserialize_reasoning_block() {
 
 #[test]
 fn test_agent_trace_serialization() {
-    let event = StreamEvent::agent_trace(
-        "run-123",
-        7,
-        crate::harness::trace::LoopTraceEvent::TurnCompleted {
+    let event = StreamEvent::AgentTrace {
+        run_id: "run-123".into(),
+        seq: 7,
+        event: crate::harness::trace::LoopTraceEvent::TurnCompleted {
             iteration: 2,
             outcome: crate::harness::trace::LoopTraceTurnOutcome::Continue,
             metrics: crate::harness::trace::LoopTraceTurnMetrics {
@@ -162,8 +162,9 @@ fn test_agent_trace_serialization() {
                 productive: true,
                 total_tokens: 42,
             },
-        },
-    );
+        }
+        .into(),
+    };
 
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("agent_trace"));
