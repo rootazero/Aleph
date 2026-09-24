@@ -836,7 +836,7 @@ async fn a_refused_calls_arguments_and_reason_reach_the_hook_as_data() {
         HookEvent::PermissionDenied,
         HookKind::Observer,
         &format!(
-            r#"echo "$DENY_REASON" > '{}'; printf '%s' "$ARGUMENTS" > '{}'"#,
+            r#"printf '%s\n' "$DENY_REASON" > '{}'; printf '%s' "$ARGUMENTS" > '{}'"#,
             reason_out.display(),
             args_out.display()
         ),

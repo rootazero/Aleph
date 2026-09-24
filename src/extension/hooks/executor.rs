@@ -180,8 +180,8 @@ pub fn command_hook_invocation(
     let mut set = |key: &str, value: Option<OsString>| env.push((key.to_string(), value));
 
     // Set environment variables. These are the only route by which the data
-    // variables (`TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`, `FILE`, `SESSION_ID`,
-    // every `context.env` key) reach a command — none is substituted into
+    // variables (`TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`, `SESSION_ID`, every
+    // `context.env` key) reach a command — none is substituted into
     // its source (above). `ARGUMENTS` / `TOOL_INPUT` mirror the tool payload,
     // but a large payload (a Write tool's whole file body) can exceed the OS
     // `ARG_MAX` limit and make `spawn` fail with E2BIG — which, on an
@@ -215,7 +215,7 @@ pub fn command_hook_invocation(
         set(name, data.clone());
     }
     // A fixed data field this event does not carry is removed, not left to
-    // the daemon's environment: a daemon started with `FILE` or `ARGUMENTS`
+    // the daemon's environment: a daemon started with `TOOL_NAME` or `ARGUMENTS`
     // exported would otherwise hand that value to every hook as if it were
     // the event's (the `CLAUDE_PROJECT_DIR` rule above, for the data half).
     // The `context.env` keys below have no such list: each is set when the
@@ -235,7 +235,6 @@ pub fn command_hook_invocation(
             .as_deref()
             .map(|v| bounded_env_value("TOOL_INPUT", v).into()),
     );
-    set("FILE", context.file_path.clone().map(Into::into));
     set("SESSION_ID", Some(context.session_id.clone().into()));
     // The event's own variables, last: a key here (e.g. `TOOL_NAME` from
     // `fire_observer`) overrides a removal above.
@@ -2060,15 +2059,10 @@ mod tests {
     /// same rule for the run directory (unknown outside a run).
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial] // writes process env a spawned child reads
     async fn a_field_the_event_lacks_is_not_inherited_from_the_daemon() {
         use crate::extension::hooks::HookContext;
-        const INHERITED: [&str; 5] = [
-            "TOOL_NAME",
-            "ARGUMENTS",
-            "TOOL_INPUT",
-            "FILE",
-            "CLAUDE_PROJECT_DIR",
-        ];
+        const INHERITED: [&str; 4] = ["TOOL_NAME", "ARGUMENTS", "TOOL_INPUT", "CLAUDE_PROJECT_DIR"];
         /// Sets the daemon-side values for the test and removes them after.
         struct DaemonEnv;
         impl Drop for DaemonEnv {
@@ -2096,14 +2090,14 @@ mod tests {
         ));
         hook.event = HookEvent::SessionStart;
         hook.kind = HookKind::Observer;
-        // Outside a run: no tool, no input, no file, no run directory.
+        // Outside a run: no tool, no input, no run directory.
         HookExecutor::new(vec![hook])
             .execute_observers(HookEvent::SessionStart, &HookContext::new("s"))
             .await;
 
         assert_eq!(
             std::fs::read_to_string(&out).unwrap(),
-            "unset|unset|unset|unset|unset|"
+            "unset|unset|unset|unset|"
         );
     }
 
@@ -2540,8 +2534,12 @@ mod tests {
             "This conversation is PLANNING, so `touch {}` does not run yet; Aleph's plan first.",
             marker.display()
         );
-        let mut hook =
-            interceptor_command_hook(&format!(r#"echo "$DENY_REASON" > '{}'"#, out.display()));
+        // `printf`, not `echo`: dash's and macOS `sh`'s `echo` interpret
+        // backslashes, so a reason holding one would read back altered.
+        let mut hook = interceptor_command_hook(&format!(
+            r#"printf '%s\n' "$DENY_REASON" > '{}'"#,
+            out.display()
+        ));
         hook.event = HookEvent::PermissionDenied;
         hook.kind = HookKind::Observer;
         let ctx = HookContext::new("s")
@@ -2655,6 +2653,7 @@ mod tests {
     /// daemon — which may itself run inside a Claude Code plugin.
     #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial] // writes process env a spawned child reads
     async fn a_path_variable_the_hook_lacks_is_not_inherited_from_the_daemon() {
         /// Sets the daemon-side values for the test and removes them after.
         struct DaemonEnv;

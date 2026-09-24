@@ -113,10 +113,15 @@ pub enum HookEvent {
     /// error or are decided elsewhere:
     ///
     /// - a person declining a confirmation card (Ask tier, destructive
-    ///   arguments), or that gate refusing because no approval channel
-    ///   exists — `Execution`;
+    ///   arguments), that gate refusing because no approval channel exists,
+    ///   or it refusing without asking anyone — an unattended run, or a call
+    ///   the denial ledger remembers being refused — `Execution`;
     /// - a BeforeToolCall hook's `ask:` that the person declined or that
     ///   could not be raised — `Execution`;
+    /// - a BeforeToolCall hook's `block:` (or exit 2) — a soft block the
+    ///   model can react to — including a BeforeToolCall hook that failed to
+    ///   run, which blocks fail-closed, and a failure of the hook executor
+    ///   itself — `Execution`;
     /// - a card that expired unanswered — `ApprovalExpired`: nobody refused;
     /// - a sub-agent calling a tool outside its allowlist
     ///   (`AllowlistToolService`): decided above the chokepoint, before this
@@ -430,7 +435,7 @@ pub enum HookAction {
     /// - **stdin** — the whole event as JSON (`jq -r '.tool_input'`,
     ///   `jq -r '.env.DENY_REASON'`); full fidelity, every platform.
     /// - **its environment** — `TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`,
-    ///   `FILE`, `SESSION_ID` and every key of the event's `env`
+    ///   `SESSION_ID` and every key of the event's `env`
     ///   (`DENY_REASON`, …). On unix write them double-quoted
     ///   (`"$ARGUMENTS"`): the shell expands the value as one word of data;
     ///   unquoted it is word-split and globbed, single-quoted it is not
@@ -438,7 +443,7 @@ pub enum HookAction {
     ///   executor's env cap (`MAX_ENV_VALUE_BYTES`) is replaced by the marker
     ///   `[N bytes — read from stdin JSON]`, which is then all the variable
     ///   holds. A fixed field the event does not carry — `TOOL_NAME` /
-    ///   `ARGUMENTS` / `TOOL_INPUT` / `FILE` with no tool or file,
+    ///   `ARGUMENTS` / `TOOL_INPUT` with no tool,
     ///   `CLAUDE_PROJECT_DIR` outside a run — is removed from the
     ///   environment, never inherited from the daemon's. An `env` key is set
     ///   only on the events that carry it: on any other event a variable of

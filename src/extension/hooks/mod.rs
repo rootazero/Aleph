@@ -97,8 +97,6 @@ pub struct HookContext {
     pub arguments: Option<String>,
     /// Tool input content
     pub tool_input: Option<String>,
-    /// File path (if applicable)
-    pub file_path: Option<PathBuf>,
     /// Working directory for commands
     pub working_dir: Option<PathBuf>,
     /// Additional environment variables
@@ -142,12 +140,6 @@ impl HookContext {
     /// Set the tool input
     pub fn with_tool_input(mut self, input: impl Into<String>) -> Self {
         self.tool_input = Some(input.into());
-        self
-    }
-
-    /// Set the file path
-    pub fn with_file_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.file_path = Some(path.into());
         self
     }
 
@@ -584,7 +576,6 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
 ///   and its spellings, the `_DATA` pair), replaced first;
 /// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
 /// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
-/// - `$FILE` / `${FILE}` - File path
 /// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
 /// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
 /// - `$KEY` / `${KEY}` for every key of [`HookContext::env`] (`$DENY_REASON`, …)
@@ -594,9 +585,9 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
 /// never gets it spliced in: it receives [`substitute_path_variables`] on
 /// Windows and no substitution at all on unix, and each data variable is
 /// exported as an environment variable of the same name, which `sh` expands
-/// as data (`"$ARGUMENTS"`) rather than parsing as source. Splicing it made a tool argument's `$(…)` run as
-/// code in an unsandboxed shell, and consent approves the template, not the
-/// resolved string. On Windows `cmd /C` expands `%VAR%` before it parses
+/// as data (`"$ARGUMENTS"`) rather than parsing as source. Splicing it made
+/// a tool argument's `$(…)` run as code in an unsandboxed shell, and consent
+/// approves the template, not the resolved string. On Windows `cmd /C` expands `%VAR%` before it parses
 /// the line, so a command hook there reads data from the stdin JSON. The
 /// full contract is on [`HookAction::Command`](crate::extension::HookAction::Command).
 #[must_use]
@@ -624,13 +615,6 @@ pub fn substitute_variables(
     if let Some(ref input) = context.tool_input {
         result = result.replace("$TOOL_INPUT", input);
         result = result.replace("${TOOL_INPUT}", input);
-    }
-
-    // File path
-    if let Some(ref file) = context.file_path {
-        let file_str = file.to_string_lossy();
-        result = result.replace("$FILE", &file_str);
-        result = result.replace("${FILE}", &file_str);
     }
 
     // Session ID
@@ -713,7 +697,6 @@ mod tests {
             tool_name: Some("Write".to_string()),
             arguments: Some(r#"{"path": "/test.txt"}"#.to_string()),
             tool_input: Some("file content".to_string()),
-            file_path: Some(PathBuf::from("/path/to/file.txt")),
             working_dir: None,
             env: HashMap::new(),
             tool_output: None,
@@ -724,7 +707,7 @@ mod tests {
         let plugin_root = PathBuf::from("/plugins/my-plugin");
 
         let result = substitute_variables(
-            "Run ${PLUGIN_ROOT}/script.sh with $ARGUMENTS on $FILE for $TOOL_NAME",
+            "Run ${PLUGIN_ROOT}/script.sh with $ARGUMENTS for $TOOL_NAME",
             &context,
             &plugin_root,
             "test-plugin",
@@ -732,7 +715,6 @@ mod tests {
 
         assert!(result.contains("/plugins/my-plugin/script.sh"));
         assert!(result.contains(r#"{"path": "/test.txt"}"#));
-        assert!(result.contains("/path/to/file.txt"));
         assert!(result.contains("Write"));
     }
 
@@ -777,14 +759,12 @@ mod tests {
         let context = HookContext::new("session-123")
             .with_tool_name("Bash")
             .with_arguments(r#"{"command": "ls"}"#)
-            .with_file_path("/some/path")
             .with_working_dir("/work")
             .with_env("MY_VAR", "my_value");
 
         assert_eq!(context.session_id, "session-123");
         assert_eq!(context.tool_name, Some("Bash".to_string()));
         assert_eq!(context.arguments, Some(r#"{"command": "ls"}"#.to_string()));
-        assert_eq!(context.file_path, Some(PathBuf::from("/some/path")));
         assert_eq!(context.working_dir, Some(PathBuf::from("/work")));
         assert_eq!(context.env.get("MY_VAR"), Some(&"my_value".to_string()));
     }

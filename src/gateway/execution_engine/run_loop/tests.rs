@@ -2264,7 +2264,15 @@ async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
         ),
     ]);
 
-    let mut request = minimal_request(std::collections::HashMap::new());
+    // A tier the turn must resolve from the request, not the default one: a
+    // producer that wrote `ExecTier::default()` (or a literal `"auto"`) in
+    // place of the resolved tier would still match a default-tier fixture.
+    let mut request = minimal_request(std::collections::HashMap::from([(
+        crate::config::types::policies::EXEC_TIER_SESSION_KEY.to_string(),
+        crate::config::types::policies::ExecTier::Ask
+            .id()
+            .to_string(),
+    )]));
     request.input = "hello".to_string();
     request.session_key =
         crate::routing::session_key::SessionKey::main("turn-start-permission-mode");
@@ -2273,6 +2281,11 @@ async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
         .await
         .tier
         .cc_permission_mode();
+    assert_ne!(
+        expected,
+        crate::config::types::policies::ExecTier::default().cc_permission_mode(),
+        "the fixture must resolve a non-default tier, or this test cannot tell the two apart"
+    );
 
     let result = engine
         .run_agent_loop_inner(
