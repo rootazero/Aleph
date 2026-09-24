@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::error::AlephError;
 use crate::memory::context::{FactSource, NoteType};
-use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope, UNDECIDED_PARTITION};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_note_path, sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
@@ -62,15 +62,22 @@ impl MemoryCommandHandler {
     /// `session_write_id`: a dream / sweep / reconciler-driven write can run
     /// with no session at all, and an event stamped with the caller's
     /// partition instead of the fact's files one user's history under another
-    /// user's name. `None` only when the fact's partition is genuinely unknown;
-    /// such a row is invisible to every scoped reader.
+    /// user's name.
+    ///
+    /// `None` = the writer could not decide the partition (sources in two
+    /// partitions, an unattributed or unknown target). The row is then filed
+    /// under [`UNDECIDED_PARTITION`], never NULL: NULL on disk means "written
+    /// before the column existed", which the per-caller read hands to the
+    /// legacy owner. No caller's read set names the sentinel, so only the
+    /// unscoped write-side / reconciler reads see such a row.
     async fn append(
         &self,
         envelope: MemoryEventEnvelope,
         partition: Option<String>,
     ) -> Result<i64, AlephError> {
+        let partition = partition.unwrap_or_else(|| UNDECIDED_PARTITION.to_string());
         self.db
-            .append_memory_event(&envelope.in_partition(partition))
+            .append_memory_event(&envelope.in_partition(Some(partition)))
             .await
     }
 
@@ -455,8 +462,9 @@ impl MemoryCommandHandler {
 
         // A merged fact inherits its sources' partition — when they agree.
         // Sources in two partitions have no single owner to inherit; filing the
-        // merge under either would hand the other's content to it, so it is
-        // filed under none (invisible to every scoped reader).
+        // merge under either would hand the other's content to it, so the
+        // partition is left undecided and `append` files it under
+        // `UNDECIDED_PARTITION`, which no caller's read set names.
         let mut source_partitions = std::collections::BTreeSet::new();
         for source in &cmd.source_note_paths {
             source_partitions.insert(self.db.memory_fact_partition(source).await?);
@@ -466,7 +474,7 @@ impl MemoryCommandHandler {
         } else {
             tracing::warn!(
                 sources = ?cmd.source_note_paths,
-                "consolidating facts that do not share one partition; the merged fact is filed under none"
+                "consolidating facts that do not share one partition; the merged fact is filed as undecided"
             );
             None
         };
@@ -1062,9 +1070,14 @@ mod tests {
     }
 
     /// A merge of facts from two partitions has no single owner to inherit —
-    /// filing it under either would hand the other's content to it.
+    /// filing it under either would hand the other's content to it. It is
+    /// filed under the undecided sentinel, NOT NULL: NULL is the legacy
+    /// owner's on the read side, so a NULL stamp would hand the merge of
+    /// Alice's and Bob's facts to the owner. Unreadable by the owner, Alice
+    /// and Bob alike; only the unscoped (write-side / reconciler) read sees it.
     #[tokio::test]
-    async fn a_consolidation_across_partitions_is_filed_under_none() {
+    async fn a_consolidation_across_partitions_is_filed_as_undecided() {
+        use crate::memory::events::UnpartitionedRows;
         let handler = make_handler();
         let mut sources = Vec::new();
         for agent in ["main__u-alice", "main__u-bob"] {
@@ -1085,6 +1098,14 @@ mod tests {
                     .unwrap(),
             );
         }
+        // The sources really are in two DECIDED partitions — so the merge's
+        // stamp below is the consolidate rule, not a dead funnel.
+        for (source, agent) in sources.iter().zip(["main__u-alice", "main__u-bob"]) {
+            assert_eq!(
+                handler.db.memory_fact_partition(source).await.unwrap(),
+                Some(agent.to_string())
+            );
+        }
         let merged = handler
             .consolidate_facts(ConsolidateCommand {
                 source_note_paths: sources,
@@ -1099,14 +1120,31 @@ mod tests {
             .get_memory_events_for_fact_unscoped(&merged)
             .await
             .unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].partition, None);
+        assert_eq!(events.len(), 1, "the unscoped read still sees the merge");
+        assert_eq!(events[0].partition.as_deref(), Some(UNDECIDED_PARTITION));
+
+        let owner = crate::gateway::security::store::OWNER_USER_ID;
+        for (who, rows) in [
+            (owner, UnpartitionedRows::Admit),
+            ("u-alice", UnpartitionedRows::Refuse),
+            ("u-bob", UnpartitionedRows::Refuse),
+        ] {
+            let partitions = vec!["main".to_string(), format!("main__{who}")];
+            let seen = handler
+                .db
+                .get_memory_events_for_fact(&merged, &partitions, rows)
+                .await
+                .unwrap();
+            assert!(seen.is_empty(), "{who} read the undecided merge: {seen:?}");
+        }
     }
 
-    /// Every production write to `memory_events` in the crate goes through
-    /// this handler, and inside it through ONE funnel — so the partition is a
-    /// positional argument nobody can forget at a site nobody counted
-    /// (判据 §6, §11: fix the executor, not each instance).
+    /// Every production APPEND to `memory_events` goes through
+    /// `append_memory_event`, and inside the handler through ONE funnel — so
+    /// the partition is a positional argument nobody can forget at a site
+    /// nobody counted (判据 §6, §11: fix the executor, not each instance).
+    /// This pins the Rust-call face only; the table face — raw SQL naming the
+    /// table — is `every_raw_sql_writer_of_memory_events_is_known`.
     #[test]
     fn the_handler_funnel_is_the_only_memory_event_writer() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1128,6 +1166,117 @@ mod tests {
             1,
             "the handler must append through `append` only — a direct call skips the partition"
         );
+    }
+
+    /// How many raw SQL writes to the `memory_events` table `code` spells:
+    /// `INSERT [OR …] INTO`, `REPLACE INTO`, `UPDATE [OR …]` and
+    /// `DELETE FROM`, case-insensitive, across line breaks. `code` must keep
+    /// literal payloads (`code_keeping_literals`) — SQL lives in strings.
+    fn raw_memory_events_writes(code: &str) -> usize {
+        const TABLE: &str = "memory_events";
+        let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        // `\n` / `\t` escapes inside a literal would otherwise glue an `n` /
+        // `t` onto the keyword before the table name.
+        let text = code
+            .to_ascii_lowercase()
+            .replace("\\n", " ")
+            .replace("\\t", " ")
+            .replace("\\r", " ");
+        let mut writes = 0;
+        let mut from = 0;
+        while let Some(at) = text.get(from..).and_then(|rest| rest.find(TABLE)) {
+            let start = from + at;
+            let end = start + TABLE.len();
+            from = end;
+            let head = text.get(..start).unwrap_or_default();
+            let whole_word = !head.chars().next_back().is_some_and(is_word)
+                && !text
+                    .get(end..)
+                    .unwrap_or_default()
+                    .chars()
+                    .next()
+                    .is_some_and(is_word);
+            if !whole_word {
+                continue;
+            }
+            let words: Vec<&str> = head
+                .rsplit(|c: char| !is_word(c))
+                .filter(|w| !w.is_empty())
+                .take(3)
+                .collect();
+            let is_write = matches!(
+                words.as_slice(),
+                ["into" | "update", ..] | ["from", "delete", ..] | [_, "or", "update", ..]
+            );
+            if is_write {
+                writes += 1;
+            }
+        }
+        writes
+    }
+
+    /// The table face of the writer census (判据 §3: the Rust identifier is
+    /// one spelling of a write; raw SQL is another). Production code of every
+    /// file under `src/` — tests and comments stripped, literals kept — is
+    /// scanned for SQL that writes the table, and the set must be exactly the
+    /// two known writers.
+    #[test]
+    fn every_raw_sql_writer_of_memory_events_is_known() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found: std::collections::BTreeMap<String, usize> =
+            crate::utils::source_scan::rust_sources_under(&root)
+                .into_iter()
+                .filter_map(|(rel, text)| {
+                    let code = crate::utils::source_scan::code_keeping_literals(
+                        &crate::utils::source_scan::production_text(
+                            std::path::Path::new(&rel),
+                            &text,
+                        ),
+                    );
+                    let n = raw_memory_events_writes(&code);
+                    (n > 0).then_some((rel, n))
+                })
+                .collect();
+        let expected: std::collections::BTreeMap<String, usize> = [
+            // `append_memory_event`: the INSERT behind the one funnel above.
+            ("src/resilience/database/memory_events.rs".to_string(), 1),
+            // `backfill_memory_events_partition`: the one sanctioned writer
+            // that is not the funnel. It never adds a row; it only fills the
+            // NULL partition of a legacy row from that fact's own creation
+            // event, and leaves any row it cannot attribute NULL.
+            ("src/resilience/database/migration.rs".to_string(), 1),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            found, expected,
+            "raw SQL writes memory_events outside the known writers; append through \
+             MemoryCommandHandler so the row is stamped with the fact's partition"
+        );
+    }
+
+    /// The scan above must see every spelling it claims, and nothing else — a
+    /// census that was never shown red is not a census (判据 §3).
+    #[test]
+    fn the_raw_sql_writer_scan_sees_every_spelling_of_a_write() {
+        let fixture = r##"
+fn writes(conn: &Connection) {
+    conn.execute("insert into\n   MEMORY_EVENTS (fact_id) values (?1)", []);
+    conn.execute(r#"UPDATE memory_events SET partition = NULL"#, []);
+    conn.execute("REPLACE INTO memory_events VALUES (1)", []);
+    conn.execute("INSERT OR IGNORE INTO memory_events VALUES (1)", []);
+    conn.execute("UPDATE OR IGNORE memory_events SET seq = 1", []);
+    conn.execute("DELETE FROM memory_events WHERE seq = 0", []);
+}
+fn reads(conn: &Connection) {
+    // INSERT INTO memory_events in a comment is not a write
+    conn.query_row("SELECT seq FROM memory_events", [], |_| Ok(()));
+    conn.execute("INSERT INTO memory_events_archive VALUES (1)", []);
+    conn.execute("CREATE TABLE IF NOT EXISTS memory_events (id INTEGER)", []);
+}
+"##;
+        let code = crate::utils::source_scan::code_keeping_literals(fixture);
+        assert_eq!(raw_memory_events_writes(&code), 6);
     }
 
     #[tokio::test]

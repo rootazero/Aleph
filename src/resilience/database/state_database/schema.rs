@@ -145,8 +145,11 @@ impl StateDatabase {
                 correlation_id TEXT,
                 -- The partition the fact lives under (`memory_dir/<partition>/`).
                 -- NULL = written before the column existed and not attributable
-                -- by `backfill_memory_events_partition`; refused to every scoped
-                -- reader. Index created by `migrate_add_memory_events_partition`.
+                -- by `backfill_memory_events_partition`; who may read such a row
+                -- is `visibility::unattributed_memory_events_for`. A new row
+                -- whose writer could not decide its partition carries
+                -- `memory::events::UNDECIDED_PARTITION`, never NULL. Index
+                -- created by `migrate_add_memory_events_partition`.
                 partition      TEXT,
 
                 UNIQUE(fact_id, seq)

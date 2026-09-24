@@ -274,7 +274,8 @@ pub struct MemoryEventEnvelope {
     pub correlation_id: Option<String>,
     /// The partition the fact lives under (`memory_dir/<partition>/`), as the
     /// writer knew it — `None` on an envelope that has not been stamped, and
-    /// on a row read back from before the column existed.
+    /// on a row read back from before the column existed. A writer that could
+    /// not decide stamps [`UNDECIDED_PARTITION`], never `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition: Option<String>,
 }
@@ -325,6 +326,22 @@ impl MemoryEventEnvelope {
         self.event.is_skeleton()
     }
 }
+
+/// The partition a NEW `memory_events` row is filed under when its writer
+/// could not decide one: a merge whose sources sit in two partitions, or a
+/// command on a fact whose own partition is unknown.
+///
+/// Why not NULL: on disk NULL means "written before the column existed", and
+/// the per-caller read admits NULL rows to the legacy owner
+/// ([`UnpartitionedRows`]) — an undecided row written as NULL would be read as
+/// the owner's (判据 §8: "I don't know" must not be spelled as a permission).
+///
+/// Why this value: `!` is outside the partition grammar (agent ids are
+/// `[A-Za-z0-9_-]`, composed ids add `__` and a `u-` / `p-` / `proj-` suffix),
+/// so no caller's read set can name it, and the scoped reader
+/// (`StateDatabase::get_memory_events_for_fact`) refuses it besides. Only the
+/// unscoped write-side / reconciler reads see such a row.
+pub const UNDECIDED_PARTITION: &str = "!undecided";
 
 /// Whether a per-caller read of `memory_events` may see rows that carry no
 /// partition — written before the column existed and not attributable by

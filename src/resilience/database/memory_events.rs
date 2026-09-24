@@ -5,7 +5,9 @@
 
 use super::StateDatabase;
 use crate::error::AlephError;
-use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope, UnpartitionedRows};
+use crate::memory::events::{
+    EventActor, MemoryEvent, MemoryEventEnvelope, UnpartitionedRows, UNDECIDED_PARTITION,
+};
 use rusqlite::params;
 
 /// The column list every reader selects, in the order
@@ -86,7 +88,9 @@ impl StateDatabase {
     /// the tool face and the gateway face). An event filed under any other
     /// partition is absent exactly as if it did not exist, so handing Bob
     /// Alice's fact id yields what a never-written id yields. `unpartitioned`
-    /// decides the rows the backfill could not attribute.
+    /// decides the rows the backfill could not attribute. A row filed under
+    /// [`UNDECIDED_PARTITION`] is refused whatever `partitions` says: no read
+    /// set should name it, and this does not rely on that.
     pub async fn get_memory_events_for_fact(
         &self,
         fact_id: &str,
@@ -104,12 +108,18 @@ impl StateDatabase {
                      WHERE fact_id = ?1 \
                        AND (partition IN (SELECT value FROM json_each(?2)) \
                             OR (?3 = 1 AND partition IS NULL)) \
+                       AND partition IS NOT ?4 \
                      ORDER BY seq ASC"
                 ))
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
             let rows = stmt
                 .query_map(
-                    params![fact_id, partitions_json, admit_unpartitioned],
+                    params![
+                        fact_id,
+                        partitions_json,
+                        admit_unpartitioned,
+                        UNDECIDED_PARTITION
+                    ],
                     MemoryEventRow::from_row,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
@@ -148,7 +158,9 @@ impl StateDatabase {
     /// backfill could not attribute, or no such fact).
     ///
     /// Exact for ids minted by `MemoryCommandHandler::create_fact` /
-    /// `consolidate_facts` (UUIDs — one partition each). A note-path-keyed
+    /// `consolidate_facts` (UUIDs — one partition each; a cross-partition merge
+    /// is filed under [`UNDECIDED_PARTITION`], which this returns as-is so the
+    /// merge's later events stay undecided too). A note-path-keyed
     /// stream can span partitions (two users' `preferences/lang` share the
     /// id), which is why the `log_note_*` path passes its partition in and
     /// never asks this.
@@ -812,6 +824,48 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// A row whose writer could not decide its partition is refused to EVERY
+    /// per-caller read — the owner's, a member's, legacy rows admitted or not,
+    /// and even a read set that (wrongly) names the sentinel — while the
+    /// unscoped write side still sees it. The sentinel is also outside the
+    /// agent-id grammar, so no partition derivation can produce it.
+    #[tokio::test]
+    async fn an_undecided_row_is_refused_to_every_scoped_read() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("merged", Some(UNDECIDED_PARTITION)))
+            .await
+            .unwrap();
+        for read in [
+            read_set(crate::gateway::security::store::OWNER_USER_ID),
+            read_set("u-alice"),
+            vec![UNDECIDED_PARTITION.to_string()],
+        ] {
+            for rows in [UnpartitionedRows::Admit, UnpartitionedRows::Refuse] {
+                let seen = db
+                    .get_memory_events_for_fact("merged", &read, rows)
+                    .await
+                    .unwrap();
+                assert!(
+                    seen.is_empty(),
+                    "{read:?} / {rows:?} read the undecided row"
+                );
+            }
+        }
+        assert_eq!(
+            db.get_memory_events_for_fact_unscoped("merged")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            crate::builtin_tools::agent_manage::validate_agent_id(UNDECIDED_PARTITION).is_err()
+        );
+        assert!(UNDECIDED_PARTITION
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')));
     }
 
     /// 判据 §9: enumerate the readers. The unscoped reader answers for every
