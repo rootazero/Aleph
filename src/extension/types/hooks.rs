@@ -398,13 +398,34 @@ pub enum HookAction {
     /// is parsed using the line-prefix protocol (see
     /// [`crate::extension::hooks::parse_command_output`]).
     ///
+    /// # Path variables
+    ///
+    /// `${CLAUDE_PLUGIN_ROOT}` (also `${PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}`)
+    /// is the hook's root; `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` is a
+    /// plugin-owned hook's data directory. Each is set in the command's
+    /// environment, and removed when the hook has none (a settings hook has
+    /// no data directory) rather than inherited from the daemon's.
+    ///
+    /// On unix that is the only way they reach the command: nothing is
+    /// substituted into `command`, and `sh` expands the variable as one word
+    /// of data, so a root named with a space or a `$(…)` stays one path.
+    /// Unquoted and double-quoted uses read the path —
+    /// `"${CLAUDE_PLUGIN_ROOT}"/hooks/x.sh` survives a space. Where `sh` does
+    /// not expand — single quotes (`'${CLAUDE_PLUGIN_ROOT}'`), a quoted
+    /// heredoc (`<<'EOF'`), an escaped `\${…}` — the text stays literal; it
+    /// was replaced before 2026-09-24. A nested `sh -c '…${CLAUDE_PLUGIN_ROOT}…'`
+    /// still reads the path, from the environment it inherits.
+    ///
+    /// On Windows `cmd` cannot expand `${…}`, so the path variables — never
+    /// the event's data — are substituted into `command` before it parses the
+    /// line. Their values come from where the hook is installed, never from
+    /// the model or the event.
+    ///
     /// # Event data
     ///
-    /// Only the path variables — `${CLAUDE_PLUGIN_ROOT}` and its spellings,
-    /// the `_DATA` pair — are substituted into `command` before the shell
-    /// parses it. The event's data never is: it is model-controlled or
-    /// quotes identifiers in backticks, so splicing it into the source would
-    /// run it. A command reads the data from:
+    /// The event's data is never substituted into `command`: it is
+    /// model-controlled or quotes identifiers in backticks, so splicing it
+    /// into the source would run it. A command reads the data from:
     ///
     /// - **stdin** — the whole event as JSON (`jq -r '.tool_input'`,
     ///   `jq -r '.env.DENY_REASON'`); full fidelity, every platform.
@@ -482,7 +503,7 @@ pub struct HookConfig {
     #[serde(default)]
     pub plugin_name: String,
 
-    /// Plugin root (for variable substitution)
+    /// Plugin root: what the hook's path variables (`${CLAUDE_PLUGIN_ROOT}` …) name
     #[serde(skip)]
     pub plugin_root: PathBuf,
 

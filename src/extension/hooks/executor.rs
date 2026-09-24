@@ -3,7 +3,8 @@
 use super::session_facts::SessionFacts;
 use super::{
     substitute_path_variables, substitute_variables, ActionResult, HookContext, ShellHookConsent,
-    DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS,
+    DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS, PLUGIN_DATA_VARIABLES,
+    PLUGIN_ROOT_VARIABLES,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::visibility::ScopeKey;
@@ -102,7 +103,10 @@ pub struct CommandHookInvocation {
     pub program: &'static str,
     /// Its "run this line" flag (`-c` / `/C`).
     pub flag: &'static str,
-    /// The command after substituting the path variables — and nothing else.
+    /// The command as the shell receives it: verbatim on unix, where every
+    /// variable reaches the child through [`env`](Self::env); with the path
+    /// variables substituted — and nothing else — on Windows, where `cmd`
+    /// cannot expand `${…}`.
     pub line: String,
     /// Where the child runs: the context's `working_dir`, else the hook's
     /// plugin root. `None` only when neither is known.
@@ -119,8 +123,8 @@ pub struct CommandHookInvocation {
 ///
 /// `event_name` is the spelling the hook receives on `hook_event_name`
 /// ([`HookConfig::event_name`]). `plugin_root` is `None` only for a consent
-/// entry recorded before the root was kept: the path variables then stay
-/// unresolved rather than being given an invented directory.
+/// entry recorded before the root was kept: the path variables are then
+/// unset rather than given an invented directory.
 #[must_use]
 pub fn command_hook_invocation(
     command: &str,
@@ -133,17 +137,36 @@ pub fn command_hook_invocation(
     // Derived once, so the stdin payload and the environment read the same
     // answer.
     let facts = SessionFacts::derive(context);
+    // The data directory: plugin-owned hooks only — a settings source label
+    // such as `user:project` is not a plugin id and has none.
+    let plugin_vars = plugin_root
+        .filter(|_| crate::extension::manifest::validate_plugin_id(plugin_name).is_ok())
+        .map(|root| crate::extension::plugin_vars::PluginVars::new(plugin_name, root));
 
-    // Only the trusted path variables become shell source. The data
-    // variables (`$ARGUMENTS`, `$DENY_REASON`, …) are model-controlled or
-    // quote identifiers in backticks: they reach the child as the env vars
-    // below, which the shell expands as data. Spliced in here they ran as
-    // code — and consent approves the template, not the resolved string.
-    // Same on Windows, where `cmd` would expand a `%VAR%` before parsing:
+    // What the shell parses. On unix: the command as written. Every
+    // variable — the path variables included — reaches the child through
+    // the environment below, and `sh` expands it as one word of data. The
+    // data variables (`$ARGUMENTS`, `$DENY_REASON`, …) are model-controlled
+    // or quote identifiers in backticks, and a path variable's value is a
+    // directory name — `fmt$(…)`, `Jane Doe` — so either one spliced into
+    // the source would be parsed, and consent approves the template, not the
+    // resolved string. On Windows `cmd` cannot expand `${…}`, so the path
+    // variables (never the data) are substituted into the line: the one
+    // platform difference. `cmd` would expand a `%VAR%` before parsing, so
     // data is read from the stdin JSON there.
-    let line = match plugin_root {
-        Some(root) => substitute_path_variables(command, root, plugin_name),
-        None => command.to_string(),
+    let line = if cfg!(windows) {
+        plugin_root.map_or_else(
+            || command.to_string(),
+            |root| substitute_path_variables(command, root, plugin_name),
+        )
+    } else {
+        // `substitute_path_variables` creates the data directory when the
+        // template names it; with no splice that is done here, from the same
+        // template text.
+        if let Some(vars) = &plugin_vars {
+            vars.ensure_data_dir_if_referenced(command);
+        }
+        command.to_string()
     };
     let (program, flag) = if cfg!(windows) {
         ("cmd", "/C")
@@ -165,9 +188,15 @@ pub fn command_hook_invocation(
     // Claude-Code convention), so oversized values are replaced in the env by
     // a marker rather than risking the spawn — and the marker is all a
     // `"$ARGUMENTS"` script then sees.
-    if let Some(root) = plugin_root {
-        set("PLUGIN_ROOT", Some(root.into()));
-        set("CLAUDE_PLUGIN_ROOT", Some(root.into()));
+    //
+    // The path variables, every spelling the substitution knows — on unix
+    // the only route by which they reach a command. Each is set when known
+    // and removed when not, never inherited: a daemon launched from inside a
+    // Claude Code plugin exports its own `CLAUDE_PLUGIN_ROOT` /
+    // `CLAUDE_PLUGIN_DATA`, which would otherwise read as this hook's.
+    let root = plugin_root.map(OsString::from);
+    for name in PLUGIN_ROOT_VARIABLES {
+        set(name, root.clone());
     }
     // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`), the
     // one every CC hook script reaches for first: `facts.cwd`, the value the
@@ -177,15 +206,11 @@ pub fn command_hook_invocation(
     set("CLAUDE_PROJECT_DIR", facts.cwd.clone().map(Into::into));
     // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by `plugin update`
     // (stage → backup → swap), so a hook that wants state that outlives an
-    // upgrade had no addressable path until this line existed. Plugin-owned
-    // hooks only — a settings source label such as `user:project` is not a
-    // plugin id and has no data directory.
-    if let Some(root) = plugin_root {
-        if crate::extension::manifest::validate_plugin_id(plugin_name).is_ok() {
-            let vars = crate::extension::plugin_vars::PluginVars::new(plugin_name, root);
-            set("CLAUDE_PLUGIN_DATA", Some(vars.data_dir().into()));
-            set("ALEPH_PLUGIN_DATA", Some(vars.data_dir().into()));
-        }
+    // upgrade had no addressable path until this line existed. Removed for a
+    // hook with no data directory (a settings hook).
+    let data = plugin_vars.as_ref().map(|v| OsString::from(v.data_dir()));
+    for name in PLUGIN_DATA_VARIABLES {
+        set(name, data.clone());
     }
     // A data field this event does not carry is removed, not left to the
     // daemon's environment: a daemon started with `FILE` or `ARGUMENTS`
@@ -2465,8 +2490,9 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // A command hook's data variables reach it through its environment; only
-    // the trusted path variables are spliced into the shell source.
+    // A command hook's variables reach it through its environment. On unix
+    // nothing is spliced into the shell source — not the data, and not the
+    // path variables either (Windows keeps splicing those).
     // -----------------------------------------------------------------------
 
     /// A `$(…)` in a tool argument is data to the hook, not code: the shell
@@ -2523,30 +2549,143 @@ mod tests {
         );
     }
 
-    /// The path variables are still spliced into the source. The single-quoted
-    /// copies can only read as the path if they were replaced before the shell
-    /// parsed the line — `PLUGIN_ROOT` is also an env var, so the `cat` alone
-    /// would pass with no substitution at all.
+    /// Every spelling of the plugin root reaches the command through its
+    /// environment, and nothing replaces one before the shell parses the
+    /// line: the single-quoted copy stays literal text, which it could not be
+    /// if it had been spliced in. That copy is the one use whose meaning
+    /// changed when the splice was removed.
     #[cfg(unix)]
     #[tokio::test]
-    async fn path_variables_are_still_substituted_into_the_command() {
+    async fn path_variables_reach_the_command_through_its_environment() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("x"), "from-x").unwrap();
         let out = root.path().join("out");
+        let reads: Vec<String> = PLUGIN_ROOT_VARIABLES
+            .iter()
+            .map(|name| format!(r#"cat "${{{name}}}/x""#))
+            .collect();
         let mut hook = interceptor_command_hook(&format!(
-            "cat ${{PLUGIN_ROOT}}/x > '{0}'; \
-             printf '|%s' '${{PLUGIN_ROOT}}' '${{CLAUDE_PLUGIN_ROOT}}' '${{ALEPH_PLUGIN_ROOT}}' >> '{0}'",
-            out.display()
+            "({reads}) > '{out}'; printf '|%s' '${{CLAUDE_PLUGIN_ROOT}}' >> '{out}'",
+            reads = reads.join("; "),
+            out = out.display()
         ));
         hook.plugin_root = root.path().to_path_buf();
         HookExecutor::new(vec![hook])
             .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
             .await
             .expect("the hook runs");
-        let r = root.path().display();
         assert_eq!(
             std::fs::read_to_string(&out).expect("the hook ran"),
-            format!("from-x|{r}|{r}|{r}")
+            format!(
+                "{}|${{CLAUDE_PLUGIN_ROOT}}",
+                "from-x".repeat(PLUGIN_ROOT_VARIABLES.len())
+            )
         );
+    }
+
+    /// A plugin root is a directory name, and a directory name can hold a
+    /// `$(…)` and a space. Expanded by the shell it is one word of data: the
+    /// quoted path reads the file, and nothing runs.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_plugin_root_named_with_a_command_substitution_is_one_word_of_data() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("fmt $(touch M)");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("x"), "from-x").unwrap();
+        let out = base.path().join("out");
+        let mut hook = interceptor_command_hook(&format!(
+            r#"cat "${{CLAUDE_PLUGIN_ROOT}}/x" > '{}'"#,
+            out.display()
+        ));
+        hook.plugin_root = root.clone();
+        HookExecutor::new(vec![hook])
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("the hook runs");
+        // The hook runs in its root, so a `touch M` that ran lands there.
+        assert!(!root.join("M").exists(), "the root's `$(…)` ran as shell");
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("the hook ran"),
+            "from-x"
+        );
+    }
+
+    /// A plugin hook's data directory reaches it through the environment
+    /// under both spellings, and is created because the template names it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_plugin_hooks_data_directory_reaches_it_through_the_environment() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let mut hook = interceptor_command_hook(&format!(
+            r#"printf '%s|%s' "${{CLAUDE_PLUGIN_DATA}}" "${{ALEPH_PLUGIN_DATA}}" > '{}'"#,
+            out.display()
+        ));
+        hook.plugin_name = "fmt".into();
+        hook.plugin_root = dir.path().to_path_buf();
+        let data = crate::extension::plugin_data_dir("fmt");
+        HookExecutor::new(vec![hook])
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("the hook runs");
+        let data_str = data.to_string_lossy();
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("the hook ran"),
+            format!("{data_str}|{data_str}")
+        );
+        assert!(
+            data.is_dir(),
+            "a template that names the directory creates it"
+        );
+    }
+
+    /// A settings hook has a root but no data directory, and a hook with no
+    /// recorded root (an old consent entry, rebuilt by `aleph hooks test`)
+    /// has neither: whatever is unknown is removed, not inherited from the
+    /// daemon — which may itself run inside a Claude Code plugin.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_path_variable_the_hook_lacks_is_not_inherited_from_the_daemon() {
+        /// Sets the daemon-side values for the test and removes them after.
+        struct DaemonEnv;
+        impl Drop for DaemonEnv {
+            fn drop(&mut self) {
+                for key in PLUGIN_DATA_VARIABLES {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+        let _daemon = DaemonEnv;
+        for key in PLUGIN_DATA_VARIABLES {
+            std::env::set_var(key, "from-the-daemon");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("env.txt");
+        let shown: Vec<String> = PLUGIN_DATA_VARIABLES
+            .iter()
+            .map(|key| format!("\"${{{key}-unset}}\""))
+            .collect();
+        let mut hook = interceptor_command_hook(&format!(
+            "printf '%s|' {} > '{}'",
+            shown.join(" "),
+            out.display()
+        ));
+        hook.plugin_name = "user:global".into();
+        HookExecutor::new(vec![hook])
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("the hook runs");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "unset|unset|");
+
+        let rebuilt = command_hook_invocation("true", "e", &HookContext::new("s"), None, "fmt");
+        for name in PLUGIN_ROOT_VARIABLES.iter().chain(&PLUGIN_DATA_VARIABLES) {
+            assert!(
+                rebuilt.env.contains(&((*name).to_string(), None)),
+                "{name} must be removed when the root is unknown"
+            );
+        }
     }
 }

@@ -14,7 +14,8 @@ use std::io::{self, Write};
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
-    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent,
+    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, PLUGIN_DATA_VARIABLES,
+    PLUGIN_ROOT_VARIABLES,
 };
 use alephcore::utils::no_window::NoWindow;
 
@@ -137,10 +138,23 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
 /// than invoking a single binary. The `test` subcommand rejects these
 /// unless `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` is set — a malicious plugin
 /// should not be able to deliver a `; rm -rf ~` payload that gets
-/// approved on first prompt. Checked on the line the shell would run —
-/// after the path variables are resolved — so `${CLAUDE_PLUGIN_ROOT}/x.sh`
-/// is judged as the path it becomes.
+/// approved on first prompt. Checked on the line the shell runs
+/// ([`gated_text`]), where a path-variable reference such as
+/// `${CLAUDE_PLUGIN_ROOT}/x.sh` does not count: it chains nothing.
 const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '>', '<', '\n', '\r'];
+
+/// `line` as the metacharacter gate reads it: without its path-variable
+/// references. On unix the shell expands `${CLAUDE_PLUGIN_ROOT}` from the
+/// hook's environment as one word of data; on Windows the line already holds
+/// the path in its place, which is judged as written.
+fn gated_text(line: &str) -> String {
+    PLUGIN_ROOT_VARIABLES
+        .iter()
+        .chain(&PLUGIN_DATA_VARIABLES)
+        .fold(line.to_string(), |text, name| {
+            text.replace(&format!("${{{name}}}"), "")
+        })
+}
 
 /// Run a recorded hook the way production runs it, on a synthetic tool call:
 /// the child is built by the same derivation
@@ -155,7 +169,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
     if entry.plugin_root.is_none() {
         println!(
             "(recorded before Aleph kept a hook's plugin root: path variables such as \
-             ${{CLAUDE_PLUGIN_ROOT}} stay unresolved in this run)"
+             ${{CLAUDE_PLUGIN_ROOT}} are unset in this run)"
         );
     }
     if !matches!(
@@ -163,8 +177,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
             .ok()
             .as_deref(),
         Some("1") | Some("true") | Some("yes")
-    ) && invocation
-        .line
+    ) && gated_text(&invocation.line)
         .chars()
         .any(|c| SHELL_METACHARS.contains(&c))
     {
@@ -374,9 +387,10 @@ mod tests {
     }
 
     /// The review run is the production run on a synthetic tool call: the
-    /// recorded spelling on `hook_event_name`, the path variable resolved
-    /// against the recorded root (which is also the working directory), and
-    /// the data variables in the environment. Driven through
+    /// recorded spelling on `hook_event_name`, the path variable reading the
+    /// recorded root (which is also the working directory) from the
+    /// environment, as the data variables do — and the metacharacter gate
+    /// letting that reference through. Driven through
     /// `run_command_with_payload`, the function `aleph hooks test` calls.
     #[cfg(unix)]
     #[test]
@@ -403,7 +417,7 @@ mod tests {
             script_fingerprint: None,
         };
 
-        run_command_with_payload(&entry).expect("the resolved line has no metacharacters");
+        run_command_with_payload(&entry).expect("a path-variable reference is not a metacharacter");
 
         let read = |name: &str| std::fs::read_to_string(root.path().join(name)).unwrap();
         let stdin: serde_json::Value = serde_json::from_str(&read("stdin.json")).unwrap();

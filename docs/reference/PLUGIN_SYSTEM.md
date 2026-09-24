@@ -399,7 +399,10 @@ aleph plugin list
 | `${ALEPH_PLUGIN_DATA}` | 同上 | Aleph 别名 |
 
 四个变量在**同一个点**展开：`mcp_config.rs::substitute_vars`，路径单一源
-`extension::plugin_data_dir`。数据目录在插件**首次引用它**时创建（无条件创建会给每个
+`extension::plugin_data_dir`。**hook 的 `command` 例外**：unix 上这些变量不做文本替换，
+只写进 hook 子进程的环境、由 `sh` 当数据展开（目录名里的 `$(…)` / 空格不会被当作源码解析；
+单引号 `'${CLAUDE_PLUGIN_ROOT}'` 因此保持字面量）；Windows 的 `cmd` 不会展开 `${…}`，由
+`hooks::substitute_path_variables` 替换。拼写清单单一源：`hooks::{PLUGIN_ROOT_VARIABLES, PLUGIN_DATA_VARIABLES}`。数据目录在插件**首次引用它**时创建（无条件创建会给每个
 装好的插件留一个空目录）。
 
 > **`_DATA` 那一对在 2026-08-16 之前没有任何生产者。** `mcp_config.rs` 上有一句注释说

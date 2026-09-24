@@ -515,15 +515,33 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
     }
 }
 
+/// Every spelling of the plugin-root path variable.
+///
+/// One list for the three places that must agree on it: the text
+/// substitution ([`substitute_path_variables`]), the variables a command
+/// hook's environment carries ([`command_hook_invocation`]) and the
+/// `aleph hooks test` metacharacter gate, which does not count a reference
+/// to one as shell syntax. A spelling substituted but not exported would
+/// read as empty in a unix hook, where the shell expands it.
+pub const PLUGIN_ROOT_VARIABLES: [&str; 3] =
+    ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "ALEPH_PLUGIN_ROOT"];
+
+/// Every spelling of the plugin-data path variable; plugin-owned hooks only.
+/// The same three consumers as [`PLUGIN_ROOT_VARIABLES`].
+pub const PLUGIN_DATA_VARIABLES: [&str; 2] = ["CLAUDE_PLUGIN_DATA", "ALEPH_PLUGIN_DATA"];
+
 /// Substitute the trusted path variables — and only those — in a string.
 ///
-/// - `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` — plugin root directory
-/// - `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` — plugin data directory
+/// - [`PLUGIN_ROOT_VARIABLES`] (`${CLAUDE_PLUGIN_ROOT}` …) — plugin root directory
+/// - [`PLUGIN_DATA_VARIABLES`] (`${CLAUDE_PLUGIN_DATA}` …) — plugin data directory
 ///
 /// Their values come from where the hook is installed, never from the model
-/// or the event, so this is the one substitution a Command action's shell
-/// source receives. Every data variable reaches a command through its
-/// environment instead — see [`HookAction::Command`](crate::extension::HookAction::Command).
+/// or the event. Text that is not shell source gets this (through
+/// [`substitute_variables`]). A Command action's shell source gets it on
+/// Windows only, where `cmd` cannot expand `${…}`; on unix the path
+/// variables reach the command through its environment like every data
+/// variable, because a value spliced into source is parsed — a directory
+/// named `fmt$(…)` would run. See [`HookAction::Command`](crate::extension::HookAction::Command).
 ///
 /// `owner` is the hook's `plugin_name`: a plugin id for plugin-registered
 /// hooks, or a source label like `user:project` for hooks that came from
@@ -541,18 +559,18 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();
 
-    // Plugin root (all three spellings)
-    result = result.replace("${PLUGIN_ROOT}", &plugin_root_str);
-    result = result.replace("${CLAUDE_PLUGIN_ROOT}", &plugin_root_str);
-    result = result.replace("${ALEPH_PLUGIN_ROOT}", &plugin_root_str);
+    for name in PLUGIN_ROOT_VARIABLES {
+        result = result.replace(&format!("${{{name}}}"), &plugin_root_str);
+    }
 
     // Plugin data directory — plugin-owned hooks only.
     if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
         let vars = crate::extension::plugin_vars::PluginVars::new(owner, plugin_root);
         vars.ensure_data_dir_if_referenced(&result);
         let data = vars.data_dir().to_string_lossy();
-        result = result.replace("${CLAUDE_PLUGIN_DATA}", &data);
-        result = result.replace("${ALEPH_PLUGIN_DATA}", &data);
+        for name in PLUGIN_DATA_VARIABLES {
+            result = result.replace(&format!("${{{name}}}"), &data);
+        }
     }
 
     result
@@ -573,10 +591,10 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
 ///
 /// Everything after the first bullet is DATA — model-controlled tool input,
 /// or policy text that quotes identifiers in backticks. A Command action
-/// never gets it spliced in: it receives only [`substitute_path_variables`],
-/// and each data variable is exported as an environment variable of the
-/// same name, which `sh` expands as data (`"$ARGUMENTS"`) rather than
-/// parsing as source. Splicing it made a tool argument's `$(…)` run as
+/// never gets it spliced in: it receives [`substitute_path_variables`] on
+/// Windows and no substitution at all on unix, and each data variable is
+/// exported as an environment variable of the same name, which `sh` expands
+/// as data (`"$ARGUMENTS"`) rather than parsing as source. Splicing it made a tool argument's `$(…)` run as
 /// code in an unsandboxed shell, and consent approves the template, not the
 /// resolved string. On Windows `cmd /C` expands `%VAR%` before it parses
 /// the line, so a command hook there reads data from the stdin JSON. The
