@@ -1202,7 +1202,7 @@ async fn lifecycle_events_are_filed_under_the_notes_own_partition() {
     let note_path = result.note_path.expect("create reports its note path");
 
     let events = state_db
-        .get_memory_events_for_fact(&note_path)
+        .get_memory_events_for_fact_unscoped(&note_path)
         .await
         .unwrap();
     assert_eq!(events.len(), 1);

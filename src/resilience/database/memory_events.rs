@@ -5,7 +5,7 @@
 
 use super::StateDatabase;
 use crate::error::AlephError;
-use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope, UnpartitionedRows};
 use rusqlite::params;
 
 /// The column list every reader selects, in the order
@@ -32,7 +32,7 @@ impl StateDatabase {
     /// SQLite's statement-level lock and never collide.
     ///
     /// Callers that need the post-insert `seq` must re-read via
-    /// [`get_memory_events_for_fact`] (or [`get_memory_event_latest_seq`]);
+    /// [`get_memory_events_for_fact_unscoped`] (or [`get_memory_event_latest_seq`]);
     /// the append path itself does not surface it.
     pub async fn append_memory_event(
         &self,
@@ -78,11 +78,53 @@ impl StateDatabase {
         .await
     }
 
-    /// Every event for `fact_id` across ALL partitions, ordered by seq — the
-    /// write side's view: `MemoryCommandHandler` folds a fact's whole stream to
-    /// project it and to allocate the next seq. A per-caller read filters on
-    /// `memory_events.partition` instead.
+    /// Every event for `fact_id` filed under one of `partitions`, ordered by
+    /// seq — the read every per-caller face goes through.
+    ///
+    /// `partitions` is the caller's read set (`project_scope::session_read_ids`
+    /// — the org tier plus the caller's own partition, the same derivation on
+    /// the tool face and the gateway face). An event filed under any other
+    /// partition is absent exactly as if it did not exist, so handing Bob
+    /// Alice's fact id yields what a never-written id yields. `unpartitioned`
+    /// decides the rows the backfill could not attribute.
     pub async fn get_memory_events_for_fact(
+        &self,
+        fact_id: &str,
+        partitions: &[String],
+        unpartitioned: UnpartitionedRows,
+    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
+        let fact_id = fact_id.to_string();
+        let partitions_json = serde_json::to_string(partitions)
+            .map_err(|e| AlephError::other(format!("Failed to encode partitions: {e}")))?;
+        let admit_unpartitioned = i64::from(unpartitioned == UnpartitionedRows::Admit);
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {EVENT_COLUMNS} FROM memory_events \
+                     WHERE fact_id = ?1 \
+                       AND (partition IN (SELECT value FROM json_each(?2)) \
+                            OR (?3 = 1 AND partition IS NULL)) \
+                     ORDER BY seq ASC"
+                ))
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+            let rows = stmt
+                .query_map(
+                    params![fact_id, partitions_json, admit_unpartitioned],
+                    MemoryEventRow::from_row,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            collect_envelopes(rows)
+        })
+        .await
+    }
+
+    /// Every event for `fact_id` across ALL partitions — the WRITE side's view
+    /// only: `MemoryCommandHandler` folds a fact's whole stream to project it
+    /// and scans every stream to reconcile. Any read made on a caller's behalf
+    /// goes through [`Self::get_memory_events_for_fact`]; the census
+    /// `each_memory_event_reader_has_only_the_consumers_it_was_built_for`
+    /// pins that this has no other production caller.
+    pub async fn get_memory_events_for_fact_unscoped(
         &self,
         fact_id: &str,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
@@ -357,7 +399,10 @@ mod tests {
         let id = db.append_memory_event(&envelope).await.unwrap();
         assert!(id > 0);
 
-        let events = db.get_memory_events_for_fact("fact-001").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-001")
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fact_id, "fact-001");
         assert_eq!(events[0].seq, 1);
@@ -450,7 +495,7 @@ mod tests {
 
         // Replay must not error — unknown variant is logged and skipped.
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact_unscoped("fact-orphan")
             .await
             .expect("unknown variant must not error replay");
         assert!(
@@ -470,7 +515,7 @@ mod tests {
         db.append_memory_event(&known).await.unwrap();
 
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact_unscoped("fact-orphan")
             .await
             .expect("mixed replay must succeed");
         assert_eq!(events.len(), 1, "only the known event should survive");
@@ -507,7 +552,10 @@ mod tests {
         );
         db.append_memory_event(&e2).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-dup").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-dup")
+            .await
+            .unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[1].seq, 2);
@@ -587,7 +635,10 @@ mod tests {
             "concurrent appends must not fail: {errors:?}"
         );
 
-        let events = db.get_memory_events_for_fact("fact-race").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-race")
+            .await
+            .unwrap();
         assert_eq!(
             events.len(),
             N,
@@ -633,7 +684,10 @@ mod tests {
         .in_partition(Some("main__u-alice".into()));
         db.append_memory_event(&stamped).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-p").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-p")
+            .await
+            .unwrap();
         assert_eq!(events[0].partition.as_deref(), Some("main__u-alice"));
         assert_eq!(
             db.memory_fact_partition("fact-p").await.unwrap().as_deref(),
@@ -642,6 +696,150 @@ mod tests {
         assert_eq!(
             db.memory_fact_partition("never-written").await.unwrap(),
             None
+        );
+    }
+
+    fn stamped(fact_id: &str, partition: Option<&str>) -> MemoryEventEnvelope {
+        MemoryEventEnvelope::new(
+            fact_id.into(),
+            1,
+            make_created_event(fact_id),
+            EventActor::Agent,
+            None,
+        )
+        .in_partition(partition.map(str::to_string))
+    }
+
+    fn read_set(principal: &str) -> Vec<String> {
+        vec!["main".to_string(), format!("main__{principal}")]
+    }
+
+    /// D7, the two-principal case at the store: a note-path id both Alice and
+    /// Bob wrote is two histories, and a third principal holding the id reads
+    /// exactly what a never-written id reads.
+    #[tokio::test]
+    async fn a_fact_id_from_another_partition_reads_as_absent() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("preferences/lang", Some("main__u-alice")))
+            .await
+            .unwrap();
+        db.append_memory_event(&stamped("preferences/lang", Some("main__u-bob")))
+            .await
+            .unwrap();
+
+        let seen = |events: Vec<MemoryEventEnvelope>| {
+            events.into_iter().map(|e| e.partition).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            seen(
+                db.get_memory_events_for_fact(
+                    "preferences/lang",
+                    &read_set("u-alice"),
+                    UnpartitionedRows::Refuse
+                )
+                .await
+                .unwrap()
+            ),
+            vec![Some("main__u-alice".to_string())]
+        );
+        assert_eq!(
+            seen(
+                db.get_memory_events_for_fact(
+                    "preferences/lang",
+                    &read_set("u-bob"),
+                    UnpartitionedRows::Refuse
+                )
+                .await
+                .unwrap()
+            ),
+            vec![Some("main__u-bob".to_string())]
+        );
+        assert!(db
+            .get_memory_events_for_fact(
+                "preferences/lang",
+                &read_set("u-carol"),
+                UnpartitionedRows::Refuse
+            )
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .get_memory_events_for_fact(
+                "never-written",
+                &read_set("u-carol"),
+                UnpartitionedRows::Refuse
+            )
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Rows with no partition are the legacy owner's (`owner_or_legacy`):
+    /// admitted only when the caller's decision says so. The org tier is in
+    /// every scoped read set, and an empty read set reads nothing stamped.
+    #[tokio::test]
+    async fn unattributed_rows_follow_the_callers_admission() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("legacy", None))
+            .await
+            .unwrap();
+        db.append_memory_event(&stamped("org", Some("main")))
+            .await
+            .unwrap();
+        let alice = read_set("u-alice");
+
+        assert!(db
+            .get_memory_events_for_fact("legacy", &alice, UnpartitionedRows::Refuse)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.get_memory_events_for_fact("legacy", &alice, UnpartitionedRows::Admit)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_memory_events_for_fact("org", &alice, UnpartitionedRows::Refuse)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(db
+            .get_memory_events_for_fact("org", &[], UnpartitionedRows::Admit)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// 判据 §9: enumerate the readers. The unscoped reader answers for every
+    /// partition at once, so only the write side (`MemoryCommandHandler`'s
+    /// folds and reconciler) may call it; the per-caller reader has one face
+    /// today (the traveler, behind `memory_timeline`). A new face shows up
+    /// here instead of shipping unreviewed.
+    #[test]
+    fn each_memory_event_reader_has_only_the_consumers_it_was_built_for() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let unscoped = crate::utils::source_scan::files_whose_production_code_reads(
+            &root,
+            "get_memory_events_for_fact_unscoped",
+        );
+        assert_eq!(
+            unscoped.into_iter().collect::<Vec<_>>(),
+            vec!["src/memory/events/handler.rs".to_string()],
+            "only the write side may read events across partitions"
+        );
+        let scoped = crate::utils::source_scan::files_whose_production_code_reads(
+            &root,
+            "get_memory_events_for_fact",
+        );
+        assert_eq!(
+            scoped.into_iter().collect::<Vec<_>>(),
+            vec!["src/memory/events/traveler.rs".to_string()],
+            "a new per-caller face must derive its partitions the way memory_timeline does \
+             (session_read_ids + unattributed_memory_events_for)"
         );
     }
 }

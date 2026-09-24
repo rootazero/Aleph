@@ -821,6 +821,82 @@ pub fn migrate_add_memory_events_partition(conn: &Connection) -> Result<(), Alep
     Ok(())
 }
 
+/// Attribute legacy `memory_events` rows to the partition their fact lives in.
+///
+/// The fact's own partition is the `agent` its creation event recorded
+/// (`NoteCreated` / legacy `FactCreated`): `note_manage` writes the resolved
+/// partition there and `MemoryCommandHandler::create_fact` projects the note
+/// into `memory_dir/<agent>/`. There is no facts table to join —
+/// `memory_facts` was dropped (`drop_obsolete_tables`) and the notes index is
+/// in a different database file — so the creation event IS the record.
+///
+/// Only a fact whose creation events all name ONE partition is attributed. A
+/// note-path id two principals both created (`preferences/lang`) has rows
+/// nobody can tell apart after the fact, and a guess hands one user's history
+/// to the other; those rows, rows whose fact has no creation event, and rows
+/// whose creation JSON does not parse all stay `NULL` — refused to every
+/// principal but the legacy owner (`UnpartitionedRows`).
+///
+/// Runs on every boot and touches only `partition IS NULL`, so it is
+/// idempotent and still reaches a database that ran the column migration in
+/// an earlier build. The probe first keeps the common case (nothing to do)
+/// to one index lookup.
+pub fn backfill_memory_events_partition(conn: &Connection) -> Result<usize, AlephError> {
+    let pending: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_events WHERE partition IS NULL)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to probe unattributed memory_events rows: {e}"
+            ))
+        })?;
+    if pending == 0 {
+        return Ok(0);
+    }
+    let attributed = conn
+        .execute(
+            r#"
+            UPDATE memory_events
+            SET partition = (
+                SELECT json_extract(c.event_json, '$.agent')
+                FROM memory_events AS c
+                WHERE c.fact_id = memory_events.fact_id
+                  AND c.event_type IN ('NoteCreated', 'FactCreated')
+                LIMIT 1
+            )
+            WHERE partition IS NULL
+              AND fact_id IN (
+                SELECT fact_id
+                FROM memory_events
+                WHERE event_type IN ('NoteCreated', 'FactCreated')
+                GROUP BY fact_id
+                HAVING COUNT(*) = COUNT(
+                           CASE WHEN json_valid(event_json)
+                                THEN json_extract(event_json, '$.agent')
+                           END)
+                   AND COUNT(DISTINCT
+                           CASE WHEN json_valid(event_json)
+                                THEN json_extract(event_json, '$.agent')
+                           END) = 1
+              )
+            "#,
+            [],
+        )
+        .map_err(|e| {
+            AlephError::config(format!("Failed to backfill memory_events.partition: {e}"))
+        })?;
+    if attributed > 0 {
+        tracing::info!(
+            attributed,
+            "Attributed legacy memory_events rows to their fact's partition"
+        );
+    }
+    Ok(attributed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,6 +1049,58 @@ mod tests {
         assert_eq!(
             legacy, None,
             "the column migration attributes nothing — that is the backfill's job (T13b)"
+        );
+    }
+
+    #[test]
+    fn backfill_attributes_only_facts_with_one_unambiguous_creator() {
+        let conn = Connection::open_in_memory().unwrap();
+        legacy_memory_events(&conn);
+        conn.execute_batch(
+            r#"
+            INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp) VALUES
+              ('solo', 1, 'NoteCreated', '{"type":"NoteCreated","agent":"main__u-alice"}', 'agent', 'skeleton', 0),
+              ('solo', 2, 'NoteContentUpdated', '{"type":"NoteContentUpdated"}', 'agent', 'skeleton', 0),
+              ('legacy-tag', 1, 'FactCreated', '{"type":"FactCreated","agent":"main"}', 'migration', 'skeleton', 0),
+              ('shared', 1, 'NoteCreated', '{"type":"NoteCreated","agent":"main__u-alice"}', 'agent', 'skeleton', 0),
+              ('shared', 2, 'NoteCreated', '{"type":"NoteCreated","agent":"main__u-bob"}', 'agent', 'skeleton', 0),
+              ('shared', 3, 'NoteContentUpdated', '{"type":"NoteContentUpdated"}', 'agent', 'skeleton', 0),
+              ('orphan', 1, 'NoteContentUpdated', '{"type":"NoteContentUpdated"}', 'agent', 'skeleton', 0),
+              ('garbled', 1, 'NoteCreated', 'not json', 'agent', 'skeleton', 0),
+              ('garbled', 2, 'NoteContentUpdated', '{}', 'agent', 'skeleton', 0);
+            "#,
+        )
+        .unwrap();
+        migrate_add_memory_events_partition(&conn).unwrap();
+
+        assert_eq!(backfill_memory_events_partition(&conn).unwrap(), 3);
+        let rows: Vec<(String, i64, Option<String>)> = conn
+            .prepare("SELECT fact_id, seq, partition FROM memory_events ORDER BY fact_id, seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let alice = Some("main__u-alice".to_string());
+        assert_eq!(
+            rows,
+            vec![
+                ("garbled".into(), 1, None),
+                ("garbled".into(), 2, None),
+                ("legacy-tag".into(), 1, Some("main".to_string())),
+                ("orphan".into(), 1, None),
+                ("shared".into(), 1, None),
+                ("shared".into(), 2, None),
+                ("shared".into(), 3, None),
+                ("solo".into(), 1, alice.clone()),
+                ("solo".into(), 2, alice),
+            ],
+            "only a fact whose creation events name ONE partition is attributed"
+        );
+        assert_eq!(
+            backfill_memory_events_partition(&conn).unwrap(),
+            0,
+            "idempotent"
         );
     }
 }

@@ -139,6 +139,12 @@ impl StateDatabase {
         migration::migrate_add_agent_tasks_adjudicated_at(conn)?;
         migration::migrate_add_agent_tasks_interrupted_by_restart(conn)?;
         migration::migrate_add_memory_events_partition(conn)?;
+        // Best-effort: an unattributed row is already refused to every scoped
+        // reader, so a failed backfill loses no isolation — it must not stop
+        // the daemon from starting (判据 §14: fail-closed, not fail-dead).
+        if let Err(e) = migration::backfill_memory_events_partition(conn) {
+            tracing::warn!(error = %e, "memory_events partition backfill failed; legacy rows stay unattributed");
+        }
         Ok(())
     }
 

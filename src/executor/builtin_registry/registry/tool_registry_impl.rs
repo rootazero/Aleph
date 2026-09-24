@@ -369,12 +369,25 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "memory_timeline" => Box::pin(async move {
-                let tool = self.memory_timeline_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("memory_timeline not available: no event store configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
+            // A fact's history is filed under the partition the fact lives in
+            // (`memory_events.partition`), so the read set is this turn's
+            // composed one plus the org tier; rows no backfill could attribute
+            // are the legacy owner's.
+            "memory_timeline" => {
+                let partitions = self.caller_memory_read_partitions("main");
+                let unpartitioned = crate::gateway::visibility::unattributed_memory_events_for(
+                    crate::gateway::visibility::ambient_principal().as_deref(),
+                );
+                Box::pin(async move {
+                    let tool = self.memory_timeline_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool("memory_timeline not available: no event store configured")
+                    })?;
+                    tool.clone()
+                        .for_caller(partitions, unpartitioned)
+                        .call_json(arguments)
+                        .await
+                })
+            }
             // Corrections are filed per PARTITION and read back per partition,
             // so the identity has to be this turn's composed one — not the bare
             // persona, and not the one the registry was built with at boot.
@@ -2128,6 +2141,7 @@ mod channel_tool_dispatch_tests {
         "note_graph_query",
         "flag_user_correction",
         "memory_reflect",
+        "memory_timeline",
     ];
 
     /// The end of a match arm, as a line index: the next arm's opening line at
@@ -2184,6 +2198,7 @@ mod channel_tool_dispatch_tests {
                 .join("\n");
             checked += 1;
             if !window.contains("caller_memory_partition")
+                && !window.contains("caller_memory_read_partitions")
                 && !window.contains("caller_profile_partition")
             {
                 offenders.push(format!(
@@ -2207,6 +2222,7 @@ mod channel_tool_dispatch_tests {
              stock loopback Panel session is already `Personal(u-owner)`, so this is not a \
              multi-user-only defect. Resolve through \
              `BuiltinToolRegistry::caller_memory_partition` (or \
+             `caller_memory_read_partitions` for a reader, \
              `caller_profile_partition` for the one reader that must refuse inside a room):\n  {}",
             offenders.join("\n  ")
         );
@@ -2256,6 +2272,103 @@ mod channel_tool_dispatch_tests {
             profile, None,
             "a room holds more than one human, so `user_profile` must refuse rather than \
              answer with the room's merged profile"
+        );
+    }
+
+    /// The tool face and the gateway face of one memory read derive the same
+    /// partition set (判据 §9).
+    #[tokio::test]
+    async fn caller_memory_read_partitions_is_the_gateway_faces_derivation() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::new().await.unwrap();
+        assert_eq!(
+            registry.caller_memory_read_partitions("main"),
+            vec!["main".to_string()]
+        );
+        let personal = crate::scope::ScopeAttribution::personal("u-alice");
+        let (tool_face, rpc_face) = crate::scope::with_scope(Some(personal), async {
+            (
+                registry.caller_memory_read_partitions("main"),
+                crate::gateway::handlers::memory_scope::read_partitions("main"),
+            )
+        })
+        .await;
+        assert_eq!(tool_face, rpc_face);
+        assert_eq!(
+            tool_face,
+            vec!["main".to_string(), "main__u-alice".to_string()]
+        );
+    }
+
+    /// D7 through the real dispatch arm: Alice's fact history reaches Alice;
+    /// Bob holding the id gets byte-for-byte the answer a never-written id gets.
+    #[tokio::test]
+    async fn memory_timeline_reads_only_the_callers_partitions() {
+        use crate::memory::context::{FactSource, NoteType};
+        use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let mut registry = BuiltinToolRegistry::new().await.unwrap();
+        let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
+        // No `/`: `memory_timeline` rejects it in `fact_id` (see its input
+        // validation), so a note-path id would fail before the partition
+        // filter is ever reached.
+        let id = "alice-secret";
+        db.append_memory_event(
+            &MemoryEventEnvelope::new(
+                id.into(),
+                1,
+                MemoryEvent::NoteCreated {
+                    note_path: id.into(),
+                    content: "Alice's secret".into(),
+                    note_type: NoteType::Preference,
+                    path: id.into(),
+                    namespace: "main__u-alice".into(),
+                    agent: "main__u-alice".into(),
+                    source: FactSource::Manual,
+                    source_memory_ids: vec![],
+                },
+                EventActor::Agent,
+                None,
+            )
+            .in_partition(Some("main__u-alice".into())),
+        )
+        .await
+        .unwrap();
+        registry.memory_timeline_tool = Some(crate::builtin_tools::MemoryTimelineTool::new(
+            Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(db)),
+        ));
+
+        let registry = &registry;
+        // `execute_tool` resolves the caller synchronously when it is CALLED
+        // (as in production, where the dispatcher already runs inside the
+        // turn's scope), so the call itself must happen inside `with_scope`.
+        let as_user = move |user: &str, fact: &str| {
+            let attr = crate::scope::ScopeAttribution::personal(user);
+            let args = serde_json::json!({ "fact_id": fact });
+            crate::scope::with_scope(Some(attr), async move {
+                registry.execute_tool("memory_timeline", args).await
+            })
+        };
+
+        let alice = as_user("u-alice", id)
+            .await
+            .expect("Alice reads her own fact");
+        assert_eq!(
+            alice["explanation"]["events"].as_array().map(Vec::len),
+            Some(1)
+        );
+
+        let bob = as_user("u-bob", id)
+            .await
+            .expect_err("Bob must not read Alice's fact");
+        let never = as_user("u-bob", "never-written")
+            .await
+            .expect_err("a never-written id has no history");
+        assert_eq!(
+            bob.to_string().replace(id, "<id>"),
+            never.to_string().replace("never-written", "<id>"),
+            "the refusal must not be an existence oracle"
         );
     }
 }

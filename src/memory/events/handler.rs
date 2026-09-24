@@ -94,7 +94,7 @@ impl MemoryCommandHandler {
             return Ok(());
         };
 
-        let events = self.db.get_memory_events_for_fact(fact_id).await?;
+        let events = self.db.get_memory_events_for_fact_unscoped(fact_id).await?;
         let projected = super::projector::fold_events_to_note(&events)?;
 
         match projected {
@@ -286,7 +286,10 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Rebuild from events to get the current content.
-        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
+        let events = self
+            .db
+            .get_memory_events_for_fact_unscoped(&cmd.note_path)
+            .await?;
         let current_fact = super::projector::fold_events_to_note(&events)?.ok_or_else(|| {
             AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
         })?;
@@ -400,7 +403,10 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Get current access count from event history
-        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
+        let events = self
+            .db
+            .get_memory_events_for_fact_unscoped(&cmd.note_path)
+            .await?;
         let current_fact = super::projector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
@@ -657,7 +663,7 @@ impl MemoryCommandHandler {
                 continue;
             };
 
-            let events = self.db.get_memory_events_for_fact(fact_id).await?;
+            let events = self.db.get_memory_events_for_fact_unscoped(fact_id).await?;
             let projected = super::projector::fold_events_to_note(&events)?;
 
             match projected {
@@ -1038,7 +1044,7 @@ mod tests {
                 .unwrap();
 
             for id in [fact_id.as_str(), merged.as_str(), "preferences/lang"] {
-                let events = db.get_memory_events_for_fact(id).await.unwrap();
+                let events = db.get_memory_events_for_fact_unscoped(id).await.unwrap();
                 assert!(!events.is_empty(), "{id}: nothing was written");
                 for e in &events {
                     assert_eq!(
@@ -1090,7 +1096,7 @@ mod tests {
             .unwrap();
         let events = handler
             .db
-            .get_memory_events_for_fact(&merged)
+            .get_memory_events_for_fact_unscoped(&merged)
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
@@ -1147,7 +1153,7 @@ mod tests {
         // Verify event was stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
@@ -1182,7 +1188,7 @@ mod tests {
         // Verify two events stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 2);
@@ -1244,7 +1250,7 @@ mod tests {
         // Verify invalidated state
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         let fact = fold_events_to_note(&events)
@@ -1269,7 +1275,7 @@ mod tests {
         // Verify restored state
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + Invalidated + Restored
@@ -1311,7 +1317,7 @@ mod tests {
         // Verify access count
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + 2 Accessed
@@ -1339,7 +1345,7 @@ mod tests {
         // Verify events stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 2); // Created + Deleted
@@ -1403,7 +1409,7 @@ mod tests {
         // Verify consolidated event stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&consolidated_id)
+            .get_memory_events_for_fact_unscoped(&consolidated_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
@@ -1455,7 +1461,7 @@ mod tests {
 
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id)
+            .get_memory_events_for_fact_unscoped(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3);
@@ -1502,7 +1508,7 @@ mod tests {
         // All three events land in one stream keyed by the stable note path.
         let events = handler
             .db
-            .get_memory_events_for_fact(note_path)
+            .get_memory_events_for_fact_unscoped(note_path)
             .await
             .unwrap();
         assert_eq!(events.len(), 3);

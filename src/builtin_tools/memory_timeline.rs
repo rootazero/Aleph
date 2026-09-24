@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::events::traveler::MemoryTimeTraveler;
+use crate::memory::events::UnpartitionedRows;
 use crate::memory::explain::FactExplanation;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -35,12 +36,28 @@ pub struct MemoryTimelineOutput {
 /// View the complete lifecycle of a memory fact
 pub struct MemoryTimelineTool {
     traveler: Arc<MemoryTimeTraveler>,
+    /// The caller's read set, bound per call by the registry's dispatch arm
+    /// ([`Self::for_caller`]). `None` on the boot-built instance: a timeline
+    /// read that did not come through the arm has no partition to read, and
+    /// says so rather than answering "no events" for a fact that has them.
+    read_scope: Option<(Vec<String>, UnpartitionedRows)>,
 }
 
 impl MemoryTimelineTool {
     #[must_use]
     pub const fn new(traveler: Arc<MemoryTimeTraveler>) -> Self {
-        Self { traveler }
+        Self {
+            traveler,
+            read_scope: None,
+        }
+    }
+
+    /// Bind this call to the caller's partitions (the registry arm's
+    /// `caller_memory_read_partitions` + `unattributed_memory_events_for`).
+    #[must_use]
+    pub fn for_caller(mut self, partitions: Vec<String>, unpartitioned: UnpartitionedRows) -> Self {
+        self.read_scope = Some((partitions, unpartitioned));
+        self
     }
 
     /// Internal implementation
@@ -50,14 +67,15 @@ impl MemoryTimelineTool {
     ) -> std::result::Result<MemoryTimelineOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        // BT-D-R4-05 (partial fix): validate the fact_id format up-front.
-        // `memory_events` has no agent/partition column at all, so there is
-        // no per-agent authorization to add at the traveler — any caller
-        // that learns or guesses another corpus's fact id can read its
-        // lifecycle and current content; this validation bounds the input
-        // surface but does not close that gap. Closing it needs a real
-        // schema-level partition column and is tracked as a separate
-        // change, not something fixable at this call site.
+        // Format validation bounds the input surface. WHOSE fact this is is
+        // decided by the partition filter the dispatch arm bound (`for_caller`).
+        let Some((partitions, unpartitioned)) = self.read_scope.as_ref() else {
+            return Err(ToolError::Execution(
+                "memory_timeline is not bound to a caller's partitions; it must be dispatched \
+                 through the builtin tool registry"
+                    .to_string(),
+            ));
+        };
         let fact_id = args.fact_id.trim();
         if fact_id.is_empty() {
             return Err(ToolError::InvalidArgs(
@@ -84,7 +102,7 @@ impl MemoryTimelineTool {
 
         let explanation = self
             .traveler
-            .explain_fact(fact_id)
+            .explain_fact(fact_id, partitions, *unpartitioned)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to explain fact: {e}")))?;
 
@@ -102,6 +120,7 @@ impl Clone for MemoryTimelineTool {
     fn clone(&self) -> Self {
         Self {
             traveler: self.traveler.clone(),
+            read_scope: self.read_scope.clone(),
         }
     }
 }
@@ -177,6 +196,7 @@ mod tests {
             EventActor::Agent,
             None,
         )
+        .in_partition(Some("main".into()))
     }
 
     /// Reachability: `memory_timeline` is called from inside a turn, and
@@ -198,7 +218,8 @@ mod tests {
             .unwrap();
 
         let traveler = Arc::new(MemoryTimeTraveler::new(db));
-        let tool = MemoryTimelineTool::new(traveler);
+        let tool = MemoryTimelineTool::new(traveler)
+            .for_caller(vec!["main".into()], UnpartitionedRows::Refuse);
 
         let result = TURN_CONTEXT
             .scope(turn("main"), async {
@@ -229,7 +250,8 @@ mod tests {
             .unwrap();
 
         let traveler = Arc::new(MemoryTimeTraveler::new(db));
-        let tool = MemoryTimelineTool::new(traveler);
+        let tool = MemoryTimelineTool::new(traveler)
+            .for_caller(vec!["main".into()], UnpartitionedRows::Refuse);
 
         let result = TURN_CONTEXT
             .scope(turn("main"), async {
@@ -246,5 +268,25 @@ mod tests {
                 "a fact that has events must not surface the empty-history error: {e}"
             );
         }
+    }
+
+    /// The boot-built instance has no caller: it must say so, not answer
+    /// "No events found" for a fact that has events (判据 §8).
+    #[tokio::test]
+    async fn an_unbound_timeline_refuses_instead_of_reporting_no_history() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        db.append_memory_event(&created_event("fact-unbound"))
+            .await
+            .unwrap();
+        let tool = MemoryTimelineTool::new(Arc::new(MemoryTimeTraveler::new(db)));
+        let text = tool
+            .call(MemoryTimelineArgs {
+                fact_id: "fact-unbound".into(),
+            })
+            .await
+            .expect_err("an unbound tool has no partition to read")
+            .to_string();
+        assert!(!text.contains("No events found"), "{text}");
+        assert!(text.contains("not bound to a caller"), "{text}");
     }
 }

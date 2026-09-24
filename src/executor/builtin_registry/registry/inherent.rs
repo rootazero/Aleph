@@ -191,6 +191,20 @@ impl BuiltinToolRegistry {
         )
     }
 
+    /// The read-side twin of [`Self::caller_memory_partition`]: every partition
+    /// an in-turn memory READ may see — `[org tier, this session's partition]`
+    /// under a session scope, `[base]` (or the legacy project-directory pair)
+    /// without one. `project_scope::session_read_ids`, i.e. the derivation the
+    /// gateway face gets from `handlers::memory_scope::read_partitions`, so the
+    /// two faces of one read cannot disagree (判据 §9).
+    pub(super) fn caller_memory_read_partitions(&self, fallback: &str) -> Vec<String> {
+        crate::memory::project_scope::session_read_ids(
+            &self.caller_agent_id(fallback),
+            self.memory_project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
+    }
+
     /// [`Self::caller_memory_partition`] for the ONE reader whose question has
     /// no answer in a shared room: the single human's profile.
     ///

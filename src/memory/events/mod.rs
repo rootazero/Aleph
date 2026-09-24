@@ -326,6 +326,22 @@ impl MemoryEventEnvelope {
     }
 }
 
+/// Whether a per-caller read of `memory_events` may see rows that carry no
+/// partition — written before the column existed and not attributable by
+/// `backfill_memory_events_partition`.
+///
+/// Two named arms rather than a `bool`, because the decision has one owner:
+/// [`crate::gateway::visibility::unattributed_memory_events_for`] derives it
+/// from the `owner_or_legacy` rule (a legacy row is the legacy owner's), and a
+/// bare `true` at a call site would be a second derivation of that rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpartitionedRows {
+    /// The legacy owner, or an unrestricted internal caller.
+    Admit,
+    /// Every other principal — fail-closed.
+    Refuse,
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

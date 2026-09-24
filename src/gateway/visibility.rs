@@ -193,6 +193,24 @@ pub fn ambient_actor() -> Option<String> {
         .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
 }
 
+/// Whether `principal` may read `memory_events` rows that carry no partition.
+///
+/// Such a row predates the column (or defeated the backfill). Adoption by
+/// absence — the rule [`owner_or_legacy`] encodes once: the row is the legacy
+/// owner's, so the owner and an unrestricted internal caller (`None`) see it
+/// and every other principal does not.
+#[must_use]
+pub fn unattributed_memory_events_for(
+    principal: Option<&str>,
+) -> crate::memory::events::UnpartitionedRows {
+    use crate::memory::events::UnpartitionedRows;
+    match principal {
+        None => UnpartitionedRows::Admit,
+        Some(p) if p == owner_or_legacy(None) => UnpartitionedRows::Admit,
+        Some(_) => UnpartitionedRows::Refuse,
+    }
+}
+
 /// Whether the current gateway caller may see records scoped to `project_id`
 /// (P2 project rooms).
 ///
@@ -1353,6 +1371,23 @@ mod tests {
                 ambient_canvas_visible(Some("u-alice"), None)
             })
             .await
+        );
+    }
+
+    #[test]
+    fn unattributed_memory_events_are_the_legacy_owners() {
+        use crate::memory::events::UnpartitionedRows;
+        assert_eq!(
+            unattributed_memory_events_for(None),
+            UnpartitionedRows::Admit
+        );
+        assert_eq!(
+            unattributed_memory_events_for(Some(OWNER_USER_ID)),
+            UnpartitionedRows::Admit
+        );
+        assert_eq!(
+            unattributed_memory_events_for(Some("u-alice")),
+            UnpartitionedRows::Refuse
         );
     }
 }
