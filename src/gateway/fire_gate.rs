@@ -118,9 +118,16 @@ pub(crate) fn subject_for_session_row<'a>(
 /// may install the process-global users store). Production passes
 /// `|subject| crate::scope::authority::resolve(&subject)`, spelled at each
 /// executor's own site because the `RunRequest` producer census greps it there.
+///
+/// `multi_user` is the server's mode for the room floor
+/// ([`row_is_project_room`]), injected for the same reason: production passes
+/// `crate::gateway::security::store::slot::multi_user`, tests pass the mode
+/// they mean. It is called only for a room row with no known initiator whose
+/// run proceeds, so every other fire pays no users read.
 #[must_use]
 pub(crate) fn authorize_session_run<R>(
     resolve: R,
+    multi_user: impl FnOnce() -> bool,
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
     metadata: &mut HashMap<String, String>,
 ) -> FireVerdict
@@ -141,7 +148,7 @@ where
     let authority = resolve(subject);
     match apply(authority, metadata) {
         FireVerdict::Proceed => {
-            if initiator_unknown_in_room {
+            if initiator_unknown_in_room && multi_user() {
                 // Role only goes DOWN: absent reads as operator, and a
                 // ceiling the grant already stamped is kept.
                 metadata
@@ -183,13 +190,14 @@ pub(crate) enum FireStop {
 /// `announce_delivery::admit_announce`, `resume_coordinator::admit_resume`).
 pub(crate) fn admit_session_metadata<R>(
     resolve: R,
+    multi_user: impl FnOnce() -> bool,
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
     mut base: HashMap<String, String>,
 ) -> Result<HashMap<String, String>, FireStop>
 where
     R: FnOnce(FireSubject<'_>) -> FireAuthority,
 {
-    match authorize_session_run(resolve, row, &mut base) {
+    match authorize_session_run(resolve, multi_user, row, &mut base) {
         FireVerdict::Proceed => Ok(base),
         FireVerdict::Refused(reason) => Err(FireStop::Refused(reason)),
         FireVerdict::Unknown(reason) => Err(FireStop::Unknown(reason)),
@@ -200,11 +208,18 @@ where
 /// room's CREATOR, identical for every member, so a run rebuilt from the row
 /// with no author and no carried role has an unknown initiator: judged as the
 /// creator, an admin creator would run a member's work as operator.
-/// [`authorize_session_run`] caps such a run at `member` — role only down.
+/// [`authorize_session_run`] caps such a run at `member` — role only down —
+/// on a MULTI-USER server only. With no person but the machine owner (or no
+/// users table at all) there is no member whose work the creator's grant
+/// could carry, so a single-user install keeps its grant unchanged. The mode
+/// is read at fire time, so the floor applies from the first fire after a
+/// second person is added; a failed read or a degraded store counts as
+/// multi-user (`slot::multi_user_in`).
 ///
-/// Trade-off, recorded: an admin's own announcements and resumes in their own
-/// room are capped at member too, until the initiator is carried on these
-/// paths (announce / resume initiator carry — a ledgered follow-up).
+/// Trade-off, recorded: on a multi-user server an admin's own announcements
+/// and resumes in their own room are capped at member too, until the
+/// initiator is carried on these paths (announce / resume initiator carry —
+/// a ledgered follow-up).
 fn row_is_project_room(
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
 ) -> bool {
@@ -231,12 +246,17 @@ fn row_is_project_room(
 /// `admit_resume`'s alone: the producer census reads those tokens per file,
 /// and a second spelling beside the one that APPLIES the grant would keep the
 /// census green with that call deleted (T09 re-review, N1).
+///
+/// The room floor stamps only the metadata, which this pre-check discards, so
+/// it is handed a constant mode rather than a users read that could change
+/// nothing.
 #[must_use]
 pub(crate) fn session_may_act(
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
 ) -> FireVerdict {
     authorize_session_run(
         |subject| crate::scope::authority::resolve(&subject),
+        || false,
         row,
         &mut HashMap::new(),
     )
@@ -418,6 +438,7 @@ mod tests {
                 asked = subject.owner.map(str::to_string);
                 resolve_with(Some(&store), &subject)
             },
+            || true,
             Some(&row),
             &mut meta,
         );
@@ -430,17 +451,85 @@ mod tests {
 
     /// Final review I1: a room row rebuilt with no author and no carried role
     /// (announce delivery, boot resume) would be judged as the room's CREATOR,
-    /// and an admin creator's grant stamps no ceiling — operator. The floor
-    /// caps it at `member`.
+    /// and an admin creator's grant stamps no ceiling — operator. On a
+    /// multi-user server (the mode read from the same table) the floor caps
+    /// it at `member`.
     #[test]
     fn a_room_run_with_no_known_initiator_is_capped_at_member() {
         let store = users();
         let room = room_row();
         let mut meta = HashMap::new();
-        let verdict =
-            authorize_session_run(|s| resolve_with(Some(&store), &s), Some(&room), &mut meta);
+        let verdict = authorize_session_run(
+            |s| resolve_with(Some(&store), &s),
+            || crate::gateway::security::store::slot::multi_user_with(Some(&store)),
+            Some(&room),
+            &mut meta,
+        );
         assert_eq!(verdict, FireVerdict::Proceed);
         assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    /// Re-review c4: the floor is a multi-user rule. On a single-user install
+    /// (only the machine owner has a row) the owner's own room run keeps the
+    /// grant it resolved — byte-identical to the pre-floor behaviour — and a
+    /// fire that is not a speakerless room run never asks for the mode.
+    #[test]
+    fn a_single_user_room_run_keeps_its_grant_and_other_fires_read_no_mode() {
+        use crate::gateway::security::store::OWNER_USER_ID;
+        let store = SecurityStore::in_memory().unwrap();
+        store.ensure_bootstrap_owner().unwrap();
+        let room = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some(OWNER_USER_ID.into()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-room".into()).render()),
+            ..Default::default()
+        };
+        let asked = std::cell::Cell::new(0u32);
+        let mode = || {
+            asked.set(asked.get() + 1);
+            crate::gateway::security::store::slot::multi_user_with(Some(&store))
+        };
+        let mut meta = HashMap::new();
+        assert_eq!(
+            authorize_session_run(
+                |s| resolve_with(Some(&store), &s),
+                mode,
+                Some(&room),
+                &mut meta
+            ),
+            FireVerdict::Proceed
+        );
+        assert_eq!(asked.get(), 1, "a speakerless room run asks for the mode");
+        assert_eq!(
+            meta.get("caller_role"),
+            None,
+            "single-user: the owner's room run keeps its uncapped grant"
+        );
+
+        let personal = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some(OWNER_USER_ID.into()),
+            scope_id: Some(format!("personal:{OWNER_USER_ID}")),
+            ..Default::default()
+        };
+        let mut authored = HashMap::new();
+        authored.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            OWNER_USER_ID.to_string(),
+        );
+        for (row, meta) in [(&personal, HashMap::new()), (&room, authored)] {
+            let mut meta = meta;
+            let before = asked.get();
+            let verdict = authorize_session_run(
+                |s| resolve_with(Some(&store), &s),
+                || {
+                    asked.set(asked.get() + 1);
+                    true
+                },
+                Some(row),
+                &mut meta,
+            );
+            assert_eq!(verdict, FireVerdict::Proceed);
+            assert_eq!(asked.get(), before, "no floor question, no users read");
+        }
     }
 
     /// The floor only ever lowers: a carried `guest` stays `guest`, and a
@@ -453,6 +542,7 @@ mod tests {
         assert_eq!(
             authorize_session_run(
                 |s| resolve_with(Some(&store), &s),
+                || true,
                 Some(&room_row()),
                 &mut guest
             ),
@@ -469,6 +559,7 @@ mod tests {
         assert_eq!(
             authorize_session_run(
                 |s| resolve_with(Some(&store), &s),
+                || true,
                 Some(&personal),
                 &mut meta
             ),
@@ -507,6 +598,7 @@ mod tests {
         };
         let verdict = authorize_session_run(
             |s| resolve_with(Some(&store), &s),
+            || true,
             Some(&bobs),
             &mut HashMap::new(),
         );
@@ -525,8 +617,12 @@ mod tests {
             crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
             "u-ghost".to_string(),
         );
-        let verdict =
-            authorize_session_run(|s| resolve_with(Some(&store), &s), Some(&ghosts), &mut meta);
+        let verdict = authorize_session_run(
+            |s| resolve_with(Some(&store), &s),
+            || true,
+            Some(&ghosts),
+            &mut meta,
+        );
         assert_eq!(
             verdict,
             FireVerdict::Refused("principal gone — author `u-ghost`".into())

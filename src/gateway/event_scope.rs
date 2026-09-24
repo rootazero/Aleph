@@ -59,9 +59,10 @@ impl EventScopeGuard {
     /// (`runtime.agents.list`'s prefix in `method_admin.rs`). Its one topic,
     /// `runtime.agents.changed`, carries NO session id or other payload
     /// (`json!({})` — clients re-fetch via the gated RPC), so unlike `pty.`
-    /// it needs no `session_identity_of` arm to narrow per-session ownership
-    /// within the operators this rule admits: role alone is the whole
-    /// answer, because there is no per-row content on the wire to leak.
+    /// its arm in `event_visibility::classify` narrows nothing: it is an
+    /// explicit `Global` (present so the raw-topic census can tell "somebody
+    /// decided" from "fell through"), and role alone is the whole answer,
+    /// because there is no per-row content on the wire to leak.
     ///
     /// `node.` is the delivery-side half of the `environments.` RPC gate
     /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the

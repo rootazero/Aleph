@@ -35,10 +35,13 @@
 //! project room the owner is the room's CREATOR, so a member's finished
 //! sub-agent or bash job is judged by the creator's STATUS: refused if the
 //! creator was deactivated, delivered if only the member was, and spend and
-//! the ledger are charged to the creator. Its ROLE is no longer the
-//! creator's: `fire_gate::authorize_session_run` caps a room run with no
-//! author and no carried role at `member` (final review I1), and the browser
-//! face composes no one's profile for a room run with no speaker. Closing the
+//! the ledger are charged to the creator. On a multi-user server its ROLE is
+//! no longer the creator's: `fire_gate::authorize_session_run` caps a room
+//! run with no author and no carried role at `member` (final review I1), and
+//! the browser face composes no one's profile for a room run with no speaker
+//! (`visibility::run_principal`). On a single-user install (nobody but the
+//! machine owner in the users table) the floor does not apply: there is no
+//! member whose work the creator's grant could carry. Closing the
 //! rest means capturing `scope::current_room_author()` at the two spawn sites
 //! (`agents::subagent_tool::spawn`, `builtin_tools::bash_exec` →
 //! `builtin_tools::process_completion`), carrying it on both event types and
@@ -133,8 +136,10 @@ where
 /// grant admitted for the parent session `row` (round 11, N9; ruling b):
 /// `deliver` executes exactly the request returned here, so there is no
 /// second copy of `base` a stamp could miss. Asked afresh on every attempt.
+/// `multi_user` is the room floor's mode (`fire_gate::authorize_session_run`).
 pub(crate) fn admit_announce<R>(
     resolve: R,
+    multi_user: impl FnOnce() -> bool,
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
     base: &HashMap<String, String>,
     input: &str,
@@ -143,7 +148,8 @@ pub(crate) fn admit_announce<R>(
 where
     R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
 {
-    let metadata = crate::gateway::fire_gate::admit_session_metadata(resolve, row, base.clone())?;
+    let metadata =
+        crate::gateway::fire_gate::admit_session_metadata(resolve, multi_user, row, base.clone())?;
     Ok(RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
         input: input.to_string(),
@@ -277,6 +283,7 @@ pub(crate) async fn deliver(
             ))),
             Ok(row) => admit_announce(
                 |subject| crate::scope::authority::resolve(&subject),
+                crate::gateway::security::store::slot::multi_user,
                 row.as_ref(),
                 &metadata,
                 &input,
@@ -395,6 +402,7 @@ mod tests {
         base.insert("subagent_announce".to_string(), "sub-1".to_string());
         let request = admit_announce(
             |s| resolve_with(Some(&users), &s),
+            || true,
             Some(&row),
             &base,
             "[system] done",

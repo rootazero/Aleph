@@ -177,8 +177,14 @@ pub fn ambient_principal() -> Option<String> {
 ///    run with no seeded speaker.
 /// 3. The turn's agent id (below) — the arm [`ambient_principal`] leaves out.
 ///
-/// `None` means "no ambient actor" and is deliberately unrestricted (cron,
-/// background sweeps, in-process tests), matching every other predicate here.
+/// `None` means "no ambient actor" and is deliberately unrestricted, matching
+/// every other predicate here: code that runs with no person, no scope and no
+/// turn identity (a background sweep outside any turn, an in-process test).
+/// A scheduled fire is not that case any more: since round 11 a cron or
+/// heartbeat run that resolves `Granted` carries its owner's scope pair and
+/// author, so its actor is that person; only a `Legacy` fire (nobody to
+/// check) reaches its tools with no person, and even then a tool call the
+/// dispatcher wraps in a turn context answers with the turn's agent id.
 #[must_use]
 pub fn ambient_actor() -> Option<String> {
     // PR-4 / BT-D-R4-06 + BT-D-R4-07: when the dispatcher wraps a tool
@@ -189,8 +195,10 @@ pub fn ambient_actor() -> Option<String> {
     // `scope::*` still wins when set; the TURN_CONTEXT fallback only
     // kicks in when neither is in play, so older call sites are
     // unchanged. Returning `None` here remains the explicit way to
-    // opt into the unrestricted arm — tests, cron, and A2A paths that
-    // do not yet plumb an actor continue to fall through.
+    // opt into the unrestricted arm — for code that plumbs neither a
+    // person nor a turn identity (in-process tests, a sweep outside any
+    // turn). A round-11 cron fire carries its owner's grant, so it is
+    // not one of them.
     ambient_principal()
         .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
 }
@@ -199,7 +207,9 @@ pub fn ambient_actor() -> Option<String> {
 /// the one verdict the browser face (a managed profile is per person), room
 /// creation in `project_manage` (a room's owner column names a person) and
 /// the `memory_timeline` arm (legacy history is the owner's) share, so "nobody
-/// is attached" means one thing everywhere.
+/// is attached" means one thing everywhere. All three reach it through
+/// [`run_principal`] / [`run_principal_in`], which is where the room rule
+/// below lives — no face re-derives it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunPrincipal {
     /// [`ambient_principal`] named a person.
@@ -215,18 +225,39 @@ pub enum RunPrincipal {
 }
 
 /// [`RunPrincipal`] for the current execution context:
-/// [`ambient_principal`], and the one "multi-user mode" derivation
+/// [`run_principal_in`] under the one "multi-user mode" derivation
 /// (`security::store::slot::multi_user`, read from the users table).
 #[must_use]
 pub fn run_principal() -> RunPrincipal {
-    run_principal_with(
-        ambient_principal(),
-        crate::gateway::security::store::slot::multi_user(),
-    )
+    run_principal_in(crate::gateway::security::store::slot::multi_user())
 }
 
-/// [`run_principal`] with both inputs explicit — lib tests never install the
-/// process-global users store, so this is where both modes are tested.
+/// [`run_principal`] with the server's mode explicit — lib tests never
+/// install the users store, so this is where both modes meet the ambient
+/// scope.
+///
+/// The person is [`ambient_principal`], except in a project ROOM with no
+/// seeded speaker: there `ambient_principal` falls back to the room's
+/// CREATOR, and that is work rebuilt from a session row (boot resume,
+/// announce delivery) whose initiator is unknown. Handing a member's work the
+/// creator's browser, or writing the creator down as the owner of a room that
+/// work creates, would name a person nobody asked for — so nobody is attached
+/// instead, and the mode decides (re-review N1).
+#[must_use]
+pub fn run_principal_in(multi_user: bool) -> RunPrincipal {
+    let speakerless_room = crate::scope::current_scope()
+        .is_some_and(|attr| matches!(attr.scope, crate::scope::ScopeId::Project(_)))
+        && crate::scope::current_room_author().is_none();
+    let person = if speakerless_room {
+        None
+    } else {
+        ambient_principal()
+    };
+    run_principal_with(person, multi_user)
+}
+
+/// [`run_principal`] with both inputs explicit: the verdict alone, for tests
+/// that need no ambient scope.
 #[must_use]
 pub fn run_principal_with(principal: Option<String>, multi_user: bool) -> RunPrincipal {
     match principal {
@@ -1295,9 +1326,13 @@ mod tests {
         }
     }
 
-    /// The behavioural half of the fix: outside a room the two resolvers are
-    /// the same answer, so switching a predicate from one to the other is a
-    /// no-op for every personal / org / cron caller.
+    /// The behavioural half of the fix: outside a room, and with no seeded
+    /// speaker, the two resolvers are the same answer — so switching a
+    /// predicate from one to the other is a no-op for a personal / org run
+    /// that carries no author. They are NOT the same once a speaker is
+    /// seeded: `current_room_author` wins whatever the scope, so a scopeless
+    /// fire-time grant that names its author has no ambient owner but does
+    /// have an actor (T08 re-review N3). Both halves are asserted.
     #[tokio::test]
     async fn ambient_actor_equals_ambient_owner_outside_a_room() {
         let personal = crate::scope::ScopeAttribution::personal("u-alice");
@@ -1311,6 +1346,14 @@ mod tests {
         // And with no scope at all, both are the unrestricted `None`.
         assert_eq!(crate::scope::ambient_owner(), None);
         assert_eq!(ambient_actor(), None);
+
+        // A seeded speaker with no scope: the owner is unknown, the actor is not.
+        let authored = crate::scope::with_room_author(Some("u-bob".to_string()), async {
+            (crate::scope::ambient_owner(), ambient_actor())
+        })
+        .await;
+        assert_eq!(authored.0, None);
+        assert_eq!(authored.1.as_deref(), Some("u-bob"));
     }
 
     // ── whiteboard canvas ───────────────────────────────────────────────
@@ -1477,19 +1520,26 @@ mod tests {
     }
 
     /// Landmine H's roster (`src/gateway/CLAUDE.md`) as a pin rather than a
-    /// counted prose list: every production file that calls `ambient_actor()`,
-    /// how many times, and how many of those calls COMPOSE — record or build a
+    /// counted prose list: every production file that references
+    /// `ambient_actor` — a call, or the function item handed on as a pointer
+    /// (`.or_else(visibility::ambient_actor)`, `[ambient_actor, …]`), which
+    /// composes just the same once called (re-review N5) — how many times,
+    /// and how many of those references COMPOSE — record or build a
     /// person from the answer (an owner column, an audit / ledger principal, a
     /// key), which falls back to the turn's AGENT id when nobody is ambient.
     /// The composing calls are parked violations; new code composes from
     /// `ambient_principal()`. The rest COMPARE (with an owner column, a
     /// partition suffix, `allowed_users`). The compose column is a recorded
     /// classification, not something a scan can check; the file set and the
-    /// call counts are checked. A new file, or a new call in a listed one,
-    /// turns this red: classify it here — and if it composes, do not.
+    /// call counts are checked. A new file, or a new reference in a listed
+    /// one, turns this red: classify it here — and if it composes, do not.
+    /// Not counted: the `fn ambient_actor` definition, a `use` import of it,
+    /// and a longer identifier that merely contains the name. A reference
+    /// built by a macro from a string, or reached through a re-exported
+    /// alias under another name, is invisible to this scan.
     #[test]
     fn every_production_caller_of_ambient_actor_is_classified() {
-        /// (file, production calls, of which COMPOSE)
+        /// (file, production references, of which COMPOSE)
         const CALLERS: &[(&str, usize, usize)] = &[
             // COMPOSE: identity rotate / revoke ledger principal.
             ("src/identity/ledger.rs", 2, 2),
@@ -1527,23 +1577,42 @@ mod tests {
             ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
             ("src/builtin_tools/terminal.rs", 1, 0),
         ];
-        fn calls_of_ambient_actor(code: &str) -> usize {
+        fn references_to_ambient_actor(code: &str) -> usize {
+            const NAME: &str = "ambient_actor";
             let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
-            code.match_indices("ambient_actor(")
-                .filter(|(at, _)| {
-                    let head = code.get(..*at).unwrap_or_default();
-                    !head.chars().next_back().is_some_and(is_ident)
-                        && !head.trim_end().ends_with("fn")
+            let mut inside_use = false;
+            code.lines()
+                .map(|line| {
+                    let head = crate::utils::source_scan::strip_visibility(line.trim_start());
+                    if inside_use || head.starts_with("use ") {
+                        inside_use = !line.contains(';');
+                        return 0;
+                    }
+                    line.match_indices(NAME)
+                        .filter(|(at, _)| {
+                            let before = line.get(..*at).unwrap_or_default();
+                            let after = line.get(*at + NAME.len()..).unwrap_or_default();
+                            !before.chars().next_back().is_some_and(is_ident)
+                                && !after.chars().next().is_some_and(is_ident)
+                                && !before.trim_end().ends_with("fn")
+                        })
+                        .count()
                 })
-                .count()
+                .sum()
         }
-        // The scan must see a call and must not see the definition (判据 §3).
+        // The scan must see a call and a pointer, and must not see the
+        // definition, an import or a longer name (判据 §3).
         assert_eq!(
-            calls_of_ambient_actor(
+            references_to_ambient_actor(
                 "pub fn ambient_actor() {}\nlet a = visibility::ambient_actor();\n\
-                 let b = my_ambient_actor();"
+                 let b = my_ambient_actor();\n\
+                 let c = x.or_else(crate::gateway::visibility::ambient_actor);\n\
+                 let d = [ambient_actor, other];\n\
+                 use crate::gateway::visibility::ambient_actor;\n\
+                 use crate::gateway::visibility::{\n    ambient_actor,\n};\n\
+                 let e = ambient_actor_like();"
             ),
-            1
+            3
         );
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1557,7 +1626,7 @@ mod tests {
                             &text,
                         ),
                     );
-                    let calls = calls_of_ambient_actor(&code);
+                    let calls = references_to_ambient_actor(&code);
                     (calls > 0).then_some((rel, calls))
                 })
                 .collect();
@@ -1567,11 +1636,15 @@ mod tests {
             .collect();
         assert_eq!(
             found, expected,
-            "a production `ambient_actor()` call appeared, moved or went away. Classify it in \
-             CALLERS; if it records or builds a person, compose from `ambient_principal()` instead"
+            "a production `ambient_actor` reference (a call or a function pointer) appeared, \
+             moved or went away. Classify it in CALLERS; if it records or builds a person, \
+             compose from `ambient_principal()` instead"
         );
         for (file, calls, compose) in CALLERS {
-            assert!(compose <= calls, "{file}: more composing calls than calls");
+            assert!(
+                compose <= calls,
+                "{file}: more composing references than references"
+            );
         }
     }
 

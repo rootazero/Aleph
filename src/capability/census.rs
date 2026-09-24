@@ -846,7 +846,9 @@ mod tests {
              (worktree-cc-render-r1) added `thinker/prompt-size-registry`; \
              origin/main independently added `search::handle::GLOBAL_SEARCH_HANDLE` \
              (b359f75e4) and `tasks::heartbeat::GLOBAL_HEARTBEAT` (bb2c5ed4c). \
-             Both branches' slots are in `ALL_SLOTS`; the merged count is 49.",
+             Both branches' slots are in `ALL_SLOTS`; the merged count at that \
+             merge was 49 (the literal has moved since — the current value is \
+             the 51 this message opened with).",
             raw + slots
         );
 

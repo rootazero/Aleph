@@ -220,24 +220,15 @@ pub(crate) fn caller_browser_principal() -> Result<Option<String>, BrowserError>
 /// [`caller_browser_principal`] with the server's mode explicit — lib tests
 /// never install the users store, so this is where multi-user is tested.
 ///
-/// In a project room with no seeded speaker, `ambient_principal` falls back
-/// to the room's CREATOR: that is work rebuilt from a session row (boot
-/// resume, announce delivery) whose initiator is unknown. Composing the
-/// creator's key would hand a member's work the creator's browser, so nobody
-/// is attached instead and the mode decides.
+/// The verdict is `visibility::run_principal_in`'s, the one every per-person
+/// face shares — including its rule that a project room with no seeded
+/// speaker (work rebuilt from a session row, initiator unknown) has nobody
+/// attached, so a member's work is never handed the room creator's browser.
+/// This function adds only the mode seam.
 pub(crate) fn caller_browser_principal_in(
     multi_user: bool,
 ) -> Result<Option<String>, BrowserError> {
-    let in_room = crate::scope::current_scope()
-        .is_some_and(|attr| matches!(attr.scope, crate::scope::ScopeId::Project(_)));
-    let person = if in_room && crate::scope::current_room_author().is_none() {
-        None
-    } else {
-        crate::gateway::visibility::ambient_principal()
-    };
-    browser_principal(crate::gateway::visibility::run_principal_with(
-        person, multi_user,
-    ))
+    browser_principal(crate::gateway::visibility::run_principal_in(multi_user))
 }
 
 /// [`caller_browser_principal`] for an explicit verdict — lib tests never

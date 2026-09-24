@@ -1209,8 +1209,9 @@ mod tests {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
 
         let (tool, project, _store, _g) = fixture();
@@ -1719,6 +1720,53 @@ mod tests {
         );
         let refused = ProjectManageTool::room_owner(run_principal_with(None, true))
             .expect_err("nobody attached on a server with users owns no room");
-        assert!(refused.to_string().contains("no person is attached"), "{refused}");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+    }
+
+    /// Re-review N1: a speakerless run inside a room (announce delivery, boot
+    /// resume) has an unknown initiator, so room creation must not stamp the
+    /// room's CREATOR — whom `ambient_principal` falls back to — as the new
+    /// room's owner. On a server with users it is refused; single-user it is
+    /// unowned (the legacy owner by absence); a seeded speaker owns it.
+    #[tokio::test]
+    async fn a_speakerless_room_run_owns_no_room_it_creates() {
+        use crate::gateway::visibility::run_principal_in;
+        let room = || {
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project("p-room".to_string()),
+            })
+        };
+        let (multi, single) = crate::scope::with_scope(room(), async {
+            assert_eq!(
+                crate::gateway::visibility::ambient_principal().as_deref(),
+                Some("u-alice"),
+                "precondition: with no speaker the ambient person is the room's creator"
+            );
+            (
+                ProjectManageTool::room_owner(run_principal_in(true)),
+                ProjectManageTool::room_owner(run_principal_in(false)),
+            )
+        })
+        .await;
+        let refused = multi.expect_err("an unknown initiator owns no room on a server with users");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+        assert_eq!(single.unwrap(), None);
+
+        let spoken = crate::scope::with_scope(
+            room(),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                ProjectManageTool::room_owner(run_principal_in(true))
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(spoken.as_deref(), Some("u-bob"));
     }
 }

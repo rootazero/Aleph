@@ -1595,32 +1595,52 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
     now.saturating_duration_since(last_activity).as_secs() > timeout_secs
 }
 
-/// `args` minus every flag that names a browser store: `--user-data-dir` and
-/// `--profile-directory`, in the `--flag=value` spelling and in the
-/// `--flag value` spelling (whose value is dropped with it, unless the next
-/// argument is itself a flag). A principal's copy of a profile must not
+/// `args` minus every flag that names a browser store: `user-data-dir` and
+/// `profile-directory`, behind either prefix Chromium's switch parser accepts
+/// (`--` and `-`; re-review N7), in the `=value` spelling and in the
+/// separate-argument spelling (whose value is dropped with it, unless the
+/// next argument is itself a flag) — i.e. `^-{1,2}(user-data-dir|
+/// profile-directory)(=|$)`. A principal's copy of a profile must not
 /// inherit the operator's store through `extra_args` (final review M10).
+/// Not stripped: the `/flag` prefix Chromium also accepts on Windows.
 fn args_without_store_flags(args: &[String]) -> Vec<String> {
-    const STORE_FLAGS: [&str; 2] = ["--user-data-dir", "--profile-directory"];
     let mut kept = Vec::with_capacity(args.len());
     let mut drop_value = false;
     for arg in args {
         if std::mem::take(&mut drop_value) && !arg.starts_with('-') {
             continue;
         }
-        if STORE_FLAGS.contains(&arg.as_str()) {
-            drop_value = true;
-            continue;
-        }
-        let inline = STORE_FLAGS.iter().any(|flag| {
-            arg.strip_prefix(flag)
-                .is_some_and(|rest| rest.starts_with('='))
-        });
-        if !inline {
-            kept.push(arg.clone());
+        match store_flag(arg) {
+            Some(StoreFlagValue::Separate) => drop_value = true,
+            Some(StoreFlagValue::Inline) => {}
+            None => kept.push(arg.clone()),
         }
     }
     kept
+}
+
+/// Where a store flag's value is, for [`args_without_store_flags`].
+enum StoreFlagValue {
+    /// `-{1,2}flag=value`.
+    Inline,
+    /// `-{1,2}flag`, the value in the next argument.
+    Separate,
+}
+
+/// Whether `arg` names a browser store, and how its value is spelled.
+fn store_flag(arg: &str) -> Option<StoreFlagValue> {
+    const STORE_FLAGS: [&str; 2] = ["user-data-dir", "profile-directory"];
+    let name = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'))?;
+    STORE_FLAGS.iter().find_map(|flag| {
+        let rest = name.strip_prefix(flag)?;
+        if rest.is_empty() {
+            Some(StoreFlagValue::Separate)
+        } else if rest.starts_with('=') {
+            Some(StoreFlagValue::Inline)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1631,9 +1651,11 @@ mod tests {
     use aleph_cdp::testkit::FakeCdpServer;
 
     /// Final review M10: a principal's copy must not reach the operator's
-    /// browser store through `extra_args` — both spellings of both flags are
-    /// dropped (a separate value with them), everything else is kept, and the
-    /// configured profile itself is untouched.
+    /// browser store through `extra_args` — both spellings of both flags,
+    /// behind either switch prefix (`--`, and the single `-` Chromium also
+    /// accepts — re-review N7), are dropped (a separate value with them),
+    /// everything else is kept, and the configured profile itself is
+    /// untouched.
     #[test]
     fn a_principal_copy_drops_the_operators_store_flags() {
         let mut config = BrowserSystemConfig::default();
@@ -1644,6 +1666,9 @@ mod tests {
             "/operator/other",
             "--profile-directory",
             "Profile 1",
+            "-user-data-dir=/x",
+            "-profile-directory",
+            "Profile 2",
             "--lang=en",
         ]
         .into_iter()

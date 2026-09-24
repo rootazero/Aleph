@@ -4009,7 +4009,13 @@ mod tests {
     ///
     /// `install_users_store` joined the list in round 11 for the same reason:
     /// its only consumer (`scope::authority::resolve`) degrades to `Legacy`
-    /// silently when it is missing.
+    /// silently when it is missing. `install_degraded_users_store` joined it
+    /// in the round-11 final round (re-review N3): without it the in-memory
+    /// fallback store would be installed as a durable one, and every member
+    /// it has no row for would resolve `Gone` — not `Unknown` — and have its
+    /// background work disabled for good. Its presence alone is not enough:
+    /// the fallback (`Some(reason)`) arm must be the one that calls it, so
+    /// the arm pairing is pinned too.
     ///
     /// CRLF-safe (`\r` stripped before any split — an anchored
     /// `"\n#[cfg(test)]"` needle matches nothing on this repo's Windows
@@ -4028,7 +4034,12 @@ mod tests {
              its own doc comment"
         );
         let production = alephcore::utils::source_scan::code_text(&production);
-        for call in ["install_policy(", "install_ledger(", "install_users_store("] {
+        for call in [
+            "install_policy(",
+            "install_ledger(",
+            "install_users_store(",
+            "install_degraded_users_store(",
+        ] {
             assert!(
                 production.contains(call),
                 "start/mod.rs must contain a production call to {call} — \
@@ -4039,6 +4050,30 @@ mod tests {
                  demoted principal's background work runs unchecked"
             );
         }
+        // Which arm calls which: whitespace-free, so formatting cannot move it.
+        let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
+        let store = "alephcore::gateway::security::store::";
+        assert!(
+            compact.contains(&format!("None=>{store}install_users_store(")),
+            "the durable-store (`None`) arm of `security_store_fallback` must install the \
+             users store as durable"
+        );
+        let degraded = format!("{store}install_degraded_users_store(");
+        let arm_head = compact
+            .find(&degraded)
+            .and_then(|at| compact.get(..at))
+            .and_then(|head| head.rsplit_once("Some("))
+            .map(|(_, binding)| binding);
+        assert!(
+            arm_head.is_some_and(
+                |b| b.strip_suffix(")=>").is_some_and(|name| !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            ),
+            "the fallback (`Some(reason)`) arm of `security_store_fallback` must call \
+             install_degraded_users_store — installed as durable, the fallback store answers \
+             `Gone` for every member it has no row for (final review I3); got arm head \
+             {arm_head:?}"
+        );
     }
 
     /// `users.*` has TWO registration faces — this file at boot, and

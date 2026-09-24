@@ -129,6 +129,18 @@ impl SecurityStore {
         rows.collect()
     }
 
+    /// Whether any row other than `user_id`'s exists, in any status — one
+    /// `EXISTS` probe with no ordering and no allocation, for
+    /// `slot::multi_user_in`, which runs on every per-person tool call.
+    pub(crate) fn has_user_other_than(&self, user_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE user_id <> ?1)",
+            params![user_id],
+            |r| r.get(0),
+        )
+    }
+
     pub fn count_users(&self) -> SqliteResult<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))

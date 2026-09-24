@@ -394,6 +394,43 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 // Boot reinjection
 // ============================================================================
 
+/// Rebuild a journaled message's `RunRequest` under the fire-time grant for
+/// its session `row` (round 11, N10; ruling b). The request is built FROM the
+/// admitted metadata ([`crate::gateway::fire_gate::admit_session_metadata`]),
+/// and `reinject_survivors` executes exactly the request returned here — there
+/// is no second copy of the payload's metadata a stamp could miss.
+/// `multi_user` is the room floor's mode (`fire_gate::authorize_session_run`).
+pub(crate) fn admit_reinjection<R>(
+    resolve: R,
+    multi_user: impl FnOnce() -> bool,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    payload: &QueuedRunPayload,
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Result<crate::gateway::execution_engine::RunRequest, crate::gateway::fire_gate::FireStop>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    let metadata = crate::gateway::fire_gate::admit_session_metadata(
+        resolve,
+        multi_user,
+        row,
+        payload.metadata.clone(),
+    )?;
+    Ok(crate::gateway::execution_engine::RunRequest {
+        run_id: payload.run_id.clone(),
+        input: payload.input.clone(),
+        session_key: session_key.clone(),
+        timeout_secs: payload.timeout_secs,
+        metadata,
+        attachments: payload.attachments.clone(),
+        pending_media: Default::default(),
+        sandbox_override: None,
+        workspace_override: payload.workspace_override.clone(),
+        max_iterations_override: payload.max_iterations_override,
+        model_override: payload.model_override.clone(),
+    })
+}
+
 /// Re-deliver the journaled survivors `select` admits through the ordinary
 /// arrival path; the rest stay journaled for a later call.
 ///
@@ -432,37 +469,6 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 /// A survivor whose session key no longer parses, or whose agent is gone, is
 /// logged and left in the journal (a later boot with the agent restored can
 /// still deliver it) rather than silently tombstoned.
-/// Rebuild a journaled message's `RunRequest` under the fire-time grant for
-/// its session `row` (round 11, N10; ruling b). The request is built FROM the
-/// admitted metadata ([`crate::gateway::fire_gate::admit_session_metadata`]),
-/// and `reinject_survivors` executes exactly the request returned here — there
-/// is no second copy of the payload's metadata a stamp could miss.
-pub(crate) fn admit_reinjection<R>(
-    resolve: R,
-    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
-    payload: &QueuedRunPayload,
-    session_key: &crate::routing::session_key::SessionKey,
-) -> Result<crate::gateway::execution_engine::RunRequest, crate::gateway::fire_gate::FireStop>
-where
-    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
-{
-    let metadata =
-        crate::gateway::fire_gate::admit_session_metadata(resolve, row, payload.metadata.clone())?;
-    Ok(crate::gateway::execution_engine::RunRequest {
-        run_id: payload.run_id.clone(),
-        input: payload.input.clone(),
-        session_key: session_key.clone(),
-        timeout_secs: payload.timeout_secs,
-        metadata,
-        attachments: payload.attachments.clone(),
-        pending_media: Default::default(),
-        sandbox_override: None,
-        workspace_override: payload.workspace_override.clone(),
-        max_iterations_override: payload.max_iterations_override,
-        model_override: payload.model_override.clone(),
-    })
-}
-
 pub async fn reinject_survivors(
     adapter: std::sync::Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
     registry: std::sync::Arc<crate::gateway::agent_instance::AgentRegistry>,
@@ -516,6 +522,7 @@ pub async fn reinject_survivors(
             ))),
             Ok(row) => admit_reinjection(
                 |subject| crate::scope::authority::resolve(&subject),
+                crate::gateway::security::store::slot::multi_user,
                 row.as_ref(),
                 &payload,
                 &session_key,
@@ -742,6 +749,7 @@ mod tests {
         let queued = payload("r-bob");
         let request = admit_reinjection(
             |s| resolve_with(Some(&users), &s),
+            || true,
             Some(&row),
             &queued,
             &key,
@@ -787,6 +795,7 @@ mod tests {
         assert_eq!(
             authorize_session_run(
                 |s| resolve_with(Some(&users), &s),
+                || true,
                 Some(&room),
                 &mut metadata
             ),
@@ -812,6 +821,7 @@ mod tests {
         assert_eq!(
             authorize_session_run(
                 |s| resolve_with(Some(&users), &s),
+                || true,
                 Some(&room),
                 &mut metadata
             ),

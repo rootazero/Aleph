@@ -115,9 +115,13 @@ pub(crate) fn users_authority() -> UsersAuthority<'static> {
 /// whether a store is installed (boot installs one on every server, so that
 /// test is constant-true in production, 判据 §2).
 ///
-/// Consumers — the None-principal ruling's two call sites:
+/// Consumers — the None-principal ruling's two call sites,
 /// `visibility::run_principal` (room creation, legacy `memory_events` rows)
-/// and `browser_tools::caller_browser_principal` (profile selection).
+/// and `browser_tools::caller_browser_principal` (profile selection), and the
+/// room floor of the three session-row executors, which hand this function
+/// to `fire_gate::authorize_session_run` so it is read only when the floor is
+/// in question (`admit_reinjection`, `admit_announce`, `admit_resume`).
+/// `multi_user_derivation_census` pins that list.
 /// `scope::authority`'s `FireAuthority::Legacy` does NOT route through this:
 /// it answers a different question (is there a store to check a person
 /// against at all).
@@ -146,10 +150,7 @@ pub(crate) fn multi_user_in(users: UsersAuthority<'_>) -> bool {
     match users {
         UsersAuthority::Absent => false,
         UsersAuthority::Degraded { .. } => true,
-        UsersAuthority::Durable(store) => match store.list_users() {
-            Ok(users) => users.iter().any(|user| user.user_id != OWNER_USER_ID),
-            Err(_) => true,
-        },
+        UsersAuthority::Durable(store) => store.has_user_other_than(OWNER_USER_ID).unwrap_or(true),
     }
 }
 
@@ -171,11 +172,6 @@ mod tests {
         );
     }
 
-    /// No lib test may install this process-global. Once installed it
-    /// stays for the whole test binary, and every other test that fires an
-    /// owned cron job or heartbeat would then resolve its owner against
-    /// that store — and be refused as `Gone`. Tests inject a store through
-    /// `scope::authority::resolve_with` instead.
     /// "Multi-user" is table content: owner-only is single-user, any other
     /// row (active or not) is multi-user, and the fallback store is treated
     /// as multi-user because it lost the rows that would say otherwise.
@@ -219,6 +215,122 @@ mod tests {
         );
     }
 
+    /// Re-review N2: every consumer of [`multi_user`] is tested through an
+    /// explicit-mode seam (`visibility::run_principal_in`,
+    /// `browser_tools::caller_browser_principal_in`, the `multi_user`
+    /// argument of `fire_gate::authorize_session_run`), so a consumer that
+    /// stopped reading the real mode — `false`, or the constant-true "a store
+    /// is installed" this function replaced — keeps every behavioural test
+    /// green. This pins the wire at the source, over production code (tests,
+    /// comments and literals stripped):
+    /// - `run_principal()` and `caller_browser_principal()` each call
+    ///   `slot::multi_user()` in their own body;
+    /// - every production reference to `slot::multi_user` (a call or the
+    ///   function handed on as the floor's mode), per file, is exactly the
+    ///   table below — the two faces plus the three session-row executors;
+    /// - `multi_user_in(` has one production caller: [`multi_user`] itself.
+    ///
+    /// Counted by the path spelling: a file that imports `multi_user` and
+    /// calls it bare is seen once, at its import.
+    #[test]
+    fn multi_user_derivation_census() {
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+        const EXPECTED: [(&str, usize); 5] = [
+            ("src/builtin_tools/browser_tools/mod.rs", 1),
+            ("src/gateway/announce_delivery.rs", 1),
+            ("src/gateway/busy_queue/durable.rs", 1),
+            ("src/gateway/resume_coordinator.rs", 1),
+            ("src/gateway/visibility.rs", 1),
+        ];
+        let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let whole = |code: &str, token: &str| -> usize {
+            code.match_indices(token)
+                .filter(|(at, _)| {
+                    let before = code.get(..*at).unwrap_or_default();
+                    let after = code.get(*at + token.len()..).unwrap_or_default();
+                    !before.chars().next_back().is_some_and(is_ident)
+                        && !after.chars().next().is_some_and(is_ident)
+                        && !before.trim_end().ends_with("fn")
+                })
+                .count()
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let code: std::collections::BTreeMap<String, String> = rust_sources_under(&root)
+            .into_iter()
+            .map(|(rel, text)| {
+                let production = code_text(&production_text(std::path::Path::new(&rel), &text));
+                (rel, production)
+            })
+            .collect();
+
+        for (file, function) in [
+            ("src/gateway/visibility.rs", "fn run_principal()"),
+            (
+                "src/builtin_tools/browser_tools/mod.rs",
+                "fn caller_browser_principal()",
+            ),
+        ] {
+            let text = code.get(file).unwrap_or_else(|| panic!("{file} is gone"));
+            let start = text
+                .find(function)
+                .unwrap_or_else(|| panic!("the scan is broken, not the tree: no `{function}`"));
+            let body = text
+                .get(start..)
+                .and_then(|rest| rest.find("\n}").and_then(|end| rest.get(..end)))
+                .unwrap_or_else(|| panic!("`{function}`'s body never closes at column 0"));
+            assert!(
+                body.contains("slot::multi_user()"),
+                "{file}: `{function}` must read the server's mode from `slot::multi_user()` — \
+                 its tests run through an explicit-mode seam and cannot see this wire"
+            );
+        }
+
+        let found: std::collections::BTreeMap<&str, usize> = code
+            .iter()
+            .map(|(rel, text)| (rel.as_str(), whole(text.as_str(), "slot::multi_user")))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        let expected: std::collections::BTreeMap<&str, usize> = EXPECTED.into_iter().collect();
+        assert_eq!(
+            found, expected,
+            "a production reference to `slot::multi_user` appeared, moved or went away — a \
+             consumer that hands its floor or its principal verdict a constant instead of the \
+             server's mode is green in every behavioural test"
+        );
+
+        let callers: std::collections::BTreeMap<&str, usize> = code
+            .iter()
+            .map(|(rel, text)| (rel.as_str(), whole(text.as_str(), "multi_user_in")))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        let only_multi_user: std::collections::BTreeMap<&str, usize> =
+            [("src/gateway/security/store/slot.rs", 1)]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            callers, only_multi_user,
+            "`multi_user_in` has one production caller, `multi_user`; a second derivation of \
+             the mode is the one this function exists to prevent (判据 §1)"
+        );
+
+        // The token rule itself: a call and a pointer count; the definition,
+        // a longer name and the `_in` / `_with` seams do not (判据 §3).
+        assert_eq!(
+            whole(
+                "pub(crate) fn multi_user() {}\nlet a = slot::multi_user();\n\
+                 f(slot::multi_user, row);\nlet b = slot::multi_user_in(x);\n\
+                 let c = slot::multi_user_with(None);",
+                "slot::multi_user"
+            ),
+            2
+        );
+    }
+
+    /// No lib test may install this process-global. Once installed it
+    /// stays for the whole test binary, and every other test that fires an
+    /// owned cron job or heartbeat would then resolve its owner against
+    /// that store — and be refused as `Gone`. Tests inject a store through
+    /// `scope::authority::resolve_with` instead.
     #[test]
     fn no_lib_test_installs_the_process_global_users_store() {
         assert!(

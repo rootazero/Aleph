@@ -931,9 +931,11 @@ fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(
 /// The resumed run's `RunRequest`, built FROM `metadata` as the fire-time
 /// grant for the session `row` admitted it (round 11, N8; ruling b):
 /// `retrigger` executes exactly the request returned here, so the grant can
-/// only land on what runs.
+/// only land on what runs. `multi_user` is the room floor's mode
+/// (`fire_gate::authorize_session_run`).
 fn admit_resume<R>(
     resolve: R,
+    multi_user: impl FnOnce() -> bool,
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
     mut metadata: HashMap<String, String>,
     session_id: &SessionId,
@@ -945,6 +947,7 @@ where
 {
     resume_authority(crate::gateway::fire_gate::authorize_session_run(
         resolve,
+        multi_user,
         row,
         &mut metadata,
     ))?;
@@ -2415,6 +2418,7 @@ impl ResumeCoordinator {
         // CURRENT status and role, not whatever was true when the run crashed.
         let request = admit_resume(
             |subject| crate::scope::authority::resolve(&subject),
+            crate::gateway::security::store::slot::multi_user,
             row.as_ref(),
             metadata,
             session_id,
@@ -3406,6 +3410,7 @@ mod tests {
         };
         let request = admit_resume(
             |s| crate::scope::authority::resolve_with(Some(&users), &s),
+            || true,
             Some(&row),
             resume_metadata(None, Some(&row)),
             &session_id,

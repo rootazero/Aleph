@@ -1170,8 +1170,22 @@ mod tests {
 
     /// How many raw SQL writes to the `memory_events` table `code` spells:
     /// `INSERT [OR …] INTO`, `REPLACE INTO`, `UPDATE [OR …]` and
-    /// `DELETE FROM`, case-insensitive, across line breaks. `code` must keep
+    /// `DELETE FROM`, case-insensitive, across line breaks, with the table
+    /// bare or qualified by the `main.` / `temp.` schema. `code` must keep
     /// literal payloads (`code_keeping_literals`) — SQL lives in strings.
+    ///
+    /// Blind spots (re-review N6) — it stays GREEN on:
+    /// - a quoted table name: `"memory_events"`, `[memory_events]`,
+    ///   `` `memory_events` ``, or an attached schema other than main / temp;
+    /// - a table name interpolated at run time (`format!("INSERT INTO {t}")`,
+    ///   a `const` joined in with `concat!`);
+    /// - SQL in a non-`.rs` file pulled in by `include_str!`, or built by a
+    ///   macro from pieces.
+    ///
+    /// False-positive shape: plain Rust in which the word before a
+    /// `memory_events` identifier is `into` / `update` / `delete from`
+    /// (`x.into();\n memory_events.push(..)`, `fn update(memory_events: …)`)
+    /// reads as a write. That error is loud (red), and nothing trips it today.
     fn raw_memory_events_writes(code: &str) -> usize {
         const TABLE: &str = "memory_events";
         let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -1199,6 +1213,10 @@ mod tests {
             if !whole_word {
                 continue;
             }
+            let head = head
+                .strip_suffix("main.")
+                .or_else(|| head.strip_suffix("temp."))
+                .unwrap_or(head);
             let words: Vec<&str> = head
                 .rsplit(|c: char| !is_word(c))
                 .filter(|w| !w.is_empty())
@@ -1255,10 +1273,11 @@ mod tests {
         );
     }
 
-    /// The scan above must see every spelling it claims, and nothing else — a
-    /// census that was never shown red is not a census (判据 §3).
+    /// The scan above must see each spelling it claims, and nothing else — a
+    /// census that was never shown red is not a census (判据 §3). The
+    /// spellings it does NOT claim are listed on `raw_memory_events_writes`.
     #[test]
-    fn the_raw_sql_writer_scan_sees_every_spelling_of_a_write() {
+    fn the_raw_sql_writer_scan_sees_the_spellings_it_claims() {
         let fixture = r##"
 fn writes(conn: &Connection) {
     conn.execute("insert into\n   MEMORY_EVENTS (fact_id) values (?1)", []);
@@ -1267,6 +1286,7 @@ fn writes(conn: &Connection) {
     conn.execute("INSERT OR IGNORE INTO memory_events VALUES (1)", []);
     conn.execute("UPDATE OR IGNORE memory_events SET seq = 1", []);
     conn.execute("DELETE FROM memory_events WHERE seq = 0", []);
+    conn.execute("INSERT INTO main.memory_events VALUES (1)", []);
 }
 fn reads(conn: &Connection) {
     // INSERT INTO memory_events in a comment is not a write
@@ -1276,7 +1296,7 @@ fn reads(conn: &Connection) {
 }
 "##;
         let code = crate::utils::source_scan::code_keeping_literals(fixture);
-        assert_eq!(raw_memory_events_writes(&code), 6);
+        assert_eq!(raw_memory_events_writes(&code), 7);
     }
 
     #[tokio::test]

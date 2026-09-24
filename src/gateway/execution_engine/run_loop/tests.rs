@@ -492,11 +492,22 @@ enum Authority {
 /// / `NoPrincipal` rows were green for as long as the names existed, whether
 /// or not anything still read a live identity (T09 review, I3).
 fn seam_used(code: &str, seam: &str) -> bool {
+    seam_uses(code, seam) > 0
+}
+
+/// How many times `seam` is USED in `code` — [`seam_used`]'s rule, counted:
+/// every occurrence on a line that is neither the seam's own `fn` definition
+/// nor a `use` import. One derivation, so "is it used" and "how often" cannot
+/// disagree about what a use is.
+fn seam_uses(code: &str, seam: &str) -> usize {
     let definition = format!("fn {}", seam.trim_end_matches('('));
-    code.lines().any(|line| {
-        let head = crate::utils::source_scan::strip_visibility(line.trim_start());
-        line.contains(seam) && !head.starts_with("use ") && !line.contains(&definition)
-    })
+    code.lines()
+        .filter(|line| {
+            let head = crate::utils::source_scan::strip_visibility(line.trim_start());
+            !head.starts_with("use ") && !line.contains(&definition)
+        })
+        .map(|line| line.matches(seam).count())
+        .sum()
 }
 
 /// The call a `Resolves` / `ResolvedUpstream` answer must still contain.
@@ -902,6 +913,137 @@ fn every_run_producer_answers_the_fire_time_authority_question() {
         resolved >= 7,
         "only {resolved} producers resolve fire-time authority; 7 were measured at round 11"
     );
+}
+
+/// The three session-row executors and the `admit_*` each builds its executed
+/// request in (final review I4).
+const SESSION_ROW_ADMITS: [(&str, &str); 3] = [
+    ("src/gateway/busy_queue/durable.rs", "admit_reinjection("),
+    ("src/gateway/announce_delivery.rs", "admit_announce("),
+    ("src/gateway/resume_coordinator.rs", "admit_resume("),
+];
+
+/// Byte offsets of each [`RunRequest`] CONSTRUCTION in `code` —
+/// [`constructs_run_request`]'s rule (a `RunRequest {` not preceded on its
+/// line by `->`, so a return type is not one), located rather than answered
+/// yes/no. Struct-update syntax (`RunRequest { .., ..admitted }`) is a
+/// construction too, and is counted.
+fn run_request_constructions(code: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut line_start = 0usize;
+    for line in code.split_inclusive('\n') {
+        for (at, _) in line.match_indices("RunRequest {") {
+            if !line.get(..at).unwrap_or_default().contains("->") {
+                found.push(line_start + at);
+            }
+        }
+        line_start += line.len();
+    }
+    found
+}
+
+/// What is wrong with one session-row executor's production `code`, given
+/// the call `seam` (`admit_x(`) that must build its executed request: the
+/// file calls it exactly once (a use per [`seam_uses`] — not the definition,
+/// not an import), and its ONE `RunRequest {` construction lies inside
+/// `fn admit_x`, whose body runs to the next column-0 `}`.
+fn session_row_admit_findings(file: &str, code: &str, seam: &str) -> Vec<String> {
+    let mut wrong = Vec::new();
+    let calls = seam_uses(code, seam);
+    if calls != 1 {
+        wrong.push(format!(
+            "{file}: {calls} production calls of `{seam}`, expected exactly 1 — the executor \
+             must run the request its admit function built, once"
+        ));
+    }
+    let name = seam.trim_end_matches('(');
+    let body = code.find(&format!("fn {name}")).and_then(|start| {
+        code.get(start..)
+            .and_then(|rest| rest.find("\n}"))
+            .map(|len| start..start + len)
+    });
+    let built = run_request_constructions(code);
+    match body {
+        None => wrong.push(format!(
+            "{file}: no `fn {name}` whose body closes at column 0"
+        )),
+        Some(body) => {
+            if built.len() != 1 || !body.contains(&built[0]) {
+                wrong.push(format!(
+                    "{file}: {} production `RunRequest {{` construction(s); expected exactly one, \
+                     inside `fn {name}`. A second one — or struct-update syntax over the base \
+                     map — runs a request the fire-time grant never admitted",
+                    built.len()
+                ));
+            }
+        }
+    }
+    wrong
+}
+
+/// Final review I4's CALL-SITE face (fix-wave re-review c3). Each
+/// `*_carries_the_resolved_grant` test calls its `admit_*` directly, so it
+/// proves what the function returns, not that the executor runs it; and
+/// `GRANT_APPLIED` is satisfied by the `admit_*` body itself. Two shapes stay
+/// green under both: a site that stops calling its `admit_*`, and a site that
+/// calls it and then executes a request rebuilt from the unadmitted map
+/// (`let _ = admit_x(..)?; RunRequest { metadata: payload.metadata.clone(), .. }`).
+/// This pins both per file, over production code (tests and comments
+/// stripped): exactly one call, and exactly one construction, inside the
+/// admit function.
+///
+/// Blind spots, stated: a request built through a helper in ANOTHER file, or
+/// by a constructor function rather than a struct literal, is not a
+/// construction here; nor is a macro that expands to one.
+#[test]
+fn each_session_row_executor_runs_the_request_its_admit_built() {
+    use crate::utils::source_scan::code_text;
+    let mut wrong = Vec::new();
+    for (file, seam) in SESSION_ROW_ADMITS {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let code = code_text(&production_half(&path, &text));
+        wrong.extend(session_row_admit_findings(file, &code, seam));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The pin above, shown red on each shape it claims and green on the one it
+/// allows (判据 §3: a census never shown red is not a census).
+#[test]
+fn the_session_row_admit_pin_sees_the_bypass_shapes() {
+    use crate::utils::source_scan::code_text;
+    let admit = "pub(crate) fn admit_x<R>(resolve: R) -> Result<RunRequest, FireStop> {\n\
+                 \x20   let metadata = admit_session_metadata(resolve)?;\n\
+                 \x20   Ok(RunRequest {\n        metadata,\n    })\n}\n";
+    let site = |body: &str| code_text(&format!("{admit}\npub async fn site() {{\n{body}\n}}\n"));
+    let ok = site("    let request = admit_x(|s| resolve(&s))?;\n    run(request);");
+    assert!(session_row_admit_findings("ok.rs", &ok, "admit_x(").is_empty());
+
+    for (shape, body) in [
+        ("never called", "    run(rebuild());"),
+        (
+            "called twice",
+            "    let a = admit_x(|s| resolve(&s))?;\n    let b = admit_x(|s| resolve(&s))?;",
+        ),
+        (
+            "called, then bypassed",
+            "    let _ = admit_x(|s| resolve(&s))?;\n    \
+             let request = RunRequest {\n        metadata: payload.metadata.clone(),\n    };",
+        ),
+        (
+            "struct update over the admitted request",
+            "    let admitted = admit_x(|s| resolve(&s))?;\n    \
+             let request = RunRequest { input: String::new(), ..admitted };",
+        ),
+    ] {
+        assert!(
+            !session_row_admit_findings("probe.rs", &site(body), "admit_x(").is_empty(),
+            "the pin must go red when the admit function is {shape}"
+        );
+    }
+    // A return type is not a construction.
+    assert!(run_request_constructions("fn f() -> RunRequest {\n    g()\n}").is_empty());
 }
 
 /// Nothing under `execution_engine/` may read the raw scope stamp out of a
