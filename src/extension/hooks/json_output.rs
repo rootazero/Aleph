@@ -68,12 +68,16 @@ struct JsonHookOutput {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct HookSpecificOutput {
-    /// `"allow"` | `"deny"` | `"ask"`.
+    /// `"allow"` | `"deny"` | `"ask"` | `"block"` (both documented spellings
+    /// of the enum).
     permission_decision: Option<String>,
     /// Reason paired with `permission_decision`.
     permission_decision_reason: Option<String>,
     /// Extra context injected as a `<system-reminder>` next turn.
     additional_context: Option<String>,
+    /// Replacement tool input (`PreToolUse`). Routed through the SAME setter
+    /// as the Aleph-native `update_input:` line — one field, one writer.
+    updated_input: Option<serde_json::Value>,
 }
 
 /// Try to interpret `stdout` as a JSON decision object.
@@ -130,6 +134,9 @@ impl JsonHookOutput {
             }
             if let Some(decision) = hso.permission_decision.as_deref() {
                 apply_permission_decision(decision, hso.permission_decision_reason, result);
+            }
+            if let Some(input) = hso.updated_input {
+                result.set_updated_input(input);
             }
         }
 
@@ -189,6 +196,14 @@ fn apply_permission_decision(decision: &str, reason: Option<String>, result: &mu
             result.denied = true;
             result.deny_reason = Some(reason.clone());
             result.permission_decision = Some(PermissionDecision::Deny { reason });
+        }
+        "block" => {
+            // Live-docs spelling of the enum (`allow|deny|block`); a retryable
+            // block, the same outcome as the top-level `decision: "block"`.
+            let reason = reason.unwrap_or_else(|| DEFAULT_BLOCK_MESSAGE.to_string());
+            result.blocked = true;
+            result.block_reason = Some(reason.clone());
+            result.permission_decision = Some(PermissionDecision::Block { reason });
         }
         "ask" => {
             result.permission_decision = Some(PermissionDecision::Ask {
@@ -362,5 +377,46 @@ mod tests {
         let (consumed, result) = apply(r#"{"futureKey": 42, "decision": "block", "reason": "r"}"#);
         assert!(consumed);
         assert!(result.blocked);
+    }
+
+    #[test]
+    fn hook_specific_updated_input_rewrites_the_tool_input() {
+        let json = r#"{"hookSpecificOutput":{"permissionDecision":"allow","updatedInput":{"path":"/rewritten","dry_run":true}}}"#;
+        let (consumed, result) = apply(json);
+        assert!(consumed);
+        assert_eq!(
+            result.updated_input,
+            Some(serde_json::json!({"path": "/rewritten", "dry_run": true}))
+        );
+        assert_eq!(result.permission_decision, Some(PermissionDecision::Allow));
+    }
+
+    #[test]
+    fn hook_specific_block_is_a_retryable_block() {
+        // The live docs (scan-cc-plugin-format §8) spell the enum
+        // `allow|deny|block`; the shipping skill doc spells it `allow|deny|ask`.
+        // Both are accepted; `block` maps to the retryable Block, not Deny.
+        let json = r#"{"hookSpecificOutput":{"permissionDecision":"block","permissionDecisionReason":"try later"}}"#;
+        let (consumed, result) = apply(json);
+        assert!(consumed);
+        assert!(result.blocked && !result.denied);
+        assert_eq!(result.block_reason.as_deref(), Some("try later"));
+        assert_eq!(
+            result.permission_decision,
+            Some(PermissionDecision::Block {
+                reason: "try later".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn updated_input_last_writer_wins_like_the_prefix_path() {
+        let mut result = HookResult::default();
+        apply_json_decision(
+            r#"{"hookSpecificOutput":{"updatedInput":{"a":1}}}"#,
+            &mut result,
+        );
+        super::super::parse_command_output(r#"update_input: {"a":2}"#, &mut result);
+        assert_eq!(result.updated_input, Some(serde_json::json!({"a": 2})));
     }
 }

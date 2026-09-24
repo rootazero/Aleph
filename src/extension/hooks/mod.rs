@@ -344,6 +344,15 @@ impl HookResult {
             .cloned()
             .unwrap_or_else(|| default.to_string())
     }
+
+    /// Record a hook's rewrite of the tool input. Last writer wins across an
+    /// interceptor chain; the interceptor loop then threads the value into
+    /// both `HookContext.arguments` and `.tool_input` for the next hook.
+    /// The `update_input:` line and the JSON `hookSpecificOutput.updatedInput`
+    /// both land here (`updated_input_has_exactly_one_writer`).
+    pub(crate) fn set_updated_input(&mut self, input: serde_json::Value) {
+        self.updated_input = Some(input);
+    }
 }
 
 /// Reason attached to an exit-2 block whose hook wrote nothing to stderr.
@@ -467,7 +476,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
             });
         } else if let Some(json_str) = trimmed.strip_prefix("update_input:") {
             match serde_json::from_str(json_str.trim()) {
-                Ok(val) => result.updated_input = Some(val),
+                Ok(val) => result.set_updated_input(val),
                 Err(e) => {
                     tracing::warn!("Hook update_input invalid JSON: {}", e);
                 }
@@ -1467,5 +1476,60 @@ mod tests {
         );
         assert!(r.blocked);
         assert_eq!(r.block_reason.as_deref(), Some("r"));
+    }
+
+    /// Both spellings of "rewrite the tool input" — the JSON `updatedInput`
+    /// and the `update_input:` line — must reach `updated_input` through the
+    /// one setter. Source-level, so a third spelling written as a bare field
+    /// assignment is red on arrival.
+    #[test]
+    fn updated_input_has_exactly_one_writer() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+        let corpus = [
+            (
+                "hooks/mod.rs",
+                code_text(&production_prefix(include_str!("mod.rs"))),
+            ),
+            (
+                "hooks/json_output.rs",
+                code_text(&production_prefix(include_str!("json_output.rs"))),
+            ),
+            (
+                "hooks/executor.rs",
+                code_text(&production_prefix(include_str!("executor.rs"))),
+            ),
+        ];
+        // (file, line, enclosing fn) for every direct write of the field.
+        let mut direct = Vec::new();
+        for (name, code) in &corpus {
+            let lines: Vec<&str> = code.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("updated_input = Some(") || line.contains("updated_input = None") {
+                    let enclosing = lines[..i]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            l.trim_start()
+                                .strip_prefix("pub(crate) fn ")
+                                .or_else(|| l.trim_start().strip_prefix("pub fn "))
+                                .or_else(|| l.trim_start().strip_prefix("fn "))
+                        })
+                        .map(|rest| rest.split('(').next().unwrap_or("?").to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    direct.push((name.to_string(), i + 1, enclosing));
+                }
+            }
+        }
+        assert_eq!(
+            direct.len(),
+            1,
+            "`updated_input` is written directly at {direct:?}; the only direct write is inside \
+             `HookResult::set_updated_input` — route new writers through it"
+        );
+        assert_eq!(
+            direct[0].2, "set_updated_input",
+            "the one direct write must be the setter itself, found in fn `{}` at {}:{}",
+            direct[0].2, direct[0].0, direct[0].1
+        );
     }
 }

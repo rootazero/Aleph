@@ -1715,6 +1715,54 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interceptor_chain_propagates_a_json_hook_specific_rewrite_too() {
+        // Same contract as `interceptor_chain_propagates_rewrite_to_stdin_payload`,
+        // but for the Claude-Code spelling (`hookSpecificOutput.updatedInput`)
+        // instead of the Aleph-native `update_input:` line — both must reach
+        // `accumulated.updated_input` through `HookResult::set_updated_input`
+        // and thread forward to the next interceptor's stdin the same way.
+        use crate::extension::hooks::HookContext;
+        let rewriter = interceptor_command_hook(
+            r#"echo '{"hookSpecificOutput":{"updatedInput":{"path":"/rewritten"}}}'"#,
+        );
+        let checker = interceptor_command_hook(
+            r#"input=$(cat); echo "$input" | grep -q '/rewritten' && echo 'context: saw-rewrite' || echo 'context: saw-original'"#,
+        );
+        let executor = HookExecutor::new(vec![rewriter, checker]);
+        let ctx = HookContext::new("chain")
+            .with_tool_name("Write")
+            .with_arguments(r#"{"path":"/original"}"#)
+            .with_tool_input(r#"{"path":"/original"}"#);
+
+        let (final_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx)
+            .await
+            .expect("chain must run");
+
+        assert_eq!(
+            result.updated_input,
+            Some(serde_json::json!({"path": "/rewritten"}))
+        );
+        assert!(
+            result
+                .additional_contexts
+                .iter()
+                .any(|c| c == "saw-rewrite"),
+            "second interceptor must see the JSON rewrite on stdin: {:?}",
+            result.additional_contexts
+        );
+        assert_eq!(
+            final_ctx.tool_input.as_deref(),
+            Some(r#"{"path":"/rewritten"}"#)
+        );
+        assert_eq!(
+            final_ctx.arguments.as_deref(),
+            Some(r#"{"path":"/rewritten"}"#)
+        );
+    }
+
     #[tokio::test]
     async fn plugin_action_is_dispatched_and_skips_without_manager() {
         // Regression lock: a `HookAction::Plugin` must reach `execute_plugin`
