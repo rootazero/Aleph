@@ -522,6 +522,7 @@ The exhaustive list is `HookEvent::ALL`. Frequently used:
 | `timeout_secs` ceiling | 300s | Interceptor seams **await** hooks; an unclamped override would wedge the tool gate. Clamped at `HookExecutor::effective_timeout`, covering every config source. |
 | stdout / stderr / HTTP body read | 64KB | Truncation is a **hard error** (fail-closed): a `deny:` printed past the cap must never be silently dropped. |
 | Injected context per block | ~2500 tokens | Over-budget `context:` text is spilled to `~/.aleph/data/hook_outputs/<session>/` and replaced by a head/tail preview naming the file, so the model can still read it in full on demand. |
+| Event data in a `command` | stdin JSON + env only | Only the path variables (`${CLAUDE_PLUGIN_ROOT}` & co.) are substituted into the command text. `$ARGUMENTS`, `$DENY_REASON`, … are env vars the shell expands as data — write them double-quoted; on Windows read the stdin JSON. Splicing them in ran a tool argument's `$(…)` as code. Contract: `HookAction::Command` (`src/extension/types/hooks.rs`). |
 
 #### Hook Example
 

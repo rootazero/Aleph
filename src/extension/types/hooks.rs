@@ -34,6 +34,10 @@ use std::path::PathBuf;
 ///   ]
 /// }
 /// ```
+///
+/// What a command hook receives for an event, and how to read it safely on
+/// each platform (stdin JSON / environment, never spliced into the command
+/// text): [`HookAction::Command`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEvent {
@@ -106,7 +110,12 @@ pub enum HookEvent {
     /// refusal has already been returned to the model; hooks witness it
     /// (audit, metrics, a notification). Claude Code `PermissionDenied`
     /// parity. Carries `tool_name` (so a `matcher` applies) and
-    /// `DENY_REASON` in `env`.
+    /// `DENY_REASON` in `env`. A command hook reads the reason as
+    /// `.env.DENY_REASON` from the stdin JSON, or as `"$DENY_REASON"`
+    /// (double-quoted) from its environment: the reason quotes identifiers in
+    /// backticks and can contain apostrophes and the operator's own words,
+    /// and it is never substituted into the command text. On Windows, use
+    /// the stdin JSON ([`HookAction::Command`]).
     #[serde(alias = "PermissionDenied")]
     PermissionDenied,
     /// When a user prompt is about to be sent to the LLM (after history
@@ -361,9 +370,35 @@ impl std::str::FromStr for PromptScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum HookAction {
-    /// Execute a shell command. Event JSON is piped to stdin in addition to
-    /// being exposed via env vars; stdout is parsed using the line-prefix
-    /// protocol (see [`crate::extension::hooks::parse_command_output`]).
+    /// Execute a shell command (`sh -c` on unix, `cmd /C` on Windows). stdout
+    /// is parsed using the line-prefix protocol (see
+    /// [`crate::extension::hooks::parse_command_output`]).
+    ///
+    /// # Event data
+    ///
+    /// Only the path variables — `${CLAUDE_PLUGIN_ROOT}` and its spellings,
+    /// the `_DATA` pair — are substituted into `command` before the shell
+    /// parses it. The event's data never is: it is model-controlled or
+    /// quotes identifiers in backticks, so splicing it into the source would
+    /// run it. A command reads the data from:
+    ///
+    /// - **stdin** — the whole event as JSON (`jq -r '.tool_input'`,
+    ///   `jq -r '.env.DENY_REASON'`); full fidelity, every platform.
+    /// - **its environment** — `TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`,
+    ///   `FILE`, `SESSION_ID` and every key of the event's `env`
+    ///   (`DENY_REASON`, …). On unix write them double-quoted
+    ///   (`"$ARGUMENTS"`): the shell expands the value as one word of data;
+    ///   unquoted it is word-split and globbed, single-quoted it is not
+    ///   expanded at all. An `ARGUMENTS` / `TOOL_INPUT` value over the
+    ///   executor's env cap (`MAX_ENV_VALUE_BYTES`) is replaced by the marker
+    ///   `[N bytes — read from stdin JSON]`, which is then all the variable
+    ///   holds.
+    ///
+    /// On Windows `cmd` expands `%VAR%` before it parses the line, so a `&`,
+    /// `|` or `^` in the value would still be interpreted, and `$ARGUMENTS`
+    /// is plain text to it. Read the stdin JSON there — or `!VAR!` inside a
+    /// batch file that runs `setlocal EnableDelayedExpansion` (`cmd /C` does
+    /// not enable delayed expansion by itself).
     Command { command: String },
     /// Provide a prompt template. The resolved prompt is injected as
     /// `additional_context` for the next LLM turn (no separate LLM call).

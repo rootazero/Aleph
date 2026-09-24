@@ -822,6 +822,52 @@ async fn only_a_permission_denied_fires_the_permission_denied_observer() {
     );
 }
 
+/// This seam hands a REFUSED call's raw arguments to hooks, together with a
+/// reason that quotes the policy table in backticks. A `PermissionDenied`
+/// hook using both the natural way (`"$DENY_REASON"`, `"$ARGUMENTS"`) must
+/// receive them as data: the refused call's `$(…)` does not run there.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_calls_arguments_and_reason_reach_the_hook_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("M");
+    let (reason_out, args_out) = (dir.path().join("reason"), dir.path().join("args"));
+    let hook = make_command_hook(
+        HookEvent::PermissionDenied,
+        HookKind::Observer,
+        &format!(
+            r#"echo "$DENY_REASON" > '{}'; printf '%s' "$ARGUMENTS" > '{}'"#,
+            reason_out.display(),
+            args_out.display()
+        ),
+    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_tool_permissions(crate::config::types::policies::ToolPermissionsConfig {
+            default: crate::extension::PermissionAction::Allow,
+            overrides: std::collections::HashMap::from([(
+                "echo".to_string(),
+                crate::extension::PermissionAction::Deny,
+            )]),
+        })
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![hook])), "test-session");
+    let input = json!({ "x": format!("$(touch {})", marker.display()) });
+    let err = svc.execute("echo", input.clone()).await.unwrap_err();
+    let ToolError::PermissionDenied { reason, .. } = &err else {
+        panic!("expected PermissionDenied, got {err:?}"); // rust-doctor-disable-line panic-in-library
+    };
+    assert!(
+        reason.contains('`'),
+        "premise: the policy reason quotes in backticks: {reason}"
+    );
+    assert!(
+        !marker.exists(),
+        "the refused call's `$(…)` ran in the hook"
+    );
+    let read = |p: &PathBuf| std::fs::read_to_string(p).expect("the hook ran");
+    assert_eq!(read(&reason_out), format!("{reason}\n"));
+    assert_eq!(read(&args_out), input.to_string());
+}
+
 #[tokio::test]
 #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
 async fn before_tool_hook_update_input_rewrites_args() {

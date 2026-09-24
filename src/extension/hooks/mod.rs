@@ -512,16 +512,15 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
     }
 }
 
-/// Substitute variables in a string
+/// Substitute the trusted path variables — and only those — in a string.
 ///
-/// Supported variables:
 /// - `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` — plugin root directory
 /// - `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` — plugin data directory
-/// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
-/// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
-/// - `$FILE` / `${FILE}` - File path
-/// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
-/// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+///
+/// Their values come from where the hook is installed, never from the model
+/// or the event, so this is the one substitution a Command action's shell
+/// source receives. Every data variable reaches a command through its
+/// environment instead — see [`HookAction::Command`](crate::extension::HookAction::Command).
 ///
 /// `owner` is the hook's `plugin_name`: a plugin id for plugin-registered
 /// hooks, or a source label like `user:project` for hooks that came from
@@ -535,12 +534,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// `${CLAUDE_PLUGIN_ROOT}` is destroyed by `plugin update`, which swaps the
 /// install directory.
 #[must_use]
-pub fn substitute_variables(
-    template: &str,
-    context: &HookContext,
-    plugin_root: &Path,
-    owner: &str,
-) -> String {
+pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owner: &str) -> String {
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();
 
@@ -557,6 +551,41 @@ pub fn substitute_variables(
         result = result.replace("${CLAUDE_PLUGIN_DATA}", &data);
         result = result.replace("${ALEPH_PLUGIN_DATA}", &data);
     }
+
+    result
+}
+
+/// Substitute variables in a string that is NOT shell source: a Prompt
+/// action's prompt, an Http action's URL and header values.
+///
+/// Supported variables:
+/// - the path variables of [`substitute_path_variables`] (`${PLUGIN_ROOT}`
+///   and its spellings, the `_DATA` pair), replaced first;
+/// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
+/// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
+/// - `$FILE` / `${FILE}` - File path
+/// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
+/// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+/// - `$KEY` / `${KEY}` for every key of [`HookContext::env`] (`$DENY_REASON`, …)
+///
+/// Everything after the first bullet is DATA — model-controlled tool input,
+/// or policy text that quotes identifiers in backticks. A Command action
+/// never gets it spliced in: it receives only [`substitute_path_variables`],
+/// and each data variable is exported as an environment variable of the
+/// same name, which `sh` expands as data (`"$ARGUMENTS"`) rather than
+/// parsing as source. Splicing it made a tool argument's `$(…)` run as
+/// code in an unsandboxed shell, and consent approves the template, not the
+/// resolved string. On Windows `cmd /C` expands `%VAR%` before it parses
+/// the line, so a command hook there reads data from the stdin JSON. The
+/// full contract is on [`HookAction::Command`](crate::extension::HookAction::Command).
+#[must_use]
+pub fn substitute_variables(
+    template: &str,
+    context: &HookContext,
+    plugin_root: &Path,
+    owner: &str,
+) -> String {
+    let mut result = substitute_path_variables(template, plugin_root, owner);
 
     // Tool name
     if let Some(ref name) = context.tool_name {

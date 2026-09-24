@@ -2,7 +2,7 @@
 
 use super::session_facts::SessionFacts;
 use super::{
-    substitute_variables, ActionResult, HookContext, ShellHookConsent,
+    substitute_path_variables, substitute_variables, ActionResult, HookContext, ShellHookConsent,
     DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
@@ -589,8 +589,14 @@ impl HookExecutor {
             }
         }
 
-        // Substitute variables
-        let resolved = substitute_variables(command, context, plugin_root, plugin_name);
+        // Only the trusted path variables become shell source. The data
+        // variables (`$ARGUMENTS`, `$DENY_REASON`, …) are model-controlled
+        // or quote identifiers in backticks: they reach the child as the env
+        // vars set below, which the shell expands as data. Spliced in here
+        // they ran as code — and consent (above) approved the template, not
+        // the resolved string. Same on Windows, where `cmd` would expand a
+        // `%VAR%` before parsing: data is read from the stdin JSON there.
+        let resolved = substitute_path_variables(command, plugin_root, plugin_name);
         debug!(plugin = plugin_name, event = ?event, "Executing hook command");
 
         // Determine working directory
@@ -617,14 +623,18 @@ impl HookExecutor {
         // hook command does not keep running as an orphan past its deadline.
         cmd.kill_on_drop(true);
 
-        // Set environment variables. `ARGUMENTS` / `TOOL_INPUT` mirror the
-        // tool payload as a convenience for `$ARGUMENTS`-style scripts, but a
-        // large payload (a Write tool's whole file body) can exceed the OS
-        // `ARG_MAX` limit and make `spawn` fail with E2BIG — which, on an
-        // interceptor seam, fails CLOSED and spuriously blocks the tool. The
-        // canonical full-fidelity path is the stdin JSON (`jq -r
-        // '.tool_input…'`, Claude-Code convention), so oversized values are
-        // dropped from the env with a marker rather than risking the spawn.
+        // Set environment variables. These are the only route by which the
+        // data variables (`TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`, `FILE`,
+        // `SESSION_ID`, every `context.env` key) reach a command — none is
+        // substituted into its source (above). `ARGUMENTS` / `TOOL_INPUT`
+        // mirror the tool payload, but a large payload (a Write tool's whole
+        // file body) can exceed the OS `ARG_MAX` limit and make `spawn` fail
+        // with E2BIG — which, on an interceptor seam, fails CLOSED and
+        // spuriously blocks the tool. The canonical full-fidelity path is the
+        // stdin JSON (`jq -r '.tool_input…'`, Claude-Code convention), so
+        // oversized values are replaced in the env by a marker rather than
+        // risking the spawn — and the marker is all a `"$ARGUMENTS"` script
+        // then sees.
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
         // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`),
@@ -683,7 +693,8 @@ impl HookExecutor {
 
         // Configure stdio. The event JSON payload is piped to stdin so
         // hook scripts can `jq -r '.tool_input.file_path'` (Claude Code
-        // convention). Env vars stay set for back-compat.
+        // convention). The env vars above carry the same data for
+        // `"$VAR"`-style scripts on unix.
         let payload = build_event_payload(event_name, context, &facts);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
@@ -2248,5 +2259,91 @@ mod tests {
         )
         .unwrap();
         assert!(json.get("transcript_path").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // A command hook's data variables reach it through its environment; only
+    // the trusted path variables are spliced into the shell source.
+    // -----------------------------------------------------------------------
+
+    /// A `$(…)` in a tool argument is data to the hook, not code: the shell
+    /// expands `"$ARGUMENTS"` from the environment and does not parse it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_substitution_in_the_arguments_does_not_run_in_the_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("M");
+        let out = dir.path().join("out");
+        let args = serde_json::json!({ "x": format!("$(touch {})", marker.display()) }).to_string();
+        let hook = interceptor_command_hook(&format!(
+            r#"printf '%s' "$ARGUMENTS" > '{}'"#,
+            out.display()
+        ));
+        let ctx = HookContext::new("s")
+            .with_tool_name("bash")
+            .with_arguments(args.clone())
+            .with_tool_input(args.clone());
+        HookExecutor::new(vec![hook])
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx)
+            .await
+            .expect("the hook runs");
+        assert!(!marker.exists(), "the argument's `$(…)` ran as shell");
+        assert_eq!(std::fs::read_to_string(&out).expect("the hook ran"), args);
+    }
+
+    /// A refusal's reason quotes identifiers in backticks and says `Aleph's`;
+    /// a hook that reads it as `"$DENY_REASON"` prints it and runs nothing.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn backticks_in_a_deny_reason_do_not_run_in_the_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("B");
+        let out = dir.path().join("out");
+        let reason = format!(
+            "This conversation is PLANNING, so `touch {}` does not run yet; Aleph's plan first.",
+            marker.display()
+        );
+        let mut hook =
+            interceptor_command_hook(&format!(r#"echo "$DENY_REASON" > '{}'"#, out.display()));
+        hook.event = HookEvent::PermissionDenied;
+        hook.kind = HookKind::Observer;
+        let ctx = HookContext::new("s")
+            .with_tool_name("bash")
+            .with_env("DENY_REASON", reason.clone());
+        HookExecutor::new(vec![hook])
+            .execute_observers(HookEvent::PermissionDenied, &ctx)
+            .await;
+        assert!(!marker.exists(), "the reason's backticks ran as shell");
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("the hook ran"),
+            format!("{reason}\n")
+        );
+    }
+
+    /// The path variables are still spliced into the source. The single-quoted
+    /// copies can only read as the path if they were replaced before the shell
+    /// parsed the line — `PLUGIN_ROOT` is also an env var, so the `cat` alone
+    /// would pass with no substitution at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn path_variables_are_still_substituted_into_the_command() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("x"), "from-x").unwrap();
+        let out = root.path().join("out");
+        let mut hook = interceptor_command_hook(&format!(
+            "cat ${{PLUGIN_ROOT}}/x > '{0}'; \
+             printf '|%s' '${{PLUGIN_ROOT}}' '${{CLAUDE_PLUGIN_ROOT}}' '${{ALEPH_PLUGIN_ROOT}}' >> '{0}'",
+            out.display()
+        ));
+        hook.plugin_root = root.path().to_path_buf();
+        HookExecutor::new(vec![hook])
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("the hook runs");
+        let r = root.path().display();
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("the hook ran"),
+            format!("from-x|{r}|{r}|{r}")
+        );
     }
 }
