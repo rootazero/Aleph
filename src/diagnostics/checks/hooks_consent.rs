@@ -75,12 +75,13 @@ impl HooksConsentCheck {
             ));
         }
 
-        // A stored fingerprint that no longer matches hash(plugin, command)
-        // means the registry was hand-edited or corrupted — consent for those
-        // rows can no longer be trusted.
+        // A stored fingerprint that no longer matches the hash of the entry's
+        // own key (plugin, project, command) means the registry was
+        // hand-edited or corrupted — consent for those rows can no longer be
+        // trusted.
         let drifted = entries
             .iter()
-            .filter(|e| ShellHookConsent::fingerprint(&e.plugin_name, &e.command) != e.fingerprint)
+            .filter(|e| e.expected_fingerprint() != e.fingerprint)
             .count();
         if drifted > 0 {
             findings.push(
@@ -121,5 +122,33 @@ impl HealthCheck for HooksConsentCheck {
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // Consent is never auto-repaired — approval is a human decision.
         self.diagnose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::visibility::ScopeKey;
+
+    /// A project entry's key includes its project, so the drift check must
+    /// recompute it with the project — a check that hashed `(plugin,
+    /// command)` alone would call every project approval hand-edited.
+    #[test]
+    fn a_project_bound_entry_is_not_reported_as_drifted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let consent = ShellHookConsent::with_path(dir.path().join("allowlist.json"));
+        consent.record_pending(
+            "user:project",
+            &ScopeKey::project(dir.path()),
+            "lint",
+            "PreToolUse",
+            dir.path(),
+        );
+
+        let findings = HooksConsentCheck::new(consent).diagnose();
+        assert!(
+            findings.iter().all(|f| f.title != "Stale fingerprint"),
+            "{findings:?}"
+        );
     }
 }

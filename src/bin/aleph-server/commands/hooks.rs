@@ -55,6 +55,9 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
             truncate(&e.plugin_name, 20),
             truncate(&e.command, 44),
         );
+        if let Some(note) = project_note(e) {
+            println!("{:<18} project: {note}", "");
+        }
     }
 
     let pending = entries
@@ -81,6 +84,11 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
 
     println!("Fingerprint: {}", entry.fingerprint);
     println!("Plugin:      {}", entry.plugin_name);
+    // The same template in two projects is two entries; this line is what
+    // tells them apart before approving one.
+    if let Some(note) = project_note(&entry) {
+        println!("Project:     {note}");
+    }
     println!("Event:       {}", entry.event);
     println!("Status:      {}", status_label(entry.status));
     if let Some(url) = http_url {
@@ -305,6 +313,20 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
 
 // -- helpers ----------------------------------------------------------------
 
+/// Which project an entry's approval is bound to, or — for a project-settings
+/// entry recorded before approvals were bound to a project — that it
+/// authorises nothing. `None` for a hook that fires everywhere.
+fn project_note(entry: &ConsentEntry) -> Option<String> {
+    if let Some(root) = &entry.project_root {
+        return Some(root.display().to_string());
+    }
+    entry.predates_project_binding().then(|| {
+        "no project — recorded before approvals were bound to one; authorises nothing. \
+         Approve the new pending entry of each project instead."
+            .to_string()
+    })
+}
+
 const fn status_label(status: ConsentStatus) -> &'static str {
     match status {
         ConsentStatus::Pending => "pending",
@@ -371,6 +393,7 @@ mod tests {
         let entry = ConsentEntry {
             fingerprint: "0123456789abcdef".into(),
             plugin_name: "user:global".into(),
+            project_root: None,
             command: "sh ${CLAUDE_PLUGIN_ROOT}/probe.sh".into(),
             event: "PreToolUse".into(),
             plugin_root: Some(root.path().to_path_buf()),

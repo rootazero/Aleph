@@ -10,12 +10,14 @@
 //!    targets). In App mode the daemon CWD is meaningless, so project hooks
 //!    are loaded from the registry rather than (only) the launch directory.
 //!
-//! Layers 2–4 are tagged `user:project` / `user:project-local` (logs /
-//! consent) and stamped `ScopeKey::Project(root)`; the
+//! Layers 2–4 are tagged `user:project` / `user:project-local` (logs) and
+//! stamped `ScopeKey::Project(root)`; the
 //! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time
 //! through `visibility::visible_to` so a hook checked into project A never
-//! runs while the agent works inside project B. Layer 1 (`user:global`) is
-//! stamped `ScopeKey::Global` and always fires.
+//! runs while the agent works inside project B, and consent keys them by
+//! that same root, so approving it in A does not approve B's copy
+//! (`consent.rs`). Layer 1 (`user:global`) is stamped `ScopeKey::Global` and
+//! always fires.
 //!
 //! The format mirrors Claude Code's `settings.json` `hooks` block so users
 //! can copy a working config across both tools without translation:
@@ -155,18 +157,21 @@ fn canonical(p: &Path) -> PathBuf {
     canonical_root(p)
 }
 
+/// The owner labels of a project's two hook files, checked-in and gitignored.
+/// Every project's files load under these same two labels, so a label never
+/// says WHICH project a hook belongs to — its `ScopeKey::Project` does, and
+/// that key is what the fire-time gate and consent (`consent.rs`) read.
+pub(crate) const PROJECT_LABELS: [&str; 2] = ["user:project", "user:project-local"];
+
 /// Load a project directory's checked-in + gitignored hook files. Both are
-/// tagged `user:project*` for logs / consent and stamped `Project(root)` so
-/// the executor's fire-time gate (`visible_to`) binds them to this project.
+/// tagged `user:project*` for logs and stamped `Project(root)` so the
+/// executor's fire-time gate (`visible_to`) and the consent key bind them to
+/// this project.
 fn load_project_layer(root: &Path, out: &mut Vec<HookConfig>) {
     let key = ScopeKey::project(root);
-    load_into(&root.join(".aleph/hooks.json"), "user:project", &key, out);
-    load_into(
-        &root.join(".aleph/hooks.local.json"),
-        "user:project-local",
-        &key,
-        out,
-    );
+    let [checked_in, local] = PROJECT_LABELS;
+    load_into(&root.join(".aleph/hooks.json"), checked_in, &key, out);
+    load_into(&root.join(".aleph/hooks.local.json"), local, &key, out);
 }
 
 fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<HookConfig>) {

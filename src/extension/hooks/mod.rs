@@ -48,6 +48,8 @@
 //! ```
 
 mod consent;
+#[cfg(all(test, unix))]
+mod consent_scope;
 mod executor;
 mod json_output;
 mod output_budget;
@@ -1297,7 +1299,13 @@ mod tests {
             dir.path().join("allowlist.json"),
         ));
         let cmd = "echo approved_output";
-        consent.record_pending("consent-test", cmd, "before_tool_call", Path::new("/tmp"));
+        consent.record_pending(
+            "consent-test",
+            &ScopeKey::Global,
+            cmd,
+            "before_tool_call",
+            Path::new("/tmp"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 

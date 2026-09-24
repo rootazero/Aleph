@@ -10,7 +10,34 @@
 //! `(mtime, len)` pair is the cache fingerprint — `is_approved` re-reads the
 //! registry whenever the file changes on disk, so an approval made via the
 //! `aleph hooks` CLI is picked up by a running server without a restart.
+//!
+//! # What an approval is bound to
+//!
+//! An entry is keyed by `(owner, project, command)` — see
+//! [`ShellHookConsent::fingerprint`]. `project` is the canonical root of the
+//! project the hook is bound to: its `ScopeKey::Project`, the same field the
+//! executor's fire-time gate (`project_scope_allows`) reads.
+//!
+//! - A hook that fires everywhere (`ScopeKey::Global`: `~/.aleph/hooks.json`,
+//!   a globally installed plugin) has no project and keeps the key it has
+//!   always had. A global plugin's root is its own install directory, so the
+//!   owner id already names the one place its code comes from.
+//! - A project hook (a project's `.aleph/hooks{,.local}.json`, a plugin found
+//!   under a project) is keyed by its project as well. Every project's files
+//!   load under the same `user:project` label, and a byte-identical template
+//!   in another repo resolves `${CLAUDE_PLUGIN_ROOT}` to THAT repo's
+//!   directory: approving `"${CLAUDE_PLUGIN_ROOT}"/hooks/lint.sh` in repo A
+//!   must not run repo B's `lint.sh`. A project-scoped plugin is the same
+//!   case — another repo can ship a plugin with the same id.
+//!
+//! **Migration.** An entry recorded before this binding carries no project.
+//! It is kept on disk as it is — never rewritten, never deleted — but a
+//! project hook is never looked up under it, so it authorises nothing: each
+//! project's hooks come back as `pending` once and are approved again, per
+//! project. `aleph hooks list` / `test` mark such a `user:project*` entry
+//! ([`ConsentEntry::predates_project_binding`]).
 
+use crate::extension::visibility::ScopeKey;
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::BTreeMap;
 use std::fs;
@@ -44,18 +71,26 @@ pub enum ConsentStatus {
 /// A single shell-hook consent record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsentEntry {
-    /// Stable id: `sha256(plugin_name \0 command)` truncated to 16 hex chars.
+    /// Stable id: the `sha256` of `(plugin_name, project_root, command)`
+    /// ([`ShellHookConsent::fingerprint`]) truncated to 16 hex chars.
     /// Changes when the command text changes — editing a hook revokes consent.
     pub fingerprint: String,
     /// Plugin that registered the hook.
     pub plugin_name: String,
+    /// The project this entry is bound to: the canonical root of a hook that
+    /// fires only inside one project. Part of the fingerprint, so approving
+    /// a template in one project never approves it in another. `None` for a
+    /// hook that fires everywhere — and for every entry recorded before
+    /// approvals were bound to a project (see the module doc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
     /// The exact shell command string.
     pub command: String,
     /// The event name the hook is dispatched with — its registered spelling
     /// (`PreToolUse`, `before_tool_call`), exactly what its payload's
     /// `hook_event_name` carries — so `aleph hooks test` can hand it the same
-    /// value. Best-effort: one entry per `(plugin, command)`, so a command
-    /// bound to two events keeps the first one seen, and an entry recorded
+    /// value. Best-effort: one entry per `(plugin, project, command)`, so a
+    /// command bound to two events keeps the first one seen, and an entry recorded
     /// before this field held the spelling carries the enum's Rust name
     /// (`BeforeToolCall`) instead — [`ShellHookConsent::record_pending`] never
     /// rewrites an existing entry.
@@ -91,6 +126,40 @@ pub struct ConsentEntry {
     pub script_fingerprint: Option<String>,
 }
 
+impl ConsentEntry {
+    /// The fingerprint this entry's own key derives — what `fingerprint`
+    /// must equal unless the registry was edited by hand.
+    #[must_use]
+    pub fn expected_fingerprint(&self) -> String {
+        ShellHookConsent::fingerprint(
+            &self.plugin_name,
+            self.project_root.as_deref(),
+            &self.command,
+        )
+    }
+
+    /// Whether this is a project-settings entry recorded before approvals
+    /// were bound to a project: a `user:project*` owner with no project. It
+    /// authorises nothing — no project hook is looked up without its
+    /// project. A project-scoped plugin's entry from that time cannot be
+    /// told apart from a global plugin's, so it is not marked (it is just as
+    /// inert).
+    #[must_use]
+    pub fn predates_project_binding(&self) -> bool {
+        self.project_root.is_none()
+            && super::user_settings::PROJECT_LABELS.contains(&self.plugin_name.as_str())
+    }
+}
+
+/// The project a consent key names: the root of a hook bound to one project,
+/// `None` for a hook that fires everywhere.
+fn bound_project(scope: &ScopeKey) -> Option<&Path> {
+    match scope {
+        ScopeKey::Global => None,
+        ScopeKey::Project(root) => Some(root),
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct RegistryDoc {
     #[serde(default)]
@@ -112,10 +181,25 @@ pub struct ShellHookConsent {
 }
 
 impl ShellHookConsent {
-    /// Compute the stable fingerprint for a `(plugin_name, command)` pair.
+    /// Compute the stable fingerprint for a `(plugin_name, project_root,
+    /// command)` key. `project_root` is the canonical root of a hook bound to
+    /// one project, `None` for a hook that fires everywhere.
+    ///
+    /// Without a project the hashed bytes are `plugin_name \0 command` — the
+    /// key every entry had before approvals were bound to a project, so a
+    /// global hook's approval survives. With one, a `0xFF` tag and the
+    /// length-prefixed root come first: no global key starts with `0xFF` (a
+    /// plugin name is UTF-8), so a project key can never equal a global one,
+    /// and the prefix keeps one root from running into the name after it.
     #[must_use]
-    pub fn fingerprint(plugin_name: &str, command: &str) -> String {
+    pub fn fingerprint(plugin_name: &str, project_root: Option<&Path>, command: &str) -> String {
         let mut hasher = Sha256::new();
+        if let Some(root) = project_root {
+            let root = root.as_os_str().as_encoded_bytes();
+            hasher.update([0xFFu8]);
+            hasher.update((root.len() as u64).to_le_bytes());
+            hasher.update(root);
+        }
         hasher.update(plugin_name.as_bytes());
         hasher.update([0u8]);
         hasher.update(command.as_bytes());
@@ -160,14 +244,17 @@ impl ShellHookConsent {
         &self.path
     }
 
-    /// Whether a `(plugin_name, command)` shell hook is approved to run.
+    /// Whether a shell hook is approved to run: `command`, owned by
+    /// `plugin_name`, from a hook whose visibility key is `scope` — the
+    /// hook's own `scope_key`, so a project hook is looked up under its
+    /// project and nowhere else (module doc).
     ///
     /// Re-reads the registry first if the file changed on disk, so approvals
     /// made via the `aleph hooks` CLI are honored without a server restart.
     ///
     /// Two conditions, both required:
     ///
-    /// 1. an `Approved` entry exists for the command string, and
+    /// 1. an `Approved` entry exists for that key, and
     /// 2. if that entry recorded a [`script_fingerprint`](ConsentEntry::script_fingerprint),
     ///    the script on disk still hashes to it.
     ///
@@ -176,9 +263,9 @@ impl ShellHookConsent {
     /// SAFE (the hook is skipped, exactly like an un-approved one) and is
     /// logged loudly, because the alternative — running edited-since-approval
     /// code — is the whole thing consent exists to prevent.
-    pub fn is_approved(&self, plugin_name: &str, command: &str) -> bool {
+    pub fn is_approved(&self, plugin_name: &str, scope: &ScopeKey, command: &str) -> bool {
         self.reload_if_stale();
-        let fp = Self::fingerprint(plugin_name, command);
+        let fp = Self::fingerprint(plugin_name, bound_project(scope), command);
         let recorded = {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
             match cache.entries.get(&fp) {
@@ -222,17 +309,20 @@ impl ShellHookConsent {
     /// review it. No-op when the fingerprint is already known. Best-effort:
     /// a write failure is logged, not propagated.
     ///
-    /// `event` is the name the hook is dispatched with
+    /// `scope` is the hook's `scope_key`, keyed exactly as in
+    /// [`Self::is_approved`]. `event` is the name the hook is dispatched with
     /// (`HookConfig::event_name`) and `plugin_root` the root its path
     /// variables resolve to — what `aleph hooks test` rebuilds the run from.
     pub fn record_pending(
         &self,
         plugin_name: &str,
+        scope: &ScopeKey,
         command: &str,
         event: &str,
         plugin_root: &Path,
     ) {
-        let fp = Self::fingerprint(plugin_name, command);
+        let project_root = bound_project(scope);
+        let fp = Self::fingerprint(plugin_name, project_root, command);
         {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
             if cache.entries.contains_key(&fp) {
@@ -242,6 +332,7 @@ impl ShellHookConsent {
         let entry = ConsentEntry {
             fingerprint: fp.clone(),
             plugin_name: plugin_name.to_string(),
+            project_root: project_root.map(Path::to_path_buf),
             command: command.to_string(),
             event: event.to_string(),
             plugin_root: Some(plugin_root.to_path_buf()),
@@ -575,20 +666,95 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_and_command_sensitive() {
-        let a = ShellHookConsent::fingerprint("plug", "echo hi");
-        let b = ShellHookConsent::fingerprint("plug", "echo hi");
-        let c = ShellHookConsent::fingerprint("plug", "echo HI");
-        let d = ShellHookConsent::fingerprint("other", "echo hi");
+        let a = ShellHookConsent::fingerprint("plug", None, "echo hi");
+        let b = ShellHookConsent::fingerprint("plug", None, "echo hi");
+        let c = ShellHookConsent::fingerprint("plug", None, "echo HI");
+        let d = ShellHookConsent::fingerprint("other", None, "echo hi");
         assert_eq!(a, b);
         assert_ne!(a, c, "command change must change the fingerprint");
         assert_ne!(a, d, "plugin change must change the fingerprint");
         assert_eq!(a.len(), 16);
     }
 
+    /// A global key is the pre-binding key, byte for byte, so every approval
+    /// of a hook that fires everywhere survives the change. Pinned value:
+    /// `sha256("plug\0echo hi")`, what `286ccf533` computed.
+    #[test]
+    fn a_global_key_is_the_key_it_always_was() {
+        assert_eq!(
+            ShellHookConsent::fingerprint("plug", None, "echo hi"),
+            "c64b0e5b341bfa92"
+        );
+    }
+
+    #[test]
+    fn a_project_key_names_its_project() {
+        let key = |root: Option<&str>| {
+            ShellHookConsent::fingerprint("user:project", root.map(Path::new), "lint")
+        };
+        assert_ne!(
+            key(Some("/repo/a")),
+            key(Some("/repo/b")),
+            "one template in two projects is two keys"
+        );
+        assert_ne!(
+            key(Some("/repo/a")),
+            key(None),
+            "a project key is never the shared-label key"
+        );
+    }
+
+    /// The doctor's drift check recomputes each entry's key from its own
+    /// fields; a project entry must round-trip through the file, or every
+    /// one of them reads as hand-edited.
+    #[test]
+    fn a_recorded_project_entry_derives_its_own_fingerprint() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        let scope = ScopeKey::project(root.path());
+        consent.record_pending("user:project", &scope, "lint", "PreToolUse", root.path());
+
+        let entry = consent.entries().remove(0);
+        assert_eq!(
+            entry.project_root,
+            Some(crate::extension::visibility::canonical_root(root.path()))
+        );
+        assert_eq!(entry.expected_fingerprint(), entry.fingerprint);
+        assert!(!entry.predates_project_binding());
+        let reopened = ShellHookConsent::with_path(consent.path());
+        assert_eq!(
+            reopened.entries()[0].expected_fingerprint(),
+            entry.fingerprint
+        );
+    }
+
+    /// Recording under `Global` is exactly how every entry looked before the
+    /// binding. Only the project-settings labels can be told apart.
+    #[test]
+    fn only_an_unbound_project_label_entry_predates_the_binding() {
+        let (_d, consent) = tmp_consent();
+        for (owner, command) in [
+            ("user:project", "a"),
+            ("user:project-local", "b"),
+            ("user:global", "c"),
+            ("some-plugin", "d"),
+        ] {
+            consent.record_pending(owner, &ScopeKey::Global, command, "e", Path::new("/p"));
+        }
+        let mut marked: Vec<String> = consent
+            .entries()
+            .into_iter()
+            .filter(ConsentEntry::predates_project_binding)
+            .map(|e| e.command)
+            .collect();
+        marked.sort();
+        assert_eq!(marked, ["a", "b"]);
+    }
+
     #[test]
     fn unknown_hook_is_not_approved() {
         let (_d, consent) = tmp_consent();
-        assert!(!consent.is_approved("p", "rm -rf /"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, "rm -rf /"));
     }
 
     // -- script-content binding (TOCTOU guard) -----------------------------
@@ -610,21 +776,30 @@ mod tests {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo safe\n");
 
-        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
-        assert!(consent.is_approved("p", &command), "freshly approved");
+        assert!(
+            consent.is_approved("p", &ScopeKey::Global, &command),
+            "freshly approved"
+        );
 
         std::fs::write(&script, "rm -rf /\n").expect("rewrite script");
         assert!(
-            !consent.is_approved("p", &command),
+            !consent.is_approved("p", &ScopeKey::Global, &command),
             "edited script must lose its approval"
         );
 
         // Restoring the exact approved bytes restores the approval — the
         // guard keys on content, not on an mtime that any touch would bump.
         std::fs::write(&script, "echo safe\n").expect("restore script");
-        assert!(consent.is_approved("p", &command));
+        assert!(consent.is_approved("p", &ScopeKey::Global, &command));
     }
 
     #[test]
@@ -634,14 +809,20 @@ mod tests {
         // steps would make the just-approved version fail on first fire.
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo v1\n");
-        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
 
         std::fs::write(&script, "echo v2\n").expect("edit before approving");
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 
         assert!(
-            consent.is_approved("p", &command),
+            consent.is_approved("p", &ScopeKey::Global, &command),
             "approval must attest to the content present when approving"
         );
     }
@@ -650,12 +831,18 @@ mod tests {
     fn deleting_an_approved_script_fails_safe() {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo hi\n");
-        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 
         std::fs::remove_file(&script).expect("delete script");
-        assert!(!consent.is_approved("p", &command));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, &command));
     }
 
     #[test]
@@ -663,11 +850,17 @@ mod tests {
         // `echo hi` has nothing to bind to; it must still approve normally
         // rather than being permanently refused for lack of a fingerprint.
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "before_tool_call",
+            Path::new("/p"),
+        );
         assert!(consent.entries()[0].script_fingerprint.is_none());
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
-        assert!(consent.is_approved("p", "echo hi"));
+        assert!(consent.is_approved("p", &ScopeKey::Global, "echo hi"));
     }
 
     #[test]
@@ -691,7 +884,7 @@ mod tests {
         assert!(entry.script_fingerprint.is_none());
         // The seeded fingerprint is synthetic, so look it up the way the
         // executor does: by (plugin, command).
-        let real_fp = ShellHookConsent::fingerprint("p", "sh /nonexistent/legacy.sh");
+        let real_fp = ShellHookConsent::fingerprint("p", None, "sh /nonexistent/legacy.sh");
         assert_ne!(real_fp, entry.fingerprint, "seeded id is deliberately fake");
         // The stored entry is keyed by its recorded fingerprint and stays
         // approved — no forced re-consent for pre-existing registries.
@@ -761,8 +954,17 @@ mod tests {
     #[test]
     fn record_pending_then_approve_round_trip() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
-        assert!(!consent.is_approved("p", "echo hi"), "pending != approved");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
+        assert!(
+            !consent.is_approved("p", &ScopeKey::Global, "echo hi"),
+            "pending != approved"
+        );
 
         let entries = consent.entries();
         assert_eq!(entries.len(), 1);
@@ -771,34 +973,55 @@ mod tests {
 
         let approved = consent.approve(&fp).expect("approve").expect("entry");
         assert_eq!(approved.status, ConsentStatus::Approved);
-        assert!(consent.is_approved("p", "echo hi"), "approved hook runs");
+        assert!(
+            consent.is_approved("p", &ScopeKey::Global, "echo hi"),
+            "approved hook runs"
+        );
     }
 
     #[test]
     fn record_pending_is_idempotent() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
-        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
         assert_eq!(consent.entries().len(), 1);
     }
 
     #[test]
     fn revoke_sends_approved_hook_back_to_pending() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call", Path::new("/p"));
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).unwrap();
-        assert!(consent.is_approved("p", "echo hi"));
+        assert!(consent.is_approved("p", &ScopeKey::Global, "echo hi"));
 
         let revoked = consent.revoke(&fp).expect("revoke").expect("entry");
         assert_eq!(revoked.status, ConsentStatus::Pending);
-        assert!(!consent.is_approved("p", "echo hi"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, "echo hi"));
     }
 
     #[test]
     fn approve_by_prefix_resolves_unique_match() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         let approved = consent
             .approve(fp.get(..6).unwrap_or(&fp))
@@ -817,21 +1040,21 @@ mod tests {
     fn changes_persist_across_reload() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).unwrap();
 
         // A fresh instance reads the same file from disk.
         let reopened = ShellHookConsent::with_path(path);
-        assert!(reopened.is_approved("p", "echo hi"));
+        assert!(reopened.is_approved("p", &ScopeKey::Global, "echo hi"));
     }
 
     #[test]
     fn external_file_change_is_picked_up_via_stamp() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
-        assert!(!consent.is_approved("p", "echo hi"));
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, "echo hi"));
 
         // A second process approves the hook by writing the file directly;
         // the approval grows the file, so the `(mtime, len)` stamp differs.
@@ -840,7 +1063,7 @@ mod tests {
         writer.approve(&fp).unwrap();
 
         assert!(
-            consent.is_approved("p", "echo hi"),
+            consent.is_approved("p", &ScopeKey::Global, "echo hi"),
             "is_approved must reload after the registry file changes"
         );
     }

@@ -6,6 +6,7 @@ use super::{
     DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
+use crate::extension::visibility::ScopeKey;
 use crate::extension::ExtensionError;
 use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
@@ -558,6 +559,7 @@ impl HookExecutor {
         context: &HookContext,
         plugin_root: &Path,
         plugin_name: &str,
+        scope_key: &ScopeKey,
         event: HookEvent,
         event_name: &str,
         timeout_override: Option<Duration>,
@@ -569,6 +571,7 @@ impl HookExecutor {
                     context,
                     plugin_root,
                     plugin_name,
+                    scope_key,
                     event,
                     event_name,
                     timeout_override,
@@ -587,6 +590,7 @@ impl HookExecutor {
                     context,
                     plugin_root,
                     plugin_name,
+                    scope_key,
                     event,
                     event_name,
                     timeout_override,
@@ -684,6 +688,7 @@ impl HookExecutor {
         context: &HookContext,
         plugin_root: &Path,
         plugin_name: &str,
+        scope_key: &ScopeKey,
         event: HookEvent,
         event_name: &str,
         timeout_override: Option<Duration>,
@@ -695,14 +700,18 @@ impl HookExecutor {
         // the tool call. Approving arbitrary code execution is the operator's
         // explicit decision, not a default.
         if let Some(consent) = &self.consent {
-            if !consent.is_approved(plugin_name, command) {
+            // Keyed by the hook's `scope_key` — the field
+            // `project_scope_allows` reads — so a project hook's approval is
+            // its project's alone (`consent.rs`, module doc).
+            if !consent.is_approved(plugin_name, scope_key, command) {
                 // What `aleph hooks test` rebuilds the run from: the spelling
                 // this hook is dispatched with and the root its path
                 // variables resolve to.
-                consent.record_pending(plugin_name, command, event_name, plugin_root);
+                consent.record_pending(plugin_name, scope_key, command, event_name, plugin_root);
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
+                    scope = ?scope_key,
                     "Shell hook command not approved — skipped. Review with `aleph hooks list`."
                 );
                 return Ok(ActionResult {
@@ -916,17 +925,25 @@ impl HookExecutor {
         context: &HookContext,
         plugin_root: &Path,
         plugin_name: &str,
+        scope_key: &ScopeKey,
         event: HookEvent,
         event_name: &str,
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         if let Some(consent) = &self.consent {
             let consent_key = format!("http:{url}");
-            if !consent.is_approved(plugin_name, &consent_key) {
-                consent.record_pending(plugin_name, &consent_key, event_name, plugin_root);
+            if !consent.is_approved(plugin_name, scope_key, &consent_key) {
+                consent.record_pending(
+                    plugin_name,
+                    scope_key,
+                    &consent_key,
+                    event_name,
+                    plugin_root,
+                );
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
+                    scope = ?scope_key,
                     "HTTP hook URL not approved — skipped. Review with `aleph hooks list`."
                 );
                 return Ok(ActionResult {
@@ -1094,6 +1111,7 @@ impl HookExecutor {
                         &current_context,
                         &hook.plugin_root,
                         &hook.plugin_name,
+                        &hook.scope_key,
                         event,
                         &event_name,
                         hook.timeout_secs.map(Duration::from_secs),
@@ -1273,7 +1291,7 @@ impl HookExecutor {
                 _ => continue,
             };
             saw_gated = true;
-            if !consent.is_approved(&hook.plugin_name, &key) {
+            if !consent.is_approved(&hook.plugin_name, &hook.scope_key, &key) {
                 all_approved = false;
             }
         }
@@ -1324,6 +1342,7 @@ impl HookExecutor {
                             context,
                             &hook.plugin_root,
                             &hook.plugin_name,
+                            &hook.scope_key,
                             event,
                             &event_name,
                             timeout_override,
@@ -1472,6 +1491,7 @@ mod tests {
         // consent is a separate axis from configuration validity.
         consent.record_pending(
             "plugin:linter",
+            &ScopeKey::Global,
             "true",
             "before_tool_call",
             std::path::Path::new("/p"),
@@ -2202,6 +2222,7 @@ mod tests {
                 &ctx,
                 &PathBuf::new(),
                 "plugin:demo",
+                &ScopeKey::Global,
                 HookEvent::MessageReceived,
                 "message_received",
                 None,
