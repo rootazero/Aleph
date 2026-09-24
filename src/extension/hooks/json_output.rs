@@ -21,7 +21,7 @@
 //! { "continue": false, "stopReason": "…" }               // halt the loop
 //! { "systemMessage": "…" }                               // surface a notice
 //! { "hookSpecificOutput": {                              // Claude-Code modern
-//!     "permissionDecision": "deny",                      //   allow|deny|ask
+//!     "permissionDecision": "deny",                      //   allow|deny|ask|block
 //!     "permissionDecisionReason": "…",
 //!     "additionalContext": "…" } }
 //! ```
@@ -181,7 +181,7 @@ impl JsonHookOutput {
     }
 }
 
-/// Apply a `permissionDecision` string to the result (allow/deny/ask).
+/// Apply a `permissionDecision` string to the result (allow/deny/ask/block).
 fn apply_permission_decision(decision: &str, reason: Option<String>, result: &mut HookResult) {
     match decision {
         "allow" => {
