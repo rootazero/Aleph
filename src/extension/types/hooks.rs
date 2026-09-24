@@ -99,23 +99,46 @@ pub enum HookEvent {
     #[serde(alias = "PermissionRequest")]
     PermissionRequest,
     /// A tool call was refused at the tool-dispatch chokepoint
-    /// (`ScopedToolService`): the exec-tier / `[policies.tool_permissions]`
-    /// rule, the operator gate (the operator said no, or no approval channel
-    /// exists), or a BeforeToolCall hook's `deny:`. Fired for every
-    /// `ToolError::PermissionDenied` leaving that chokepoint, so a new deny
-    /// arm there is covered without knowing this event exists. NOT fired for
-    /// refusals reported as a different error (a human declining a
-    /// confirmation card is `Execution`) or decided above the chokepoint (a
-    /// sub-agent's allowlist, `AllowlistToolService`). Observer-only: the
-    /// refusal has already been returned to the model; hooks witness it
-    /// (audit, metrics, a notification). Claude Code `PermissionDenied`
-    /// parity. Carries `tool_name` (so a `matcher` applies) and
-    /// `DENY_REASON` in `env`. A command hook reads the reason as
-    /// `.env.DENY_REASON` from the stdin JSON, or as `"$DENY_REASON"`
-    /// (double-quoted) from its environment: the reason quotes identifiers in
-    /// backticks and can contain apostrophes and the operator's own words,
-    /// and it is never substituted into the command text. On Windows, use
-    /// the stdin JSON ([`HookAction::Command`]).
+    /// (`ScopedToolService`). Fired for every `ToolError::PermissionDenied`
+    /// leaving that chokepoint — so a new deny arm there is covered without
+    /// knowing this event exists — which today means:
+    ///
+    /// - the exec-tier / plan / side-question / `[policies.tool_permissions]`
+    ///   rule refused the tool;
+    /// - the operator gate (a configuration tool called from a non-operator
+    ///   turn): the operator said no, or no approval channel exists;
+    /// - a BeforeToolCall hook said `deny:`.
+    ///
+    /// NOT fired for these refusals, which reach the model as a different
+    /// error or are decided elsewhere:
+    ///
+    /// - a person declining a confirmation card (Ask tier, destructive
+    ///   arguments), or that gate refusing because no approval channel
+    ///   exists — `Execution`;
+    /// - a BeforeToolCall hook's `ask:` that the person declined or that
+    ///   could not be raised — `Execution`;
+    /// - a card that expired unanswered — `ApprovalExpired`: nobody refused;
+    /// - a sub-agent calling a tool outside its allowlist
+    ///   (`AllowlistToolService`): decided above the chokepoint, before this
+    ///   event's seam.
+    ///
+    /// Those return before any post-call hook runs, so no hook event reports
+    /// them: a card a person declined is visible to hooks only as the
+    /// `PermissionRequest` that raised it, and a refusal made without raising
+    /// a card leaves no hook trace at all.
+    ///
+    /// Observer-only: the refusal has already been returned to the model;
+    /// hooks witness it (audit, metrics, a notification). Claude Code
+    /// `PermissionDenied` parity. Carries `tool_name` (so a `matcher`
+    /// applies), the refused call's raw arguments — `tool_input` in the
+    /// stdin JSON, `ARGUMENTS` / `TOOL_INPUT` in the environment, exactly as
+    /// a BeforeToolCall hook gets them (a PermissionRequest observer gets
+    /// only the redacted summary) — and `DENY_REASON` in `env`. Both reach a
+    /// command as data only, never as its source ([`HookAction::Command`]):
+    /// read the reason as `.env.DENY_REASON` from the stdin JSON, or as
+    /// `"$DENY_REASON"` (double-quoted) from the environment — it quotes
+    /// identifiers in backticks and can contain apostrophes and the
+    /// operator's own words. On Windows, use the stdin JSON.
     #[serde(alias = "PermissionDenied")]
     PermissionDenied,
     /// When a user prompt is about to be sent to the LLM (after history
@@ -180,8 +203,9 @@ impl HookEvent {
 
     /// The serde snake_case name (`before_tool_call`) — what the payload
     /// carries for a hook that declared no other spelling (runtime/WASM
-    /// registrations, `aleph hooks test`). Derived from serde so the enum's
-    /// rename attribute stays the single source.
+    /// registrations), and the name every diagnostic view (`hooks.registry`,
+    /// the `hooks.events` catalogue) lists an event under. Derived from serde
+    /// so the enum's rename attribute stays the single source.
     #[must_use]
     pub fn canonical_name(self) -> String {
         match serde_json::to_value(self) {
@@ -392,7 +416,11 @@ pub enum HookAction {
     ///   expanded at all. An `ARGUMENTS` / `TOOL_INPUT` value over the
     ///   executor's env cap (`MAX_ENV_VALUE_BYTES`) is replaced by the marker
     ///   `[N bytes — read from stdin JSON]`, which is then all the variable
-    ///   holds.
+    ///   holds. A field the event does not carry (no tool, no file) is
+    ///   removed from the environment, never inherited from the daemon's.
+    ///
+    /// `aleph hooks test` builds its run by the same derivation, so a command
+    /// reviewed there sees these same variables (on a synthetic tool call).
     ///
     /// On Windows `cmd` expands `%VAR%` before it parses the line, so a `&`,
     /// `|` or `^` in the value would still be interpreted, and `$ARGUMENTS`

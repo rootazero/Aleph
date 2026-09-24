@@ -58,7 +58,7 @@ mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub(crate) use executor::read_capped;
-pub use executor::{event_payload_json, HookExecutor};
+pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
@@ -110,8 +110,9 @@ pub struct HookContext {
     /// `transcript_path` (derived by the executor, `session_facts`), only a
     /// fire site that holds the tier can say it: tool dispatch
     /// (`build_hook_context`) and the turn-start seams in
-    /// `run_loop/inner.rs`. Every other face leaves it `None` and the payload
-    /// omits the key — unknown, not a default tier.
+    /// `run_loop/inner.rs` (plus `aleph hooks test`'s synthetic tool call,
+    /// which states the default tier). Every other face leaves it `None` and
+    /// the payload omits the key — unknown, not a default tier.
     pub permission_mode: Option<&'static str>,
 }
 
@@ -1296,7 +1297,7 @@ mod tests {
             dir.path().join("allowlist.json"),
         ));
         let cmd = "echo approved_output";
-        consent.record_pending("consent-test", cmd, "before_tool_call");
+        consent.record_pending("consent-test", cmd, "before_tool_call", Path::new("/tmp"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 

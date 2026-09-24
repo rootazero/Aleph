@@ -51,9 +51,22 @@ pub struct ConsentEntry {
     pub plugin_name: String,
     /// The exact shell command string.
     pub command: String,
-    /// Hook event the command is bound to (display-only, best-effort).
+    /// The event name the hook is dispatched with — its registered spelling
+    /// (`PreToolUse`, `before_tool_call`), exactly what its payload's
+    /// `hook_event_name` carries — so `aleph hooks test` can hand it the same
+    /// value. Best-effort: one entry per `(plugin, command)`, so a command
+    /// bound to two events keeps the first one seen, and an entry recorded
+    /// before this field held the spelling carries the enum's Rust name
+    /// (`BeforeToolCall`) instead — [`ShellHookConsent::record_pending`] never
+    /// rewrites an existing entry.
     #[serde(default)]
     pub event: String,
+    /// The hook's plugin root, which its path variables
+    /// (`${CLAUDE_PLUGIN_ROOT}` …) resolve to, so `aleph hooks test` runs the
+    /// command as production does. `None` for entries recorded before it was
+    /// kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<PathBuf>,
     /// Consent status.
     pub status: ConsentStatus,
     /// Unix seconds when the record was first created.
@@ -208,7 +221,17 @@ impl ShellHookConsent {
     /// Record an un-approved shell hook as `pending` so the operator can
     /// review it. No-op when the fingerprint is already known. Best-effort:
     /// a write failure is logged, not propagated.
-    pub fn record_pending(&self, plugin_name: &str, command: &str, event: &str) {
+    ///
+    /// `event` is the name the hook is dispatched with
+    /// (`HookConfig::event_name`) and `plugin_root` the root its path
+    /// variables resolve to — what `aleph hooks test` rebuilds the run from.
+    pub fn record_pending(
+        &self,
+        plugin_name: &str,
+        command: &str,
+        event: &str,
+        plugin_root: &Path,
+    ) {
         let fp = Self::fingerprint(plugin_name, command);
         {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
@@ -221,6 +244,7 @@ impl ShellHookConsent {
             plugin_name: plugin_name.to_string(),
             command: command.to_string(),
             event: event.to_string(),
+            plugin_root: Some(plugin_root.to_path_buf()),
             status: ConsentStatus::Pending,
             first_seen: now_secs(),
             approved_at: None,
@@ -586,7 +610,7 @@ mod tests {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo safe\n");
 
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
         assert!(consent.is_approved("p", &command), "freshly approved");
@@ -610,7 +634,7 @@ mod tests {
         // steps would make the just-approved version fail on first fire.
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo v1\n");
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
 
         std::fs::write(&script, "echo v2\n").expect("edit before approving");
         let fp = consent.entries()[0].fingerprint.clone();
@@ -626,7 +650,7 @@ mod tests {
     fn deleting_an_approved_script_fails_safe() {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo hi\n");
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending("p", &command, "before_tool_call", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 
@@ -639,7 +663,7 @@ mod tests {
         // `echo hi` has nothing to bind to; it must still approve normally
         // rather than being permanently refused for lack of a fingerprint.
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call");
+        consent.record_pending("p", "echo hi", "before_tool_call", Path::new("/p"));
         assert!(consent.entries()[0].script_fingerprint.is_none());
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
@@ -737,7 +761,7 @@ mod tests {
     #[test]
     fn record_pending_then_approve_round_trip() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call");
+        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
         assert!(!consent.is_approved("p", "echo hi"), "pending != approved");
 
         let entries = consent.entries();
@@ -753,15 +777,15 @@ mod tests {
     #[test]
     fn record_pending_is_idempotent() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call");
-        consent.record_pending("p", "echo hi", "after_tool_call");
+        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
+        consent.record_pending("p", "echo hi", "after_tool_call", Path::new("/p"));
         assert_eq!(consent.entries().len(), 1);
     }
 
     #[test]
     fn revoke_sends_approved_hook_back_to_pending() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call");
+        consent.record_pending("p", "echo hi", "before_tool_call", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).unwrap();
         assert!(consent.is_approved("p", "echo hi"));
@@ -774,7 +798,7 @@ mod tests {
     #[test]
     fn approve_by_prefix_resolves_unique_match() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "e");
+        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         let approved = consent
             .approve(fp.get(..6).unwrap_or(&fp))
@@ -793,7 +817,7 @@ mod tests {
     fn changes_persist_across_reload() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e");
+        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).unwrap();
 
@@ -806,7 +830,7 @@ mod tests {
     fn external_file_change_is_picked_up_via_stamp() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e");
+        consent.record_pending("p", "echo hi", "e", Path::new("/p"));
         assert!(!consent.is_approved("p", "echo hi"));
 
         // A second process approves the hook by writing the file directly;

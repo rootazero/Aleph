@@ -31,9 +31,10 @@ const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
 /// object in the capture), as text otherwise ([`tool_response_value`]).
 /// Settled by the P0 live capture (2026-09-20): the official hooks reference
 /// and dsh's `hooks-claude-code` port both spell it `tool_response`; the
-/// plugin-dev skill's prose (`tool_result`) is stale. If a future capture
-/// disagrees, this constant and `post_tool_payload_carries_the_claude_code_envelope_keys`
-/// are the only two places to touch.
+/// plugin-dev skill's prose (`tool_result`) is stale. This constant is the
+/// one production spelling. This module's payload tests read the key through
+/// it; the real-tool-call test in `tools::scoped` spells it out literally, so
+/// changing the constant fails that test instead of silently following.
 pub(crate) const CC_POST_TOOL_RESULT_KEY: &str = "tool_response";
 
 /// Read at most `cap` bytes from `r`, then drain (and discard) the rest so
@@ -70,23 +71,158 @@ pub(crate) async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: u64) -> (Ve
 /// over the limit. The full value is always available on stdin.
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
-/// Set `key` to `value` on `cmd`, but skip (with a placeholder) any value
-/// past [`MAX_ENV_VALUE_BYTES`] — an oversized env var can make `spawn` fail
-/// with E2BIG, which on an interceptor seam fails closed and blocks the tool.
-fn set_env_bounded(cmd: &mut Command, key: &str, value: Option<&str>) {
-    match value {
-        Some(v) if v.len() <= MAX_ENV_VALUE_BYTES => {
-            cmd.env(key, v);
+/// `value` for the env var `key`, or a placeholder for any value past
+/// [`MAX_ENV_VALUE_BYTES`] — an oversized env var can make `spawn` fail with
+/// E2BIG, which on an interceptor seam fails closed and blocks the tool.
+fn bounded_env_value(key: &str, value: &str) -> String {
+    if value.len() <= MAX_ENV_VALUE_BYTES {
+        return value.to_string();
+    }
+    debug!(
+        key,
+        len = value.len(),
+        "hook env value exceeds cap; omitting from env (full value is on stdin)"
+    );
+    format!("[{} bytes — read from stdin JSON]", value.len())
+}
+
+/// A command hook's child process, derived once from the action: the shell
+/// line, the directory, the environment and the stdin JSON.
+///
+/// Production ([`HookExecutor`]'s command action) and `aleph hooks test` both
+/// spawn from this value, so a script an operator reviews there sees the same
+/// path substitution, the same data variables and the same payload it will
+/// get in production. Production adds one thing: the plugin's runtime
+/// settings (`ALEPH_PLUGIN_OPTION_*`), which need the running extension
+/// manager.
+#[derive(Debug, Clone)]
+pub struct CommandHookInvocation {
+    /// The shell (`sh` / `cmd`).
+    pub program: &'static str,
+    /// Its "run this line" flag (`-c` / `/C`).
+    pub flag: &'static str,
+    /// The command after substituting the path variables — and nothing else.
+    pub line: String,
+    /// Where the child runs: the context's `working_dir`, else the hook's
+    /// plugin root. `None` only when neither is known.
+    pub current_dir: Option<std::path::PathBuf>,
+    /// Environment changes, in the order they are applied. `Some` sets the
+    /// variable; `None` removes it, so a field this event does not have is
+    /// never inherited from the daemon's own environment.
+    pub env: Vec<(String, Option<std::ffi::OsString>)>,
+    /// The event as JSON, written to the child's stdin.
+    pub stdin: String,
+}
+
+/// Derive a command hook's [`CommandHookInvocation`].
+///
+/// `event_name` is the spelling the hook receives on `hook_event_name`
+/// ([`HookConfig::event_name`]). `plugin_root` is `None` only for a consent
+/// entry recorded before the root was kept: the path variables then stay
+/// unresolved rather than being given an invented directory.
+#[must_use]
+pub fn command_hook_invocation(
+    command: &str,
+    event_name: &str,
+    context: &HookContext,
+    plugin_root: Option<&Path>,
+    plugin_name: &str,
+) -> CommandHookInvocation {
+    use std::ffi::OsString;
+    // Derived once, so the stdin payload and the environment read the same
+    // answer.
+    let facts = SessionFacts::derive(context);
+
+    // Only the trusted path variables become shell source. The data
+    // variables (`$ARGUMENTS`, `$DENY_REASON`, …) are model-controlled or
+    // quote identifiers in backticks: they reach the child as the env vars
+    // below, which the shell expands as data. Spliced in here they ran as
+    // code — and consent approves the template, not the resolved string.
+    // Same on Windows, where `cmd` would expand a `%VAR%` before parsing:
+    // data is read from the stdin JSON there.
+    let line = match plugin_root {
+        Some(root) => substitute_path_variables(command, root, plugin_name),
+        None => command.to_string(),
+    };
+    let (program, flag) = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+
+    let mut env: Vec<(String, Option<OsString>)> = Vec::new();
+    let mut set = |key: &str, value: Option<OsString>| env.push((key.to_string(), value));
+
+    // Set environment variables. These are the only route by which the data
+    // variables (`TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`, `FILE`, `SESSION_ID`,
+    // every `context.env` key) reach a command — none is substituted into
+    // its source (above). `ARGUMENTS` / `TOOL_INPUT` mirror the tool payload,
+    // but a large payload (a Write tool's whole file body) can exceed the OS
+    // `ARG_MAX` limit and make `spawn` fail with E2BIG — which, on an
+    // interceptor seam, fails CLOSED and spuriously blocks the tool. The
+    // canonical full-fidelity path is the stdin JSON (`jq -r '.tool_input…'`,
+    // Claude-Code convention), so oversized values are replaced in the env by
+    // a marker rather than risking the spawn — and the marker is all a
+    // `"$ARGUMENTS"` script then sees.
+    if let Some(root) = plugin_root {
+        set("PLUGIN_ROOT", Some(root.into()));
+        set("CLAUDE_PLUGIN_ROOT", Some(root.into()));
+    }
+    // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`), the
+    // one every CC hook script reaches for first: `facts.cwd`, the value the
+    // payload's `cwd` is written from. Removed rather than inherited when
+    // unknown, so a daemon launched from inside a Claude Code session cannot
+    // hand its own value to every hook.
+    set("CLAUDE_PROJECT_DIR", facts.cwd.clone().map(Into::into));
+    // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by `plugin update`
+    // (stage → backup → swap), so a hook that wants state that outlives an
+    // upgrade had no addressable path until this line existed. Plugin-owned
+    // hooks only — a settings source label such as `user:project` is not a
+    // plugin id and has no data directory.
+    if let Some(root) = plugin_root {
+        if crate::extension::manifest::validate_plugin_id(plugin_name).is_ok() {
+            let vars = crate::extension::plugin_vars::PluginVars::new(plugin_name, root);
+            set("CLAUDE_PLUGIN_DATA", Some(vars.data_dir().into()));
+            set("ALEPH_PLUGIN_DATA", Some(vars.data_dir().into()));
         }
-        Some(v) => {
-            debug!(
-                key,
-                len = v.len(),
-                "hook env value exceeds cap; omitting from env (full value is on stdin)"
-            );
-            cmd.env(key, format!("[{} bytes — read from stdin JSON]", v.len()));
-        }
-        None => {}
+    }
+    // A data field this event does not carry is removed, not left to the
+    // daemon's environment: a daemon started with `FILE` or `ARGUMENTS`
+    // exported would otherwise hand that value to every hook as if it were
+    // the event's (the `CLAUDE_PROJECT_DIR` rule above, for the data half).
+    set("TOOL_NAME", context.tool_name.clone().map(Into::into));
+    set(
+        "ARGUMENTS",
+        context
+            .arguments
+            .as_deref()
+            .map(|v| bounded_env_value("ARGUMENTS", v).into()),
+    );
+    set(
+        "TOOL_INPUT",
+        context
+            .tool_input
+            .as_deref()
+            .map(|v| bounded_env_value("TOOL_INPUT", v).into()),
+    );
+    set("FILE", context.file_path.clone().map(Into::into));
+    set("SESSION_ID", Some(context.session_id.clone().into()));
+    // The event's own variables, last: a key here (e.g. `TOOL_NAME` from
+    // `fire_observer`) overrides a removal above.
+    for (key, value) in &context.env {
+        set(key, Some(value.into()));
+    }
+
+    CommandHookInvocation {
+        program,
+        flag,
+        line,
+        current_dir: context
+            .working_dir
+            .clone()
+            .or_else(|| plugin_root.map(Path::to_path_buf)),
+        env,
+        stdin: build_event_payload(event_name, context, &facts),
     }
 }
 
@@ -120,7 +256,9 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// spelling, else `HookEvent::canonical_name`).
 ///
 /// `facts` are the session facts the executor derived for this action
-/// ([`SessionFacts::derive`]) — no fire site supplies them.
+/// ([`SessionFacts::derive`]) from what the run publishes; the only input a
+/// fire site could add is an explicit `working_dir`, and no production fire
+/// site sets one.
 fn build_event_payload_value(
     event_name: &str,
     context: &HookContext,
@@ -194,24 +332,11 @@ fn tool_response_value(output: &str) -> serde_json::Value {
 }
 
 /// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
+/// `aleph hooks test` reaches it through [`command_hook_invocation`], so a
+/// hook exercised there reads the exact payload production sends.
 fn build_event_payload(event_name: &str, context: &HookContext, facts: &SessionFacts) -> String {
     serde_json::to_string(&build_event_payload_value(event_name, context, facts))
         .unwrap_or_else(|_| "{}".to_string())
-}
-
-/// Public alias of [`build_event_payload`] for out-of-band verification
-/// (`aleph hooks test`): the CLI pipes THIS to the hook's stdin, so a hook
-/// exercised there sees the exact payload structure production sends —
-/// hermes' "test through the same serializer" pattern. A hook that reads
-/// stdin (`jq -r '.tool_name'`) behaves identically in both worlds instead
-/// of hanging on an unwired stdin.
-#[must_use]
-pub fn event_payload_json(event: HookEvent, context: &HookContext) -> String {
-    build_event_payload(
-        &event.canonical_name(),
-        context,
-        &SessionFacts::derive(context),
-    )
 }
 
 /// Short, human-readable label for one hook action, used by the runtime
@@ -431,7 +556,7 @@ impl HookExecutor {
         &self,
         action: &HookAction,
         context: &HookContext,
-        plugin_root: &std::path::PathBuf,
+        plugin_root: &Path,
         plugin_name: &str,
         event: HookEvent,
         event_name: &str,
@@ -557,7 +682,7 @@ impl HookExecutor {
         &self,
         command: &str,
         context: &HookContext,
-        plugin_root: &std::path::PathBuf,
+        plugin_root: &Path,
         plugin_name: &str,
         event: HookEvent,
         event_name: &str,
@@ -571,7 +696,10 @@ impl HookExecutor {
         // explicit decision, not a default.
         if let Some(consent) = &self.consent {
             if !consent.is_approved(plugin_name, command) {
-                consent.record_pending(plugin_name, command, &format!("{event:?}"));
+                // What `aleph hooks test` rebuilds the run from: the spelling
+                // this hook is dispatched with and the root its path
+                // variables resolve to.
+                consent.record_pending(plugin_name, command, event_name, plugin_root);
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
@@ -589,82 +717,38 @@ impl HookExecutor {
             }
         }
 
-        // Only the trusted path variables become shell source. The data
-        // variables (`$ARGUMENTS`, `$DENY_REASON`, …) are model-controlled
-        // or quote identifiers in backticks: they reach the child as the env
-        // vars set below, which the shell expands as data. Spliced in here
-        // they ran as code — and consent (above) approved the template, not
-        // the resolved string. Same on Windows, where `cmd` would expand a
-        // `%VAR%` before parsing: data is read from the stdin JSON there.
-        let resolved = substitute_path_variables(command, plugin_root, plugin_name);
+        // Shell line, directory, environment and stdin payload: one derivation,
+        // shared with `aleph hooks test` so a reviewed script runs as it does
+        // here.
+        let invocation =
+            command_hook_invocation(command, event_name, context, Some(plugin_root), plugin_name);
         debug!(plugin = plugin_name, event = ?event, "Executing hook command");
 
-        // Determine working directory
-        let working_dir = context.working_dir.as_ref().unwrap_or(plugin_root);
-        // Derived once, so the stdin payload and this command's environment
-        // read the same answer.
-        let facts = SessionFacts::derive(context);
-
-        // Build command
-        let mut cmd = if cfg!(windows) {
-            let mut c = Command::new("cmd");
-            c.args(["/C", &resolved]);
-            c
-        } else {
-            let mut c = Command::new("sh");
-            c.args(["-c", &resolved]);
-            c
-        };
-
-        // Set working directory
-        cmd.current_dir(working_dir);
+        let mut cmd = Command::new(invocation.program);
+        cmd.args([invocation.flag, invocation.line.as_str()]);
+        if let Some(dir) = &invocation.current_dir {
+            cmd.current_dir(dir);
+        }
 
         // Kill the child when the timeout drops the wait future, so a hung
         // hook command does not keep running as an orphan past its deadline.
         cmd.kill_on_drop(true);
 
-        // Set environment variables. These are the only route by which the
-        // data variables (`TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`, `FILE`,
-        // `SESSION_ID`, every `context.env` key) reach a command — none is
-        // substituted into its source (above). `ARGUMENTS` / `TOOL_INPUT`
-        // mirror the tool payload, but a large payload (a Write tool's whole
-        // file body) can exceed the OS `ARG_MAX` limit and make `spawn` fail
-        // with E2BIG — which, on an interceptor seam, fails CLOSED and
-        // spuriously blocks the tool. The canonical full-fidelity path is the
-        // stdin JSON (`jq -r '.tool_input…'`, Claude-Code convention), so
-        // oversized values are replaced in the env by a marker rather than
-        // risking the spawn — and the marker is all a `"$ARGUMENTS"` script
-        // then sees.
-        cmd.env("PLUGIN_ROOT", plugin_root);
-        cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
-        // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`),
-        // the one every CC hook script reaches for first: `facts.cwd`, the
-        // value the payload's `cwd` is written from. Removed rather than
-        // inherited when unknown, so a daemon launched from inside a Claude
-        // Code session cannot hand its own value to every hook.
-        match &facts.cwd {
-            Some(dir) => {
-                cmd.env("CLAUDE_PROJECT_DIR", dir);
-            }
-            None => {
-                cmd.env_remove("CLAUDE_PROJECT_DIR");
+        for (key, value) in &invocation.env {
+            match value {
+                Some(value) => {
+                    cmd.env(key, value);
+                }
+                None => {
+                    cmd.env_remove(key);
+                }
             }
         }
-        // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by
-        // `plugin update` (stage → backup → swap), so a hook that wants state
-        // that outlives an upgrade had no addressable path until this line
-        // existed. Plugin-owned hooks only — a settings source label such as
-        // `user:project` is not a plugin id and has no data directory.
+        // The operator's configuration for this plugin, in the same env
+        // spelling the plugin's MCP servers get. A hook and an MCP server from
+        // one plugin reading the same setting under two different names would
+        // be two conventions for one fact. Plugin-owned hooks only.
         if crate::extension::manifest::validate_plugin_id(plugin_name).is_ok() {
-            let vars =
-                crate::extension::plugin_vars::PluginVars::new(plugin_name, plugin_root.as_path());
-            cmd.env("CLAUDE_PLUGIN_DATA", vars.data_dir());
-            cmd.env("ALEPH_PLUGIN_DATA", vars.data_dir());
-
-            // The operator's configuration for this plugin, in the same env
-            // spelling the plugin's MCP servers get. A hook and an MCP server
-            // from one plugin reading the same setting under two different
-            // names would be two conventions for one fact.
             if let Some(manager) = crate::extension::try_extension_manager() {
                 // Runtime form: these values become the hook subprocess's
                 // environment, so a `{{secret:NAME}}` reference resolves here.
@@ -676,26 +760,12 @@ impl HookExecutor {
                 }
             }
         }
-        if let Some(ref tool_name) = context.tool_name {
-            cmd.env("TOOL_NAME", tool_name);
-        }
-        set_env_bounded(&mut cmd, "ARGUMENTS", context.arguments.as_deref());
-        set_env_bounded(&mut cmd, "TOOL_INPUT", context.tool_input.as_deref());
-        if let Some(ref file) = context.file_path {
-            cmd.env("FILE", file);
-        }
-        cmd.env("SESSION_ID", &context.session_id);
-
-        // Add custom environment variables
-        for (key, value) in &context.env {
-            cmd.env(key, value);
-        }
 
         // Configure stdio. The event JSON payload is piped to stdin so
         // hook scripts can `jq -r '.tool_input.file_path'` (Claude Code
         // convention). The env vars above carry the same data for
         // `"$VAR"`-style scripts on unix.
-        let payload = build_event_payload(event_name, context, &facts);
+        let payload = invocation.stdin;
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -853,7 +923,7 @@ impl HookExecutor {
         if let Some(consent) = &self.consent {
             let consent_key = format!("http:{url}");
             if !consent.is_approved(plugin_name, &consent_key) {
-                consent.record_pending(plugin_name, &consent_key, &format!("{event:?}"));
+                consent.record_pending(plugin_name, &consent_key, event_name, plugin_root);
                 warn!(
                     plugin = plugin_name,
                     event = ?event,
@@ -1165,10 +1235,9 @@ impl HookExecutor {
 
         super::HookInventoryEntry {
             source: hook.plugin_name.clone(),
-            event: serde_json::to_value(hook.event)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_else(|| format!("{:?}", hook.event)),
+            // Canonical, not the declared spelling: a diagnostic view, not
+            // the wire a script reads.
+            event: hook.event.canonical_name(),
             kind: kind.to_string(),
             priority: format!("{:?}", hook.priority).to_lowercase(),
             matcher: hook.matcher.clone(),
@@ -1314,6 +1383,13 @@ mod tests {
         }
     }
 
+    /// The stdin JSON a command hook registered under `event`'s canonical
+    /// name is handed — the same derivation production and `aleph hooks
+    /// test` spawn from.
+    fn stdin_json(event: HookEvent, ctx: &HookContext) -> String {
+        command_hook_invocation("true", &event.canonical_name(), ctx, None, "test").stdin
+    }
+
     #[test]
     fn inventory_flags_a_matcher_on_a_tool_less_event() {
         // Foot-gun #1: matchers test `tool_name`, which SessionStart has none
@@ -1394,7 +1470,12 @@ mod tests {
 
         // Approving flips it — and the hook stays reachable throughout, since
         // consent is a separate axis from configuration validity.
-        consent.record_pending("plugin:linter", "true", "BeforeToolCall");
+        consent.record_pending(
+            "plugin:linter",
+            "true",
+            "before_tool_call",
+            std::path::Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
         let entry = &exec.inventory()[0];
@@ -1872,6 +1953,107 @@ mod tests {
         assert_eq!(seen("observer.json")["hook_event_name"], "PostToolUse");
     }
 
+    /// `aleph hooks test` rebuilds a hook's run from its consent entry, so the
+    /// entry must hold what production derived: the spelling the hook is
+    /// dispatched with (not the enum's Rust name) and the root its path
+    /// variables resolve to — recorded at the real consent gate.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_consent_entry_records_what_aleph_hooks_test_rebuilds_the_run_from() {
+        use crate::extension::hooks::{HookContext, ShellHookConsent};
+        use crate::sync_primitives::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let consent = Arc::new(ShellHookConsent::with_path(
+            dir.path().join("allowlist.json"),
+        ));
+        let mut hook = interceptor_command_hook("true");
+        hook.declared_event = Some("PreToolUse".into());
+        hook.plugin_root = root.path().to_path_buf();
+        HookExecutor::new(vec![hook.clone()])
+            .with_consent(consent.clone())
+            .execute_interceptors(
+                HookEvent::BeforeToolCall,
+                HookContext::new("s").with_tool_name("bash"),
+            )
+            .await
+            .expect("an unapproved hook is skipped, not an error");
+
+        let entry = consent
+            .entries()
+            .into_iter()
+            .next()
+            .expect("recorded pending");
+        assert_eq!(entry.event, "PreToolUse");
+        assert_eq!(entry.plugin_root.as_deref(), Some(root.path()));
+        // The CLI's rebuilt payload names the event as production does.
+        let rebuilt: serde_json::Value = serde_json::from_str(
+            &command_hook_invocation(
+                &entry.command,
+                &entry.event,
+                &HookContext::new("s"),
+                entry.plugin_root.as_deref(),
+                &entry.plugin_name,
+            )
+            .stdin,
+        )
+        .unwrap();
+        assert_eq!(rebuilt["hook_event_name"], hook.event_name());
+    }
+
+    /// A data field this event does not carry is removed from the command's
+    /// environment — not inherited from the daemon's, where a variable of the
+    /// same name would read as the event's value. `CLAUDE_PROJECT_DIR` is the
+    /// same rule for the run directory (unknown outside a run).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_field_the_event_lacks_is_not_inherited_from_the_daemon() {
+        use crate::extension::hooks::HookContext;
+        const INHERITED: [&str; 5] = [
+            "TOOL_NAME",
+            "ARGUMENTS",
+            "TOOL_INPUT",
+            "FILE",
+            "CLAUDE_PROJECT_DIR",
+        ];
+        /// Sets the daemon-side values for the test and removes them after.
+        struct DaemonEnv;
+        impl Drop for DaemonEnv {
+            fn drop(&mut self) {
+                for key in INHERITED {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+        let _daemon = DaemonEnv;
+        for key in INHERITED {
+            std::env::set_var(key, "from-the-daemon");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("env.txt");
+        let shown: Vec<String> = INHERITED
+            .iter()
+            .map(|key| format!("\"${{{key}-unset}}\""))
+            .collect();
+        let mut hook = interceptor_command_hook(&format!(
+            "printf '%s|' {} > '{}'",
+            shown.join(" "),
+            out.display()
+        ));
+        hook.event = HookEvent::SessionStart;
+        hook.kind = HookKind::Observer;
+        // Outside a run: no tool, no input, no file, no run directory.
+        HookExecutor::new(vec![hook])
+            .execute_observers(HookEvent::SessionStart, &HookContext::new("s"))
+            .await;
+
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "unset|unset|unset|unset|unset|"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn oversized_stdin_does_not_deadlock() {
@@ -2064,7 +2246,7 @@ mod tests {
         let transcripts = one_transcript("agent:main:ws:1", "/data/sessions/k/transcript.jsonl");
         let json: serde_json::Value = serde_json::from_str(
             &with_transcript_source(transcripts, async {
-                event_payload_json(HookEvent::AfterToolCall, &ctx)
+                stdin_json(HookEvent::AfterToolCall, &ctx)
             })
             .await,
         )
@@ -2107,7 +2289,7 @@ mod tests {
     fn tool_response_is_the_tools_structure_and_text_stays_text() {
         let payload = |output: &str| -> serde_json::Value {
             let ctx = HookContext::new("s").with_tool_output(output);
-            serde_json::from_str(&event_payload_json(HookEvent::AfterToolCall, &ctx)).unwrap()
+            serde_json::from_str(&stdin_json(HookEvent::AfterToolCall, &ctx)).unwrap()
         };
         let dispatched = |text: &str| serde_json::Value::String(text.to_string()).to_string();
 
@@ -2146,7 +2328,7 @@ mod tests {
         use crate::extension::hooks::HookContext;
         let ctx = HookContext::new("s").with_tool_name("bash");
         let json: serde_json::Value =
-            serde_json::from_str(&event_payload_json(HookEvent::BeforeToolCall, &ctx)).unwrap();
+            serde_json::from_str(&stdin_json(HookEvent::BeforeToolCall, &ctx)).unwrap();
         assert!(json.get("cwd").is_none());
         assert!(json.get("transcript_path").is_none());
         assert!(json.get("permission_mode").is_none());
@@ -2253,7 +2435,7 @@ mod tests {
         let ctx = HookContext::new("agent:main:other");
         let json: serde_json::Value = serde_json::from_str(
             &with_transcript_source(one_transcript("agent:main:ws:1", "/t.jsonl"), async {
-                event_payload_json(HookEvent::Stop, &ctx)
+                stdin_json(HookEvent::Stop, &ctx)
             })
             .await,
         )

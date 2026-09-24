@@ -13,7 +13,9 @@
 use std::io::{self, Write};
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
-use alephcore::extension::hooks::{ConsentStatus, ShellHookConsent};
+use alephcore::extension::hooks::{
+    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent,
+};
 use alephcore::utils::no_window::NoWindow;
 
 use crate::cli::HooksAction;
@@ -98,7 +100,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
             println!("Skipped — hook left pending.");
             return Ok(());
         }
-        run_command_with_payload(&entry.command, &entry.event)?;
+        run_command_with_payload(&entry)?;
     }
 
     if entry.status == ConsentStatus::Approved {
@@ -127,20 +129,36 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
 /// than invoking a single binary. The `test` subcommand rejects these
 /// unless `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` is set — a malicious plugin
 /// should not be able to deliver a `; rm -rf ~` payload that gets
-/// approved on first prompt.
+/// approved on first prompt. Checked on the line the shell would run —
+/// after the path variables are resolved — so `${CLAUDE_PLUGIN_ROOT}/x.sh`
+/// is judged as the path it becomes.
 const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '>', '<', '\n', '\r'];
 
-/// Run a hook command with a synthetic event payload piped to stdin — the
-/// SAME serializer production uses (`event_payload_json`), so a hook that
-/// reads stdin (`jq -r '.tool_name'`) behaves identically here and at
-/// runtime instead of hanging on the CLI's inherited stdin.
-fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
+/// Run a recorded hook the way production runs it, on a synthetic tool call:
+/// the child is built by the same derivation
+/// ([`command_hook_invocation`](alephcore::extension::hooks::command_hook_invocation)),
+/// so the path variables resolve against the hook's recorded plugin root,
+/// the data variables (`"$ARGUMENTS"`, `"$TOOL_NAME"`, …) are in its
+/// environment, the event JSON — under the spelling the hook is dispatched
+/// with — is on its stdin, and it runs in its plugin root. A script reviewed
+/// here therefore behaves as it will in production.
+fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
+    let invocation = test_invocation(entry);
+    if entry.plugin_root.is_none() {
+        println!(
+            "(recorded before Aleph kept a hook's plugin root: path variables such as \
+             ${{CLAUDE_PLUGIN_ROOT}} stay unresolved in this run)"
+        );
+    }
     if !matches!(
         std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS")
             .ok()
             .as_deref(),
         Some("1") | Some("true") | Some("yes")
-    ) && command.chars().any(|c| SHELL_METACHARS.contains(&c))
+    ) && invocation
+        .line
+        .chars()
+        .any(|c| SHELL_METACHARS.contains(&c))
     {
         return Err("hook command contains shell metacharacters; \
              refusing to invoke 'sh -c' / 'cmd /C' on it. \
@@ -148,13 +166,24 @@ fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
             .to_string()
             .into());
     }
-    let payload = synthetic_payload(event);
-    println!("(stdin payload: {payload})");
+    println!("(stdin payload: {})", invocation.stdin);
 
-    let (shell, flag) = shell_invocation();
-    let mut child = std::process::Command::new(shell)
-        .arg(flag)
-        .arg(command)
+    let mut cmd = std::process::Command::new(invocation.program);
+    cmd.arg(invocation.flag).arg(&invocation.line);
+    if let Some(dir) = &invocation.current_dir {
+        cmd.current_dir(dir);
+    }
+    for (key, value) in &invocation.env {
+        match value {
+            Some(value) => {
+                cmd.env(key, value);
+            }
+            None => {
+                cmd.env_remove(key);
+            }
+        }
+    }
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -162,7 +191,7 @@ fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
         .spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         // Best-effort: a hook that never reads stdin may close the pipe early.
-        let _ = stdin.write_all(payload.as_bytes());
+        let _ = stdin.write_all(invocation.stdin.as_bytes());
     }
     let output = child.wait_with_output()?;
 
@@ -179,23 +208,41 @@ fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
     Ok(())
 }
 
-/// Build the synthetic test payload for a consent entry's recorded event.
-/// The event string is stored in `{:?}` (PascalCase) form, which the
-/// `HookEvent` serde aliases parse directly; unknown/legacy strings fall
-/// back to `BeforeToolCall` — the payload shape is representative either way.
-fn synthetic_payload(event: &str) -> String {
-    use alephcore::extension::hooks::{event_payload_json, HookContext};
+/// The child `aleph hooks test` spawns for `entry`: a synthetic tool call,
+/// through the production derivation.
+///
+/// `hook_event_name` is the entry's recorded name verbatim — the spelling the
+/// hook is dispatched with (`ConsentEntry::event`), not a re-derivation from
+/// the enum, which would lose it. An entry recorded before that field held
+/// the spelling carries the enum's Rust name instead; an entry with no event
+/// at all gets `before_tool_call`, the shape being representative either way.
+fn test_invocation(entry: &ConsentEntry) -> CommandHookInvocation {
+    use alephcore::extension::hooks::{command_hook_invocation, HookContext};
     use alephcore::extension::HookEvent;
 
-    let parsed: HookEvent =
-        serde_json::from_str(&format!("\"{event}\"")).unwrap_or(HookEvent::BeforeToolCall);
+    let event_name = if entry.event.is_empty() {
+        HookEvent::BeforeToolCall.canonical_name()
+    } else {
+        entry.event.clone()
+    };
+    // The fields a tool-dispatch hook gets (`build_hook_context` sets both
+    // `arguments` and `tool_input` from the call's input).
+    let input = r#"{"example":true}"#;
     let ctx = HookContext::new("hooks-cli-test")
         .with_tool_name("ExampleTool")
-        .with_tool_input(r#"{"example":true}"#)
+        .with_arguments(input)
+        .with_tool_input(input)
         .with_permission_mode(alephcore::orchestrator::ExecTier::default().cc_permission_mode())
         .with_env("ALEPH_HOOKS_TEST", "1".to_string());
-    // (no transcript for a synthetic session — the key is omitted, which is the truth.)
-    event_payload_json(parsed, &ctx)
+    // (no transcript and no run directory for a synthetic session — both keys
+    // are omitted, which is the truth.)
+    command_hook_invocation(
+        &entry.command,
+        &event_name,
+        &ctx,
+        entry.plugin_root.as_deref(),
+        &entry.plugin_name,
+    )
 }
 
 fn revoke(consent: &ShellHookConsent, target: &str) -> CmdResult {
@@ -265,14 +312,6 @@ const fn status_label(status: ConsentStatus) -> &'static str {
     }
 }
 
-const fn shell_invocation() -> (&'static str, &'static str) {
-    if cfg!(windows) {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    }
-}
-
 /// Hard cap: these feed fixed-width table columns, so the ellipsis must fit
 /// inside `max` rather than push the column wider.
 fn truncate(s: &str, max: usize) -> String {
@@ -310,5 +349,49 @@ mod tests {
     fn status_labels_are_stable() {
         assert_eq!(status_label(ConsentStatus::Pending), "pending");
         assert_eq!(status_label(ConsentStatus::Approved), "approved");
+    }
+
+    /// The review run is the production run on a synthetic tool call: the
+    /// recorded spelling on `hook_event_name`, the path variable resolved
+    /// against the recorded root (which is also the working directory), and
+    /// the data variables in the environment. Driven through
+    /// `run_command_with_payload`, the function `aleph hooks test` calls.
+    #[cfg(unix)]
+    #[test]
+    fn a_reviewed_hook_runs_as_production_runs_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("probe.sh"),
+            "cat > stdin.json\n\
+             printf '%s' \"$ARGUMENTS\" > arguments.txt\n\
+             printf '%s' \"$TOOL_NAME\" > tool_name.txt\n\
+             pwd -P > pwd.txt\n",
+        )
+        .unwrap();
+        let entry = ConsentEntry {
+            fingerprint: "0123456789abcdef".into(),
+            plugin_name: "user:global".into(),
+            command: "sh ${CLAUDE_PLUGIN_ROOT}/probe.sh".into(),
+            event: "PreToolUse".into(),
+            plugin_root: Some(root.path().to_path_buf()),
+            status: ConsentStatus::Pending,
+            first_seen: 0,
+            approved_at: None,
+            script_fingerprint: None,
+        };
+
+        run_command_with_payload(&entry).expect("the resolved line has no metacharacters");
+
+        let read = |name: &str| std::fs::read_to_string(root.path().join(name)).unwrap();
+        let stdin: serde_json::Value = serde_json::from_str(&read("stdin.json")).unwrap();
+        assert_eq!(stdin["hook_event_name"], "PreToolUse");
+        assert_eq!(read("arguments.txt"), r#"{"example":true}"#);
+        assert_eq!(read("tool_name.txt"), "ExampleTool");
+        assert_eq!(
+            read("pwd.txt").trim_end(),
+            std::fs::canonicalize(root.path())
+                .unwrap()
+                .to_string_lossy()
+        );
     }
 }

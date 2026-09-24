@@ -3,10 +3,29 @@
 //! Claude Code puts `transcript_path` and `cwd` (and `$CLAUDE_PROJECT_DIR`)
 //! on EVERY event. Asking each fire site to remember them left most Claude
 //! Code faces without them (判据 §11: fix the executor, not each instance).
-//! The executor derives them here instead, from
-//! what the run publishes, so every face fired inside a run carries them
-//! whichever executor fires it, and a face fired outside one omits them:
-//! absent means "unknown", never a guess.
+//! The executor derives them here instead, from task-locals the run
+//! publishes — so a face carries a fact exactly when the task it fires in
+//! can still see that task-local. Absent means "unknown", never a guess.
+//!
+//! Where each fact reaches today:
+//!
+//! - **The run task** (`BeforeAgentStart`, `SessionStart`,
+//!   `UserPromptSubmit`, compaction, `AgentEnd`): both, when the run has a
+//!   project root or an exec workspace (`cwd`) and a file-backed store
+//!   (`transcript_path`).
+//! - **The harness task** `orchestrator::dispatch` spawns (every tool face —
+//!   `PreToolUse` / `PostToolUse` / `PermissionRequest` / `PermissionDenied`
+//!   / …, `Stop`, the provider faces, a foreground sub-agent's
+//!   `SubagentStart` / `SubagentStop`): it re-establishes the transcript
+//!   source and the project root but not the exec workspace, so `cwd` is
+//!   there only in a project run.
+//! - **Work spawned through `CarriedAttribution`** (sync fan-out batch legs,
+//!   background sub-agents): it carries the project root and exec workspace
+//!   the spawning task had (so `cwd` as there), but not the transcript
+//!   source — no `transcript_path`.
+//! - **Faces fired outside any run** (`SessionEnd` from the RPC, inbound
+//!   `MessageReceived`, the gateway start/stop observers, `aleph hooks
+//!   test`): neither.
 
 use std::path::PathBuf;
 
@@ -33,10 +52,11 @@ tokio::task_local! {
 /// value — the shape of `projects::with_project_root` and
 /// `sandbox::context::with_exec_workspace`.
 ///
-/// A task spawned with `tokio::spawn` does not inherit the scope. The one
-/// spawn between a run and its tool hooks — the harness task in
-/// `orchestrator::dispatch` — re-establishes it from
-/// [`current_transcript_source`]; any other spawned work omits the key.
+/// A task spawned with `tokio::spawn` does not inherit the scope. The
+/// harness task in `orchestrator::dispatch` — the spawn between a run and
+/// its tool hooks — re-establishes it from [`current_transcript_source`];
+/// work spawned further out (the sub-agent paths through
+/// `CarriedAttribution`) omits the key.
 pub async fn with_transcript_source<F>(
     source: Option<Arc<dyn TranscriptSource>>,
     fut: F,
@@ -62,9 +82,12 @@ pub(super) struct SessionFacts {
     /// cannot disagree. The fire site's explicit `working_dir`, else the run's
     /// project root (`projects::with_project_root`, the same task-local the
     /// project-scope gate reads), else the workspace the run is authorised to
-    /// execute in (`sandbox::context::with_exec_workspace`). `None` outside a
-    /// run: never the daemon's own cwd (the lie `thinker/runtime_context.rs`
-    /// already removed once), never the hook's `plugin_root`.
+    /// execute in (`sandbox::context::with_exec_workspace`). `None` when none
+    /// of those is in scope — outside a run, and in the harness task of a
+    /// run without a project (it does not carry the exec workspace; see the
+    /// module doc) — never the daemon's own cwd (the lie
+    /// `thinker/runtime_context.rs` already removed once), never the hook's
+    /// `plugin_root`.
     ///
     /// Read from the RAW task-local, not `VisibilityCtx::for_session`: that
     /// one falls back to the daemon cwd itself, so it is never `None`.
