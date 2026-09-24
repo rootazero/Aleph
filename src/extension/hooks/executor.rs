@@ -673,10 +673,14 @@ impl HookExecutor {
         let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
         let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
-        if !status.success() {
-            warn!("Hook command exited with status {:?}", status.code());
-        }
-
+        // No generic non-success log here: `derive_decision` is the ONE
+        // owner of exit-code interpretation, including its log line — a
+        // non-zero exit is either a hook DECISION (exit 2, no log needed on
+        // the interceptor path; logged on the observer path since that seam
+        // cannot act on it) or a non-blocking error (`derive_decision`'s own
+        // `Some(code) => warn!`). Logging here too produced a duplicate line
+        // for every non-zero exit.
+        //
         // `exit_code` is consumed by `derive_decision` at both call sites
         // (`execute_interceptors` / `execute_observers`) — exit 2 blocks an
         // interceptor even when stdout is empty (the CC `>&2; exit 2` idiom).
@@ -1538,6 +1542,82 @@ mod tests {
         })
         .await;
         assert!(sentinel.exists(), "observer keyed to a must run inside a");
+    }
+
+    /// Captures every event's formatted `message` field, scoped to one
+    /// async block via `tracing_subscriber`'s `set_default()` guard — the
+    /// same in-crate idiom as `approval::config::tests::CaptureLayer` /
+    /// `spend::tests::CapturedErrorEvents` (no new dependency). The observer
+    /// arm's `derive_decision` call (see `execute_observers` above) writes
+    /// only into a `scratch: HookResult` that is immediately discarded — a
+    /// `tracing::warn!` line is the ONLY externally observable effect a
+    /// fire-site test can assert on (P4.1 review, Q1).
+    #[derive(Clone, Default)]
+    struct CapturedMessages(Arc<std::sync::Mutex<Vec<String>>>);
+
+    struct MessageVisitor(String);
+
+    impl tracing::field::Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedMessages {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(visitor.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exit_2_observer_hook_warns_but_does_not_block() {
+        // Fire-site proof per 判据 §4: drives the REAL `execute_observers` →
+        // `execute_action` → `derive_decision` path (Observer kind), not the
+        // pure-function matrix test (`exit_2_on_an_observer_only_logs` in
+        // `hooks/mod.rs`). Deleting the `if let HookAction::Command { .. }`
+        // block in `execute_observers` (or its `derive_decision` call) must
+        // turn this red — see the mutation record in the report.
+        use crate::extension::hooks::HookContext;
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+
+        let mut hook = dummy_hook("plugin:exit2-observer");
+        hook.actions = vec![HookAction::Command {
+            command: "echo 'outside the repo' >&2; exit 2".into(),
+        }];
+        // `dummy_hook`'s empty `plugin_root` would fail the spawn itself
+        // (see `execute_observers_skips_a_hook_keyed_to_another_project`).
+        hook.plugin_root = std::env::temp_dir();
+        let executor = HookExecutor::new(vec![hook]);
+
+        let captured = CapturedMessages::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = subscriber.set_default();
+
+        executor
+            .execute_observers(HookEvent::MessageReceived, &HookContext::new("s"))
+            .await;
+
+        drop(_guard);
+        let messages = captured.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("observer hook exited 2")),
+            "observer exit-2 warn must fire; got: {messages:?}"
+        );
     }
 
     #[test]
