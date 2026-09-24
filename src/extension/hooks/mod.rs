@@ -60,7 +60,7 @@ pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub(crate) use executor::read_capped;
 pub use executor::{event_payload_json, HookExecutor};
 pub use output_budget::{budget_hook_contexts, join_messages};
-pub use session_facts::{with_transcript_source, TranscriptSource};
+pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
 pub(crate) use user_settings::{default_kind_for_event, parse_event};
 

@@ -25,17 +25,33 @@ pub trait TranscriptSource: Send + Sync {
 }
 
 tokio::task_local! {
-    static TRANSCRIPTS: Arc<dyn TranscriptSource>;
+    static TRANSCRIPTS: Option<Arc<dyn TranscriptSource>>;
 }
 
 /// Run `fut` with `source` answering the transcript lookup of every hook fired
-/// inside it. A task spawned with `tokio::spawn` does not inherit the scope;
-/// its hooks omit the key.
-pub async fn with_transcript_source<F>(source: Arc<dyn TranscriptSource>, fut: F) -> F::Output
+/// inside it. Takes `Option` and always scopes, so `None` shadows an outer
+/// value — the shape of `projects::with_project_root` and
+/// `sandbox::context::with_exec_workspace`.
+///
+/// A task spawned with `tokio::spawn` does not inherit the scope. The one
+/// spawn between a run and its tool hooks — the harness task in
+/// `orchestrator::dispatch` — re-establishes it from
+/// [`current_transcript_source`]; any other spawned work omits the key.
+pub async fn with_transcript_source<F>(
+    source: Option<Arc<dyn TranscriptSource>>,
+    fut: F,
+) -> F::Output
 where
     F: std::future::Future,
 {
     TRANSCRIPTS.scope(source, fut).await
+}
+
+/// The source in scope, for a caller that must carry it across a
+/// `tokio::spawn` (read it BEFORE the spawn; inside, it is already gone).
+#[must_use]
+pub fn current_transcript_source() -> Option<Arc<dyn TranscriptSource>> {
+    TRANSCRIPTS.try_with(Clone::clone).ok().flatten()
 }
 
 /// The facts the executor derives for one hook action — once, so the stdin
@@ -65,10 +81,8 @@ impl SessionFacts {
                 .clone()
                 .or_else(crate::projects::current_project_root)
                 .or_else(crate::sandbox::context::current_exec_workspace),
-            transcript_path: TRANSCRIPTS
-                .try_with(|source| source.transcript_path(&context.session_id))
-                .ok()
-                .flatten(),
+            transcript_path: current_transcript_source()
+                .and_then(|source| source.transcript_path(&context.session_id)),
         }
     }
 }

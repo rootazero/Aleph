@@ -2035,8 +2035,8 @@ mod tests {
     fn one_transcript(
         session: &'static str,
         path: &'static str,
-    ) -> Arc<dyn crate::extension::hooks::TranscriptSource> {
-        Arc::new(OneTranscript { session, path })
+    ) -> Option<Arc<dyn crate::extension::hooks::TranscriptSource>> {
+        Some(Arc::new(OneTranscript { session, path }))
     }
 
     #[tokio::test]

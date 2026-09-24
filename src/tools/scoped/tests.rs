@@ -633,7 +633,10 @@ async fn a_real_tool_call_hands_its_hooks_the_claude_code_envelope() {
     crate::projects::with_project_root(
         Some(project.path().to_path_buf()),
         crate::extension::hooks::with_transcript_source(
-            Arc::new(OneTranscript("agent:main:main", transcript.clone())),
+            Some(Arc::new(OneTranscript(
+                "agent:main:main",
+                transcript.clone(),
+            ))),
             svc.execute("echo", json!({"k": "v"})),
         ),
     )

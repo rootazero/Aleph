@@ -100,7 +100,7 @@ mod tests {
         }]);
         let ctx = HookContext::new(key.to_key_string());
         with_transcript_source(
-            Arc::new(StoreTranscripts::new(Arc::clone(&store))),
+            Some(Arc::new(StoreTranscripts::new(Arc::clone(&store)))),
             executor.execute_observers(HookEvent::SessionStart, &ctx),
         )
         .await;
@@ -178,6 +178,58 @@ mod tests {
         assert!(
             args.contains("StoreTranscripts::new("),
             "{rel}: the published source is the live store"
+        );
+    }
+
+    /// The harness runs in a `tokio::spawn` (`orchestrator::dispatch`), and a
+    /// task-local does not cross one: without the carry every tool-dispatch
+    /// hook, `Stop` and the permission observers fire with NO source and omit
+    /// `transcript_path` — while every test above stays green, because none of
+    /// them crosses that spawn. Pinned by shape, like its sibling carry
+    /// (`the_harness_spawn_reestablishes_the_run_tree_originator`): read
+    /// before the spawn, re-scoped inside it.
+    #[test]
+    fn the_harness_spawn_carries_the_transcript_source() {
+        use crate::utils::source_scan::{code_text, production_text};
+        let rel = "src/orchestrator/dispatch.rs";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let code = code_text(&production_text(
+            std::path::Path::new(rel),
+            &std::fs::read_to_string(&path).unwrap(),
+        ));
+        let dispatch_at = code
+            .find("pub async fn dispatch(")
+            .expect("the harness dispatch is where it was");
+        let spawn_at = dispatch_at
+            + code[dispatch_at..]
+                .find("tokio::spawn(")
+                .expect("dispatch spawns the harness");
+        let open = spawn_at + "tokio::spawn".len();
+        let mut depth = 0usize;
+        let close = code[open..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(open + i)
+            })
+            .expect("balanced parentheses");
+        // Whitespace-free, so the checks below read the shape, not the layout.
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        assert!(
+            squash(&code[dispatch_at..spawn_at])
+                .contains("lettranscripts=crate::extension::hooks::current_transcript_source();"),
+            "{rel}: dispatch reads the source into `transcripts` before it spawns the harness"
+        );
+        // The CAPTURED value, not merely a call: `with_transcript_source(None, ..)`
+        // would keep the call and lose the source.
+        let spawned = squash(&code[open..close]);
+        assert!(
+            spawned.contains("with_transcript_source(transcripts,harness.run("),
+            "{rel}: the captured source is re-scoped around the spawned harness run"
         );
     }
 }

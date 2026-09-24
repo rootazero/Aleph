@@ -886,12 +886,13 @@ where
         // `transcript_path` from THIS store (`extension::hooks::session_facts`),
         // so the SQLite backend answers `None` instead of a re-derived
         // file-backend path. Published outside `run_agent_loop` so its
-        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
+        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too; the
+        // harness task `orchestrator::dispatch` spawns carries it across.
         let result: Result<String, ExecutionError> = tokio::select! {
             result = crate::extension::hooks::with_transcript_source(
-                Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
+                Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
                     agent.session_store(),
-                )),
+                ))),
                 self.run_agent_loop(
                     &run_id,
                     &request,
