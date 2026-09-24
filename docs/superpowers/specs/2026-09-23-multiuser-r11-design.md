@@ -2,7 +2,7 @@
 
 - **日期**：2026-09-23
 - **分支**：`worktree-multiuser-r11`（worktree `/home/zou/data/workspace/Aleph-wt-multiuser-r11`，基于 main `b5cf9aed3`）
-- **Status**：implemented 2026-09-23 – 2026-09-24 on branch `worktree-multiuser-r11` (`536ad5414`..`68386a986`; code complete, final review + fix wave done; a small follow-up source round is ruled but not yet landed — the room floor's `multi_user()` gate and a per-site `admit_*` census token); verification ledger in T17 of the plan. 设计已定（用户在线逐段批准 §3–§6；全部裁定见 §2）；实现记录见 FEATURE_LOCATOR §5.22「第十一轮」。
+- **Status**：implemented 2026-09-23 – 2026-09-24 on branch `worktree-multiuser-r11` (`536ad5414`..`d63636107`; code complete, final review + fix wave done; the follow-up source round — the room floor's `multi_user()` gate and the per-site `admit_*` call pin — landed in `d63636107`); verification ledger in T17 of the plan. 设计已定（用户在线逐段批准 §3–§6；全部裁定见 §2）；实现记录见 FEATURE_LOCATOR §5.22「第十一轮」。
 - **承接**：FEATURE_LOCATOR §5.22 多用户线第十一轮。前十轮裁定不重做（r10 spec §1 的「已裁定区域」表整体沿用）。
 - **参考项目**：`/home/zou/mnt/macmini/TBU4/Github/qm`（qm 第五次走查；上次走查 = r10，2026-09-03，基线 qm `d15295ea` 之前，本轮审 346 个非 merge 提交）。
 - **本轮重心（用户裁定）**：**还债 + 修缺陷**；qm 增量只取能直接连到现有模块的部分，新能力一律记入 §8 推迟。

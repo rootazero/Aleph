@@ -3541,10 +3541,11 @@ Reading the table:
   only down; a `guest` carry stays `guest`; personal rows are untouched). The
   browser composes nobody's profile for the same shape. **Cost:** an admin's
   own background announcements and resumes in their own room are capped at
-  member too, until the initiator is carried. ⚠️ At `68386a986` the floor is
-  not gated on `multi_user()`, so a single-user install that uses project
-  rooms caps the owner the same way; gating it is ruled and queued for a small
-  follow-up source fix.
+  member too, until the initiator is carried. Since `d63636107` the floor
+  applies only in multi-user mode (`slot::multi_user()`, read lazily and only
+  for a proceeding room run with no known initiator), so a single-user install
+  keeps the owner's grant; the same commit pins that each session-row executor
+  runs the request its own `admit_*` built.
 - **The R-d converse is still open.** `session_may_act` checks the row owner,
   so if a room's creator is deactivated, every member's interrupted run in that
   room is settled closed at resume although its initiator is active. It is
