@@ -48,7 +48,15 @@ fn project_hooks(roots: &[PathBuf]) -> Vec<HookConfig> {
 /// stamps it: the plugin's id, its directory inside the project, and the
 /// owning row's `Project(root)` key.
 fn project_plugin_hook(project: &Path) -> HookConfig {
-    let plugin_root = project.join(".aleph/plugins/fmt");
+    plugin_hook(
+        project.join(".aleph/plugins/fmt"),
+        ScopeKey::project(project),
+    )
+}
+
+/// The plugin `fmt`'s `TEMPLATE` hook, installed at `plugin_root` and
+/// visible to `scope`.
+fn plugin_hook(plugin_root: PathBuf, scope_key: ScopeKey) -> HookConfig {
     write_script(&plugin_root);
     HookConfig {
         event: HookEvent::BeforeToolCall,
@@ -63,7 +71,7 @@ fn project_plugin_hook(project: &Path) -> HookConfig {
         handler: None,
         timeout_secs: None,
         declared_event: Some("PreToolUse".into()),
-        scope_key: ScopeKey::project(project),
+        scope_key,
     }
 }
 
@@ -109,7 +117,9 @@ async fn approve_in_a_then_fire_in_b(
     );
     let recorded = consent.entries();
     assert_eq!(recorded.len(), 1, "the first fire records one entry");
-    consent.approve(&recorded[0].fingerprint).unwrap();
+    consent
+        .approve(&recorded[0].fingerprint, recorded[0].plugin_root.as_deref())
+        .unwrap();
 
     fire_in(exec, a).await;
     fire_in(exec, b).await;
@@ -206,7 +216,9 @@ async fn a_project_http_hooks_approval_is_its_projects_alone() {
     fire_in(&exec, a.path()).await;
     let recorded = consent.entries();
     assert_eq!(recorded.len(), 1, "the first fire records one entry");
-    consent.approve(&recorded[0].fingerprint).unwrap();
+    consent
+        .approve(&recorded[0].fingerprint, recorded[0].plugin_root.as_deref())
+        .unwrap();
     let in_b = crate::projects::with_project_root(Some(b.path().to_path_buf()), async {
         exec.execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
             .await
@@ -270,4 +282,55 @@ async fn a_shared_label_approval_from_before_the_binding_authorises_no_project()
         .expect("the old entry is kept");
     assert_eq!(kept.status, ConsentStatus::Approved);
     assert!(kept.predates_project_binding());
+}
+
+/// Within one key an approval attests to the root it was reviewed from. The
+/// same plugin id installed somewhere else — same owner, same command, same
+/// key — is refused until the operator revokes the approval and reviews the
+/// new root, which the next fire records.
+#[tokio::test]
+async fn an_approval_is_bound_to_the_root_it_was_reviewed_from() {
+    let (first, second, state) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let consent = consent_in(state.path());
+    let installed_at = |root: &Path| {
+        HookExecutor::new(vec![plugin_hook(root.to_path_buf(), ScopeKey::Global)])
+            .with_consent(consent.clone())
+    };
+    let (at_first, at_second) = (installed_at(first.path()), installed_at(second.path()));
+
+    fire_in(&at_first, first.path()).await;
+    let recorded = consent.entries().remove(0);
+    consent
+        .approve(&recorded.fingerprint, recorded.plugin_root.as_deref())
+        .unwrap();
+    fire_in(&at_first, first.path()).await;
+    assert!(
+        first.path().join("ran").exists(),
+        "approved: runs from its root"
+    );
+
+    fire_in(&at_second, second.path()).await;
+    assert!(
+        !second.path().join("ran").exists(),
+        "an approval of the first root ran the second"
+    );
+
+    // The way back: revoke, let it fire, review what that recorded, approve.
+    consent.revoke(&recorded.fingerprint).unwrap();
+    fire_in(&at_second, second.path()).await;
+    let refreshed = consent.entries().remove(0);
+    assert_eq!(
+        refreshed.plugin_root.as_deref(),
+        Some(second.path()),
+        "the next fire records the root it ran from"
+    );
+    consent
+        .approve(&refreshed.fingerprint, refreshed.plugin_root.as_deref())
+        .unwrap();
+    fire_in(&at_second, second.path()).await;
+    assert!(second.path().join("ran").exists());
 }

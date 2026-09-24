@@ -1325,7 +1325,9 @@ mod tests {
             Path::new("/tmp"),
         );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
+        consent
+            .approve(&fp, Some(Path::new("/tmp")))
+            .expect("approve");
 
         let executor = HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
         let (_ctx, result) = executor

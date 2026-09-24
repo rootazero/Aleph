@@ -728,7 +728,7 @@ impl HookExecutor {
             // Keyed by the hook's `scope_key` — the field
             // `project_scope_allows` reads — so a project hook's approval is
             // its project's alone (`consent.rs`, module doc).
-            if !consent.is_approved(plugin_name, scope_key, command) {
+            if !consent.is_approved(plugin_name, scope_key, plugin_root, command) {
                 // What `aleph hooks test` rebuilds the run from: the spelling
                 // this hook is dispatched with and the root its path
                 // variables resolve to.
@@ -957,7 +957,7 @@ impl HookExecutor {
     ) -> Result<ActionResult, ExtensionError> {
         if let Some(consent) = &self.consent {
             let consent_key = format!("http:{url}");
-            if !consent.is_approved(plugin_name, scope_key, &consent_key) {
+            if !consent.is_approved(plugin_name, scope_key, plugin_root, &consent_key) {
                 consent.record_pending(
                     plugin_name,
                     scope_key,
@@ -1316,7 +1316,7 @@ impl HookExecutor {
                 _ => continue,
             };
             saw_gated = true;
-            if !consent.is_approved(&hook.plugin_name, &hook.scope_key, &key) {
+            if !consent.is_approved(&hook.plugin_name, &hook.scope_key, &hook.plugin_root, &key) {
                 all_approved = false;
             }
         }
@@ -1508,6 +1508,8 @@ mod tests {
         let mut hook = dummy_hook("plugin:linter");
         hook.event = HookEvent::BeforeToolCall;
         hook.kind = HookKind::Interceptor;
+        // The root the approval below is recorded with — an approval binds it.
+        hook.plugin_root = PathBuf::from("/p");
 
         let exec = HookExecutor::new(vec![hook]).with_consent(consent.clone());
         assert_eq!(exec.inventory()[0].consent.as_deref(), Some("pending"));
@@ -1522,7 +1524,9 @@ mod tests {
             std::path::Path::new("/p"),
         );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
+        consent
+            .approve(&fp, Some(std::path::Path::new("/p")))
+            .expect("approve");
         let entry = &exec.inventory()[0];
         assert_eq!(entry.consent.as_deref(), Some("approved"));
         assert!(entry.reachable);

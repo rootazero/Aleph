@@ -92,6 +92,11 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     }
     println!("Event:       {}", entry.event);
     println!("Status:      {}", status_label(entry.status));
+    // The directory the run below uses, and the one an approval binds to.
+    match &entry.plugin_root {
+        Some(root) => println!("Root:        {}", root.display()),
+        None => println!("Root:        (not recorded — path variables are unset)"),
+    }
     if let Some(url) = http_url {
         println!("HTTP URL (event payload is POSTed here when the hook fires):");
         println!("  {url}");
@@ -113,7 +118,14 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     }
 
     if entry.status == ConsentStatus::Approved {
-        println!("Hook is already approved.");
+        // An approved entry is never rewritten, so a hook refused since —
+        // its script edited, or run from another root — is re-reviewed by
+        // revoking first: the next fire records what it runs now.
+        println!(
+            "Hook is already approved. If the server refuses it (its script or root changed), \
+             run `aleph hooks revoke {}` and review it again after it next fires.",
+            entry.fingerprint
+        );
         return Ok(());
     }
 
@@ -123,9 +135,15 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         "Approve this hook so the server may run it? [y/N] "
     };
     if prompt_yes(approve_prompt)? {
-        match consent.approve(&entry.fingerprint)? {
+        // Approves the root shown above, or nothing: a fire may have moved
+        // this pending entry to another root while it was being reviewed.
+        match consent.approve(&entry.fingerprint, entry.plugin_root.as_deref())? {
             Some(_) => println!("Approved {}.", entry.fingerprint),
-            None => println!("Could not approve — the hook is no longer in the registry."),
+            None => println!(
+                "Could not approve — the hook is no longer in the registry, or it now runs \
+                 from another root. Run `aleph hooks test {}` again.",
+                entry.fingerprint
+            ),
         }
     } else {
         println!("Left pending.");
@@ -163,7 +181,8 @@ fn gated_text(line: &str) -> String {
 /// the data variables (`"$ARGUMENTS"`, `"$TOOL_NAME"`, …) are in its
 /// environment, the event JSON — under the spelling the hook is dispatched
 /// with — is on its stdin, and it runs in its plugin root. A script reviewed
-/// here therefore behaves as it will in production.
+/// here sees the variables, directory and payload production gives it from
+/// that root — not production's timeout, output cap or daemon environment.
 fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
     let invocation = test_invocation(entry);
     if entry.plugin_root.is_none() {
@@ -404,18 +423,7 @@ mod tests {
              pwd -P > pwd.txt\n",
         )
         .unwrap();
-        let entry = ConsentEntry {
-            fingerprint: "0123456789abcdef".into(),
-            plugin_name: "user:global".into(),
-            project_root: None,
-            command: "sh ${CLAUDE_PLUGIN_ROOT}/probe.sh".into(),
-            event: "PreToolUse".into(),
-            plugin_root: Some(root.path().to_path_buf()),
-            status: ConsentStatus::Pending,
-            first_seen: 0,
-            approved_at: None,
-            script_fingerprint: None,
-        };
+        let entry = pending_entry("sh ${CLAUDE_PLUGIN_ROOT}/probe.sh", root.path());
 
         run_command_with_payload(&entry).expect("a path-variable reference is not a metacharacter");
 
@@ -430,5 +438,41 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
         );
+    }
+
+    /// The gate's other direction: a template that chains a second command
+    /// is refused before anything runs — the path-variable reference in it
+    /// does not excuse the `;`.
+    #[cfg(unix)]
+    #[test]
+    fn a_reviewed_hook_that_chains_a_command_is_refused_before_it_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let entry = pending_entry(
+            "sh ${CLAUDE_PLUGIN_ROOT}/probe.sh; touch chained",
+            root.path(),
+        );
+
+        assert!(run_command_with_payload(&entry).is_err());
+        assert!(
+            !root.path().join("chained").exists(),
+            "the chained command ran"
+        );
+    }
+
+    /// A pending `user:global` entry for `command`, recorded from `root`.
+    #[cfg(unix)]
+    fn pending_entry(command: &str, root: &std::path::Path) -> ConsentEntry {
+        ConsentEntry {
+            fingerprint: "0123456789abcdef".into(),
+            plugin_name: "user:global".into(),
+            project_root: None,
+            command: command.into(),
+            event: "PreToolUse".into(),
+            plugin_root: Some(root.to_path_buf()),
+            status: ConsentStatus::Pending,
+            first_seen: 0,
+            approved_at: None,
+            script_fingerprint: None,
+        }
     }
 }
