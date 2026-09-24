@@ -10,7 +10,7 @@ use crate::gateway::session_store::types::{
     CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionChangedEvent, SessionFilter,
     SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
-use crate::gateway::session_store::{SessionStore, StampOutcome};
+use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::sync_primitives::Arc;
 
 pub(crate) mod meta;
@@ -307,7 +307,7 @@ impl FileSessionStore {
     /// update is lost. Losing an update needs a lock held across the read AND
     /// the write, and the scope of that here is deliberately partial:
     ///
-    /// - `append_message` and `stamp_assistant_metadata_in_range` DO hold the
+    /// - `append_message` and `stamp_and_bill_in_range` DO hold the
     ///   session's [`Self::lock_metadata`] guard across their whole operation.
     ///   Those two are the pair that runs on every turn of every run on the
     ///   default backend, so their race is a routine event rather than a rare
@@ -700,7 +700,7 @@ impl SessionStore for FileSessionStore {
         let key_str = key.to_key_string();
         // Lock FIRST, then append. The append used to sit outside the critical
         // section, which was harmless while nothing else rewrote the transcript
-        // — it is not harmless now that `stamp_assistant_metadata_in_range` does a
+        // — it is not harmless now that `stamp_and_bill_in_range` does a
         // read-modify-write of the same file at the end of every run. Taking
         // the same lock is what makes the two mutually exclusive; the append
         // itself is still O(one line) so the section stays short.
@@ -1485,13 +1485,19 @@ impl SessionStore for FileSessionStore {
     /// of the whole transcript is a truncate-then-write, and the projector can
     /// append between the two halves — the same tear that cost this store its
     /// `metadata.json` (see `utils::atomic_write`).
-    async fn stamp_assistant_metadata_in_range(
+    async fn stamp_and_bill_in_range(
         &self,
         key: &SessionKey,
         after_seq: u64,
         before_seq: u64,
         metadata: &serde_json::Value,
+        bill: Option<&RunBill>,
     ) -> Result<StampOutcome, SessionStoreError> {
+        if bill.is_some() {
+            // Task 10 lands the file backend's bill; until then refuse rather
+            // than stamp and report a bill that was never written.
+            return Err(SessionStoreError::Unsupported);
+        }
         let key_str = key.to_key_string();
         // The session's write lock, held across the whole read-modify-write.
         //
@@ -1773,17 +1779,12 @@ mod default_backend_parity_guards {
 
         let stamp = tokio::time::timeout(
             Duration::from_millis(150),
-            store.stamp_assistant_metadata_in_range(
-                &key,
-                0,
-                99,
-                &serde_json::json!({"run_id": "r1"}),
-            ),
+            store.stamp_and_bill_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"}), None),
         )
         .await;
         assert!(
             stamp.is_err(),
-            "stamp_assistant_metadata_in_range completed while the session write \
+            "stamp_and_bill_in_range completed while the session write \
              lock was held — it is doing an UNLOCKED read-modify-write of \
              transcript.jsonl at the end of every run on the default backend, \
              and the update it loses is the user's newest message"
@@ -1824,12 +1825,7 @@ mod default_backend_parity_guards {
         drop(held);
         tokio::time::timeout(
             Duration::from_secs(5),
-            store.stamp_assistant_metadata_in_range(
-                &key,
-                0,
-                99,
-                &serde_json::json!({"run_id": "r1"}),
-            ),
+            store.stamp_and_bill_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"}), None),
         )
         .await
         .expect("stamp must proceed once the lock is free")
@@ -1919,7 +1915,7 @@ mod default_backend_parity_guards {
         let meta = serde_json::json!({ "run_id": "run-7", "context_tokens": 1234 });
         assert_eq!(
             store
-                .stamp_assistant_metadata_in_range(&key, 0, 3, &meta)
+                .stamp_and_bill_in_range(&key, 0, 3, &meta, None)
                 .await
                 .unwrap(),
             StampOutcome::Stamped
@@ -1928,7 +1924,7 @@ mod default_backend_parity_guards {
         // re-apply it, which is what keeps the caller from billing twice.
         assert_eq!(
             store
-                .stamp_assistant_metadata_in_range(&key, 0, 3, &meta)
+                .stamp_and_bill_in_range(&key, 0, 3, &meta, None)
                 .await
                 .unwrap(),
             StampOutcome::AlreadyStamped
@@ -1972,11 +1968,12 @@ mod default_backend_parity_guards {
 
         assert_eq!(
             store
-                .stamp_assistant_metadata_in_range(
+                .stamp_and_bill_in_range(
                     &key,
                     0,
                     3,
-                    &serde_json::json!({ "run_id": "run-7" })
+                    &serde_json::json!({ "run_id": "run-7" }),
+                    None
                 )
                 .await
                 .unwrap(),

@@ -190,7 +190,7 @@ pub(crate) fn collect_run_spans(
 /// The stamp carries the `run_id` alone — `build_message_metadata` with no
 /// occupancy — because the gauge is unknown here and a zero would read as a
 /// measurement on the Panel. It goes through the same
-/// `stamp_assistant_metadata_in_range` as a real meta, over the same shape of
+/// `stamp_and_bill_in_range` as a real meta, over the same shape of
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
 /// rows strictly between), so a later heal reads `AlreadyStamped` and bills
 /// nothing: the stamp is the idempotence guard, exactly as on the live path.
@@ -234,7 +234,7 @@ pub(crate) async fn synthesize_missing_stamps(
             continue;
         };
         match store
-            .stamp_assistant_metadata_in_range(id, span.start, end, &meta)
+            .stamp_and_bill_in_range(id, span.start, end, &meta, None)
             .await
         {
             Ok(StampOutcome::Stamped) => {

@@ -9,7 +9,7 @@ use crate::gateway::session_store::types::{
     CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit, SessionFilter,
     SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
-use crate::gateway::session_store::{SessionStore, StampOutcome};
+use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 
 pub type SqliteSessionStore = SessionManager;
 pub type SqliteSessionStoreConfig = SessionManagerConfig;
@@ -429,7 +429,7 @@ impl SessionStore for SessionManager {
     }
 
     /// See the trait doc. Written directly against `self.conn` — like
-    /// `stamp_assistant_metadata_in_range` above — rather than as an inherent
+    /// `stamp_and_bill_in_range` above — rather than as an inherent
     /// `SessionManager` method plus `map_err`: `SessionManagerError` has no
     /// variant for "this key is not rescopable", because that is a
     /// store-level concept (`SessionStoreError::Unsupported`), not a
@@ -588,43 +588,67 @@ impl SessionStore for SessionManager {
     /// Ordering by `source_seq DESC` rather than `id DESC` for the same reason:
     /// a back-filled row has a larger `id` than rows recorded before it, so
     /// `id` order inside a range is not seq order after a repair.
-    async fn stamp_assistant_metadata_in_range(
+    ///
+    /// Stamp and bill share one transaction on the connection mutex, so a
+    /// failed bill rolls the stamp back (F10).
+    async fn stamp_and_bill_in_range(
         &self,
         key: &SessionKey,
         after_seq: u64,
         before_seq: u64,
         metadata: &serde_json::Value,
+        bill: Option<&RunBill>,
     ) -> Result<StampOutcome, SessionStoreError> {
         let key_str = key.to_key_string();
         let run_id = metadata.get("run_id").and_then(|v| v.as_str());
         let metadata_json = serde_json::to_string(metadata)
             .map_err(|e| SessionStoreError::DatabaseError(format!("serialize metadata: {e}")))?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
-        let target: Option<(i64, Option<String>)> = conn
-            .query_row(
-                "SELECT id, metadata FROM messages
-                  WHERE session_key = ?1 AND role = 'assistant'
-                    AND source_seq IS NOT NULL AND source_seq > ?2 AND source_seq <= ?3
-                  ORDER BY source_seq DESC LIMIT 1",
-                params![key_str, after_seq as i64, before_seq as i64],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+        let db = |e: rusqlite::Error| SessionStoreError::DatabaseError(e.to_string());
+        {
+            let mut conn = self
+                .conn
+                .lock()
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
+            // One transaction: the stamp and the bill land together or not at
+            // all. Every early return below drops `tx` uncommitted — a rollback
+            // of whatever it did, which on those paths is nothing or the stamp.
+            let tx = conn.transaction().map_err(db)?;
+            let target: Option<(i64, Option<String>)> = tx
+                .query_row(
+                    "SELECT id, metadata FROM messages
+                      WHERE session_key = ?1 AND role = 'assistant'
+                        AND source_seq IS NOT NULL AND source_seq > ?2 AND source_seq <= ?3
+                      ORDER BY source_seq DESC LIMIT 1",
+                    params![key_str, after_seq as i64, before_seq as i64],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(db)?;
+            let Some((row_id, existing)) = target else {
+                return Ok(StampOutcome::NoRowInRange);
+            };
+            if already_stamped_by(existing.as_deref(), run_id) {
+                return Ok(StampOutcome::AlreadyStamped);
+            }
+            tx.execute(
+                "UPDATE messages SET metadata = ?1 WHERE id = ?2",
+                params![metadata_json, row_id],
             )
-            .optional()
-            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-        let Some((row_id, existing)) = target else {
-            return Ok(StampOutcome::NoRowInRange);
-        };
-        if already_stamped_by(existing.as_deref(), run_id) {
-            return Ok(StampOutcome::AlreadyStamped);
+            .map_err(db)?;
+            if let Some(bill) = bill {
+                let changed = crate::gateway::session_manager::ops::add_usage(&tx, &key_str, bill)
+                    .map_err(db)?;
+                if changed == 0 {
+                    return Err(SessionStoreError::NotFound(format!(
+                        "no session row for {key_str}; the run is not billed and its row is not stamped"
+                    )));
+                }
+            }
+            tx.commit().map_err(db)?;
         }
-        conn.execute(
-            "UPDATE messages SET metadata = ?1 WHERE id = ?2",
-            params![metadata_json, row_id],
-        )
-        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+        if bill.is_some() {
+            self.notify_usage_updated(&key_str);
+        }
         Ok(StampOutcome::Stamped)
     }
 }
@@ -801,5 +825,182 @@ mod tests {
             !changed,
             "there is no row yet for a group nobody has spoken in"
         );
+    }
+
+    fn stamp_bill(input: i64, output: i64) -> RunBill {
+        RunBill {
+            input_tokens: input,
+            output_tokens: output,
+            cost_usd: 0.12,
+            model: Some("claude".into()),
+            model_provider: Some("anthropic".into()),
+        }
+    }
+
+    /// A session with one assistant row at source seq 2, as the projector
+    /// writes it.
+    async fn store_with_row(temp: &tempfile::TempDir, key: &SessionKey) -> SessionManager {
+        let store = test_store(temp);
+        SessionStore::get_or_create(&store, key).await.unwrap();
+        SessionStore::append_message(
+            &store,
+            key,
+            crate::gateway::session_store::types::MessageRecord {
+                id: crate::session::projection::row_id(&key.to_key_string(), 2),
+                role: "assistant".into(),
+                content: "hello".into(),
+                timestamp: 2,
+                metadata: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_call_id: None,
+                tool_name: None,
+            },
+        )
+        .await
+        .unwrap();
+        store
+    }
+
+    async fn row_run_id(store: &SessionManager, key: &SessionKey) -> Option<String> {
+        SessionStore::get_history(store, key, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .and_then(|m| m.metadata)
+            .and_then(|m| m.get("run_id").and_then(|v| v.as_str()).map(str::to_string))
+    }
+
+    async fn tokens(store: &SessionManager, key: &SessionKey) -> (i64, i64) {
+        let m = SessionStore::get_metadata(store, key)
+            .await
+            .unwrap()
+            .unwrap();
+        (m.input_tokens, m.output_tokens)
+    }
+
+    /// Review Focus 5: the stamp and the bill land together, and a replay of
+    /// the same meta is `AlreadyStamped` and adds nothing.
+    #[tokio::test]
+    async fn a_stamp_and_its_bill_land_together_and_a_replay_adds_nothing() {
+        let temp = tempdir().unwrap();
+        let key = SessionKey::from_key_string("agent:stampbill:main").unwrap();
+        let store = store_with_row(&temp, &key).await;
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = stamp_bill(45, 25);
+        for (pass, expected) in [
+            (1, StampOutcome::Stamped),
+            (2, StampOutcome::AlreadyStamped),
+        ] {
+            assert_eq!(
+                SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
+                    .await
+                    .unwrap(),
+                expected,
+                "pass {pass}"
+            );
+            assert_eq!(tokens(&store, &key).await, (45, 25), "pass {pass}");
+        }
+        let m = SessionStore::get_metadata(&store, &key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (m.estimated_cost_usd, m.model.as_deref()),
+            (0.12, Some("claude"))
+        );
+        assert_eq!(row_run_id(&store, &key).await.as_deref(), Some("r"));
+    }
+
+    /// F10: a bill the database refuses rolls the stamp back, so the next
+    /// replay still finds the row unstamped and bills it.
+    #[tokio::test]
+    async fn a_refused_bill_leaves_the_row_unstamped_and_the_replay_bills_it() {
+        let temp = tempdir().unwrap();
+        let key = SessionKey::from_key_string("agent:refusedbill:main").unwrap();
+        let store = store_with_row(&temp, &key).await;
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_bill BEFORE UPDATE OF input_tokens ON sessions \
+                 BEGIN SELECT RAISE(ABORT, 'injected bill failure'); END;",
+            )
+            .unwrap();
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = stamp_bill(45, 25);
+        assert!(
+            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            row_run_id(&store, &key).await,
+            None,
+            "the stamp rolled back with the bill"
+        );
+        assert_eq!(tokens(&store, &key).await, (0, 0));
+
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_bill;")
+            .unwrap();
+        assert_eq!(
+            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        assert_eq!(tokens(&store, &key).await, (45, 25));
+    }
+
+    /// Review Focus 3: a bill for a session with no row changes nothing and is
+    /// an `Err` — never a stamp that would then guard a bill that never landed.
+    #[tokio::test]
+    async fn a_bill_for_a_session_with_no_row_is_refused_and_nothing_is_stamped() {
+        let temp = tempdir().unwrap();
+        let key = SessionKey::from_key_string("agent:norowbill:main").unwrap();
+        let store = store_with_row(&temp, &key).await;
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys = OFF; DELETE FROM sessions WHERE key = '{}';",
+                key.to_key_string()
+            ))
+            .unwrap();
+        let rows: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "precondition: the message row survived the delete");
+
+        let result = SessionStore::stamp_and_bill_in_range(
+            &store,
+            &key,
+            1,
+            4,
+            &serde_json::json!({ "run_id": "r" }),
+            Some(&stamp_bill(45, 25)),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(SessionStoreError::NotFound(_))),
+            "{result:?}"
+        );
+        let metadata: Option<String> = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT metadata FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(metadata, None, "the stamp rolled back");
     }
 }

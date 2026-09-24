@@ -17,7 +17,7 @@ use crate::gateway::session_store::types::{
 };
 use async_trait::async_trait;
 
-/// What [`SessionStore::stamp_assistant_metadata_in_range`] did.
+/// What [`SessionStore::stamp_and_bill_in_range`] did.
 ///
 /// Three answers, not two, because the caller bills on exactly one of them.
 /// Folding `NoRowInRange` into `Stamped` bills a run whose row is not in the
@@ -34,6 +34,18 @@ pub enum StampOutcome {
     /// Its row was never materialised (or has not been healed yet), so there is
     /// nothing to stamp and nothing to bill.
     NoRowInRange,
+}
+
+/// One run's spend, accumulated onto the session row in the same operation
+/// that stamps the run's row ([`SessionStore::stamp_and_bill_in_range`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunBill {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// The run's priced cost; 0.0 when it could not be priced.
+    pub cost_usd: f64,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
 }
 
 #[async_trait]
@@ -479,6 +491,18 @@ pub trait SessionStore: Send + Sync {
     /// `AlreadyStamped` when the row in range already carries this metadata's
     /// `run_id`, and must not overwrite it.
     ///
+    /// `bill`, when present, is accumulated onto the session row in the SAME
+    /// operation, and only on [`StampOutcome::Stamped`] — a replay reads
+    /// `AlreadyStamped` and adds nothing. The stamp is the bill's idempotence
+    /// guard, so the two must land together: a stamp that landed without its
+    /// bill could never be billed again (FOLLOW-UP F10). If the bill cannot be
+    /// applied — including a session with no row to add it to — the stamp
+    /// must not land either, and the answer is `Err`, never a silent `Ok`.
+    /// SQLite does both in one transaction; the file backend writes the
+    /// transcript, then `metadata.json`, and rolls the stamp back under the
+    /// same lock if the second write fails (a crash between the two writes
+    /// under-bills once — ruling U3).
+    ///
     /// Default: [`StampOutcome::NoRowInRange`] — for TEST STUBS only, and true
     /// of them by construction (a stub with no transcript has no row in any
     /// range). **Both production backends override it**: SQLite with a
@@ -486,12 +510,13 @@ pub trait SessionStore: Send + Sync {
     /// with a locked `rfind` over the same range. It is deliberately NOT
     /// `Stamped`: a default that claims the write happened would let the caller
     /// bill a session against a store that wrote nothing.
-    async fn stamp_assistant_metadata_in_range(
+    async fn stamp_and_bill_in_range(
         &self,
         _key: &SessionKey,
         _after_seq: u64,
         _before_seq: u64,
         _metadata: &serde_json::Value,
+        _bill: Option<&RunBill>,
     ) -> Result<StampOutcome, SessionStoreError> {
         Ok(StampOutcome::NoRowInRange)
     }

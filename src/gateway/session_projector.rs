@@ -798,7 +798,7 @@ pub(crate) async fn project_event(
             // (or with a later row already back-filled) is somebody else's.
             match ctx
                 .store
-                .stamp_assistant_metadata_in_range(id, ctx.run_start, rec.seq, &meta)
+                .stamp_and_bill_in_range(id, ctx.run_start, rec.seq, &meta, None)
                 .await
             {
                 Ok(StampOutcome::AlreadyStamped) => Projected::Nothing,

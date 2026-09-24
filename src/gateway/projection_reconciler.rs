@@ -590,7 +590,7 @@ mod tests {
     }
 
     /// The SQLite backend as the projection target — the one whose
-    /// `stamp_assistant_metadata_in_range` is a `source_seq`-ranged query.
+    /// `stamp_and_bill_in_range` is a `source_seq`-ranged query.
     fn temp_sqlite_store(name: &str) -> (Arc<dyn SessionStore>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let manager = SessionManager::new(SessionManagerConfig {
