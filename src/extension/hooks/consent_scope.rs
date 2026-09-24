@@ -188,6 +188,14 @@ async fn a_project_scoped_plugins_hook_is_keyed_by_its_project_too() {
 
     assert!(ran_a, "approved under a: runs under a");
     assert!(!ran_b, "a's approval ran b's copy of the plugin");
+    // What tells project keying apart from root binding: the two plugin
+    // roots differ, so binding the approval to its root alone would also
+    // keep b from running. Only the project key gives each copy its own
+    // entry — the thing a root-less approval cannot follow across projects.
+    let a_entry = entry_for(&consent, a.path()).expect("a's copy is recorded under a");
+    let b_entry = entry_for(&consent, b.path()).expect("b's copy is recorded under b");
+    assert_eq!(a_entry.status, ConsentStatus::Approved);
+    assert_eq!(b_entry.status, ConsentStatus::Pending);
 }
 
 /// The Http twin of the command gate: approving a project's URL template
@@ -407,7 +415,13 @@ async fn an_approval_that_attests_to_no_script_is_withdrawn_once_the_script_can_
         !hook_root.join("ran").exists(),
         "an approval that attests to no content ran the script"
     );
-    let entry = consent.entries().remove(0);
+    // Found by its key, not by position: the entry under test is the seeded
+    // one, whatever else a fire recorded.
+    let entry = consent
+        .entries()
+        .into_iter()
+        .find(|e| e.fingerprint == fp)
+        .expect("the seeded entry is kept");
     assert_eq!(entry.status, ConsentStatus::Pending, "withdrawn for review");
     assert!(entry.script_fingerprint.is_some());
 
