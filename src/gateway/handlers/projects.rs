@@ -109,7 +109,7 @@ use super::super::protocol::{
 use super::parse_params;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::ChangeKind;
-use crate::gateway::security::store::{SecurityStore, UserRole};
+use crate::gateway::security::store::SecurityStore;
 use crate::gateway::visibility;
 use crate::projects::{self, Project, ProjectError, ProjectStatus, ProjectStore};
 use crate::sync_primitives::Arc;
@@ -1218,6 +1218,7 @@ pub async fn handle_workspace_read(
 mod tests {
     use super::*;
     use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::security::store::UserRole;
     use crate::gateway::events::GatewayEventFrame;
     use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
     use rusqlite::Connection;
