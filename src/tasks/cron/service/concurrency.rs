@@ -36,7 +36,7 @@ use super::ops::{advance_next_run, recompute_next_run_maintenance};
 /// across ≈30 minutes, a strong signal the provider window is genuinely
 /// exhausted rather than momentarily throttled. This is what keeps a 8am 429
 /// blip from firing a "failed 3 times" alarm.
-const TRANSIENT_ALERT_FLOOR: u32 = 5;
+pub(crate) const TRANSIENT_ALERT_FLOOR: u32 = 5;
 
 /// A pending failure alert returned from [`phase3_writeback`] for the caller to
 /// dispatch via the shared delivery pipeline. The phase3 path itself does not

@@ -44,18 +44,20 @@ impl TaskFireFacts {
         }
     }
 
-    /// The person the resolver checked, labelled: the task author when one
-    /// is carried, else the owner — `resolve_with`'s own `author.or(owner)`,
-    /// with the same "an empty id is absent" reading.
+    /// The person the resolver checked, labelled — derived by
+    /// `scope::authority::checked_person`, the resolver's own answer, so the
+    /// name printed can never be a different person from the one refused.
     fn checked_principal(&self) -> Option<(&'static str, &str)> {
-        match self.author.as_deref().filter(|a| !a.is_empty()) {
-            Some(author) => Some(("task author", author)),
-            None => self
-                .owner
-                .as_deref()
-                .filter(|o| !o.is_empty())
-                .map(|owner| (self.owner_label, owner)),
-        }
+        crate::scope::authority::checked_person(&self.subject()).map(|(id, is_author)| {
+            (
+                if is_author {
+                    "task author"
+                } else {
+                    self.owner_label
+                },
+                id,
+            )
+        })
     }
 }
 

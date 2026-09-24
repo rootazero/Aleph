@@ -1922,8 +1922,9 @@ pub(super) async fn rearm_loop_after_busy(
 ///
 /// Both push the reason to the origin channel (R5 — an autonomous ending is
 /// never silent), with the remedy that fits `why`: a deactivated person can be
-/// reactivated; a deleted one cannot, so the work must be reassigned or
-/// stopped.
+/// reactivated; a deleted one cannot, and no verb reassigns a pursuit's pinned
+/// author, so the only exit is to stop it and start a new one as a current
+/// user (the dispatcher's `refusal_text` says the same).
 pub(super) async fn halt_on_refused_authority(
     kind: ContinuationKind,
     session_key_str: &str,
@@ -1943,7 +1944,8 @@ pub(super) async fn halt_on_refused_authority(
                      this loop can resume."
                 ),
                 RefusalReason::Gone => format!(
-                    "Paused: {reason}. That person no longer exists; reassign or stop this loop."
+                    "Paused: {reason}. That person no longer exists, so this loop can never run \
+                     as them. Stop it and set a new loop as a current user."
                 ),
             };
             if matches!(
@@ -1967,8 +1969,9 @@ pub(super) async fn halt_on_refused_authority(
                      that person, then set the goal back to active, before it can continue."
                 ),
                 RefusalReason::Gone => format!(
-                    "Autonomous pursuit halted: {reason}. That person no longer exists; \
-                     reassign or stop this goal."
+                    "Autonomous pursuit halted: {reason}. That person no longer exists, so \
+                     this goal can never run as them. Stop it and set a new goal as a current \
+                     user."
                 ),
             };
             match store.block_if_active(session_key_str, &note, super::goal_continuation::now_ms())

@@ -69,6 +69,11 @@ pub struct HeartbeatTickResult {
     /// The fire-time authority check CONFIRMED the owner walled or gone:
     /// writeback disarms the task (`ops::disable_walled_owner_task`).
     pub disable_task: bool,
+    /// The fire-time authority check could not read the users store (R-a).
+    /// Writeback alerts on such a beat only once the streak reaches cron's
+    /// `TRANSIENT_ALERT_FLOOR`: one store blip must not page every task's
+    /// target at once.
+    pub authority_unknown: bool,
 }
 
 impl HeartbeatTickResult {
@@ -85,6 +90,7 @@ impl HeartbeatTickResult {
             delivery_status: None,
             new_probe_result: None,
             disable_task,
+            authority_unknown: !disable_task,
         }
     }
 }
@@ -388,6 +394,7 @@ async fn execute_heartbeat_tick_as(
             delivery_status: None,
             new_probe_result: None,
             disable_task: false,
+            authority_unknown: false,
         },
         Ok(ref r) if !r.triggered && wake_reason.is_none() => HeartbeatTickResult {
             l1_status: "Skipped".into(),
@@ -398,6 +405,7 @@ async fn execute_heartbeat_tick_as(
             delivery_status: None,
             new_probe_result: Some(r.raw_value.to_string()),
             disable_task: false,
+            authority_unknown: false,
         },
         Ok(r) => {
             // L2 execution
@@ -417,6 +425,7 @@ async fn execute_heartbeat_tick_as(
                     delivery_status: None,
                     new_probe_result: Some(r.raw_value.to_string()),
                     disable_task: false,
+                    authority_unknown: false,
                 },
                 Ok(l2) => {
                     let (l2_status, delivery_status) = match l2.status {
@@ -491,6 +500,7 @@ async fn execute_heartbeat_tick_as(
                         delivery_status,
                         new_probe_result: Some(r.raw_value.to_string()),
                         disable_task: false,
+                        authority_unknown: false,
                     }
                 }
             }
@@ -626,9 +636,19 @@ async fn writeback_one(
             // could fail indefinitely with `consecutive_errors` doing nothing
             // but lengthening the backoff — nobody is told. Same gate cron
             // uses (`tasks::shared::alert`), fed from heartbeat state.
-            if let Some(alert_cfg) =
+            //
+            // An authority-unknown beat is a users-store blip, not a broken
+            // monitor: like cron's transient failures it alerts only once the
+            // streak reaches the floor cron uses (final review M3).
+            let blip_within_floor = tick_result.authority_unknown
+                && task.state.consecutive_errors
+                    < crate::tasks::cron::service::concurrency::TRANSIENT_ALERT_FLOOR;
+            let alert_cfg = if blip_within_floor {
+                None
+            } else {
                 resolve_alert_config(task, state.config.notify_on_failure_default)
-            {
+            };
+            if let Some(alert_cfg) = alert_cfg {
                 let subject = format!("Heartbeat '{}' ({})", task.name, task.id);
                 let fresh = crate::tasks::shared::alert::should_send_alert(
                     &subject,
@@ -1256,5 +1276,78 @@ mod tests {
         );
         assert!(u.state.next_due_ms.is_some());
         assert_eq!(u.state.last_error.as_deref(), Some("authority unknown: io"));
+    }
+
+    /// Final review M3: a users-store blip must not page every heartbeat's
+    /// target on its first beat. An authority-Unknown skip alerts only once
+    /// the streak reaches cron's `TRANSIENT_ALERT_FLOOR`; a CONFIRMED refusal
+    /// still alerts at once.
+    #[tokio::test]
+    async fn an_unknown_authority_beat_alerts_only_after_the_transient_floor() {
+        let alerting = |id: &str| {
+            let mut task = make_task();
+            task.id = id.to_string();
+            task.failure_alert = Some(crate::tasks::shared::alert::FailureAlertConfig {
+                after: 1,
+                cooldown_ms: 0,
+                target: webhook_target(),
+            });
+            task
+        };
+        let mut store = HeartbeatStore::open_in_memory().unwrap();
+        store.add_task(alerting("hb-blip"));
+        store.add_task(alerting("hb-walled"));
+        let state = HeartbeatServiceState::new(
+            Arc::new(tokio::sync::Mutex::new(store)),
+            HeartbeatConfig::default(),
+        );
+        let ctx = make_ctx("silent");
+        let floor = crate::tasks::cron::service::concurrency::TRANSIENT_ALERT_FLOOR;
+        let blip =
+            || HeartbeatTickResult::authority_skip("authority unknown: io".to_string(), false);
+
+        for _ in 1..floor {
+            writeback_one(&state, "hb-blip", blip(), false, &ctx).await;
+        }
+        {
+            let store = state.store.lock().await;
+            let t = store.get_task("hb-blip").unwrap();
+            assert_eq!(t.state.consecutive_errors, floor - 1);
+            assert!(
+                t.state.last_failure_alert_at_ms.is_none(),
+                "an unknown authority paged before the floor"
+            );
+        }
+        writeback_one(&state, "hb-blip", blip(), false, &ctx).await;
+        writeback_one(
+            &state,
+            "hb-walled",
+            HeartbeatTickResult::authority_skip(
+                "principal deactivated (u-walled) — task disabled at fire time".to_string(),
+                true,
+            ),
+            false,
+            &ctx,
+        )
+        .await;
+        let store = state.store.lock().await;
+        assert!(
+            store
+                .get_task("hb-blip")
+                .unwrap()
+                .state
+                .last_failure_alert_at_ms
+                .is_some(),
+            "an unknown that persists to the floor still alerts"
+        );
+        assert!(
+            store
+                .get_task("hb-walled")
+                .unwrap()
+                .state
+                .last_failure_alert_at_ms
+                .is_some(),
+            "a confirmed refusal alerts on its first beat"
+        );
     }
 }
