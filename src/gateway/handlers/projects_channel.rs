@@ -951,8 +951,11 @@ mod tests {
     ///
     /// That is the concurrent `session_admits` the forget's placement is
     /// defending against, run inline so the ordering is observable
-    /// deterministically instead of raced against a second task. Every other
-    /// method delegates, so `handle_bind` still runs against a real backend.
+    /// deterministically instead of raced against a second task. Every
+    /// required method delegates to `inner`, so `handle_bind` still runs
+    /// against a real backend; the trait's defaulted methods (`history_page`,
+    /// `truncate_messages`, `load_window`, …) are not overridden and run the
+    /// trait default, not `inner`'s.
     struct ReadDuringRescope {
         inner: Arc<dyn SessionStore>,
         index: Arc<EventVisibilityIndex>,
@@ -1150,6 +1153,18 @@ mod tests {
         }
         async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
             self.inner.set_idle(key).await
+        }
+        async fn stamp_and_bill_in_range(
+            &self,
+            key: &SessionKey,
+            after_seq: u64,
+            before_seq: u64,
+            metadata: &serde_json::Value,
+            bill: Option<&crate::gateway::session_store::RunBill>,
+        ) -> Result<crate::gateway::session_store::StampOutcome, SessionStoreError> {
+            self.inner
+                .stamp_and_bill_in_range(key, after_seq, before_seq, metadata, bill)
+                .await
         }
     }
 

@@ -383,6 +383,19 @@ impl SessionStore for E2eSessionStore {
     async fn set_idle(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
+    async fn stamp_and_bill_in_range(
+        &self,
+        _key: &SessionKey,
+        _after_seq: u64,
+        _before_seq: u64,
+        _metadata: &serde_json::Value,
+        _bill: Option<&alephcore::gateway::session_store::RunBill>,
+    ) -> Result<alephcore::gateway::session_store::StampOutcome, SessionStoreError> {
+        // `append_message` is a stub, so no row here carries a source seq and
+        // none is in any range — with or without a bill: nothing is stamped,
+        // so nothing is billed.
+        Ok(alephcore::gateway::session_store::StampOutcome::NoRowInRange)
+    }
 }
 
 // ---------------------------------------------------------------------------

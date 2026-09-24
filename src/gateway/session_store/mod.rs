@@ -512,23 +512,23 @@ pub trait SessionStore: Send + Sync {
     /// same lock if the second write fails (a crash between the two writes
     /// under-bills once — ruling U3).
     ///
-    /// Default: [`StampOutcome::NoRowInRange`] — for TEST STUBS only, and true
-    /// of them by construction (a stub with no transcript has no row in any
-    /// range). **Both production backends override it**: SQLite with a
-    /// `source_seq`-ranged `ORDER BY source_seq DESC LIMIT 1`, the file backend
-    /// with a locked `rposition` over the same range. It is deliberately NOT
-    /// `Stamped`: a default that claims the write happened would let the caller
-    /// bill a session against a store that wrote nothing.
+    /// Required, with no default body. A default would be taken silently by
+    /// a forwarding decorator that forgot this method: every stamp and every
+    /// bill would be lost, and the projector FINALISES `NoRowInRange` rather
+    /// than retrying it — the severed wire the file backend had before it
+    /// implemented the stamp. SQLite reads the range `ORDER BY source_seq
+    /// DESC`, the file backend takes a locked `rposition` over the same
+    /// range; a decorator forwards; a test double with no transcript answers
+    /// `NoRowInRange`, which is true of it by construction — never `Stamped`,
+    /// which would claim a write that did not happen.
     async fn stamp_and_bill_in_range(
         &self,
-        _key: &SessionKey,
-        _after_seq: u64,
-        _before_seq: u64,
-        _metadata: &serde_json::Value,
-        _bill: Option<&RunBill>,
-    ) -> Result<StampOutcome, SessionStoreError> {
-        Ok(StampOutcome::NoRowInRange)
-    }
+        key: &SessionKey,
+        after_seq: u64,
+        before_seq: u64,
+        metadata: &serde_json::Value,
+        bill: Option<&RunBill>,
+    ) -> Result<StampOutcome, SessionStoreError>;
 
     async fn patch_session(
         &self,
