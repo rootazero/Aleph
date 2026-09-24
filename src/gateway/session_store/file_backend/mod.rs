@@ -1526,6 +1526,10 @@ impl SessionStore for FileSessionStore {
     /// append between the two halves — the same tear that cost this store its
     /// `metadata.json` (see `utils::atomic_write`).
     ///
+    /// The idempotence guard is the SQLite twin's, asked in the same order
+    /// under the lock and before any write: `run_stamped_in_range` over every
+    /// row in range, then `already_stamped_by` on the target.
+    ///
     /// When a bill rides along, it is applied to `metadata.json` under the
     /// SAME lock as the stamp, after the transcript write has landed. If
     /// `metadata.json` then refuses the write, the transcript stamp is rolled
@@ -1565,16 +1569,30 @@ impl SessionStore for FileSessionStore {
         // what makes that true rather than assumed, and it is what excludes
         // rows with no parseable seq (legacy transcripts, boot-time orphan
         // notices).
-        let Some(idx) = messages.iter().rposition(|m| {
+        let in_range = |m: &MessageRecord| {
             m.role == "assistant"
                 && crate::session::projection::parse_source_seq(&m.id, &key_str)
                     .is_some_and(|s| s > after_seq && s <= before_seq)
-        }) else {
+        };
+        let Some(idx) = messages.iter().rposition(in_range) else {
             // The row this run produced is not in the transcript — never
             // materialised, or not healed yet. Not an error, and NOT a stamp:
             // the caller must not bill for it.
             return Ok(StampOutcome::NoRowInRange);
         };
+        // Every row in range, not only the target — see the shared predicate
+        // for the back-filled row that moves the target (I1).
+        let range_metadata: Vec<Option<String>> = messages
+            .iter()
+            .filter(|&m| in_range(m))
+            .map(|m| m.metadata.as_ref().map(serde_json::Value::to_string))
+            .collect();
+        if crate::gateway::session_store::sqlite_backend::run_stamped_in_range(
+            range_metadata.iter().map(Option::as_deref),
+            run_id,
+        ) {
+            return Ok(StampOutcome::AlreadyStamped);
+        }
         let existing = messages[idx]
             .metadata
             .as_ref()

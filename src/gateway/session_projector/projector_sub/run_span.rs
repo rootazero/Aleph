@@ -205,8 +205,11 @@ pub(crate) fn collect_run_spans(
 ///
 /// `NoRowInRange` here means the run's row is a hole this pass could not
 /// fill — it is in `retry`, `up_to_date` is already false, and the pass that
-/// fills it synthesizes. A refused stamp sets `errored`: unlike a deferred
-/// meta there is no seq to retry, and the next whole-session pass finds the
+/// fills it synthesizes. When only a LATER row of the run is such a hole,
+/// this pass stamps an earlier one, and the pass that fills the later row
+/// reads `AlreadyStamped`: the store's guard asks every row in range for
+/// this run's id, not only the newest (I1). A refused stamp sets
+/// `errored`: unlike a deferred meta there is no seq to retry, and the next whole-session pass finds the
 /// stamp still missing.
 ///
 /// The boot reconciler runs before any run is live, so it cannot race a meta

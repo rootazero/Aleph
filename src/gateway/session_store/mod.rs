@@ -486,10 +486,17 @@ pub trait SessionStore: Send + Sync {
     /// are never in any range and are therefore never stamped.
     ///
     /// [`StampOutcome::AlreadyStamped`] is what makes billing idempotent: the
-    /// caller accumulates the run's spend ONLY on [`StampOutcome::Stamped`], so
+    /// bill is applied only on [`StampOutcome::Stamped`], inside this call, so
     /// a replay of the same meta cannot bill twice. Implementors must return
-    /// `AlreadyStamped` when the row in range already carries this metadata's
-    /// `run_id`, and must not overwrite it.
+    /// `AlreadyStamped`, and write nothing, when ANY assistant row in range
+    /// already carries this metadata's `run_id`
+    /// (`sqlite_backend::run_stamped_in_range`), or when the row the stamp
+    /// would land on is not theirs to overwrite
+    /// (`sqlite_backend::already_stamped_by`). Any row, not the target: the
+    /// target is the newest row in range, and a heal that back-fills a hole
+    /// in the range after the stamp landed moves it — asking the target alone
+    /// billed that run twice (2026-09-25 final review, I1). The stamp stays on
+    /// the row it first landed on.
     ///
     /// `bill`, when present, is accumulated onto the session row in the SAME
     /// operation, and only on [`StampOutcome::Stamped`] — a replay reads

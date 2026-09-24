@@ -140,6 +140,7 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
    - **file（出厂默认）：** 在它已持有的那一把 `MetaGuard` 下先重写 transcript（戳）、再 commit `metadata.json`（计）；计费出错 ⇒ 不写 transcript ⇒ `Retry`。
    - 〔amended 2026-09-24 (plan)〕V6 结论：`stamp_assistant_metadata_in_range` 的生产调用者**恰好**是这两个孪生点 ⇒ 不新增方法，而是**把它改名为 `stamp_and_bill_in_range` 并加一个 `bill: Option<&RunBill>` 参数**（一个操作一个名字，不留旧名做死孪生）。`update_session_usage` 在本计划后没有生产调用者（`handlers/projects_channel.rs:1102` 是测试替身），但它有 6 个实现者；它的 SQL 抽成两处共用的 helper，trait 方法本身的去留**不在本计划内**（P6 另议）。
    - 〔amended〕file 臂：计费（`metadata.json`）写失败时，**仍在同一把锁下**把行的旧 metadata 写回 transcript，再返回 `Err` ⇒ `Retry`。为此 `MetaGuard` 加一个不消耗 guard 的 `write_back(&mut self)`（`commit(self)` 会随返回放锁）。回滚本身也失败 ⇒ `warn!`，这一行是「已戳未计」——与 U3 的崩溃窗同一方向。
+   - 〔amended 2026-09-25 (final review I1)〕两个后端的幂等守卫问的是范围内**任何一行**是否已带本 run 的 id（`sqlite_backend::run_stamped_in_range`，两后端共用），再问目标行（`already_stamped_by`），都在写之前。只问目标行时，heal 回填范围内的洞会让「最新行」移到一条未戳的行上，同一个 run 被戳并计第二次；戳留在它最初落下的那一行，不挪。
 3. **拆掉两义的 bool**：`Projected::Stamped { bill: BillOutcome }`，`BillOutcome::{Billed, NothingToBill, Unfoldable}`。〔amended〕`Unfoldable` 取代原稿的 `Unanchored`，覆盖两种「无从 fold」：meta 前面没有 `RunStarted`（例如 opener 已被 `/compact` 退休），或没有装 event log（`ProjectionCtx.events == None`）。照旧只戳不计，但**报出来**、`warn!`，不再默默算作「没计」（判据 #8）。fold 的**读失败**不属于它——那是 `Retry`。`RepairReport.usage_rebilled` 只数 `Billed`。
 
 **已知限制（U3）：** file 后端的两个文件各自原子写，彼此之间不原子。先戳后计 ⇒ 进程崩溃恰落两写之间时该 run 少计一次，永不重计。瞬时错误那一类已被第 2 条关掉。

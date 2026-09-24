@@ -589,6 +589,11 @@ impl SessionStore for SessionManager {
     /// a back-filled row has a larger `id` than rows recorded before it, so
     /// `id` order inside a range is not seq order after a repair.
     ///
+    /// The whole range is read, not only its newest row: the idempotence
+    /// guard is [`run_stamped_in_range`] over every row, then
+    /// [`already_stamped_by`] on the target, both inside the transaction and
+    /// before any write.
+    ///
     /// Stamp and bill share one transaction on the connection mutex, so a
     /// failed bill rolls the stamp back (F10).
     async fn stamp_and_bill_in_range(
@@ -618,20 +623,32 @@ impl SessionStore for SessionManager {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(db)?;
-            let target: Option<(i64, Option<String>)> = tx
-                .query_row(
-                    "SELECT id, metadata FROM messages
-                      WHERE session_key = ?1 AND role = 'assistant'
-                        AND source_seq IS NOT NULL AND source_seq > ?2 AND source_seq <= ?3
-                      ORDER BY source_seq DESC LIMIT 1",
-                    params![key_str, after_seq as i64, before_seq as i64],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(db)?;
-            let Some((row_id, existing)) = target else {
+            // Every row in range, newest first: the newest is the stamp's
+            // target, and all of them answer `run_stamped_in_range`.
+            let in_range: Vec<(i64, Option<String>)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT id, metadata FROM messages
+                          WHERE session_key = ?1 AND role = 'assistant'
+                            AND source_seq IS NOT NULL AND source_seq > ?2 AND source_seq <= ?3
+                          ORDER BY source_seq DESC",
+                    )
+                    .map_err(db)?;
+                let rows = stmt
+                    .query_map(
+                        params![key_str, after_seq as i64, before_seq as i64],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(db)?;
+                rows.collect::<Result<_, _>>().map_err(db)?
+            };
+            let Some((row_id, existing)) = in_range.first() else {
                 return Ok(StampOutcome::NoRowInRange);
             };
+            let row_id = *row_id;
+            if run_stamped_in_range(in_range.iter().map(|(_, m)| m.as_deref()), run_id) {
+                return Ok(StampOutcome::AlreadyStamped);
+            }
             if already_stamped_by(existing.as_deref(), run_id) {
                 return Ok(StampOutcome::AlreadyStamped);
             }
@@ -688,6 +705,49 @@ pub(crate) fn already_stamped_by(existing: Option<&str>, run_id: Option<&str>) -
         },
         Err(_) => true,
     }
+}
+
+/// "This run already stamped a row in this range" — asked of EVERY assistant
+/// row in `(after_seq, before_seq]`, before [`already_stamped_by`] is asked of
+/// the one row a stamp would land on. Both backends call it, for the same
+/// reason they share [`already_stamped_by`].
+///
+/// The target is the newest row in range, and the newest row moves: a heal
+/// that back-fills a hole inside the range AFTER the run was stamped puts a
+/// newer, unstamped row above the stamped one, and the target alone answers
+/// "not stamped" — so the run was stamped and billed a second time (2026-09-25
+/// final review, I1). Any row carrying this run's id means the run is already
+/// billed; the stamp stays on the row it first landed on.
+///
+/// Only an exact `run_id` match counts. The ambiguous cases
+/// [`already_stamped_by`] answers `true` for concern the one row about to be
+/// overwritten; asked of every row, one foreign metadata bag anywhere in the
+/// range would refuse this run's bill for good. `run_id: None` answers
+/// `false` — there is no id to find — and leaves the target-row check to
+/// decide.
+///
+/// Sound because a range holds one bracket: no range contains a `RunStarted`
+/// (the meta arm's starts at the last opener before the meta, a synthesized
+/// span's at its own opener), so a same-id retry bracket — the F1 shape — has
+/// a range of its own, and a match here is this bracket's stamp, never a
+/// sibling's.
+pub(crate) fn run_stamped_in_range<'a>(
+    rows_in_range: impl IntoIterator<Item = Option<&'a str>>,
+    run_id: Option<&str>,
+) -> bool {
+    let Some(run_id) = run_id else {
+        return false;
+    };
+    rows_in_range.into_iter().flatten().any(|existing| {
+        serde_json::from_str::<serde_json::Value>(existing)
+            .ok()
+            .and_then(|v| {
+                v.get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|r| r == run_id)
+            })
+            .unwrap_or(false)
+    })
 }
 
 #[async_trait]

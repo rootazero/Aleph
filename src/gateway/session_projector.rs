@@ -2088,6 +2088,154 @@ mod tests {
         );
     }
 
+    /// I1 (2026-09-25 final review), run against whichever backend `store` is.
+    ///
+    /// One run with two priced rows. Back-pressure dropped seqs 3 and 4, so the
+    /// live meta found only row 2 in `(1, 5]`, stamped it and billed the whole
+    /// fold — (55, 30), since the fold reads the log and row 3's tokens are in
+    /// it. The heal then fills row 3, which is now the NEWEST row in the same
+    /// range, and re-walks the meta (a meta is never `present`). A guard that
+    /// asked only the newest row "are you stamped?" heard no, stamped row 3 and
+    /// billed the run a second time.
+    async fn a_backfilled_row_scenario(store: Arc<dyn SessionStore>, key: &str) {
+        let id = SessionId::from_key_string(key).unwrap();
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 10, 5)),
+            (3, assistant_msg_billed(tid, 45, 25)),
+            (4, run_finished("engine-r")),
+            (5, run_meta(tid, "engine-r")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        for (seq, ev) in events.iter().filter(|(s, _)| [1, 2].contains(s)) {
+            project_event(&id, &rec(*seq, ev.clone()), &ctx).await;
+        }
+        assert_eq!(
+            project_event(&id, &rec(5, run_meta(tid, "engine-r")), &ctx).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            },
+            "the live meta stamps row 2, the only row in range"
+        );
+        let tokens = |m: crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "precondition: the live bill is the whole fold, row 3 included"
+        );
+
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        lock_missed(&missed).record(&id, 3);
+        lock_missed(&missed).record(&id, 4);
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let mut run_start = HashMap::from([(id.clone(), 1)]);
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::KnownGaps,
+        )
+        .await;
+        assert_eq!(
+            (
+                report.holes_filled,
+                report.stamps_reapplied,
+                report.usage_rebilled
+            ),
+            (1, 0, 0),
+            "the heal fills row 3 and its meta re-walk stamps and bills nothing: {report:?}"
+        );
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "the run is billed exactly once"
+        );
+
+        let stamp_of = |seq: EventSeq, rows: &[MessageRecord]| {
+            rows.iter()
+                .find(|m| m.id == row_id(&id.to_key_string(), seq))
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(
+            stamp_of(2, &rows).as_deref(),
+            Some("engine-r"),
+            "the stamp stays on the row it first landed on"
+        );
+        assert_eq!(
+            stamp_of(3, &rows),
+            None,
+            "the back-filled row is not stamped"
+        );
+
+        // The same stamp-and-bill asked of the store directly: the range holds
+        // this run's stamp, so the answer is `AlreadyStamped` and nothing moves.
+        let again = store
+            .stamp_and_bill_in_range(
+                &id,
+                1,
+                5,
+                &serde_json::json!({ "run_id": "engine-r" }),
+                Some(&RunBill {
+                    input_tokens: 55,
+                    output_tokens: 30,
+                    cost_usd: 0.12,
+                    model: None,
+                    model_provider: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(again, StampOutcome::AlreadyStamped);
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30)
+        );
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(stamp_of(3, &rows), None);
+    }
+
+    #[tokio::test]
+    async fn a_backfilled_row_does_not_move_the_stamp() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "backfilled_row.db");
+        a_backfilled_row_scenario(store, "agent:backfilled:main").await;
+    }
+
+    #[tokio::test]
+    async fn a_backfilled_row_does_not_move_the_stamp_on_the_file_backend() {
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        let temp = tempdir().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        a_backfilled_row_scenario(store, "agent:backfilledfile:main").await;
+    }
+
     /// T9's real defect, fixed at the executor: a run that produced no
     /// assistant row at all (a hook stopped it before its first Think) still
     /// emits a meta, and that meta has nowhere to land. It must finalise —
