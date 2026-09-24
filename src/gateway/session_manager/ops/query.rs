@@ -31,7 +31,7 @@ impl SessionManager {
                 .query_map(params![id], map_session_metadata)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            rows.filter_map(|r| r.ok()).collect()
+            collect_rows(rows, "list_sessions")?
         } else {
             let mut stmt = conn
                 .prepare(&format!("{sql} ORDER BY last_active_at DESC"))
@@ -41,7 +41,7 @@ impl SessionManager {
                 .query_map([], map_session_metadata)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            rows.filter_map(|r| r.ok()).collect()
+            collect_rows(rows, "list_sessions")?
         };
 
         Ok(sessions)
@@ -108,7 +108,7 @@ impl SessionManager {
                     topic,
                 })
             }) {
-                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Ok(rows) => collect_rows_lossy(rows, "search_messages"),
                 Err(_) => {
                     // Graceful degradation: malformed FTS5 query returns empty results
                     return Ok(Vec::new());
@@ -166,7 +166,7 @@ impl SessionManager {
             let mut stmt = conn
                 .prepare(&sql)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-            messages = stmt
+            let rows = stmt
                 .query_map(params![&key_str, message_limit as i64], |row| {
                     Ok(MessageRecord {
                         id: row.get::<_, i64>(0)?.to_string(),
@@ -182,9 +182,8 @@ impl SessionManager {
                         tool_name: row.get(8)?,
                     })
                 })
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-                .filter_map(|r| r.ok())
-                .collect();
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            messages = collect_rows_lossy(rows, "get_session_preview");
         }
 
         Ok(SessionPreview { meta, messages })
@@ -296,6 +295,64 @@ impl SessionManager {
             .query_map(params![state.to_string()], map_session_metadata)
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        collect_rows(rows, "list_by_state")
     }
+}
+
+/// Collect a listing whose contract is "the complete list, or `Err`".
+///
+/// `list_sessions` / `list_by_state` feed decisions that assert absence —
+/// `projects.channel.bind`'s `NothingToMove` receipt is one — so a row that
+/// fails to decode must not become a shorter list. Every failing row is
+/// logged by index before the listing fails, so one bad row does not hide a
+/// second.
+fn collect_rows<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+    what: &'static str,
+) -> Result<Vec<T>, SessionManagerError> {
+    let mut out = Vec::new();
+    let mut failed = 0usize;
+    let mut first_error = None;
+    for (index, row) in rows.enumerate() {
+        match row {
+            Ok(value) => out.push(value),
+            Err(e) => {
+                tracing::warn!(query = what, row = index, error = %e, "session row failed to decode");
+                failed += 1;
+                first_error.get_or_insert_with(|| e.to_string());
+            }
+        }
+    }
+    match first_error {
+        None => Ok(out),
+        Some(first) => Err(SessionManagerError::DatabaseError(format!(
+            "{what}: {failed} row(s) failed to decode; first error: {first}"
+        ))),
+    }
+}
+
+/// Collect a display-only read (search hits, a preview's messages): an
+/// undecodable row is dropped, but loudly and counted — never in silence.
+///
+/// Only for reads nothing downstream turns into a claim of absence. A caller
+/// that would is owed [`collect_rows`].
+fn collect_rows_lossy<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+    what: &'static str,
+) -> Vec<T> {
+    let mut out = Vec::new();
+    let mut dropped = 0usize;
+    for row in rows {
+        match row {
+            Ok(value) => out.push(value),
+            Err(e) => {
+                dropped += 1;
+                tracing::warn!(query = what, error = %e, "session row failed to decode; dropped from a display-only read");
+            }
+        }
+    }
+    if dropped > 0 {
+        tracing::warn!(query = what, dropped, kept = out.len(), "display-only read dropped undecodable rows");
+    }
+    out
 }

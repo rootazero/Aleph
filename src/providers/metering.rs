@@ -157,7 +157,8 @@ impl MeteringProvider {
     /// refund silently shrinks someone's ceiling forever; a bounded
     /// overshoot is the cheaper failure to accept.
     fn enforce_spend_ceiling() -> Result<()> {
-        let principal = crate::spend::ambient_principal();
+        let principal =
+            crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal());
         let now_ms = chrono::Utc::now().timestamp_millis();
         match crate::spend::check(&principal, now_ms) {
             crate::spend::Verdict::Allowed(_) => Ok(()),
@@ -192,7 +193,8 @@ impl MeteringProvider {
         if !policy.enabled() {
             return;
         }
-        let principal = crate::spend::ambient_principal();
+        let principal =
+            crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal());
         if let Err(error) = Self::record_spend_with(
             usage,
             pricing_provider,

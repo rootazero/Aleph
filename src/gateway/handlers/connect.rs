@@ -20,7 +20,7 @@
 //!
 //! `handle_connect` returns only the session baseline. The actual authorization
 //! decision needs the per-connection client IP (loopback?) and access to the
-//! token managers, both of which live in `server::handler`; it calls
+//! token managers, both of which live in `server::connection`; it calls
 //! [`resolve_connect_auth`] at the handshake and stamps the resolved role onto
 //! the connection state.
 
@@ -180,7 +180,7 @@ pub fn resolve_connection_identity(
     device_id: Option<&str>,
     store: &crate::gateway::security::store::SecurityStore,
 ) -> (Option<String>, &'static str) {
-    use crate::gateway::security::store::{UserRole, UserStatus, OWNER_USER_ID};
+    use crate::gateway::security::store::{UserStatus, OWNER_USER_ID};
 
     if is_loopback {
         return (Some(OWNER_USER_ID.to_string()), "operator");
@@ -204,10 +204,7 @@ pub fn resolve_connection_identity(
     match store.get_user(&linked_user_id) {
         Ok(Some(u)) if u.status == UserStatus::Deactivated => (None, "guest"),
         Ok(Some(u)) => {
-            let role = match u.role {
-                UserRole::Admin => "operator",
-                UserRole::Member => "member",
-            };
+            let role = u.role.wire_role();
             (Some(u.user_id), role)
         }
         // Dangling user_id (points at a row no longer in `users`), or a
@@ -230,7 +227,7 @@ pub const fn should_audit_connect_failure(authorized: bool, is_loopback: bool) -
     !authorized && !is_loopback
 }
 
-/// Handle "connect" — returns the session baseline. `server::handler` overlays
+/// Handle "connect" — returns the session baseline. `server::connection::handle_connection` overlays
 /// the authorization verdict (`role` / `authorized` / `needs_token`) computed
 /// via [`resolve_connect_auth`]; the `role` here is just a default for any path
 /// that bypasses that overlay.
@@ -354,7 +351,7 @@ mod tests {
         let resp = handle_connect(req, ctx()).await;
         assert!(resp.is_success(), "{resp:?}");
         let result = resp.result.unwrap();
-        // Baseline role; the real verdict is overlaid by server::handler.
+        // Baseline role; the real verdict is overlaid by server::connection::handle_connection.
         assert_eq!(
             result.get("role").and_then(|v| v.as_str()),
             Some("operator")

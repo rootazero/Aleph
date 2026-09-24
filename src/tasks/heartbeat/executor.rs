@@ -16,6 +16,7 @@ use crate::gateway::event_emitter::{CollectingEventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
+use crate::scope::authority::Granted;
 use crate::tasks::heartbeat::config::HeartbeatTask;
 use crate::tasks::heartbeat::probe::ProbeResult;
 
@@ -74,17 +75,16 @@ pub fn build_heartbeat_prompt(
 pub trait HeartbeatExecutionAdapter: Send + Sync {
     /// Run one L2 turn for a beat.
     ///
-    /// `owner_user_id` / `scope_id` are the task's two persisted attribution
-    /// columns, in the same order `ScopeAttribution::from_persisted` takes
-    /// them; they travel to [`heartbeat_run_metadata`], which is the only
-    /// thing that reads them. A legacy task passes `None, None`.
+    /// `granted` is the fire-time authority verdict the timer resolved
+    /// before the L1 probe (`Granted::legacy` for an unowned task or when no
+    /// users store is installed). It travels to [`heartbeat_run_metadata`],
+    /// the only thing that reads it.
     async fn execute_heartbeat(
         &self,
         agent_id: &str,
         prompt: &str,
         timeout_secs: u64,
-        owner_user_id: Option<&str>,
-        scope_id: Option<&str>,
+        granted: &Granted,
     ) -> Result<HeartbeatL2Result, String>;
 }
 
@@ -99,27 +99,21 @@ pub trait HeartbeatExecutionAdapter: Send + Sync {
 /// # Attribution
 ///
 /// A beat has no completing run to inherit metadata from (this run IS the
-/// first) and `run_loop::scope_for_session` only CORRECTS an attribution a run
-/// already carries — it never manufactures one. So the beat's owner has to be
-/// rehydrated here, from the task's persisted columns, exactly the way
-/// `cron::executor::build_cron_metadata` does it for its twin. `from_persisted`
-/// requires both columns coherent; a legacy task with neither set emits
-/// nothing here → the run stays unscoped and its spend stays
-/// `@unattributed`, byte-identical to the behaviour before this pair existed.
-fn heartbeat_run_metadata(
-    agent_id: &str,
-    owner_user_id: Option<&str>,
-    scope_id: Option<&str>,
-) -> HashMap<String, String> {
+/// first), and `run_loop::scope_for_session` only CORRECTS an attribution a
+/// run already carries. So the owner's scope — and the member ceiling for
+/// an owner demoted since the task was created — come from the fire-time
+/// authority verdict, the same derivation cron uses
+/// (`cron::executor::build_cron_metadata`). A legacy task's verdict is
+/// `Granted::legacy` over an empty pair: nothing is stamped, the run stays
+/// unscoped and its spend `@unattributed`, byte-identical to before.
+fn heartbeat_run_metadata(agent_id: &str, granted: &Granted) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     metadata.insert("heartbeat_agent_id".to_string(), agent_id.to_string());
     metadata.insert(
         crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
         "true".to_string(),
     );
-    if let Some(attr) = crate::scope::ScopeAttribution::from_persisted(owner_user_id, scope_id) {
-        crate::scope::stamp_metadata(&mut metadata, &attr);
-    }
+    granted.stamp(&mut metadata);
     metadata
 }
 
@@ -148,8 +142,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         agent_id: &str,
         prompt: &str,
         timeout_secs: u64,
-        owner_user_id: Option<&str>,
-        scope_id: Option<&str>,
+        granted: &Granted,
     ) -> Result<HeartbeatL2Result, String> {
         let start = std::time::Instant::now();
 
@@ -172,7 +165,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let task_id = format!("hb-{run_id}");
         let session_key = SessionKey::task(&resolved_agent_id, "heartbeat", &task_id);
 
-        let metadata = heartbeat_run_metadata(&resolved_agent_id, owner_user_id, scope_id);
+        let metadata = heartbeat_run_metadata(&resolved_agent_id, granted);
 
         // System-initiated: heartbeat has no parent run, so no project
         // context to inherit. Same round-3 follow-up as cron applies if
@@ -301,12 +294,20 @@ mod tests {
         }
     }
 
+    fn legacy(owner: Option<&str>, scope: Option<&str>) -> Granted {
+        Granted::legacy(&crate::scope::authority::FireSubject {
+            owner,
+            scope,
+            ..Default::default()
+        })
+    }
+
     /// The wiring guard: a beat has no surface an approval can be delivered to,
     /// so it must run unattended and let confirm-gated tools fail closed.
     #[test]
     fn a_beat_runs_unattended() {
         use crate::gateway::execution_engine::UNATTENDED_KEY;
-        let metadata = heartbeat_run_metadata("main", None, None);
+        let metadata = heartbeat_run_metadata("main", &legacy(None, None));
         assert_eq!(
             metadata.get(UNATTENDED_KEY).map(String::as_str),
             Some("true")
@@ -324,7 +325,7 @@ mod tests {
     #[test]
     fn a_legacy_beat_emits_byte_identical_metadata() {
         use crate::gateway::execution_engine::UNATTENDED_KEY;
-        let metadata = heartbeat_run_metadata("main", None, None);
+        let metadata = heartbeat_run_metadata("main", &legacy(None, None));
         let expected: HashMap<String, String> = [
             ("heartbeat_agent_id".to_string(), "main".to_string()),
             (UNATTENDED_KEY.to_string(), "true".to_string()),
@@ -344,11 +345,12 @@ mod tests {
     /// and half must emit nothing (mirrors `from_persisted`'s own contract).
     #[test]
     fn an_incoherent_pair_emits_no_scope_metadata() {
-        let metadata = heartbeat_run_metadata("main", Some("u-alice"), None);
+        let metadata = heartbeat_run_metadata("main", &legacy(Some("u-alice"), None));
         assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
         assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
 
-        let metadata = heartbeat_run_metadata("main", Some("u-alice"), Some("nonsense-scope"));
+        let metadata =
+            heartbeat_run_metadata("main", &legacy(Some("u-alice"), Some("nonsense-scope")));
         assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
         assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
     }
@@ -405,8 +407,7 @@ mod tests {
 
         let metadata = heartbeat_run_metadata(
             &task.agent_id,
-            task.owner_user_id.as_deref(),
-            task.scope_id.as_deref(),
+            &legacy(task.owner_user_id.as_deref(), task.scope_id.as_deref()),
         );
         assert_eq!(
             crate::scope::ScopeAttribution::from_persisted(
@@ -602,7 +603,7 @@ mod tests {
         );
 
         adapter
-            .execute_heartbeat("ghost", "prompt", 60, None, None)
+            .execute_heartbeat("ghost", "prompt", 60, &legacy(None, None))
             .await
             .expect("fallback to main must succeed");
 
@@ -634,7 +635,7 @@ mod tests {
         );
 
         adapter
-            .execute_heartbeat("main", "prompt", 60, None, None)
+            .execute_heartbeat("main", "prompt", 60, &legacy(None, None))
             .await
             .expect("request for main must hit");
 
@@ -654,7 +655,7 @@ mod tests {
     /// The attribution does not stop at the metadata builder: it has to reach
     /// the `RunRequest` the execution engine actually receives. Asserted on
     /// the captured request, not on `heartbeat_run_metadata`'s return value —
-    /// the two extra parameters could be accepted and dropped, and every
+    /// the `granted` parameter could be accepted and dropped, and every
     /// other test here would stay green.
     #[tokio::test]
     async fn a_stamped_beat_carries_its_scope_into_the_run_request() {
@@ -670,8 +671,7 @@ mod tests {
                 "main",
                 "prompt",
                 60,
-                Some("u-owner"),
-                Some("personal:u-owner"),
+                &legacy(Some("u-owner"), Some("personal:u-owner")),
             )
             .await
             .expect("request for main must hit");
@@ -686,6 +686,33 @@ mod tests {
             crate::spend::principal_from_metadata(&metadata),
             crate::spend::Principal::User("u-owner".to_string()),
             "the run the engine receives must be billed to the task's owner"
+        );
+    }
+
+    /// The ceiling reaches the run metadata: a demoted owner's beat is a
+    /// member turn, not the operator an absent caller_role means.
+    #[test]
+    fn a_capped_grant_stamps_caller_role_member() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let verdict = crate::scope::authority::resolve_with(
+            Some(&store),
+            &crate::scope::authority::FireSubject {
+                owner: Some("u-alice"),
+                scope: Some("personal:u-alice"),
+                ..Default::default()
+            },
+        );
+        let crate::scope::authority::FireAuthority::Granted(granted) = verdict else {
+            panic!("an active member must be granted, got {verdict:?}");
+        };
+        let metadata = heartbeat_run_metadata("main", &granted);
+        assert_eq!(
+            metadata.get("caller_role").map(String::as_str),
+            Some("member")
         );
     }
 }

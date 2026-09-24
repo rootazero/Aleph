@@ -174,11 +174,16 @@ impl BrowserSessionTool {
         }
 
         let migrate = args.migrate.unwrap_or(true);
-        match self
-            .manager
-            .switch_engine(&args.profile, engine, migrate)
-            .await
-        {
+        let profile = match super::resolve_caller_profile(&self.manager, &args.profile) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(BrowserSessionOutput::failed(super::backend_error_text(
+                    &self.manager,
+                    &e,
+                )));
+            }
+        };
+        match self.manager.switch_engine(&profile, engine, migrate).await {
             Ok(report) => {
                 let mut message = format!(
                     "Switched profile '{}' from {} to {}: {} cookie(s), {} tab(s), \

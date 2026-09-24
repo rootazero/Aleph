@@ -79,6 +79,32 @@ pub struct CarriedAttribution {
 }
 
 impl CarriedAttribution {
+    /// Assemble a carrier from facts the caller resolved itself instead of
+    /// reading them off live task-locals.
+    ///
+    /// The one producer is the fire-time authority resolver
+    /// ([`super::authority::Granted::carried`]): a background trigger has no
+    /// parent task-local nest to [`Self::capture`] from, so it hands over
+    /// the attribution it just derived from the store. `project_root` and
+    /// `exec_workspace` are `None` on purpose — neither is an authority
+    /// fact, and a fired run publishes its own.
+    #[must_use]
+    pub(crate) fn from_parts(
+        scope: Option<super::ScopeAttribution>,
+        agent_id: Option<String>,
+        caller_role: Option<String>,
+        room_author: Option<String>,
+    ) -> Self {
+        Self {
+            scope,
+            project_root: None,
+            agent_id,
+            caller_role,
+            room_author,
+            exec_workspace: None,
+        }
+    }
+
     /// Read the six task-locals. **Must be called BEFORE `tokio::spawn`** —
     /// inside the spawned future they are already gone.
     ///

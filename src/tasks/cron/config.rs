@@ -559,7 +559,7 @@ impl CronJob {
     /// carried none, so every job created from the Panel or the CLI reached
     /// the store with both columns NULL — and four readers then short-circuit
     /// on that NULL: the deactivation sweep (`pause_all_owned_by`) counts it
-    /// as not-owned, `walled_owner_reason` skips it as "legacy"
+    /// as not-owned, the fire-time authority resolver (`scope::authority`) reads it as "legacy"
     /// (byte-indistinguishable from a genuinely pre-P1 job),
     /// `executor::build_cron_metadata` has no `ScopeAttribution` to rehydrate
     /// so the run executes unscoped — the UNRESTRICTED arm of every visibility
@@ -691,6 +691,12 @@ pub struct ExecutionResult {
     /// failure (the writeback path uses this to stop scheduling further retries and
     /// to bypass the failure-alert cooldown).
     pub retry_hint: Option<crate::tasks::shared::retry_hint::RetryHint>,
+    /// In-process only (this struct is not persisted): the fire was never
+    /// admitted — the fire-time authority could not be read — so the job's
+    /// work did not run. Phase 3 still counts it as an error (the backoff
+    /// ladder applies) but fires NEITHER chain successor: a failure chain
+    /// reacts to the job's work failing, and there was no work.
+    pub unadmitted: bool,
 }
 
 // ── CronJobView ─────────────────────────────────────────────────────────
@@ -969,7 +975,7 @@ mod tests {
              `CronJob::{STAMP}` (directly or through a helper that does): \
              {offenders:?}. A job created with neither owner_user_id nor \
              scope_id is invisible to `pause_all_owned_by`, reads as a legacy \
-             job to `walled_owner_reason`, executes unscoped, and charges its \
+             job to the fire-time authority resolver, executes unscoped, and charges its \
              spend to @unattributed."
         );
     }

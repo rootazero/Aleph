@@ -5,11 +5,16 @@
 //! reasoning** — task decomposition and routing are the leader LLM's job
 //! (done via `task_create`); this only drives the DAG mechanically.
 
+mod authority;
 mod failure;
 mod reclaim;
 mod select;
 mod settle;
 
+// Production launches only through `authority::AuthorizedLaunch`; the carrier
+// primitive is re-exported for `runner.rs`'s N1 test.
+#[cfg(test)]
+pub(in crate::teams::dispatcher) use authority::spawn_under_authority;
 pub use select::{
     is_dispatcher_managed, is_zombie, orphan_reset_status, select_schedulable,
     MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
@@ -123,6 +128,25 @@ impl TeamDispatcher {
 
         // 4. Claim + launch each selected task.
         for task in selected {
+            // Fire-time authority (round 11, N1). Resolved BEFORE the claim so
+            // a refused or unknown task never takes the lock or a run record,
+            // and before the clarify branch so a refused author's workflow
+            // does not keep sending questions under a revoked principal:
+            // Unknown leaves it Pending for the next tick (R-a), Refused parks
+            // it Paused with the reason and the person checked. The returned
+            // launch is the only way to start the member run below.
+            let Some(launch) = authority::authorize_claim(
+                |subject| crate::scope::authority::resolve(&subject),
+                self.team_store.as_ref(),
+                self.context.session_store().as_ref(),
+                self.coord_store.as_ref(),
+                &task,
+            )
+            .await
+            else {
+                continue;
+            };
+
             // Clarify steps are not agent runs: deliver the question to the
             // user's channel and park the task awaiting their reply. They take
             // no worker slot and skip owner resolution (the owner is a sentinel,
@@ -192,7 +216,10 @@ impl TeamDispatcher {
             // a phantom running-map entry that only clears at the zombie
             // sweep (TEAMS-003, high) — the user sees a task that "never
             // completed" but the dispatcher loop keeps running.
-            tokio::spawn(async move {
+            // Spawned under the task's resolved authority: a bare spawn loses
+            // every task-local, and the member run then executed as an
+            // unscoped operator (N1).
+            launch.spawn(async move {
                 if let Err(panic_payload) = AssertUnwindSafe(async {
                     dispatcher
                         .run_task(task, owner, dispatch_target, permit)

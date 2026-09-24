@@ -5,8 +5,16 @@
 
 use super::StateDatabase;
 use crate::error::AlephError;
-use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+use crate::memory::events::{
+    EventActor, MemoryEvent, MemoryEventEnvelope, UnpartitionedRows, UNDECIDED_PARTITION,
+};
 use rusqlite::params;
+
+/// The column list every reader selects, in the order
+/// [`MemoryEventRow::from_row`] reads it. One copy, so a new column cannot be
+/// selected by one reader and mis-indexed by another.
+const EVENT_COLUMNS: &str =
+    "id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id, partition";
 
 impl StateDatabase {
     // =========================================================================
@@ -26,7 +34,7 @@ impl StateDatabase {
     /// SQLite's statement-level lock and never collide.
     ///
     /// Callers that need the post-insert `seq` must re-read via
-    /// [`get_memory_events_for_fact`] (or [`get_memory_event_latest_seq`]);
+    /// [`get_memory_events_for_fact_unscoped`] (or [`get_memory_event_latest_seq`]);
     /// the append path itself does not surface it.
     pub async fn append_memory_event(
         &self,
@@ -48,10 +56,10 @@ impl StateDatabase {
             // observe the same MAX(seq) and then collide on UNIQUE(fact_id, seq).
             conn.execute(
                 r#"
-                INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
+                INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id, partition)
                 SELECT ?1,
                        COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
-                       ?3, ?4, ?5, ?6, ?7, ?8
+                       ?3, ?4, ?5, ?6, ?7, ?8, ?9
                 "#,
                 params![
                     envelope.fact_id,
@@ -62,6 +70,7 @@ impl StateDatabase {
                     tier,
                     envelope.timestamp,
                     envelope.correlation_id,
+                    envelope.partition,
                 ],
             )
             .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
@@ -71,250 +80,103 @@ impl StateDatabase {
         .await
     }
 
-    /// Batch-append memory events.
+    /// Every event for `fact_id` filed under one of `partitions`, ordered by
+    /// seq — the read every per-caller face goes through.
     ///
-    /// Each envelope's `seq` is atomically allocated inside its own INSERT,
-    /// mirroring [`append_memory_event`]. A single SQLite transaction wraps
-    /// the batch so the whole batch either commits or rolls back, but the
-    /// per-row `seq` allocation is independent (concurrent writers on the
-    /// same fact_id serialize through SQLite's per-connection write lock,
-    /// not through the batch transaction).
-    pub async fn append_memory_events(
-        &self,
-        envelopes: &[MemoryEventEnvelope],
-    ) -> Result<(), AlephError> {
-        if envelopes.is_empty() {
-            return Ok(());
-        }
-
-        let envelopes: Vec<MemoryEventEnvelope> = envelopes.to_vec();
-        self.with_conn(move |conn| {
-            let tx = conn
-                .transaction()
-                .map_err(|e| AlephError::other(format!("Failed to begin transaction: {e}")))?;
-
-            {
-                let mut stmt = tx
-                    .prepare(
-                        r#"
-                        INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-                        SELECT ?1,
-                               COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
-                               ?3, ?4, ?5, ?6, ?7, ?8
-                        "#,
-                    )
-                    .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
-
-                for envelope in &envelopes {
-                    let event_json = serde_json::to_string(&envelope.event)
-                        .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-                    let tier = if envelope.event.is_skeleton() {
-                        "skeleton"
-                    } else {
-                        "pulse"
-                    };
-
-                    stmt.execute(params![
-                        envelope.fact_id,
-                        envelope.fact_id,
-                        envelope.event.event_type_tag(),
-                        event_json,
-                        envelope.actor.to_string(),
-                        tier,
-                        envelope.timestamp,
-                        envelope.correlation_id,
-                    ])
-                    .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
-                }
-            }
-
-            tx.commit()
-                .map_err(|e| AlephError::other(format!("Failed to commit transaction: {e}")))?;
-
-            Ok(())
-        })
-        .await
-    }
-
-    /// Get all events for a fact, ordered by seq.
-    ///
-    /// PR-9 / BT-D-R4-05 attempted an agent filter here (`actor = ?`), but
-    /// `memory_events` has no agent/partition column at all — `actor`
-    /// records *who wrote the event* (`{agent,user,system,decay,migration}`
-    /// from [`crate::memory::events::EventActor`]), not which agent's
-    /// corpus the fact belongs to. Comparing a caller's agent id against
-    /// that column made every scoped call filter on a vocabulary the
-    /// column never contains, so it provided no isolation while quietly
-    /// returning zero rows for legitimate in-turn callers. This returns
-    /// every event for `fact_id` unconditionally; per-agent isolation on
-    /// facts needs a real partition column and is tracked as a separate
-    /// schema change, not a filter on this query.
+    /// `partitions` is the caller's read set (`project_scope::session_read_ids`
+    /// — the org tier plus the caller's own partition, the same derivation on
+    /// the tool face and the gateway face). An event filed under any other
+    /// partition is absent exactly as if it did not exist, so handing Bob
+    /// Alice's fact id yields what a never-written id yields. `unpartitioned`
+    /// decides the rows the backfill could not attribute. A row filed under
+    /// [`UNDECIDED_PARTITION`] is refused whatever `partitions` says: no read
+    /// set should name it, and this does not rely on that.
     pub async fn get_memory_events_for_fact(
         &self,
         fact_id: &str,
+        partitions: &[String],
+        unpartitioned: UnpartitionedRows,
+    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
+        let fact_id = fact_id.to_string();
+        let partitions_json = serde_json::to_string(partitions)
+            .map_err(|e| AlephError::other(format!("Failed to encode partitions: {e}")))?;
+        let admit_unpartitioned = i64::from(unpartitioned == UnpartitionedRows::Admit);
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {EVENT_COLUMNS} FROM memory_events \
+                     WHERE fact_id = ?1 \
+                       AND (partition IN (SELECT value FROM json_each(?2)) \
+                            OR (?3 = 1 AND partition IS NULL)) \
+                       AND partition IS NOT ?4 \
+                     ORDER BY seq ASC"
+                ))
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        fact_id,
+                        partitions_json,
+                        admit_unpartitioned,
+                        UNDECIDED_PARTITION
+                    ],
+                    MemoryEventRow::from_row,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            collect_envelopes(rows)
+        })
+        .await
+    }
+
+    /// Every event for `fact_id` across ALL partitions — the WRITE side's view
+    /// only: `MemoryCommandHandler` folds a fact's whole stream to project it
+    /// and scans every stream to reconcile. Any read made on a caller's behalf
+    /// goes through [`Self::get_memory_events_for_fact`]; the census
+    /// `each_memory_event_reader_has_only_the_consumers_it_was_built_for`
+    /// pins that this has no other production caller.
+    pub async fn get_memory_events_for_fact_unscoped(
+        &self,
+        fact_id: &str,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let fact_id = fact_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                    FROM memory_events
-                    WHERE fact_id = ?1
-                    ORDER BY seq ASC
-                    "#,
-                )
+                .prepare(&format!(
+                    "SELECT {EVENT_COLUMNS} FROM memory_events WHERE fact_id = ?1 ORDER BY seq ASC"
+                ))
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
-
             let rows = stmt
                 .query_map(params![fact_id], MemoryEventRow::from_row)
                 .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
-
-            let mut envelopes = Vec::new();
-            for row in rows {
-                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-                if let Some(envelope) = row.into_envelope()? {
-                    envelopes.push(envelope);
-                }
-            }
-            Ok(envelopes)
+            collect_envelopes(rows)
         })
         .await
     }
 
-    /// Get events for a fact since a given sequence number.
+    /// The partition a fact's stream is filed under: that of its earliest
+    /// stamped row, or `None` when no row carries one (a legacy fact the
+    /// backfill could not attribute, or no such fact).
     ///
-    /// No agent filter: see [`get_memory_events_for_fact`] — `memory_events`
-    /// has no agent/partition column, so there is nothing to scope by here
-    /// either. The bounded `limit` prevents unbounded materialisation on a
-    /// hot fact_id with a long history (default 1000; pass `usize::MAX` to
-    /// opt out).
-    pub async fn get_memory_events_since_seq(
-        &self,
-        fact_id: &str,
-        since_seq: u64,
-        limit: usize,
-    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
+    /// Exact for ids minted by `MemoryCommandHandler::create_fact` /
+    /// `consolidate_facts` (UUIDs — one partition each; a cross-partition merge
+    /// is filed under [`UNDECIDED_PARTITION`], which this returns as-is so the
+    /// merge's later events stay undecided too). A note-path-keyed
+    /// stream can span partitions (two users' `preferences/lang` share the
+    /// id), which is why the `log_note_*` path passes its partition in and
+    /// never asks this.
+    pub async fn memory_fact_partition(&self, fact_id: &str) -> Result<Option<String>, AlephError> {
+        use rusqlite::OptionalExtension;
         let fact_id = fact_id.to_string();
         self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                    FROM memory_events
-                    WHERE fact_id = ?1 AND seq > ?2
-                    ORDER BY seq ASC
-                    LIMIT ?3
-                    "#,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
-
-            let since_seq_i64 = i64::try_from(since_seq).map_err(|_| {
-                AlephError::other(format!(
-                    "Sequence number {since_seq} exceeds i64::MAX and cannot be used in SQLite query"
-                ))
-            })?;
-            let limit_i64 = i64::try_from(limit).map_err(|_| {
-                AlephError::other(format!(
-                    "Limit {limit} exceeds maximum supported SQLite value ({})",
-                    i64::MAX
-                ))
-            })?;
-            let rows = stmt
-                .query_map(
-                    params![fact_id, since_seq_i64, limit_i64],
-                    MemoryEventRow::from_row,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
-
-            let mut envelopes = Vec::new();
-            for row in rows {
-                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-                if let Some(envelope) = row.into_envelope()? {
-                    envelopes.push(envelope);
-                }
-            }
-            Ok(envelopes)
-        })
-        .await
-    }
-
-    /// Get events for a fact up to a given timestamp (for time travel).
-    pub async fn get_memory_events_until(
-        &self,
-        fact_id: &str,
-        until_timestamp: i64,
-    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        let fact_id = fact_id.to_string();
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                    FROM memory_events
-                    WHERE fact_id = ?1 AND timestamp <= ?2
-                    ORDER BY seq ASC
-                    "#,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
-
-            let rows = stmt
-                .query_map(params![fact_id, until_timestamp], MemoryEventRow::from_row)
-                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
-
-            let mut envelopes = Vec::new();
-            for row in rows {
-                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-                if let Some(envelope) = row.into_envelope()? {
-                    envelopes.push(envelope);
-                }
-            }
-            Ok(envelopes)
-        })
-        .await
-    }
-
-    /// Get events across all facts within a time range.
-    pub async fn get_memory_events_in_range(
-        &self,
-        from_timestamp: i64,
-        to_timestamp: i64,
-        limit: usize,
-    ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                    FROM memory_events
-                    WHERE timestamp >= ?1 AND timestamp <= ?2
-                    ORDER BY id ASC
-                    LIMIT ?3
-                    "#,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
-
-            let limit_i64 = i64::try_from(limit).map_err(|_| {
-                AlephError::other(format!(
-                    "Limit {limit} exceeds maximum supported SQLite value ({})",
-                    i64::MAX
-                ))
-            })?;
-            let rows = stmt
-                .query_map(
-                    params![from_timestamp, to_timestamp, limit_i64],
-                    MemoryEventRow::from_row,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
-
-            let mut envelopes = Vec::new();
-            for row in rows {
-                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-                if let Some(envelope) = row.into_envelope()? {
-                    envelopes.push(envelope);
-                }
-            }
-            Ok(envelopes)
+            conn.query_row(
+                "SELECT partition FROM memory_events \
+                 WHERE fact_id = ?1 AND partition IS NOT NULL \
+                 ORDER BY seq ASC LIMIT 1",
+                params![fact_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::other(format!("Failed to read fact partition: {e}")))
         })
         .await
     }
@@ -426,11 +288,12 @@ struct MemoryEventRow {
     _tier: String,
     timestamp: i64,
     correlation_id: Option<String>,
+    partition: Option<String>,
 }
 
 impl MemoryEventRow {
     /// Construct from a rusqlite row.
-    /// Expected column order: id, `fact_id`, seq, `event_type`, `event_json`, actor, tier, timestamp, `correlation_id`
+    /// Expected column order: id, `fact_id`, seq, `event_type`, `event_json`, actor, tier, timestamp, `correlation_id`, `partition`
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         let seq_i64: i64 = row.get(2)?;
         let seq = u64::try_from(seq_i64).map_err(|_| {
@@ -453,6 +316,7 @@ impl MemoryEventRow {
             _tier: row.get::<_, String>(6)?,
             timestamp: row.get(7)?,
             correlation_id: row.get(8)?,
+            partition: row.get(9)?,
         })
     }
 }
@@ -494,8 +358,24 @@ impl MemoryEventRow {
             actor,
             timestamp: self.timestamp,
             correlation_id: self.correlation_id,
+            partition: self.partition,
         }))
     }
+}
+
+/// Map query rows to envelopes, skipping retired variants (see
+/// [`MemoryEventRow::into_envelope`]). The one body every reader shares.
+fn collect_envelopes(
+    rows: impl Iterator<Item = rusqlite::Result<MemoryEventRow>>,
+) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
+    let mut envelopes = Vec::new();
+    for row in rows {
+        let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
+        if let Some(envelope) = row.into_envelope()? {
+            envelopes.push(envelope);
+        }
+    }
+    Ok(envelopes)
 }
 
 #[cfg(test)]
@@ -531,123 +411,14 @@ mod tests {
         let id = db.append_memory_event(&envelope).await.unwrap();
         assert!(id > 0);
 
-        let events = db.get_memory_events_for_fact("fact-001").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-001")
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fact_id, "fact-001");
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[0].id, id);
-    }
-
-    #[tokio::test]
-    async fn test_batch_append() {
-        let db = make_test_db();
-        let envelopes: Vec<_> = (1..=5)
-            .map(|i| {
-                MemoryEventEnvelope::new(
-                    "fact-002".into(),
-                    i,
-                    MemoryEvent::NoteAccessed {
-                        note_path: "fact-002".into(),
-                        query: Some(format!("query-{i}")),
-                        relevance_score: Some(0.9),
-                        used_in_response: true,
-                        new_access_count: i as u32,
-                    },
-                    EventActor::Agent,
-                    None,
-                )
-            })
-            .collect();
-
-        db.append_memory_events(&envelopes).await.unwrap();
-
-        let events = db.get_memory_events_for_fact("fact-002").await.unwrap();
-        assert_eq!(events.len(), 5);
-        assert_eq!(events[0].seq, 1);
-        assert_eq!(events[4].seq, 5);
-    }
-
-    #[tokio::test]
-    async fn test_get_events_since_seq() {
-        let db = make_test_db();
-        for i in 1..=3 {
-            let envelope = MemoryEventEnvelope::new(
-                "fact-003".into(),
-                i,
-                make_created_event("fact-003"),
-                EventActor::Agent,
-                None,
-            );
-            db.append_memory_event(&envelope).await.unwrap();
-        }
-
-        let events = db
-            .get_memory_events_since_seq("fact-003", 1, 1000)
-            .await
-            .unwrap();
-        assert_eq!(events.len(), 2); // seq 2 and 3
-        assert_eq!(events[0].seq, 2);
-    }
-
-    #[tokio::test]
-    async fn test_get_events_until_timestamp() {
-        let db = make_test_db();
-        let mut e1 = MemoryEventEnvelope::new(
-            "fact-004".into(),
-            1,
-            make_created_event("fact-004"),
-            EventActor::Agent,
-            None,
-        );
-        e1.timestamp = 1000;
-        db.append_memory_event(&e1).await.unwrap();
-
-        let mut e2 = MemoryEventEnvelope::new(
-            "fact-004".into(),
-            2,
-            MemoryEvent::NoteContentUpdated {
-                note_path: "fact-004".into(),
-                old_content: "old".into(),
-                new_content: "new".into(),
-                reason: "correction".into(),
-            },
-            EventActor::User,
-            None,
-        );
-        e2.timestamp = 2000;
-        db.append_memory_event(&e2).await.unwrap();
-
-        // Time travel to before the update
-        let events = db.get_memory_events_until("fact-004", 1500).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].seq, 1);
-
-        // Time travel to after the update
-        let events = db.get_memory_events_until("fact-004", 2500).await.unwrap();
-        assert_eq!(events.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_get_events_in_range() {
-        let db = make_test_db();
-        for (i, ts) in [1000i64, 2000, 3000].iter().enumerate() {
-            let mut envelope = MemoryEventEnvelope::new(
-                format!("fact-range-{i}"),
-                1,
-                make_created_event(&format!("fact-range-{i}")),
-                EventActor::Agent,
-                None,
-            );
-            envelope.timestamp = *ts;
-            db.append_memory_event(&envelope).await.unwrap();
-        }
-
-        let events = db
-            .get_memory_events_in_range(1500, 2500, 100)
-            .await
-            .unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fact_id, "fact-range-1");
     }
 
     #[tokio::test]
@@ -736,7 +507,7 @@ mod tests {
 
         // Replay must not error — unknown variant is logged and skipped.
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact_unscoped("fact-orphan")
             .await
             .expect("unknown variant must not error replay");
         assert!(
@@ -756,7 +527,7 @@ mod tests {
         db.append_memory_event(&known).await.unwrap();
 
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact_unscoped("fact-orphan")
             .await
             .expect("mixed replay must succeed");
         assert_eq!(events.len(), 1, "only the known event should survive");
@@ -793,7 +564,10 @@ mod tests {
         );
         db.append_memory_event(&e2).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-dup").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-dup")
+            .await
+            .unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[1].seq, 2);
@@ -874,7 +648,7 @@ mod tests {
         );
 
         let events = db
-            .get_memory_events_for_fact("fact-race")
+            .get_memory_events_for_fact_unscoped("fact-race")
             .await
             .unwrap();
         assert_eq!(
@@ -887,5 +661,261 @@ mod tests {
         for (i, e) in events.iter().enumerate() {
             assert_eq!(e.seq as usize, i + 1, "event {i} must have seq {}", i + 1);
         }
+    }
+
+    /// Both open paths run the partition migration: `in_memory()` used to keep
+    /// its own copy of the migration list, and a new migration added to only
+    /// one of them is a test database that disagrees with production.
+    #[test]
+    fn the_partition_index_exists_on_a_freshly_opened_database() {
+        let db = make_test_db();
+        let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_info('idx_me_partition_fact')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            columns, 2,
+            "idx_me_partition_fact(partition, fact_id) must exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_appended_event_round_trips_its_partition() {
+        let db = make_test_db();
+        let stamped = MemoryEventEnvelope::new(
+            "fact-p".into(),
+            1,
+            make_created_event("fact-p"),
+            EventActor::Agent,
+            None,
+        )
+        .in_partition(Some("main__u-alice".into()));
+        db.append_memory_event(&stamped).await.unwrap();
+
+        let events = db
+            .get_memory_events_for_fact_unscoped("fact-p")
+            .await
+            .unwrap();
+        assert_eq!(events[0].partition.as_deref(), Some("main__u-alice"));
+        assert_eq!(
+            db.memory_fact_partition("fact-p").await.unwrap().as_deref(),
+            Some("main__u-alice")
+        );
+        assert_eq!(
+            db.memory_fact_partition("never-written").await.unwrap(),
+            None
+        );
+    }
+
+    fn stamped(fact_id: &str, partition: Option<&str>) -> MemoryEventEnvelope {
+        MemoryEventEnvelope::new(
+            fact_id.into(),
+            1,
+            make_created_event(fact_id),
+            EventActor::Agent,
+            None,
+        )
+        .in_partition(partition.map(str::to_string))
+    }
+
+    fn read_set(principal: &str) -> Vec<String> {
+        vec!["main".to_string(), format!("main__{principal}")]
+    }
+
+    /// D7, the two-principal case at the store: a note-path id both Alice and
+    /// Bob wrote is two histories, and a third principal holding the id reads
+    /// exactly what a never-written id reads.
+    #[tokio::test]
+    async fn a_fact_id_from_another_partition_reads_as_absent() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("preferences/lang", Some("main__u-alice")))
+            .await
+            .unwrap();
+        db.append_memory_event(&stamped("preferences/lang", Some("main__u-bob")))
+            .await
+            .unwrap();
+
+        let seen = |events: Vec<MemoryEventEnvelope>| {
+            events.into_iter().map(|e| e.partition).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            seen(
+                db.get_memory_events_for_fact(
+                    "preferences/lang",
+                    &read_set("u-alice"),
+                    UnpartitionedRows::Refuse
+                )
+                .await
+                .unwrap()
+            ),
+            vec![Some("main__u-alice".to_string())]
+        );
+        assert_eq!(
+            seen(
+                db.get_memory_events_for_fact(
+                    "preferences/lang",
+                    &read_set("u-bob"),
+                    UnpartitionedRows::Refuse
+                )
+                .await
+                .unwrap()
+            ),
+            vec![Some("main__u-bob".to_string())]
+        );
+        assert!(db
+            .get_memory_events_for_fact(
+                "preferences/lang",
+                &read_set("u-carol"),
+                UnpartitionedRows::Refuse
+            )
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .get_memory_events_for_fact(
+                "never-written",
+                &read_set("u-carol"),
+                UnpartitionedRows::Refuse
+            )
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Rows with no partition are the legacy owner's (`owner_or_legacy`):
+    /// admitted only when the caller's decision says so. The org tier is in
+    /// every scoped read set, and an empty read set reads nothing stamped.
+    #[tokio::test]
+    async fn unattributed_rows_follow_the_callers_admission() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("legacy", None))
+            .await
+            .unwrap();
+        db.append_memory_event(&stamped("org", Some("main")))
+            .await
+            .unwrap();
+        let alice = read_set("u-alice");
+
+        assert!(db
+            .get_memory_events_for_fact("legacy", &alice, UnpartitionedRows::Refuse)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.get_memory_events_for_fact("legacy", &alice, UnpartitionedRows::Admit)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_memory_events_for_fact("org", &alice, UnpartitionedRows::Refuse)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(db
+            .get_memory_events_for_fact("org", &[], UnpartitionedRows::Admit)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A row whose writer could not decide its partition is refused to EVERY
+    /// per-caller read — the owner's, a member's, legacy rows admitted or not,
+    /// and even a read set that (wrongly) names the sentinel — while the
+    /// unscoped write side still sees it. The sentinel is also outside the
+    /// agent-id grammar, so no partition derivation can produce it.
+    #[tokio::test]
+    async fn an_undecided_row_is_refused_to_every_scoped_read() {
+        let db = make_test_db();
+        db.append_memory_event(&stamped("merged", Some(UNDECIDED_PARTITION)))
+            .await
+            .unwrap();
+        for read in [
+            read_set(crate::gateway::security::store::OWNER_USER_ID),
+            read_set("u-alice"),
+            vec![UNDECIDED_PARTITION.to_string()],
+        ] {
+            for rows in [UnpartitionedRows::Admit, UnpartitionedRows::Refuse] {
+                let seen = db
+                    .get_memory_events_for_fact("merged", &read, rows)
+                    .await
+                    .unwrap();
+                assert!(
+                    seen.is_empty(),
+                    "{read:?} / {rows:?} read the undecided row"
+                );
+            }
+        }
+        assert_eq!(
+            db.get_memory_events_for_fact_unscoped("merged")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            crate::builtin_tools::agent_manage::validate_agent_id(UNDECIDED_PARTITION).is_err()
+        );
+        assert!(UNDECIDED_PARTITION
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')));
+    }
+
+    /// 判据 §9: enumerate the readers, at every layer a new face could enter.
+    /// The unscoped reader answers for every partition at once, so only the
+    /// write side (`MemoryCommandHandler`'s folds and reconciler) may call it.
+    /// The per-caller reader has one face today, and each hop to it is pinned:
+    /// the DB read is called only by the traveler, the traveler's
+    /// `explain_fact` only by `memory_timeline`, and the tool's `for_caller`
+    /// (the partitions it reads with) only by the registry's dispatch arm,
+    /// where `caller_memory_read_partitions` + `unattributed_memory_events_for`
+    /// derive them. A new caller at any of the three hops turns this red.
+    /// Production code only (`files_whose_production_code_reads`).
+    #[test]
+    fn each_memory_event_reader_has_only_the_consumers_it_was_built_for() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let unscoped = crate::utils::source_scan::files_whose_production_code_reads(
+            &root,
+            "get_memory_events_for_fact_unscoped",
+        );
+        assert_eq!(
+            unscoped.into_iter().collect::<Vec<_>>(),
+            vec!["src/memory/events/handler.rs".to_string()],
+            "only the write side may read events across partitions"
+        );
+        let scoped = crate::utils::source_scan::files_whose_production_code_reads(
+            &root,
+            "get_memory_events_for_fact",
+        );
+        assert_eq!(
+            scoped.into_iter().collect::<Vec<_>>(),
+            vec!["src/memory/events/traveler.rs".to_string()],
+            "a new per-caller face must derive its partitions the way memory_timeline does \
+             (session_read_ids + unattributed_memory_events_for)"
+        );
+        let explain =
+            crate::utils::source_scan::files_whose_production_code_reads(&root, "explain_fact");
+        assert_eq!(
+            explain.into_iter().collect::<Vec<_>>(),
+            vec!["src/builtin_tools/memory_timeline.rs".to_string()],
+            "a new caller of MemoryTimeTraveler::explain_fact picks its own partitions; \
+             read through memory_timeline's dispatch arm instead"
+        );
+        let bind =
+            crate::utils::source_scan::files_whose_production_code_reads(&root, "for_caller");
+        assert_eq!(
+            bind.into_iter().collect::<Vec<_>>(),
+            vec!["src/executor/builtin_registry/registry/tool_registry_impl.rs".to_string()],
+            "MemoryTimelineTool::for_caller must be bound only by the registry arm, which \
+             derives the partitions (caller_memory_read_partitions + \
+             unattributed_memory_events_for)"
+        );
     }
 }

@@ -127,6 +127,8 @@ impl NoteManageTool {
         let Ok(agent) = self.resolve_agent_id(args) else {
             return;
         };
+        // `agent` is the partition the note was just written to — the fact's
+        // own partition, which is what its lifecycle events are filed under.
         let outcome = match &args.action {
             NoteManageAction::Create => {
                 let note_type = args
@@ -148,6 +150,7 @@ impl NoteManageTool {
                 handler
                     .log_note_updated(
                         note_path,
+                        &agent,
                         args.content.clone().unwrap_or_default(),
                         "note_manage update".to_string(),
                         EventActor::Agent,
@@ -159,6 +162,7 @@ impl NoteManageTool {
                 handler
                     .log_note_updated(
                         note_path,
+                        &agent,
                         appended,
                         "note_manage append".to_string(),
                         EventActor::Agent,
@@ -169,6 +173,7 @@ impl NoteManageTool {
                 handler
                     .log_note_deleted(
                         note_path,
+                        &agent,
                         "note_manage delete".to_string(),
                         EventActor::Agent,
                     )
@@ -178,6 +183,7 @@ impl NoteManageTool {
                 handler
                     .log_note_updated(
                         note_path,
+                        &agent,
                         String::new(),
                         "note_manage rename".to_string(),
                         EventActor::Agent,

@@ -116,7 +116,7 @@ fn default_provider_model(result: &Value) -> Option<String> {
 /// `client.call`'s own correctness is `shared/client`'s test suite's job,
 /// not this crate's. `CliError::Rpc { code, .. }` is how an operator-gate
 /// refusal actually reaches this layer (`AUTH_REQUIRED`, per
-/// `gateway::server::handler::process_request`'s admin gate) — distinguished
+/// `gateway::server::connection::dispatch::process_request`'s admin gate) — distinguished
 /// by that CODE, never by matching words in the message (P8).
 fn agent_panel_data(result: CliResult<RuntimeAgentsListResponse>) -> AgentPanelData {
     match result {

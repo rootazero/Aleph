@@ -33,7 +33,8 @@ pub mod tool_permissions;
 pub mod web_fetch;
 
 pub use exec_tier::{
-    builtin_tiers, effective_permission, session_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
+    builtin_tiers, effective_permission, session_tiers, DeclaredFacts, ExecTier, ToolFacts,
+    EXEC_TIER_SESSION_KEY,
 };
 // `pub(crate)`, not `pub`: `PLAN_REACHABLE_TOOLS` is a crate-internal
 // derivation source (the side-question floor reads it), not part of this

@@ -80,7 +80,8 @@ Headless cores mint a ticket with `aleph-server pair` (opens the 0600
 
 ### Enforcement
 
-- **Login wall** (`server::handler` + `handlers::connect::connect_authorized`):
+- **Login wall** (`server/connection/auth.rs::wall_admits`, applied in
+  `server/connection/mod.rs::handle_connection`, + `handlers::connect::connect_authorized`):
   the WS dispatch refuses every method except `connect` to an unauthorized
   connection. The handshake computes the verdict — loopback, or a valid token
   via `SharedTokenManager::validate` — stamps `ConnectionState.caller_role`
@@ -416,8 +417,22 @@ Two further consequences:
 
 ### The rules read declared metadata, never the tool's name
 
-`ToolFacts { name, idempotent, requires_approval }` is filled from the tool's own
-`ToolDefinition`:
+`ToolFacts { name, idempotent, requires_approval }` has exactly one constructor,
+`ToolFacts::for_tool(name, Option<DeclaredFacts>)`
+(`config/types/policies/exec_tier.rs`, round 11 D8), and every face calls it: the
+scoped builder (`tools/scoped/builder.rs::tool_facts`) passes
+`Some(DeclaredFacts { idempotent, requires_confirmation })` from the registry,
+and the slash fast path (`execution_engine/slash_command.rs`), which has no
+registry at hand, passes `None`. The builtin allowlists answer for every builtin
+either way, and a declaration can only ADD to them (both fields are ORed), so no
+face can answer from a narrower source. `no_production_code_builds_tool_facts_by_hand`
+walks all of `src/` and goes red on any hand-built `ToolFacts { .. }` literal in
+production code. ⚠️ **One widening, accepted by ruling:** the builder side now
+also ORs in `dangerous_tools::is_confirmation_gated(name)`, so a gated tool that
+the agent's allow-list admits but that is not active (e.g. `vault_store` with no
+vault configured) reaches `tool_facts` and now asks for approval before it
+fails `NotFound`. That only ever adds a prompt, never removes one. The facts
+themselves come from the tool's own `ToolDefinition`:
 
 - `idempotent` ← `LoopTool::is_idempotent()` — the builtin pure-read allowlist
   (`tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
@@ -1556,7 +1571,8 @@ unknown models. See `pricing.rs`'s module doc.
   the accurate one is "every call made on a principal's behalf is metered".
 - **Unattributable spend has a name, and it is not a person.** Spend
   produced where no principal can be resolved
-  (`principal_from_metadata`/`ambient_principal`'s fallback arm) lands on
+  (`principal_from_metadata` / `Principal::from_person(visibility::ambient_principal())`'s
+  fallback arm) lands on
   `Principal::Unattributed`, the `"@unattributed"` row `spend.query` reports
   alongside every real principal's row. It is the ledger's honest account
   of spend nobody could be billed to — not a user who is somehow both
@@ -2111,7 +2127,7 @@ sees byte-identical behavior before and after.
   user's still-valid device gets the ordinary walled response instead of a
   false `operator` + a dead UI.
 - **Two gates, not one.** The login wall (`wall_admits`,
-  `src/gateway/server/handler.rs`) is the *guest* wall and admits both
+  `src/gateway/server/connection/auth.rs`) is the *guest* wall and admits both
   authorized roles — `"operator"` and `"member"` — for every method; a walled
   connection may only send `connect`. The admin/member split is the *separate*,
   deeper gate below, at the `process_request` chokepoint. Conflating them
@@ -2168,12 +2184,12 @@ sees byte-identical behavior before and after.
   | `users.me`, `users.list`, `agents.list`, `agents.get`, `heartbeat.list`/`.get`/`.runs` | **open** | Member-safe reads, carved out of otherwise-admin families |
 
   Enforced at **one chokepoint** inside `process_request`
-  (`src/gateway/server/handler.rs`) — both WS dispatch stations (the
+  (`src/gateway/server/connection/dispatch.rs`) — both WS dispatch stations (the
   `do_lane_dispatch` closure and the idempotency `Proceed` arm) scope
   `CALLER_ROLE` around `process_request`, so this single check covers both. A
   `"member"` role hitting an admin-classified method is refused with the same
   error code the login wall uses for non-`connect` methods on walled
-  connections. `None` (cron/internal) and `"operator"` pass every method; a
+  connections. `None` (an in-process caller with no role) and `"operator"` pass every method; a
   `"guest"` connection never reaches this check for non-`connect` methods
   because the login wall above already refuses it first.
 - **Deactivation kicks live Panel sessions.** `users.update { status:
@@ -2269,7 +2285,7 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   suffix grammar — the `proj-*` (legacy project-directory feature) / `u-*`
   (personal) / `p-*` (project, P2) suffix families are siblings, never
   nested. Carried by a `tokio::task_local!` (`with_scope`/`current_scope`),
-  scoped around every dispatch by `server::handler::
+  scoped around every dispatch by `server::connection::dispatch::
   dispatch_with_caller_context` exactly like P0's `CALLER_USER`/
   `CALLER_ROLE` — and, like those, does NOT cross a `tokio::spawn` boundary:
   any run-work spawn must re-seed it explicitly (see the
@@ -2376,9 +2392,14 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   and the chat half wide open". `ScopedTeamStore::wrap` is applied at the
   single construction site (`builder::agent_init::coord_stores`); publishing
   the raw store anywhere else is the bypass.
-  - The resolver is `visibility::ambient_actor()` — the SPEAKER in a room,
-    falling back to the gateway `CALLER_USER` / run-seeded `ScopeAttribution`
-    outside one — and the rule body is the same one sessions use
+  - The resolver is `visibility::ambient_actor()` — this turn's seeded
+    SPEAKER (`scope::current_room_author`, read whatever the scope — since
+    round 11 a fire-time grant can seed an author with no scope at all, e.g. a
+    dispatcher task on a NULL-owner legacy team), else `scope::ambient_owner`
+    (the gateway `CALLER_USER` when one is live, else the run-seeded
+    `ScopeAttribution` owner), else the turn's agent id. The first two arms
+    are `visibility::ambient_principal()`, the one "who is the person"
+    derivation; the agent-id arm is only safe for comparisons — and the rule body is the same one sessions use
     (`visibility::owner_and_scope_visible_to`): since 2026-08-18 (round-5)
     `Team` also carries `scope_id`, so a team created inside a project room
     is stamped `project:<id>` and is visible to the room's whole roster,
@@ -2414,8 +2435,10 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   analogue of the RPC chokepoint above: `EventScopeGuard` (P0) is
   role-based and default-allow for ordinary session/run events, so without
   this every connected member would receive every OTHER user's live run
-  stream. `EventVisibilityIndex` is the 4th `&&` term in `server::handler`'s
-  `should_forward` filter chain — it classifies each delivered frame's
+  stream. `EventVisibilityIndex` is the last `&&` term of the
+  `should_forward` chain in `server/connection/mod.rs::handle_connection`
+  (`wall_admits` && `EventScopeGuard::can_receive` && `audience_allows` &&
+  `should_receive` && `event_admits_for`) — it classifies each delivered frame's
   identity (`session_identity_of`: by session key directly, by `run_id`
   through a seeded run→session cache, by `team_id` for the `team.<id>.*`
   plane, or `Global` for org-level infrastructure) and then resolves that
@@ -2465,13 +2488,24 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
   updates (e.g. `GoalStore::commit_field_update`'s status CAS never
   clobbers it). **Deactivation freeze** (spec §10): `users.update { status:
-  "deactivated" }` freezes background work owned by that user — **four legs,
+  "deactivated" }` freezes background work owned by that user — **five legs,
   one per subsystem that runs work on a principal's behalf**:
   `GoalStore::pause_all_owned_by`, `LoopRegistry::pause_all_owned_by`,
-  (since 2026-08-13) `CronService::pause_all_owned_by`, and (since
-  2026-09-03) `tasks::heartbeat::service::ops::pause_all_owned_by`. The first
+  (since 2026-08-13) `CronService::pause_all_owned_by`, (since
+  2026-09-03) `tasks::heartbeat::service::ops::pause_all_owned_by`, and
+  (since 2026-09-24, round 11) the principal's dispatcher-managed team tasks —
+  `teams::TeamTaskStores::pause_dispatcher_tasks_owned_by` (`src/teams/background.rs`;
+  Pending / Blocked tasks on teams the principal OWNS; the raw team store stays
+  sealed inside `src/teams/`; receipt field
+  `FrozenBackgroundWork.team_tasks: Option<usize>`, capability slot
+  `teams/background-stores`, `ConsumerDecides`). The first
   three are reached through process-global handles because the freeze is a free
   function with no injected dependencies; cron was the one it could not reach.
+  ⚠️ The team leg is keyed on the team OWNER, while fire time judges the task
+  AUTHOR (R-d) — a task another, still-active member authored on the
+  deactivated person's team is paused by the freeze, and runs again (granted,
+  as its author) once someone sets it back to pending. Which key is right is an
+  open user decision (M7, [below](#background-authority-at-fire-time)).
 
   ⚠️ **The heartbeat leg is passed in, not read from a global, and it reports
   `Option<usize>`.** A process-global is install-once, so a test that installs
@@ -2480,9 +2514,10 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   the one that could not be tested. And "the leg did not run" is a different
   answer from "the leg froze nothing": an absent field on the receipt says the
   service was declined at boot (the capability slot carries the reason
-  verbatim), where `0` would be a claim. The other three still report `0` on a
-  store failure, which is criterion #8's shape; **one ruling across all four is
-  owed, not four.**
+  verbatim), where `0` would be a claim. The team leg (round 11) reports
+  `Option<usize>` the same way. The other three still report `0` on a
+  store failure, which is criterion #8's shape; **one ruling across all five is
+  owed, not five.**
 
   Until 2026-09-03 `HeartbeatTask` carried neither `owner_user_id` nor
   `scope_id` at all — nine files, zero hits — so a deactivated second admin's
@@ -2517,6 +2552,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   each scheduler already has — is Aleph's own 「界限要在执行时刻成立」 criterion
   applied to identity rather than to time, and is recorded as deliberately not
   done in FEATURE_LOCATOR §5.22 round-4 「刻意未做 ④」 rather than half-built.
+  **Done in round 11 (2026-09-23):** every background trigger — nine
+  executors — now re-asks at fire time through `scope::authority::resolve`; see
+  [Background authority at fire time](#background-authority-at-fire-time). The
+  write-time sweep stays the primary (it is what produces the receipt); fire
+  time is the backstop behind every leg, with one stated limit: the dispatcher checks the task's AUTHOR first, so a task
+  another active member authored is granted even on a deactivated owner's team.
 - **Scope is immutable for a session's lifetime** (spec §10), **with exactly
   one exception, added 2026-08-30.** `owner_user_id`/`scope_id` are stamped
   once, at session creation
@@ -2900,6 +2941,10 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      input added to that struct in `tools/scoped/builder.rs` alone leaves the
      fast path deciding on a stale shape — silently, and only for slash
      commands. Converging the two constructions is the open work.
+     ✅ **Closed in round 11 (D8, `1eca4aaef`):** both faces now build through
+     `ToolFacts::for_tool` — see
+     [The rules read declared metadata](#the-rules-read-declared-metadata-never-the-tools-name)
+     — and a whole-`src/` census refuses a third hand-built literal.
   5. `gateway.metrics.run_concurrency`'s `per_agent` was the one un-narrowed
      identity array in a response this round made member-reachable (was low —
      **resolved**). The handler narrowed `running_sessions` and
@@ -2939,11 +2984,11 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      transcribe the server's refusal string and claim a doc comment's worth of
      drift protection it could not deliver: `aleph-panel` does not depend on
      `alephcore`, and its test fed its OWN constant into `fleet_error_label`, so
-     rewording `handler.rs` would have stranded every member who opens the
+     rewording the server's literal would have stranded every member who opens the
      cluster page on the raw English protocol string with both crates' tests
      still green. The wording moved to
      `aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE` — the one crate both
-     sides already depend on — and both the emit site (`server/handler.rs`, via
+     sides already depend on — and both the emit site (`server/connection/dispatch.rs`, via
      `gateway::protocol`'s re-export beside `AUTH_REQUIRED`) and the match site
      read it, so there is no reword that moves one side without the other. The
      Panel test now feeds that shared constant in, which is what makes it able
@@ -3081,7 +3126,11 @@ attribution, and a bound workspace as the room's default cwd.
 - **"Admin-gated" here means NOT-A-MEMBER, not IS-AN-OPERATOR.** The
   predicate is `caller_identity::caller_is_member()`, which is literally
   `current_caller_role() == Some("member")` — so a caller with **no** role at
-  all (`None`: cron, A2A, in-process) passes every one of these gates. That is
+  all (`None`: an admin-owned or legacy cron / heartbeat fire, A2A,
+  in-process) passes every one of these gates. Since round 11 a background
+  fire that acts for a MEMBER carries `caller_role = "member"` in its run
+  metadata and is judged as one — see
+  [Background authority at fire time](#background-authority-at-fire-time). That is
   the house rule across the repo and it is deliberate: the login wall handles
   the unauthenticated half, and an unrestricted internal caller is not a
   principal being judged. Say it precisely when reading any "admin-gated"
@@ -3216,7 +3265,9 @@ attribution, and a bound workspace as the room's default cwd.
   RPC face, and stops short of the one verb that grants reach.**
   `project_manage` (R8) shares `projects::authz` with `handlers/projects.rs`
   — the same `project_for` (not-found for a non-member) and `is_owner`
-  (owner or org admin) — so a room renamed in words and one renamed by a
+  (owner or org admin; renamed `manageable_given`, `pub(crate)`, in round 11,
+  with `manageable` as the public face the server now derives
+  `ProjectRow.manageable` from) — so a room renamed in words and one renamed by a
   click pass the same gates. ⚠️ **That sentence was true of the module doc and
   false of exactly two rules until 2026-09-03**: the owner-removal protection
   and `require_known_user` lived only on the RPC face, so one tool call could
@@ -3311,9 +3362,11 @@ attribution, and a bound workspace as the room's default cwd.
        group is readable by every member's recall. Pre-existing
        adoption-by-absence shape, unchanged by this round; recorded here
        because binding a group is what makes strangers reach it.
-     - **A re-bind with no `--label` silently clears the stored label.**
-       `bind` otherwise reads as an idempotent no-op; this half is not. The
-       fixture records it as a fact rather than asserting it.
+     - ~~A re-bind with no `--label` silently clears the stored label.~~
+       **Closed in round-11 (D2, Ruling R-e)**: omitted keeps, `--label ""`
+       clears, a value replaces; the receipt reports the stored label
+       (`RETURNING`). The Panel can keep or replace but has no clear
+       affordance (an empty box sends no label).
   3. `resume_coordinator::retrigger` does not re-check the binding: a
      resumed room run whose folder vanished degrades to the agent workspace
      (background sweep, nobody to tell) where `build_run_request` refuses
@@ -3333,21 +3386,17 @@ attribution, and a bound workspace as the room's default cwd.
   6. **A session listing can come back short, and the receipt built on it
      asserts an absence.** `projects.channel.bind`'s `NothingToMove` says no
      transcript row was found for the conversation — a confident factual
-     claim, and only as honest as `list_sessions` is complete. Both backends
-     can under-report, and they do it differently:
+     claim, and only as honest as `list_sessions` is complete. Before round 11
+     both backends could under-report; SQLite's listings no longer do (below),
+     while the file backend still can, and so can any snapshot:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
-       shipped default is `"file"`, see
-       `config::types::general::default_session_store_backend`, dispatched in
-       `bin/aleph-server/commands/start/helpers.rs::initialize_session_store`)**
-       — `session_manager::ops::query::list_sessions` collects with
-       `rows.filter_map(|r| r.ok())`. A row whose column mapping fails is
-       dropped in **complete silence**, so one damaged `sessions` row yields
-       `NothingToMove`. **Deliberately not fixed in round-9**: it is
-       pre-existing, has other callers, and re-classifying it is its own
-       task. **More severe in kind** -- it drops the row with no diagnostic at
-       all, where the file backend at least warned on one arm -- but
-       **smaller in blast radius, because it is opt-in**. Round-9 fixed the
-       half a stock install actually runs.
+       shipped default is `"file"`)** — **closed in round-11 (D1)**.
+       `session_manager::ops::query::collect_rows` fails `list_sessions` /
+       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
+       (`search_messages`, `get_session_preview`) use the lossy
+       `collect_rows_lossy`, which drops and counts, loudly. Pinned by
+       `a_damaged_sqlite_row_reports_unknown_not_nothing_to_move`.
      - **File backend** — the same class, now loud on both arms. An
        unparseable `metadata.json` was already skipped with a named `warn!`;
        an **unreadable** one was skipped in silence six lines above that
@@ -3371,7 +3420,7 @@ attribution, and a bound workspace as the room's default cwd.
        only NULL rows. The window is milliseconds and the remedy is free:
        re-running `bind` on the same room is a documented no-op that re-runs
        the scan.
-  7. **Single-project RPC responses have no typed envelope** (Ruling BD).
+  7. ~~**Single-project RPC responses have no typed envelope** (Ruling BD).
      `projects.list` gained `ProjectListResult`; the single-project
      responses did not — the server writes the literal
      `json!({ "project": … })` in **6** places and the Panel reads
@@ -3380,7 +3429,12 @@ attribution, and a bound workspace as the room's default cwd.
      the list change applies verbatim (信封也是 wire key，而且它通常是最后一个
      没被类型化的部分). Deferred because 11 sites across two crates is a task
      rather than a nit, and it is pre-existing. **Counts re-verified
-     2026-08-30 and unmoved; re-verify again before acting.**
+     2026-08-30 and unmoved; re-verify again before acting.**~~
+     **Closed in round-11 (D3):** `aleph_protocol::projects::ProjectResult`
+     is built by `handlers/projects.rs::project_response` at all 6 sites and
+     parsed by all 5 Panel sites; `ProjectRow.manageable` is derived by
+     `projects::authz::manageable`, which both faces' `require_owner` now
+     call.
   8. **`AuthorityChange` is used more broadly than its own doc describes**
      (Ruling BJ). `daemon.shutdown` is logged as an `AuthorityChange`, while
      that variant's doc says it covers "changes who can do what". The ruling
@@ -3389,6 +3443,240 @@ attribution, and a bound workspace as the room's default cwd.
      to do anything by any reading not purely about grants. The census row
      is accurate and stays; narrowing prose beside a broader practice is
      this repo's most common drift shape.
+
+     **Round-11 (D4):** the variant's doc no longer lists verbs; it points at
+     `security::audit::tests::AUTHORITY_VERBS`, a per-call-site census
+     (25 call sites / 22 verbs at `a3993672c`) compared against a scan of the
+     source, so the list cannot narrow silently again.
+
+### 后台权限在触发时刻成立（第十一轮）{#background-authority-at-fire-time}
+
+Background work runs with nobody watching: a cron job, a heartbeat beat, a goal
+or loop continuation, a team task the dispatcher claims, a run the boot resume
+rebuilds, an announce, a queued message reinjected after a restart. Until round
+11 each of these nine executors decided on its own, and mostly at CREATION
+time (or never), whom the work acts for and whether that person still counts.
+A member's dispatcher task ran as operator; a demoted admin's heartbeat kept
+running as operator; a deactivated principal's queued message was replayed
+with the role frozen when it was queued. Since round 11 every one of them asks
+the same resolver at the moment it fires. Full record (commits, counts, what is
+still owed): FEATURE_LOCATOR §5.22 「第十一轮」.
+
+- **The resolver** (`src/scope/authority.rs`). `resolve(&FireSubject { owner,
+  scope, author, carried_role })` → `FireAuthority::{Legacy, Granted,
+  Refused(Deactivated | Gone), Unknown}`. The person checked is the AUTHOR,
+  else the owner (`checked_person`; empty strings read as absent). The users
+  table is reached through the capability slot `security/users-store`
+  (`gateway/security/store/slot.rs`, `FailsOpen`: with nothing installed every
+  subject is `Legacy`, which is what tests and minimal servers have always
+  had). Boot installs it unconditionally. Tests never install the process
+  global; they inject through `resolve_with` / `resolve_with_users`, and
+  `no_lib_test_installs_the_process_global_users_store` pins that.
+  `gateway/fire_gate.rs` is the single verdict → metadata mapping for the
+  gateway families (`apply`, `authorize_session_run`, `admit_session_metadata`),
+  and its `FireVerdict` keeps "refused" and "unknown" apart at the type level.
+- **Rulings (user-approved, spec §2).**
+  - **R-a — a read failure skips this fire and never disables.** The reason is
+    recorded as "authority unknown", the work stays enabled, and the next fire
+    asks again. Only a CERTAIN `Deactivated` / `Gone` stops work. This flipped
+    cron's earlier "store error ⇒ warn and run" (round-5 ④). No executor spends
+    an attempt, enters a failure chain, or disables on `Unknown`.
+  - **R-b — a continuation acts for the ORIGINAL initiator.**
+    `carry_policy_metadata` carries `AUTHOR_USER_KEY` as its fifth key, and
+    `Goal.author_user_id` is stamped at creation and wins on the hook path.
+    Loops have no stored author and keep the last completing turn's author — a
+    deliberate, recorded asymmetry with goals.
+  - **R-d — only the initiator counts.** Authority follows the person who
+    exercises it; the room creator's status is irrelevant when an author is
+    known.
+  - **Role only goes down.** A carried role that reads as operator (including
+    an absent one) plus a person who is now a Member ⇒ `caller_role = "member"`.
+    A `guest` carry is never raised. An active admin stamps nothing. So a
+    demoted admin's background work runs as member from its next fire (N4)
+    without touching the live-connection restamp path.
+- **The census.** `run_loop::tests::every_run_producer_answers_the_fire_time_authority_question`
+  classifies every production file that builds a `RunRequest { .. }` (14 at
+  `f82eebb8b`, measured by T09) and requires each `Resolves` producer to also
+  APPLY the grant (`GRANT_APPLIED`, including `admit_session_metadata(`). The
+  three session-row executors each build the request they execute inside an
+  `admit_*` function (`admit_resume`, `admit_announce`, `admit_reinjection`),
+  and each has a `resolve_with` test asserting the RETURNED request carries
+  `caller_role = "member"` for a member row.
+
+**Nine executors, one question** (after the round-11 fix wave, `68386a986`):
+
+| # | Executor | Person checked | Unknown | Refused (Deactivated / Gone) | Who sees the refusal / what next | Legacy (no person) |
+|---|---|---|---|---|---|---|
+| 1 | cron (`tasks/cron/executor.rs::admit_cron_fire`) | job owner (no author) | Skip this fire as a transient error: `consecutive_errors++` (backoff kept), no chain in either direction (`ExecutionResult.unadmitted`). Alert only once the streak reaches `TRANSIENT_ALERT_FLOOR`. Job stays enabled. | Job disabled (set, never toggle) + permanent error `principal deactivated (u-x) — job disabled at fire time` | Run history, `last_error`, immediate alert to the job's source channel. No exit is named: re-enabling takes `cron_manage` toggle, and the text does not say so. | `Granted::legacy` |
+| 2 | heartbeat (`tasks/heartbeat/service/timer.rs`, before the L1 probe) | task owner | L1 `Skipped` + error, `consecutive_errors++`, task stays armed. **Alerts only once the streak reaches cron's `TRANSIENT_ALERT_FLOOR`** (fix wave M3; it used to page on the first unknown beat). | Disabled at writeback (`ops::disable_walled_owner_task`): `… — task disabled at fire time` | History and alert. No exit is named. | `Granted::legacy` |
+| 3–5 | goal after-run / goal wake / loop tick (`execution_engine/execute.rs::admit_continuation`) | carried author, else owner | Re-arm the same step after 30 s (`rearm_*_after_busy`). No iteration spent. Retries without limit. Log only. | Goal `block_if_active`, loop `Paused`. Deactivated: "An administrator must reactivate that person…". **Gone: "That person no longer exists … Stop it and set a new goal / loop as a current user."** (fix wave M4 — the text used to offer a "reassign" no verb provides.) | `notify_origin` (the room channel if room-bound). Names no one, but discloses the status. | no stamp |
+| 6 | team dispatcher (`teams/dispatcher/schedule/authority.rs::authorize_claim`) | task author, else team owner, else origin-session owner | Stays `Pending`. Retried every tick, no backoff. Log only. | Task `Paused`; `result` names the person and the status and the exit (reactivate → set back to pending, or cancel and recreate) | Task drawer — every team member. **Names the person and the status** (M2, open). | spawn bare |
+| 7 | boot / on-demand resume (`gateway/resume_coordinator.rs::admit_resume`, pre-check `fire_gate::session_may_act`) | session row owner (no author rides a resume) — **room row with no author and no carried role: `caller_role` floored at `member`** | `HoldUnspent`: nothing written, no attempt spent, `report.refused` gets `authority_unknown` | Run closed once (`Abandoned`), counted under `abandoned` | Public notice names nobody. The operator report has the name + "send the message again". | no stamp |
+| 8 | announce (`gateway/announce_delivery.rs::admit_announce`) | session row owner (the initiator is not carried) — **same room floor** | Wait 30 s, at most 10 times, then give up at the fallback. Log only. | The delivery returns; warn log only | **Nobody in-band.** The result is left at the fallback. | no stamp |
+| 9 | busy-queue reinjection (`gateway/busy_queue/durable.rs::admit_reinjection`) | payload author, else row owner — same room floor when no author | Left journaled for the next boot. Log only. | Tombstoned `authority_refused`, with a `detail` naming the person | **Nobody in-band.** A queued message silently never runs. | no stamp |
+| — | deactivation freeze, team leg (`teams/background.rs`) | **team owner** (not the author) | n/a | `Paused`, `result` = `account 'u-x' was deactivated and owns this task's team…` | Task drawer. Names the person and the status. | n/a |
+
+Reading the table:
+
+- **Consistent across all nine:** the Unknown / Refused / Legacy arms, and
+  "no attempt spent".
+- **Across all nine, while the users store is Degraded** (next bullet list):
+  every person but `u-owner` resolves `Unknown`.
+- **Still inconsistent, recorded rather than fixed:** five refusal text formats
+  built in five places; the room privacy rule (in-band notices name nobody and
+  disclose no status) is applied only by resume — the dispatcher and freeze
+  texts name the person in a surface every team member reads (M2); announce and
+  busy-queue refusals are silent to users; cron and heartbeat name no exit.
+
+**Rooms, fallbacks and "nobody".**
+
+- **The room floor, and what it costs.** A run rebuilt from a SESSION ROW —
+  boot resume, announce delivery, busy-queue reinjection — reads owner and
+  scope from the row, and in a project room the row's owner is the room's
+  CREATOR, the same for every member. The initiator is not carried on the
+  resume and announce paths, so ATTRIBUTION there is still the room creator.
+  Since `7b25d70c3`, `fire_gate::authorize_session_run` caps such a run: a
+  `Project`-scope row whose metadata carries no (non-empty) author and no
+  `caller_role` gets `caller_role = "member"` (`entry().or_insert_with` — role
+  only down; a `guest` carry stays `guest`; personal rows are untouched). The
+  browser composes nobody's profile for the same shape. **Cost:** an admin's
+  own background announcements and resumes in their own room are capped at
+  member too, until the initiator is carried. Since `d63636107` the floor
+  applies only in multi-user mode (`slot::multi_user()`, read lazily and only
+  for a proceeding room run with no known initiator), so a single-user install
+  keeps the owner's grant; the same commit pins that each session-row executor
+  runs the request its own `admit_*` built.
+- **The R-d converse is still open.** `session_may_act` checks the row owner,
+  so if a room's creator is deactivated, every member's interrupted run in that
+  room is settled closed at resume although its initiator is active. It is
+  recoverable (send the message again); fixing it needs the initiator carry.
+- **A Degraded users store answers "unknown", never "gone".** If `security.db`
+  cannot be opened, boot runs on an in-memory fallback whose users table holds
+  only the bootstrap owner. Since `b34957880` boot installs that store as
+  `Degraded` (`install_degraded_users_store`), and the resolver then answers
+  `Unknown("users store is the in-memory fallback: …")` for every person but
+  `u-owner` — skip, never disable. The owner resolves normally: the owner cannot
+  be deactivated or demoted, so its answer is certain. Before, the same outage
+  handed every member a certain `Gone` and all of its irreversible actions
+  (jobs disabled, tasks paused "cancel and recreate", goals blocked, resumes
+  settled, queued messages tombstoned), none of which undo themselves when the
+  disk store comes back.
+- **"Nobody is attached" is one ruling.** `slot::multi_user()` is the single
+  derivation of multi-user mode: the users table has a row other than
+  `u-owner` (any status) ⇒ true; a read `Err` or a Degraded store ⇒ true.
+  `visibility::run_principal()` → `RunPrincipal::{Person, Legacy, Unattached}`.
+  With no principal in multi-user mode, a per-person resource refuses and says
+  why: browser profile selection, `memory_events` rows with a NULL (legacy)
+  partition, and room creation in `project_manage` (which used to write the
+  agent id `main` as a room's owner). NULL-partition rows are never admitted
+  under a project or room scope, the owner's own run included (the tool output
+  reaches every member). In single-user mode the owner's behaviour is
+  unchanged. `FireAuthority::Legacy` keeps its own meaning — "no store to check
+  a person against" — and does not route through `multi_user()`.
+- **Single-user is not Legacy (ruling C3).** Loopback resolves to `u-owner`,
+  and `create_team` stamps the ambient owner, so on a single-user install the
+  rows are owned and resolve `Granted`, not `Legacy`. Authority is unchanged (an
+  active admin gets no ceiling), but dispatcher tasks and announces now carry
+  the scope and author HEAD left NULL, and **the agent's `allowed_users` fence
+  now applies to dispatcher work**: it used to admit every dispatcher run (no
+  ambient person ⇒ admit); it now sees the task's author, so an agent whose
+  `allowed_users` excludes that person — the owner included — refuses the task.
+
+**Known limits (not done in round 11).**
+
+- **Initiator carry for announce and resume** (the two paths above). Announce
+  needs `current_room_author()` captured at its two spawn sites plus
+  serde-default fields; resume could read the byline of the open run's user
+  message from the log it already reduces. Until then the room floor is the
+  whole answer.
+- **Unverified hypothesis: a guest-tier carry may be dropped at dispatch.** The
+  dispatcher resolves with `carried_role: None`, so a task created from a
+  Chat-tier channel run (`caller_role = "guest"`) would dispatch at `member`
+  for a member author, or as operator for an admin author — the role would go
+  UP. Nobody has confirmed that a guest-tier run can reach `task_create`.
+  Experiment: a channel run at `permission_level = "chat"` calls `task_create`
+  with `managed_by: dispatcher`; read the dispatched run's `caller_role`. If it
+  is reachable, stamp the creating run's `caller_role` next to the author and
+  carry it into `FireSubject.carried_role`.
+- **N1 real-machine QA was not run.** The failure surface needs a member
+  identity driving `teams.create_task` (ideally against an
+  `allowed_users`-restricted agent); no existing fixture takes that path. The
+  evidence is unit / behaviour tests plus mutation. `qa/teamchat_rooms/run.sh`
+  says so next to its claim list.
+
+**Open items awaiting a user decision.**
+
+- **(M2) Do refusal texts in the team task drawer name the person?** The
+  dispatcher's refusal and the freeze's pause text name the principal and the
+  status in a surface every team member reads, while resume's in-band notice
+  names nobody. The drawer is also the admin's only surface for these tasks,
+  so naming has a use. Once decided, one `fire_gate` helper should return a
+  `(public, operator)` pair of sentences for all five formats.
+- **(M7) Is the freeze keyed on the owner or the author?** The team leg
+  pauses every dispatcher task on teams the deactivated person OWNS, including
+  tasks an active member authored — and its text blames the owner. Fire time
+  judges the author, so that member can set the task back to pending and it
+  runs. Spec §3.2 N2 says "owner" literally; the tension with R-d is flagged,
+  not changed.
+- **(M8) Does a re-queue by another person re-stamp the author?**
+  `teams.update_task` / `task_update` are member-open and carry `status` and
+  `owner` (agent). With the author pinned, Bob can set Alice's finished task
+  back to `pending`, or point it at another agent, and it runs under Alice's
+  authority, and the `allowed_users` fence reads Alice. This is narrower than
+  before round 11 (everything ran as operator), so it is a decision, not a
+  regression. One option: re-stamp the author to the patcher when a person
+  other than the author moves a task to `Pending` or changes its agent.
+
+**Rollback note.** The busy-queue journal gained a `SettleReason` variant,
+`authority_refused`. A binary from before round 11 cannot decode such an entry:
+it logs it as unreadable and skips it (per entry — other entries are
+unaffected), and the entry stays on disk.
+
+### 托管浏览器 profile 按人分（第十一轮）{#browser-profiles-per-principal}
+
+A managed browser profile holds cookies and logins, so a profile shared by
+every person on a server hands a member the operator's logged-in sessions
+(N5). Since round 11 (ruling R-c; `a4be04610`, `98a261986`) profiles are keyed
+per principal:
+
+- **One composition, the memory-partition grammar.**
+  `browser::profile::principal_profile_key(name, principal)` gives Alice's
+  `default` as `default__u-alice` (`memory::project_scope::scoped_agent_id`,
+  separator `__`). The machine owner (`u-owner`) and — on a single-user server —
+  an actor-less run get `name` itself, so the `default` directory every install
+  already has stays the owner's, with no data migration.
+- **One boundary for a caller-supplied name.** `ProfileManager::principal_profile`
+  materializes the principal's copy on first use from the CONFIGURED profile,
+  with three changes: no `user_data_dir` (a configured directory is the
+  operator's store, logins included), no `--user-data-dir` /
+  `--profile-directory` in the inherited `extra_args` (both spellings — the
+  same store named another way, and on the cdp engines `extra_args` come first),
+  and a refusal for `ExistingSession`.
+- **`ExistingSession` is the owner's own Chrome.** The auto-injected `user`
+  profile attaches to the machine owner's real browser, so there is no
+  per-principal copy: anyone but the owner is refused, and
+  `list_profiles_for` omits such profiles for them.
+- **A composed name as INPUT is not found.** `default__u-alice` is the output
+  of the composition, never a value a caller was handed to type back in
+  (`is_composed_id`, the `memory_scope::read_partitions` rule). The refusal
+  text is the same as for a missing profile, so it is no existence oracle.
+- **The tool face composes in one place.** `browser_tools::resolve_caller_profile`
+  asks `caller_browser_principal` (built on `visibility::ambient_principal`,
+  never the agent-id arm of `ambient_actor`) and every live-state call uses the
+  resolved key. `principal_profile_census::no_browser_tool_addresses_live_state_with_the_raw_profile_argument`
+  goes red on a raw `args.profile` handed to a live-state manager method,
+  including the `backend_for_key(…args.profile…)` spelling.
+- **Nobody attached ⇒ no profile.** In multi-user mode (`slot::multi_user()`)
+  a run with no principal is refused with a reason ("no person is attached to
+  this run; managed browser profiles are per person…") instead of resolving to
+  the owner's browser. A project-room run with no seeded speaker (work rebuilt
+  from a session row, whose initiator is unknown) gets nobody's profile, not
+  the room creator's.
+- **Limits, recorded:** principal directories and map entries are never
+  reaped; `chrome_mcp` is unchanged; a configured entry that happens to be
+  named `x__u-y` can be adopted as that principal's copy; the refusal text
+  reveals which configured profile names exist; `click.rs`'s `get_driver`
+  reads the configured name (a config read — a copy has the same driver).
 
 ### Network boundary = reachability
 
