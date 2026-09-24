@@ -17,9 +17,8 @@ use crate::tool_metadata::ToolCatalog;
 /// is written for plugin commands (it replaces the literal that lived in
 /// `bin/aleph-server/…/tool_catalog_init.rs`). The id is `qualified_name()`
 /// (`<plugin>:<name>`), the registry's own key derivation, so the dispatch id
-/// and the lookup key cannot drift apart. Later rounds add fields HERE
-/// (`argument_hint` / `allowed_tools` / `model` from the command's
-/// frontmatter), never at a second construction site.
+/// and the lookup key cannot drift apart. Fields from the command's
+/// frontmatter are added HERE, never at a second construction site.
 pub(crate) fn plugin_command_skill_info(cmd: &SkillRegistration) -> SkillInfo {
     SkillInfo {
         id: cmd.qualified_name(),
@@ -29,9 +28,10 @@ pub(crate) fn plugin_command_skill_info(cmd: &SkillRegistration) -> SkillInfo {
         // manifest default and matches every other slash command.
         scope: crate::domain::skill::PromptScope::System,
         version: None,
-        // No `allowed-tools:` to project: `None` keeps the agent's full tool
-        // surface, which is what plugin commands have always done.
-        allowed_tools: None,
+        // The command's own `allowed-tools`, already Aleph names
+        // (`manifest/parsers.rs`, restrict mode). `None` keeps the full surface.
+        allowed_tools: cmd.allowed_tools.clone(),
+        argument_hint: cmd.argument_hint.clone(),
         // The owner, for `extension::visibility` face ④ (the slash list and
         // the fast path). Unmount does not read it — the `slash_command`
         // disposer removes the exact ids it registered.
@@ -50,9 +50,12 @@ pub(crate) fn plugin_command_skill_infos(commands: &[SkillRegistration]) -> Vec<
 }
 
 /// Register the entries and return the disposer that removes exactly them.
-/// A skill the catalog refuses (unknown `allowed-tools:` name — impossible
-/// here, `allowed_tools` is always `None`) would simply not be in the id
-/// list the disposer removes.
+/// A command the catalog refuses (an `allowed-tools:` name the registry does
+/// not know — every name has been through the CC alias table, so it is not a
+/// CC spelling; an MCP tool whose server has not registered yet is the known
+/// false negative, see `resolve_skill_tool_scope`) is simply not in the id
+/// list the disposer removes, and `register_skills` has already warned by
+/// name.
 pub(crate) async fn register_slash_commands_effect(
     catalog: Arc<ToolCatalog>,
     infos: Vec<SkillInfo>,
@@ -95,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_command_skill_info_projects_the_qualified_name_and_nothing_else() {
+    fn plugin_command_skill_info_projects_the_qualified_name_and_the_frontmatter() {
         let info = plugin_command_skill_info(&cmd("qa-plug", "hello"));
         assert_eq!(info.id, "qa-plug:hello", "registry key = slash id");
         assert_eq!(info.name, "hello");
@@ -110,10 +113,20 @@ mod tests {
             info.version.is_none(),
             "plugin commands carry no manifest version"
         );
-        assert!(
-            info.allowed_tools.is_none(),
-            "no `allowed-tools:` → full tool surface"
+        // The frontmatter half (P4.7b): declared `allowed-tools` (already
+        // Aleph names) and `argument-hint` ride onto the SkillInfo.
+        let mut with_fm = cmd("qa-plug", "review");
+        with_fm.allowed_tools = Some(vec!["grep".into(), "bash".into()]);
+        with_fm.argument_hint = Some("[pr-number]".into());
+        let info = plugin_command_skill_info(&with_fm);
+        assert_eq!(
+            info.allowed_tools.as_deref(),
+            Some(&["grep".to_string(), "bash".to_string()][..])
         );
+        assert_eq!(info.argument_hint.as_deref(), Some("[pr-number]"));
+        // …and a command that declares nothing keeps the full surface.
+        let bare = plugin_command_skill_info(&cmd("qa-plug", "hello"));
+        assert!(bare.allowed_tools.is_none() && bare.argument_hint.is_none());
     }
 
     #[test]

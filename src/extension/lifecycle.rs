@@ -1076,6 +1076,54 @@ mod tests {
         );
     }
 
+    /// A command's frontmatter reaches the catalog row through the real mount:
+    /// `parse_dir` → `parse_single_command` → `plugin_command_skill_infos`
+    /// (the call in `mount_parsed`) → `register_slash_commands_effect` →
+    /// `register_skills`. `routing_capabilities` is what `slash_skill_scope`
+    /// narrows the run with; `usage` (`/help`) and `param_hint`
+    /// (`commands.list` → completion menus) are the hint's two display faces.
+    #[tokio::test]
+    async fn a_mounted_commands_frontmatter_reaches_its_catalog_row() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_static_plugin(tmp.path(), "alpha");
+        std::fs::write(
+            tmp.path().join("plugins/alpha/commands/review.md"),
+            "---\n\
+             description: review a change\n\
+             argument-hint: \"[pr-number]\"\n\
+             allowed-tools: Bash(git *), Read\n\
+             ---\n\
+             Review $1.\n",
+        )
+        .unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
+        manager.set_tool_catalog(catalog.clone());
+        manager.load_all().await.unwrap();
+
+        let rows = catalog.list_all().await;
+        let row = |name: &str| {
+            rows.iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name} not in the catalog"))
+        };
+        let review = row("alpha:review");
+        assert_eq!(
+            review.routing_capabilities.as_deref(),
+            Some(&["bash".to_string(), "file_read".to_string()][..]),
+            "CC `allowed-tools` arrives as Aleph names"
+        );
+        assert_eq!(review.usage.as_deref(), Some("/alpha:review [pr-number]"));
+        assert_eq!(review.param_hint.as_deref(), Some("[pr-number]"));
+        // A command that declares nothing keeps the full surface and the
+        // generic usage line.
+        let hello = row("alpha:hello");
+        assert!(hello.routing_capabilities.is_none());
+        assert_eq!(hello.usage.as_deref(), Some("/alpha:hello [input]"));
+        assert!(hello.param_hint.is_none());
+    }
+
     #[tokio::test]
     async fn mount_of_an_unknown_id_is_not_found_and_twice_is_already_mounted() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();

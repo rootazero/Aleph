@@ -33,10 +33,18 @@ pub struct SkillInfo {
     /// registry and carries the result onto `UnifiedTool.routing_capabilities`,
     /// which is what the slash-command envelope and then the run loop read.
     ///
-    /// Plugin *commands* are registered through this same shape and carry no
-    /// manifest, so they always project `None`.
+    /// Plugin *commands* are registered through this same shape with no
+    /// manifest behind them; theirs is the command file's own
+    /// `allowed-tools:`, already mapped to Aleph names at parse time
+    /// (`slash_effect::plugin_command_skill_info`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
+    /// Claude Code `argument-hint:` (`"[pr-number]"`): the slash entry's
+    /// usage line and completion hint (`register_skills`). Only plugin
+    /// commands carry one; the skill scan does not read the key, so a
+    /// manifest-backed skill projects `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
     /// The plugin that registered this entry (`commands/*.md` of a plugin, or a
     /// plugin-shipped skill). `None` for user / bundled skills. Carried onto
     /// `ToolSource::Skill` so the slash list and fast path can ask
@@ -58,6 +66,7 @@ impl From<SkillManifest> for SkillInfo {
             allowed_tools: manifest
                 .allowed_tools()
                 .map(|tools| tools.iter().map(String::clone).collect()),
+            argument_hint: None,
             plugin_id: match manifest.source() {
                 crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str().to_string()),
                 _ => None,

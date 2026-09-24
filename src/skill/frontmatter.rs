@@ -525,18 +525,30 @@ mod tests {
     /// So: any file that both deserialises YAML *and* names `allowed_tools`
     /// is a frontmatter reader of this key and must be on this list.
     ///
-    /// The two entries are not "the files that happen to match today" — each
-    /// is here for a stated reason, and a third one is a decision, not a
-    /// merge conflict:
+    /// The entries are not "the files that happen to match today" — each is
+    /// here for a stated reason, and a new one is a decision, not a merge
+    /// conflict:
     /// * `skill/manifest.rs` — the SKILL.md reader; it delegates the shape
     ///   handling to [`normalize_allowed_tools`] above.
     /// * `agents/loader.rs` — a **different concept**: agent `.md`
     ///   frontmatter, snake-cased `allowed_tools`, feeding `AgentDef`. It is
     ///   listed so the scan's blindness to it is a recorded decision rather
     ///   than an accident.
+    /// * `extension/manifest/parsers.rs` — a plugin's `commands/*.md`; it
+    ///   delegates the shape to [`normalize_allowed_tools`] and maps the names
+    ///   through the CC alias table. It reaches an enforcement point for
+    ///   commands only (`slash_effect::plugin_command_skill_info` →
+    ///   `register_skills` → `slash_skill_scope`; pinned end to end by
+    ///   `lifecycle::tests::a_mounted_commands_frontmatter_reaches_its_catalog_row`),
+    ///   and leaves a skill's declaration uncarried — `skill/manifest.rs`
+    ///   reads the same SKILL.md.
     #[test]
     fn yaml_frontmatter_readers_of_allowed_tools_are_an_enumerated_set() {
-        const ALLOWED: [&str; 2] = ["skill/manifest.rs", "agents/loader.rs"];
+        const ALLOWED: [&str; 3] = [
+            "skill/manifest.rs",
+            "agents/loader.rs",
+            "extension/manifest/parsers.rs",
+        ];
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
@@ -567,7 +579,7 @@ mod tests {
             );
         }
 
-        // Positive control first: if the predicate stopped matching the two
+        // Positive control first: if the predicate stopped matching the
         // files it is *supposed* to match, an empty offender list means the
         // scan broke, not that the tree is clean.
         for expected in ALLOWED {

@@ -19,22 +19,30 @@ use crate::extension::types::McpServerConfig;
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
 // ============================================================================
 
-/// Frontmatter for SKILL.md files, targeting `SkillRegistration` output.
+/// Frontmatter for SKILL.md and `commands/*.md` files, targeting
+/// `SkillRegistration` output. One container for both flavours
+/// ([`parse_skill_registration`]), and they read `allowed-tools` differently.
 ///
-/// # Why there is no `allowed-tools` field here
+/// # `allowed-tools` is honoured for commands, and only for commands
 ///
-/// There used to be: `#[serde(rename = "allowed-tools")] Option<Vec<String>>`,
-/// `unwrap_or_default()`ed into `SkillRegistration.allowed_tools`, which had
-/// zero readers outside two test literals. It was cut on 2026-09-05, for two
-/// reasons that reinforce each other:
+/// For a [`SkillType::Command`] the key is mapped to Aleph names here
+/// ([`command_allowed_tools`]) and carried on the registration;
+/// `slash_effect::plugin_command_skill_info` projects it onto the command's
+/// `SkillInfo`, `register_skills` validates it into
+/// `UnifiedTool::routing_capabilities`, and `slash_skill_scope` narrows the
+/// run with it. That chain is the only enforcement a plugin command has.
+///
+/// For a [`SkillType::Skill`] the key is deserialised (the container is
+/// shared) and then dropped: the registration's `allowed_tools` stays `None`
+/// and nothing on this path reads it. The two reasons this container had no
+/// `allowed-tools` field at all from 2026-09-05 until commands needed one
+/// are still the whole story for skills:
 ///
 /// 1. **It could not be enforced from here.** A plugin skill parsed on this
-///    path becomes a `SkillRegistration`. The `allowed-tools` declaration is
+///    path becomes a `SkillRegistration`. A skill's `allowed-tools` is
 ///    enforced at `tool_metadata::registry::registration::register_skills`,
 ///    which is fed from `SkillInfo` — i.e. from `SkillManifest`, i.e. from
-///    `skill::manifest`. Nothing on this path reaches that gate. Honouring the
-///    key here would have been a parse that reports success and changes
-///    nothing.
+///    `skill::manifest`. Nothing on this path reaches that gate for a skill.
 /// 2. **The same file is already parsed by the path that can enforce it.**
 ///    `projection.rs::republish_plugin_projections` publishes every active
 ///    plugin's `<root>/skills`, which the `SkillSystem` scan reads
@@ -43,12 +51,19 @@ use crate::extension::types::McpServerConfig;
 ///    and *that* reading honours `allowed-tools`, including the comma-scalar
 ///    shape.
 ///
-/// The strict `Vec<String>` was also actively harmful: an upstream skill
-/// writing `allowed-tools: Read, Grep, Bash(cargo *)` made the YAML parser
-/// reject the whole frontmatter, so the skill was dropped from the plugin over a key
-/// this path never read. Removing the field removes that failure mode outright
-/// — the container has no `deny_unknown_fields`, so the key is now ignored.
+/// Before the cut the field was a strict `Option<Vec<String>>`, and that was
+/// actively harmful: an upstream skill writing `allowed-tools: Read, Grep,
+/// Bash(cargo *)` made the YAML parser reject the whole frontmatter, so the
+/// skill was dropped from the plugin over a key this path never read. The
+/// field is now raw YAML read through
+/// `skill::frontmatter::normalize_allowed_tools` (the reader `skill::manifest`
+/// uses), which takes both the comma-scalar and the sequence form, so that
+/// failure mode does not come back.
+///
+/// [`SkillType::Command`]: crate::extension::types::SkillType::Command
+/// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 struct SkillFm {
     #[serde(default)]
     name: Option<String>,
@@ -58,6 +73,16 @@ struct SkillFm {
     triggers: Option<Vec<String>>,
     #[serde(default)]
     category: Option<String>,
+    /// Claude Code command frontmatter. `argument-hint`, `model` and
+    /// `disable-model-invocation` are carried verbatim for both flavours.
+    #[serde(default)]
+    argument_hint: Option<String>,
+    #[serde(default)]
+    allowed_tools: Option<crate::yaml::Value>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    disable_model_invocation: Option<bool>,
 }
 
 /// Frontmatter for agent .md files, targeting `AgentRegistration` output
@@ -332,9 +357,16 @@ fn parse_skill_registration(
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (SkillFm, String) = parse_frontmatter(&content)?;
+    let name = fm.name.unwrap_or_else(|| default_name.to_string());
+    // Commands only; `SkillFm`'s doc says why a skill's copy is not carried.
+    let allowed_tools = if skill_type == crate::extension::types::SkillType::Command {
+        command_allowed_tools(fm.allowed_tools.as_ref(), &name)
+    } else {
+        None
+    };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
-        name: fm.name.unwrap_or_else(|| default_name.to_string()),
+        name,
         description: fm.description.unwrap_or_default(),
         content: body,
         triggers: fm.triggers.unwrap_or_default(),
@@ -346,8 +378,42 @@ fn parse_skill_registration(
         // files. Dropping it (the old `..Default::default()`) left plugin skills
         // with an empty base dir, forcing the model to guess paths / `cat`.
         source_path: md_path.to_path_buf(),
+        argument_hint: fm.argument_hint,
+        allowed_tools,
+        model: fm.model,
+        disable_model_invocation: fm.disable_model_invocation.unwrap_or(false),
         ..Default::default()
     }))
+}
+
+/// A command's `allowed-tools:` as Aleph tool names, RESTRICT mode: the list
+/// narrows the turn's tool surface, so a scoped `Bash(...)` folds to bare
+/// `bash` and the tier gate still governs the call. An entry with no Aleph
+/// tool is dropped with a warn rather than forwarded — `register_skills`
+/// refuses the whole command over one unknown name, and losing the slash
+/// command over `TodoWrite` is the worse answer. Dropping only narrows: a
+/// declaration whose every entry drops is `Some(vec![])`, deny-all, never
+/// `None` (which would hand back the full surface the author tried to shrink).
+fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Option<Vec<String>> {
+    let declared = crate::skill::frontmatter::normalize_allowed_tools(raw, command)?;
+    let mapped: Vec<String> = declared
+        .iter()
+        .filter_map(|entry| {
+            let aleph = crate::extension::hooks::normalize_cc_tool_entry(entry, true);
+            if aleph.is_none() {
+                warn!(command, entry = %entry, "allowed-tools entry has no Aleph tool; dropped");
+            }
+            aleph
+        })
+        .collect();
+    if mapped.is_empty() && !declared.is_empty() {
+        warn!(
+            command,
+            declared = ?declared,
+            "every allowed-tools entry was dropped; the command can call no tools"
+        );
+    }
+    Some(mapped)
 }
 
 /// Parse a single skill markdown file (`skills/`) into a `Skill` capability.
@@ -951,10 +1017,12 @@ mod tests {
     /// directory was unaffected, which is precisely what made it invisible:
     /// the plugin still loaded, just one skill lighter.
     ///
-    /// The assertion that matters is that BOTH skills arrive. `allowed-tools`
-    /// is not asserted because this path no longer carries it — the same file
-    /// is scanned by `skill::manifest` (plugin skill dirs are published into
-    /// `SkillSystem`), which is where the declaration is honoured.
+    /// The assertion that matters is that BOTH skills arrive. The second one
+    /// is that the skill's registration carries NO `allowed-tools`: `SkillFm`
+    /// reads the key again (commands honour it), but a skill's declaration is
+    /// honoured by `skill::manifest`'s scan of the same file (plugin skill dirs
+    /// are published into `SkillSystem`), and the restrict-mode fold done here
+    /// for commands is not a skill's reading of it.
     #[test]
     fn an_upstream_comma_scalar_allowed_tools_does_not_delete_the_skill() {
         let dir = tempdir().unwrap();
@@ -994,6 +1062,15 @@ mod tests {
             names.contains(&"plain"),
             "the sibling must survive too; got {names:?}"
         );
+        for cap in &caps {
+            if let CapabilityDeclaration::Skill(s) = cap {
+                assert!(
+                    s.allowed_tools.is_none(),
+                    "a skill's `allowed-tools` is not projected on this path: {:?}",
+                    s.allowed_tools
+                );
+            }
+        }
     }
 
     /// Census: a scan result is a fail-closed answer ("I could not read this
@@ -1143,6 +1220,109 @@ mod tests {
             }
             other => panic!("Expected Command-typed Skill, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn command_frontmatter_fields_reach_the_registration() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("review.md"),
+            "---\n\
+             description: Code review a pull request\n\
+             argument-hint: \"[pr-number] [priority]\"\n\
+             allowed-tools: Bash(gh pr view:*), Read, Grep\n\
+             model: sonnet\n\
+             disable-model-invocation: true\n\
+             ---\n\
+             Review PR $1.\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert_eq!(reg.skill_type, crate::extension::types::SkillType::Command);
+        assert_eq!(reg.argument_hint.as_deref(), Some("[pr-number] [priority]"));
+        // Normalised through the CC alias table in RESTRICT mode: scoped Bash
+        // folds to bare `bash`; CC names become Aleph names.
+        assert_eq!(
+            reg.allowed_tools.as_deref(),
+            Some(
+                &[
+                    "bash".to_string(),
+                    "file_read".to_string(),
+                    "grep".to_string()
+                ][..]
+            )
+        );
+        assert_eq!(reg.model.as_deref(), Some("sonnet"));
+        assert!(reg.disable_model_invocation);
+        assert_eq!(reg.content, "Review PR $1.");
+    }
+
+    #[test]
+    fn a_command_with_no_extra_frontmatter_declares_nothing() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(cmds.join("hi.md"), "Say hi to $ARGUMENTS.\n").unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert!(reg.argument_hint.is_none() && reg.allowed_tools.is_none() && reg.model.is_none());
+        assert!(!reg.disable_model_invocation);
+    }
+
+    #[test]
+    fn allowed_tools_array_form_parses_too() {
+        // `create-plugin.md` (plugin-dev) uses the YAML array form.
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("c.md"),
+            "---\nallowed-tools:\n  [\"Read\",\"Write\",\"Bash\",\"TodoWrite\"]\n---\nbody\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        // `TodoWrite` has no Aleph counterpart and is dropped, never passed
+        // through as a name the registry would refuse the whole command over.
+        assert_eq!(
+            reg.allowed_tools.as_deref(),
+            Some(
+                &[
+                    "file_read".to_string(),
+                    "file_write".to_string(),
+                    "bash".to_string()
+                ][..]
+            )
+        );
+    }
+
+    /// Dropping only narrows. A declaration whose every entry drops is the
+    /// explicit deny-all, not "no declaration": reading it as `None` would
+    /// hand the command the full tool surface its author tried to shrink.
+    #[test]
+    fn a_command_whose_every_allowed_tool_drops_is_deny_all() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("t.md"),
+            "---\nallowed-tools: TodoWrite\n---\nbody\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert_eq!(reg.allowed_tools.as_deref(), Some(&[][..]));
     }
 
     #[test]

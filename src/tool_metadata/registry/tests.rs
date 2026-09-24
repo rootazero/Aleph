@@ -78,6 +78,7 @@ async fn test_register_skills() {
             scope: crate::domain::skill::PromptScope::System,
             version: None,
             allowed_tools: None,
+            argument_hint: None,
             plugin_id: None,
         },
         SkillInfo {
@@ -87,6 +88,7 @@ async fn test_register_skills() {
             scope: crate::domain::skill::PromptScope::System,
             version: None,
             allowed_tools: None,
+            argument_hint: None,
             plugin_id: None,
         },
     ];
@@ -126,6 +128,7 @@ async fn register_skills_carries_the_owning_plugin_onto_the_row() {
         scope: crate::domain::skill::PromptScope::System,
         version: None,
         allowed_tools: None,
+        argument_hint: None,
         plugin_id: Some("proj".to_string()),
     };
     let unowned = SkillInfo {
@@ -1099,6 +1102,7 @@ async fn unregister_skills_removes_exactly_the_named_skill_entries() {
         scope: crate::domain::skill::PromptScope::System,
         version: None,
         allowed_tools: None,
+        argument_hint: None,
         plugin_id: None,
     };
     let rejected = catalog

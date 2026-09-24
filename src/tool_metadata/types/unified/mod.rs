@@ -157,13 +157,14 @@ pub struct UnifiedTool {
 
     /// Tool names this command narrows the run's tool surface to.
     ///
-    /// Only skills populate this today (from their frontmatter
-    /// `allowed-tools:`). `None` = the command declares nothing, so the run
-    /// keeps the agent's full tool surface; `Some(vec![])` = an explicit
-    /// deny-all. The `Option` is not decoration: it is the only thing that
-    /// keeps "deny everything" distinguishable from "said nothing" by the time
-    /// the value reaches `ScopedToolService`, which reads an empty allow-set
-    /// as allow-all.
+    /// Only `register_skills` populates this today: a skill's SKILL.md
+    /// `allowed-tools:`, or a plugin command's `commands/*.md` one (already
+    /// mapped to Aleph names at parse time). `None` = the command declares
+    /// nothing, so the run keeps the agent's full tool surface;
+    /// `Some(vec![])` = an explicit deny-all. The `Option` is not decoration:
+    /// it is the only thing that keeps "deny everything" distinguishable from
+    /// "said nothing" by the time the value reaches `ScopedToolService`, which
+    /// reads an empty allow-set as allow-all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_capabilities: Option<Vec<String>>,
 

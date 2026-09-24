@@ -274,7 +274,10 @@ impl ToolRegistrar {
             )
             .with_display_name(&skill.name)
             .with_icon("lightbulb.fill") // Default Skill icon
-            .with_usage(format!("/{} [input]", skill.id))
+            .with_usage(match skill.argument_hint.as_deref() {
+                Some(hint) => format!("/{} {hint}", skill.id),
+                None => format!("/{} [input]", skill.id),
+            })
             // Generate routing regex for flat namespace
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(&skill.id)))
             .with_routing_intent_type("skills")
@@ -291,6 +294,12 @@ impl ToolRegistrar {
             // `UnifiedTool::routing_capabilities`.
             .with_routing_capabilities(routing_capabilities)
             .with_routing_strip_prefix(true);
+            // The hint's second face: `usage` above reaches `/help`, this one
+            // reaches `commands.list` and so the completion menus.
+            let tool = match skill.argument_hint.as_deref() {
+                Some(hint) => tool.with_param_hint(hint),
+                None => tool,
+            };
 
             // Register with automatic conflict resolution. Channel visibility is
             // inferred centrally in `register_with_conflict_resolution`.
@@ -335,11 +344,13 @@ impl ToolRegistrar {
     /// *after* skills do (MCP joins per request at run time), so a skill that
     /// names one is refused even though the run loop could have honoured it.
     /// That is a loud false negative — the author is named in a warn and in
-    /// the boot output — chosen over the silent false positive above. There is
-    /// no Claude-Code-name translation table on purpose: a table only covers
-    /// the names that existed the day it was written, and matching upstream's
-    /// `Read`/`Bash`/`Grep` literally would retain zero tools while reporting
-    /// success.
+    /// the boot output — chosen over the silent false positive above. This
+    /// function translates nothing: matching upstream's `Read`/`Bash`/`Grep`
+    /// literally would retain zero tools while reporting success, so an
+    /// upstream name is refused here by name. A plugin *command*'s
+    /// declaration arrives already translated (`manifest/parsers.rs` maps it
+    /// through `extension::hooks::normalize_cc_tool_entry` at parse time); a
+    /// skill's does not.
     async fn resolve_skill_tool_scope(
         declared: Option<&[String]>,
         conflict_resolver: &ConflictResolver,

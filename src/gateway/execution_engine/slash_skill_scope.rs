@@ -292,6 +292,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: declared,
+                argument_hint: None,
                 plugin_id: None,
             }])
             .await;
@@ -422,6 +423,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: Some(vec!["Bash".to_string()]),
+                argument_hint: None,
                 plugin_id: None,
             }])
             .await;
@@ -532,6 +534,7 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: None,
+                    argument_hint: None,
                     plugin_id: None,
                 },
                 SkillInfo {
@@ -541,6 +544,7 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: Some(vec!["sibling".to_string()]),
+                    argument_hint: None,
                     plugin_id: None,
                 },
             ])
@@ -567,6 +571,7 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: Some(vec!["grep".to_string(), "bash".to_string()]),
+                argument_hint: None,
                 plugin_id: None,
             }])
             .await;

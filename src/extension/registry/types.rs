@@ -231,6 +231,27 @@ pub struct SkillRegistration {
     /// ID of the plugin that registered this skill (plugin API path)
     #[serde(default)]
     pub plugin_id: String,
+
+    /// Claude Code `argument-hint:`, verbatim (`"[pr-number] [priority]"`).
+    /// Read for commands by `slash_effect::plugin_command_skill_info`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+
+    /// A command's `allowed-tools:`, ALREADY normalised to Aleph names
+    /// (`extension::hooks::normalize_cc_tool_entry`, restrict mode). `None` =
+    /// no declaration (full tool surface); `Some(vec![])` = deny-all. Always
+    /// `None` on a [`SkillType::Skill`] registration — see `SkillFm` in
+    /// `manifest/parsers.rs` for why a skill's declaration is not carried here.
+    ///
+    /// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+
+    /// Claude Code `model:`, verbatim (`"sonnet"`, a full model id, …).
+    /// Carried for the slash dispatch's per-turn model pin (P4.7c); nothing
+    /// reads it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl SkillRegistration {

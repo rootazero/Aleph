@@ -1,19 +1,15 @@
 //! Claude Code tool names ↔ Aleph tool names — the one table.
 //!
 //! Three readers, one derivation: the hook matcher (`executor.rs`,
-//! `matches_pattern`), a CC command's `allowed-tools:` (P4.7b) and a CC
-//! agent's `tools:` (P4.8). Each reader used to be a place where `Read` would
+//! `matches_pattern`), a CC command's `allowed-tools:`
+//! (`manifest/parsers.rs`, `command_allowed_tools`) and a CC agent's `tools:`
+//! (P4.8). Each reader used to be a place where `Read` would
 //! silently name nothing. Every right-hand side is checked against the real
 //! tool registry by `every_aleph_target_is_a_real_tool_name`.
 
 /// `(claude_code_name, aleph_name)`. Left side is exact and case-sensitive
 /// (CC matchers are). Names with no Aleph counterpart are deliberately
-/// absent: `NotebookEdit`, `LS` (Aleph folds it into `file_ops list`),
-/// `Skill` (CC invokes a skill; Aleph `skill_read` reads one — different
-/// verb), `SlashCommand`, `TodoWrite` (Aleph `scratchpad` is a different
-/// shape), `KillShell`, `BashOutput`, `EnterWorktree`/`ExitWorktree`. A
-/// matcher naming one of these matches nothing, which is the correct
-/// fail-closed answer.
+/// absent — they are [`CC_TOOLS_WITHOUT_COUNTERPART`].
 pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
     ("Bash", "bash"),
     ("Read", "file_read"),
@@ -30,12 +26,27 @@ pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
     ("ToolSearch", "tool_search"),
 ];
 
+/// Claude Code tools with no Aleph counterpart: `LS` (Aleph folds it into
+/// `file_ops list`), `Skill` (CC invokes a skill; Aleph `skill_read` reads
+/// one — different verb), `TodoWrite` (Aleph `scratchpad` is a different
+/// shape), and the rest have no analogue. A hook matcher naming one matches
+/// nothing, which is the correct fail-closed answer; an `allowed-tools:` /
+/// `tools:` entry naming one is dropped by [`normalize_cc_tool_entry`]. A CC
+/// tool in neither table is forwarded under its own name, and the registry
+/// refuses it by name (`register_skills`).
+pub(crate) const CC_TOOLS_WITHOUT_COUNTERPART: &[&str] = &[
+    "NotebookEdit",
+    "LS",
+    "Skill",
+    "SlashCommand",
+    "TodoWrite",
+    "KillShell",
+    "BashOutput",
+    "EnterWorktree",
+    "ExitWorktree",
+];
+
 /// Claude Code → Aleph, or `None` for a name with no counterpart.
-// Only test-called today: `normalize_cc_tool_entry` (below) is its one
-// production caller, and that function is itself only test-called (same
-// reason). Its production readers are P4.7b (a command's `allowed-tools:`)
-// and P4.8 (an agent's `tools:`) — delete this attribute when either lands.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn aleph_name(cc: &str) -> Option<&'static str> {
     CC_TOOL_ALIASES
         .iter()
@@ -45,8 +56,11 @@ pub(crate) fn aleph_name(cc: &str) -> Option<&'static str> {
 
 /// Every Claude Code spelling of an Aleph tool name — the table's reverse
 /// plus the MCP form: Aleph's `{server}__{tool}` is CC's `mcp__{server}__{tool}`.
-/// (The plugin-level `mcp__plugin_<p>_<s>__` form needs the owning plugin,
-/// which this module cannot know; matchers for it use `mcp__.*`.)
+/// A plugin's server needs no special case: its Aleph key is already
+/// `plugin_{plugin}_{server}__{tool}` (`McpHandler::qualified_name` over
+/// `mcp_config::plugin_server_id`), so the same prefix yields CC's
+/// `mcp__plugin_{plugin}_{server}__{tool}`. [`normalize_cc_tool_entry`] is
+/// the inverse.
 pub(crate) fn cc_spellings(aleph: &str) -> Vec<String> {
     let mut out: Vec<String> = CC_TOOL_ALIASES
         .iter()
@@ -70,16 +84,17 @@ pub(crate) fn cc_spellings(aleph: &str) -> Vec<String> {
 ///   the call; `false` (pre-grant semantics — a skill's `allowed-tools`)
 ///   returns `None`, because pre-granting all of `bash` for a scoped grant
 ///   widens an approval skip.
-/// * `mcp__<server>__<tool>` and `mcp__plugin_<plugin>_<server>__<tool>` →
-///   `<server>__<tool>`.
+/// * `mcp__<rest>` → `<rest>`, the inverse of [`cc_spellings`]' MCP arm:
+///   `mcp__<server>__<tool>` → `<server>__<tool>` and
+///   `mcp__plugin_<plugin>_<server>__<tool>` → `plugin_<plugin>_<server>__<tool>`.
+///   Nothing is taken apart, so an underscore in a plugin or server name
+///   cannot move the boundary. `mcp__<server>` (every tool of one server)
+///   names no single Aleph tool and is `None`.
+/// * a [`CC_TOOLS_WITHOUT_COUNTERPART`] name is `None`.
 /// * an Aleph name, or `*`, passes through unchanged.
-// Only test-called today. Its production readers are P4.7b (a command's
-// `allowed-tools:`) and P4.8 (an agent's `tools:`) — delete this attribute
-// when either lands.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn normalize_cc_tool_entry(entry: &str, fold_scoped_bash: bool) -> Option<String> {
     let entry = entry.trim();
-    if entry.is_empty() {
+    if entry.is_empty() || CC_TOOLS_WITHOUT_COUNTERPART.contains(&entry) {
         return None;
     }
     if let Some((head, _scope)) = entry.split_once('(') {
@@ -91,11 +106,7 @@ pub(crate) fn normalize_cc_tool_entry(entry: &str, fold_scoped_bash: bool) -> Op
     }
     if let Some(rest) = entry.strip_prefix("mcp__") {
         let (server, tool) = rest.rsplit_once("__")?;
-        let server = server
-            .strip_prefix("plugin_")
-            .and_then(|s| s.split_once('_').map(|(_, srv)| srv))
-            .unwrap_or(server);
-        return Some(format!("{server}__{tool}"));
+        return (!server.is_empty() && !tool.is_empty()).then(|| rest.to_string());
     }
     Some(aleph_name(entry).map_or_else(|| entry.to_string(), str::to_string))
 }
@@ -177,8 +188,62 @@ mod tests {
         );
         assert_eq!(
             normalize_cc_tool_entry("mcp__plugin_x_srv__tool", true).as_deref(),
-            Some("srv__tool")
+            Some("plugin_x_srv__tool"),
+            "a plugin server's Aleph key keeps its `plugin_<p>_` part"
+        );
+        assert_eq!(
+            normalize_cc_tool_entry("mcp__github", true),
+            None,
+            "a server-wide grant names no single Aleph tool"
         );
         assert_eq!(normalize_cc_tool_entry("*", true).as_deref(), Some("*"));
+    }
+
+    #[test]
+    fn a_cc_tool_with_no_counterpart_is_dropped_never_forwarded() {
+        // Forwarded, `TodoWrite` would reach `register_skills` as an unknown
+        // name and cost the command its slash entry.
+        for cc in CC_TOOLS_WITHOUT_COUNTERPART {
+            assert_eq!(aleph_name(cc), None, "{cc} is in both tables");
+            assert_eq!(normalize_cc_tool_entry(cc, true), None, "{cc}");
+            assert_eq!(normalize_cc_tool_entry(cc, false), None, "{cc}");
+        }
+    }
+
+    /// The CC side is what Claude Code writes; the Aleph side comes from the
+    /// naming owner (`McpHandler::qualified_name` over
+    /// `mcp_config::plugin_server_id`), never a literal. A dash in the plugin
+    /// id and an underscore in the server name are the shapes a split of the
+    /// CC name into plugin / server parts would get wrong.
+    #[test]
+    fn mcp_names_round_trip_through_alephs_own_naming() {
+        let aleph = |server_id: String| {
+            crate::tools::handlers::mcp::McpHandler::new(
+                crate::sync_primitives::Arc::new(crate::mcp::McpClient::new()),
+                server_id,
+                "do_thing".into(),
+                String::new(),
+                serde_json::json!({"type": "object"}),
+            )
+            .qualified_name()
+        };
+        for (cc, server_id) in [
+            (
+                "mcp__plugin_my-plug_my_srv__do_thing",
+                crate::extension::mcp_config::plugin_server_id("my-plug", "my_srv"),
+            ),
+            ("mcp__github__do_thing", "github".to_string()),
+        ] {
+            let name = aleph(server_id);
+            assert_eq!(
+                normalize_cc_tool_entry(cc, true).as_deref(),
+                Some(name.as_str()),
+                "{cc}"
+            );
+            assert!(
+                cc_spellings(&name).iter().any(|s| s == cc),
+                "{name} must be spelled {cc} for a CC matcher"
+            );
+        }
     }
 }
