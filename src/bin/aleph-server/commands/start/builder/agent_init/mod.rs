@@ -246,9 +246,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // and travels no further.
     let (team_store, background_team_stores) = match init_team_store(daemon).await {
         Some(handles) => {
-            let background = coord_store.clone().map(|tasks| {
-                alephcore::teams::TeamTaskStores::new(handles.unscoped, tasks)
-            });
+            let background = coord_store
+                .clone()
+                .map(|tasks| alephcore::teams::TeamTaskStores::new(handles.unscoped, tasks));
             (Some(handles.scoped), background)
         }
         None => (None, None),

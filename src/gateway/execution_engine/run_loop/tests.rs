@@ -521,7 +521,8 @@ fn seam_used_does_not_count_a_use_import() {
 
 #[test]
 fn seam_used_does_not_count_the_seams_own_definition() {
-    let definition = "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
+    let definition =
+        "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
                       pub(crate) fn build_sub_metadata(parent: Option<&str>) -> Meta {\n}\n";
     assert!(
         !seam_used(definition, "build_sub_metadata("),
@@ -655,8 +656,8 @@ fn constructs_run_request(production: &str) -> bool {
 /// cut, or the census would register test fixtures as producers.
 #[test]
 fn the_producer_scan_sees_past_an_external_test_module_declaration() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/zz_census_fixture/probe.rs");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/zz_census_fixture/probe.rs");
     let external = "use crate::x;\n\n#[cfg(test)]\nmod tests;\n\n\
                     pub fn produce() {\n    let _ = RunRequest {\n        run_id: String::new(),\n    };\n}\n";
     assert!(

@@ -2363,9 +2363,7 @@ impl ResumeCoordinator {
             .session_store
             .get_metadata(session_id)
             .await
-            .map_err(|e| {
-                ResumeRefusal::AuthorityUnknown(format!("session row unreadable: {e}"))
-            })?;
+            .map_err(|e| ResumeRefusal::AuthorityUnknown(format!("session row unreadable: {e}")))?;
         let mut metadata = resume_metadata(workspace_override.as_deref(), row.as_ref());
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
@@ -3410,9 +3408,15 @@ mod tests {
         );
         assert_eq!(report.abandoned, 1, "a settled run is closed, not pending");
         let [(_, ResumeRefusal::AuthorityRefused(detail))] = report.refused.as_slice() else {
-            panic!("one AuthorityRefused entry expected, got {:?}", report.refused);
+            panic!(
+                "one AuthorityRefused entry expected, got {:?}",
+                report.refused
+            );
         };
-        assert!(detail.contains("principal deactivated — session owner `u-bob`"), "{detail}");
+        assert!(
+            detail.contains("principal deactivated — session owner `u-bob`"),
+            "{detail}"
+        );
         assert!(detail.contains("send the message again"), "{detail}");
     }
 
@@ -3428,7 +3432,10 @@ mod tests {
             &mut report,
         );
         for private in ["u-bob", "deactivated", "gone", "principal"] {
-            assert!(!notice.contains(private), "the public notice leaks {private:?}: {notice}");
+            assert!(
+                !notice.contains(private),
+                "the public notice leaks {private:?}: {notice}"
+            );
         }
         let rendered = Abandoned::InterruptedRun.notice(&notice);
         assert!(!rendered.contains("u-bob"), "{rendered}");

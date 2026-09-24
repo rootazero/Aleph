@@ -736,7 +736,10 @@ mod tests {
             text.contains("1 goal(s), 2 loop(s), 3 cron(s), 4 heartbeat task(s)"),
             "every background leg must be named: {text}"
         );
-        assert!(text.contains("4 heartbeat task(s), 5 team task(s)"), "{text}");
+        assert!(
+            text.contains("4 heartbeat task(s), 5 team task(s)"),
+            "{text}"
+        );
     }
 
     /// The preview's cost statement must name every family the receipt
@@ -900,20 +903,29 @@ mod tests {
             "only the measured legs may be named: {lines:?}"
         );
         assert!(
-            lines.iter().any(|l| l.starts_with("Team tasks were NOT checked:")
-                && l.contains("can still be dispatched")
-                && l.contains("or a scan failed")),
+            lines
+                .iter()
+                .any(|l| l.starts_with("Team tasks were NOT checked:")
+                    && l.contains("can still be dispatched")
+                    && l.contains("or a scan failed")),
             "an unmeasured leg names both causes, not one as fact: {lines:?}"
         );
         assert!(
-            !lines.iter().any(|l| l.contains("did not open on that server")),
+            !lines
+                .iter()
+                .any(|l| l.contains("did not open on that server")),
             "`None` also covers a scan failure; it must not assert a store failed: {lines:?}"
         );
         assert!(
-            !lines.iter().any(|l| l.starts_with("Team tasks already running")),
+            !lines
+                .iter()
+                .any(|l| l.starts_with("Team tasks already running")),
             "the in-flight note belongs to a measured leg only: {lines:?}"
         );
-        assert!(!lines.iter().any(|l| l.contains("team task(s)")), "{lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("team task(s)")),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -929,7 +941,9 @@ mod tests {
             },
         ));
         assert!(
-            lines.iter().any(|l| l.contains("Team tasks were NOT counted")),
+            lines
+                .iter()
+                .any(|l| l.contains("Team tasks were NOT counted")),
             "{lines:?}"
         );
         assert!(

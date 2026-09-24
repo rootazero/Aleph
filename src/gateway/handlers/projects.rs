@@ -1321,7 +1321,11 @@ mod tests {
             let seen = ids(CALLER_USER
                 .scope(
                     Some(member.to_string()),
-                    handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
+                    handle_list(
+                        rpc("projects.list", json!({})),
+                        store.clone(),
+                        users.clone(),
+                    ),
                 )
                 .await);
             assert_eq!(seen, vec![project.id.clone()], "{member} is on the roster");
@@ -1330,7 +1334,11 @@ mod tests {
         let stranger = ids(CALLER_USER
             .scope(
                 Some("u-mallory".to_string()),
-                handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
+                handle_list(
+                    rpc("projects.list", json!({})),
+                    store.clone(),
+                    users.clone(),
+                ),
             )
             .await);
         assert!(
@@ -1546,8 +1554,9 @@ mod tests {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (log, mut rx_audit) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx_audit) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
 
         let (store, users, project, _guard) = room();
@@ -1736,7 +1745,12 @@ mod tests {
         };
         assert_eq!(listed(json!({}), store.clone(), users.clone()).await, 0);
         assert_eq!(
-            listed(json!({ "include_archived": true }), store.clone(), users.clone()).await,
+            listed(
+                json!({ "include_archived": true }),
+                store.clone(),
+                users.clone()
+            )
+            .await,
             1
         );
         assert_eq!(store.members(&project.id).unwrap().len(), 2);
@@ -2497,7 +2511,11 @@ mod tests {
             let raw = resp.result.expect("a roster member reads the room");
             let parsed: aleph_protocol::projects::ProjectResult =
                 serde_json::from_value(raw.clone()).expect("the response is a ProjectResult");
-            assert_eq!(serde_json::to_value(&parsed).unwrap(), raw, "{who}: same key set");
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap(),
+                raw,
+                "{who}: same key set"
+            );
             assert_eq!(parsed.project.manageable, expected, "{who}");
         }
     }
@@ -2516,7 +2534,11 @@ mod tests {
             let listed = CALLER_USER
                 .scope(
                     Some(who.to_string()),
-                    handle_list(rpc("projects.list", json!({})), store.clone(), users.clone()),
+                    handle_list(
+                        rpc("projects.list", json!({})),
+                        store.clone(),
+                        users.clone(),
+                    ),
                 )
                 .await;
             let parsed: aleph_protocol::projects::ProjectListResult =

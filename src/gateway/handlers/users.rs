@@ -2323,8 +2323,9 @@ mod tests {
 
         // Install the audit handle only for the SECOND write, so anything it
         // receives came from the retry.
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
@@ -2365,8 +2366,9 @@ mod tests {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
 
         let store = seeded_store();

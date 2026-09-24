@@ -314,7 +314,10 @@ mod tests {
             "u-bob".to_string(),
         );
         let authority = resolve_with(Some(&store), &subject_for_session_row(Some(&row), &meta));
-        assert!(matches!(apply(authority, &mut meta), FireVerdict::Refused(_)));
+        assert!(matches!(
+            apply(authority, &mut meta),
+            FireVerdict::Refused(_)
+        ));
     }
 
     /// Ruling (b): the grant the executors' shared seam stamps is the one the
@@ -380,11 +383,8 @@ mod tests {
             crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
             "u-ghost".to_string(),
         );
-        let verdict = authorize_session_run(
-            |s| resolve_with(Some(&store), &s),
-            Some(&ghosts),
-            &mut meta,
-        );
+        let verdict =
+            authorize_session_run(|s| resolve_with(Some(&store), &s), Some(&ghosts), &mut meta);
         assert_eq!(
             verdict,
             FireVerdict::Refused("principal gone — author `u-ghost`".into())

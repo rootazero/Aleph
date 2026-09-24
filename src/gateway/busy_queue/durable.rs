@@ -722,7 +722,9 @@ mod tests {
 
         // The creator is gone from the org; the member who spoke is active.
         let users = SecurityStore::in_memory().unwrap();
-        users.create_user("u-alice", "Alice", UserRole::Admin).unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
         users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
         users
             .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
@@ -745,7 +747,9 @@ mod tests {
 
         // The member who spoke is deactivated; the creator is active.
         let users = SecurityStore::in_memory().unwrap();
-        users.create_user("u-alice", "Alice", UserRole::Admin).unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
         users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
         users
             .update_user("u-bob", None, None, Some(UserStatus::Deactivated))

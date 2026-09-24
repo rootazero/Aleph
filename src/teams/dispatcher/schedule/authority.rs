@@ -860,8 +860,8 @@ mod tests {
             "schedule/mod.rs must authorize a claim at exactly one site — a second \
              `authorize_claim(` call can pass any resolver it likes"
         );
-        let schedule_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/teams/dispatcher/schedule");
+        let schedule_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/teams/dispatcher/schedule");
         assert_eq!(
             crate::utils::source_scan::files_whose_production_code_reads(
                 &schedule_dir,

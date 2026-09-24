@@ -525,9 +525,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // sees. Unconditional: `initialize_vault` always yields a store (on
     // disk, else in memory), so this slot has no decline arm. Missing it is
     // `FailsOpen` — every fire would resolve `Legacy`.
-    alephcore::gateway::security::store::install_users_store(
-        auth_bundle.security_store.clone(),
-    );
+    alephcore::gateway::security::store::install_users_store(auth_bundle.security_store.clone());
 
     // Bound the ledger's growth now that a real ledger exists to bound:
     // drop spend rows older than `spend::period::RETENTION_PERIODS` past
@@ -4095,10 +4093,16 @@ mod tests {
     fn boot_installs_or_declines_the_team_background_stores() {
         let src = include_str!("mod.rs").replace('\r', "");
         let production = alephcore::utils::source_scan::production_prefix(&src);
-        assert!(production.len() < src.len(), "the #[cfg(test)] split matched nothing");
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing"
+        );
         let production = alephcore::utils::source_scan::code_text(&production);
         for call in ["install_background_stores(", "decline_background_stores("] {
-            assert!(production.contains(call), "start/mod.rs must call teams::{call}");
+            assert!(
+                production.contains(call),
+                "start/mod.rs must call teams::{call}"
+            );
         }
     }
 

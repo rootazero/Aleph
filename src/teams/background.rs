@@ -105,7 +105,10 @@ impl TeamTaskStores {
             };
             for task in tasks.iter().filter(|t| {
                 crate::teams::dispatcher::is_dispatcher_managed(t)
-                    && matches!(t.status, CoordTaskStatus::Pending | CoordTaskStatus::Blocked)
+                    && matches!(
+                        t.status,
+                        CoordTaskStatus::Pending | CoordTaskStatus::Blocked
+                    )
             }) {
                 let update = CoordTaskUpdate {
                     status: Some(CoordTaskStatus::Paused),
@@ -213,7 +216,8 @@ pub(crate) mod test_support {
 
     /// Fresh in-memory team + coordination-task stores.
     pub(crate) async fn in_memory_stores() -> TeamTaskStores {
-        let teams = crate::teams::SqliteTeamStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        let teams =
+            crate::teams::SqliteTeamStore::new(rusqlite::Connection::open_in_memory().unwrap());
         teams.migrate().await.unwrap();
         let tasks = crate::agents::swarm::tasks::store::SqliteCoordTaskStore::new(
             rusqlite::Connection::open_in_memory().unwrap(),
@@ -329,7 +333,10 @@ mod tests {
         let stores = in_memory_stores().await;
         let alice = seed_team_tasks(&stores, Some("u-alice"), &[false]).await;
 
-        assert_eq!(stores.pause_dispatcher_tasks_owned_by("u-alice").await, Some(0));
+        assert_eq!(
+            stores.pause_dispatcher_tasks_owned_by("u-alice").await,
+            Some(0)
+        );
         assert_eq!(
             task(&stores, &alice[0]).await.status,
             CoordTaskStatus::Pending,
@@ -364,8 +371,7 @@ mod tests {
     /// one are not. Every task here is dispatcher-managed and on her own
     /// team, so only the status filter decides.
     #[tokio::test]
-    async fn deactivation_pauses_blocked_but_leaves_running_review_and_terminal_team_tasks_alone(
-    ) {
+    async fn deactivation_pauses_blocked_but_leaves_running_review_and_terminal_team_tasks_alone() {
         let stores = in_memory_stores().await;
         let team = seed_team(&stores, Some("u-alice")).await;
         let running = seed_task(&stores, &team, true, vec![]).await;
@@ -381,11 +387,26 @@ mod tests {
             "fixture precondition: a pending task behind a running one reads Blocked"
         );
 
-        assert_eq!(stores.pause_dispatcher_tasks_owned_by("u-alice").await, Some(1));
-        assert_eq!(task(&stores, &blocked).await.status, CoordTaskStatus::Paused);
-        assert_eq!(task(&stores, &running).await.status, CoordTaskStatus::InProgress);
-        assert_eq!(task(&stores, &review).await.status, CoordTaskStatus::WaitingReview);
-        assert_eq!(task(&stores, &done).await.status, CoordTaskStatus::Completed);
+        assert_eq!(
+            stores.pause_dispatcher_tasks_owned_by("u-alice").await,
+            Some(1)
+        );
+        assert_eq!(
+            task(&stores, &blocked).await.status,
+            CoordTaskStatus::Paused
+        );
+        assert_eq!(
+            task(&stores, &running).await.status,
+            CoordTaskStatus::InProgress
+        );
+        assert_eq!(
+            task(&stores, &review).await.status,
+            CoordTaskStatus::WaitingReview
+        );
+        assert_eq!(
+            task(&stores, &done).await.status,
+            CoordTaskStatus::Completed
+        );
     }
 
     /// A stale `paused_from` (left by an earlier pause→retry cycle) is nulled
@@ -406,11 +427,17 @@ mod tests {
         )
         .await;
 
-        assert_eq!(stores.pause_dispatcher_tasks_owned_by("u-alice").await, Some(1));
+        assert_eq!(
+            stores.pause_dispatcher_tasks_owned_by("u-alice").await,
+            Some(1)
+        );
         let frozen = task(&stores, &ids[0]).await;
         assert_eq!(frozen.status, CoordTaskStatus::Paused);
         assert!(
-            frozen.metadata.get(PAUSED_FROM_KEY).is_none_or(serde_json::Value::is_null),
+            frozen
+                .metadata
+                .get(PAUSED_FROM_KEY)
+                .is_none_or(serde_json::Value::is_null),
             "{}",
             frozen.metadata
         );
@@ -423,7 +450,10 @@ mod tests {
     async fn the_preview_counts_only_dispatcher_managed_team_tasks() {
         let stores = in_memory_stores().await;
         seed_team_tasks(&stores, Some("u-alice"), &[true, false]).await;
-        assert_eq!(stores.count_dispatcher_tasks_owned_by("u-alice").await, Some(1));
+        assert_eq!(
+            stores.count_dispatcher_tasks_owned_by("u-alice").await,
+            Some(1)
+        );
     }
 
     /// The preview counts what the operator is about to strand — paused and
@@ -435,6 +465,9 @@ mod tests {
         set_task(&stores, &ids[0], CoordTaskStatus::Paused, None).await;
         set_task(&stores, &ids[1], CoordTaskStatus::InProgress, None).await;
         set_task(&stores, &ids[2], CoordTaskStatus::Completed, None).await;
-        assert_eq!(stores.count_dispatcher_tasks_owned_by("u-alice").await, Some(2));
+        assert_eq!(
+            stores.count_dispatcher_tasks_owned_by("u-alice").await,
+            Some(2)
+        );
     }
 }
