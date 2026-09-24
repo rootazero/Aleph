@@ -459,20 +459,11 @@ impl ExecTier {
     }
 }
 
-/// Each tier's Claude Code `permission_mode` spelling — the value a command
-/// hook reads from its stdin JSON. One row per tier; the method below is
-/// derived from this table and the test pins the two together.
-pub const CC_PERMISSION_MODES: [(ExecTier, &str); 4] = [
-    (ExecTier::Plan, "plan"),
-    (ExecTier::Ask, "default"),
-    (ExecTier::Auto, "auto"),
-    (ExecTier::Full, "bypassPermissions"),
-];
-
 impl ExecTier {
-    /// The Claude Code `permission_mode` this tier is reported as to hooks
-    /// (see [`CC_PERMISSION_MODES`]). `acceptEdits` and `dontAsk` have no
-    /// Aleph tier and are never emitted.
+    /// The Claude Code `permission_mode` this tier is reported as to hooks —
+    /// the value a command hook reads from its stdin JSON. The `match` is the
+    /// only spelling; its exhaustiveness is the one-row-per-tier guard.
+    /// `acceptEdits` and `dontAsk` have no Aleph tier and are never emitted.
     #[must_use]
     pub const fn cc_permission_mode(self) -> &'static str {
         match self {
@@ -977,25 +968,25 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn every_tier_has_one_claude_code_permission_mode_and_the_table_agrees() {
-        // The table is what the docs quote; the method is what the payload
-        // emits. Derive one from the other so they cannot drift.
-        for (tier, mode) in CC_PERMISSION_MODES {
-            assert_eq!(tier.cc_permission_mode(), mode);
-        }
-        let all = [
-            ExecTier::Plan,
-            ExecTier::Ask,
-            ExecTier::Auto,
-            ExecTier::Full,
-        ];
-        assert_eq!(CC_PERMISSION_MODES.len(), all.len(), "one row per tier");
-        let mut modes: Vec<&str> = all.iter().map(|t| t.cc_permission_mode()).collect();
+    fn every_session_tier_has_its_own_claude_code_permission_mode() {
+        // The tier set is the census the user surfaces read (`session_tiers`,
+        // pinned against the enum by `session_tiers_are_the_install_tiers_plus_plan`),
+        // not a hand list here: a fifth tier joins this loop by being offered.
+        let tiers: Vec<ExecTier> = session_tiers()
+            .iter()
+            .filter_map(|p| ExecTier::from_id(p.id))
+            .collect();
+        assert_eq!(
+            tiers.len(),
+            session_tiers().len(),
+            "every offered id parses"
+        );
+        let mut modes: Vec<&str> = tiers.iter().map(|t| t.cc_permission_mode()).collect();
         modes.sort_unstable();
         modes.dedup();
         assert_eq!(
             modes.len(),
-            all.len(),
+            tiers.len(),
             "two tiers must not spell the same mode"
         );
         // The live enum (scan-cc-plugin-format §8): every emitted value is one of these.

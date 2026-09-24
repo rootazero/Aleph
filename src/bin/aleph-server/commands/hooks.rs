@@ -192,7 +192,7 @@ fn synthetic_payload(event: &str) -> String {
     let ctx = HookContext::new("hooks-cli-test")
         .with_tool_name("ExampleTool")
         .with_tool_input(r#"{"example":true}"#)
-        .with_permission_mode(alephcore::ExecTier::default().cc_permission_mode())
+        .with_permission_mode(alephcore::orchestrator::ExecTier::default().cc_permission_mode())
         .with_env("ALEPH_HOOKS_TEST", "1".to_string());
     // (no transcript for a synthetic session — the key is omitted, which is the truth.)
     event_payload_json(parsed, &ctx)
