@@ -231,6 +231,28 @@ const fn fold_sep(b: u8) -> u8 {
     }
 }
 
+/// Return the set of vendor slugs the model-name prefix table actually
+/// advertises. Used by `drift_tests::alias_double_path_covers_same_vendor_set`
+/// to assert that every vendor reachable via `infer_vendor` is also reachable
+/// via `canonical_provider_id` — without this helper, the two paths would
+/// have to be introspected by hand and the test would silently lose coverage
+/// the day a new `(prefix, vendor)` row was added.
+///
+/// Order is declaration order, deduplicated. The caller treats the result as
+/// a set.
+#[cfg(test)]
+#[must_use]
+pub(super) fn declared_model_vendors() -> Vec<&'static str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (_, vendor) in MODEL_VENDOR_PREFIXES {
+        if seen.insert(*vendor) {
+            out.push(*vendor);
+        }
+    }
+    out
+}
+
 /// Infer the canonical vendor slug for a *bare model name*.
 ///
 /// Returns `None` when no prefix matches — callers should treat that as

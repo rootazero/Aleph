@@ -380,3 +380,157 @@ fn exemptions_still_name_something_real() {
         );
     }
 }
+
+/// Sync guard between the two alias paths. The model-name path
+/// ([`super::alias::infer_vendor`]) is driven by [`super::alias::MODEL_VENDOR_PREFIXES`];
+/// the provider-alias path ([`super::alias::canonical_provider_id`]) is driven
+/// by an if/else chain. They previously drifted (the table had `llama → meta`
+/// while the if/else chain did not; both lacked `minimax` / `cohere` /
+/// `perplexity` / `stepfun` until they were filled in together). Asserting
+/// "every vendor the model-name table names is also reachable by feeding a
+/// representative provider alias into `canonical_provider_id`" catches a new
+/// drift at build time — the alternative is re-reading both paths by hand
+/// every round, which is what allowed the first drift.
+#[test]
+fn alias_double_path_covers_same_vendor_set() {
+    use super::alias::{canonical_provider_id, declared_model_vendors};
+
+    let prefix_vendors: std::collections::HashSet<&'static str> =
+        declared_model_vendors().into_iter().collect();
+
+    // Representative provider aliases that `canonical_provider_id` must
+    // resolve. Each one is the bare preset/vendor name so the if/else chain
+    // is exercised, not the substring-alias path.
+    let provider_aliases = [
+        "claude", "openai", "gemini", "xai", "mistral", "moonshot", "qwen", "zai", "minimax",
+        "doubao", "cohere", "perplexity", "stepfun", "baidu", "xiaomi", "meituan", "meta",
+        "deepseek",
+    ];
+    let mut canonical_vendors = std::collections::HashSet::new();
+    let mut unrecognised = Vec::new();
+    for alias in provider_aliases {
+        match canonical_provider_id(alias) {
+            Some(vendor) => {
+                canonical_vendors.insert(vendor);
+            }
+            None => unrecognised.push(alias),
+        }
+    }
+    assert!(
+        unrecognised.is_empty(),
+        "canonical_provider_id returned None for a known vendor alias \
+         (the if/else chain lost a branch): {unrecognised:?}"
+    );
+
+    let missing: Vec<&str> = prefix_vendors
+        .difference(&canonical_vendors)
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "MODEL_VENDOR_PREFIXES names vendors not reachable via canonical_provider_id: \
+         {missing:?}. Add the missing alias branch (or add the vendor slug to the \
+         representative list above if it really has no provider alias)."
+    );
+}
+
+/// Defensive guard on the capability lookup path. The picker and
+/// `resolve_context_window` feed user-supplied ids here, including the empty
+/// string (a misconfigured `default_model`) and untrusted input from
+/// `/models` endpoints. None of these should panic; all should return `None`
+/// so the conservative 128K fallback kicks in.
+#[test]
+fn capabilities_for_handles_empty_input() {
+    assert!(capabilities_for("").is_none(), "empty string must be unknown");
+    assert!(
+        capabilities_for("   ").is_none(),
+        "whitespace-only must be unknown"
+    );
+    assert!(
+        capabilities_for("\0\0\0").is_none(),
+        "control chars must be unknown"
+    );
+    // 1M chars: enough to assert "does not OOM / does not panic on absurd input".
+    // The lookup is O(rows * max_prefix_len), not O(id_len) — so even a 1MB id
+    // finishes in milliseconds. What this guards against is a future change
+    // that allocates proportional to id length and then blows the heap on
+    // misconfigured input.
+    let huge = "x".repeat(1_000_000);
+    assert!(
+        capabilities_for(&huge).is_none(),
+        "absurdly long ids must be unknown, not OOM"
+    );
+}
+
+/// Coverage extension of `record::aggregator_gets_vendor_inferred_cost_not_unknown`.
+/// That test pins the OpenRouter / Anthropic pair; the same shape recurs for
+/// every aggregator the pricing layer can fall back from — Bedrock labels its
+/// Claude hosts at Anthropic's price sheet, and Groq serves open-weight Llama
+/// with no rate row at all (Unknown would be a failure; nothing or Direct is
+/// acceptable).
+#[test]
+fn lookup_rates_vendor_inferred_resolves_aggregator_id() {
+    use crate::pricing::RateBasis;
+    use crate::providers::model_catalog::{ModelRecord, ModelSource};
+
+    // OpenRouter hosts Anthropic models. The pricing fallback keys on the
+    // model-id tag (`anthropic/`) and reports Anthropic's rates under
+    // `RateBasis::VendorInferred` so the margin stays visible.
+    let openrouter = ModelRecord::resolve(
+        "openrouter",
+        "anthropic/claude-sonnet-5",
+        Some("https://openrouter.ai/api/v1"),
+        ModelSource::Configured,
+    );
+    let cost = openrouter
+        .cost
+        .expect("openrouter-hosted Claude must be priceable");
+    assert_eq!(
+        cost.basis,
+        RateBasis::VendorInferred,
+        "openrouter claude should price at Anthropic rates"
+    );
+    assert!(
+        cost.input_per_mtok.is_some(),
+        "vendor-inferred rate must carry a number, not just a basis"
+    );
+
+    // Bedrock serves Anthropic models with Anthropic's published price sheet.
+    // The Bedrock margin is exactly why `RateBasis::VendorInferred` exists —
+    // without the fallback, every Bedrock-Claude call reports `CostStatus::Unknown`
+    // and `cost_aware` routes them as if they were free.
+    let bedrock = ModelRecord::resolve(
+        "amazon-bedrock",
+        "anthropic.claude-sonnet-5",
+        Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ModelSource::Configured,
+    );
+    let cost = bedrock
+        .cost
+        .expect("Bedrock-hosted Claude must be priceable");
+    assert_eq!(
+        cost.basis,
+        RateBasis::VendorInferred,
+        "bedrock anthropic.claude should price at Anthropic rates"
+    );
+
+    // Groq serves open-weight Llama without publishing its own rates. The
+    // `infer_vendor` table resolves `llama` to `meta`, but Meta's price sheet
+    // is not Groq's quote — so the fallback chain must stop without naming a
+    // basis. Accept `None` (no row) or `Direct` (Groq-published rate); reject
+    // `VendorInferred`, which would imply pricing did fall through to Meta's
+    // sheet and we are silently mis-quoting Groq as Meta.
+    let groq = ModelRecord::resolve(
+        "groq",
+        "llama-3.3-70b-versatile",
+        Some("https://api.groq.com/openai/v1"),
+        ModelSource::Configured,
+    );
+    match groq.cost.as_ref().map(|c| c.basis) {
+        None | Some(RateBasis::Direct) => {}
+        Some(other) => panic!(
+            "groq llama resolved to an unexpected basis {other:?}; expected None or Direct \
+             — VendorInferred would mean the fallback quoted Meta's price for a Groq run"
+        ),
+    }
+}
