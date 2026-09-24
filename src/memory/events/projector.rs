@@ -23,7 +23,7 @@ use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 /// makes it trivially testable and deterministic. Callers that need to
 /// load events from the store should read them via
 /// [`crate::resilience::database::StateDatabase::get_memory_events_for_fact`]
-/// (or `get_memory_events_until` for time-travel) and pass the slice in.
+/// and pass the slice in.
 #[allow(clippy::too_many_lines)]
 // rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn fold_events_to_note(
@@ -86,12 +86,11 @@ pub fn fold_events_to_note(
             }
 
             MemoryEvent::NoteMigrated { snapshot, .. } => {
-                let migrated: MemoryFact = serde_json::from_value(snapshot.clone()).map_err(
-                    |e| AlephError::Other {
+                let migrated: MemoryFact =
+                    serde_json::from_value(snapshot.clone()).map_err(|e| AlephError::Other {
                         message: format!("Failed to deserialize NoteMigrated snapshot: {e}"),
                         suggestion: None,
-                    },
-                )?;
+                    })?;
                 access_count = migrated.access_count;
                 fact = Some(migrated);
             }
@@ -206,6 +205,7 @@ mod tests {
             actor: EventActor::Agent,
             timestamp: ts,
             correlation_id: None,
+            partition: None,
         }
     }
 
@@ -218,6 +218,7 @@ mod tests {
             actor: EventActor::System,
             timestamp: ts,
             correlation_id: None,
+            partition: None,
         }
     }
 
@@ -236,6 +237,7 @@ mod tests {
             actor,
             timestamp: ts,
             correlation_id: None,
+            partition: None,
         }
     }
 

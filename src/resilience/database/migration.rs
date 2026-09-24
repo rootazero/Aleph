@@ -744,6 +744,83 @@ pub fn migrate_add_agent_tasks_interrupted_by_restart(conn: &Connection) -> Resu
     Ok(())
 }
 
+/// Migrate to add `partition` to `memory_events` (r11 D7).
+///
+/// `fact_id` alone never said WHOSE fact a row describes: a note-path-keyed
+/// stream (`note_manage`'s `category/filename`) is shared by every partition
+/// that has a note at that path, and `memory_timeline` returned whatever the
+/// id matched — knowing a fact id was enough to read another principal's
+/// history. The column records the partition the fact lives under; per-caller
+/// readers filter on it.
+///
+/// Existing rows keep `NULL` here; `backfill_memory_events_partition`
+/// attributes what it can.
+///
+/// The `(partition, fact_id)` index is created HERE and not in `schema_sql`:
+/// `schema_sql` runs before migrations, and on a pre-column database an index
+/// naming `partition` would fail the whole boot.
+///
+/// # Safety
+/// - Uses savepoint for atomic migration
+/// - Idempotent: skips the column when present; the index is `IF NOT EXISTS`
+pub fn migrate_add_memory_events_partition(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_memory_events_partition")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin memory_events_partition migration: {e}"
+            ))
+        })?;
+    let rollback = |conn: &Connection| {
+        if let Err(rollback_err) =
+            conn.execute_batch("ROLLBACK TO migration_memory_events_partition")
+        {
+            tracing::warn!(error = %rollback_err, "Rollback of migration_memory_events_partition failed");
+        }
+    };
+
+    let column_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memory_events') WHERE name='partition'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            rollback(conn);
+            AlephError::config(format!(
+                "Failed to check memory_events.partition column: {e}"
+            ))
+        })?;
+
+    if column_exists == 0 {
+        conn.execute_batch("ALTER TABLE memory_events ADD COLUMN partition TEXT")
+            .map_err(|e| {
+                rollback(conn);
+                AlephError::config(format!(
+                    "Failed to add partition column to memory_events: {e}"
+                ))
+            })?;
+        tracing::info!("Added partition column to memory_events");
+    } else {
+        tracing::debug!("memory_events.partition already exists, skipping");
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_me_partition_fact ON memory_events(partition, fact_id)",
+    )
+    .map_err(|e| {
+        rollback(conn);
+        AlephError::config(format!("Failed to create idx_me_partition_fact: {e}"))
+    })?;
+
+    conn.execute_batch("RELEASE migration_memory_events_partition")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit memory_events_partition migration: {e}"
+            ))
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,5 +906,73 @@ mod tests {
         );
 
         migrate_task_traces_to_agent_trace(&conn).unwrap();
+    }
+
+    /// The pre-D7 `memory_events` shape, byte-for-byte what `schema_sql`
+    /// created before the `partition` column existed.
+    fn legacy_memory_events(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE memory_events (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_id        TEXT NOT NULL,
+                seq            INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                event_json     TEXT NOT NULL,
+                actor          TEXT NOT NULL,
+                tier           TEXT NOT NULL,
+                timestamp      INTEGER NOT NULL,
+                correlation_id TEXT,
+                UNIQUE(fact_id, seq)
+            );
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn memory_events_partition_migration_adds_the_column_and_index_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        legacy_memory_events(&conn);
+        conn.execute(
+            "INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp) \
+             VALUES ('f', 1, 'NoteCreated', '{}', 'agent', 'skeleton', 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_add_memory_events_partition(&conn).unwrap();
+        migrate_add_memory_events_partition(&conn).expect("a second run is a no-op");
+
+        let has_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memory_events') WHERE name = 'partition'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_column, 1);
+        let index_columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_index_info('idx_me_partition_fact') ORDER BY seqno")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            index_columns,
+            vec!["partition".to_string(), "fact_id".to_string()]
+        );
+        let legacy: Option<String> = conn
+            .query_row(
+                "SELECT partition FROM memory_events WHERE fact_id = 'f'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            legacy, None,
+            "the column migration attributes nothing — that is the backfill's job (T13b)"
+        );
     }
 }

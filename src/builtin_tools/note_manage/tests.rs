@@ -1171,11 +1171,40 @@ async fn refusal_text_does_not_vary_with_whether_the_vault_exists() {
     .await
     .expect_err("a never-created composed vault must be refused identically");
 
-    let normalize =
-        |s: String| s.replace("main__u-alice", "<id>").replace("main__u-carol", "<id>");
+    let normalize = |s: String| {
+        s.replace("main__u-alice", "<id>")
+            .replace("main__u-carol", "<id>")
+    };
     assert_eq!(
         normalize(existing.to_string()),
         normalize(missing.to_string()),
         "the refusal text must not leak whether the named vault exists on disk"
     );
+}
+
+/// D7: the lifecycle event a note write records is filed under the partition
+/// the note itself was written to — the one `resolve_agent_id` chose — so a
+/// personal session's history is its own.
+#[tokio::test]
+async fn lifecycle_events_are_filed_under_the_notes_own_partition() {
+    let (_dir, tool) = mk_tool();
+    let state_db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
+    let tool = tool.with_command_handler(Arc::new(
+        crate::memory::events::handler::MemoryCommandHandler::new(Arc::clone(&state_db)),
+    ));
+    let alice = crate::scope::ScopeAttribution::personal("u-alice");
+    let result = crate::scope::with_scope(Some(alice), async {
+        tool.call(create_args("rust-pref", "- Alice prefers Rust"))
+            .await
+    })
+    .await
+    .expect("create succeeds");
+    let note_path = result.note_path.expect("create reports its note path");
+
+    let events = state_db
+        .get_memory_events_for_fact(&note_path)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].partition.as_deref(), Some("main__u-alice"));
 }

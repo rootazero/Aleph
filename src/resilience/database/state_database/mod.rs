@@ -138,6 +138,7 @@ impl StateDatabase {
         migration::migrate_add_group_chat_owner(conn)?;
         migration::migrate_add_agent_tasks_adjudicated_at(conn)?;
         migration::migrate_add_agent_tasks_interrupted_by_restart(conn)?;
+        migration::migrate_add_memory_events_partition(conn)?;
         Ok(())
     }
 
@@ -194,15 +195,11 @@ impl StateDatabase {
             AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
         })?;
 
-        // Run migrations (same as new()) so in-memory DBs have full schema
-        migration::migrate_task_traces_to_agent_trace(&conn)?;
-        migration::migrate_task_traces_unique_step_index(&conn)?;
-        migration::migrate_add_channel_offsets(&conn)?;
-        migration::migrate_add_paired_users(&conn)?;
-        migration::migrate_add_sticker_descriptions(&conn)?;
-        migration::migrate_add_group_chat_owner(&conn)?;
-        migration::migrate_add_agent_tasks_adjudicated_at(&conn)?;
-        migration::migrate_add_agent_tasks_interrupted_by_restart(&conn)?;
+        // The SAME list `new()` / `new_with_dim()` run — not a copy of it. A
+        // hand-copied list here is a test database that silently disagrees
+        // with production the first time someone adds a migration to one of
+        // the two (判据 §1).
+        Self::run_optional_migrations(&conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

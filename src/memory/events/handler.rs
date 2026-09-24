@@ -54,6 +54,26 @@ impl MemoryCommandHandler {
         self
     }
 
+    /// The ONE production append site (pinned by
+    /// `the_handler_funnel_is_the_only_memory_event_writer`).
+    ///
+    /// `partition` is the FACT's own partition — the directory the fact lives
+    /// under (`memory_dir/<partition>/…`) — never the ambient session's
+    /// `session_write_id`: a dream / sweep / reconciler-driven write can run
+    /// with no session at all, and an event stamped with the caller's
+    /// partition instead of the fact's files one user's history under another
+    /// user's name. `None` only when the fact's partition is genuinely unknown;
+    /// such a row is invisible to every scoped reader.
+    async fn append(
+        &self,
+        envelope: MemoryEventEnvelope,
+        partition: Option<String>,
+    ) -> Result<i64, AlephError> {
+        self.db
+            .append_memory_event(&envelope.in_partition(partition))
+            .await
+    }
+
     /// Project a fact event into the notes layer (primary write path).
     ///
     /// Called after appending an event to the event log. When the projected
@@ -222,6 +242,9 @@ impl MemoryCommandHandler {
         let fact_id = Uuid::new_v4().to_string();
         let seq = self.db.get_memory_event_latest_seq(&fact_id).await? + 1;
 
+        // The fact lives where `project_to_notes` writes it:
+        // `indexer.write_note(&fact.agent, …)`, i.e. `cmd.agent`.
+        let partition = Some(cmd.agent.clone());
         let event = MemoryEvent::NoteCreated {
             // rust-doctor-disable-next-line excessive-clone
             note_path: fact_id.clone(),
@@ -238,7 +261,7 @@ impl MemoryCommandHandler {
             // rust-doctor-disable-next-line excessive-clone
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -259,17 +282,14 @@ impl MemoryCommandHandler {
 
     /// Update the content of an existing fact.
     pub async fn update_content(&self, cmd: UpdateContentCommand) -> Result<(), AlephError> {
+        let partition = self.db.memory_fact_partition(&cmd.note_path).await?;
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Rebuild from events to get the current content.
-        let events = self
-            .db
-            .get_memory_events_for_fact(&cmd.note_path)
-            .await?;
-        let current_fact = super::projector::fold_events_to_note(&events)?
-            .ok_or_else(|| {
-                AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
-            })?;
+        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
+        let current_fact = super::projector::fold_events_to_note(&events)?.ok_or_else(|| {
+            AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
+        })?;
 
         let event = MemoryEvent::NoteContentUpdated {
             // rust-doctor-disable-next-line excessive-clone
@@ -284,7 +304,7 @@ impl MemoryCommandHandler {
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -305,6 +325,7 @@ impl MemoryCommandHandler {
 
     /// Invalidate (soft-delete) a fact.
     pub async fn invalidate_fact(&self, cmd: InvalidateNoteCommand) -> Result<(), AlephError> {
+        let partition = self.db.memory_fact_partition(&cmd.note_path).await?;
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteInvalidated {
@@ -320,7 +341,7 @@ impl MemoryCommandHandler {
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -341,6 +362,7 @@ impl MemoryCommandHandler {
 
     /// Restore a previously invalidated fact.
     pub async fn restore_fact(&self, cmd: RestoreNoteCommand) -> Result<(), AlephError> {
+        let partition = self.db.memory_fact_partition(&cmd.note_path).await?;
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteRestored {
@@ -353,7 +375,7 @@ impl MemoryCommandHandler {
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -374,13 +396,11 @@ impl MemoryCommandHandler {
 
     /// Record a fact access (Pulse event).
     pub async fn record_access(&self, cmd: RecordNoteAccessCommand) -> Result<(), AlephError> {
+        let partition = self.db.memory_fact_partition(&cmd.note_path).await?;
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Get current access count from event history
-        let events = self
-            .db
-            .get_memory_events_for_fact(&cmd.note_path)
-            .await?;
+        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
         let current_fact = super::projector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
@@ -403,7 +423,7 @@ impl MemoryCommandHandler {
             cmd.correlation_id,
         );
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -427,6 +447,23 @@ impl MemoryCommandHandler {
         let fact_id = Uuid::new_v4().to_string();
         let seq = 1u64; // New fact, starts at seq 1
 
+        // A merged fact inherits its sources' partition — when they agree.
+        // Sources in two partitions have no single owner to inherit; filing the
+        // merge under either would hand the other's content to it, so it is
+        // filed under none (invisible to every scoped reader).
+        let mut source_partitions = std::collections::BTreeSet::new();
+        for source in &cmd.source_note_paths {
+            source_partitions.insert(self.db.memory_fact_partition(source).await?);
+        }
+        let partition = if source_partitions.len() == 1 {
+            source_partitions.into_iter().next().flatten()
+        } else {
+            tracing::warn!(
+                sources = ?cmd.source_note_paths,
+                "consolidating facts that do not share one partition; the merged fact is filed under none"
+            );
+            None
+        };
         let event = MemoryEvent::NoteConsolidated {
             // rust-doctor-disable-next-line excessive-clone
             note_path: fact_id.clone(),
@@ -438,7 +475,7 @@ impl MemoryCommandHandler {
             // rust-doctor-disable-next-line excessive-clone
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -459,6 +496,7 @@ impl MemoryCommandHandler {
 
     /// Permanently delete a fact.
     pub async fn delete_fact(&self, cmd: DeleteNoteCommand) -> Result<(), AlephError> {
+        let partition = self.db.memory_fact_partition(&cmd.note_path).await?;
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteDeleted {
@@ -472,7 +510,7 @@ impl MemoryCommandHandler {
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, partition).await?;
         // Best-effort projection: the event log is the source of truth and is already
         // persisted above, so a notes-filesystem failure must NOT roll back the
         // event append. Surface the divergence as an observable log event so a future
@@ -502,6 +540,10 @@ impl MemoryCommandHandler {
     // they only append the event that `MemoryTimeTraveler` and the
     // `memory_timeline` tool read. This is what turns the event log — and
     // therefore the timeline view — from permanently-empty into live.
+    //
+    // The caller passes the partition the note was written to: a note-path id
+    // is shared by every partition holding a note at that path, so it cannot
+    // be derived from the id.
 
     /// Record that a note was created.
     pub async fn log_note_created(
@@ -512,6 +554,8 @@ impl MemoryCommandHandler {
         note_type: NoteType,
         actor: EventActor,
     ) -> Result<(), AlephError> {
+        // rust-doctor-disable-next-line excessive-clone
+        let partition = agent.clone();
         let event = MemoryEvent::NoteCreated {
             note_path: note_path.to_string(),
             content,
@@ -523,13 +567,15 @@ impl MemoryCommandHandler {
             source: FactSource::Manual,
             source_memory_ids: vec![],
         };
-        self.append_note_event(note_path, event, actor).await
+        self.append_note_event(note_path, &partition, event, actor)
+            .await
     }
 
     /// Record that a note's content was updated or appended to.
     pub async fn log_note_updated(
         &self,
         note_path: &str,
+        partition: &str,
         new_content: String,
         reason: String,
         actor: EventActor,
@@ -540,13 +586,15 @@ impl MemoryCommandHandler {
             new_content,
             reason,
         };
-        self.append_note_event(note_path, event, actor).await
+        self.append_note_event(note_path, partition, event, actor)
+            .await
     }
 
     /// Record that a note was deleted.
     pub async fn log_note_deleted(
         &self,
         note_path: &str,
+        partition: &str,
         reason: String,
         actor: EventActor,
     ) -> Result<(), AlephError> {
@@ -554,7 +602,8 @@ impl MemoryCommandHandler {
             note_path: note_path.to_string(),
             reason,
         };
-        self.append_note_event(note_path, event, actor).await
+        self.append_note_event(note_path, partition, event, actor)
+            .await
     }
 
     /// Append an event to the per-note event stream without projecting it to
@@ -562,12 +611,13 @@ impl MemoryCommandHandler {
     async fn append_note_event(
         &self,
         note_path: &str,
+        partition: &str,
         event: MemoryEvent,
         actor: EventActor,
     ) -> Result<(), AlephError> {
         let seq = self.db.get_memory_event_latest_seq(note_path).await? + 1;
         let envelope = MemoryEventEnvelope::new(note_path.to_string(), seq, event, actor, None);
-        self.db.append_memory_event(&envelope).await?;
+        self.append(envelope, Some(partition.to_string())).await?;
         Ok(())
     }
 
@@ -877,6 +927,201 @@ mod tests {
             .await
             .unwrap();
         (handler, fact_id)
+    }
+
+    /// D7: every write is filed under the FACT's own partition — the directory
+    /// the fact lives in — whatever session happens to be ambient. Bob's scope
+    /// is live for the whole test; nothing Alice's fact records may say `u-bob`.
+    #[tokio::test]
+    async fn every_handler_write_stamps_the_facts_own_partition() {
+        let handler = make_handler();
+        let db = Arc::clone(&handler.db);
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        crate::scope::with_scope(Some(bob), async {
+            let fact_id = handler
+                .create_fact(CreateNoteCommand {
+                    content: "Alice prefers Rust".into(),
+                    note_type: NoteType::Preference,
+                    path: "/user/preferences".into(),
+                    namespace: "main__u-alice".into(),
+                    agent: "main__u-alice".into(),
+                    source: FactSource::Extracted,
+                    source_memory_ids: vec![],
+                    actor: EventActor::Agent,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .update_content(UpdateContentCommand {
+                    note_path: fact_id.clone(),
+                    new_content: "Alice loves Rust".into(),
+                    reason: "reinforced".into(),
+                    actor: EventActor::Agent,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .record_access(RecordNoteAccessCommand {
+                    note_path: fact_id.clone(),
+                    query: None,
+                    relevance_score: None,
+                    used_in_response: false,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .invalidate_fact(InvalidateNoteCommand {
+                    note_path: fact_id.clone(),
+                    reason: "stale".into(),
+                    actor: EventActor::System,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .restore_fact(RestoreNoteCommand {
+                    note_path: fact_id.clone(),
+                    actor: EventActor::User,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            let merged = handler
+                .consolidate_facts(ConsolidateCommand {
+                    source_note_paths: vec![fact_id.clone()],
+                    consolidated_content: "Alice: Rust".into(),
+                    actor: EventActor::System,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .delete_fact(DeleteNoteCommand {
+                    note_path: fact_id.clone(),
+                    reason: "asked".into(),
+                    actor: EventActor::User,
+                    correlation_id: None,
+                })
+                .await
+                .unwrap();
+            handler
+                .log_note_created(
+                    "preferences/lang",
+                    "Rust".into(),
+                    "main__u-alice".into(),
+                    NoteType::Preference,
+                    EventActor::Agent,
+                )
+                .await
+                .unwrap();
+            handler
+                .log_note_updated(
+                    "preferences/lang",
+                    "main__u-alice",
+                    "Rust!".into(),
+                    "note_manage update".into(),
+                    EventActor::Agent,
+                )
+                .await
+                .unwrap();
+            handler
+                .log_note_deleted(
+                    "preferences/lang",
+                    "main__u-alice",
+                    "note_manage delete".into(),
+                    EventActor::Agent,
+                )
+                .await
+                .unwrap();
+
+            for id in [fact_id.as_str(), merged.as_str(), "preferences/lang"] {
+                let events = db.get_memory_events_for_fact(id).await.unwrap();
+                assert!(!events.is_empty(), "{id}: nothing was written");
+                for e in &events {
+                    assert_eq!(
+                        e.partition.as_deref(),
+                        Some("main__u-alice"),
+                        "{id} seq {} ({}) was filed under {:?}, not the fact's own partition",
+                        e.seq,
+                        e.event_type_tag(),
+                        e.partition
+                    );
+                }
+            }
+        })
+        .await;
+    }
+
+    /// A merge of facts from two partitions has no single owner to inherit —
+    /// filing it under either would hand the other's content to it.
+    #[tokio::test]
+    async fn a_consolidation_across_partitions_is_filed_under_none() {
+        let handler = make_handler();
+        let mut sources = Vec::new();
+        for agent in ["main__u-alice", "main__u-bob"] {
+            sources.push(
+                handler
+                    .create_fact(CreateNoteCommand {
+                        content: format!("{agent} fact"),
+                        note_type: NoteType::Preference,
+                        path: "/p".into(),
+                        namespace: agent.into(),
+                        agent: agent.into(),
+                        source: FactSource::Extracted,
+                        source_memory_ids: vec![],
+                        actor: EventActor::Agent,
+                        correlation_id: None,
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let merged = handler
+            .consolidate_facts(ConsolidateCommand {
+                source_note_paths: sources,
+                consolidated_content: "mixed".into(),
+                actor: EventActor::System,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+        let events = handler
+            .db
+            .get_memory_events_for_fact(&merged)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].partition, None);
+    }
+
+    /// Every production write to `memory_events` in the crate goes through
+    /// this handler, and inside it through ONE funnel — so the partition is a
+    /// positional argument nobody can forget at a site nobody counted
+    /// (判据 §6, §11: fix the executor, not each instance).
+    #[test]
+    fn the_handler_funnel_is_the_only_memory_event_writer() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let writers = crate::utils::source_scan::files_whose_production_code_reads(
+            &root,
+            "append_memory_event",
+        );
+        assert_eq!(
+            writers.into_iter().collect::<Vec<_>>(),
+            vec!["src/memory/events/handler.rs".to_string()],
+            "a second file writes memory_events; route it through MemoryCommandHandler so it \
+             has to name the fact's partition"
+        );
+        let handler_code = crate::utils::source_scan::code_text(
+            &crate::utils::source_scan::production_prefix(include_str!("handler.rs")),
+        );
+        assert_eq!(
+            handler_code.matches("append_memory_event(").count(),
+            1,
+            "the handler must append through `append` only — a direct call skips the partition"
+        );
     }
 
     #[tokio::test]
@@ -1237,6 +1482,7 @@ mod tests {
         handler
             .log_note_updated(
                 note_path,
+                "default",
                 "- Prefers Neovim".into(),
                 "note_manage update".into(),
                 EventActor::Agent,
@@ -1244,7 +1490,12 @@ mod tests {
             .await
             .unwrap();
         handler
-            .log_note_deleted(note_path, "note_manage delete".into(), EventActor::Agent)
+            .log_note_deleted(
+                note_path,
+                "default",
+                "note_manage delete".into(),
+                EventActor::Agent,
+            )
             .await
             .unwrap();
 

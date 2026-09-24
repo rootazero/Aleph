@@ -272,6 +272,11 @@ pub struct MemoryEventEnvelope {
     pub timestamp: i64,
     /// Optional correlation to a task or session.
     pub correlation_id: Option<String>,
+    /// The partition the fact lives under (`memory_dir/<partition>/`), as the
+    /// writer knew it — `None` on an envelope that has not been stamped, and
+    /// on a row read back from before the column existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<String>,
 }
 
 impl MemoryEventEnvelope {
@@ -296,7 +301,16 @@ impl MemoryEventEnvelope {
             actor,
             timestamp: now,
             correlation_id,
+            partition: None,
         }
+    }
+
+    /// File this envelope under `partition` — the FACT's own partition, never
+    /// the ambient session's (see `MemoryCommandHandler::append`).
+    #[must_use]
+    pub fn in_partition(mut self, partition: Option<String>) -> Self {
+        self.partition = partition;
+        self
     }
 
     /// Convenience: return the event type tag.
