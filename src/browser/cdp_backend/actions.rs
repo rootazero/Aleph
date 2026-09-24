@@ -2733,6 +2733,9 @@ mod tests {
             "type_text",
             "press_key",
             "snapshot",
+            // Same `capture` — same `tab_ready` — as `snapshot`; the read it
+            // adds is a presentation of the same page the dialog covers.
+            "snapshot_presented",
         ];
         // Ungated, each for a stated reason.
         let ungated = [

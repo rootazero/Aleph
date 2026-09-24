@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId, WaitCondition,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, PresentedSnapshot, ScreenshotOpts,
+    ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId, WaitCondition,
 };
 
 /// Compact target rendering for the recorded call log (matches the formats
@@ -64,6 +64,12 @@ pub(crate) struct FakeBackend {
     /// rendering should be able to write that rendering.
     tabs: Vec<super::tab_registry::TabLine>,
     snapshot_text: String,
+    /// What `snapshot_presented` answers when set: `(text, truncated,
+    /// full_text)`. `None` (the default) reproduces the trait default's shape
+    /// — the full `snapshot_text` presented uncut — so a test that does not
+    /// call the builder sees the same behaviour the production default gives
+    /// the two text drivers.
+    presented: Option<(String, bool, Option<String>)>,
     screenshot_png: Vec<u8>,
     console_text: String,
     network_text: String,
@@ -81,6 +87,7 @@ impl FakeBackend {
             failure_message: DEFAULT_FAILURE_MESSAGE.to_string(),
             tabs: super::tab_registry::parse_tab_lines(DEFAULT_TABS_TEXT),
             snapshot_text: String::new(),
+            presented: None,
             screenshot_png: Vec::new(),
             console_text: String::new(),
             network_text: String::new(),
@@ -107,6 +114,19 @@ impl FakeBackend {
     /// What `snapshot` puts in `snapshot_text` (default: empty).
     pub(crate) fn with_snapshot_text(mut self, text: impl Into<String>) -> Self {
         self.snapshot_text = text.into();
+        self
+    }
+
+    /// What `snapshot_presented` answers with, for tests of the
+    /// presentation-aware read path (default: the trait default's shape —
+    /// `snapshot_text` presented uncut, `truncated: false`).
+    pub(crate) fn with_presented_snapshot(
+        mut self,
+        text: impl Into<String>,
+        truncated: bool,
+        full_text: Option<String>,
+    ) -> Self {
+        self.presented = Some((text.into(), truncated, full_text));
         self
     }
 
@@ -178,6 +198,22 @@ impl FakeBackend {
             0 => super::wait_probe::WAIT_PROBE_FOUND.to_string(),
             1 => q[0].clone(),
             _ => q.pop_front().unwrap_or_default(),
+        }
+    }
+
+    /// The ONE derivation of the fake's snapshot answer, shared by `snapshot`
+    /// and `snapshot_presented` so the two can never disagree about the page
+    /// (判据 §1).
+    fn snapshot_output(&self) -> SnapshotOutput {
+        SnapshotOutput {
+            ref_count: self
+                .snapshot_text
+                .matches(crate::browser::types::REF_TOKEN)
+                .count(),
+            snapshot_text: self.snapshot_text.clone(),
+            page_url: Some("https://example.com".into()),
+            page_title: Some("Example".into()),
+            state_json: None,
         }
     }
 }
@@ -254,15 +290,28 @@ impl BrowserBackend for FakeBackend {
 
     async fn snapshot(&self, _tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         self.record("snapshot".into())?;
-        Ok(SnapshotOutput {
-            ref_count: self
-                .snapshot_text
-                .matches(crate::browser::types::REF_TOKEN)
-                .count(),
-            snapshot_text: self.snapshot_text.clone(),
-            page_url: Some("https://example.com".into()),
-            page_title: Some("Example".into()),
-            state_json: None,
+        Ok(self.snapshot_output())
+    }
+
+    async fn snapshot_presented(
+        &self,
+        _tab_id: &str,
+        _max_chars: usize,
+    ) -> Result<PresentedSnapshot, BrowserError> {
+        self.record("snapshot_presented".into())?;
+        let snap = self.snapshot_output();
+        let (text, truncated, full_text) = match &self.presented {
+            Some((text, truncated, full_text)) => (text.clone(), *truncated, full_text.clone()),
+            // The trait default's shape, spelled out: the census requires
+            // every method answered here, and the honest default is what the
+            // trait itself would do.
+            None => (snap.snapshot_text.clone(), false, None),
+        };
+        Ok(PresentedSnapshot {
+            snap,
+            text,
+            truncated,
+            full_text,
         })
     }
 
@@ -1089,6 +1138,20 @@ mod tests {
             },
         );
         assert!(err.await.unwrap_err().to_string().contains("boom"));
+    }
+
+    /// The fake's default `snapshot_presented` is the TRAIT default's shape —
+    /// the full text presented uncut — so every pre-existing test keeps its
+    /// historical answer, and the presented knob is what a test opts into.
+    #[tokio::test]
+    async fn the_fakes_default_presentation_is_the_trait_defaults_shape() {
+        let fake = FakeBackend::new(None).with_snapshot_text("- button \"b\" [ref=e1]");
+        let presented = fake.snapshot_presented("1", 1_000).await.unwrap();
+        assert!(!presented.truncated);
+        assert!(presented.full_text.is_none());
+        assert_eq!(presented.text, presented.snap.snapshot_text);
+        assert_eq!(presented.text, "- button \"b\" [ref=e1]");
+        assert_eq!(fake.calls(), vec!["snapshot_presented"]);
     }
 
     /// The fake answers ROWS, and `with_tabs_text` still takes the listing

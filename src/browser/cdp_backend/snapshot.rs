@@ -8,7 +8,7 @@ use aleph_cdp::SessionId;
 use crate::browser::engine::{Engine, EngineHandle};
 use crate::browser::error::BrowserError;
 use crate::browser::page_state::{self, PageState};
-use crate::browser::types::SnapshotOutput;
+use crate::browser::types::{PresentedSnapshot, SnapshotOutput};
 
 use super::{map_cdp_err, CdpBackend};
 
@@ -48,10 +48,15 @@ async fn url_and_title(
     Ok((pick(0), pick(1)))
 }
 
-pub(super) async fn snapshot(
+/// Fetch + build: everything from the dialog gate to the `PageState`, with
+/// the page's own answer to where it is. Shared by [`snapshot`] and
+/// [`snapshot_presented`] so the two can never capture two different pages
+/// (判据 §1) — and so the presented read costs exactly one capture, like the
+/// plain one.
+async fn capture(
     be: &CdpBackend,
     tab_id: &str,
-) -> Result<SnapshotOutput, BrowserError> {
+) -> Result<(PageState, Option<String>, Option<String>), BrowserError> {
     let handle = be.handle().await?;
     // GATED on a pending dialog, unlike the other read verbs, because this is
     // the one a model reaches for next after a click that opened one: "what
@@ -99,12 +104,62 @@ pub(super) async fn snapshot(
     );
     drop(tabs);
 
-    Ok(SnapshotOutput {
-        snapshot_text: page_state::render_text(&state),
+    Ok((state, url, title))
+}
+
+/// The full-fidelity output over an already-built state and its full render.
+fn output_from_state(
+    state: &PageState,
+    full_text: String,
+    url: Option<String>,
+    title: Option<String>,
+) -> SnapshotOutput {
+    SnapshotOutput {
+        snapshot_text: full_text,
         page_url: url,
         page_title: title,
         ref_count: state.ref_count(),
-        state_json: Some(page_state::to_json(&state)),
+        state_json: Some(page_state::to_json(state)),
+    }
+}
+
+pub(super) async fn snapshot(
+    be: &CdpBackend,
+    tab_id: &str,
+) -> Result<SnapshotOutput, BrowserError> {
+    let (state, url, title) = capture(be, tab_id).await?;
+    Ok(output_from_state(&state, page_state::render_text(&state), url, title))
+}
+
+/// `snapshot` under a char budget — the trait contract is on
+/// [`crate::browser::backend::BrowserBackend::snapshot_presented`]. One
+/// capture, one full render; only an over-budget page pays for the bounded
+/// second render, which is CPU-only.
+pub(super) async fn snapshot_presented(
+    be: &CdpBackend,
+    tab_id: &str,
+    max_chars: usize,
+) -> Result<PresentedSnapshot, BrowserError> {
+    let (state, url, title) = capture(be, tab_id).await?;
+    let full = page_state::render_text(&state);
+    let snap = output_from_state(&state, full.clone(), url, title);
+    if full.chars().count() <= max_chars {
+        return Ok(PresentedSnapshot {
+            snap,
+            text: full,
+            truncated: false,
+            full_text: None,
+        });
+    }
+    // Over budget: the presentation names the interactive controls the cut
+    // removes (their refs stay live), and the FULL text rides along so the
+    // tool layer's offload keeps the dropped tail recoverable (FL §3.12 ⑮).
+    let (text, _) = page_state::render_text_bounded(&state, max_chars);
+    Ok(PresentedSnapshot {
+        snap,
+        text,
+        truncated: true,
+        full_text: Some(full),
     })
 }
 
@@ -291,6 +346,146 @@ mod tests {
         // to tell them apart.
         let second = backend.snapshot("T1").await.expect("snapshot ok");
         assert_eq!(second.state_json.as_ref().expect("state")["generation"], 2);
+    }
+
+    /// `snapshot_presented` goes through the same `capture`, so it sits behind
+    /// the same dialog gate — the census in `actions` lists it as gated, and
+    /// this is what makes that listing true rather than a claim.
+    #[tokio::test]
+    async fn a_presented_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("alert: saved!".into());
+        }
+
+        let before = methods(&server).len();
+        let err = backend
+            .snapshot_presented("T1", 30_000)
+            .await
+            .expect_err("a tab with an open dialog cannot be snapshotted");
+        let text = err.to_string();
+        assert!(
+            text.contains("open dialog") && text.contains("saved!"),
+            "the refusal names the dialog, not the snapshot: {text}"
+        );
+        assert_eq!(
+            methods(&server).len(),
+            before,
+            "refusing before the wire is the whole point: {:?}",
+            methods(&server)
+        );
+    }
+
+    /// Within budget the presentation IS the full render — `truncated: false`
+    /// and no `full_text` are what tell the tool layer there is nothing to
+    /// offload.
+    #[tokio::test]
+    async fn a_presented_snapshot_within_budget_is_the_full_render() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        wire_capture(&server, &fixture_main_frame());
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        backend
+            .handle()
+            .await
+            .expect("handle")
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        let presented = backend
+            .snapshot_presented("T1", 10_000_000)
+            .await
+            .expect("snapshot ok");
+        assert!(!presented.truncated);
+        assert!(presented.full_text.is_none());
+        assert_eq!(presented.text, presented.snap.snapshot_text);
+        assert!(
+            presented.text.contains("unreached_frames=0"),
+            "…and it is the real render, not a stand-in: {}",
+            presented.text
+        );
+    }
+
+    /// Over budget: the presentation is cut WITHIN the budget and names the
+    /// interactive controls the cut removed, while the FULL text rides along
+    /// so the tool layer's offload keeps the dropped tail recoverable
+    /// (FL §3.12 ⑮ — `browser_snapshot`'s truncation must not be
+    /// irreversible).
+    #[tokio::test]
+    async fn a_presented_snapshot_over_budget_names_omitted_controls_and_carries_the_full_text()
+     {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        wire_capture(&server, &fixture_main_frame());
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        backend
+            .handle()
+            .await
+            .expect("handle")
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        let presented = backend
+            .snapshot_presented("T1", 2_000)
+            .await
+            .expect("snapshot ok");
+        assert!(
+            presented.truncated,
+            "precondition: the HN fixture cannot fit in 2000 chars"
+        );
+        let full = presented
+            .full_text
+            .as_deref()
+            .expect("the full text rides along for the offload");
+        assert_eq!(
+            full, presented.snap.snapshot_text,
+            "one render, two faces — the offload body IS the full text"
+        );
+        assert!(
+            full.chars().count() > 2_000,
+            "precondition: the fixture really is over budget"
+        );
+        assert!(
+            presented.text.chars().count() <= 2_000,
+            "the presentation honors the budget: {} chars",
+            presented.text.chars().count()
+        );
+        let at = presented
+            .text
+            .find("# Omitted high-value controls:")
+            .unwrap_or_else(|| {
+                panic!("the cut must name what it took:\n{}", presented.text)
+            });
+        let section = &presented.text[at..];
+        let named = section
+            .matches(crate::browser::types::REF_TOKEN)
+            .count();
+        assert!(named > 0, "the section names at least one control");
+        // Every ref the section names is live — minted in the full render.
+        for (start, _) in section.match_indices(crate::browser::types::REF_TOKEN) {
+            let end = section[start..]
+                .find(']')
+                .map(|e| start + e + 1)
+                .expect("a closed ref token");
+            let token = &section[start..end];
+            assert!(
+                full.contains(token),
+                "the section may name only live refs; {token} is not in the full render"
+            );
+        }
     }
 
     /// **The viewport comes from `Page.getLayoutMetrics` and from nothing

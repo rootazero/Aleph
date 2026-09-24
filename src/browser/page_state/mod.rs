@@ -24,7 +24,9 @@ pub use raw::{
     attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, UnreachedFrame, Viewport,
 };
 pub use refs::{FrameKey, FrameVerdict, RefEntry, RefId, RefKey, RefTable, StaleReason};
-pub use render::{quote, render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
+pub use render::{
+    quote, render_text, render_text_bounded, rendered_indices, to_json, TEXT_MAX_CHARS,
+};
 pub use roles::{is_interactive, role_for, role_from_aria};
 
 /// The roles this build models. A closed set on purpose: an open one would
@@ -334,7 +336,7 @@ pub struct PageState {
     /// such string this struct carries, after the accessible name, a text leaf,
     /// an `href`, a `placeholder` and `url`.
     ///
-    /// `render_text` does not print it, so ruling R40's five quoting sites are
+    /// `render_text` does not print it, so ruling R40's six quoting sites are
     /// the complete list *for this task's renderer* and no more than that.
     /// Task 14 renders url and title in `browser_snapshot`: **that render goes
     /// through [`render::quote`]**, which is re-exported from this module for

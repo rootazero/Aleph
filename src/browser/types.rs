@@ -154,6 +154,32 @@ pub struct SnapshotOutput {
     pub state_json: Option<serde_json::Value>,
 }
 
+/// A snapshot plus its budgeted *presentation* — the return of
+/// [`crate::browser::backend::BrowserBackend::snapshot_presented`].
+///
+/// The split exists so a backend that renders its text from a `PageState`
+/// (the CDP backend) can cut that text to the caller's budget WITH the omitted
+/// high-value controls named (`page_state::render_text_bounded`), while the
+/// full text still reaches the tool layer for the offload path — a truncation
+/// the tool cannot recover from is data loss, not a budget (FL §3.12 ⑮).
+#[derive(Debug, Clone)]
+pub struct PresentedSnapshot {
+    /// The full-fidelity snapshot the presentation was derived from: page
+    /// metadata, `ref_count` and the JSON face stay available to the tool
+    /// layer, which needs them regardless of how the text was presented.
+    pub snap: SnapshotOutput,
+    /// The bounded presentation text. When [`Self::truncated`] is true it is
+    /// already within the caller's `max_chars` and carries the omitted
+    /// high-value-controls section — the tool layer must NOT cut it again.
+    pub text: String,
+    /// Whether `text` is a cut presentation of the full tree.
+    pub truncated: bool,
+    /// The full text when truncated, for the tool layer's offload
+    /// (`offload_full_content`). `None` when untruncated — the full text is
+    /// then simply [`Self::text`] (and `snap.snapshot_text`).
+    pub full_text: Option<String>,
+}
+
 /// Screenshot output (raw PNG bytes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotOutput {

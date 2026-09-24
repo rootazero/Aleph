@@ -54,8 +54,8 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::tab_registry::{TabLine, TabRegistry};
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, PresentedSnapshot, ScreenshotOpts,
+    ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
 
 mod actions;
@@ -343,6 +343,13 @@ impl BrowserBackend for CdpBackend {
     }
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         snapshot::snapshot(self, tab_id).await
+    }
+    async fn snapshot_presented(
+        &self,
+        tab_id: &str,
+        max_chars: usize,
+    ) -> Result<PresentedSnapshot, BrowserError> {
+        snapshot::snapshot_presented(self, tab_id, max_chars).await
     }
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError> {
         evaluate::evaluate(self, tab_id, js).await

@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use super::error::BrowserError;
 use super::profile::BrowserDriver;
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, PresentedSnapshot, ScreenshotOpts,
+    ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
 };
 
 #[async_trait]
@@ -59,6 +59,39 @@ pub trait BrowserBackend: Send + Sync {
         opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError>;
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError>;
+
+    /// `snapshot` plus a budgeted *presentation* of its text.
+    ///
+    /// `max_chars` is in CHARS and is already clamped by the caller. The
+    /// contract:
+    ///
+    /// - `truncated == false` ⇒ `text` is the full snapshot text and
+    ///   `full_text` is `None`;
+    /// - `truncated == true` ⇒ `text` is within `max_chars` and carries the
+    ///   omitted high-value-controls section, and `full_text` is `Some` of the
+    ///   FULL text so the tool layer can offload it — a truncation the tool
+    ///   cannot recover from is data loss, not a budget (FL §3.12 ⑮).
+    ///
+    /// **The default is the honest asymmetry.** Only a backend that renders
+    /// its text from a `PageState` can re-render that text under a budget
+    /// with the omitted controls named; the two text drivers pass a driver's
+    /// own rendering through and have nothing to re-render from. So the
+    /// default presents the full text uncut (`truncated: false`) and the tool
+    /// layer's `bound_content` applies the budget exactly as it always has —
+    /// those backends lose the controls section, never the offload.
+    async fn snapshot_presented(
+        &self,
+        tab_id: &str,
+        _max_chars: usize,
+    ) -> Result<PresentedSnapshot, BrowserError> {
+        let snap = self.snapshot(tab_id).await?;
+        Ok(PresentedSnapshot {
+            text: snap.snapshot_text.clone(),
+            truncated: false,
+            full_text: None,
+            snap,
+        })
+    }
     /// Evaluate `js` in the page and return **the value it produced** — not a
     /// transcript of the call.
     ///
