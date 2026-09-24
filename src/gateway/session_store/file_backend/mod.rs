@@ -477,6 +477,44 @@ impl FileSessionStore {
         }
         Ok(messages)
     }
+
+    /// Rewrite the whole transcript. Takes the session's `MetaGuard` by
+    /// reference so it can only be called under the write lock — a whole-file
+    /// rewrite without it silently loses a concurrent `append_message`.
+    async fn write_transcript_locked(
+        &self,
+        _lock: &meta::MetaGuard,
+        key_str: &str,
+        messages: &[MessageRecord],
+    ) -> Result<(), SessionStoreError> {
+        let mut contents = String::new();
+        for msg in messages {
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
+            contents.push_str(&line);
+            contents.push('\n');
+        }
+        crate::utils::atomic_write::atomic_write_file(&self.transcript_path(key_str), &contents)
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Write transcript failed: {e}")))
+    }
+}
+
+/// The metadata half of billing a run — the file twin of SQLite's
+/// `session_manager::ops::add_usage`.
+fn add_bill(meta: &mut SessionMetadata, bill: &RunBill) {
+    meta.input_tokens += bill.input_tokens;
+    meta.output_tokens += bill.output_tokens;
+    meta.total_tokens += bill.input_tokens + bill.output_tokens;
+    // The file backend serializes the whole struct, so unlike SQLite it
+    // always HAD somewhere to put this — it just never had a writer.
+    meta.estimated_cost_usd += bill.cost_usd;
+    if let Some(m) = &bill.model {
+        meta.model = Some(m.clone());
+    }
+    if let Some(mp) = &bill.model_provider {
+        meta.model_provider = Some(mp.clone());
+    }
 }
 
 #[async_trait]
@@ -1407,18 +1445,14 @@ impl SessionStore for FileSessionStore {
         let key_str = key.to_key_string();
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
-            meta.input_tokens += input_tokens;
-            meta.output_tokens += output_tokens;
-            meta.total_tokens += input_tokens + output_tokens;
-            // The file backend serializes the whole struct, so unlike SQLite it
-            // always HAD somewhere to put this — it just never had a writer.
-            meta.estimated_cost_usd += cost_usd;
-            if let Some(m) = model {
-                meta.model = Some(m.to_string());
-            }
-            if let Some(mp) = model_provider {
-                meta.model_provider = Some(mp.to_string());
-            }
+            let bill = RunBill {
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                model: model.map(str::to_string),
+                model_provider: model_provider.map(str::to_string),
+            };
+            add_bill(meta, &bill);
             guard.commit().await?;
         }
         Ok(())
@@ -1493,11 +1527,6 @@ impl SessionStore for FileSessionStore {
         metadata: &serde_json::Value,
         bill: Option<&RunBill>,
     ) -> Result<StampOutcome, SessionStoreError> {
-        if bill.is_some() {
-            // Task 10 lands the file backend's bill; until then refuse rather
-            // than stamp and report a bill that was never written.
-            return Err(SessionStoreError::Unsupported);
-        }
         let key_str = key.to_key_string();
         // The session's write lock, held across the whole read-modify-write.
         //
@@ -1508,20 +1537,31 @@ impl SessionStore for FileSessionStore {
         // (`append_message`) on a routine schedule rather than a rare one, and
         // the loser is the user's most recent message, silently.
         //
-        // The guard is deliberately dropped WITHOUT `commit()`: this method
-        // does not change `metadata.json`. What it needs is the mutual
-        // exclusion, and `MetaGuard` is the only thing in this module that can
-        // hold it — which is the point (see `lock_metadata`'s doc: the
-        // discipline is a module boundary, not a convention to remember).
-        let _write_lock = self.lock_metadata(&key_str).await?;
+        // The guard is written back only when a bill rides along — see the
+        // rollback below. With no bill, it is dropped WITHOUT `commit()`,
+        // because this method does not change `metadata.json` in that case.
+        // Either way, what the lock provides is the mutual exclusion, and
+        // `MetaGuard` is the only thing in this module that can hold it —
+        // which is the point (see `lock_metadata`'s doc: the discipline is a
+        // module boundary, not a convention to remember).
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if bill.is_some() && guard.existing_mut().is_none() {
+            // Nothing to bill onto. Refuse BEFORE the stamp: a stamp is the
+            // bill's idempotence guard, and one landed without its bill could
+            // never be billed again.
+            return Err(SessionStoreError::NotFound(format!(
+                "no metadata.json for {key_str}; the run is not billed and its row is not stamped"
+            )));
+        }
         let mut messages = self.read_transcript(&key_str, None).await?;
         let run_id = metadata.get("run_id").and_then(|v| v.as_str());
         // The same range predicate as the SQLite twin, spelled over the row ids
-        // this backend writes. `rfind` walks recording order, which for rows
-        // this projector wrote is seq order; the explicit seq test is what makes
-        // that true rather than assumed, and it is what excludes rows with no
-        // parseable seq (legacy transcripts, boot-time orphan notices).
-        let Some(last) = messages.iter_mut().rfind(|m| {
+        // this backend writes. `rposition` walks recording order, which for
+        // rows this projector wrote is seq order; the explicit seq test is
+        // what makes that true rather than assumed, and it is what excludes
+        // rows with no parseable seq (legacy transcripts, boot-time orphan
+        // notices).
+        let Some(idx) = messages.iter().rposition(|m| {
             m.role == "assistant"
                 && crate::session::projection::parse_source_seq(&m.id, &key_str)
                     .is_some_and(|s| s > after_seq && s <= before_seq)
@@ -1531,7 +1571,7 @@ impl SessionStore for FileSessionStore {
             // the caller must not bill for it.
             return Ok(StampOutcome::NoRowInRange);
         };
-        let existing = last
+        let existing = messages[idx]
             .metadata
             .as_ref()
             .map(serde_json::Value::to_string)
@@ -1542,20 +1582,33 @@ impl SessionStore for FileSessionStore {
         ) {
             return Ok(StampOutcome::AlreadyStamped);
         }
-        last.metadata = Some(metadata.clone());
-
-        let mut contents = String::new();
-        for msg in &messages {
-            let line = serde_json::to_string(msg)
-                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
-            contents.push_str(&line);
-            contents.push('\n');
+        let previous = std::mem::replace(&mut messages[idx].metadata, Some(metadata.clone()));
+        self.write_transcript_locked(&guard, &key_str, &messages)
+            .await?;
+        let Some(bill) = bill else {
+            return Ok(StampOutcome::Stamped);
+        };
+        if let Some(meta) = guard.existing_mut() {
+            add_bill(meta, bill);
         }
-        crate::utils::atomic_write::atomic_write_file(&self.transcript_path(&key_str), &contents)
-            .await
-            .map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-            })?;
+        if let Err(e) = guard.write_back().await {
+            // Two files, two atomic writes, no atomicity between them. Undo the
+            // stamp under the same lock so the replay finds the row unstamped
+            // and bills it (F10). If the undo fails too, the row is stamped and
+            // unbilled — the same direction as a crash between the writes (U3).
+            messages[idx].metadata = previous;
+            if let Err(undo) = self
+                .write_transcript_locked(&guard, &key_str, &messages)
+                .await
+            {
+                tracing::warn!(
+                    session = %key_str,
+                    error = %undo,
+                    "stamp rollback failed after a refused bill; this run's row is stamped but not billed"
+                );
+            }
+            return Err(e);
+        }
         Ok(StampOutcome::Stamped)
     }
 }
@@ -1979,6 +2032,128 @@ mod default_backend_parity_guards {
                 .unwrap(),
             StampOutcome::NoRowInRange
         );
+    }
+
+    fn file_bill() -> RunBill {
+        RunBill {
+            input_tokens: 45,
+            output_tokens: 25,
+            cost_usd: 0.12,
+            model: Some("claude".into()),
+            model_provider: None,
+        }
+    }
+
+    async fn store_with_row(key_str: &str) -> (FileSessionStore, tempfile::TempDir, SessionKey) {
+        let (store, dir) = temp_store();
+        let key = SessionKey::from_key_string(key_str).unwrap();
+        store.get_or_create(&key).await.unwrap();
+        let mut record = msg("assistant", "hello");
+        record.id = crate::session::projection::row_id(key_str, 2);
+        store.append_message(&key, record).await.unwrap();
+        (store, dir, key)
+    }
+
+    async fn stamped_id(store: &FileSessionStore, key_str: &str) -> Option<String> {
+        store
+            .read_transcript(key_str, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .and_then(|m| m.metadata)
+            .and_then(|m| m.get("run_id").and_then(|v| v.as_str()).map(str::to_string))
+    }
+
+    /// Review Focus 5 on the DEFAULT backend: stamp and bill in one call; a
+    /// replay is `AlreadyStamped` and adds nothing.
+    #[tokio::test]
+    async fn the_default_backend_stamps_and_bills_once_and_a_replay_adds_nothing() {
+        let key_str = "agent:filebill:main";
+        let (store, _dir, key) = store_with_row(key_str).await;
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = file_bill();
+        for (pass, expected) in [
+            (1, StampOutcome::Stamped),
+            (2, StampOutcome::AlreadyStamped),
+        ] {
+            assert_eq!(
+                store
+                    .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
+                    .await
+                    .unwrap(),
+                expected,
+                "pass {pass}"
+            );
+            let m = store.get_metadata(&key).await.unwrap().unwrap();
+            assert_eq!((m.input_tokens, m.output_tokens), (45, 25), "pass {pass}");
+        }
+        assert_eq!(stamped_id(&store, key_str).await.as_deref(), Some("r"));
+    }
+
+    /// F10 on the default backend: `metadata.json` refuses the bill, the stamp
+    /// is rolled back under the same lock, and the replay bills.
+    #[tokio::test]
+    async fn a_refused_metadata_write_rolls_the_stamp_back() {
+        let key_str = "agent:filerollback:main";
+        let (store, _dir, key) = store_with_row(key_str).await;
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = file_bill();
+        meta::failpoint::fail_next_write(&store.metadata_path(key_str));
+        assert!(store
+            .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
+            .await
+            .is_err());
+        assert_eq!(stamped_id(&store, key_str).await, None, "rolled back");
+        assert_eq!(
+            store
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .input_tokens,
+            0
+        );
+
+        assert_eq!(
+            store
+                .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        assert_eq!(
+            store
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .input_tokens,
+            45
+        );
+    }
+
+    /// Review Focus 3 on the default backend: no `metadata.json` to bill ⇒
+    /// `Err` before the transcript is touched.
+    #[tokio::test]
+    async fn a_bill_for_a_session_with_no_metadata_is_refused_before_the_stamp() {
+        let key_str = "agent:filenometa:main";
+        let (store, _dir, key) = store_with_row(key_str).await;
+        std::fs::remove_file(store.metadata_path(key_str)).unwrap();
+        let result = store
+            .stamp_and_bill_in_range(
+                &key,
+                1,
+                4,
+                &serde_json::json!({ "run_id": "r" }),
+                Some(&file_bill()),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(SessionStoreError::NotFound(_))),
+            "{result:?}"
+        );
+        assert_eq!(stamped_id(&store, key_str).await, None);
     }
 }
 
