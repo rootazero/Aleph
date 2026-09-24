@@ -74,7 +74,7 @@ pub enum HookEvent {
     #[serde(alias = "PreCompact", alias = "BeforeCompaction")]
     BeforeCompaction,
     /// After session compaction
-    #[serde(alias = "AfterCompaction")]
+    #[serde(alias = "AfterCompaction", alias = "PostCompact")]
     AfterCompaction,
     /// Before an LLM provider API request is issued
     #[serde(alias = "PreApiRequest")]
@@ -94,6 +94,21 @@ pub enum HookEvent {
     /// When a permission is requested
     #[serde(alias = "PermissionRequest")]
     PermissionRequest,
+    /// A tool call was refused at the tool-dispatch chokepoint
+    /// (`ScopedToolService`): the exec-tier / `[policies.tool_permissions]`
+    /// rule, the operator gate (the operator said no, or no approval channel
+    /// exists), or a BeforeToolCall hook's `deny:`. Fired for every
+    /// `ToolError::PermissionDenied` leaving that chokepoint, so a new deny
+    /// arm there is covered without knowing this event exists. NOT fired for
+    /// refusals reported as a different error (a human declining a
+    /// confirmation card is `Execution`) or decided above the chokepoint (a
+    /// sub-agent's allowlist, `AllowlistToolService`). Observer-only: the
+    /// refusal has already been returned to the model; hooks witness it
+    /// (audit, metrics, a notification). Claude Code `PermissionDenied`
+    /// parity. Carries `tool_name` (so a `matcher` applies) and
+    /// `DENY_REASON` in `env`.
+    #[serde(alias = "PermissionDenied")]
+    PermissionDenied,
     /// When a user prompt is about to be sent to the LLM (after history
     /// build, before the first think call). Lets hooks inject context or
     /// abort the run before any provider call.
@@ -127,7 +142,7 @@ impl HookEvent {
     /// `hooks_manage` tool's catalogue both project this instead of keeping
     /// their own hand-written lists (which is how a new variant ends up
     /// invisible to one surface and not the other).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::BeforeAgentStart,
         Self::AgentEnd,
         Self::BeforeToolCall,
@@ -147,6 +162,7 @@ impl HookEvent {
         Self::GatewayStop,
         Self::Notification,
         Self::PermissionRequest,
+        Self::PermissionDenied,
         Self::UserPromptSubmit,
         Self::SubagentStart,
         Self::SubagentStop,
@@ -184,6 +200,7 @@ impl HookEvent {
                 | AfterToolCallFailure
                 | ToolResultPersist
                 | PermissionRequest
+                | PermissionDenied
                 | Notification
         )
     }
@@ -415,6 +432,16 @@ pub struct HookConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
 
+    /// The event name exactly as the hook's author wrote it (`PreToolUse`
+    /// or `before_tool_call`) — what the stdin payload's `hook_event_name`
+    /// echoes back (user ruling 2026-09-20 U-b). Filled by the two file
+    /// parsers that read the key as written (`~/.aleph` / project
+    /// `hooks.json`, a plugin's `hooks.json`). `None` for the runtime/WASM
+    /// registration API and `aleph.plugin.toml` `[[hooks]]`: both dispatch
+    /// to a WASM handler, which has always read the canonical serde name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_event: Option<String>,
+
     /// Who may see this hook fire: stamped by the producer that knows where
     /// the hook came from (`hooks::load_user_hooks` for `~/.aleph/hooks.json`
     /// and project files, `extension/mod.rs::sync_hooks_from_registry` for
@@ -423,6 +450,18 @@ pub struct HookConfig {
     /// deliberately no `Default`: a hook constructed without saying where it
     /// belongs would fire everywhere.
     pub scope_key: crate::extension::visibility::ScopeKey,
+}
+
+impl HookConfig {
+    /// The `hook_event_name` this hook's payload carries: the declared
+    /// spelling when there is one, else the canonical serde name. THE one
+    /// derivation — the executor's dispatch loops read it per hook.
+    #[must_use]
+    pub fn event_name(&self) -> String {
+        self.declared_event
+            .clone()
+            .unwrap_or_else(|| self.event.canonical_name())
+    }
 }
 
 // =============================================================================
@@ -523,5 +562,56 @@ impl McpServerConfig {
             Self::Remote { url, .. } => Some(url),
             Self::Stdio { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_compact_is_an_alias_of_after_compaction() {
+        let e: HookEvent = serde_json::from_str("\"PostCompact\"").unwrap();
+        assert_eq!(e, HookEvent::AfterCompaction);
+    }
+
+    #[test]
+    fn permission_denied_parses_carries_a_tool_name_and_is_observer_only() {
+        let e: HookEvent = serde_json::from_str("\"PermissionDenied\"").unwrap();
+        assert_eq!(e, HookEvent::PermissionDenied);
+        assert_eq!(serde_json::to_value(e).unwrap(), "permission_denied");
+        assert!(
+            e.supports_matcher(),
+            "the refusal names a tool; a matcher can select it"
+        );
+        assert!(
+            !e.supports_interceptor(),
+            "the refusal has already been returned"
+        );
+        assert!(HookEvent::ALL.contains(&e));
+    }
+
+    #[test]
+    fn event_name_is_the_declared_spelling_else_the_canonical_name() {
+        let mut hook = HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::Normal,
+            matcher: None,
+            actions: Vec::new(),
+            plugin_name: "t".into(),
+            plugin_root: PathBuf::new(),
+            handler: None,
+            timeout_secs: None,
+            declared_event: None,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
+        };
+        assert_eq!(hook.event_name(), "before_tool_call");
+        hook.declared_event = Some("PreToolUse".into());
+        assert_eq!(hook.event_name(), "PreToolUse");
+        // An absent spelling is not written out.
+        hook.declared_event = None;
+        let v = serde_json::to_value(&hook).unwrap();
+        assert!(v.get("declared_event").is_none(), "{v}");
     }
 }

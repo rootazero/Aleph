@@ -528,6 +528,7 @@ fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookCon
         plugin_root: PathBuf::from("/tmp"),
         handler: None,
         timeout_secs: None,
+        declared_event: None,
         scope_key: crate::extension::visibility::ScopeKey::Global,
     }
 }
@@ -585,6 +586,158 @@ async fn before_tool_hook_deny_returns_permission_denied() {
         }
         other => panic!("expected PermissionDenied from deny hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
+}
+
+// -------------------------------------------------------------------------
+// `HookEvent::PermissionDenied`: every `ToolError::PermissionDenied` leaving
+// the chokepoint fires the observer. One test per deny arm, so a fire-site
+// moved into a single arm goes red on the others.
+// -------------------------------------------------------------------------
+
+/// A `PermissionDenied` observer on `tool` that writes its stdin payload to a
+/// file, and that file's path.
+#[cfg(unix)]
+fn permission_denied_probe(dir: &std::path::Path, tool: &str) -> (HookConfig, PathBuf) {
+    let marker = dir.join(format!("{tool}.denied.json"));
+    let mut hook = make_command_hook(
+        HookEvent::PermissionDenied,
+        HookKind::Observer,
+        &format!("cat > '{}'", marker.display()),
+    );
+    hook.matcher = Some(tool.to_string());
+    (hook, marker)
+}
+
+/// The observer saw THIS refusal: its tool name and the exact reason the
+/// model was handed.
+#[cfg(unix)]
+fn assert_denial_observed(marker: &std::path::Path, err: &ToolError) {
+    let ToolError::PermissionDenied { name, reason } = err else {
+        panic!("expected PermissionDenied, got {err:?}"); // rust-doctor-disable-line panic-in-library
+    };
+    let seen: Value = serde_json::from_str(
+        &std::fs::read_to_string(marker).expect("the PermissionDenied observer ran"),
+    )
+    .unwrap();
+    assert_eq!(seen["hook_event_name"], "permission_denied");
+    assert_eq!(seen["tool_name"], name.as_str());
+    assert_eq!(seen["env"]["DENY_REASON"], reason.as_str());
+}
+
+#[cfg(unix)]
+fn guest_turn(session: &str) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main(session),
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: Some("guest".to_string()),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+    }
+}
+
+/// Arm 1: the `deny_rule` gate (here an explicit `[policies.tool_permissions]`
+/// entry) — the refusal no hook could witness before this event existed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_policy_denial_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_tool_permissions(crate::config::types::policies::ToolPermissionsConfig {
+            default: crate::extension::PermissionAction::Allow,
+            overrides: std::collections::HashMap::from([(
+                "echo".to_string(),
+                crate::extension::PermissionAction::Deny,
+            )]),
+        })
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("echo", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 2: the operator gate, where the operator answered no.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_refusal_fires_the_permission_denied_observer() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "cron_manage");
+    let svc = ScopedToolService::new(make_registry(&["cron_manage"]), BTreeSet::new())
+        .with_turn_context(guest_turn("p44-operator-refused"))
+        .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)))
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 3: the operator gate with no approval channel (refused unasked).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unaskable_operator_gate_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "cron_manage");
+    let svc = ScopedToolService::new(make_registry(&["cron_manage"]), BTreeSet::new())
+        .with_turn_context(guest_turn("p44-operator-unaskable"))
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 4: a BeforeToolCall hook's `deny:` — one hook's verdict, witnessed by
+/// another.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hook_deny_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let deny = make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'deny: hard policy stop'",
+    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![deny, probe])),
+        "test-session",
+    );
+    let err = svc.execute("echo", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// The other direction of the gate (判据 §14): a call that succeeds, and one
+/// refused as something other than `PermissionDenied` (a hook `block:` is an
+/// `Execution` error the model may react to), never fire it.
+#[cfg(unix)]
+#[tokio::test]
+async fn only_a_permission_denied_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let allowed = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![probe.clone()])),
+        "test-session",
+    );
+    allowed
+        .execute("echo", json!({}))
+        .await
+        .expect("an allowed call succeeds");
+    let block = make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'block: not now'",
+    );
+    let blocked = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![block, probe])),
+        "test-session",
+    );
+    let err = blocked.execute("echo", json!({})).await.unwrap_err();
+    assert!(matches!(err, ToolError::Execution { .. }), "{err:?}");
+    assert!(
+        !marker.exists(),
+        "neither a success nor an Execution error is a permission denial"
+    );
 }
 
 #[tokio::test]

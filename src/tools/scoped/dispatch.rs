@@ -137,7 +137,7 @@ impl ConfirmDenial {
     }
 }
 
-/// Which dispatch branch `execute_inner` is routing into. Kept as a
+/// Which dispatch branch `execute_gated` is routing into. Kept as a
 /// fieldless enum so the retry closure can capture it by value.
 #[derive(Copy, Clone)]
 enum RoutingTarget {
@@ -153,7 +153,45 @@ impl ScopedToolService {
     /// the inner [`crate::tools::runtime::LoopToolRegistry::execute`] /
     /// [`crate::agents::subagent_tool::SubagentTool::execute`] so subprocess
     /// `kill_on_drop`, reqwest abort, etc. propagate naturally.
+    ///
+    /// The gated dispatch ([`Self::execute_gated`]), plus the one observation
+    /// no gate could make: a `PermissionDenied` leaving here fires the
+    /// `PermissionDenied` hook observers. Placed on the way OUT rather than
+    /// at each deny arm (tier / policy rule, operator gate ×2, hook `deny:`)
+    /// so a new arm is covered without knowing this seam exists. The input
+    /// is cloned only when a hook executor with hooks is attached.
     pub(super) async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let for_hook = self
+            .hook_executor
+            .as_ref()
+            .filter(|e| e.hook_count() > 0)
+            .map(|e| (e.clone(), input.clone()));
+        let result = self.execute_gated(name, input, cancel).await;
+        if let (
+            Err(ToolError::PermissionDenied {
+                name: denied,
+                reason,
+            }),
+            Some((executor, input)),
+        ) = (&result, for_hook)
+        {
+            let ctx = self
+                .build_hook_context(denied, &input, None, None)
+                .with_env("DENY_REASON", reason.clone());
+            executor
+                .execute_observers(HookEvent::PermissionDenied, &ctx)
+                .await;
+        }
+        result
+    }
+
+    /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
+    async fn execute_gated(
         &self,
         name: &str,
         input: Value,
@@ -535,7 +573,7 @@ impl ScopedToolService {
     /// Returns `true` when this call was authorized by a person (or by a
     /// standing grant of theirs), `false` when no gate applied and nobody was
     /// asked. The caller threads that on to the `BeforeToolCall` hook seam so
-    /// one dispatch raises at most one card — see `execute_inner`.
+    /// one dispatch raises at most one card — see `execute_gated`.
     ///
     /// Which rule gated the call comes from [`Self::confirmation_rule`], and its
     /// prose goes to the human card and the model's refusal from that one
@@ -616,7 +654,7 @@ impl ScopedToolService {
     /// Run the call: route it to the subagent tool or the inner registry, through
     /// the one-shot retry helper and the Layer-2 result budget.
     ///
-    /// Split out of [`Self::execute_inner`] so the wall clock can wrap exactly
+    /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
     async fn route_and_execute(
         &self,

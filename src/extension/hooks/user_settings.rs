@@ -294,6 +294,7 @@ fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<Ho
                     plugin_root: plugin_root.clone(),
                     handler: None,
                     timeout_secs,
+                    declared_event: Some(event_str.clone()),
                     scope_key: scope.clone(),
                 });
             }
@@ -303,7 +304,12 @@ fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<Ho
 
 /// Map both Claude Code-style (`PreToolUse`) and Aleph-style
 /// (`before_tool_call`) event names to [`HookEvent`].
-fn parse_event(name: &str) -> Option<HookEvent> {
+///
+/// Shared by the three file readers — this loader, a plugin's `hooks.json`
+/// (`manifest::parsers::parse_hooks_content`) and `aleph.plugin.toml`
+/// `[[hooks]]` (`parse_v2_hooks`) — so a name one of them accepts, the
+/// others accept too.
+pub(crate) fn parse_event(name: &str) -> Option<HookEvent> {
     // Re-uses the serde aliases on HookEvent. snake_case → primary; PascalCase
     // → alias. Falls back to `from_str` via JSON deserialization.
     let attempts = [
@@ -364,6 +370,7 @@ mod tests {
         assert!(HookEvent::supports_matcher(HookEvent::AfterToolCallFailure));
         assert!(HookEvent::supports_matcher(HookEvent::ToolResultPersist));
         assert!(HookEvent::supports_matcher(HookEvent::PermissionRequest));
+        assert!(HookEvent::supports_matcher(HookEvent::PermissionDenied));
         assert!(HookEvent::supports_matcher(HookEvent::Notification));
         // Lifecycle events have no tool name; a matcher there never fires.
         assert!(!HookEvent::supports_matcher(HookEvent::SessionStart));
@@ -563,6 +570,39 @@ mod tests {
         let mut out = Vec::new();
         load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
+    }
+
+    /// U-b: the key as written is what the hook's payload will echo, so the
+    /// loader keeps it — both spellings, side by side, each on its own row.
+    #[test]
+    fn each_row_keeps_the_event_spelling_its_author_wrote() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{ "hooks": {
+                "PreToolUse": [{ "hooks": [{ "type": "command", "command": "a" }] }],
+                "before_tool_call": [{ "hooks": [{ "type": "command", "command": "b" }] }]
+            } }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
+        let mut seen: Vec<(HookEvent, Option<String>)> = out
+            .iter()
+            .map(|h| (h.event, h.declared_event.clone()))
+            .collect();
+        seen.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            seen,
+            vec![
+                (HookEvent::BeforeToolCall, Some("PreToolUse".to_string())),
+                (
+                    HookEvent::BeforeToolCall,
+                    Some("before_tool_call".to_string())
+                ),
+            ]
+        );
+        assert_eq!(out[0].event_name(), out[0].declared_event.clone().unwrap());
     }
 
     const ONE_HOOK: &str = r#"{ "hooks": { "PreToolUse": [

@@ -272,6 +272,7 @@ mod tests {
                 actions: Vec::new(),
                 plugin_root: None,
                 timeout_secs: None,
+                declared_event: None,
             }),
             CapabilityDeclaration::Service(ServiceRegistration {
                 id: "s".to_string(),

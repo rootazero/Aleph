@@ -14,7 +14,7 @@
 //! - Message: `MessageReceived` / `MessageSending` / `MessageSent`
 //! - Compaction: `BeforeCompaction` / `AfterCompaction`
 //! - Provider: `PreApiRequest` / `PostApiRequest`
-//! - Approval: `PermissionRequest` / `Notification`
+//! - Approval: `PermissionRequest` / `PermissionDenied` / `Notification`
 //! - Gateway: `GatewayStart` / `GatewayStop`
 //!
 //! # Command-hook decision contract
@@ -51,14 +51,16 @@ mod consent;
 mod executor;
 mod json_output;
 mod output_budget;
+#[cfg(test)]
+mod producer_census;
 mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub(crate) use executor::read_capped;
 pub use executor::{event_payload_json, HookExecutor};
 pub use output_budget::{budget_hook_contexts, join_messages};
-pub(crate) use user_settings::default_kind_for_event;
 pub use user_settings::load_user_hooks;
+pub(crate) use user_settings::{default_kind_for_event, parse_event};
 
 use crate::extension::types::HookKind;
 use std::collections::HashMap;
@@ -825,6 +827,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -857,6 +860,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -886,6 +890,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -930,6 +935,7 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -1063,6 +1069,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -1093,6 +1100,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }];
 
@@ -1181,6 +1189,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }
     }
@@ -1235,6 +1244,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         };
         let executor = HookExecutor::new(vec![hook]).with_consent(consent.clone());
@@ -1317,6 +1327,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }
     }

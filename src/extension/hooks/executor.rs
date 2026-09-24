@@ -113,10 +113,9 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// without a string round-trip.
 ///
 /// Takes the event's NAME rather than the [`HookEvent`] enum: the spelling a
-/// hook sees on `hook_event_name` is whatever it was registered under
-/// (`HookEvent::canonical_name` for runtime/WASM registrations today; P4.4
-/// hands this the hook's own `declared_event` without touching this
-/// function again).
+/// hook sees on `hook_event_name` is whatever it was registered under —
+/// the dispatch loops pass [`HookConfig::event_name`] (the declared
+/// spelling, else `HookEvent::canonical_name`).
 fn build_event_payload_value(event_name: &str, context: &HookContext) -> serde_json::Value {
     use serde_json::{json, Map, Value};
     let mut payload: Map<String, Value> = Map::new();
@@ -332,6 +331,13 @@ impl HookExecutor {
     #[must_use]
     pub fn has_hooks_for(&self, event: HookEvent) -> bool {
         self.hooks.iter().any(|h| h.event == event)
+    }
+
+    /// The registered hooks, for tests outside this module that assert on a
+    /// field `inventory()` deliberately does not show (`declared_event`).
+    #[cfg(test)]
+    pub(crate) fn hook_configs_for_test(&self) -> &[HookConfig] {
+        &self.hooks
     }
 
     /// Check if a hook's pattern matches the context
@@ -953,10 +959,9 @@ impl HookExecutor {
             );
             accumulated.hooks_executed += 1;
 
-            // The name this hook sees on `hook_event_name`. Computed per hook
-            // (not once for the whole call) so a future declared-spelling
-            // lookup (P4.4: `hook.event_name()`) is a one-line swap here.
-            let event_name = event.canonical_name();
+            // The name this hook sees on `hook_event_name`: the spelling it
+            // was registered under, so it is per hook, not per call.
+            let event_name = hook.event_name();
 
             // Execute all actions for this hook
             for action in &hook.actions {
@@ -1187,9 +1192,9 @@ impl HookExecutor {
             .into_iter()
             .map(|hook| async move {
                 let timeout_override = hook.timeout_secs.map(Duration::from_secs);
-                // Computed per hook (see `execute_interceptors`'s twin) so a
-                // future declared-spelling lookup is a one-line swap here.
-                let event_name = event.canonical_name();
+                // Per hook, as in `execute_interceptors`'s twin: the spelling
+                // this hook was registered under.
+                let event_name = hook.event_name();
                 for action in &hook.actions {
                     match self
                         .execute_action(
@@ -1251,6 +1256,7 @@ mod tests {
             plugin_root: PathBuf::new(),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }
     }
@@ -1704,6 +1710,7 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
             scope_key: ScopeKey::Global,
         }
     }
@@ -1765,6 +1772,51 @@ mod tests {
         assert!(!result.blocked && !result.denied, "exit 1 is non-blocking");
         assert_eq!(result.action_results.len(), 1);
         assert_eq!(result.action_results[0].exit_code, Some(1));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hook_event_name_echoes_the_spelling_the_hook_was_registered_under() {
+        // Two hooks on the same seam, one written the Claude Code way, one the
+        // Aleph way; each must read back its OWN spelling from stdin. Both
+        // dispatch loops are driven (interceptor and observer) — they are the
+        // two places the payload is built.
+        use crate::extension::hooks::HookContext;
+        let dir = tempfile::tempdir().unwrap();
+        let out = |name: &str| dir.path().join(name);
+        let capture = |name: &str| format!("cat > {}", out(name).display());
+        let mut cc = interceptor_command_hook(&capture("cc.json"));
+        cc.declared_event = Some("PreToolUse".into());
+        let mut aleph = interceptor_command_hook(&capture("aleph.json"));
+        aleph.declared_event = Some("before_tool_call".into());
+        let mut observer = interceptor_command_hook(&capture("observer.json"));
+        observer.event = HookEvent::AfterToolCall;
+        observer.kind = HookKind::Observer;
+        observer.declared_event = Some("PostToolUse".into());
+        let mut bare = interceptor_command_hook("true");
+        bare.declared_event = None;
+        assert_eq!(
+            bare.event_name(),
+            "before_tool_call",
+            "no spelling → the canonical serde name"
+        );
+
+        let executor = HookExecutor::new(vec![cc, aleph, observer]);
+        let ctx = HookContext::new("s").with_tool_name("bash");
+        executor
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx.clone())
+            .await
+            .expect("both hooks run");
+        executor
+            .execute_observers(HookEvent::AfterToolCall, &ctx)
+            .await;
+
+        let seen = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(out(name)).unwrap()).unwrap()
+        };
+        assert_eq!(seen("cc.json")["hook_event_name"], "PreToolUse");
+        assert_eq!(seen("aleph.json")["hook_event_name"], "before_tool_call");
+        assert_eq!(seen("observer.json")["hook_event_name"], "PostToolUse");
     }
 
     #[cfg(unix)]

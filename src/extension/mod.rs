@@ -821,18 +821,23 @@ impl projection::Views {
 
         // Convert HookRegistration → HookConfig for the executor, consuming
         // each registration by value so its fields move into the config.
+        // Every field is named (no `..`): a field added to the registration
+        // must be decided on here, not silently dropped between the parser
+        // that filled it and the executor that should read it.
         for (hr, scope_key) in hook_regs {
             let HookRegistration {
                 event,
                 priority,
                 handler,
+                name: _,
+                description: _,
                 plugin_id,
                 kind,
                 matcher,
                 actions,
                 plugin_root,
                 timeout_secs,
-                ..
+                declared_event,
             } = hr;
             // Registrations carrying concrete actions (plugin-shipped
             // hooks.json shell hooks) dispatch those directly — through the
@@ -879,6 +884,7 @@ impl projection::Views {
                 plugin_root: plugin_root.unwrap_or_default(),
                 handler: Some(handler),
                 timeout_secs,
+                declared_event,
                 scope_key,
             };
             executor.add_hook(hook_config);

@@ -1804,6 +1804,27 @@ priority = 60
         assert!(mine.iter().all(|root| *root == want), "got {mine:?}");
     }
 
+    /// U-b end to end: the spelling a plugin's `hooks.json` key was written in
+    /// (`write_static_plugin` writes `PreToolUse`) survives parser → registry
+    /// → `sync_hooks_from_registry` → the executor the fire-sites snapshot.
+    /// The sync step is the link that used to drop unlisted fields (`..`).
+    #[tokio::test]
+    async fn plugin_hooks_keep_the_event_spelling_their_hooks_json_wrote() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_static_plugin(dir.path(), "p4-spelling");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let snapshot = manager.hook_executor_snapshot().await;
+        let names: Vec<String> = snapshot
+            .hook_configs_for_test()
+            .iter()
+            .filter(|h| h.plugin_name == "p4-spelling")
+            .map(crate::extension::HookConfig::event_name)
+            .collect();
+        assert_eq!(names, vec!["PreToolUse".to_string()]);
+    }
+
     // ── P3.3a: the next executor is installed in one write, never torn ────
 
     /// 判据 §8: a reader must never observe the hook executor mid-rebuild —

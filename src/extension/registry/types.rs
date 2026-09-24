@@ -111,6 +111,12 @@ pub struct HookRegistration {
     /// Per-hook timeout in seconds (applies to command/http actions).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+    /// The event name exactly as the author wrote it (`PreToolUse` /
+    /// `before_tool_call`); carried onto `HookConfig::declared_event`, whose
+    /// doc says who fills it. `None` for the WASM runtime API and
+    /// `aleph.plugin.toml` `[[hooks]]` registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_event: Option<String>,
 }
 
 // ============================================================================
@@ -500,6 +506,7 @@ mod tests {
             actions: Vec::new(),
             plugin_root: None,
             timeout_secs: None,
+            declared_event: None,
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));

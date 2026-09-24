@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::registry::{AgentRegistration, SkillRegistration};
-use crate::extension::types::{HookEvent, McpServerConfig};
+use crate::extension::types::McpServerConfig;
 
 // ============================================================================
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
@@ -77,8 +77,12 @@ struct AgentFm {
 
 #[derive(Debug, Deserialize)]
 struct HooksFileConfig {
+    /// Keyed by the event name AS WRITTEN. A `HashMap<HookEvent, _>` key
+    /// would parse the alias and forget the spelling the payload must echo —
+    /// and one unknown key (a Claude Code event Aleph has no moment for)
+    /// failed the whole map, rejecting every hook in the file.
     #[serde(default)]
-    hooks: HashMap<HookEvent, Vec<HookMatcher>>,
+    hooks: HashMap<String, Vec<HookMatcher>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,7 +498,13 @@ pub fn parse_hooks_content(
     };
 
     let mut caps = Vec::new();
-    for (event, matchers) in config.hooks {
+    for (event_str, matchers) in config.hooks {
+        // The same parser as the user-hooks loader: an unknown name is
+        // skipped with a warn, never fatal to the rest of the file.
+        let Some(event) = crate::extension::hooks::parse_event(&event_str) else {
+            warn!(plugin = plugin_id, event = %event_str, "Unknown hook event in hooks.json; skipping");
+            continue;
+        };
         for (idx, matcher) in matchers.into_iter().enumerate() {
             // Emit ONE registration per command action so the executor can
             // actually run each when the event fires, with ITS OWN timeout.
@@ -528,6 +538,7 @@ pub fn parse_hooks_content(
                         }],
                         plugin_root: Some(base.to_path_buf()),
                         timeout_secs: a.timeout_secs,
+                        declared_event: Some(event_str.clone()),
                     },
                 ));
             }
@@ -743,12 +754,9 @@ pub fn parse_v2_hooks(
             continue;
         };
         // Accept both snake_case (`before_tool_call`) and Claude-Code
-        // PascalCase aliases (`PreToolUse`) — same tolerance as the user
-        // hooks.json loader.
-        let event = [h.event.clone(), h.event.to_lowercase().replace('-', "_")]
-            .iter()
-            .find_map(|s| serde_json::from_str::<HookEvent>(&format!("\"{s}\"")).ok());
-        let Some(event) = event else {
+        // PascalCase aliases (`PreToolUse`) — the user hooks.json loader's
+        // own parser, so the two cannot drift.
+        let Some(event) = crate::extension::hooks::parse_event(&h.event) else {
             warn!(
                 "[[hooks]] entry in plugin '{}' names unknown event '{}' — skipped",
                 plugin_id, h.event
@@ -776,6 +784,11 @@ pub fn parse_v2_hooks(
             actions: Vec::new(),
             plugin_root: None,
             timeout_secs: None,
+            // The author did write a spelling (`h.event`), but these
+            // dispatch to a WASM handler, which has always been handed the
+            // canonical serde name; echoing the spelling would change what
+            // an existing handler receives.
+            declared_event: None,
         }));
     }
     caps
@@ -847,6 +860,7 @@ fn substitute_vars(value: &str, plugin_root: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::types::HookEvent;
     use std::fs;
     use tempfile::tempdir;
 
@@ -1222,6 +1236,47 @@ mod tests {
         assert!(caps.is_empty());
     }
 
+    fn declared_hooks(caps: &[CapabilityDeclaration]) -> Vec<(HookEvent, Option<String>)> {
+        caps.iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Hook(h) => Some((h.event, h.declared_event.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hooks_json_keeps_the_event_spelling_the_author_wrote() {
+        let caps = parse_hooks_content(
+            r#"{"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "a"}]}],
+                          "after_tool_call": [{"hooks": [{"type": "command", "command": "b"}]}]}}"#,
+            std::path::Path::new("/p"),
+            "plug",
+        )
+        .unwrap();
+        let regs = declared_hooks(&caps);
+        assert!(regs.contains(&(HookEvent::BeforeToolCall, Some("PreToolUse".into()))));
+        assert!(regs.contains(&(HookEvent::AfterToolCall, Some("after_tool_call".into()))));
+    }
+
+    /// A Claude Code event Aleph has no moment for (`Setup`) used to fail the
+    /// enum-keyed map and with it every hook in the file. It is now the one
+    /// key skipped; its neighbours still register.
+    #[test]
+    fn an_unknown_event_in_a_plugin_hooks_json_skips_only_that_key() {
+        let caps = parse_hooks_content(
+            r#"{"hooks": {"Setup": [{"hooks": [{"type": "command", "command": "x"}]}],
+                          "PostCompact": [{"hooks": [{"type": "command", "command": "y"}]}]}}"#,
+            std::path::Path::new("/p"),
+            "plug",
+        )
+        .unwrap();
+        assert_eq!(
+            declared_hooks(&caps),
+            vec![(HookEvent::AfterCompaction, Some("PostCompact".into()))]
+        );
+    }
+
     #[test]
     fn test_parse_v2_hooks_registers_declared_hooks() {
         use crate::extension::manifest::HookSection;
@@ -1285,6 +1340,9 @@ mod tests {
             CapabilityDeclaration::Hook(h) => {
                 assert_eq!(h.event, HookEvent::AfterToolCall);
                 assert_eq!(h.kind, Some(HookKind::Observer));
+                // Written `PostToolUse`, but a WASM handler keeps receiving
+                // the canonical name (see `parse_v2_hooks`).
+                assert_eq!(h.declared_event, None);
             }
             other => panic!("Expected Hook, got {:?}", other),
         }
