@@ -26,8 +26,9 @@ use tracing::{debug, warn};
 /// output to disk; a hard cap is the minimal Aleph equivalent.
 const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
 
-/// Claude Code's PostToolUse result key, mirrored from the Aleph-native
-/// `tool_output` so a hook written for either name reads the same text.
+/// Claude Code's PostToolUse result key, carrying the same output as the
+/// Aleph-native `tool_output` — as the tool's structure when it has one (an
+/// object in the capture), as text otherwise ([`tool_response_value`]).
 /// Settled by the P0 live capture (2026-09-20): the official hooks reference
 /// and dsh's `hooks-claude-code` port both spell it `tool_response`; the
 /// plugin-dev skill's prose (`tool_result`) is stale. If a future capture
@@ -145,9 +146,7 @@ fn build_event_payload_value(
     }
     if let Some(o) = &context.tool_output {
         payload.insert("tool_output".into(), Value::String(o.clone()));
-        // Mirrors Claude Code's PostToolUse result key verbatim, so a hook
-        // written for either name reads the same text.
-        payload.insert(CC_POST_TOOL_RESULT_KEY.into(), Value::String(o.clone()));
+        payload.insert(CC_POST_TOOL_RESULT_KEY.into(), tool_response_value(o));
     }
     if let Some(e) = context.tool_error {
         payload.insert("tool_error".into(), Value::Bool(e));
@@ -169,6 +168,29 @@ fn build_event_payload_value(
         payload.insert("env".into(), json!(context.env));
     }
     Value::Object(payload)
+}
+
+/// Claude Code's `tool_response` for one tool output: the tool's structured
+/// answer where there is one (an object in the P0 capture, so
+/// `jq '.tool_response.file'` works), else the text.
+///
+/// The tool-dispatch seam hands over `Value::to_string()` of the result the
+/// model saw, and after the result budget that value is a JSON string holding
+/// the model-facing text — so the text is decoded first, and a text that is
+/// itself a JSON object or array is the structure. A scalar-looking text
+/// (`42`, `true`) stays text: nothing says the tool meant a number. Output
+/// that is not JSON at all (a failure's error text, an agent's final reply)
+/// is the text as given.
+fn tool_response_value(output: &str) -> serde_json::Value {
+    use serde_json::Value;
+    match serde_json::from_str::<Value>(output) {
+        Ok(Value::String(text)) => match serde_json::from_str::<Value>(&text) {
+            Ok(structured @ (Value::Object(_) | Value::Array(_))) => structured,
+            _ => Value::String(text),
+        },
+        Ok(structured @ (Value::Object(_) | Value::Array(_))) => structured,
+        _ => Value::String(output.to_string()),
+    }
 }
 
 /// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
@@ -2061,9 +2083,47 @@ mod tests {
         assert_eq!(json["permission_mode"], "default");
         assert_eq!(json["transcript_path"], "/data/sessions/k/transcript.jsonl");
         assert_eq!(json["cwd"], "/work");
-        // The CC key mirrors the Aleph-native `tool_output` verbatim — a hook
-        // written for either name reads the same text.
+        // Output that is not JSON reads the same under either key.
         assert_eq!(json[CC_POST_TOOL_RESULT_KEY], json["tool_output"]);
+    }
+
+    /// `tool_response` is the tool's structure when there is one — an object
+    /// in the P0 capture (`{"type":"text","file":{..}}`) — and text otherwise.
+    /// The inputs are the shapes producers really hand over: the dispatch seam
+    /// sends `Value::to_string()` of the budgeted result, i.e. a JSON STRING
+    /// holding the model-facing text. `tool_output` stays the verbatim text.
+    #[test]
+    fn tool_response_is_the_tools_structure_and_text_stays_text() {
+        let payload = |output: &str| -> serde_json::Value {
+            let ctx = HookContext::new("s").with_tool_output(output);
+            serde_json::from_str(&event_payload_json(HookEvent::AfterToolCall, &ctx)).unwrap()
+        };
+        let dispatched = |text: &str| serde_json::Value::String(text.to_string()).to_string();
+
+        let object = payload(&dispatched(r#"{"type":"text","file":{"numLines":1}}"#));
+        assert_eq!(
+            object[CC_POST_TOOL_RESULT_KEY],
+            serde_json::json!({"type": "text", "file": {"numLines": 1}})
+        );
+        assert_eq!(object[CC_POST_TOOL_RESULT_KEY]["file"]["numLines"], 1);
+        assert!(
+            object["tool_output"].is_string(),
+            "the native key stays text"
+        );
+
+        assert_eq!(
+            payload(&dispatched("contents"))[CC_POST_TOOL_RESULT_KEY],
+            "contents"
+        );
+        assert_eq!(
+            payload(&dispatched("42"))[CC_POST_TOOL_RESULT_KEY],
+            "42",
+            "a scalar-looking text is still text"
+        );
+        assert_eq!(
+            payload("permission denied: rm")[CC_POST_TOOL_RESULT_KEY],
+            "permission denied: rm"
+        );
     }
 
     #[test]
