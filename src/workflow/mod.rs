@@ -16,9 +16,11 @@
 //! agent run; dependency edges drive Tokio-concurrent execution that the
 //! single-agent reference designs (e.g. `OpenHands`) cannot express.
 
+pub mod budget;
 pub mod clarify;
 pub mod compile;
 pub mod def;
+pub mod determinism;
 pub mod interop;
 pub mod proposal;
 pub mod store;
@@ -26,6 +28,7 @@ pub mod store;
 // Re-exports carry only names with live `crate::workflow::X` consumers;
 // everything else is reached fully-qualified (`workflow::store::…`,
 // `workflow::proposal::…`, `workflow::clarify::…`) at its call sites.
+pub use budget::{BudgetOutcome, BudgetSnapshot, WorkflowRunBudget};
 pub use clarify::{ClarifyContext, CLARIFY_DELIVERY_PENDING_KEY};
 pub use compile::{
     materialize, workflow_effort_think_level, workflow_model_override, workflow_origin,
@@ -35,4 +38,5 @@ pub use compile::{
     WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
 };
 pub use def::{render_prompt, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
+pub use determinism::{audit_step_prompt, DeterminismFinding, DeterminismFindingKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
