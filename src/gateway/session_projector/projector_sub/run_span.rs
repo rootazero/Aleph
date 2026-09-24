@@ -241,22 +241,40 @@ pub(crate) async fn synthesize_missing_stamps(
             run_start: span.start,
             bus: None,
         };
-        // Folded first, for the same reason as the meta arm (F10).
-        let Some((bill, if_stamped)) = fold_run_bill(id, end, &ctx, &span.run_id, None, None, None)
-            .await
-            .plan()
+        // Folded first, for the same reason as the meta arm (F10). `anchor`
+        // equals `span.start` by construction here (a span's own opener is
+        // always a live RunStarted) — reading it from the fold rather than
+        // re-asserting that agreement is the same derivation the meta arm
+        // uses (I2), so the two cannot drift apart under a future change to
+        // either.
+        let Some((bill, if_stamped, anchor)) =
+            fold_run_bill(id, end, &ctx, &span.run_id, None, None, None)
+                .await
+                .plan(span.start)
         else {
             report.errored = true;
             continue;
         };
         match store
-            .stamp_and_bill_in_range(id, span.start, end, &meta, bill.as_ref())
+            .stamp_and_bill_in_range(id, anchor, end, &meta, bill.as_ref())
             .await
         {
             Ok(StampOutcome::Stamped) => {
                 report.stamps_synthesized += 1;
                 if if_stamped == BillOutcome::Billed {
                     report.usage_rebilled += 1;
+                }
+                if if_stamped == BillOutcome::Unfoldable {
+                    // Reachable only through a retire racing the heal's own
+                    // read against this fold's read — `span.start` is always
+                    // a live RunStarted when the spans were collected.
+                    tracing::warn!(
+                        session = ?id,
+                        run_id = %span.run_id,
+                        "heal: synthesized stamp landed, but its spend cannot be folded \
+                         (its RunStarted was retired between the heal's read and the \
+                         fold's); not accumulated"
+                    );
                 }
             }
             Ok(StampOutcome::AlreadyStamped | StampOutcome::NoRowInRange) => {}

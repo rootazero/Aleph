@@ -535,9 +535,14 @@ impl SessionManager {
     /// Until this had a production caller, the session's token columns were
     /// permanently 0 and `estimated_cost_usd` had no column at all — while both
     /// were surfaced to the model (the `sessions` tool) and to the Panel as
-    /// facts. The caller is `session_projector`'s `AssistantRunMeta` arm, whose
-    /// watermark suppression is what makes this accumulation idempotent under
-    /// the reconciler's replay.
+    /// facts.
+    ///
+    /// No production caller today, either: a run is billed only through
+    /// `stamp_and_bill_in_range`, inside the same operation that lands its
+    /// stamp (F10), and that stamp is the idempotence guard against a replay.
+    /// Calling this method to bill a run bypasses that guard — nothing here
+    /// stops a second call from billing the same run twice. Parked, not cut
+    /// (2026-09-24 review, I1).
     pub async fn update_session_usage(
         &self,
         key: &SessionKey,

@@ -555,10 +555,10 @@ async fn heal_session(
     }
     // `retry` is part of this answer. Every failure inside the loop — an append
     // that would not write, a stamp that would not land, a retirement flag that
-    // would not read — comes back as `Projected::Retry` and sets none of the
-    // counters, so without this clause a heal that wrote nothing BECAUSE it
-    // could not returns `up_to_date: true`, and the reconciler counts the
-    // session as whole in the boot line.
+    // would not read, a usage fold that would not read — comes back as
+    // `Projected::Retry` and sets none of the counters, so without this clause
+    // a heal that wrote nothing BECAUSE it could not returns `up_to_date: true`,
+    // and the reconciler counts the session as whole in the boot line.
     //
     // Deliberately not folded into `errored`: a `NoRowInRange` deferral is
     // benign (a run that produced no assistant row at all), and reporting it as
@@ -702,7 +702,8 @@ pub(crate) enum Projected {
     /// deliberately retired, or a stamp with no row in its run's range.
     Nothing,
     /// This seq must be tried again — its retirement state is unknown, a write
-    /// failed, or the row a stamp needs is not in the projection yet.
+    /// failed, a usage fold could not be read, or the row a stamp needs is
+    /// not in the projection yet.
     Retry,
 }
 
@@ -809,7 +810,7 @@ pub(crate) async fn project_event(
             // Fold BEFORE the stamp (F10): the stamp is the bill's idempotence
             // guard, so a stamp that landed without its bill could never be
             // billed again. A failed read writes nothing and retries.
-            let Some((bill, if_stamped)) = fold_run_bill(
+            let Some((bill, if_stamped, anchor)) = fold_run_bill(
                 id,
                 rec.seq,
                 ctx,
@@ -819,17 +820,21 @@ pub(crate) async fn project_event(
                 model_provider.as_deref(),
             )
             .await
-            .plan()
-            else {
+            .plan(ctx.run_start) else {
                 return Projected::Retry;
             };
             // The row this run's numbers belong to is the last assistant row
             // BETWEEN the run's own `RunStarted` and this meta — not "the last
             // assistant row in the table", which on a session with two runs
             // (or with a later row already back-filled) is somebody else's.
+            // The lower bound is `anchor`, not `ctx.run_start` (I2): they
+            // agree when `run_start` is this run's own opener, but
+            // `run_start` can go stale-low (0, after a drain respawn) while
+            // the fold still anchors correctly — using `run_start` there
+            // would let the stamp reach back into the PRIOR run's row.
             match ctx
                 .store
-                .stamp_and_bill_in_range(id, ctx.run_start, rec.seq, &meta, bill.as_ref())
+                .stamp_and_bill_in_range(id, anchor, rec.seq, &meta, bill.as_ref())
                 .await
             {
                 Ok(StampOutcome::AlreadyStamped) => Projected::Nothing,
@@ -921,9 +926,19 @@ pub(crate) async fn project_event(
 }
 
 /// What the usage fold says a run owes, read BEFORE its stamp is written.
-pub(crate) enum FoldedBill {
-    Owe(RunBill),
-    Nothing,
+/// `Owe` and `Nothing` carry the seq the fold anchored on — the last
+/// `RunStarted` in the slice, from [`crate::session::usage_fold::run_usage_totals`]
+/// — so a caller that stamps by range can bound it from the SAME anchor the
+/// fold used rather than re-deriving one (I2, criterion #12): a stale-low
+/// `ctx.run_start` (for example 0, after a drain respawn) must not let the
+/// stamp's lower bound reach further back than the fold's did, or it can pick
+/// up the PRIOR run's row instead of this run's.
+enum FoldedBill {
+    Owe(RunBill, EventSeq),
+    Nothing(EventSeq),
+    /// No anchor at all — no event log, or no `RunStarted` in the slice (a
+    /// retired opener, or a legacy log). [`FoldedBill::plan`] falls back to
+    /// the caller's own lower bound for this variant only.
     Unfoldable,
     /// The slice could not be read. Nothing may be written: the stamp is the
     /// bill's idempotence guard, so stamping now would forfeit the bill.
@@ -931,13 +946,16 @@ pub(crate) enum FoldedBill {
 }
 
 impl FoldedBill {
-    /// The bill to hand the store and the outcome to report if the stamp
-    /// lands; `None` = the fold failed and the caller writes nothing.
-    pub(crate) fn plan(self) -> Option<(Option<RunBill>, BillOutcome)> {
+    /// The bill to hand the store, the outcome to report if the stamp lands,
+    /// and the seq to stamp FROM. `None` = the fold failed and the caller
+    /// writes nothing. `fallback` is the caller's own lower bound
+    /// (`ctx.run_start` or a span's `start`), used only for `Unfoldable`,
+    /// which has no anchor to report.
+    fn plan(self, fallback: EventSeq) -> Option<(Option<RunBill>, BillOutcome, EventSeq)> {
         match self {
-            Self::Owe(bill) => Some((Some(bill), BillOutcome::Billed)),
-            Self::Nothing => Some((None, BillOutcome::NothingToBill)),
-            Self::Unfoldable => Some((None, BillOutcome::Unfoldable)),
+            Self::Owe(bill, anchor) => Some((Some(bill), BillOutcome::Billed, anchor)),
+            Self::Nothing(anchor) => Some((None, BillOutcome::NothingToBill, anchor)),
+            Self::Unfoldable => Some((None, BillOutcome::Unfoldable, fallback)),
             Self::ReadFailed => None,
         }
     }
@@ -948,13 +966,17 @@ impl FoldedBill {
 /// ([`crate::session::usage_fold::run_usage_totals`]). The cost and model are
 /// the meta's own — `None` from [`synthesize_missing_stamps`], which has no
 /// meta and passes the run's `RunFinished` seq as `meta_seq`. Read BEFORE the
-/// stamp (F10): the log is append-only, so the slice is fixed once the meta
-/// exists, and a read that fails leaves nothing half-written.
+/// stamp (F10): a read that fails leaves nothing half-written. The slice is
+/// NOT fixed once the meta exists — a `/compact` can retire the opener later,
+/// which is the `Unfoldable` case below; it is harmless because the replay by
+/// then reads `AlreadyStamped`.
 ///
 /// `ctx.run_start == 0` ⇒ the slice starts at the log head and the fold
 /// anchors on the last `RunStarted` it finds — the restarted-drain case,
-/// where this process never saw the marker go by.
-pub(crate) async fn fold_run_bill(
+/// where this process never saw the marker go by. That is also the shape I2
+/// fixes: `ctx.run_start` may be stale-low, but the anchor this function
+/// returns is always this run's own opener (or nothing), never a stale one.
+async fn fold_run_bill(
     id: &SessionId,
     meta_seq: EventSeq,
     ctx: &ProjectionCtx<'_>,
@@ -976,7 +998,7 @@ pub(crate) async fn fold_run_bill(
             return FoldedBill::ReadFailed;
         }
     };
-    let Some(totals) = crate::session::usage_fold::run_usage_totals(&slice) else {
+    let Some((anchor, totals)) = crate::session::usage_fold::run_usage_totals(&slice) else {
         return FoldedBill::Unfoldable;
     };
     if totals.without_usage > 0 {
@@ -989,15 +1011,18 @@ pub(crate) async fn fold_run_bill(
         );
     }
     if totals.input == 0 && totals.output == 0 && cost_usd.is_none() {
-        return FoldedBill::Nothing;
+        return FoldedBill::Nothing(anchor);
     }
-    FoldedBill::Owe(RunBill {
-        input_tokens: i64::try_from(totals.input).unwrap_or(i64::MAX),
-        output_tokens: i64::try_from(totals.output).unwrap_or(i64::MAX),
-        cost_usd: cost_usd.unwrap_or(0.0),
-        model: model.map(str::to_string),
-        model_provider: provider.map(str::to_string),
-    })
+    FoldedBill::Owe(
+        RunBill {
+            input_tokens: i64::try_from(totals.input).unwrap_or(i64::MAX),
+            output_tokens: i64::try_from(totals.output).unwrap_or(i64::MAX),
+            cost_usd: cost_usd.unwrap_or(0.0),
+            model: model.map(str::to_string),
+            model_provider: provider.map(str::to_string),
+        },
+        anchor,
+    )
 }
 
 impl SessionEventObserver for MessageProjector {
@@ -1533,7 +1558,11 @@ mod tests {
             .into_iter()
             .find(|m| m.role == "assistant")
             .expect("the row is there");
-        assert!(row.metadata.is_none(), "nothing stamped: {:?}", row.metadata);
+        assert!(
+            row.metadata.is_none(),
+            "nothing stamped: {:?}",
+            row.metadata
+        );
     }
 
     /// F10 through the projector: the store refuses the bill, the meta is
@@ -1576,18 +1605,26 @@ mod tests {
         let meta_rec = rec(4, run_meta(tid, "run_a"));
         assert_eq!(project_event(&id, &meta_rec, &ctx).await, Projected::Retry);
 
-        manager.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_bill;").unwrap();
+        manager
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_bill;")
+            .unwrap();
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
-            Projected::Stamped { bill: BillOutcome::Billed }
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
         );
         let meta = store.get_metadata(&id).await.unwrap().unwrap();
         assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
     }
 
-    /// Review Focus 4: a meta whose opener is gone (retired by `/compact`)
-    /// stamps its row and bills nothing — and the heal SAYS so: one stamp
-    /// re-applied, zero rebilled, tokens untouched.
+    /// Review Focus 4: a meta whose slice holds no `RunStarted` at all — a
+    /// legacy log, the same shape a retired opener would leave — stamps its
+    /// row and bills nothing, and the heal SAYS so: one stamp re-applied,
+    /// zero rebilled, tokens untouched.
     #[tokio::test]
     async fn a_heal_counts_an_unfoldable_stamp_as_not_rebilled() {
         let temp = tempdir().unwrap();
@@ -1597,7 +1634,10 @@ mod tests {
         let tid = uuid::Uuid::new_v4();
         let log = own_event_log(
             &id,
-            &[(2, assistant_msg_billed(tid, 45, 25)), (4, run_meta(tid, "run_a"))],
+            &[
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (4, run_meta(tid, "run_a")),
+            ],
         )
         .await;
         let pinned: Option<Arc<dyn SessionEventStore>> = Some(log);
@@ -1613,12 +1653,107 @@ mod tests {
         )
         .await;
         assert_eq!(
-            (report.holes_filled, report.stamps_reapplied, report.usage_rebilled),
+            (
+                report.holes_filled,
+                report.stamps_reapplied,
+                report.usage_rebilled
+            ),
             (1, 1, 0),
             "{report:?}"
         );
         let meta = store.get_metadata(&id).await.unwrap().unwrap();
         assert_eq!((meta.input_tokens, meta.output_tokens), (0, 0));
+    }
+
+    /// I2 regression: the stamp's lower bound must be the SAME anchor the
+    /// fold used, not `ctx.run_start` — which can go stale-low (0, after a
+    /// drain respawn) while the fold still anchors correctly on this run's
+    /// own `RunStarted`. Before the fix, a stale-low `run_start` let the
+    /// stamp's range reach back past this run's own opener and pick up the
+    /// PRIOR run's row instead — overwriting its stamp and billing the wrong
+    /// run there.
+    #[tokio::test]
+    async fn a_stale_low_run_start_cannot_steal_the_prior_runs_row() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "stale_run_start.db");
+        let id = SessionId::ephemeral("stale-run-start");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid_a = uuid::Uuid::new_v4();
+        let tid_b = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, assistant_msg_billed(tid_a, 10, 5)),
+            (3, run_finished("run_a")),
+            (4, run_meta(tid_a, "run_a")),
+            (5, run_started("run_b")),
+            // B's row is deliberately never projected — the hole this
+            // regression needs: the event is in the log (the fold can see
+            // it) but no row for it exists in `messages`.
+            (6, assistant_msg_billed(tid_b, 45, 25)),
+            (7, run_finished("run_b")),
+            (8, run_meta(tid_b, "run_b")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+
+        // Run A: project its row, then its meta, with its own correct
+        // `run_start`. This is the row a stale-low `run_start` must not
+        // reach.
+        let ctx_a = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        project_event(&id, &rec(2, assistant_msg_billed(tid_a, 10, 5)), &ctx_a).await;
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid_a, "run_a")), &ctx_a).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
+        );
+
+        // Run B: its row (seq 6) is never projected. Its meta is projected
+        // with `run_start: 0` — the stale-low value a drain respawn leaves
+        // behind (`ensure_drain`'s fresh, empty map).
+        let ctx_b = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 0,
+            bus: None,
+        };
+        assert_eq!(
+            project_event(&id, &rec(8, run_meta(tid_b, "run_b")), &ctx_b).await,
+            Projected::Nothing,
+            "B's row is a hole, not A's — the anchor must exclude A's row \
+             even though `run_start` is stale-low"
+        );
+
+        let row_a = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("A's row is there");
+        assert_eq!(
+            row_a
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("run_a"),
+            "A's row must still carry A's own stamp, not B's"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (10, 5),
+            "B must not have been billed onto A's row"
+        );
     }
 
     /// An unreadable retirement flag is neither "retired" nor "live". The old
@@ -1851,7 +1986,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(3, run_meta(tid, "run_a")), &ctx_a).await,
-            Projected::Stamped { bill: BillOutcome::Unfoldable }
+            Projected::Stamped {
+                bill: BillOutcome::Unfoldable
+            }
         );
 
         let rows = store.get_history(&id, None).await.unwrap();
@@ -2029,7 +2166,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta_without_gauge(tid, "run_a")), &ctx).await,
-            Projected::Stamped { bill: BillOutcome::NothingToBill },
+            Projected::Stamped {
+                bill: BillOutcome::NothingToBill
+            },
             "no usage, no price: stamped, nothing to bill"
         );
         let row = store
@@ -2099,7 +2238,9 @@ mod tests {
         let meta_rec = rec(4, run_meta(tid, "run_a"));
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
-            Projected::Stamped { bill: BillOutcome::Billed }
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
         );
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
@@ -2152,7 +2293,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
-            Projected::Stamped { bill: BillOutcome::Unfoldable }
+            Projected::Stamped {
+                bill: BillOutcome::Unfoldable
+            }
         );
 
         let row = store
