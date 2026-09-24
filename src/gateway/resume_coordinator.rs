@@ -928,6 +928,43 @@ fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(
     }
 }
 
+/// The resumed run's `RunRequest`, built FROM `metadata` as the fire-time
+/// grant for the session `row` admitted it (round 11, N8; ruling b):
+/// `retrigger` executes exactly the request returned here, so the grant can
+/// only land on what runs.
+fn admit_resume<R>(
+    resolve: R,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    mut metadata: HashMap<String, String>,
+    session_id: &SessionId,
+    workspace_override: Option<std::path::PathBuf>,
+    model_override: Option<crate::gateway::model_override::ModelOverride>,
+) -> Result<RunRequest, ResumeRefusal>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    resume_authority(crate::gateway::fire_gate::authorize_session_run(
+        resolve,
+        row,
+        &mut metadata,
+    ))?;
+    Ok(RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        // Empty input — `FlowInput::Resume` ignores it; the session log
+        // already holds the original UserMessage.
+        input: String::new(),
+        session_key: session_id.clone(),
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override,
+        max_iterations_override: None,
+        model_override,
+    })
+}
+
 /// What a resume candidate does once its age is known, decided in ONE order:
 /// fire-time authority first, the crash-loop cap second, the intent stamp
 /// last (ruling a, §15).
@@ -2376,31 +2413,19 @@ impl ResumeCoordinator {
         // Fire-time authority (round 11, N8), resolved LAST so its stamp is
         // the final word on scope / author / role: the session owner's
         // CURRENT status and role, not whatever was true when the run crashed.
-        resume_authority(crate::gateway::fire_gate::authorize_session_run(
+        let request = admit_resume(
             |subject| crate::scope::authority::resolve(&subject),
             row.as_ref(),
-            &mut metadata,
-        ))?;
-        // A replayed `/btw` stamp makes this resume a side question. Read
-        // here, before `metadata` moves into the request, because the
-        // emitter choice below depends on it.
-        let is_side_question = metadata.contains_key(crate::gateway::btw::BTW_METADATA_KEY);
-
-        let request = RunRequest {
-            run_id: uuid::Uuid::new_v4().to_string(),
-            // Empty input — `FlowInput::Resume` ignores it; the session log
-            // already holds the original UserMessage.
-            input: String::new(),
-            session_key: session_id.clone(),
-            timeout_secs: None,
             metadata,
-            attachments: Vec::new(),
-            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
+            session_id,
             workspace_override,
-            max_iterations_override: None,
-            model_override: plan.model_override.clone(),
-        };
+            plan.model_override.clone(),
+        )?;
+        // A replayed `/btw` stamp makes this resume a side question; the
+        // emitter choice below depends on it.
+        let is_side_question = request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY);
 
         // Broadcast the recovered run live (Panel / CLI / `aleph watch`) on
         // the bus. Same two arms as `execute::spawn_continuation_run` and
@@ -3357,6 +3382,45 @@ mod tests {
         resume_authority(crate::gateway::fire_gate::apply(authority, &mut meta))
             .expect("an active member resumes");
         assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    /// Ruling (b) at the resume site: the request `admit_resume` hands back —
+    /// the one `retrigger` executes — carries the grant resolved for this row.
+    /// A member's PERSONAL session, so the member ceiling (not the room floor)
+    /// supplies `caller_role`.
+    #[test]
+    fn the_resumed_request_carries_the_resolved_grant() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::gateway::session_store::types::SessionMetadata;
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let session_id = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let request = admit_resume(
+            |s| crate::scope::authority::resolve_with(Some(&users), &s),
+            Some(&row),
+            resume_metadata(None, Some(&row)),
+            &session_id,
+            None,
+            None,
+        )
+        .expect("an active member resumes");
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("member")
+        );
+        assert_eq!(
+            request.metadata.get("resume").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]

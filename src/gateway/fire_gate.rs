@@ -37,6 +37,14 @@ pub(crate) enum FireVerdict {
 /// Map `authority` onto `metadata` and a verdict. `metadata` is changed only
 /// on `Granted` (`Granted::stamp`: scope keys, author, and `caller_role` only
 /// when it downgrades an operator carry).
+///
+/// `Legacy` stamps nothing here, while cron and heartbeat run `Legacy` under
+/// `Granted::legacy` (which stamps the persisted pair). The two agree in
+/// production: boot always installs the users store, so `Legacy` there only
+/// means "nobody to check" — no owner and no author — and `Granted::legacy`
+/// of such a subject has no pair and no author to stamp either. They differ
+/// only where no store is installed (tests, minimal servers), where an owned
+/// row resolves `Legacy` and cron/heartbeat still stamp its pair.
 #[must_use]
 pub(crate) fn apply(
     authority: FireAuthority,
@@ -119,6 +127,12 @@ pub(crate) fn authorize_session_run<R>(
 where
     R: FnOnce(FireSubject<'_>) -> FireAuthority,
 {
+    // An empty author is absent, exactly as the resolver reads it.
+    let initiator_unknown_in_room = row_is_project_room(row)
+        && metadata
+            .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+            .is_none_or(String::is_empty)
+        && !metadata.contains_key("caller_role");
     let subject = subject_for_session_row(row, metadata);
     let checked = crate::scope::authority::checked_person(&subject).map(|(id, is_author)| {
         let capacity = if is_author { "author" } else { "session owner" };
@@ -126,12 +140,77 @@ where
     });
     let authority = resolve(subject);
     match apply(authority, metadata) {
+        FireVerdict::Proceed => {
+            if initiator_unknown_in_room {
+                // Role only goes DOWN: absent reads as operator, and a
+                // ceiling the grant already stamped is kept.
+                metadata
+                    .entry("caller_role".to_string())
+                    .or_insert_with(|| {
+                        crate::gateway::security::store::UserRole::Member
+                            .wire_role()
+                            .to_string()
+                    });
+            }
+            FireVerdict::Proceed
+        }
         FireVerdict::Refused(reason) => FireVerdict::Refused(match checked {
             Some(who) => format!("{reason} — {who}"),
             None => reason,
         }),
         other => other,
     }
+}
+
+/// The two stopping arms of [`FireVerdict`]: what a session-row admission
+/// returns instead of the metadata to run with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FireStop {
+    /// Settled (deactivated / deleted): stop this work and say why.
+    Refused(String),
+    /// The users store could not answer (R-a): skip this fire only.
+    Unknown(String),
+}
+
+/// [`authorize_session_run`] for an executor that BUILDS its run from the
+/// result: `Ok` is `base` as admitted — stamped with the resolved grant and
+/// the room floor — and the only metadata the caller has to build from.
+/// Taking `base` by value and handing it back is the point (ruling b): a
+/// stamp that landed on any other map would be a stamp the run never sees.
+///
+/// Each session-row executor wraps this in its own `admit_*` that builds the
+/// exact `RunRequest` it executes (`busy_queue::durable::admit_reinjection`,
+/// `announce_delivery::admit_announce`, `resume_coordinator::admit_resume`).
+pub(crate) fn admit_session_metadata<R>(
+    resolve: R,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    mut base: HashMap<String, String>,
+) -> Result<HashMap<String, String>, FireStop>
+where
+    R: FnOnce(FireSubject<'_>) -> FireAuthority,
+{
+    match authorize_session_run(resolve, row, &mut base) {
+        FireVerdict::Proceed => Ok(base),
+        FireVerdict::Refused(reason) => Err(FireStop::Refused(reason)),
+        FireVerdict::Unknown(reason) => Err(FireStop::Unknown(reason)),
+    }
+}
+
+/// Whether `row` is a project ROOM's session. In a room the row's owner is the
+/// room's CREATOR, identical for every member, so a run rebuilt from the row
+/// with no author and no carried role has an unknown initiator: judged as the
+/// creator, an admin creator would run a member's work as operator.
+/// [`authorize_session_run`] caps such a run at `member` — role only down.
+///
+/// Trade-off, recorded: an admin's own announcements and resumes in their own
+/// room are capped at member too, until the initiator is carried on these
+/// paths (announce / resume initiator carry — a ledgered follow-up).
+fn row_is_project_room(
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+) -> bool {
+    row.and_then(|r| r.scope_id.as_deref())
+        .and_then(crate::scope::ScopeId::parse)
+        .is_some_and(|scope| matches!(scope, crate::scope::ScopeId::Project(_)))
 }
 
 /// Whether the person behind a session row may act at all — the question a
@@ -144,13 +223,14 @@ where
 /// `ResumeCoordinator::retrigger`, against the run's FINAL metadata: the
 /// carried `caller_role` that `stamp_origin_identity` restores for a channel
 /// origin decides the ceiling, and a grant computed here, without it, would
-/// stamp `member` over a `guest` — raising it.
+/// stamp `member` over a `guest` — raising it. (`retrigger` resolves; its
+/// `admit_resume` applies and builds the request.)
 ///
 /// Lives here rather than in `resume_coordinator.rs` so that file's
-/// `authority::resolve(` and `authorize_session_run(` are `retrigger`'s
-/// alone: the producer census reads those tokens per file, and a second
-/// spelling beside the one that APPLIES the grant would keep the census green
-/// with that call deleted (T09 re-review, N1).
+/// `authority::resolve(` and `authorize_session_run(` are `retrigger`'s and
+/// `admit_resume`'s alone: the producer census reads those tokens per file,
+/// and a second spelling beside the one that APPLIES the grant would keep the
+/// census green with that call deleted (T09 re-review, N1).
 #[must_use]
 pub(crate) fn session_may_act(
     row: Option<&crate::gateway::session_store::types::SessionMetadata>,
@@ -346,6 +426,68 @@ mod tests {
         assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
         let scope = crate::scope::scope_from_metadata(&meta).expect("the grant stamps the pair");
         assert_eq!(scope.owner_user_id, "u-bob");
+    }
+
+    /// Final review I1: a room row rebuilt with no author and no carried role
+    /// (announce delivery, boot resume) would be judged as the room's CREATOR,
+    /// and an admin creator's grant stamps no ceiling — operator. The floor
+    /// caps it at `member`.
+    #[test]
+    fn a_room_run_with_no_known_initiator_is_capped_at_member() {
+        let store = users();
+        let room = room_row();
+        let mut meta = HashMap::new();
+        let verdict =
+            authorize_session_run(|s| resolve_with(Some(&store), &s), Some(&room), &mut meta);
+        assert_eq!(verdict, FireVerdict::Proceed);
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    /// The floor only ever lowers: a carried `guest` stays `guest`, and a
+    /// personal row (one human, the owner IS the initiator) is untouched.
+    #[test]
+    fn the_room_floor_never_raises_a_carry_and_leaves_personal_rows_alone() {
+        let store = users();
+        let mut guest = HashMap::new();
+        guest.insert("caller_role".to_string(), "guest".to_string());
+        assert_eq!(
+            authorize_session_run(
+                |s| resolve_with(Some(&store), &s),
+                Some(&room_row()),
+                &mut guest
+            ),
+            FireVerdict::Proceed
+        );
+        assert_eq!(guest.get("caller_role").map(String::as_str), Some("guest"));
+
+        let personal = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-alice".into()),
+            scope_id: Some("personal:u-alice".into()),
+            ..Default::default()
+        };
+        let mut meta = HashMap::new();
+        assert_eq!(
+            authorize_session_run(
+                |s| resolve_with(Some(&store), &s),
+                Some(&personal),
+                &mut meta
+            ),
+            FireVerdict::Proceed
+        );
+        assert_eq!(
+            meta.get("caller_role"),
+            None,
+            "an admin's own personal session keeps its uncapped grant"
+        );
+    }
+
+    /// Alice's (admin) project room `p-room`.
+    fn room_row() -> crate::gateway::session_store::types::SessionMetadata {
+        crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-alice".into()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-room".into()).render()),
+            ..Default::default()
+        }
     }
 
     /// T09 fix round 1 (I1/M4): a refusal names WHO was checked and in which

@@ -432,6 +432,37 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 /// A survivor whose session key no longer parses, or whose agent is gone, is
 /// logged and left in the journal (a later boot with the agent restored can
 /// still deliver it) rather than silently tombstoned.
+/// Rebuild a journaled message's `RunRequest` under the fire-time grant for
+/// its session `row` (round 11, N10; ruling b). The request is built FROM the
+/// admitted metadata ([`crate::gateway::fire_gate::admit_session_metadata`]),
+/// and `reinject_survivors` executes exactly the request returned here — there
+/// is no second copy of the payload's metadata a stamp could miss.
+pub(crate) fn admit_reinjection<R>(
+    resolve: R,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    payload: &QueuedRunPayload,
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Result<crate::gateway::execution_engine::RunRequest, crate::gateway::fire_gate::FireStop>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    let metadata =
+        crate::gateway::fire_gate::admit_session_metadata(resolve, row, payload.metadata.clone())?;
+    Ok(crate::gateway::execution_engine::RunRequest {
+        run_id: payload.run_id.clone(),
+        input: payload.input.clone(),
+        session_key: session_key.clone(),
+        timeout_secs: payload.timeout_secs,
+        metadata,
+        attachments: payload.attachments.clone(),
+        pending_media: Default::default(),
+        sandbox_override: None,
+        workspace_override: payload.workspace_override.clone(),
+        max_iterations_override: payload.max_iterations_override,
+        model_override: payload.model_override.clone(),
+    })
+}
+
 pub async fn reinject_survivors(
     adapter: std::sync::Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
     registry: std::sync::Arc<crate::gateway::agent_instance::AgentRegistry>,
@@ -479,43 +510,30 @@ pub async fn reinject_survivors(
         // `inbound_router::executor` (paired sender). A deactivated member's
         // queued room message is therefore refused even while the room's
         // creator is active, and vice versa (R-b / R-d).
-        let mut metadata = payload.metadata.clone();
-        let verdict = match agent.session_store().get_metadata(&session_key).await {
-            Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
+        let admitted = match agent.session_store().get_metadata(&session_key).await {
+            Err(e) => Err(crate::gateway::fire_gate::FireStop::Unknown(format!(
                 "session row unreadable: {e}"
-            )),
-            Ok(row) => crate::gateway::fire_gate::authorize_session_run(
+            ))),
+            Ok(row) => admit_reinjection(
                 |subject| crate::scope::authority::resolve(&subject),
                 row.as_ref(),
-                &mut metadata,
+                &payload,
+                &session_key,
             ),
         };
-        match verdict {
-            crate::gateway::fire_gate::FireVerdict::Proceed => {}
-            crate::gateway::fire_gate::FireVerdict::Refused(reason) => {
+        let request = match admitted {
+            Ok(request) => request,
+            Err(crate::gateway::fire_gate::FireStop::Refused(reason)) => {
                 tracing::warn!(run_id = %run_id, reason = %reason,
                     "busy-queue reinject: authority refused; tombstoning the record");
                 record_settled_because(&run_id, SettleReason::AuthorityRefused, &reason);
                 continue;
             }
-            crate::gateway::fire_gate::FireVerdict::Unknown(reason) => {
+            Err(crate::gateway::fire_gate::FireStop::Unknown(reason)) => {
                 tracing::warn!(run_id = %run_id, reason = %reason,
                     "busy-queue reinject: authority unknown; leaving record queued");
                 continue;
             }
-        }
-        let request = crate::gateway::execution_engine::RunRequest {
-            run_id: payload.run_id.clone(),
-            input: payload.input.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: payload.timeout_secs,
-            metadata: metadata.clone(),
-            attachments: payload.attachments.clone(),
-            pending_media: Default::default(),
-            sandbox_override: None,
-            workspace_override: payload.workspace_override.clone(),
-            max_iterations_override: payload.max_iterations_override,
-            model_override: payload.model_override.clone(),
         };
         // Live frames go on the bus; the final answer additionally fans out to
         // the bound origin channel when one exists (Panel-only sessions ride
@@ -557,7 +575,7 @@ pub async fn reinject_survivors(
         // dropping the message.
         let ticket = super::register_run(
             &session_key,
-            &metadata,
+            &request.metadata,
             cfg.max_per_session,
             &payload.run_id,
         );
@@ -697,6 +715,42 @@ mod tests {
         assert_eq!(
             entry.detail.as_deref(),
             Some("principal gone — author `u-ghost`")
+        );
+    }
+
+    /// Ruling (b) at the reinjection site: the request `admit_reinjection`
+    /// hands back — the one `reinject_survivors` executes — carries the grant
+    /// resolved for this row. A member's PERSONAL session, so the member
+    /// ceiling (not the room floor) is what supplies `caller_role`.
+    #[test]
+    fn the_reinjected_request_carries_the_resolved_grant() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::scope::authority::resolve_with;
+
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let key = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let queued = payload("r-bob");
+        let request = admit_reinjection(
+            |s| resolve_with(Some(&users), &s),
+            Some(&row),
+            &queued,
+            &key,
+        )
+        .expect("an active member's queued message is admitted");
+        assert_eq!(request.run_id, "r-bob");
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("member")
         );
     }
 

@@ -377,7 +377,7 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
     RunProducer {
         file: "src/gateway/busy_queue/durable.rs",
         attribution: "stamps",
-        attribution_why: "boot reinjection rebuilds the request from the journaled payload (the original arrival's scope/author/caller stamps), then re-stamps it with the fire-time grant via fire_gate::authorize_session_run (round 11, N10)",
+        attribution_why: "boot reinjection rebuilds the request from the journaled payload (the original arrival's scope/author/caller stamps), then rebuilds it under the fire-time grant via admit_reinjection → fire_gate::admit_session_metadata (round 11, N10; final review I4)",
         ingress: Ingress::Machine,
         ingress_why: "boot-time re-delivery of a message the human sent before the crash — the keystroke stamped at the original arrival (mirrors resume_coordinator: re-stamping here would let a crash-restart loop hold the sensor open with nobody present)",
         authority: Authority::Resolves,
@@ -533,10 +533,19 @@ fn seam_used_does_not_count_the_seams_own_definition() {
 }
 
 /// Evidence that a producer APPLIES the grant it resolved, rather than only
-/// asking for it: the seam that resolves-and-stamps, the verdict mapping that
+/// asking for it: the seam that resolves-and-stamps, its by-value form that
+/// hands back the admitted metadata (`admit_session_metadata`, which the
+/// busy-queue and announce `admit_*` builders call), the verdict mapping that
 /// stamps, or a direct `Granted::stamp`. Resolving and then dropping the
-/// verdict is exactly what none of these can be (T09 review, M2).
-const GRANT_APPLIED: [&str; 3] = ["authorize_session_run(", "fire_gate::apply(", ".stamp("];
+/// verdict is exactly what none of these can be (T09 review, M2). Which grant
+/// reaches the EXECUTED request is pinned behaviourally per site, not here
+/// (final review I4: each `admit_*` has a `resolve_with` test).
+const GRANT_APPLIED: [&str; 4] = [
+    "authorize_session_run(",
+    "admit_session_metadata(",
+    "fire_gate::apply(",
+    ".stamp(",
+];
 
 /// The call every `stamps` producer must contain.
 const SCOPE_STAMP: &str = "scope::stamp_metadata(";
@@ -818,11 +827,15 @@ fn every_run_producer_answers_the_fire_time_authority_question() {
                 } else if !GRANT_APPLIED.iter().any(|token| code.contains(token)) {
                     // Resolving is half the answer: a producer that asks and
                     // then drops the grant runs under the frozen authority all
-                    // the same. `resume_coordinator.rs`'s only spelling of
-                    // either half is `retrigger`'s (its pre-check resolves
-                    // through `fire_gate::session_may_act`), so deleting the
-                    // call that applies the grant turns this red (T09
-                    // re-review, N1).
+                    // the same. `resume_coordinator.rs`'s only spellings of
+                    // the two halves are `retrigger`'s resolve and
+                    // `admit_resume`'s apply (its pre-check resolves through
+                    // `fire_gate::session_may_act`), so deleting the call that
+                    // applies the grant turns this red (T09 re-review, N1).
+                    // Deleting the CALL to `admit_resume` leaves its body — and
+                    // this check — intact; that face is pinned by
+                    // `the_resumed_request_carries_the_resolved_grant` plus
+                    // the dead-code lint, not by this token scan.
                     wrong.push(format!(
                         "{} resolves fire-time authority but its production code applies no grant \
                          (none of {GRANT_APPLIED:?}) — the verdict is asked for and dropped. \
