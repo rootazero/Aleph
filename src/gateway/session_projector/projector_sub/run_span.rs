@@ -21,7 +21,8 @@ use super::missed_seqs::RepairReport;
 pub(crate) struct RunSpan {
     /// The id its `RunStarted` carries — the harness-minted MARKER id
     /// (`runner_impl.rs`), which is NOT the engine's `RunRequest.run_id` the
-    /// meta carries (ruling A5: the two are never joined). It is what a
+    /// meta carries — equal since 2026-09-24 (F1), different in older logs;
+    /// the join is positional, so either reads the same. It is what a
     /// synthesized stamp writes under the row's `run_id` key, and it names
     /// this span in log lines; it is never compared to a meta's id.
     run_id: String,
@@ -68,19 +69,20 @@ impl RunSpan {
 /// PARENT: `execute()` stamps `request.session_key` and never learns the
 /// adopted child (`final_session_id()` is read only by the harness bridge,
 /// for the `RunFinished`), so the parent's `RunStarted(p) … RunFinished {
-/// split_run_id } … AssistantRunMeta` is a span WITH a meta — billed live by
+/// R } … AssistantRunMeta` is a span WITH a meta — billed live by
 /// the meta arm for its pre-split tokens plus the whole run's `cost_usd` and
-/// model. The CHILD's own span, `RunStarted { split_run_id } … RunFinished`,
-/// is the meta-less one: synthesized and billed (tokens only) at the next
-/// whole-session heal, so its tokens reach its session row no sooner than
-/// that (FOLLOW-UP F26). Assistant messages count into the newest span only
-/// while it is open.
+/// model. The CHILD's own span, `RunStarted { R } … RunFinished` (split
+/// reuses the parent run's id), is the meta-less one: synthesized and billed
+/// (tokens only) at the next whole-session heal, so its tokens reach its
+/// session row no sooner than that (FOLLOW-UP F26). Assistant messages count
+/// into the newest span only while it is open.
 ///
 /// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
-/// markers carry the harness-minted marker id and the meta carries the
-/// engine's run id, and the two are never equal on a live log (ruling A5),
-/// so an id join never matched: every finished run read as meta-less at
-/// boot, a stamp was synthesized and billed on EVERY boot, and the two
+/// older logs' markers carry a harness-minted id that is never the meta's;
+/// newer logs carry the engine id on both (F1). The join below is positional
+/// and reads both, so an id join never matched: every finished run read as
+/// meta-less at boot, a stamp was synthesized and billed on EVERY boot, and
+/// the two
 /// stamps then overwrote each other's `run_id` so the next boot re-applied
 /// both — session totals doubled per restart (44 → 88 → 176 on the real
 /// machine). Position is the same derivation the projector's meta arm uses
@@ -192,12 +194,10 @@ pub(crate) fn collect_run_spans(
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
 /// rows strictly between), so a later heal reads `AlreadyStamped` and bills
 /// nothing: the stamp is the idempotence guard, exactly as on the live path.
-/// Against a later heal only — the stamp carries the MARKER id, a real meta
-/// carries the engine id, and `already_stamped_by` reads a different id as a
-/// different run (see the race note below). The bill is [`bill_run_from_fold`]
-/// with `run_start = start` and the fold read up to `end`; the cost and model
-/// are `None` because there is no meta to take them from, so a synthesized
-/// bill adds tokens and never dollars. A run whose provider reported no usage
+/// The bill is [`bill_run_from_fold`] with `run_start = start` and the fold
+/// read up to `end`; the cost and model are `None` because there is no meta
+/// to take them from, so a synthesized bill adds tokens and never dollars.
+/// A run whose provider reported no usage
 /// is stamped (the join is still owed) and not billed — nothing to add, and
 /// `bill_run_from_fold` says nothing about it.
 ///
@@ -210,12 +210,11 @@ pub(crate) fn collect_run_spans(
 /// The boot reconciler runs before any run is live, so it cannot race a meta
 /// that is about to be appended. A `request_repair` on a live session (the
 /// doctor's repair) can, in the window between a run's `RunFinished` and its
-/// meta: the synthesized stamp lands first under the marker id, and the meta
-/// — carrying the engine id — then finds a row stamped by "a different run",
-/// overwrites the stamp and bills the run a second time. That window is one
-/// append wide and a T24 known limit; closing it needs the two ids joined
-/// (FOLLOW-UP "A5 join"), not a guess here about which id a stamp "really"
-/// names.
+/// meta: the synthesized stamp lands first, under the run's own id since the
+/// markers carry the engine id (F1), so the meta then reads `AlreadyStamped`
+/// and bills nothing. The run's tokens are billed once; the cost and model
+/// the meta carried are not (ruling U5). Logs written before F1 still carry
+/// a marker id there, and for them the window still double-bills — U1.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn synthesize_missing_stamps(
     store: &Arc<dyn SessionStore>,

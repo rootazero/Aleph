@@ -1323,19 +1323,20 @@ mod tests {
         log
     }
 
-    /// The marker id a live log carries on its `RunStarted` / `RunFinished`
-    /// for the run whose meta carries `run`: the harness mints its own
-    /// (`runner_impl.rs`), and it is never the engine id the meta carries.
-    /// Every fixture that pairs a marker with a meta derives the marker id
-    /// here, so no test can pass by an equality the production log never
-    /// satisfies.
+    /// The marker id a log written BEFORE 2026-09-24 carries on its
+    /// RunStarted / RunFinished: the bridge minted its own, never the engine
+    /// id the meta carries (ruling A5, reversed by F1). Fixtures that pin
+    /// the legacy shape derive the marker id here; the same-id shape every
+    /// newer log carries has its own twins below (U1: both shapes stay
+    /// readable).
     fn marker_of(run: &str) -> String {
         format!("marker-{run}")
     }
 
     /// One run, one priced message, its meta after `RunFinished` — the shape
     /// every billing test below reads. `(45, 25)` is what the fold must find.
-    /// The markers carry [`marker_of`]`(run)`, the meta carries `run`.
+    /// The markers carry [`marker_of`]`(run)`, the meta carries `run` — the
+    /// legacy shape.
     fn one_billed_run(tid: TurnId, run: &str) -> Vec<(EventSeq, SessionEvent)> {
         vec![
             (1, run_started(&marker_of(run))),
@@ -2121,10 +2122,9 @@ mod tests {
         );
     }
 
-    /// The production id shape, on the pure fold: the markers carry the
-    /// harness-minted marker id, the meta carries the engine's run id, and
-    /// the two are never equal (ruling A5). The meta must still mark the span
-    /// it follows — by position, the way the projector anchored it — or every
+    /// The legacy id shape, on the pure fold: in a log written before the
+    /// markers carried the engine id, the meta still marks the span it
+    /// follows — by position, the way the projector anchored it — or every
     /// finished run reads meta-less at boot and is stamped and billed again
     /// on every restart (the `holes` stage's 44 → 88 → 176). Reddens if the
     /// join goes back to comparing ids.
@@ -2141,6 +2141,23 @@ mod tests {
             vec![None],
             "the meta names an id the markers never carry, and still marks \
              the span it landed inside: nothing to synthesize"
+        );
+    }
+
+    /// The shape every log written since 2026-09-24 carries: the markers and
+    /// the meta share the engine's run id. Same answer as the legacy twin
+    /// above — the join is positional, so it never depended on the ids.
+    #[test]
+    fn a_meta_under_its_markers_own_id_marks_the_span_it_follows() {
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            synthesis_ends(&[
+                (1, run_started("engine-X")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, run_finished("engine-X")),
+                (4, run_meta(tid, "engine-X")),
+            ]),
+            vec![None],
         );
     }
 
@@ -2165,8 +2182,10 @@ mod tests {
     /// The historical shape: run a's meta landed AFTER run b's opener (the
     /// live path no longer writes this — `execute()` holds the run slot
     /// through the meta append, pinned in `execution_engine::tests` — but
-    /// logs written before that fix carry it). The walk anchors the meta on
-    /// b's opener, finds no assistant row in `(4, 5]`, finalises it
+    /// logs written before that fix carry it). This is also a log written
+    /// before the markers carried the engine id — the `marker_of` fixture ids
+    /// throughout — so the same positional join applies. The walk anchors the
+    /// meta on b's opener, finds no assistant row in `(4, 5]`, finalises it
     /// `NoRowInRange` and bills nothing; the positional fold reads the same
     /// way — the meta marks span b — so span a is finished, has a row and no
     /// meta, and IS synthesized: stamped with its marker id and billed ONCE
@@ -2263,9 +2282,9 @@ mod tests {
     }
 
     /// The shape `qa/resume_boundary` `holes` measures, at the store: a run
-    /// that finished normally on the LIVE path — markers with the marker id,
-    /// meta with the engine id, drained live so the meta's own stamp landed
-    /// and billed — is billed exactly once, and two whole-session repairs
+    /// that finished normally on the LIVE path — in a log written before the
+    /// markers carried the engine id, drained live so the meta's own stamp
+    /// landed and billed — is billed exactly once, and two whole-session repairs
     /// (the boot reconciler's pass, twice, as two restarts would run it) add
     /// nothing. With the fold joining meta to span by id equality this went
     /// `(45, 25)` → `(90, 50)` → `(180, 100)`: every pass read the run as
@@ -2329,6 +2348,163 @@ mod tests {
             Some("engine-x"),
             "the row still carries the meta's id — no synthesized stamp overwrote it"
         );
+    }
+
+    /// F1, at the store: `request_repair` runs in the one-append window between
+    /// a run's `RunFinished` and its meta, synthesizes the stamp and bills the
+    /// run's tokens; the meta then lands under the SAME id, reads
+    /// `AlreadyStamped` and bills nothing. Tokens once. Before the markers
+    /// carried the engine id, the meta read the synthesized stamp as "another
+    /// run's", overwrote it and billed a second time. The cost and model the
+    /// meta carried are lost — ruling U5, asserted so a change to it is seen.
+    #[tokio::test]
+    async fn a_synthesized_stamp_then_its_own_meta_bills_the_run_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "synth_then_meta.db");
+        let id = SessionId::ephemeral("synth-then-meta");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let run = [
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("engine-r")),
+        ];
+        let log = own_event_log(&id, &run).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log.clone()));
+        for (seq, ev) in &run {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        let repair = projector.request_repair(&id).await;
+        assert_eq!(
+            (repair.stamps_synthesized, repair.usage_rebilled),
+            (1, 1),
+            "the repair ran inside the window and synthesized: {repair:?}"
+        );
+
+        let meta_ev = run_meta(tid, "engine-r");
+        log.append(&id, 4, &meta_ev, 0).await.unwrap();
+        projector.on_appended(&id, &rec(4, meta_ev));
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (45, 25),
+            "tokens once"
+        );
+        assert_eq!(
+            (meta.estimated_cost_usd, meta.model.as_deref()),
+            (0.0, None),
+            "U5: the late meta's cost and model are not accumulated"
+        );
+    }
+
+    /// One engine run whose first attempt failed and was retried under the
+    /// same run id: two brackets, one meta after the last. The meta bills the
+    /// last bracket; the first — finished, with a row, no meta — is
+    /// synthesized and billed once from its own messages; a second repair adds
+    /// nothing. The provider billed both attempts, so both are counted.
+    #[tokio::test]
+    async fn a_retried_run_bills_each_bracket_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "retried_run.db");
+        let id = SessionId::ephemeral("retried-run");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 10, 5)),
+            (
+                3,
+                SessionEvent::RunFinished {
+                    run_id: "engine-r".into(),
+                    outcome: crate::session::events::RunOutcome::Errored,
+                    at: 2,
+                },
+            ),
+            (4, run_started("engine-r")),
+            (5, assistant_msg_billed(tid, 45, 25)),
+            (6, run_finished("engine-r")),
+            (7, run_meta(tid, "engine-r")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        let tokens = |m: &crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        assert_eq!(
+            tokens(&store.get_metadata(&id).await.unwrap().unwrap()),
+            (45, 25),
+            "the live meta billed the bracket it closes"
+        );
+
+        let first = projector.request_repair(&id).await;
+        assert_eq!(
+            (first.stamps_synthesized, first.usage_rebilled),
+            (1, 1),
+            "{first:?}"
+        );
+        let second = projector.request_repair(&id).await;
+        assert!(second.up_to_date, "{second:?}");
+        assert_eq!(
+            tokens(&store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "each bracket billed exactly once"
+        );
+    }
+
+    /// A session that straddles the upgrade: run a was written before the
+    /// markers carried the engine id (marker ≠ meta id), run b after (same id).
+    /// Both are billed once live, and two repairs add nothing.
+    #[tokio::test]
+    async fn a_legacy_run_and_a_same_id_run_in_one_log_are_each_billed_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "mixed_shapes.db");
+        let id = SessionId::ephemeral("mixed-shapes");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let mut events = one_billed_run(tid, "a");
+        events.extend([
+            (5, run_started("b")),
+            (6, assistant_msg_billed(tid, 10, 5)),
+            (7, run_finished("b")),
+            (8, run_meta(tid, "b")),
+        ]);
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        for pass in 1..=2 {
+            let repair = projector.request_repair(&id).await;
+            assert!(repair.up_to_date, "repair {pass}: {repair:?}");
+        }
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (55, 30));
+        let ids: Vec<Option<String>> = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.role == "assistant")
+            .map(|m| {
+                m.metadata
+                    .as_ref()
+                    .and_then(|v| v.get("run_id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(ids, vec![Some("a".to_string()), Some("b".to_string())]);
     }
 
     /// Final review I1, at the store: a `chat.rewind` / `session.truncate` /
