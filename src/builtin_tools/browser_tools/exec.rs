@@ -222,6 +222,51 @@ pub enum ExecAction {
         #[serde(default)]
         prompt_text: Option<String>,
     },
+    /// Run a sub-list of actions repeatedly: the `until` condition is
+    /// evaluated BEFORE each iteration — a condition already true runs zero
+    /// iterations — and the loop stops when it holds or after
+    /// `max_iterations` (hard cap 20). A condition that cannot be EVALUATED
+    /// aborts the whole procedure; it is never read as true or false.
+    /// Nested `repeat` is refused at plan time (one level of repetition).
+    Repeat {
+        /// The actions to repeat.
+        actions: Vec<ExecAction>,
+        /// Stop condition, checked before each iteration.
+        until: ExecCondition,
+        /// Maximum iterations (hard cap 20).
+        max_iterations: u32,
+    },
+    /// Run `then` when `condition` holds, `otherwise` (if given) when it
+    /// does not. A condition that cannot be EVALUATED aborts the whole
+    /// procedure — it is never read as true or false.
+    If {
+        /// The condition to evaluate once.
+        condition: ExecCondition,
+        /// Steps run when the condition holds.
+        then: Vec<ExecAction>,
+        /// Steps run when it does not (optional).
+        #[serde(default)]
+        otherwise: Option<Vec<ExecAction>>,
+    },
+}
+
+/// The condition of a `repeat`/`if` step: exactly one of the four fields —
+/// the same four-way mutex wording as `browser_wait_for`, minus `time_ms`
+/// (a fixed delay is not a condition; it is a `wait` step).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ExecCondition {
+    /// Text that must be present on the page.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Text that must be ABSENT from the page.
+    #[serde(default)]
+    pub text_gone: Option<String>,
+    /// CSS selector that must match at least one element.
+    #[serde(default)]
+    pub selector: Option<String>,
+    /// Substring that must appear in the tab's current URL.
+    #[serde(default)]
+    pub url_contains: Option<String>,
 }
 
 /// Arguments for the `browser_exec` tool.
@@ -263,6 +308,19 @@ pub struct StepResult {
     /// Encoding of `image_base64` — always `"png"` (see above).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// The effect-arrival verdict for click/type/fill steps on a probing
+    /// backend (the cdp one): `"verified"` / `"skipped(<engine>)"` /
+    /// `"failed"`. Absent on the two text drivers, whose honest answer is
+    /// "this backend does not say" (判据 §8) — never a fabricated
+    /// `"verified"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect_verification: Option<String>,
+    /// Results of the sub-steps a `repeat`/`if` step executed, in run order,
+    /// numbered within the parent. Reads inside a loop keep their `output`
+    /// here; `steps[]` nests as deep as the (one-level) plan allows, and the
+    /// image hoist walks it recursively.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub steps: Vec<StepResult>,
 }
 
 /// Output from the `browser_exec` tool.
@@ -382,6 +440,16 @@ enum PlannedAction {
         action: DialogAction,
         prompt_text: Option<String>,
     },
+    Repeat {
+        actions: Vec<PlannedAction>,
+        until: WaitCondition,
+        max_iterations: u32,
+    },
+    If {
+        condition: WaitCondition,
+        then: Vec<PlannedAction>,
+        otherwise: Option<Vec<PlannedAction>>,
+    },
 }
 
 /// Resolve a ref_id-or-coordinates target with `browser_click` semantics:
@@ -421,107 +489,261 @@ fn plan_actions(actions: &[ExecAction]) -> std::result::Result<Vec<PlannedAction
     if actions.is_empty() {
         return Err("browser_exec requires at least one action".into());
     }
-    if actions.len() > MAX_EXEC_ACTIONS {
+    let mut planned = Vec::with_capacity(actions.len());
+    let mut expanded = 0usize;
+    for action in actions {
+        let (p, cost) = plan_action(action, false)?;
+        planned.push(p);
+        expanded += cost;
+    }
+    if expanded > MAX_EXEC_ACTIONS {
         return Err(format!(
-            "browser_exec is limited to {MAX_EXEC_ACTIONS} actions per call (got {}); \
-             split the procedure across several calls",
-            actions.len()
+            "browser_exec is limited to {MAX_EXEC_ACTIONS} actions per call (got {expanded} \
+             after expanding repeat/if steps to their worst case); split the procedure \
+             across several calls"
         ));
     }
-    actions
-        .iter()
-        .map(|action| {
-            let planned = match action {
-                ExecAction::Navigate { url } => {
-                    if url.trim().is_empty() {
-                        return Err("navigate requires a non-empty 'url'".to_string());
-                    }
-                    PlannedAction::Navigate(url.clone())
-                }
-                ExecAction::Click { ref_id, x, y } => {
-                    PlannedAction::Click(resolve_xy_target("click", ref_id.as_ref(), *x, *y)?)
-                }
-                ExecAction::Dblclick { ref_id } => PlannedAction::Dblclick(ref_target(ref_id)),
-                // A targetless `type` is refused, not lowered to a `focused`
-                // pseudo-ref. That literal had zero readers under
-                // `src/browser/`: both backends resolve a `Ref` as a snapshot
-                // handle, so the promised "type into whatever holds focus"
-                // reached the page as a lookup for an element named `focused`
-                // and failed there. `browser_type` cut the same encoding and
-                // names the one targeting method that works; the two faces of
-                // the verb now say the same thing.
-                ExecAction::Type { ref_id, text } => {
-                    let Some(ref_id) = ref_id else {
-                        return Err(
-                            "type requires 'ref_id': add a snapshot step and pass the ref_id it \
-                             reports for the field you want to type into"
-                                .to_string(),
-                        );
-                    };
-                    PlannedAction::Type(ref_target(ref_id), text.clone())
-                }
-                ExecAction::Fill { ref_id, value } => {
-                    PlannedAction::Fill(ref_target(ref_id), value.clone())
-                }
-                ExecAction::Hover { ref_id } => PlannedAction::Hover(ref_target(ref_id)),
-                ExecAction::Scroll { direction } => PlannedAction::Scroll(direction.clone()),
-                ExecAction::Select { ref_id, value } => {
-                    PlannedAction::Select(ref_target(ref_id), value.clone())
-                }
-                ExecAction::PressKey { key } => PlannedAction::PressKey(key.clone()),
-                ExecAction::Wait {
-                    text,
-                    text_gone,
-                    selector,
-                    url_contains,
-                    time_ms,
-                    timeout_ms,
-                } => {
-                    let fields = WaitFields {
-                        text: text.clone(),
-                        text_gone: text_gone.clone(),
-                        selector: selector.clone(),
-                        url_contains: url_contains.clone(),
-                        time_ms: *time_ms,
-                    };
-                    PlannedAction::Wait {
-                        condition: resolve_wait(&fields)?,
-                        timeout_ms: super::wait_for::clamp_timeout(
-                            timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS),
-                        ),
-                    }
-                }
-                ExecAction::Snapshot { max_chars } => PlannedAction::Snapshot {
-                    // The same clamp the standalone tool applies to the same knob.
-                    max_chars: super::snapshot::resolve_max_chars(*max_chars),
+    Ok(planned)
+}
+
+/// Iterations of a `repeat` are hard-capped. The cap keeps the worst legal
+/// execution of a procedure decidable by plan arithmetic — the expansion
+/// count below is `max_iterations × len(actions)`, and 20 keeps one level of
+/// repetition well inside the 50-action budget the count is checked against.
+const MAX_REPEAT_ITERATIONS: u32 = 20;
+
+/// Plan one action, returning its planned form and its EXPANSION cost — the
+/// worst-case number of primitive steps a legal execution of it can run:
+/// `max_iterations × len(actions)` for a repeat (the budget must cover the
+/// worst legal execution, not the hoped-for one), the larger arm for an
+/// `if`, 1 for everything else. `inside_repeat` carries the one-level rule:
+/// a `repeat` reached with it set — at ANY depth, through `if` arms — is
+/// refused.
+fn plan_action(
+    action: &ExecAction,
+    inside_repeat: bool,
+) -> std::result::Result<(PlannedAction, usize), String> {
+    match action {
+        ExecAction::Repeat {
+            actions,
+            until,
+            max_iterations,
+        } => {
+            if inside_repeat {
+                return Err(
+                    "repeat cannot nest inside another repeat (at any depth) — one level of \
+                     repetition per procedure; split the inner loop into a second \
+                     browser_exec call"
+                        .into(),
+                );
+            }
+            if actions.is_empty() {
+                return Err("repeat requires at least one inner action".into());
+            }
+            if *max_iterations > MAX_REPEAT_ITERATIONS {
+                return Err(format!(
+                    "repeat is capped at {MAX_REPEAT_ITERATIONS} iterations (got \
+                     {max_iterations}); a procedure that needs more is several browser_exec \
+                     calls"
+                ));
+            }
+            let condition = resolve_condition(until, "repeat's 'until'")?;
+            let mut planned_inner = Vec::with_capacity(actions.len());
+            let mut inner_cost = 0usize;
+            for a in actions {
+                let (p, c) = plan_action(a, true)?;
+                planned_inner.push(p);
+                inner_cost += c;
+            }
+            Ok((
+                PlannedAction::Repeat {
+                    actions: planned_inner,
+                    until: condition,
+                    max_iterations: *max_iterations,
                 },
-                ExecAction::Evaluate { js } => {
-                    let chars = js.chars().count();
-                    if chars > MAX_EVAL_SCRIPT_CHARS {
-                        return Err(format!(
-                            "evaluate script is {chars} chars; the cap is \
-                             {MAX_EVAL_SCRIPT_CHARS} chars. Split it into smaller evaluate \
-                             steps, or use a snapshot step for bulk DOM work"
-                        ));
-                    }
-                    PlannedAction::Evaluate(js.clone())
+                inner_cost * (*max_iterations as usize),
+            ))
+        }
+        ExecAction::If {
+            condition,
+            then,
+            otherwise,
+        } => {
+            if then.is_empty() {
+                return Err("if requires at least one 'then' action".into());
+            }
+            let condition = resolve_condition(condition, "if's 'condition'")?;
+            let mut planned_then = Vec::with_capacity(then.len());
+            let mut then_cost = 0usize;
+            for a in then {
+                let (p, c) = plan_action(a, inside_repeat)?;
+                planned_then.push(p);
+                then_cost += c;
+            }
+            let mut planned_otherwise = None;
+            let mut else_cost = 0usize;
+            if let Some(otherwise) = otherwise {
+                let mut arm = Vec::with_capacity(otherwise.len());
+                for a in otherwise {
+                    let (p, c) = plan_action(a, inside_repeat)?;
+                    arm.push(p);
+                    else_cost += c;
                 }
-                ExecAction::Screenshot { full_page } => PlannedAction::Screenshot {
-                    full_page: full_page.unwrap_or(false),
+                planned_otherwise = Some(arm);
+            }
+            Ok((
+                PlannedAction::If {
+                    condition,
+                    then: planned_then,
+                    otherwise: planned_otherwise,
                 },
-                ExecAction::Console => PlannedAction::Console,
-                ExecAction::Network => PlannedAction::Network,
-                ExecAction::Dialog {
-                    decision,
-                    prompt_text,
-                } => PlannedAction::Dialog {
-                    action: decision.clone(),
-                    prompt_text: prompt_text.clone(),
-                },
+                then_cost.max(else_cost),
+            ))
+        }
+        _ => Ok((plan_simple(action)?, 1)),
+    }
+}
+
+/// A repeat/if condition into its [`WaitCondition`]. Exactly one of the four
+/// fields must be set — the same mutual-exclusion contract as
+/// `browser_wait_for`'s five-way mutex, and the same error wording style.
+fn resolve_condition(
+    c: &ExecCondition,
+    what: &str,
+) -> std::result::Result<WaitCondition, String> {
+    let set = [
+        c.text.as_ref().map(|t| ("text", t)),
+        c.text_gone.as_ref().map(|t| ("text_gone", t)),
+        c.selector.as_ref().map(|s| ("selector", s)),
+        c.url_contains.as_ref().map(|u| ("url_contains", u)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    match set.as_slice() {
+        [("text", t)] => Ok(WaitCondition::Text((*t).clone())),
+        [("text_gone", t)] => Ok(WaitCondition::TextGone((*t).clone())),
+        [("selector", s)] => Ok(WaitCondition::Selector((*s).clone())),
+        [("url_contains", u)] => Ok(WaitCondition::UrlContains((*u).clone())),
+        [] => Err(format!(
+            "{what} needs exactly one condition field: set one of 'text', 'text_gone', \
+             'selector' or 'url_contains'"
+        )),
+        _ => Err(format!(
+            "{what} condition fields are mutually exclusive: set exactly one of 'text', \
+             'text_gone', 'selector' or 'url_contains', not several"
+        )),
+    }
+}
+
+/// Plan a non-compound action (everything except `repeat`/`if`, which
+/// [`plan_action`] intercepts). One planned step, expansion cost 1.
+fn plan_simple(action: &ExecAction) -> std::result::Result<PlannedAction, String> {
+    let planned = match action {
+        ExecAction::Navigate { url } => {
+            if url.trim().is_empty() {
+                return Err("navigate requires a non-empty 'url'".to_string());
+            }
+            PlannedAction::Navigate(url.clone())
+        }
+        ExecAction::Click { ref_id, x, y } => {
+            PlannedAction::Click(resolve_xy_target("click", ref_id.as_ref(), *x, *y)?)
+        }
+        ExecAction::Dblclick { ref_id } => PlannedAction::Dblclick(ref_target(ref_id)),
+        // A targetless `type` is refused, not lowered to a `focused`
+        // pseudo-ref. That literal had zero readers under
+        // `src/browser/`: both backends resolve a `Ref` as a snapshot
+        // handle, so the promised "type into whatever holds focus"
+        // reached the page as a lookup for an element named `focused`
+        // and failed there. `browser_type` cut the same encoding and
+        // names the one targeting method that works; the two faces of
+        // the verb now say the same thing.
+        ExecAction::Type { ref_id, text } => {
+            let Some(ref_id) = ref_id else {
+                return Err(
+                    "type requires 'ref_id': add a snapshot step and pass the ref_id it \
+                     reports for the field you want to type into"
+                        .to_string(),
+                );
             };
-            Ok(planned)
-        })
-        .collect()
+            PlannedAction::Type(ref_target(ref_id), text.clone())
+        }
+        ExecAction::Fill { ref_id, value } => {
+            PlannedAction::Fill(ref_target(ref_id), value.clone())
+        }
+        ExecAction::Hover { ref_id } => PlannedAction::Hover(ref_target(ref_id)),
+        ExecAction::Scroll { direction } => PlannedAction::Scroll(direction.clone()),
+        ExecAction::Select { ref_id, value } => {
+            PlannedAction::Select(ref_target(ref_id), value.clone())
+        }
+        ExecAction::PressKey { key } => PlannedAction::PressKey(key.clone()),
+        ExecAction::Wait {
+            text,
+            text_gone,
+            selector,
+            url_contains,
+            time_ms,
+            timeout_ms,
+        } => {
+            let fields = WaitFields {
+                text: text.clone(),
+                text_gone: text_gone.clone(),
+                selector: selector.clone(),
+                url_contains: url_contains.clone(),
+                time_ms: *time_ms,
+            };
+            PlannedAction::Wait {
+                condition: resolve_wait(&fields)?,
+                timeout_ms: super::wait_for::clamp_timeout(
+                    timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS),
+                ),
+            }
+        }
+        ExecAction::Snapshot { max_chars } => PlannedAction::Snapshot {
+            // The same clamp the standalone tool applies to the same knob.
+            max_chars: super::snapshot::resolve_max_chars(*max_chars),
+        },
+        ExecAction::Evaluate { js } => {
+            let chars = js.chars().count();
+            if chars > MAX_EVAL_SCRIPT_CHARS {
+                return Err(format!(
+                    "evaluate script is {chars} chars; the cap is \
+                     {MAX_EVAL_SCRIPT_CHARS} chars. Split it into smaller evaluate \
+                     steps, or use a snapshot step for bulk DOM work"
+                ));
+            }
+            PlannedAction::Evaluate(js.clone())
+        }
+        ExecAction::Screenshot { full_page } => PlannedAction::Screenshot {
+            full_page: full_page.unwrap_or(false),
+        },
+        ExecAction::Console => PlannedAction::Console,
+        ExecAction::Network => PlannedAction::Network,
+        ExecAction::Dialog {
+            decision,
+            prompt_text,
+        } => PlannedAction::Dialog {
+            action: decision.clone(),
+            prompt_text: prompt_text.clone(),
+        },
+        // Intercepted by `plan_action` before delegation; an internal error,
+        // never a panic path.
+        ExecAction::Repeat { .. } | ExecAction::If { .. } => {
+            return Err("internal: repeat/if steps are planned by plan_action".into());
+        }
+    };
+    Ok(planned)
+}
+
+/// The condition half of a step label, shared by `wait`, `repeat` and `if`.
+fn condition_label(condition: &WaitCondition) -> String {
+    match condition {
+        WaitCondition::Text(t) => format!("text '{t}'"),
+        WaitCondition::TextGone(t) => format!("text_gone '{t}'"),
+        WaitCondition::Selector(s) => format!("selector '{s}'"),
+        WaitCondition::UrlContains(u) => format!("url_contains '{u}'"),
+        WaitCondition::Time(ms) => format!("delay {ms}ms"),
+    }
 }
 
 /// Short human-readable label for the step result. Deliberately never echoes
@@ -542,13 +764,7 @@ fn action_label(action: &PlannedAction) -> String {
         PlannedAction::Scroll(d) => format!("scroll {d:?}"),
         PlannedAction::Select(t, _) => format!("select {}", target(t)),
         PlannedAction::PressKey(key) => format!("press_key {key}"),
-        PlannedAction::Wait { condition, .. } => match condition {
-            WaitCondition::Text(t) => format!("wait text '{t}'"),
-            WaitCondition::TextGone(t) => format!("wait text_gone '{t}'"),
-            WaitCondition::Selector(s) => format!("wait selector '{s}'"),
-            WaitCondition::UrlContains(u) => format!("wait url_contains '{u}'"),
-            WaitCondition::Time(ms) => format!("wait delay {ms}ms"),
-        },
+        PlannedAction::Wait { condition, .. } => format!("wait {}", condition_label(condition)),
         PlannedAction::Snapshot { max_chars } => format!("snapshot max_chars={max_chars}"),
         PlannedAction::Evaluate(js) => format!("evaluate {} chars of JS", js.chars().count()),
         PlannedAction::Screenshot { full_page } => format!("screenshot full_page={full_page}"),
@@ -556,6 +772,15 @@ fn action_label(action: &PlannedAction) -> String {
         PlannedAction::Network => "network".into(),
         // The verb only — never the prompt text (same rule as typed text).
         PlannedAction::Dialog { action, .. } => format!("dialog {}", action.verb()),
+        PlannedAction::Repeat {
+            until,
+            max_iterations,
+            ..
+        } => format!(
+            "repeat until {} (max {max_iterations})",
+            condition_label(until)
+        ),
+        PlannedAction::If { condition, .. } => format!("if {}", condition_label(condition)),
     }
 }
 
@@ -604,6 +829,55 @@ fn approval_surface(action: &PlannedAction) -> Option<(ActionType, &'static str,
         // `browser_screenshot` / `browser_console` / `browser_network` tools
         // are likewise ungated; the read-time SSRF guard is their boundary.
         PlannedAction::Screenshot { .. } | PlannedAction::Console | PlannedAction::Network => None,
+        // Compound steps have no surface of their own: every nested step
+        // maps to its EXISTING ActionType at execution time (zero new
+        // knobs), so a policy that governs `browser_click` governs a click
+        // inside a repeat identically.
+        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => None,
+    }
+}
+
+/// Does this step target an element by snapshot ref? The in-batch latch
+/// refuses exactly these after a navigation: a coordinate click names a
+/// point rather than a captured element, and the read steps mint their own
+/// view of the page. (Dblclick/Type/Fill/Hover/Select are ref-only by
+/// construction; compound steps are checked per nested step at execution.)
+fn carries_ref(action: &PlannedAction) -> bool {
+    matches!(
+        action,
+        PlannedAction::Click(ActionTarget::Ref { .. })
+            | PlannedAction::Dblclick(_)
+            | PlannedAction::Type(..)
+            | PlannedAction::Fill(..)
+            | PlannedAction::Hover(_)
+            | PlannedAction::Select(..)
+    )
+}
+
+/// Evaluate a repeat/if condition ONCE — the same probe `wait_for` polls
+/// (`wait_probe::wait_probe_func`), as a single shot rather than a wait.
+/// `Err` means the condition could not be READ (a transport failure, or a
+/// selector the page rejected) and must abort the caller: never read as the
+/// condition holding, never as it not holding (判据 §8).
+async fn eval_condition_once(
+    manager: &ProfileManager,
+    backend: &dyn BrowserBackend,
+    tab_id: &str,
+    condition: &WaitCondition,
+) -> std::result::Result<bool, String> {
+    let probe = crate::browser::wait_probe::wait_probe_func(condition);
+    let out = backend
+        .evaluate(tab_id, &probe)
+        .await
+        .map_err(|e| super::backend_error_text(manager, &e))?;
+    if out.contains(crate::browser::wait_probe::WAIT_PROBE_FOUND) {
+        Ok(true)
+    } else if out.contains(crate::browser::wait_probe::WAIT_PROBE_ERROR) {
+        Err(format!(
+            "invalid CSS selector in {condition:?} — the page rejected it"
+        ))
+    } else {
+        Ok(false)
     }
 }
 
@@ -724,46 +998,256 @@ async fn execute_actions(
     tab_id: &str,
     planned: &[PlannedAction],
 ) -> (Vec<StepResult>, Option<(usize, String)>) {
-    let started = std::time::Instant::now();
+    let mut runner = ExecRunner {
+        manager,
+        approval_policy,
+        backend,
+        tab_id,
+        started: std::time::Instant::now(),
+        steps_run: 0,
+        refs_stale: false,
+    };
     let mut results = Vec::with_capacity(planned.len());
     for (i, action) in planned.iter().enumerate() {
         let ordinal = i + 1;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        if elapsed_ms >= MAX_EXEC_BUDGET_MS {
-            return (
-                results,
-                Some((
-                    ordinal,
-                    format!(
-                        "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {i} actions"
-                    ),
-                )),
-            );
-        }
-        if let Some((action_type, verb, target)) = approval_surface(action) {
-            if let Some(message) =
-                super::check_browser_approval(approval_policy, action_type, verb, &target).await
-            {
-                return (results, Some((ordinal, message)));
-            }
-        }
-        let label = action_label(action);
-        match run_one(manager, backend, tab_id, action).await {
-            Ok(outcome) => {
-                let has_image = outcome.image_base64.is_some();
-                results.push(StepResult {
-                    step: ordinal,
-                    action: label,
-                    status: outcome.status,
-                    output: outcome.output,
-                    image_base64: outcome.image_base64,
-                    format: has_image.then(|| "png".into()),
-                })
+        match runner.run_step(action).await {
+            Ok(mut result) => {
+                result.step = ordinal;
+                results.push(result);
             }
             Err(message) => return (results, Some((ordinal, message))),
         }
     }
     (results, None)
+}
+
+/// The mutable state of one procedure run. Factored out of the step loop so
+/// `repeat`/`if` steps run their nested actions through the SAME gates —
+/// wall-clock, the in-batch ref latch, approval — as top-level ones, instead
+/// of a second, weaker path (the chokepoint singularity this tool exists to
+/// keep).
+struct ExecRunner<'a> {
+    manager: &'a ProfileManager,
+    approval_policy: Option<&'a Arc<dyn ApprovalPolicy>>,
+    backend: &'a dyn BrowserBackend,
+    tab_id: &'a str,
+    started: std::time::Instant,
+    /// Primitive steps executed so far, for the budget message.
+    steps_run: usize,
+    /// The in-batch ref latch. Set after an EXECUTED `navigate` (or an
+    /// ACCEPTED dialog — a `beforeunload` accept can navigate, and the
+    /// answer cannot tell us whether it did). While set, any step targeting
+    /// a snapshot ref is refused BEFORE dispatch (and before approval);
+    /// a `snapshot` step clears it, because the refs it mints postdate the
+    /// navigation.
+    refs_stale: bool,
+}
+
+impl ExecRunner<'_> {
+    /// Run one planned action through every gate a top-level step gets:
+    /// wall-clock budget, the ref latch (BEFORE approval — a step that will
+    /// be refused must not spend a user approval), the per-step approval
+    /// check, then dispatch. Returns the step's result with `step` left 0
+    /// for the caller to number.
+    ///
+    /// A plain `fn` returning a boxed future rather than an `async fn`:
+    /// `repeat`/`if` recurse (`run_step` → `dispatch` → `run_step`), and an
+    /// `async fn` may not recurse without boxing.
+    fn run_step<'a>(
+        &'a mut self,
+        action: &'a PlannedAction,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::result::Result<StepResult, String>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+        if self.started.elapsed().as_millis() as u64 >= MAX_EXEC_BUDGET_MS {
+            return Err(format!(
+                "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {} actions",
+                self.steps_run
+            ));
+        }
+        if self.refs_stale && carries_ref(action) {
+            // The message ENDS with the resnapshot hint — pinned by test.
+            return Err(format!(
+                "{} targets a snapshot ref, but an earlier step in this procedure \
+                 navigated; refs may be stale; take a fresh snapshot",
+                action_label(action)
+            ));
+        }
+        if let Some((action_type, verb, target)) = approval_surface(action) {
+            if let Some(message) =
+                super::check_browser_approval(self.approval_policy, action_type, verb, &target)
+                    .await
+            {
+                return Err(message);
+            }
+        }
+        let label = action_label(action);
+        let (outcome, mut nested) = self.dispatch(action).await?;
+        self.steps_run += 1 + nested.len();
+        // The latch moves only on SUCCESS: a failed navigation changed
+        // nothing the refs point at.
+        match action {
+            PlannedAction::Navigate(_) => self.refs_stale = true,
+            // An ACCEPTED dialog can be a `beforeunload` letting the page
+            // leave — and the answer does not say whether it was one, so
+            // the fail-closed reading is that refs captured before it may
+            // be stale. A DISMISS cannot navigate and does not latch.
+            PlannedAction::Dialog {
+                action: DialogAction::Accept,
+                ..
+            } => self.refs_stale = true,
+            // The remedy the latch message names: a fresh snapshot mints
+            // refs that postdate the navigation.
+            PlannedAction::Snapshot { .. } => self.refs_stale = false,
+            _ => {}
+        }
+        // The effect-arrival verdict, when the backend probes (the cdp
+        // one) — read AFTER the verb, per the latch contract on
+        // `last_effect_verification`. `None` on a non-probing backend
+        // serializes as absence, never as a claim.
+        let effect_verification = match action {
+            PlannedAction::Click(_) | PlannedAction::Type(..) | PlannedAction::Fill(..) => self
+                .backend
+                .last_effect_verification()
+                .map(|v| v.as_wire()),
+            _ => None,
+        };
+        let has_image = outcome.image_base64.is_some();
+        // Number the nested results within their parent.
+        for (i, r) in nested.iter_mut().enumerate() {
+            r.step = i + 1;
+        }
+        Ok(StepResult {
+            step: 0,
+            action: label,
+            status: outcome.status,
+            output: outcome.output,
+            image_base64: outcome.image_base64,
+            format: has_image.then(|| "png".into()),
+            effect_verification,
+            steps: nested,
+        })
+        })
+    }
+
+    /// Execute one action's own body: the compound steps recurse into
+    /// [`Self::run_step`] (so every nested step pays the same gates);
+    /// everything else goes to [`run_one`].
+    async fn dispatch(
+        &mut self,
+        action: &PlannedAction,
+    ) -> std::result::Result<(StepOutcome, Vec<StepResult>), String> {
+        match action {
+            PlannedAction::Repeat {
+                actions,
+                until,
+                max_iterations,
+            } => {
+                let mut nested = Vec::new();
+                let mut iterations = 0u32;
+                let mut held = false;
+                for _ in 0..*max_iterations {
+                    // The condition is evaluated BEFORE each iteration — a
+                    // condition already true runs zero iterations — and an
+                    // evaluation ERROR aborts the whole procedure: a
+                    // condition that cannot be read is neither true nor
+                    // false (判据 §8), so it must never be spent as either.
+                    match eval_condition_once(self.manager, self.backend, self.tab_id, until)
+                        .await
+                    {
+                        Ok(true) => {
+                            held = true;
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            // `e` is a String `eval_condition_once` already
+                            // routed through `backend_error_text` — NOT a raw
+                            // `BrowserError`, so it carries no unegressed page
+                            // bytes. Re-bound under a non-`Err`-pattern name
+                            // for exactly that reason: the census's own doc
+                            // names this as the shape for an arm whose payload
+                            // is not a backend error.
+                            let reason = e;
+                            return Err(format!(
+                                "the repeat's until-condition could not be evaluated \
+                                 ({reason}); the procedure is aborted, because a condition \
+                                 that cannot be read is neither true nor false"
+                            ));
+                        }
+                    }
+                    for inner in actions {
+                        let mut result = self.run_step(inner).await.map_err(|e| {
+                            format!(
+                                "repeat iteration {}, inner step '{}': {e}",
+                                iterations + 1,
+                                action_label(inner)
+                            )
+                        })?;
+                        result.action = format!("iter {}: {}", iterations + 1, result.action);
+                        nested.push(result);
+                    }
+                    iterations += 1;
+                }
+                // The summary must say WHICH way the loop ended: "the
+                // condition held" and "the cap was reached without it ever
+                // holding" are different facts, and the second must not be
+                // misread as the first (判据 §17).
+                let summary = if held {
+                    format!("{iterations} iteration(s) run; the until-condition then held")
+                } else {
+                    format!(
+                        "{iterations} iteration(s) run; the until-condition never held \
+                         (the cap of {max_iterations} was reached)"
+                    )
+                };
+                Ok((StepOutcome::read(summary), nested))
+            }
+            PlannedAction::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let held = eval_condition_once(self.manager, self.backend, self.tab_id, condition)
+                    .await
+                    .map_err(|reason| {
+                        // Same shape as the repeat arm above: `reason` is the
+                        // already-egressed String, not a raw BrowserError.
+                        format!(
+                            "the if-condition could not be evaluated ({reason}); the \
+                             procedure is aborted, because a condition that cannot be \
+                             read is neither true nor false"
+                        )
+                    })?;
+                let arm = if held { Some(then) } else { otherwise.as_ref() };
+                let mut nested = Vec::new();
+                if let Some(steps) = arm {
+                    for inner in steps {
+                        nested.push(self.run_step(inner).await?);
+                    }
+                }
+                let summary = match (held, arm) {
+                    (true, _) => format!(
+                        "the condition held; the then-arm ran ({} step(s))",
+                        nested.len()
+                    ),
+                    (false, Some(_)) => format!(
+                        "the condition did not hold; the otherwise-arm ran ({} step(s))",
+                        nested.len()
+                    ),
+                    (false, None) => {
+                        "the condition did not hold; there is no otherwise-arm".into()
+                    }
+                };
+                Ok((StepOutcome::read(summary), nested))
+            }
+            _ => Ok((
+                run_one(self.manager, self.backend, self.tab_id, action).await?,
+                Vec::new(),
+            )),
+        }
+    }
 }
 
 /// Execute a single planned action, returning its status word and — for a
@@ -907,6 +1391,11 @@ async fn run_one(
             backend
                 .handle_dialog(tab_id, action.verb(), prompt_text.as_deref())
                 .await,
+        ),
+        // Compound steps never arrive here — `dispatch` intercepts them and
+        // recurses through `run_step`. An internal error, not a panic path.
+        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => Err(
+            "internal: repeat/if steps are executed by ExecRunner::dispatch".into(),
         ),
     }
 }
@@ -1304,6 +1793,14 @@ mod tests {
     }
 
     /// The headline: navigate → act → wait → read, one call, reads included.
+    ///
+    /// The procedure snapshots right after its navigation because the
+    /// in-batch ref latch requires it: a ref captured before a `navigate`
+    /// step addresses a page that step just replaced, so the batch must
+    /// re-read before acting. That is the latch working, not a restriction
+    /// being routed around — the previous shape of this very procedure
+    /// (navigate, then type into a pre-captured ref) is the hazard it
+    /// refuses.
     #[tokio::test]
     async fn one_call_carries_a_navigate_act_read_procedure() {
         let backend = FakeBackend::new(None).with_snapshot_text("- searchbox [ref=e9]");
@@ -1312,6 +1809,7 @@ mod tests {
             ExecAction::Navigate {
                 url: "https://example.com/search".into(),
             },
+            ExecAction::Snapshot { max_chars: None },
             ExecAction::Type {
                 ref_id: Some("e3".into()),
                 text: "hello".into(),
@@ -1333,6 +1831,10 @@ mod tests {
             backend.calls(),
             vec![
                 "navigate:1:https://example.com/search",
+                // The post-navigation read (its SSRF re-check, then the read),
+                // which is also what unlatches the refs below.
+                "list_tabs",
+                "snapshot",
                 "type_text:hello",
                 "press_key:Enter",
                 "wait:Text(\"Results\")",
@@ -1341,20 +1843,24 @@ mod tests {
                 "snapshot",
             ]
         );
-        assert_eq!(results.len(), 5);
+        assert_eq!(results.len(), 6);
         assert_eq!(results[0].status, "navigated");
-        // Writes carry no output; the read does, and it is what the model
-        // would otherwise have spent a whole extra turn to obtain.
-        assert!(results[1].output.is_none());
-        assert!(results[4]
+        // Writes carry no output; the reads do, and they are what the model
+        // would otherwise have spent whole extra turns to obtain.
+        assert!(results[1]
+            .output
+            .as_deref()
+            .is_some_and(|o| o.contains("[ref=e9]")));
+        assert!(results[2].output.is_none());
+        assert!(results[5]
             .output
             .as_deref()
             .is_some_and(|o| o.contains("[ref=e9]")));
         // The typed text is never echoed back in a step label.
         assert!(
-            !results[1].action.contains("hello"),
+            !results[2].action.contains("hello"),
             "got: {}",
-            results[1].action
+            results[2].action
         );
     }
 
@@ -1939,5 +2445,469 @@ mod tests {
         assert!(target.contains("wire-transfer-9000"), "got: {target}");
         // The human-facing half is still payload-free.
         assert_eq!(display, "browser dialog");
+    }
+
+    // ---------------------------------------------------------------
+    // repeat / if steps and the in-batch ref latch.
+    // ---------------------------------------------------------------
+
+    fn press(key: &str) -> ExecAction {
+        ExecAction::PressKey { key: key.into() }
+    }
+
+    fn until_sel(s: &str) -> ExecCondition {
+        ExecCondition {
+            selector: Some(s.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plan_actions_expands_repeat_and_enforces_cap() {
+        let inner = vec![
+            ExecAction::PressKey {
+                key: "Enter".into(),
+            };
+            3
+        ];
+        let actions = vec![ExecAction::Repeat {
+            actions: inner,
+            until: ExecCondition {
+                selector: Some(".next".into()),
+                ..Default::default()
+            },
+            max_iterations: 20,
+        }];
+        let err = plan_actions(&actions).unwrap_err();
+        assert!(
+            err.contains("limited to"),
+            "3×20=60 expanded steps must exceed the cap of 50"
+        );
+    }
+
+    #[test]
+    fn repeat_iterations_are_hard_capped_at_twenty() {
+        let actions = vec![ExecAction::Repeat {
+            actions: vec![press("Enter")],
+            until: until_sel(".next"),
+            max_iterations: 21,
+        }];
+        let err = plan_actions(&actions).unwrap_err();
+        assert!(err.contains("20"), "got: {err}");
+        // 20 itself is legal.
+        plan_actions(&[ExecAction::Repeat {
+            actions: vec![press("Enter")],
+            until: until_sel(".next"),
+            max_iterations: 20,
+        }])
+        .expect("20 is the cap, not above it");
+    }
+
+    #[test]
+    fn condition_requires_exactly_one_field() {
+        // Zero fields — a graceful error, not a panic.
+        let err = plan_actions(&[ExecAction::Repeat {
+            actions: vec![press("Enter")],
+            until: ExecCondition::default(),
+            max_iterations: 3,
+        }])
+        .unwrap_err();
+        assert!(err.contains("exactly one"), "got: {err}");
+        // Two fields — the same mutual-exclusion contract as browser_wait_for.
+        let err = plan_actions(&[ExecAction::If {
+            condition: ExecCondition {
+                text: Some("a".into()),
+                selector: Some("#b".into()),
+                ..Default::default()
+            },
+            then: vec![press("Enter")],
+            otherwise: None,
+        }])
+        .unwrap_err();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+    }
+
+    #[test]
+    fn a_repeat_inside_a_repeat_is_refused_at_any_depth() {
+        let inner_repeat = || ExecAction::Repeat {
+            actions: vec![press("Enter")],
+            until: until_sel(".x"),
+            max_iterations: 2,
+        };
+        // Direct nesting.
+        let err = plan_actions(&[ExecAction::Repeat {
+            actions: vec![inner_repeat()],
+            until: until_sel(".y"),
+            max_iterations: 2,
+        }])
+        .unwrap_err();
+        assert!(err.contains("nest"), "got: {err}");
+        // Transitive nesting through an if arm — the cap is on the SHAPE,
+        // not on the immediate parent.
+        let err = plan_actions(&[ExecAction::Repeat {
+            actions: vec![ExecAction::If {
+                condition: until_sel(".z"),
+                then: vec![inner_repeat()],
+                otherwise: None,
+            }],
+            until: until_sel(".y"),
+            max_iterations: 2,
+        }])
+        .unwrap_err();
+        assert!(err.contains("nest"), "got: {err}");
+        // …but a repeat inside an if at TOP level is the one legal level.
+        plan_actions(&[ExecAction::If {
+            condition: until_sel(".z"),
+            then: vec![inner_repeat()],
+            otherwise: None,
+        }])
+        .expect("a repeat inside an if arm is one level of repetition, which is legal");
+    }
+
+    #[test]
+    fn if_counts_the_larger_arm_against_the_cap() {
+        // then: 40, otherwise: 60 → expanded 60 > 50, even though only one
+        // arm ever runs: the budget covers the worst LEGAL execution.
+        let then: Vec<ExecAction> = (0..40).map(|_| press("Enter")).collect();
+        let otherwise: Vec<ExecAction> = (0..60).map(|_| press("Tab")).collect();
+        let err = plan_actions(&[ExecAction::If {
+            condition: until_sel(".x"),
+            then,
+            otherwise: Some(otherwise),
+        }])
+        .unwrap_err();
+        assert!(err.contains("limited to"), "got: {err}");
+    }
+
+    /// Review Focus #1: a condition that is ALREADY true before the first
+    /// iteration runs ZERO iterations, not one. (FakeBackend's default
+    /// evaluate answer is the wait-probe FOUND sentinel.)
+    #[tokio::test]
+    async fn repeat_with_until_already_true_runs_zero_iterations() {
+        let backend = FakeBackend::new(None);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Repeat {
+            actions: vec![click("e1")],
+            until: until_sel(".done"),
+            max_iterations: 5,
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        assert_eq!(results.len(), 1);
+        let calls = backend.calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "one condition probe and nothing else: {calls:?}"
+        );
+        assert!(calls[0].starts_with("evaluate:"), "got: {calls:?}");
+        let out = results[0].output.as_deref().expect("the repeat step reports");
+        assert!(out.contains("0 iteration"), "got: {out}");
+        assert!(out.contains("held"), "got: {out}");
+    }
+
+    /// Two absences then the condition holds: exactly two iterations, and
+    /// the loop stops on the condition, not on the cap.
+    #[tokio::test]
+    async fn repeat_runs_until_the_condition_holds() {
+        let backend = FakeBackend::new(None).with_evaluate_responses([
+            "absent",
+            "absent",
+            crate::browser::wait_probe::WAIT_PROBE_FOUND,
+        ]);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Repeat {
+            actions: vec![click("e1"), press("Enter")],
+            until: until_sel(".done"),
+            max_iterations: 5,
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let calls = backend.calls();
+        assert_eq!(
+            calls.iter().filter(|c| c.starts_with("evaluate:")).count(),
+            3,
+            "three condition probes: {calls:?}"
+        );
+        assert_eq!(
+            calls.iter().filter(|c| c.starts_with("click:")).count(),
+            2,
+            "two iterations: {calls:?}"
+        );
+        let out = results[0].output.as_deref().unwrap();
+        assert!(out.contains("2 iteration"), "{out}");
+        assert!(out.contains("held"), "{out}");
+        // The nested steps are visible, numbered within the parent and
+        // labelled with their iteration.
+        assert_eq!(results[0].steps.len(), 4);
+        assert_eq!(results[0].steps[0].step, 1);
+        assert!(
+            results[0].steps[2].action.starts_with("iter 2:"),
+            "{:?}",
+            results[0].steps[2].action
+        );
+    }
+
+    /// Review Focus #2: a condition whose EVALUATION fails (transport error,
+    /// not "condition false") aborts the whole exec. It must never be read
+    /// as "condition met" (no premature stop) nor as "keep going" (no
+    /// iteration) — a condition that cannot be read is neither (判据 §8).
+    #[tokio::test]
+    async fn until_condition_error_aborts_not_continues() {
+        // The first recorded call — the condition probe — fails.
+        let backend = FakeBackend::new(Some(1)).with_failure_message("transport down");
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Repeat {
+            actions: vec![click("e1")],
+            until: until_sel(".done"),
+            max_iterations: 5,
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        let (ordinal, err) = failure.expect("a condition error must abort the exec");
+        assert_eq!(ordinal, 1);
+        assert!(err.contains("could not be evaluated"), "got: {err}");
+        assert!(err.contains("transport down"), "got: {err}");
+        assert!(results.is_empty(), "the repeat step never completed");
+        assert!(
+            backend.calls().iter().all(|c| !c.starts_with("click:")),
+            "no iteration ran on an unreadable condition: {:?}",
+            backend.calls()
+        );
+    }
+
+    /// `if` runs the arm the condition selects — and only that arm.
+    #[tokio::test]
+    async fn if_runs_the_arm_the_condition_selects() {
+        // Condition holds (default evaluate → FOUND): then-arm.
+        let backend = FakeBackend::new(None);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::If {
+            condition: until_sel(".admin"),
+            then: vec![press("Tab")],
+            otherwise: Some(vec![press("Enter")]),
+        }])
+        .unwrap();
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let calls = backend.calls();
+        assert!(
+            calls.iter().any(|c| c == "press_key:Tab") && !calls.iter().any(|c| c == "press_key:Enter"),
+            "the then-arm and only the then-arm: {calls:?}"
+        );
+        assert!(
+            results[0].output.as_deref().is_some_and(|o| o.contains("then-arm")),
+            "{:?}",
+            results[0].output
+        );
+
+        // Condition absent: otherwise-arm.
+        let backend = FakeBackend::new(None).with_evaluate_responses(["absent"]);
+        let planned = plan_actions(&[ExecAction::If {
+            condition: until_sel(".admin"),
+            then: vec![press("Tab")],
+            otherwise: Some(vec![press("Enter")]),
+        }])
+        .unwrap();
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let calls = backend.calls();
+        assert!(
+            calls.iter().any(|c| c == "press_key:Enter") && !calls.iter().any(|c| c == "press_key:Tab"),
+            "the otherwise-arm and only the otherwise-arm: {calls:?}"
+        );
+        assert!(
+            results[0].output.as_deref().is_some_and(|o| o.contains("otherwise-arm")),
+            "{:?}",
+            results[0].output
+        );
+    }
+
+    /// The if-condition gets the same abort semantics as the repeat's until:
+    /// an evaluation error is neither "take the then-arm" nor "take the
+    /// else-arm".
+    #[tokio::test]
+    async fn if_condition_error_aborts_the_procedure() {
+        let backend = FakeBackend::new(Some(1)).with_failure_message("transport down");
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::If {
+            condition: until_sel(".admin"),
+            then: vec![click("e1")],
+            otherwise: Some(vec![click("e2")]),
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        let (ordinal, err) = failure.expect("a condition error must abort");
+        assert_eq!(ordinal, 1);
+        assert!(err.contains("could not be evaluated"), "got: {err}");
+        assert!(results.is_empty());
+        assert!(
+            backend.calls().iter().all(|c| !c.starts_with("click:")),
+            "neither arm ran: {:?}",
+            backend.calls()
+        );
+    }
+
+    /// The in-batch ref latch: after a `navigate` step, a step carrying a
+    /// ref is refused BEFORE any page side effect — the batch-internal
+    /// analogue of the single-tool ref precheck.
+    #[tokio::test]
+    async fn ref_step_after_navigate_is_refused_before_dispatch() {
+        let backend = FakeBackend::new(None);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[
+            ExecAction::Navigate {
+                url: "https://example.com/".into(),
+            },
+            click("e1"),
+        ])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        let (ordinal, err) = failure.expect("the latch must refuse the ref step");
+        assert_eq!(ordinal, 2);
+        assert!(
+            err.ends_with("refs may be stale; take a fresh snapshot"),
+            "the refusal must end with the resnapshot hint: {err}"
+        );
+        assert_eq!(results.len(), 1);
+        // The click never reached the backend — the refusal is ahead of the
+        // wire, which is the entire point of the latch.
+        assert_eq!(backend.calls(), vec!["navigate:1:https://example.com/"]);
+    }
+
+    /// …and the remedy the message names is the one that clears the latch:
+    /// a snapshot step mints refs that postdate the navigation.
+    #[tokio::test]
+    async fn a_snapshot_step_clears_the_ref_latch() {
+        let backend = FakeBackend::new(None).with_snapshot_text("- button [ref=e1]");
+        let manager = permissive_manager();
+        let planned = plan_actions(&[
+            ExecAction::Navigate {
+                url: "https://example.com/".into(),
+            },
+            ExecAction::Snapshot { max_chars: None },
+            click("e1"),
+        ])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        assert_eq!(results.len(), 3);
+        assert!(
+            backend.calls().iter().any(|c| c.starts_with("click:")),
+            "the post-snapshot ref step runs: {:?}",
+            backend.calls()
+        );
+    }
+
+    /// An ACCEPTED dialog can be a `beforeunload` letting the page leave —
+    /// and the answer cannot say whether it was one, so the fail-closed
+    /// reading latches the refs. A DISMISS cannot navigate and does not.
+    #[tokio::test]
+    async fn a_dialog_accept_latches_refs_and_a_dismiss_does_not() {
+        let manager = permissive_manager();
+        let backend = FakeBackend::new(None);
+        let planned = plan_actions(&[
+            ExecAction::Dialog {
+                decision: DialogAction::Accept,
+                prompt_text: None,
+            },
+            click("e1"),
+        ])
+        .unwrap();
+        let (_r, failure) = run(&manager, &backend, &planned).await;
+        let (ordinal, err) = failure.expect("an accepted dialog may have navigated");
+        assert_eq!(ordinal, 2);
+        assert!(err.ends_with("refs may be stale; take a fresh snapshot"), "{err}");
+        assert!(
+            backend.calls().iter().all(|c| !c.starts_with("click:")),
+            "{:?}",
+            backend.calls()
+        );
+
+        let backend = FakeBackend::new(None);
+        let planned = plan_actions(&[
+            ExecAction::Dialog {
+                decision: DialogAction::Dismiss,
+                prompt_text: None,
+            },
+            click("e1"),
+        ])
+        .unwrap();
+        let (_r, failure) = run(&manager, &backend, &planned).await;
+        assert!(
+            failure.is_none(),
+            "a dismiss cannot navigate: {failure:?}"
+        );
+    }
+
+    /// Zero new approval knobs: a click nested inside a repeat is judged as
+    /// `ActionType::BrowserClick`, at execution time, per iteration — the
+    /// same ActionType the standalone tool and a top-level batched click
+    /// produce.
+    #[tokio::test]
+    async fn nested_steps_keep_the_existing_approval_mapping() {
+        use crate::approval::{ActionRequest, ApprovalDecision};
+        use std::sync::Mutex;
+
+        struct DenyClicks {
+            seen: Mutex<Vec<ActionType>>,
+        }
+        #[async_trait]
+        impl ApprovalPolicy for DenyClicks {
+            async fn check(&self, req: &ActionRequest) -> ApprovalDecision {
+                self.seen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(req.action_type.clone());
+                if req.action_type == ActionType::BrowserClick {
+                    ApprovalDecision::Deny {
+                        reason: "no clicks".into(),
+                    }
+                } else {
+                    ApprovalDecision::Allow
+                }
+            }
+            async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
+        }
+
+        let policy = Arc::new(DenyClicks {
+            seen: Mutex::new(Vec::new()),
+        });
+        // The condition is absent, so the first iteration WOULD run — but
+        // the nested click is denied at the gate.
+        let backend = FakeBackend::new(None).with_evaluate_responses(["absent"]);
+        let manager = manager();
+        let planned = plan_actions(&[ExecAction::Repeat {
+            actions: vec![click("e1")],
+            until: until_sel(".done"),
+            max_iterations: 3,
+        }])
+        .unwrap();
+
+        let policy_dyn: Arc<dyn ApprovalPolicy> = policy.clone();
+        let (_r, failure) =
+            execute_actions(&manager, Some(&policy_dyn), &backend, "1", &planned).await;
+        let (ordinal, err) = failure.expect("a denied nested click must abort");
+        assert_eq!(ordinal, 1, "the repeat is the top-level failing step");
+        assert!(err.contains("iteration 1"), "the nested context is named: {err}");
+        assert!(err.contains("denied by approval policy"), "{err}");
+        assert_eq!(
+            *policy.seen.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![ActionType::BrowserClick],
+            "the nested click mapped to the EXISTING ActionType — zero new knobs"
+        );
+        assert!(
+            backend.calls().iter().all(|c| !c.starts_with("click:")),
+            "the denied click never reached the page: {:?}",
+            backend.calls()
+        );
     }
 }

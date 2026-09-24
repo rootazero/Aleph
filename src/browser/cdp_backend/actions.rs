@@ -8,6 +8,7 @@
 use aleph_cdp::SessionId;
 use aleph_cdp::methods::{dom, input, page, runtime};
 
+use crate::browser::backend::EffectVerification;
 use crate::browser::engine::EngineHandle;
 use crate::browser::engine::{Cap, EngineCapabilities};
 use crate::browser::error::BrowserError;
@@ -928,14 +929,248 @@ async fn prepare(
     Ok((handle, session, resolved))
 }
 
+// ----------------------------------------------------------------------
+// The effect-arrival probe (Task B2).
+//
+// Why it exists: `Input.dispatch*` returning `ok` means the engine TOOK the
+// event, not that the page SAW it — 「这个哨兵问的是『调用发生了吗』还是
+// 『效果到达了吗』」 (附录 E.9), and the whole record of external engines
+// answering success for effects that never landed (obscura's synthesized
+// geometry, playwright-cli's exit-0 failures) is what the second question
+// costs when nobody asks it. The probe asks it: a one-shot capture listener
+// is installed on the resolved node BEFORE dispatch, and read back AFTER.
+//
+// What a verdict may claim, per verb — this is the trust argument, and it
+// is written here because the dispatch path decides it:
+//
+// * `click` dispatches via `Input.dispatchMouseEvent` — trusted input. A
+//   `Verified` means the page's own event dispatch observed a real click
+//   landing on the probed node (or its descendant): the strongest claim
+//   this file makes.
+// * `type_text` dispatches via `Input.insertText` /
+//   `Input.dispatchKeyEvent` — also trusted input; `Verified` means an
+//   `input` event arrived at the focused, probed node.
+// * `fill` runs `FILL_JS` on the node — NOT trusted input: the same script
+//   sets the value AND dispatches the `input`/`change` events. The probe
+//   there confirms delivery of the verb's own event, a deliberately
+//   narrower claim, kept so the three verbs report one shape.
+//
+// The probe's own faults NEVER fail an action: install/read-back errors
+// record `Skipped(engine)` and the action stands — "I could not ask" is
+// not "it did not happen" (判据 §8). Only a clean read-back naming no
+// event is `EffectNotDelivered`.
+//
+// ⚠️ Spoofing, stated rather than fixed: a hostile page can dispatch its
+// own synthetic event at the node, or write `window.__alephProbeHit`
+// directly, and the probe cannot tell that from a real arrival. What the
+// probe kills is the silent no-op, not the actively adversarial page — the
+// same bound every other page-side probe in this file (`OCCLUSION_JS`,
+// `NODE_LIVENESS_JS`) already carries.
+// ----------------------------------------------------------------------
+
+/// The install script, run via `Runtime.callFunctionOn` with `this` = the
+/// resolved node. Tags the NODE (never `document`) with `data-aleph-probe`
+/// so a later snapshot shows which element was probed, resets the hit
+/// variable, and installs one-shot capture listeners for the events the
+/// probed verbs produce. `once: true` is load-bearing: a probe that keeps
+/// listening after answering leaks a page-side hook per action.
+///
+/// The ref id is embedded as the tag's VALUE — the caller's own string,
+/// JSON-escaped so no ref text can break out of the literal.
+pub(super) fn effect_probe_install_js(ref_id: &str) -> String {
+    let tag = serde_json::to_string(ref_id).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r"
+function() {{
+  this.setAttribute('data-aleph-probe', {tag});
+  window.__alephProbeHit = null;
+  const hit = (e) => {{ window.__alephProbeHit = e.type; }};
+  const opts = {{ capture: true, once: true }};
+  this.addEventListener('click', hit, opts);
+  this.addEventListener('input', hit, opts);
+  window.__alephProbeCleanup = () => {{
+    this.removeEventListener('click', hit, opts);
+    this.removeEventListener('input', hit, opts);
+  }};
+  return {{ ok: true }};
+}}
+"
+    )
+}
+
+/// The read-back, run via `Runtime.evaluate` after dispatch. Answers the
+/// event type the one-shot listener recorded (`null` when none), resets the
+/// variable for the next action, and removes the listeners — the D.9.20
+/// lesson: an installed hook whose event never fires must not outlive the
+/// action that installed it. Any throw inside the cleanup is swallowed by
+/// the page-side `try`: a failed cleanup is a warn-level fact, never worth
+/// the action's verdict.
+pub(super) const EFFECT_PROBE_READBACK_JS: &str = r"
+(() => {
+  const v = window.__alephProbeHit;
+  window.__alephProbeHit = null;
+  if (typeof window.__alephProbeCleanup === 'function') {
+    try { window.__alephProbeCleanup(); } catch (e) {}
+    window.__alephProbeCleanup = null;
+  }
+  return v === undefined || v === null ? null : v;
+})()
+";
+
+/// What the read-back answered. `Unknown` is "I could not ask" — a
+/// transport error, a page exception, or a value of a shape the read-back
+/// never produces — and it is the ONLY one of the three that must not move
+/// the verdict off `Skipped` (判据 §8).
+enum ProbeReadback {
+    Hit(String),
+    NoHit,
+    Unknown,
+}
+
+/// Arm the probe on the resolved node when the capability row allows it.
+/// Returns whether a probe is live. Every non-live exit records
+/// `Skipped(engine)` on the verdict latch — the honest "not verified"
+/// (判据 §8), never a silent absence.
+async fn arm_effect_probe(
+    be: &CdpBackend,
+    caps: &EngineCapabilities,
+    handle: &EngineHandle,
+    session: &SessionId,
+    resolved: &Resolved,
+    ref_label: &str,
+) -> bool {
+    // The capability gate. An engine whose row is not `Supported` gets no
+    // probe at all — no install, no read-back — and the latch says why.
+    if caps.effect_probe != Cap::Supported {
+        be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
+        return false;
+    }
+    // A coordinate names a point, not an element: there is no node to tag.
+    let Resolved::Node { object_id, .. } = resolved else {
+        be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
+        return false;
+    };
+    match runtime::call_function_on(
+        &handle.conn,
+        Some(session),
+        object_id,
+        &effect_probe_install_js(ref_label),
+        Vec::new(),
+    )
+    .await
+    {
+        // An install that failed — transport error OR a page-side exception
+        // — disarms the probe; it never fails the action.
+        Ok(res) if res.exception.is_none() => true,
+        _ => {
+            be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
+            false
+        }
+    }
+}
+
+async fn read_effect_probe(handle: &EngineHandle, session: &SessionId) -> ProbeReadback {
+    match runtime::evaluate(&handle.conn, Some(session), EFFECT_PROBE_READBACK_JS, false).await {
+        Ok(res) => {
+            if res.exception.is_some() {
+                return ProbeReadback::Unknown;
+            }
+            match res.value {
+                serde_json::Value::Null => ProbeReadback::NoHit,
+                serde_json::Value::String(event) => ProbeReadback::Hit(event),
+                _ => ProbeReadback::Unknown,
+            }
+        }
+        // ⚠️ Includes `EngineBusy`: on Chromium a click that opened a JS
+        // dialog leaves `Runtime.evaluate` queued behind the dialog, so the
+        // read-back times out. The click LANDED (the dialog is the
+        // evidence); the verdict is honestly "not read", not "not
+        // delivered".
+        Err(_) => ProbeReadback::Unknown,
+    }
+}
+
+/// The probe's verdict after a successful dispatch. `armed == false` means
+/// the latch already carries its `Skipped`; otherwise the read-back
+/// decides: the expected event → `Verified`; a clean read naming no (or the
+/// wrong) event → `Failed` + [`BrowserError::EffectNotDelivered`]; an
+/// unreadable read-back → `Skipped` and the action stands.
+async fn conclude_effect_probe(
+    be: &CdpBackend,
+    handle: &EngineHandle,
+    session: &SessionId,
+    verb: &'static str,
+    expected_event: &str,
+    armed: bool,
+) -> Result<(), BrowserError> {
+    if !armed {
+        return Ok(());
+    }
+    match read_effect_probe(handle, session).await {
+        ProbeReadback::Hit(event) if event == expected_event => {
+            be.record_effect_verdict(Some(EffectVerification::Verified));
+            Ok(())
+        }
+        ProbeReadback::Hit(other) => {
+            be.record_effect_verdict(Some(EffectVerification::Failed));
+            Err(BrowserError::EffectNotDelivered {
+                verb,
+                detail: format!(
+                    "a '{other}' event arrived at the probed element instead of \
+                     '{expected_event}'"
+                ),
+            })
+        }
+        ProbeReadback::NoHit => {
+            be.record_effect_verdict(Some(EffectVerification::Failed));
+            Err(BrowserError::EffectNotDelivered {
+                verb,
+                detail: format!(
+                    "no '{expected_event}' event arrived at the probed element after \
+                     the dispatch was accepted"
+                ),
+            })
+        }
+        ProbeReadback::Unknown => {
+            be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
+            Ok(())
+        }
+    }
+}
+
+/// The probe tag for a target: the ref id when there is one, a descriptive
+/// label otherwise (a coordinate is never probed, but the label keeps the
+/// install call honest about what it tagged).
+fn probe_label(target: &ActionTarget) -> String {
+    match target {
+        ActionTarget::Ref { ref_id } => ref_id.clone(),
+        ActionTarget::Coordinates { x, y } => format!("coordinates({x},{y})"),
+    }
+}
+
 pub(super) async fn click(
     be: &CdpBackend,
+    caps: &EngineCapabilities,
     tab_id: &str,
     target: ActionTarget,
 ) -> Result<(), BrowserError> {
+    // Cleared at ENTRY: the latch belongs to the most recent probed verb,
+    // and a verb that fails before dispatch must not leave the previous
+    // verb's verdict behind to be misread.
+    be.record_effect_verdict(None);
     let (handle, session, resolved) = prepare(be, tab_id, &target).await?;
     let (x, y) = point_for(be, &handle, &session, &resolved, true).await?;
-    press_and_release(be, &handle, &session, x, y, 1).await
+    let armed = arm_effect_probe(
+        be,
+        caps,
+        &handle,
+        &session,
+        &resolved,
+        &probe_label(&target),
+    )
+    .await;
+    press_and_release(be, &handle, &session, x, y, 1).await?;
+    conclude_effect_probe(be, &handle, &session, "browser_click", "click", armed).await
 }
 
 pub(super) async fn dblclick(
@@ -1113,8 +1348,13 @@ pub(super) async fn type_text(
         }
         ActionTarget::Coordinates { .. } => None,
     };
-    match &resolved {
-        Some(Resolved::Node {
+    // Cleared at ENTRY, like click's: the latch belongs to the most recent
+    // probed verb. Armed AFTER the focus call, on the node the keystrokes
+    // are about to land in; a target with no node honestly records
+    // `Skipped` (判据 §8).
+    be.record_effect_verdict(None);
+    let armed = match &resolved {
+        Some(node @ Resolved::Node {
             backend_node_id, ..
         }) => {
             dom::focus(
@@ -1124,11 +1364,15 @@ pub(super) async fn type_text(
             )
             .await
             .map_err(|e| map_cdp_err(be.engine(), "DOM.focus", e))?;
+            arm_effect_probe(be, caps, &handle, &session, node, &probe_label(&target)).await
         }
         // No element named — type into whatever holds focus, the same contract
-        // the managed backend has.
-        Some(Resolved::Point { .. }) | None => {}
-    }
+        // the managed backend has. No node, no probe.
+        Some(Resolved::Point { .. }) | None => {
+            be.record_effect_verdict(Some(EffectVerification::Skipped(be.engine())));
+            false
+        }
+    };
 
     // Read off the ARGUMENT (R42). This is not a refusal but a path choice, and
     // it is the one branch here whose *wrong* half is silent: an engine without
@@ -1173,7 +1417,7 @@ pub(super) async fn type_text(
             }
         }
     }
-    Ok(())
+    conclude_effect_probe(be, &handle, &session, "browser_type", "input", armed).await
 }
 
 pub(super) async fn press_key(
@@ -1234,10 +1478,12 @@ async fn call_on_node(
 
 pub(super) async fn fill(
     be: &CdpBackend,
+    caps: &EngineCapabilities,
     tab_id: &str,
     target: ActionTarget,
     value: &str,
 ) -> Result<(), BrowserError> {
+    be.record_effect_verdict(None);
     let (handle, session, resolved) = prepare(be, tab_id, &target).await?;
     if let Resolved::Node {
         backend_node_id, ..
@@ -1253,6 +1499,21 @@ pub(super) async fn fill(
         .await
         .map_err(|e| map_cdp_err(be.engine(), "DOM.focus", e))?;
     }
+    // Armed BEFORE `FILL_JS` runs: the listener must be in place when that
+    // script dispatches its `input`/`change` events, or the read-back below
+    // can only ever answer NoHit. ⚠️ What this probe proves is deliberately
+    // narrow — `fill` is NOT trusted input (the same script sets the value
+    // and dispatches the event), so `Verified` here confirms delivery of the
+    // verb's own event. The trust claim lives with click/type.
+    let armed = arm_effect_probe(
+        be,
+        caps,
+        &handle,
+        &session,
+        &resolved,
+        &probe_label(&target),
+    )
+    .await;
     let out = call_on_node(
         be,
         &handle,
@@ -1263,7 +1524,7 @@ pub(super) async fn fill(
     )
     .await?;
     if out.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        Ok(())
+        conclude_effect_probe(be, &handle, &session, "browser_fill_form", "input", armed).await
     } else {
         Err(BrowserError::ActionFailed(
             "the element did not accept a value; it may not be an input, a \
@@ -1421,9 +1682,9 @@ mod tests {
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use serde_json::json;
 
-    use crate::browser::backend::BrowserBackend;
+    use crate::browser::backend::{BrowserBackend, EffectVerification};
     use crate::browser::cdp_backend::test_support::*;
-    use crate::browser::engine::{Cap, Engine};
+    use crate::browser::engine::{Cap, Engine, capabilities};
     use crate::browser::error::BrowserError;
     use crate::browser::page_state::{RefKey, StaleReason, quote};
     use crate::browser::types::ActionTarget;
@@ -1460,6 +1721,37 @@ mod tests {
             {
                 return Responder::Reply(
                     json!({ "result": { "type": "object", "value": { "connected": true } } }),
+                );
+            }
+            base(frame)
+        }
+    }
+
+    /// A fake peer that answers the effect probe's READ-BACK with a hit of
+    /// `event`. Discriminated on the read-back's own marker, not on a copy of
+    /// the whole expression, so the day the read-back JS changes this helper
+    /// keeps answering it instead of silently falling through to `base`
+    /// (判据 §1 — a second spelling of the same fact).
+    ///
+    /// Method-level discrimination, like [`peer_with_live_node`]: the
+    /// read-back is a `Runtime.evaluate`, and a table entry for that whole
+    /// method would swallow every other evaluate the verb makes.
+    fn peer_with_effect_hit<F>(
+        event: &'static str,
+        base: F,
+    ) -> impl Fn(&serde_json::Value) -> Responder + Send + Sync
+    where
+        F: Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
+    {
+        move |frame: &serde_json::Value| {
+            if frame.get("method").and_then(serde_json::Value::as_str)
+                == Some("Runtime.evaluate")
+                && frame["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("__alephProbeHit"))
+            {
+                return Responder::Reply(
+                    json!({ "result": { "type": "string", "value": event } }),
                 );
             }
             base(frame)
@@ -2566,7 +2858,9 @@ mod tests {
 
         let seen = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&seen);
-        let server = FakeCdpServer::start(peer_with_live_node(move |frame: &serde_json::Value| {
+        let server = FakeCdpServer::start(peer_with_effect_hit(
+            "click",
+            peer_with_live_node(move |frame: &serde_json::Value| {
             if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
                 // The hit test. The liveness probe on the same method is
                 // answered by `peer_with_live_node` before this runs.
@@ -2585,7 +2879,8 @@ mod tests {
                 }));
             }
             Responder::Reply(json!({}))
-        }))
+        },
+        )))
         .await;
         wire_session(&server, "S1");
         server.on(
@@ -3092,8 +3387,11 @@ mod tests {
     /// for the whole run, and no per-character key events.
     #[tokio::test]
     async fn type_text_uses_insert_text_when_the_table_says_it_can() {
-        let server =
-            FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![]))).await;
+        let server = FakeCdpServer::start(peer_with_effect_hit(
+            "input",
+            peer_with_live_node(FakeCdpServer::scripted(vec![])),
+        ))
+        .await;
         wire_session(&server, "S1");
         server.on("DOM.focus", Responder::Reply(json!({})));
         server.on("Input.insertText", Responder::Reply(json!({})));
@@ -3136,8 +3434,11 @@ mod tests {
     /// the reason it is worth a test nobody's production config can reach.
     #[tokio::test]
     async fn type_text_falls_back_to_per_character_keys_when_it_cannot() {
-        let server =
-            FakeCdpServer::start(peer_with_live_node(FakeCdpServer::scripted(vec![]))).await;
+        let server = FakeCdpServer::start(peer_with_effect_hit(
+            "input",
+            peer_with_live_node(FakeCdpServer::scripted(vec![])),
+        ))
+        .await;
         wire_session(&server, "S1");
         server.on("DOM.focus", Responder::Reply(json!({})));
         server.on("Input.dispatchKeyEvent", Responder::Reply(json!({})));
@@ -3221,6 +3522,362 @@ mod tests {
             !methods(&server).iter().any(|m| m.starts_with("Input.")),
             "an unknown key must not reach the page as a keystroke: {:?}",
             methods(&server)
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // The effect-arrival probe (Task B2): install, read-back, verdicts.
+    // ---------------------------------------------------------------
+
+    /// The install JS tags the RESOLVED NODE — never `document` — and its
+    /// listener is one-shot: a probe that keeps listening after answering
+    /// would leak a page-side hook per action.
+    #[test]
+    fn probe_js_marks_only_the_target_element() {
+        let js = super::effect_probe_install_js("e7");
+        assert!(
+            js.contains("data-aleph-probe"),
+            "probe must tag the resolved node, not document"
+        );
+        assert!(
+            js.contains("once: true") || js.contains("once:true"),
+            "one-shot listener"
+        );
+    }
+
+    /// A table lookup must never mint a verification. `for_engine` answers
+    /// `Some(Skipped(engine))` when the capability row holds the probe off,
+    /// `None` when the probe will run and the read-back decides — and no
+    /// engine, probed or not, ever gets `Verified` out of it (判据 §8 /
+    /// Review Focus #4: 活性≠能干活，「它答了」和「它答的是真的」是两个问题).
+    #[test]
+    fn skipped_is_an_honest_label_not_a_success() {
+        for engine in Engine::ALL {
+            let v = EffectVerification::for_engine(engine);
+            assert!(
+                !matches!(v, Some(EffectVerification::Verified)),
+                "a table lookup must never fabricate a verification: {v:?}"
+            );
+        }
+        // obscura's row is fail-closed Unsupported today (no binary to
+        // measure on), so its verdict is the skipped label; the day it is
+        // measured Supported, `for_engine` returning `None` is the honest
+        // answer and this arm must be revisited rather than flipped.
+        match EffectVerification::for_engine(Engine::Obscura) {
+            Some(EffectVerification::Skipped(e)) => assert_eq!(e, Engine::Obscura),
+            None => assert_eq!(
+                capabilities(Engine::Obscura).effect_probe,
+                Cap::Supported,
+                "for_engine returned None, which is only honest when the probe runs"
+            ),
+            other => panic!("never a fabricated verified: {other:?}"),
+        }
+    }
+
+    /// The wire fixture every probed-click test below shares: resolveNode →
+    /// OBJ1, scroll/box-model/hit-test all happy, mouse dispatch accepted.
+    /// What varies — the read-back's answer — is the subject of each test.
+    async fn probed_click_server(
+        responder: impl Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
+    ) -> FakeCdpServer {
+        let server = FakeCdpServer::start(responder).await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
+        );
+        server.on("DOM.scrollIntoViewIfNeeded", Responder::Reply(json!({})));
+        server.on(
+            "DOM.getBoxModel",
+            Responder::Reply(json!({ "model": {
+                "content": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "width": 100, "height": 40
+            }})),
+        );
+        server.on("Input.dispatchMouseEvent", Responder::Reply(json!({})));
+        server
+    }
+
+    /// The probe's negative verdict: the engine ACCEPTED the dispatch (three
+    /// mouse events on the wire to prove it) and the one-shot listener never
+    /// fired. That is `EffectNotDelivered` — not a success, and not a
+    /// transport error: the engine answered; the effect did not arrive
+    /// (判据 §8 — the two facts license different recoveries).
+    #[tokio::test]
+    async fn a_click_the_engine_accepted_but_the_page_never_saw_is_effect_not_delivered() {
+        // The read-back falls through to `scripted`'s catch-all `Reply({})`,
+        // whose absent `result` decodes as `null` — exactly what the page
+        // says when the listener never fired.
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
+            vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )],
+        )))
+        .await;
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect_err("no event arrived at the probed element");
+        match err {
+            BrowserError::EffectNotDelivered { verb, detail } => {
+                assert_eq!(verb, "browser_click");
+                assert!(detail.contains("click"), "{detail}");
+            }
+            other => panic!("expected EffectNotDelivered, got {other:?}"),
+        }
+        // The dispatch DID happen — this is a post-dispatch verdict.
+        assert_eq!(
+            methods(&server)
+                .iter()
+                .filter(|m| *m == "Input.dispatchMouseEvent")
+                .count(),
+            3,
+            "move + press + release were dispatched: {:?}",
+            methods(&server)
+        );
+        // …and the verdict latch says Failed, never Verified (判据 §8).
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Failed)
+        );
+    }
+
+    /// The positive half: the listener fired, the read-back names the
+    /// expected event, the verdict is Verified — and the install provably
+    /// preceded the dispatch it watches, on the wire.
+    #[tokio::test]
+    async fn a_click_the_page_saw_is_verified_and_the_probe_is_installed_before_dispatch() {
+        let server = probed_click_server(peer_with_effect_hit(
+            "click",
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
+        .await;
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect("the page saw the click");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Verified)
+        );
+
+        // Ordering: the install (the callFunctionOn carrying the probe tag)
+        // must precede the first mouse dispatch, or the probe listens after
+        // the fact and its Verified is luck.
+        let received = server.received();
+        let install_at = received.iter().position(|f| {
+            f["method"].as_str() == Some("Runtime.callFunctionOn")
+                && f["params"]["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("data-aleph-probe"))
+        });
+        let dispatch_at = received
+            .iter()
+            .position(|f| f["method"].as_str() == Some("Input.dispatchMouseEvent"));
+        match (install_at, dispatch_at) {
+            (Some(i), Some(d)) => assert!(
+                i < d,
+                "the probe was installed after the dispatch it watches"
+            ),
+            other => panic!("probe install or dispatch missing from the wire: {other:?}"),
+        }
+
+        // The latch belongs to the most recent probed verb: a verb that
+        // fails in `prepare` (a ref this table never minted) clears it
+        // rather than leaving the previous success behind to be misread.
+        let stale = backend
+            .click("T1", ActionTarget::Ref { ref_id: "e9".into() })
+            .await
+            .expect_err("e9 was never minted in this table");
+        assert!(matches!(stale, BrowserError::StaleRef { .. }));
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            None,
+            "a verb that never dispatched carries no verdict"
+        );
+    }
+
+    /// A read-back FAILURE is `skipped`, never `failed`: the probe's own
+    /// fault must not turn a successful action into a failure (判据 §8 —
+    /// "I could not ask" is not "it did not happen").
+    #[tokio::test]
+    async fn a_readback_failure_marks_the_action_skipped_not_failed() {
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
+            vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )],
+        )))
+        .await;
+        server.on(
+            "Runtime.evaluate",
+            Responder::Error {
+                code: -32000,
+                message: "boom".into(),
+            },
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect("the action stands — the probe's own failure must not fail it");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Skipped(Engine::Chromium))
+        );
+    }
+
+    /// The capability gate: obscura's `effect_probe` row is `Unsupported`
+    /// (unmeasured — fail-closed), so no install and no read-back reach the
+    /// wire, and the verdict is the honest `skipped(obscura)`.
+    #[tokio::test]
+    async fn an_engine_without_the_probe_capability_is_honestly_skipped() {
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
+            vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )],
+        )))
+        .await;
+        let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            .expect("the click itself is fine — only the probe is gated");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Skipped(Engine::Obscura))
+        );
+        let probe_frames = server
+            .received()
+            .iter()
+            .filter(|f| {
+                f["params"]["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("data-aleph-probe"))
+                    || f["params"]["expression"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("__alephProbeHit"))
+            })
+            .count();
+        assert_eq!(
+            probe_frames, 0,
+            "the capability gate must hold the probe off the wire"
+        );
+    }
+
+    /// A coordinate click names a POINT, not an element: there is no node to
+    /// tag, so the verdict is skipped — never a verification of a point.
+    #[tokio::test]
+    async fn a_coordinate_click_has_no_node_to_probe_and_says_so() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Page.getLayoutMetrics",
+            Responder::Reply(json!({
+                "cssVisualViewport": {
+                    "pageX": 0.0, "pageY": 0.0,
+                    "clientWidth": 1280.0, "clientHeight": 800.0, "scale": 1.0
+                },
+                "cssContentSize": { "width": 1280.0, "height": 800.0 }
+            })),
+        );
+        server.on("Input.dispatchMouseEvent", Responder::Reply(json!({})));
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        backend
+            .click("T1", ActionTarget::Coordinates { x: 10.0, y: 10.0 })
+            .await
+            .expect("the click itself succeeds");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Skipped(Engine::Chromium))
+        );
+        let probe_frames = server
+            .received()
+            .iter()
+            .filter(|f| {
+                f["params"]["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("data-aleph-probe"))
+                    || f["params"]["expression"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("__alephProbeHit"))
+            })
+            .count();
+        assert_eq!(probe_frames, 0, "no node, no probe on the wire");
+    }
+
+    /// `fill` probed end to end: the listener installed before `FILL_JS`
+    /// runs catches the `input` event that script dispatches, and the
+    /// verdict is Verified. ⚠️ What this proves is deliberately narrow: the
+    /// fill verb IS its own effect (the same script sets the value and
+    /// dispatches the event), so the probe here confirms delivery of the
+    /// verb's own event rather than an independent page reaction — the trust
+    /// claim lives with click/type, whose dispatch is engine-trusted input.
+    #[tokio::test]
+    async fn a_fill_the_page_acknowledged_is_verified() {
+        let server = FakeCdpServer::start(peer_with_effect_hit(
+            "input",
+            peer_with_live_node(FakeCdpServer::scripted(vec![(
+                "Runtime.callFunctionOn",
+                Responder::Reply(
+                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                ),
+            )])),
+        ))
+        .await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
+        );
+        server.on("DOM.focus", Responder::Reply(json!({})));
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        backend
+            .fill("T1", ActionTarget::Ref { ref_id }, "hello")
+            .await
+            .expect("the field took the value");
+        assert_eq!(
+            BrowserBackend::last_effect_verification(&backend),
+            Some(EffectVerification::Verified)
         );
     }
 }

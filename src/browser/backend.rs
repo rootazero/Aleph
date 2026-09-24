@@ -4,6 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use super::engine::Engine;
 use super::error::BrowserError;
 use super::profile::BrowserDriver;
 use super::types::{
@@ -281,6 +282,70 @@ pub trait BrowserBackend: Send + Sync {
             filled += 1;
         }
         Ok(filled)
+    }
+
+    /// The effect-arrival verdict of the most recent PROBED verb
+    /// (click / type / fill) this backend dispatched, when it probes.
+    /// `browser_exec` reads it to stamp a step's `effect_verification`.
+    ///
+    /// The default is a no-op: `None` means "this backend does not say", and
+    /// must never be READ as verified — the two text drivers have no probe,
+    /// so for them every step honestly reports nothing (判据 §8). The cdp
+    /// backend overrides it; its verdict is cleared at the entry of each
+    /// probed verb, so a value read right after a verb belongs to THAT verb.
+    fn last_effect_verification(&self) -> Option<EffectVerification> {
+        None
+    }
+}
+
+/// The effect-arrival verdict of one probed verb (click / type / fill),
+/// stamped onto `browser_exec` step results as `effect_verification`.
+///
+/// The three states are three DIFFERENT facts, and collapsing any two of
+/// them is a lie the model acts on (判据 §8):
+///
+/// * `Verified` — the one-shot listener installed before dispatch observed
+///   the expected event at the target element. Earned by the read-back,
+///   never asserted by a table.
+/// * `Skipped(engine)` — no verdict exists and the label says so: the
+///   engine's capability row holds the probe off, the action named a point
+///   rather than a node, or the probe's own machinery failed. An honest
+///   "I do not know", never a quiet success (「活性≠能干活」).
+/// * `Failed` — the probe ran and the effect did not arrive. The action
+///   itself already failed as [`BrowserError::EffectNotDelivered`]; the
+///   latch records the same verdict as data so a caller that caught the
+///   error can still read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectVerification {
+    Verified,
+    Skipped(Engine),
+    Failed,
+}
+
+impl EffectVerification {
+    /// The verdict a verb reports WITHOUT running the probe: `Some(Skipped)`
+    /// when the engine's capability row holds the probe off, `None` when the
+    /// probe will run and the read-back decides. Never `Some(Verified)` — a
+    /// verification is earned by observing the event, never by looking up a
+    /// table (判据 §8: 「外部引擎可以把编造的值当作成功应答」).
+    #[must_use]
+    pub fn for_engine(engine: Engine) -> Option<Self> {
+        match super::engine::capabilities(engine).effect_probe {
+            super::engine::Cap::Supported => None,
+            // `Partial` is not `Supported`: a caveat row does not run a probe.
+            _ => Some(Self::Skipped(engine)),
+        }
+    }
+
+    /// The wire token carried in `browser_exec` step results:
+    /// `"verified"` / `"skipped(<engine>)"` / `"failed"`.
+    #[must_use]
+    pub fn as_wire(&self) -> String {
+        match self {
+            Self::Verified => "verified".into(),
+            Self::Skipped(engine) => format!("skipped({})", engine.as_str()),
+            Self::Failed => "failed".into(),
+        }
     }
 }
 

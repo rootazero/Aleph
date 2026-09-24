@@ -89,6 +89,14 @@ pub struct CdpBackend {
     /// "that target is gone" after a re-attach instead of guessing from a
     /// listing's row order (附录 D.9.19).
     tab_identities: Arc<TabRegistry>,
+    /// The effect-arrival verdict of the most recent probed verb
+    /// (click / type / fill). A latch rather than a return value because the
+    /// trait's `Result<(), BrowserError>` shape is fixed across three
+    /// backends; the contract is `last_effect_verification`'s doc: cleared
+    /// at the entry of each probed verb, so a value read right after a verb
+    /// belongs to THAT verb. This backend is rebuilt per call, so the latch
+    /// can never leak a verdict across tool calls.
+    effect_verdict: std::sync::Mutex<Option<crate::browser::backend::EffectVerification>>,
 }
 
 impl CdpBackend {
@@ -123,7 +131,22 @@ impl CdpBackend {
             ssrf_guard,
             command_timeout,
             tab_identities,
+            effect_verdict: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Record the effect-arrival verdict of the probed verb currently
+    /// running (`None` clears it at that verb's entry). The writer is
+    /// `cdp_backend::actions` and ONLY that module — a verdict minted
+    /// anywhere else would be a claim no probe earned.
+    pub(crate) fn record_effect_verdict(
+        &self,
+        verdict: Option<crate::browser::backend::EffectVerification>,
+    ) {
+        *self
+            .effect_verdict
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = verdict;
     }
 
     /// The profile's engine, which must ALREADY exist.
@@ -323,6 +346,13 @@ impl BrowserBackend for CdpBackend {
         self
     }
 
+    fn last_effect_verification(&self) -> Option<crate::browser::backend::EffectVerification> {
+        self.effect_verdict
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         tabs::open_tab(self, url).await
     }
@@ -372,7 +402,7 @@ impl BrowserBackend for CdpBackend {
     }
 
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
-        actions::click(self, tab_id, target).await
+        actions::click(self, capabilities(self.engine), tab_id, target).await
     }
     async fn dblclick(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         actions::dblclick(self, tab_id, target).await
@@ -394,7 +424,7 @@ impl BrowserBackend for CdpBackend {
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        actions::fill(self, tab_id, target, value).await
+        actions::fill(self, capabilities(self.engine), tab_id, target, value).await
     }
     async fn select(
         &self,
@@ -592,6 +622,7 @@ pub(crate) mod test_support {
             file_upload: Cap::Supported,
             pdf: Cap::Supported,
             insert_text: Cap::Supported,
+            effect_probe: Cap::Supported,
             measured_on: "test fixture",
         }
     }

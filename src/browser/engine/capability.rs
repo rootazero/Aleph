@@ -107,6 +107,13 @@ pub struct EngineCapabilities {
     pub pdf: Cap,
     /// `browser_type` and `browser_fill` — `Input.insertText`.
     pub insert_text: Cap,
+    /// `browser_click`, `browser_type` and `browser_fill_form` — the
+    /// effect-arrival probe: a one-shot capture listener installed on the
+    /// resolved node via `Runtime.callFunctionOn` BEFORE dispatch, read back
+    /// via `Runtime.evaluate` after. It needs the engine's page-global JS
+    /// state to persist across those two calls, and its synthetic
+    /// `Input.dispatch*` events to reach page-installed listeners.
+    pub effect_probe: Cap,
     /// The build each row above was measured against. A capability claim with
     /// no measurement date is a list that expires without telling anyone.
     pub measured_on: &'static str,
@@ -117,12 +124,13 @@ pub struct EngineCapabilities {
 /// being described, serialised or falsified, so Task 16's
 /// `cap_fields_covers_every_cap_typed_field_of_the_struct` derives the expected
 /// set from this file's own source (判据 §3).
-pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 5] = [
+pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 6] = [
     ("js_dialogs", |c| c.js_dialogs),
     ("drag", |c| c.drag),
     ("file_upload", |c| c.file_upload),
     ("pdf", |c| c.pdf),
     ("insert_text", |c| c.insert_text),
+    ("effect_probe", |c| c.effect_probe),
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
@@ -189,6 +197,21 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     pdf: Cap::Supported,
     // Landed in obscura ce9714f, 2026-09-04 (`domains/input.rs:329`).
     insert_text: Cap::Supported,
+    // **Unsupported as the fail-closed answer to an unknown, not as a
+    // measurement.** No obscura binary exists on the machine this row was
+    // implemented on, so the plan's "measure against the real binary first"
+    // could not be honoured — the deviation is recorded in the implementing
+    // commit. What is known structurally (measured 2026-09-19, recorded at
+    // `cdp_backend::actions::NODE_LIVENESS_JS`): obscura mints a FRESH JS
+    // wrapper for every `DOM.resolveNode`, and page-side expandos on the
+    // node do not persist — so the probe's state must live on `window`, and
+    // whether THIS engine's `Runtime.evaluate` calls share a persistent
+    // window global, and whether a listener installed through
+    // `Runtime.callFunctionOn` observes synthetic `Input.dispatch*` events,
+    // are both unmeasured. An unknown may not be spent as a permission
+    // (判据 §8); `qa/browser_dual`'s `caps` stage is the expiry check that
+    // re-asks the question against a real binary.
+    effect_probe: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -214,6 +237,14 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     file_upload: Cap::Supported,
     pdf: Cap::Supported,
     insert_text: Cap::Supported,
+    // Session-scoped JS-global persistence and trusted-input delivery of
+    // `Input.dispatch*` to page listeners are the two premises the probe
+    // needs — and they are the same premises the DevTools console, this
+    // repo's own `evaluate`/`wait_probe` verbs, and the whole click path
+    // already run on (the liveness/occlusion probes measured on Chrome
+    // 152/153 rely on the first; every `browser_click` relies on the
+    // second). `qa/browser_dual`'s `caps` stage is the expiry check.
+    effect_probe: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
     // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
@@ -358,12 +389,29 @@ mod tests {
     /// set `every_matrix_exempt_disagreement_cites_its_reading` has to walk. A
     /// second copy over there would be the two-authors shape this file spends
     /// most of its guards on (判据 §1).
-    const NOT_PROBED: [(&str, &str); 1] = [(
-        "drag",
-        "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
-         dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
-         did not read on either engine",
-    )];
+    /// The rows in [`NOT_PROBED`] are the ones whose evidence lives
+    /// outside this file. `effect_probe` joined it unmeasured: no obscura
+    /// binary exists on the machine this row was implemented on, and the two
+    /// facts the probe needs — page-global JS state persisting across two
+    /// `Runtime.evaluate` calls, and a listener installed via
+    /// `Runtime.callFunctionOn` observing synthetic `Input.dispatch*` events
+    /// — are both unmeasured on that engine. An unknown may not be spent as
+    /// a permission (判据 §8), so obscura's row is `Unsupported` until a real
+    /// binary answers them.
+    const NOT_PROBED: [(&str, &str); 2] = [
+        (
+            "drag",
+            "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
+             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
+             did not read on either engine",
+        ),
+        (
+            "effect_probe",
+            "no obscura binary on the implementing machine; window-global persistence \
+             across Runtime.evaluate calls and listener delivery of synthetic Input \
+             events are both unmeasured on that engine (判据 §8: fail-closed)",
+        ),
+    ];
 
     /// A row with no provenance cannot be re-measured, and an empty string
     /// reads exactly like a row someone forgot to fill in.
@@ -388,6 +436,9 @@ mod tests {
         // Both engines upload, so this one's hint is the engine you are already
         // on — which is why `upload`'s refusal is unreachable on both today.
         assert_eq!(supported_by(|c| c.file_upload), Some(Engine::Chromium));
+        // The probe row: obscura is fail-closed unmeasured, so the door the
+        // hint names must be chromium.
+        assert_eq!(supported_by(|c| c.effect_probe), Some(Engine::Chromium));
     }
 
     /// `supported_by` must be able to answer `None`, or its `Option` return is
@@ -486,6 +537,11 @@ mod tests {
             ("file_upload", "browser_upload"),
             ("pdf", "browser_pdf"),
             ("insert_text", "browser_type"),
+            // The probe is shared by three verbs; the doc must name all of
+            // them, or the model cannot tell which tools the row governs.
+            ("effect_probe", "browser_click"),
+            ("effect_probe", "browser_type"),
+            ("effect_probe", "browser_fill_form"),
         ] {
             assert!(
                 CAP_FIELDS.iter().any(|(n, _)| *n == name),
@@ -606,11 +662,22 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["drag"],
-            "a matrix-exempt row other than `drag` now answers differently per \
-             engine. That difference is published to the model as a route, and \
-             nothing in the matrix decides it — state the reading that does, \
-             beside BOTH values, and check it here"
+            vec!["drag", "effect_probe"],
+            "a matrix-exempt row other than `drag`/`effect_probe` now answers \
+             differently per engine. That difference is published to the model \
+             as a route, and nothing in the matrix decides it — state the \
+             reading that does, beside BOTH values, and check it here"
+        );
+
+        // effect_probe's disagreement rests on an explicit fail-closed ruling:
+        // obscura is unmeasured (no binary on the implementing machine), and
+        // BOTH values must say what the row needs to flip — checked in the
+        // source rather than trusted, because a published route resting on an
+        // argument nobody can read is the shape this test exists for.
+        let src = include_str!("capability.rs");
+        assert!(
+            src.contains("fail-closed answer to an unknown") && src.contains("window global"),
+            "obscura's effect_probe row no longer states what is unmeasured"
         );
 
         // The citation, checked rather than trusted. `driver` drives the verb
