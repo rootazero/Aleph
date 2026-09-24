@@ -352,7 +352,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mut session_start_blocks: Vec<String> = Vec::new();
         if history.is_empty() {
             if let Some(executor) = hook_executor.as_ref() {
-                let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+                let ctx = lifecycle_hook_context(
+                    &hook_session_id,
+                    run_id,
+                    &agent,
+                    Some(exec_tier.cc_permission_mode()),
+                );
                 executor
                     .execute_observers(HookEvent::SessionStart, &ctx)
                     .await;
@@ -413,7 +418,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ));
         }
         if let Some(executor) = hook_executor.as_ref() {
-            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let mut ctx = lifecycle_hook_context(
+                &hook_session_id,
+                run_id,
+                &agent,
+                Some(exec_tier.cc_permission_mode()),
+            );
             ctx = ctx.with_tool_input(request.input.clone());
             match executor
                 .execute_interceptors(HookEvent::UserPromptSubmit, ctx)

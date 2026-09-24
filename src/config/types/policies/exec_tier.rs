@@ -459,6 +459,31 @@ impl ExecTier {
     }
 }
 
+/// Each tier's Claude Code `permission_mode` spelling — the value a command
+/// hook reads from its stdin JSON. One row per tier; the method below is
+/// derived from this table and the test pins the two together.
+pub const CC_PERMISSION_MODES: [(ExecTier, &str); 4] = [
+    (ExecTier::Plan, "plan"),
+    (ExecTier::Ask, "default"),
+    (ExecTier::Auto, "auto"),
+    (ExecTier::Full, "bypassPermissions"),
+];
+
+impl ExecTier {
+    /// The Claude Code `permission_mode` this tier is reported as to hooks
+    /// (see [`CC_PERMISSION_MODES`]). `acceptEdits` and `dontAsk` have no
+    /// Aleph tier and are never emitted.
+    #[must_use]
+    pub const fn cc_permission_mode(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Ask => "default",
+            Self::Auto => "auto",
+            Self::Full => "bypassPermissions",
+        }
+    }
+}
+
 /// The effective permission for a tool: a refusing tier's floor, else the
 /// operator's explicit decision, else their configured baseline TIGHTENED by
 /// the tier.
@@ -950,6 +975,42 @@ mod tests {
     use super::*;
     use crate::sandbox::command_policy::{CommandPolicy, EnforcementMode};
     use serde_json::json;
+
+    #[test]
+    fn every_tier_has_one_claude_code_permission_mode_and_the_table_agrees() {
+        // The table is what the docs quote; the method is what the payload
+        // emits. Derive one from the other so they cannot drift.
+        for (tier, mode) in CC_PERMISSION_MODES {
+            assert_eq!(tier.cc_permission_mode(), mode);
+        }
+        let all = [
+            ExecTier::Plan,
+            ExecTier::Ask,
+            ExecTier::Auto,
+            ExecTier::Full,
+        ];
+        assert_eq!(CC_PERMISSION_MODES.len(), all.len(), "one row per tier");
+        let mut modes: Vec<&str> = all.iter().map(|t| t.cc_permission_mode()).collect();
+        modes.sort_unstable();
+        modes.dedup();
+        assert_eq!(
+            modes.len(),
+            all.len(),
+            "two tiers must not spell the same mode"
+        );
+        // The live enum (scan-cc-plugin-format §8): every emitted value is one of these.
+        const CC: [&str; 6] = [
+            "default",
+            "plan",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+        ];
+        for m in modes {
+            assert!(CC.contains(&m), "{m} is not a Claude Code permission_mode");
+        }
+    }
 
     /// Facts as the chokepoint would build them for a tool nobody declared
     /// anything about — an MCP tool, a browser tool, a tool shipped tomorrow.

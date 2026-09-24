@@ -153,6 +153,18 @@ impl HookEvent {
         Self::Stop,
     ];
 
+    /// The serde snake_case name (`before_tool_call`) — what the payload
+    /// carries for a hook that declared no other spelling (runtime/WASM
+    /// registrations, `aleph hooks test`). Derived from serde so the enum's
+    /// rename attribute stays the single source.
+    #[must_use]
+    pub fn canonical_name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(s)) => s,
+            _ => format!("{self:?}").to_lowercase(),
+        }
+    }
+
     /// Whether this event's [`HookContext`](crate::extension::hooks::HookContext)
     /// carries a `tool_name`, so a `matcher` regex can meaningfully select
     /// among invocations.

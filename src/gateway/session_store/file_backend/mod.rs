@@ -98,6 +98,29 @@ fn epoch_from_dir_name(pattern: &str, name: &str) -> Option<u32> {
     SessionKey::epoch_after_base(pattern, name, &[':', '_'])
 }
 
+/// The transcript file for `session_key` under `base_dir` — the ONE spelling
+/// of that path. The store reads/writes through it; the hook payload asks
+/// through [`transcript_path_for_session`]. Two spellings would be two
+/// answers to "where is this session's transcript".
+pub(crate) fn transcript_file(base_dir: &std::path::Path, session_key: &str) -> PathBuf {
+    base_dir
+        .join(sanitize_key_for_dir(session_key))
+        .join("transcript.jsonl")
+}
+
+/// Where a Claude Code hook can read this session's transcript, if anywhere.
+///
+/// `Some` only when the file exists: the SQLite backend keeps no file, and
+/// the file backend has nothing on disk before the first line is written.
+/// Existence is the honest predicate — a hook handed a path must be able to
+/// open it. Resolved against the default store location (the only one
+/// `aleph-server` constructs, `commands/start/helpers.rs`).
+#[must_use]
+pub fn transcript_path_for_session(session_key: &str) -> Option<PathBuf> {
+    let p = transcript_file(&FileSessionStoreConfig::default().base_dir, session_key);
+    p.is_file().then_some(p)
+}
+
 #[derive(Debug, Clone)]
 pub struct FileSessionStoreConfig {
     pub base_dir: PathBuf,
@@ -322,7 +345,7 @@ impl FileSessionStore {
     /// The lock is named for `metadata.json` because that is what it was built
     /// for, but it is the SESSION's write lock: one key, both files.
     fn transcript_path(&self, key: &str) -> PathBuf {
-        self.session_dir(key).join("transcript.jsonl")
+        transcript_file(&self.config.base_dir, key)
     }
 
     fn checkpoint_dir(&self, key: &str) -> PathBuf {
@@ -2658,6 +2681,31 @@ mod rescope_attribution_tests {
         assert!(
             !changed,
             "there is no row yet for a group nobody has spoken in"
+        );
+    }
+}
+
+#[cfg(test)]
+mod transcript_path_tests {
+    use super::*;
+
+    #[test]
+    fn transcript_path_for_session_answers_only_for_an_existing_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let key = "agent:main:ws:hooks";
+        // Not written yet → None (never a path that does not exist).
+        assert!(!transcript_file(temp.path(), key).is_file());
+        std::fs::create_dir_all(transcript_file(temp.path(), key).parent().unwrap()).unwrap();
+        std::fs::write(transcript_file(temp.path(), key), "{}\n").unwrap();
+        // The store's own spelling and the hook's spelling are the same function.
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().to_path_buf(),
+            ..FileSessionStoreConfig::default()
+        })
+        .unwrap();
+        assert_eq!(
+            store.transcript_path(key),
+            transcript_file(temp.path(), key)
         );
     }
 }

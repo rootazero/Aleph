@@ -614,7 +614,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // BeforeAgentStart — interceptor-kind hooks may abort the run before
         // any provider call; observer-kind hooks just witness the start.
         if let Some(executor) = hook_executor.as_ref() {
-            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent, None);
             match executor
                 .execute_interceptors(HookEvent::BeforeAgentStart, ctx)
                 .await
@@ -785,7 +785,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // seam already honored on the AfterToolCall path — no new protocol.
         // block / deny are meaningless post-hoc (the run is over) and ignored.
         if let Some(executor) = hook_executor.as_ref() {
-            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent, None);
             ctx = ctx.with_env("AGENT_OUTCOME", if result.is_ok() { "ok" } else { "error" });
             match &result {
                 Ok(text) => ctx = ctx.with_tool_output(text.clone()),

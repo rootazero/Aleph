@@ -174,7 +174,7 @@ pub use crate::config::{
     backup::ConfigBackup,
     guides::deploy_guides,
     patcher::ConfigPatcher,
-    policies::CompressionPolicy,
+    policies::{CompressionPolicy, ExecTier, CC_PERMISSION_MODES},
     types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     types::memory::{DreamingConfig, MemoryDecayPolicy},

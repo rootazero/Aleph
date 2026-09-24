@@ -25,6 +25,15 @@ use tracing::{debug, warn};
 /// output to disk; a hard cap is the minimal Aleph equivalent.
 const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
 
+/// Claude Code's PostToolUse result key, mirrored from the Aleph-native
+/// `tool_output` so a hook written for either name reads the same text.
+/// Settled by the P0 live capture (2026-09-20): the official hooks reference
+/// and dsh's `hooks-claude-code` port both spell it `tool_response`; the
+/// plugin-dev skill's prose (`tool_result`) is stale. If a future capture
+/// disagrees, this constant and `post_tool_payload_carries_the_claude_code_envelope_keys`
+/// are the only two places to touch.
+pub(crate) const CC_POST_TOOL_RESULT_KEY: &str = "tool_response";
+
 /// Read at most `cap` bytes from `r`, then drain (and discard) the rest so
 /// the writing child process never blocks on a full pipe — a blocked child
 /// would otherwise hang `wait()` until the timeout kills it, turning
@@ -97,19 +106,24 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// Build a Claude Code-style event payload as a JSON value.
 ///
 /// Schema (keyed `snake_case` to match the rest of the hook surface):
-/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, tool_error?, cwd?, env }`
+/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, <CC_POST_TOOL_RESULT_KEY>?, tool_error?, cwd, transcript_path?, permission_mode?, env? }`
 ///
 /// Shared by the stdin/HTTP string form ([`build_event_payload`]) and the
 /// plugin-hook path, which passes the value straight to `execute_plugin_hook`
 /// without a string round-trip.
-fn build_event_payload_value(event: HookEvent, context: &HookContext) -> serde_json::Value {
+///
+/// Takes the event's NAME rather than the [`HookEvent`] enum: the spelling a
+/// hook sees on `hook_event_name` is whatever it was registered under
+/// (`HookEvent::canonical_name` for runtime/WASM registrations today; P4.4
+/// hands this the hook's own `declared_event` without touching this
+/// function again).
+fn build_event_payload_value(event_name: &str, context: &HookContext) -> serde_json::Value {
     use serde_json::{json, Map, Value};
-    let event_str = match serde_json::to_value(event) {
-        Ok(Value::String(s)) => s,
-        _ => format!("{event:?}").to_lowercase(),
-    };
     let mut payload: Map<String, Value> = Map::new();
-    payload.insert("hook_event_name".into(), Value::String(event_str));
+    payload.insert(
+        "hook_event_name".into(),
+        Value::String(event_name.to_string()),
+    );
     payload.insert(
         "session_id".into(),
         Value::String(context.session_id.clone()),
@@ -124,12 +138,30 @@ fn build_event_payload_value(event: HookEvent, context: &HookContext) -> serde_j
     }
     if let Some(o) = &context.tool_output {
         payload.insert("tool_output".into(), Value::String(o.clone()));
+        // Mirrors Claude Code's PostToolUse result key verbatim, so a hook
+        // written for either name reads the same text.
+        payload.insert(CC_POST_TOOL_RESULT_KEY.into(), Value::String(o.clone()));
     }
     if let Some(e) = context.tool_error {
         payload.insert("tool_error".into(), Value::Bool(e));
     }
-    if let Some(c) = &context.working_dir {
+    // CC always sends `cwd`; the tool-dispatch seam sets no `working_dir`, so
+    // fall back to the process cwd rather than omitting the key there.
+    let cwd = context
+        .working_dir
+        .clone()
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(c) = cwd {
         payload.insert("cwd".into(), Value::String(c.to_string_lossy().to_string()));
+    }
+    if let Some(t) = &context.transcript_path {
+        payload.insert(
+            "transcript_path".into(),
+            Value::String(t.to_string_lossy().to_string()),
+        );
+    }
+    if let Some(m) = context.permission_mode {
+        payload.insert("permission_mode".into(), Value::String(m.to_string()));
     }
     if !context.env.is_empty() {
         payload.insert("env".into(), json!(context.env));
@@ -138,8 +170,8 @@ fn build_event_payload_value(event: HookEvent, context: &HookContext) -> serde_j
 }
 
 /// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
-fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
-    serde_json::to_string(&build_event_payload_value(event, context))
+fn build_event_payload(event_name: &str, context: &HookContext) -> String {
+    serde_json::to_string(&build_event_payload_value(event_name, context))
         .unwrap_or_else(|_| "{}".to_string())
 }
 
@@ -151,7 +183,7 @@ fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
 /// of hanging on an unwired stdin.
 #[must_use]
 pub fn event_payload_json(event: HookEvent, context: &HookContext) -> String {
-    build_event_payload(event, context)
+    build_event_payload(&event.canonical_name(), context)
 }
 
 /// Short, human-readable label for one hook action, used by the runtime
@@ -367,6 +399,7 @@ impl HookExecutor {
         plugin_root: &std::path::PathBuf,
         plugin_name: &str,
         event: HookEvent,
+        event_name: &str,
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         match action {
@@ -377,6 +410,7 @@ impl HookExecutor {
                     plugin_root,
                     plugin_name,
                     event,
+                    event_name,
                     timeout_override,
                 )
                 .await
@@ -394,12 +428,13 @@ impl HookExecutor {
                     plugin_root,
                     plugin_name,
                     event,
+                    event_name,
                     timeout_override,
                 )
                 .await
             }
             HookAction::Plugin { plugin_id, handler } => {
-                self.execute_plugin(plugin_id, handler, context, event)
+                self.execute_plugin(plugin_id, handler, context, event_name)
                     .await
             }
         }
@@ -421,7 +456,7 @@ impl HookExecutor {
         plugin_id: &str,
         handler: &str,
         context: &HookContext,
-        event: HookEvent,
+        event_name: &str,
     ) -> Result<ActionResult, ExtensionError> {
         let Some(manager) = crate::extension::try_extension_manager() else {
             return Ok(ActionResult {
@@ -431,7 +466,7 @@ impl HookExecutor {
                 exit_code: None,
             });
         };
-        let payload = build_event_payload_value(event, context);
+        let payload = build_event_payload_value(event_name, context);
         match manager
             .execute_plugin_hook(plugin_id, handler, payload)
             .await
@@ -489,6 +524,7 @@ impl HookExecutor {
         plugin_root: &std::path::PathBuf,
         plugin_name: &str,
         event: HookEvent,
+        event_name: &str,
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         // Shell-hook consent gate: an un-approved command must not run. It is
@@ -552,6 +588,10 @@ impl HookExecutor {
         // dropped from the env with a marker rather than risking the spawn.
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
+        // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`),
+        // the one every CC hook script reaches for first. Same value as the
+        // payload's `cwd`.
+        cmd.env("CLAUDE_PROJECT_DIR", working_dir);
         // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by
         // `plugin update` (stage → backup → swap), so a hook that wants state
         // that outlives an upgrade had no addressable path until this line
@@ -596,7 +636,7 @@ impl HookExecutor {
         // Configure stdio. The event JSON payload is piped to stdin so
         // hook scripts can `jq -r '.tool_input.file_path'` (Claude Code
         // convention). Env vars stay set for back-compat.
-        let payload = build_event_payload(event, context);
+        let payload = build_event_payload(event_name, context);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -748,6 +788,7 @@ impl HookExecutor {
         plugin_root: &Path,
         plugin_name: &str,
         event: HookEvent,
+        event_name: &str,
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         if let Some(consent) = &self.consent {
@@ -772,7 +813,7 @@ impl HookExecutor {
         }
 
         let resolved_url = substitute_variables(url, context, plugin_root, plugin_name);
-        let payload = build_event_payload(event, context);
+        let payload = build_event_payload(event_name, context);
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
 
         let client = reqwest::Client::builder()
@@ -912,6 +953,11 @@ impl HookExecutor {
             );
             accumulated.hooks_executed += 1;
 
+            // The name this hook sees on `hook_event_name`. Computed per hook
+            // (not once for the whole call) so a future declared-spelling
+            // lookup (P4.4: `hook.event_name()`) is a one-line swap here.
+            let event_name = event.canonical_name();
+
             // Execute all actions for this hook
             for action in &hook.actions {
                 let action_result = self
@@ -921,6 +967,7 @@ impl HookExecutor {
                         &hook.plugin_root,
                         &hook.plugin_name,
                         event,
+                        &event_name,
                         hook.timeout_secs.map(Duration::from_secs),
                     )
                     .await;
@@ -1140,6 +1187,9 @@ impl HookExecutor {
             .into_iter()
             .map(|hook| async move {
                 let timeout_override = hook.timeout_secs.map(Duration::from_secs);
+                // Computed per hook (see `execute_interceptors`'s twin) so a
+                // future declared-spelling lookup is a one-line swap here.
+                let event_name = event.canonical_name();
                 for action in &hook.actions {
                     match self
                         .execute_action(
@@ -1148,6 +1198,7 @@ impl HookExecutor {
                             &hook.plugin_root,
                             &hook.plugin_name,
                             event,
+                            &event_name,
                             timeout_override,
                         )
                         .await
@@ -1865,11 +1916,75 @@ mod tests {
                 &PathBuf::new(),
                 "plugin:demo",
                 HookEvent::MessageReceived,
+                "message_received",
                 None,
             )
             .await
             .expect("plugin action must skip (not error) when manager is absent");
         assert!(!result.success);
         assert!(result.output.is_none());
+    }
+
+    #[test]
+    fn post_tool_payload_carries_the_claude_code_envelope_keys() {
+        use crate::extension::hooks::HookContext;
+        let ctx = HookContext::new("agent:main:ws:1")
+            .with_tool_name("file_read")
+            .with_tool_input(r#"{"path":"/tmp/x"}"#)
+            .with_tool_output("contents")
+            .with_tool_error(false)
+            .with_working_dir("/work")
+            .with_transcript_path(Some(std::path::PathBuf::from(
+                "/data/sessions/k/transcript.jsonl",
+            )))
+            .with_permission_mode("default")
+            .with_env("RUN_ID", "r1");
+        let json: serde_json::Value =
+            serde_json::from_str(&event_payload_json(HookEvent::AfterToolCall, &ctx)).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        let mut expected = vec![
+            "hook_event_name",
+            "session_id",
+            "tool_name",
+            "tool_input",
+            "tool_output",
+            CC_POST_TOOL_RESULT_KEY,
+            "tool_error",
+            "cwd",
+            "transcript_path",
+            "permission_mode",
+            "env",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "payload key set");
+        assert_eq!(json["permission_mode"], "default");
+        assert_eq!(json["transcript_path"], "/data/sessions/k/transcript.jsonl");
+        assert_eq!(json["cwd"], "/work");
+        // The CC key mirrors the Aleph-native `tool_output` verbatim — a hook
+        // written for either name reads the same text.
+        assert_eq!(json[CC_POST_TOOL_RESULT_KEY], json["tool_output"]);
+    }
+
+    #[test]
+    fn unknown_transcript_and_mode_are_omitted_not_blanked() {
+        // A hook must not be handed `""` for a path that does not exist or a
+        // mode nobody resolved (`BeforeAgentStart` fires before the tier is
+        // known): absent means "unknown", an empty string reads as a value.
+        use crate::extension::hooks::HookContext;
+        let ctx = HookContext::new("s").with_tool_name("bash");
+        let json: serde_json::Value =
+            serde_json::from_str(&event_payload_json(HookEvent::BeforeToolCall, &ctx)).unwrap();
+        assert!(json.get("transcript_path").is_none());
+        assert!(json.get("permission_mode").is_none());
+        assert!(
+            json.get(CC_POST_TOOL_RESULT_KEY).is_none(),
+            "no output → no result key"
+        );
     }
 }

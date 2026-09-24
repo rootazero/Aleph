@@ -11,14 +11,25 @@ use crate::gateway::agent_instance::AgentInstance;
 /// session id plus `RUN_ID` / `AGENT_ID` env vars so command hooks have
 /// correlation handles. Lifecycle events have no tool, so the tool fields
 /// stay unset.
+///
+/// `permission_mode` is `None` on seams that fire before the tier is
+/// resolved (`BeforeAgentStart`, `AgentEnd`) — see the callers.
 pub(crate) fn lifecycle_hook_context(
     session_id: &str,
     run_id: &str,
     agent: &AgentInstance,
+    permission_mode: Option<&'static str>,
 ) -> HookContext {
-    HookContext::new(session_id)
+    let mut ctx = HookContext::new(session_id)
         .with_env("RUN_ID", run_id)
         .with_env("AGENT_ID", agent.id())
+        .with_transcript_path(
+            crate::gateway::session_store::file_backend::transcript_path_for_session(session_id),
+        );
+    if let Some(mode) = permission_mode {
+        ctx = ctx.with_permission_mode(mode);
+    }
+    ctx
 }
 
 /// Upper bound on how many project-local skills are advertised in the

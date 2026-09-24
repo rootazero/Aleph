@@ -1448,7 +1448,19 @@ impl ScopedToolService {
         let mut ctx = HookContext::new(self.hook_session_id.clone())
             .with_tool_name(name.to_string())
             .with_arguments(input.to_string())
-            .with_tool_input(input.to_string());
+            .with_tool_input(input.to_string())
+            // The two Claude Code envelope facts this seam can answer: the
+            // transcript file (when the file backend keeps one) and the tier
+            // the gate below will enforce, read from the same method the gate
+            // reads (`effective_exec_tier`, so a released PlanGate shows).
+            .with_transcript_path(
+                crate::gateway::session_store::file_backend::transcript_path_for_session(
+                    &self.hook_session_id,
+                ),
+            );
+        if let Some(tier) = self.effective_exec_tier() {
+            ctx = ctx.with_permission_mode(tier.cc_permission_mode());
+        }
         if let Some(out) = tool_output {
             ctx = ctx.with_tool_output(out.to_string());
         }
@@ -1777,7 +1789,9 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
 /// tokens, because the only safe signal is the adapter's own report, and
 /// a misclassification would silently re-route a genuine tool failure.
 fn looks_like_cancellation(cause: &str) -> bool {
-    let trimmed = cause.trim_end().trim_end_matches(|c: char| !c.is_alphanumeric());
+    let trimmed = cause
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_alphanumeric());
     // Strip the trailing "by upstream" / "by client" / "by caller" style
     // participle so "... cancelled by upstream" still matches.
     let core = trimmed

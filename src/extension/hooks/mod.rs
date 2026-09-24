@@ -101,6 +101,17 @@ pub struct HookContext {
     pub tool_output: Option<String>,
     /// Whether the tool execution resulted in an error
     pub tool_error: Option<bool>,
+    /// This session's transcript on disk, when the session store keeps one
+    /// (`file_backend::transcript_path_for_session`). `None` on the SQLite
+    /// backend or before the first line is written; the payload then OMITS
+    /// the key rather than sending `""` — a hook must not be handed a path
+    /// that does not exist.
+    pub transcript_path: Option<PathBuf>,
+    /// This turn's execution tier in Claude Code's `permission_mode`
+    /// spelling (`ExecTier::cc_permission_mode`). `None` on seams that fire
+    /// before the tier is resolved (`BeforeAgentStart`) and on the global
+    /// fire-and-forget observers (gateway / channel / provider events).
+    pub permission_mode: Option<&'static str>,
 }
 
 impl HookContext {
@@ -158,6 +169,20 @@ impl HookContext {
     #[must_use]
     pub const fn with_tool_error(mut self, is_error: bool) -> Self {
         self.tool_error = Some(is_error);
+        self
+    }
+
+    /// Set the transcript path (`None` = unknown, key omitted from the payload).
+    #[must_use]
+    pub fn with_transcript_path(mut self, path: Option<PathBuf>) -> Self {
+        self.transcript_path = path;
+        self
+    }
+
+    /// Set the Claude Code `permission_mode` string for this turn.
+    #[must_use]
+    pub const fn with_permission_mode(mut self, mode: &'static str) -> Self {
+        self.permission_mode = Some(mode);
         self
     }
 }
@@ -649,6 +674,8 @@ mod tests {
             env: HashMap::new(),
             tool_output: None,
             tool_error: None,
+            transcript_path: None,
+            permission_mode: None,
         };
 
         let plugin_root = PathBuf::from("/plugins/my-plugin");
