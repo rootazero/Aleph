@@ -24,7 +24,7 @@ pub struct ProfileInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileAction {
-    /// List all available profiles.
+    /// List the profiles available to you.
     List,
     /// Get the liveness and driver of a specific profile.
     GetState {
@@ -72,10 +72,22 @@ impl AlephTool for BrowserProfileTool {
         match args.action {
             ProfileAction::List => {
                 // The caller's view (r11 N5): configured names only, with the
-                // liveness of the caller's own copy.
+                // liveness of the caller's own copy. The person is the same
+                // derivation every other browser tool resolves a profile with.
+                let principal = match super::caller_browser_principal() {
+                    Ok(principal) => principal,
+                    Err(e) => {
+                        return Ok(BrowserProfileOutput {
+                            success: false,
+                            profiles: None,
+                            state: None,
+                            message: Some(e.to_string()),
+                        });
+                    }
+                };
                 let profiles = self
                     .manager
-                    .list_profiles_for(crate::gateway::visibility::ambient_principal().as_deref())
+                    .list_profiles_for(principal.as_deref())
                     .into_iter()
                     .map(|(name, active)| {
                         let driver = self

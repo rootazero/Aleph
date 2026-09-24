@@ -225,6 +225,28 @@ impl ProjectManageTool {
         crate::gateway::visibility::ambient_actor()
     }
 
+    /// The `owner_user_id` a room created this call is stamped with — a
+    /// PERSON, composed from `ambient_principal` (never `ambient_actor`, whose
+    /// last arm is the turn's agent id: a room owned by `main` is a room no
+    /// user owns or can administer).
+    ///
+    /// - A person ⇒ that person.
+    /// - The legacy single-user install with nobody attached ⇒ unowned, which
+    ///   reads as the legacy owner by absence (`owner_or_legacy`).
+    /// - Nobody attached on a server with users ⇒ refused: "I do not know who
+    ///   this is" must not be written down as an owner (判据 §8).
+    fn room_owner(principal: crate::gateway::visibility::RunPrincipal) -> Result<Option<String>> {
+        use crate::gateway::visibility::RunPrincipal;
+        match principal {
+            RunPrincipal::Person(person) => Ok(Some(person)),
+            RunPrincipal::Legacy => Ok(None),
+            RunPrincipal::Unattached => Err(AlephError::tool(
+                "no person is attached to this run, and a room must be owned by a person; \
+                 create the room from a signed-in session",
+            )),
+        }
+    }
+
     /// Resolve a room the actor may address, or the one refusal shape.
     ///
     /// "Not on the roster" and "does not exist" are one message on purpose:
@@ -438,9 +460,10 @@ impl AlephTool for ProjectManageTool {
             }
             ProjectAction::Create => {
                 let name = Self::need(args.name.as_ref(), "name", action)?;
+                let owner = Self::room_owner(crate::gateway::visibility::run_principal())?;
                 let project = self
                     .store
-                    .create(name, actor, None)
+                    .create(name, owner.as_deref(), None)
                     .map_err(|e| AlephError::tool(format!("failed to create project: {e}")))?;
                 let id = project.id.clone();
                 self.announce(&id, ChangeKind::Created, None);
@@ -1632,5 +1655,70 @@ mod tests {
         let row = out.project.expect("a created room comes back");
         assert_eq!(row.name, "headless room");
         assert_eq!(row.owner_user_id, None);
+    }
+
+    /// A run with no person but a turn agent id (A2A, a bare turn): the
+    /// room's owner column must never be written as the AGENT id — a room
+    /// owned by `main` is one no user owns or can administer.
+    #[tokio::test]
+    async fn a_room_is_never_owned_by_an_agent_id() {
+        let (tool, _project, _store, _g) = fixture();
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::Main {
+                agent_id: "main".to_string(),
+                main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+                epoch: 0,
+            },
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        let out = crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, async {
+                assert_eq!(
+                    crate::gateway::visibility::ambient_actor().as_deref(),
+                    Some("main"),
+                    "precondition: the actor falls back to the turn's agent id"
+                );
+                tool.call(ProjectManageArgs {
+                    action: ProjectAction::Create,
+                    project_id: None,
+                    name: Some("a2a room".into()),
+                    user: None,
+                    user_id: None,
+                    path: None,
+                })
+                .await
+            })
+            .await
+            .expect("single-user: an unattached create is the legacy owner's");
+        let row = out.project.expect("a created room comes back");
+        assert_eq!(row.owner_user_id, None);
+    }
+
+    /// The None-principal ruling (r11) on room creation: a person owns the
+    /// room; on a server with users, a run nobody is attached to is refused
+    /// with a reason instead of writing an owner it does not know.
+    #[test]
+    fn a_room_needs_a_person_to_own_it_on_a_server_with_users() {
+        use crate::gateway::visibility::run_principal_with;
+        assert_eq!(
+            ProjectManageTool::room_owner(run_principal_with(Some("u-alice".into()), true))
+                .unwrap()
+                .as_deref(),
+            Some("u-alice")
+        );
+        assert_eq!(
+            ProjectManageTool::room_owner(run_principal_with(None, false)).unwrap(),
+            None
+        );
+        let refused = ProjectManageTool::room_owner(run_principal_with(None, true))
+            .expect_err("nobody attached on a server with users owns no room");
+        assert!(refused.to_string().contains("no person is attached"), "{refused}");
     }
 }

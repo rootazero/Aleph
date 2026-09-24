@@ -147,9 +147,11 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
 ///    creator — the only person left to name).
 ///
 /// It is [`ambient_actor`] minus that function's last arm, which falls back
-/// to the turn's AGENT id (`main`): harmless for predicates that compare it
-/// with a partition suffix (an agent id never equals `u-*`), wrong for a
-/// caller that COMPOSES with the answer — a browser profile keyed
+/// to the turn's AGENT id (`main`): tolerable for predicates that compare it
+/// with an owner column or a partition suffix — an agent id is not a user id
+/// unless an operator names an agent `u-…`, and nothing reserves that prefix,
+/// so such an agent compares equal to that user — and wrong for a caller that
+/// COMPOSES with the answer — a browser profile keyed
 /// `default__main`, a spend row charged to an agent, or a task author the
 /// users table has never heard of.
 #[must_use]
