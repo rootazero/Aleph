@@ -148,6 +148,13 @@ call site — it is at the type that let the two answers look alike.
 - **`SESSION_KNOBS.md`,** and a `CLAUDE.md` that stops carrying detail no single
   reference document could say — the criteria index now holds shape names, with
   triggers and full text in the FEATURE_LOCATOR appendices.
+- **`shell`:** unify Windows shell resolution under `src/utils/shell.rs`
+  (pwsh → powershell → cmd ladder with absolute paths, `PS_PROLOGUE` /
+  `PS_EPILOGUE` for UTF-8 + POSIX exit codes, `STDIN_PIPE_THRESHOLD` /
+  `PWSH_STDIN_THRESHOLD` for the two different argv ceilings, Microsoft
+  Store alias filter); add `qa/winshell/run.sh` (resolve / encoding / exit /
+  comment / length / profile / env stages) as the re-derivation fixture
+  for the seven contracts.
 
 ### Fixed
 
