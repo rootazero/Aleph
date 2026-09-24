@@ -2537,7 +2537,9 @@ pub fn after() {}
     /// Task 3 migrated 36 sites onto [`production_prefix`] and closed with
     /// "zero offenders". That was true of the three spellings it searched for.
     /// Widening the search to the rule (above) found five, all older
-    /// than that round (r11 T01 migrated `session/steer_signal.rs`). The rest are registered rather than migrated because
+    /// than that round (r11 T01 migrated `session/steer_signal.rs`, and r11
+    /// T09's fix round migrated `execution_engine/run_loop/tests.rs` onto
+    /// `production_text`). The rest are registered rather than migrated because
     /// migrating each is a behaviour question of its own, not a rename:
     ///
     /// **This list may only shrink**, and the assertion below pins its size so
@@ -2556,12 +2558,6 @@ pub fn after() {}
             "the same const-ATTR shape as guard_tests.rs, minus the visibility \
              handling — two copies of one idea, already drifted. Converging \
              them is worth doing and is not a rename.",
-        ),
-        (
-            "src/gateway/execution_engine/run_loop/tests.rs",
-            "splits on the longer needle `\"#[cfg(test)]\\nmod tests\"`, which \
-             is a narrower cut than the naive one and not equivalent to \
-             production_prefix on a file with a gated non-mod item.",
         ),
         (
             "src/harness/tests/budget.rs",

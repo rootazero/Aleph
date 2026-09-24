@@ -97,6 +97,12 @@ pub(crate) fn subject_for_session_row<'a>(
 /// Resolve and apply fire-time authority for a run rebuilt for an existing
 /// session, in one step: [`subject_for_session_row`] → `resolve` → [`apply`].
 ///
+/// A refusal names the person that was checked and in which capacity
+/// (e.g. `principal deactivated — author u-bob`), from
+/// [`crate::scope::authority::checked_person`], so a tombstone, a resume
+/// refusal or an announce log line says WHO may no longer act, not only
+/// whether they were deactivated or are gone.
+///
 /// The resolver is a parameter so the whole mapping — including WHICH grant
 /// lands on `metadata` — is driven by tests with `resolve_with` (no lib test
 /// may install the process-global users store). Production passes
@@ -111,8 +117,19 @@ pub(crate) fn authorize_session_run<R>(
 where
     R: FnOnce(FireSubject<'_>) -> FireAuthority,
 {
-    let authority = resolve(subject_for_session_row(row, metadata));
-    apply(authority, metadata)
+    let subject = subject_for_session_row(row, metadata);
+    let checked = crate::scope::authority::checked_person(&subject).map(|(id, is_author)| {
+        let capacity = if is_author { "author" } else { "session owner" };
+        format!("{capacity} `{id}`")
+    });
+    let authority = resolve(subject);
+    match apply(authority, metadata) {
+        FireVerdict::Refused(reason) => FireVerdict::Refused(match checked {
+            Some(who) => format!("{reason} — {who}"),
+            None => reason,
+        }),
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -296,5 +313,51 @@ mod tests {
         assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
         let scope = crate::scope::scope_from_metadata(&meta).expect("the grant stamps the pair");
         assert_eq!(scope.owner_user_id, "u-bob");
+    }
+
+    /// T09 fix round 1 (I1/M4): a refusal names WHO was checked and in which
+    /// capacity — the resume settle sentence, the busy-queue tombstone and
+    /// the announce log line all carry this text — and says deactivated vs
+    /// gone.
+    #[test]
+    fn a_session_refusal_names_the_person_checked() {
+        let store = users();
+        store
+            .update_user("u-bob", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let bobs = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let verdict = authorize_session_run(
+            |s| resolve_with(Some(&store), &s),
+            Some(&bobs),
+            &mut HashMap::new(),
+        );
+        assert_eq!(
+            verdict,
+            FireVerdict::Refused("principal deactivated — session owner `u-bob`".into())
+        );
+
+        let ghosts = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-alice".into()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-room".into()).render()),
+            ..Default::default()
+        };
+        let mut meta = HashMap::new();
+        meta.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            "u-ghost".to_string(),
+        );
+        let verdict = authorize_session_run(
+            |s| resolve_with(Some(&store), &s),
+            Some(&ghosts),
+            &mut meta,
+        );
+        assert_eq!(
+            verdict,
+            FireVerdict::Refused("principal gone — author `u-ghost`".into())
+        );
     }
 }

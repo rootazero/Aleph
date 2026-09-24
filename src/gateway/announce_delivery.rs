@@ -23,7 +23,24 @@
 //!   live run at its next turn boundary rather than spawning a second one.
 //! - **busy elsewhere → bounded retries**, then give up quietly and leave the
 //!   result reachable through the tool that produced it.
-//! - **may its owner still act?** — fire-time authority (round 11), re-asked on every attempt; refused ends the ladder, unknown waits like busy.
+//! - **may its owner still act?** — fire-time authority (round 11), re-asked
+//!   on every attempt; refused ends the ladder, unknown waits on its own
+//!   bounded budget and never spends a busy retry.
+//!
+//! ⚠️ **Known gap — the person checked is the parent session's OWNER, not
+//! the initiator** (R-b / R-d; parked in round 11's T09 fix round). An
+//! announce run carries no `AUTHOR_USER_KEY`: the completion events
+//! (`SubAgentCompletionEvent`, `ProcessCompletionEvent`) and the orphan
+//! sidecar (`agents::background_persistence`'s `state.json`) record no
+//! author. In a project room the owner is the room's CREATOR, so a member's
+//! finished sub-agent or bash job is announced under the creator's status and
+//! role: refused if the creator was deactivated, delivered if only the member
+//! was. Closing it means capturing `scope::current_room_author()` at the two
+//! spawn sites (`agents::subagent_tool::spawn`, `builtin_tools::bash_exec` →
+//! `builtin_tools::process_completion`), carrying it on both event types and
+//! on the sidecar record (serde-default fields — no database migration), and
+//! stamping it into `metadata` below. Personal sessions (one human) are not
+//! affected.
 //!
 //! What stays with each caller is exactly what differs: which event it listens
 //! for, what the notice says, what "already collected" means for its own
@@ -49,6 +66,17 @@ use crate::sync_primitives::Arc;
 /// Busy-retry schedule (seconds before each attempt). The first attempt is
 /// immediate; later ones give a busy parent time to free its run slot.
 const RETRY_DELAYS_SECS: [u64; 3] = [0, 30, 120];
+
+/// Wait before re-asking an authority that could not be established. An
+/// unknown answer is not a busy parent: it spends none of
+/// [`RETRY_DELAYS_SECS`] (ruling a), and has this budget of its own instead.
+const AUTHORITY_UNKNOWN_WAIT_SECS: u64 = 30;
+
+/// How many times an unknown authority is re-asked before the ladder gives up
+/// and leaves the result where [`Announcement::fallback`] says it is — five
+/// minutes at [`AUTHORITY_UNKNOWN_WAIT_SECS`]. A bound so a users store that
+/// stays down does not pin one waiting task per finished unit forever.
+const AUTHORITY_UNKNOWN_MAX_WAITS: u32 = 10;
 
 /// One completion, ready to be delivered into the session that owns it.
 pub(crate) struct Announcement {
@@ -178,7 +206,12 @@ pub(crate) async fn deliver(
         "true".to_string(),
     );
 
-    for delay_secs in RETRY_DELAYS_SECS {
+    // `slot` walks `RETRY_DELAYS_SECS` and advances ONLY on a busy parent. An
+    // unknown authority retries the same slot after its own wait (M5).
+    let mut slot = 0usize;
+    let mut delay_secs = RETRY_DELAYS_SECS[0];
+    let mut unknown_waits = 0u32;
+    loop {
         if delay_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
             // Re-check the dedup guard after every wait, not just once up front.
@@ -200,8 +233,10 @@ pub(crate) async fn deliver(
         // Fire-time authority, asked on EVERY attempt (round 11, N9): the
         // parent session's owner may be deactivated or demoted during the
         // two-minute retry schedule. Granted stamps the scope pair (the run
-        // used to carry none) and the member ceiling; Unknown waits for the
-        // next attempt like a busy parent does (R-a).
+        // used to carry none) and the member ceiling; Unknown waits and asks
+        // again without spending a busy retry (R-a). The person checked is
+        // the row's OWNER — see the module doc's known gap: no initiator
+        // rides an announce.
         let mut attempt_metadata = metadata.clone();
         let verdict = match agent.session_store().get_metadata(&session_key).await {
             Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
@@ -226,13 +261,26 @@ pub(crate) async fn deliver(
                 return;
             }
             crate::gateway::fire_gate::FireVerdict::Unknown(reason) => {
+                unknown_waits += 1;
+                if unknown_waits > AUTHORITY_UNKNOWN_MAX_WAITS {
+                    warn!(
+                        announce = kind,
+                        key = %key,
+                        session = %session_id,
+                        reason = %reason,
+                        waits = AUTHORITY_UNKNOWN_MAX_WAITS,
+                        "announce authority stayed unknown; {fallback}"
+                    );
+                    return;
+                }
                 warn!(
                     announce = kind,
                     key = %key,
                     session = %session_id,
                     reason = %reason,
-                    "announce authority unknown; retrying on the next attempt"
+                    "announce authority unknown; asking again without spending a busy retry"
                 );
+                delay_secs = AUTHORITY_UNKNOWN_WAIT_SECS;
                 continue;
             }
         }
@@ -268,7 +316,14 @@ pub(crate) async fn deliver(
                 return;
             }
             Err(ExecutionError::AgentBusy(_)) => {
-                continue;
+                slot += 1;
+                match RETRY_DELAYS_SECS.get(slot) {
+                    Some(&next) => {
+                        delay_secs = next;
+                        continue;
+                    }
+                    None => break,
+                }
             }
             Err(e) => {
                 warn!(
@@ -287,6 +342,6 @@ pub(crate) async fn deliver(
         announce = kind,
         key = %key,
         session = %session_id,
-        "parent stayed busy, or its authority could not be established, through all retries; {fallback}"
+        "parent stayed busy through all retries; {fallback}"
     );
 }

@@ -1218,8 +1218,8 @@ pub async fn handle_workspace_read(
 mod tests {
     use super::*;
     use crate::gateway::caller_identity::CALLER_USER;
-    use crate::gateway::security::store::UserRole;
     use crate::gateway::events::GatewayEventFrame;
+    use crate::gateway::security::store::UserRole;
     use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
     use rusqlite::Connection;
     use std::sync::MutexGuard;

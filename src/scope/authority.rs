@@ -151,6 +151,24 @@ impl FireAuthority {
     }
 }
 
+/// Who [`resolve_with`] checks for `subject`, and whether that person is
+/// the carried author (`true`) or the owner (`false`): the author when one is
+/// carried, else the owner, an empty id read as absent. `None` = nobody to
+/// check (`Legacy`).
+///
+/// The one derivation of "the person checked": `resolve_with` asks it, and so
+/// does every refusal text that has to name that person, so the name printed
+/// can never be a different person from the one refused.
+#[must_use]
+pub fn checked_person<'a>(subject: &FireSubject<'a>) -> Option<(&'a str, bool)> {
+    let author = subject.author.filter(|s| !s.is_empty());
+    let owner = subject.owner.filter(|s| !s.is_empty());
+    match author {
+        Some(a) => Some((a, true)),
+        None => owner.map(|o| (o, false)),
+    }
+}
+
 /// Resolve against an explicit store. `None` store ⇒ `Legacy` — the
 /// `FailsOpen` contract of `security/users-store`, stated at the slot.
 ///
@@ -160,8 +178,7 @@ impl FireAuthority {
 #[must_use]
 pub fn resolve_with(users: Option<&SecurityStore>, subject: &FireSubject<'_>) -> FireAuthority {
     let author = subject.author.filter(|s| !s.is_empty());
-    let owner = subject.owner.filter(|s| !s.is_empty());
-    let Some(person) = author.or(owner) else {
+    let Some((person, _)) = checked_person(subject) else {
         return FireAuthority::Legacy;
     };
     let Some(users) = users else {
