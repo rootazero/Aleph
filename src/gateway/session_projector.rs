@@ -820,7 +820,7 @@ pub(crate) async fn project_event(
                 model_provider.as_deref(),
             )
             .await
-            .plan(ctx.run_start) else {
+            .plan(fold_floor(ctx.run_start, rec.seq)) else {
                 return Projected::Retry;
             };
             // The row this run's numbers belong to is the last assistant row
@@ -949,8 +949,8 @@ impl FoldedBill {
     /// The bill to hand the store, the outcome to report if the stamp lands,
     /// and the seq to stamp FROM. `None` = the fold failed and the caller
     /// writes nothing. `fallback` is the caller's own lower bound
-    /// (`ctx.run_start` or a span's `start`), used only for `Unfoldable`,
-    /// which has no anchor to report.
+    /// ([`fold_floor`] of `ctx.run_start`, or a span's `start`), used only
+    /// for `Unfoldable`, which has no anchor to report.
     fn plan(self, fallback: EventSeq) -> Option<(Option<RunBill>, BillOutcome, EventSeq)> {
         match self {
             Self::Owe(bill, anchor) => Some((Some(bill), BillOutcome::Billed, anchor)),
@@ -961,8 +961,23 @@ impl FoldedBill {
     }
 }
 
-/// Fold the run's spend from the log slice `[ctx.run_start, meta_seq)`,
-/// anchored on the last `RunStarted` in it
+/// The floor a meta's fold reads from, and its stamp's fallback lower bound:
+/// `run_start`, or 0 when `run_start` lies ABOVE the meta. Post-F1,
+/// `execute()` holds the run slot through the meta append, so a live
+/// `run_start` above the meta is always stale — a heal re-walking this meta
+/// after the drain already saw the NEXT run's opener — and reading from the
+/// log head lets the fold find this run's anchor positionally instead of
+/// folding the empty slice `[run_start, meta)` (stale-high, M5).
+fn fold_floor(run_start: EventSeq, meta_seq: EventSeq) -> EventSeq {
+    if run_start > meta_seq {
+        0
+    } else {
+        run_start
+    }
+}
+
+/// Fold the run's spend from the log slice
+/// `[fold_floor(ctx.run_start), meta_seq)`, anchored on the last `RunStarted` in it
 /// ([`crate::session::usage_fold::run_usage_totals`]). The cost and model are
 /// the meta's own — `None` from [`synthesize_missing_stamps`], which has no
 /// meta and passes the run's `RunFinished` seq as `meta_seq`. Read BEFORE the
@@ -994,7 +1009,11 @@ async fn fold_run_bill(
         return FoldedBill::Unfoldable;
     };
     let slice = match events
-        .load_events_range(id, Some(ctx.run_start), Some(meta_seq))
+        .load_events_range(
+            id,
+            Some(fold_floor(ctx.run_start, meta_seq)),
+            Some(meta_seq),
+        )
         .await
     {
         Ok(s) => s,
@@ -1758,6 +1777,67 @@ mod tests {
             (meta.input_tokens, meta.output_tokens),
             (10, 5),
             "B must not have been billed onto A's row"
+        );
+    }
+
+    /// M5, the stale-HIGH twin of the test above: a heal re-walks run A's meta
+    /// after the drain already recorded run B's opener, so the `run_start` it
+    /// inherits lies ABOVE the meta. Folding `[5, 4)` read nothing and the
+    /// fallback range `(5, 4]` held no row, so A was neither stamped nor
+    /// billed. The floor clamps to 0, the fold anchors on A's own opener, and
+    /// A is stamped and billed exactly once.
+    #[tokio::test]
+    async fn a_stale_high_run_start_still_stamps_and_bills_the_run_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "stale_high_run_start.db");
+        let id = SessionId::ephemeral("stale-high-run-start");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("run_a")),
+            (4, run_meta(tid, "run_a")),
+            (5, run_started("run_b")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 5,
+            bus: None,
+        };
+        project_event(&id, &rec(2, assistant_msg_billed(tid, 45, 25)), &ctx).await;
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            },
+            "a run_start above the meta is stale; the fold must still find A's opener"
+        );
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Nothing,
+            "the replay reads AlreadyStamped"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("A's row is there");
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("run_a")
         );
     }
 
