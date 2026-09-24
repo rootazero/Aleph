@@ -1486,16 +1486,11 @@ impl ScopedToolService {
         let mut ctx = HookContext::new(self.hook_session_id.clone())
             .with_tool_name(name.to_string())
             .with_arguments(input.to_string())
-            .with_tool_input(input.to_string())
-            // The two Claude Code envelope facts this seam can answer: the
-            // transcript file (when the file backend keeps one) and the tier
-            // the gate below will enforce, read from the same method the gate
-            // reads (`effective_exec_tier`, so a released PlanGate shows).
-            .with_transcript_path(
-                crate::gateway::session_store::file_backend::transcript_path_for_session(
-                    &self.hook_session_id,
-                ),
-            );
+            .with_tool_input(input.to_string());
+        // The one Claude Code envelope fact only this seam can answer: the
+        // tier the gate below will enforce, read from the same method the
+        // gate reads (`effective_exec_tier`, so a released PlanGate shows).
+        // `transcript_path` / `cwd` are the executor's (`session_facts`).
         if let Some(tier) = self.effective_exec_tier() {
             ctx = ctx.with_permission_mode(tier.cc_permission_mode());
         }

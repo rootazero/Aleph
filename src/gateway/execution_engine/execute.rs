@@ -882,16 +882,26 @@ where
         let occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>> =
             Arc::new(std::sync::Mutex::new(None));
 
+        // Every hook fired inside the run — whichever executor fires it — reads
+        // `transcript_path` from THIS store (`extension::hooks::session_facts`),
+        // so the SQLite backend answers `None` instead of a re-derived
+        // file-backend path. Published outside `run_agent_loop` so its
+        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
         let result: Result<String, ExecutionError> = tokio::select! {
-            result = self.run_agent_loop(
-                &run_id,
-                &request,
-                agent.clone(),
-                emitter.clone(),
-                deadline.clone(),
-                trace_task_persisted.then(|| run_id.clone()),
-                cancel_token.clone(),
-                occupancy_out.clone(),
+            result = crate::extension::hooks::with_transcript_source(
+                Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
+                    agent.session_store(),
+                )),
+                self.run_agent_loop(
+                    &run_id,
+                    &request,
+                    agent.clone(),
+                    emitter.clone(),
+                    deadline.clone(),
+                    trace_task_persisted.then(|| run_id.clone()),
+                    cancel_token.clone(),
+                    occupancy_out.clone(),
+                ),
             ) => result,
 
             _ = cancel_rx.recv() => {

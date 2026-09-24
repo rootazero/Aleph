@@ -174,6 +174,9 @@ mod tests {
 
     #[async_trait]
     impl SessionStore for InMemorySessionStore {
+        fn transcript_file(&self, _key: &SessionKey) -> Option<std::path::PathBuf> {
+            None
+        }
         async fn get_or_create(
             &self,
             _key: &SessionKey,

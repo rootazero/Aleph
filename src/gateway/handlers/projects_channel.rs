@@ -962,6 +962,9 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionStore for ReadDuringRescope {
+        fn transcript_file(&self, key: &SessionKey) -> Option<std::path::PathBuf> {
+            self.inner.transcript_file(key)
+        }
         async fn rescope_attribution(
             &self,
             key: &SessionKey,

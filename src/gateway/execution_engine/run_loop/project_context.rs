@@ -22,10 +22,7 @@ pub(crate) fn lifecycle_hook_context(
 ) -> HookContext {
     let mut ctx = HookContext::new(session_id)
         .with_env("RUN_ID", run_id)
-        .with_env("AGENT_ID", agent.id())
-        .with_transcript_path(
-            crate::gateway::session_store::file_backend::transcript_path_for_session(session_id),
-        );
+        .with_env("AGENT_ID", agent.id());
     if let Some(mode) = permission_mode {
         ctx = ctx.with_permission_mode(mode);
     }

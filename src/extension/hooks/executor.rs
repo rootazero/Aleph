@@ -1,5 +1,6 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
+use super::session_facts::SessionFacts;
 use super::{
     substitute_variables, ActionResult, HookContext, ShellHookConsent,
     DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS,
@@ -116,7 +117,14 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// hook sees on `hook_event_name` is whatever it was registered under —
 /// the dispatch loops pass [`HookConfig::event_name`] (the declared
 /// spelling, else `HookEvent::canonical_name`).
-fn build_event_payload_value(event_name: &str, context: &HookContext) -> serde_json::Value {
+///
+/// `facts` are the session facts the executor derived for this action
+/// ([`SessionFacts::derive`]) — no fire site supplies them.
+fn build_event_payload_value(
+    event_name: &str,
+    context: &HookContext,
+    facts: &SessionFacts,
+) -> serde_json::Value {
     use serde_json::{json, Map, Value};
     let mut payload: Map<String, Value> = Map::new();
     payload.insert(
@@ -153,7 +161,7 @@ fn build_event_payload_value(event_name: &str, context: &HookContext) -> serde_j
     if let Some(c) = cwd {
         payload.insert("cwd".into(), Value::String(c.to_string_lossy().to_string()));
     }
-    if let Some(t) = &context.transcript_path {
+    if let Some(t) = &facts.transcript_path {
         payload.insert(
             "transcript_path".into(),
             Value::String(t.to_string_lossy().to_string()),
@@ -169,8 +177,8 @@ fn build_event_payload_value(event_name: &str, context: &HookContext) -> serde_j
 }
 
 /// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
-fn build_event_payload(event_name: &str, context: &HookContext) -> String {
-    serde_json::to_string(&build_event_payload_value(event_name, context))
+fn build_event_payload(event_name: &str, context: &HookContext, facts: &SessionFacts) -> String {
+    serde_json::to_string(&build_event_payload_value(event_name, context, facts))
         .unwrap_or_else(|_| "{}".to_string())
 }
 
@@ -182,7 +190,11 @@ fn build_event_payload(event_name: &str, context: &HookContext) -> String {
 /// of hanging on an unwired stdin.
 #[must_use]
 pub fn event_payload_json(event: HookEvent, context: &HookContext) -> String {
-    build_event_payload(&event.canonical_name(), context)
+    build_event_payload(
+        &event.canonical_name(),
+        context,
+        &SessionFacts::derive(context),
+    )
 }
 
 /// Short, human-readable label for one hook action, used by the runtime
@@ -472,7 +484,8 @@ impl HookExecutor {
                 exit_code: None,
             });
         };
-        let payload = build_event_payload_value(event_name, context);
+        let payload =
+            build_event_payload_value(event_name, context, &SessionFacts::derive(context));
         match manager
             .execute_plugin_hook(plugin_id, handler, payload)
             .await
@@ -565,6 +578,9 @@ impl HookExecutor {
 
         // Determine working directory
         let working_dir = context.working_dir.as_ref().unwrap_or(plugin_root);
+        // Derived once, so the stdin payload and this command's environment
+        // read the same answer.
+        let facts = SessionFacts::derive(context);
 
         // Build command
         let mut cmd = if cfg!(windows) {
@@ -642,7 +658,7 @@ impl HookExecutor {
         // Configure stdio. The event JSON payload is piped to stdin so
         // hook scripts can `jq -r '.tool_input.file_path'` (Claude Code
         // convention). Env vars stay set for back-compat.
-        let payload = build_event_payload(event_name, context);
+        let payload = build_event_payload(event_name, context, &facts);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -819,7 +835,7 @@ impl HookExecutor {
         }
 
         let resolved_url = substitute_variables(url, context, plugin_root, plugin_name);
-        let payload = build_event_payload(event_name, context);
+        let payload = build_event_payload(event_name, context, &SessionFacts::derive(context));
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
 
         let client = reqwest::Client::builder()
@@ -1977,22 +1993,45 @@ mod tests {
         assert!(result.output.is_none());
     }
 
-    #[test]
-    fn post_tool_payload_carries_the_claude_code_envelope_keys() {
-        use crate::extension::hooks::HookContext;
+    /// Names `path` as the transcript of `session` and of nothing else, so a
+    /// test also proves the lookup is keyed by the context's session id.
+    struct OneTranscript {
+        session: &'static str,
+        path: &'static str,
+    }
+
+    impl crate::extension::hooks::TranscriptSource for OneTranscript {
+        fn transcript_path(&self, session_id: &str) -> Option<PathBuf> {
+            (session_id == self.session).then(|| PathBuf::from(self.path))
+        }
+    }
+
+    fn one_transcript(
+        session: &'static str,
+        path: &'static str,
+    ) -> Arc<dyn crate::extension::hooks::TranscriptSource> {
+        Arc::new(OneTranscript { session, path })
+    }
+
+    #[tokio::test]
+    async fn post_tool_payload_carries_the_claude_code_envelope_keys() {
+        use crate::extension::hooks::{with_transcript_source, HookContext};
         let ctx = HookContext::new("agent:main:ws:1")
             .with_tool_name("file_read")
             .with_tool_input(r#"{"path":"/tmp/x"}"#)
             .with_tool_output("contents")
             .with_tool_error(false)
             .with_working_dir("/work")
-            .with_transcript_path(Some(std::path::PathBuf::from(
-                "/data/sessions/k/transcript.jsonl",
-            )))
             .with_permission_mode("default")
             .with_env("RUN_ID", "r1");
-        let json: serde_json::Value =
-            serde_json::from_str(&event_payload_json(HookEvent::AfterToolCall, &ctx)).unwrap();
+        let transcripts = one_transcript("agent:main:ws:1", "/data/sessions/k/transcript.jsonl");
+        let json: serde_json::Value = serde_json::from_str(
+            &with_transcript_source(transcripts, async {
+                event_payload_json(HookEvent::AfterToolCall, &ctx)
+            })
+            .await,
+        )
+        .unwrap();
         let mut keys: Vec<&str> = json
             .as_object()
             .unwrap()
@@ -2038,5 +2077,21 @@ mod tests {
             json.get(CC_POST_TOOL_RESULT_KEY).is_none(),
             "no output → no result key"
         );
+    }
+
+    /// A published source that has no file for THIS session answers nothing,
+    /// even though it names a file for another one.
+    #[tokio::test]
+    async fn a_source_without_this_sessions_file_leaves_the_key_out() {
+        use crate::extension::hooks::{with_transcript_source, HookContext};
+        let ctx = HookContext::new("agent:main:other");
+        let json: serde_json::Value = serde_json::from_str(
+            &with_transcript_source(one_transcript("agent:main:ws:1", "/t.jsonl"), async {
+                event_payload_json(HookEvent::Stop, &ctx)
+            })
+            .await,
+        )
+        .unwrap();
+        assert!(json.get("transcript_path").is_none());
     }
 }
