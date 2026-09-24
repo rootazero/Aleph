@@ -58,10 +58,16 @@ pub trait SessionEventStore: Send + Sync + 'static {
     ///
     /// This is the only write path: a multi-step durable operation either
     /// lands whole or not at all — manual `/compact` is its summary row, its
-    /// checkpoint row and `Retire::Through(cut)` in one call; `chat.rewind` /
-    /// `session.truncate` are `Retire::From(seq)` plus the `RunFinished`
-    /// closer the cut would otherwise leave owed. Fails — with nothing written
-    /// and nothing retired — if any `(session_id, seq)` already exists.
+    /// checkpoint row and `Retire::Through { through: cut, live }` in one
+    /// call; `chat.rewind` / `session.truncate` are `Retire::From(seq)` plus
+    /// the `RunFinished` closer the cut would otherwise leave owed. Fails —
+    /// with nothing written and nothing retired — if any `(session_id, seq)`
+    /// already exists, and with [`SessionError::RetireSpanChanged`] if a
+    /// `Retire::Through` retires any count other than its `live`. **Every
+    /// implementer must enforce that count inside the transaction.** One that
+    /// ignores `live` still compiles and still passes every test that does not
+    /// race a clear, and silently brings back the race it exists to close: a
+    /// summary of turns the user erased, at the head of every future prompt.
     /// `retire` runs BEFORE the inserts so the batch's own rows stay live.
     /// `durability` decides whether the commit fsyncs the WAL
     /// ([`Durability::Barrier`]) or rides the store's resting level.
@@ -633,7 +639,10 @@ fn retire_in_txn(
             )?;
             Ok(n)
         }
-        Retire::Through(through_seq) => {
+        Retire::Through {
+            through: through_seq,
+            ..
+        } => {
             let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
             tx.execute(
                 "UPDATE session_events SET retired_at = ?3
@@ -685,7 +694,20 @@ fn write_batch(
         .map_err(|e| SessionError::Storage(format!("append_batch BEGIN IMMEDIATE failed: {e}")))?;
     // Retire FIRST so the batch's own rows, appended after, stay live.
     if let Some(r) = retire {
-        retire_in_txn(&tx, session_key, r, at).map_err(|e| SessionError::Storage(e.to_string()))?;
+        let retired = retire_in_txn(&tx, session_key, r, at)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        // The head-side condition (see `Retire::Through`): checked inside the
+        // transaction, so it and the commit cannot be separated by a
+        // `retire_from` on another path. Returning drops `tx` uncommitted,
+        // which rolls the retire back with nothing inserted.
+        if let Retire::Through { live, .. } = r {
+            if retired != live {
+                return Err(SessionError::RetireSpanChanged {
+                    expected: live,
+                    found: retired,
+                });
+            }
+        }
     }
     for row in rows {
         tx.execute(
@@ -2303,19 +2325,112 @@ mod tests {
 
     /// `Retire::Through` has no standalone method: it is reached only as the
     /// `retire` argument of `append_batch`, so a retire-only batch is how the
-    /// head-side bound is driven here.
-    async fn retire_through_batch(store: &SqliteEventStore, sid: &SessionId, through: EventSeq) {
+    /// head-side bound is driven here. `live` is the count the caller expects
+    /// to retire; a mismatch is the rollback pinned below, so every caller of
+    /// this helper states the count it read.
+    async fn retire_through_batch(
+        store: &SqliteEventStore,
+        sid: &SessionId,
+        through: EventSeq,
+        live: usize,
+    ) {
         let next = store.load_head_seq(sid).await.unwrap() + 1;
         store
             .append_batch(
                 sid,
                 next,
                 &[],
-                Some(Retire::Through(through)),
+                Some(Retire::Through { through, live }),
                 Durability::Normal,
             )
             .await
             .unwrap();
+    }
+
+    /// F25: a head-side retire that finds fewer live rows than its caller
+    /// read — here because a tail-side clear landed in between — rolls the
+    /// WHOLE batch back. The row it would have appended (the summary, in
+    /// production) is not in the log, and the rows the clear left live are
+    /// still live. Asserted as effects on the log (criterion #4).
+    #[tokio::test]
+    async fn retire_through_rolls_back_when_the_span_shrank_under_it() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for (seq, text) in [(1u64, "one"), (2, "two"), (3, "three")] {
+            store
+                .append(&sid, seq, &user_message(tid, text, at), at)
+                .await
+                .unwrap();
+        }
+        // The caller read seqs 1..=2 as the span; then a clear erased from 2.
+        store.retire_from(&sid, 2).await.unwrap();
+
+        let err = store
+            .append_batch(
+                &sid,
+                4,
+                &[(user_message(tid, "summary of one and two", at), at)],
+                Some(Retire::Through {
+                    through: 2,
+                    live: 2,
+                }),
+                Durability::Normal,
+            )
+            .await
+            .expect_err("a span that shrank must not be retired");
+        assert!(
+            matches!(
+                err,
+                SessionError::RetireSpanChanged {
+                    expected: 2,
+                    found: 1
+                }
+            ),
+            "{err:?}"
+        );
+
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(
+            live.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![1],
+            "nothing appended, and seq 1 was not retired by the rolled-back batch"
+        );
+        assert_eq!(store.load_head_seq(&sid).await.unwrap(), 3);
+    }
+
+    /// The control for the rollback above: a tail-side clear PAST the span
+    /// leaves the count intact, so the head-side retire commits.
+    #[tokio::test]
+    async fn retire_through_commits_when_only_the_tail_past_it_changed() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for (seq, text) in [(1u64, "one"), (2, "two"), (3, "three")] {
+            store
+                .append(&sid, seq, &user_message(tid, text, at), at)
+                .await
+                .unwrap();
+        }
+        store.retire_from(&sid, 3).await.unwrap();
+
+        store
+            .append_batch(
+                &sid,
+                4,
+                &[(user_message(tid, "summary", at), at)],
+                Some(Retire::Through {
+                    through: 2,
+                    live: 2,
+                }),
+                Durability::Normal,
+            )
+            .await
+            .expect("the summarized span is intact");
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(live.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![4]);
     }
 
     /// `retired_at` of one row, read off the private connection.
@@ -2342,7 +2457,7 @@ mod tests {
                 .unwrap();
         }
 
-        retire_through_batch(&store, &sid, 2).await;
+        retire_through_batch(&store, &sid, 2, 2).await;
 
         let live = store.load_all_events(&sid).await.unwrap();
         assert_eq!(live.len(), 1);
@@ -2366,7 +2481,8 @@ mod tests {
             )
             .unwrap();
         }
-        retire_through_batch(&store, &sid, 2).await;
+        // Zero live rows remain at or below the bound, so zero is the count.
+        retire_through_batch(&store, &sid, 2, 0).await;
         assert_eq!(
             retired_at(&store, &sid, 1).await,
             Some(4242),
@@ -2396,7 +2512,7 @@ mod tests {
             .await
             .unwrap();
 
-        retire_through_batch(&store, &sid, 1).await;
+        retire_through_batch(&store, &sid, 1, 1).await;
         assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
         assert!(
             !store
@@ -2435,7 +2551,7 @@ mod tests {
             .await
             .unwrap();
 
-        retire_through_batch(&store, &sid_b, 1).await;
+        retire_through_batch(&store, &sid_b, 1, 1).await;
 
         assert_eq!(store.load_all_events(&sid_a).await.unwrap().len(), 1);
         assert!(store.load_all_events(&sid_b).await.unwrap().is_empty());

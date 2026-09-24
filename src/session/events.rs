@@ -620,10 +620,24 @@ pub struct SessionEventRecord {
 /// already-retired row keeps its original stamp and is not counted again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retire {
-    /// Retire every live event with `seq <= n` — the head side, what
+    /// Retire every live event with `seq <= through` — the head side, what
     /// `/compact` uses. The BM25 mirror is **kept**: compacted turns leave
     /// the prompt but must stay recallable.
-    Through(EventSeq),
+    ///
+    /// Conditional on the head being the one the caller read: the
+    /// transaction rolls back with [`SessionError::RetireSpanChanged`] unless
+    /// it retires exactly `live` rows. A head-side retire is always written
+    /// on behalf of something computed from those rows (a summary of them),
+    /// and `chat.clear` / `chat.rewind` retire from the tail without going
+    /// through the session actor. A clear landing between the caller's read
+    /// and this commit would otherwise put a summary of erased turns at the
+    /// head of every future prompt. The count is exact because seqs only
+    /// grow: no row with `seq <= through` can appear after the read, so the
+    /// only way the count moves is a row the caller summarized having been
+    /// retired by someone else.
+    ///
+    /// [`SessionError::RetireSpanChanged`]: crate::session::service::SessionError::RetireSpanChanged
+    Through { through: EventSeq, live: usize },
     /// Retire every live event with `seq >= n` — the tail side, what
     /// `chat.clear` / `chat.rewind` / `/undo` use. The BM25 mirror rows for
     /// the same range are **deleted** in the same transaction, so erased
