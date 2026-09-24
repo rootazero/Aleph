@@ -985,6 +985,9 @@ mod tests {
         let temp = tempdir().unwrap();
         let key = SessionKey::from_key_string("agent:refusedbill:main").unwrap();
         let store = store_with_row(&temp, &key).await;
+        let bus = std::sync::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = store.with_event_bus(bus);
         store
             .conn
             .lock()
@@ -1001,6 +1004,21 @@ mod tests {
         assert!(
             matches!(&result, Err(SessionStoreError::DatabaseError(msg)) if msg.contains("injected bill failure")),
             "{result:?}"
+        );
+        let mut announced = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == &key.to_key_string() {
+                    announced += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced, 0,
+            "a rolled-back bill changed nothing and must not announce usage"
         );
         assert_eq!(
             row_run_id(&store, &key).await,

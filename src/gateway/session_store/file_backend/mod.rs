@@ -2145,6 +2145,9 @@ mod default_backend_parity_guards {
     async fn a_refused_metadata_write_rolls_the_stamp_back() {
         let key_str = "agent:filerollback:main";
         let (store, _dir, key) = store_with_row(key_str).await;
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = store.with_event_bus(bus);
         let meta = serde_json::json!({ "run_id": "r" });
         let bill = file_bill();
         meta::failpoint::fail_next_write(&store.metadata_path(key_str));
@@ -2152,6 +2155,21 @@ mod default_backend_parity_guards {
             .stamp_and_bill_in_range(&key, 1, 4, &meta, Some(&bill))
             .await
             .is_err());
+        let mut announced = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == key_str {
+                    announced += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced, 0,
+            "a rolled-back stamp billed nothing and must not announce usage"
+        );
         assert_eq!(stamped_id(&store, key_str).await, None, "rolled back");
         assert!(
             assistant_metadata(&store, key_str).await.is_none(),
