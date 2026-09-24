@@ -353,7 +353,8 @@ pub const UNDECIDED_PARTITION: &str = "!undecided";
 /// bare `true` at a call site would be a second derivation of that rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnpartitionedRows {
-    /// The legacy owner, or an unrestricted internal caller.
+    /// The legacy owner outside a project room, or — on a single-user
+    /// install only — a run nobody is attached to.
     Admit,
     /// Every other principal — fail-closed.
     Refuse,

@@ -67,8 +67,12 @@ impl MemoryTimelineTool {
     ) -> std::result::Result<MemoryTimelineOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        // Format validation bounds the input surface. WHOSE fact this is is
-        // decided by the partition filter the dispatch arm bound (`for_caller`).
+        // Format validation bounds the input surface only. WHOSE fact this is
+        // is decided by the partition filter the dispatch arm bound
+        // (`for_caller`). `fact_id` is only ever a bound SQL parameter, never a
+        // path, so `/` guards nothing — and every stream the note tools write
+        // is keyed `category/filename`, so refusing it made this face unable to
+        // read any of them.
         let Some((partitions, unpartitioned)) = self.read_scope.as_ref() else {
             return Err(ToolError::Execution(
                 "memory_timeline is not bound to a caller's partitions; it must be dispatched \
@@ -88,12 +92,9 @@ impl MemoryTimelineTool {
                 fact_id.len()
             )));
         }
-        if fact_id.chars().any(|c| {
-            c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$'
-        }) {
+        if fact_id.chars().any(char::is_control) {
             return Err(ToolError::InvalidArgs(
-                "fact_id contains an invalid character (whitespace, control, /, \\, `, or $)"
-                    .to_string(),
+                "fact_id contains a control character".to_string(),
             ));
         }
 
@@ -268,6 +269,54 @@ mod tests {
                 "a fact that has events must not surface the empty-history error: {e}"
             );
         }
+    }
+
+    /// A note-path id (`category/filename`, the key every `note_manage`
+    /// stream carries) reaches the partition filter: the caller whose
+    /// partition holds it reads it, another caller gets exactly the answer a
+    /// never-written id gets. Control characters are still refused.
+    #[tokio::test]
+    async fn a_note_path_fact_id_is_read_through_the_partition_filter() {
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let id = "learning/rust-pref";
+        db.append_memory_event(&created_event(id).in_partition(Some("main__u-alice".into())))
+            .await
+            .unwrap();
+        let traveler = Arc::new(MemoryTimeTraveler::new(db));
+        let read_as = |who: &str, fact_id: &str| {
+            let tool = MemoryTimelineTool::new(Arc::clone(&traveler)).for_caller(
+                vec!["main".into(), format!("main__{who}")],
+                UnpartitionedRows::Refuse,
+            );
+            let args = MemoryTimelineArgs {
+                fact_id: fact_id.to_string(),
+            };
+            async move { tool.call(args).await }
+        };
+
+        let alice = read_as("u-alice", id)
+            .await
+            .expect("Alice reads her own note");
+        assert_eq!(alice.explanation.events.len(), 1);
+
+        let bob = read_as("u-bob", id)
+            .await
+            .expect_err("Bob must not read Alice's note")
+            .to_string();
+        let never = read_as("u-bob", "learning/never-written")
+            .await
+            .expect_err("a never-written id has no history")
+            .to_string();
+        assert_eq!(
+            bob.replace(id, "<id>"),
+            never.replace("learning/never-written", "<id>")
+        );
+
+        let control = read_as("u-alice", "learning/rust\u{7}pref")
+            .await
+            .expect_err("a control character is refused")
+            .to_string();
+        assert!(control.contains("control character"), "{control}");
     }
 
     /// The boot-built instance has no caller: it must say so, not answer

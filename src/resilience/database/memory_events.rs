@@ -868,11 +868,16 @@ mod tests {
             .any(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')));
     }
 
-    /// 判据 §9: enumerate the readers. The unscoped reader answers for every
-    /// partition at once, so only the write side (`MemoryCommandHandler`'s
-    /// folds and reconciler) may call it; the per-caller reader has one face
-    /// today (the traveler, behind `memory_timeline`). A new face shows up
-    /// here instead of shipping unreviewed.
+    /// 判据 §9: enumerate the readers, at every layer a new face could enter.
+    /// The unscoped reader answers for every partition at once, so only the
+    /// write side (`MemoryCommandHandler`'s folds and reconciler) may call it.
+    /// The per-caller reader has one face today, and each hop to it is pinned:
+    /// the DB read is called only by the traveler, the traveler's
+    /// `explain_fact` only by `memory_timeline`, and the tool's `for_caller`
+    /// (the partitions it reads with) only by the registry's dispatch arm,
+    /// where `caller_memory_read_partitions` + `unattributed_memory_events_for`
+    /// derive them. A new caller at any of the three hops turns this red.
+    /// Production code only (`files_whose_production_code_reads`).
     #[test]
     fn each_memory_event_reader_has_only_the_consumers_it_was_built_for() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -894,6 +899,23 @@ mod tests {
             vec!["src/memory/events/traveler.rs".to_string()],
             "a new per-caller face must derive its partitions the way memory_timeline does \
              (session_read_ids + unattributed_memory_events_for)"
+        );
+        let explain =
+            crate::utils::source_scan::files_whose_production_code_reads(&root, "explain_fact");
+        assert_eq!(
+            explain.into_iter().collect::<Vec<_>>(),
+            vec!["src/builtin_tools/memory_timeline.rs".to_string()],
+            "a new caller of MemoryTimeTraveler::explain_fact picks its own partitions; \
+             read through memory_timeline's dispatch arm instead"
+        );
+        let bind =
+            crate::utils::source_scan::files_whose_production_code_reads(&root, "for_caller");
+        assert_eq!(
+            bind.into_iter().collect::<Vec<_>>(),
+            vec!["src/executor/builtin_registry/registry/tool_registry_impl.rs".to_string()],
+            "MemoryTimelineTool::for_caller must be bound only by the registry arm, which \
+             derives the partitions (caller_memory_read_partitions + \
+             unattributed_memory_events_for)"
         );
     }
 }

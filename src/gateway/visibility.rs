@@ -193,21 +193,76 @@ pub fn ambient_actor() -> Option<String> {
         .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
 }
 
-/// Whether `principal` may read `memory_events` rows that carry no partition.
+/// Who this run acts for, as far as a PER-PERSON resource may rely on it —
+/// the one verdict the browser face (a managed profile is per person), room
+/// creation in `project_manage` (a room's owner column names a person) and
+/// the `memory_timeline` arm (legacy history is the owner's) share, so "nobody
+/// is attached" means one thing everywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunPrincipal {
+    /// [`ambient_principal`] named a person.
+    Person(String),
+    /// Nobody is attached and no users store is installed: the legacy
+    /// single-user install, where "nobody" has always meant the machine
+    /// owner. The same notion `crate::scope::authority::FireAuthority::Legacy`
+    /// answers with no store installed.
+    Legacy,
+    /// Nobody is attached on a server that has a users table: "I do not know
+    /// who this is", which is never permission (判据 §8). A per-person
+    /// resource refuses, and says why.
+    Unattached,
+}
+
+/// [`RunPrincipal`] for the current execution context:
+/// [`ambient_principal`], and whether the users store is installed
+/// (`security::store::slot::users_store`).
+#[must_use]
+pub fn run_principal() -> RunPrincipal {
+    run_principal_with(
+        ambient_principal(),
+        crate::gateway::security::store::slot::users_store().is_some(),
+    )
+}
+
+/// [`run_principal`] with both inputs explicit — lib tests never install the
+/// process-global users store, so this is where both modes are tested.
+#[must_use]
+pub fn run_principal_with(principal: Option<String>, users_store_installed: bool) -> RunPrincipal {
+    match principal {
+        Some(person) => RunPrincipal::Person(person),
+        None if users_store_installed => RunPrincipal::Unattached,
+        None => RunPrincipal::Legacy,
+    }
+}
+
+/// Whether a per-caller read may see `memory_events` rows that carry no
+/// partition, for a caller acting as `principal` over `read_partitions` (its
+/// `session_read_ids`).
 ///
 /// Such a row predates the column (or defeated the backfill). Adoption by
-/// absence — the rule [`owner_or_legacy`] encodes once: the row is the legacy
-/// owner's, so the owner and an unrestricted internal caller (`None`) see it
-/// and every other principal does not.
+/// absence — the rule [`owner_or_legacy`] encodes once — makes it the legacy
+/// owner's, so:
+/// - in a project room (a read set naming a `p-*` partition) nobody sees it,
+///   the owner included: the tool output reaches every member of the room;
+/// - otherwise the owner sees it, and so does a [`RunPrincipal::Legacy`] run
+///   (single-user, where nobody attached IS the owner);
+/// - every other person, and an [`RunPrincipal::Unattached`] run, does not.
 #[must_use]
 pub fn unattributed_memory_events_for(
-    principal: Option<&str>,
+    principal: &RunPrincipal,
+    read_partitions: &[String],
 ) -> crate::memory::events::UnpartitionedRows {
     use crate::memory::events::UnpartitionedRows;
+    if read_partitions
+        .iter()
+        .any(|p| crate::memory::project_scope::partition_is_shared_room(p))
+    {
+        return UnpartitionedRows::Refuse;
+    }
     match principal {
-        None => UnpartitionedRows::Admit,
-        Some(p) if p == owner_or_legacy(None) => UnpartitionedRows::Admit,
-        Some(_) => UnpartitionedRows::Refuse,
+        RunPrincipal::Legacy => UnpartitionedRows::Admit,
+        RunPrincipal::Person(p) if p == owner_or_legacy(None) => UnpartitionedRows::Admit,
+        RunPrincipal::Person(_) | RunPrincipal::Unattached => UnpartitionedRows::Refuse,
     }
 }
 
@@ -1377,17 +1432,73 @@ mod tests {
     #[test]
     fn unattributed_memory_events_are_the_legacy_owners() {
         use crate::memory::events::UnpartitionedRows;
+        let personal = |who: &str| vec!["main".to_string(), format!("main__{who}")];
         assert_eq!(
-            unattributed_memory_events_for(None),
+            unattributed_memory_events_for(&RunPrincipal::Legacy, &["main".to_string()]),
             UnpartitionedRows::Admit
         );
         assert_eq!(
-            unattributed_memory_events_for(Some(OWNER_USER_ID)),
+            unattributed_memory_events_for(
+                &RunPrincipal::Person(OWNER_USER_ID.to_string()),
+                &personal(OWNER_USER_ID)
+            ),
             UnpartitionedRows::Admit
         );
         assert_eq!(
-            unattributed_memory_events_for(Some("u-alice")),
+            unattributed_memory_events_for(
+                &RunPrincipal::Person("u-alice".to_string()),
+                &personal("u-alice")
+            ),
             UnpartitionedRows::Refuse
+        );
+    }
+
+    /// The None-principal ruling (r11): with no users store installed an
+    /// actor-less run is the legacy single-user owner and keeps today's
+    /// behaviour; with one installed, "nobody attached" is unknown and is
+    /// refused (判据 §8).
+    #[test]
+    fn legacy_memory_rows_need_a_person_on_a_server_with_users() {
+        use crate::memory::events::UnpartitionedRows;
+        assert_eq!(run_principal_with(None, false), RunPrincipal::Legacy);
+        assert_eq!(run_principal_with(None, true), RunPrincipal::Unattached);
+        assert_eq!(
+            run_principal_with(Some("u-alice".to_string()), true),
+            RunPrincipal::Person("u-alice".to_string())
+        );
+        assert_eq!(
+            unattributed_memory_events_for(&run_principal_with(None, true), &["main".to_string()]),
+            UnpartitionedRows::Refuse
+        );
+        assert_eq!(
+            unattributed_memory_events_for(&run_principal_with(None, false), &["main".to_string()]),
+            UnpartitionedRows::Admit
+        );
+    }
+
+    /// In a project room the timeline's output reaches every member, so the
+    /// owner's legacy history is shown to nobody there — not even the owner.
+    #[test]
+    fn legacy_memory_rows_are_refused_in_a_room() {
+        use crate::memory::events::UnpartitionedRows;
+        let room = vec!["main".to_string(), "main__p-room".to_string()];
+        for principal in [
+            RunPrincipal::Person(OWNER_USER_ID.to_string()),
+            RunPrincipal::Legacy,
+        ] {
+            assert_eq!(
+                unattributed_memory_events_for(&principal, &room),
+                UnpartitionedRows::Refuse,
+                "{principal:?} in a room"
+            );
+        }
+        // The legacy project-DIRECTORY family is one person, not a room.
+        assert_eq!(
+            unattributed_memory_events_for(
+                &RunPrincipal::Legacy,
+                &["main".to_string(), "main__proj-abc".to_string()]
+            ),
+            UnpartitionedRows::Admit
         );
     }
 }

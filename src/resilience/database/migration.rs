@@ -834,13 +834,14 @@ pub fn migrate_add_memory_events_partition(conn: &Connection) -> Result<(), Alep
 /// note-path id two principals both created (`preferences/lang`) has rows
 /// nobody can tell apart after the fact, and a guess hands one user's history
 /// to the other; those rows, rows whose fact has no creation event, and rows
-/// whose creation JSON does not parse all stay `NULL` — refused to every
-/// principal but the legacy owner (`UnpartitionedRows`).
+/// whose creation JSON does not parse all stay `NULL`, and who may read a
+/// NULL row is `visibility::unattributed_memory_events_for`'s decision.
 ///
 /// Runs on every boot and touches only `partition IS NULL`, so it is
 /// idempotent and still reaches a database that ran the column migration in
-/// an earlier build. The probe first keeps the common case (nothing to do)
-/// to one index lookup.
+/// an earlier build. The probe keeps a database with no NULL row to one
+/// lookup; once any row stays unattributable, every boot runs the UPDATE's
+/// grouping scan again (it attributes nothing new, but it is not free).
 pub fn backfill_memory_events_partition(conn: &Connection) -> Result<usize, AlephError> {
     let pending: i64 = conn
         .query_row(
