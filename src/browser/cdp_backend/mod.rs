@@ -52,7 +52,7 @@ use super::engine::{
 };
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
-use super::tab_registry::TabLine;
+use super::tab_registry::{TabLine, TabRegistry};
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
     ScrollDirection, SnapshotOutput, TabId,
@@ -82,6 +82,13 @@ pub struct CdpBackend {
     req: LaunchRequest,
     ssrf_guard: Arc<BrowserSsrfGuard>,
     command_timeout: Duration,
+    /// The profile-manager-owned tab identity registry. This backend is
+    /// rebuilt per call, so the mappings it discovers (tab id ↔ CDP
+    /// targetId, last-seen URL) are recorded THERE — the record outlives the
+    /// backend, which is what lets `TabRegistry::resolve_identity` answer
+    /// "that target is gone" after a re-attach instead of guessing from a
+    /// listing's row order (附录 D.9.19).
+    tab_identities: Arc<TabRegistry>,
 }
 
 impl CdpBackend {
@@ -89,37 +96,33 @@ impl CdpBackend {
         registry: Arc<EngineRegistry>,
         engine: Engine,
         req: LaunchRequest,
-        profile: impl Into<String>,
         ssrf_guard: Arc<BrowserSsrfGuard>,
         command_timeout: Duration,
+        tab_identities: Arc<TabRegistry>,
     ) -> Self {
-        // ONE spelling of "which profile this backend drives". The registry
-        // keys on `req.profile`, so a second `profile` field free to disagree
-        // with it would make every verb resolve a profile the backend does not
-        // claim to be on (判据 §1). The argument is the authority and the
-        // request is corrected to match, rather than the two being carried side
-        // by side for a later reader to pick between.
+        // ONE spelling of "which profile this backend drives": `req.profile`.
+        // The registry keys on it, and this constructor once ALSO took a
+        // separate `profile` argument it wrote OVER `req.profile` — one fact
+        // as two strings, free to disagree (判据 §1). The argument is gone;
+        // the request the caller built is the authority.
         //
-        // ⚠️ `req.session_key` is NOT normalised, and that is a decision for
-        // whoever writes the first production constructor rather than one to
-        // make blind here. It is a second profile-shaped string — it names the
-        // engine's on-disk sidecar (`engine::chromium`) — so a caller passing a
-        // `profile` argument that disagrees with `req.session_key` gets a
-        // backend whose registry key and whose sidecar name are different
-        // strings, silently. Overwriting it here would be worse: the session
-        // key is deliberately separable from the profile (that is what lets one
-        // profile hold more than one launched session), so this constructor
-        // does not get to decide they are the same thing. **Task 14 owns
-        // this**: build the `LaunchRequest` and the profile name from one
-        // source, or say in its own words why they differ.
-        let mut req = req;
-        req.profile = profile.into();
+        // `req.session_key` stays a second field ON PURPOSE: it names the
+        // engine's on-disk sidecar (`engine::chromium`), and one profile can
+        // hold more than one launched session, so the two are deliberately
+        // separable. What makes them agree is not this constructor but the
+        // ONE construction site — `manager::get_backend`'s `Cdp` arm builds
+        // the request through `launch_request_for`, which writes both fields
+        // from the same principal-scoped profile key (`principal_profile`
+        // has already run by then: the tool layer resolves it before
+        // `get_backend`). That site, not this signature, is where the
+        // derivation lives (Task 14's debt, settled).
         Self {
             registry,
             engine,
             req,
             ssrf_guard,
             command_timeout,
+            tab_identities,
         }
     }
 
@@ -168,6 +171,32 @@ impl CdpBackend {
     /// made that the one spelling of "which profile this backend drives".
     pub(crate) fn profile_name(&self) -> &str {
         &self.req.profile
+    }
+
+    /// Record `tab_id`'s identity in the shared registry. On this backend a
+    /// tab id IS the CDP `targetId` (`tabs.rs`'s module doc), which is what
+    /// lets the registry answer `TabGone` structurally later: the target is
+    /// either in the next enumeration or it is not.
+    ///
+    /// Every point below that learns "tab X has targetId Y / is at URL Z"
+    /// calls this — `open_tab`, `switch_tab`, `list_tabs`, `navigate`,
+    /// `history`. Popup adoption and the launch's first tab are covered
+    /// transitively: the next `list_tabs` records every tab in the table.
+    pub(crate) fn record_tab(&self, tab_id: &str, url: Option<&str>) {
+        self.tab_identities.record_identity(
+            &self.req.profile,
+            tab_id,
+            Some(tab_id.to_string()),
+            url.map(str::to_string),
+        );
+    }
+
+    /// The deliberate-close half of [`Self::record_tab`]: a tab WE closed is
+    /// forgotten, so a later `resolve_identity` answers `TabNotFound` ("we
+    /// closed it, that id is ours no more") and `TabGone` keeps meaning
+    /// "gone WITHOUT us closing it".
+    pub(crate) fn forget_tab(&self, tab_id: &str) {
+        self.tab_identities.forget(&self.req.profile, tab_id);
     }
 }
 
@@ -534,9 +563,9 @@ pub(crate) mod test_support {
             registry.clone(),
             engine,
             dummy_launch("default"),
-            "default",
             guard,
             TEST_TIMEOUT,
+            std::sync::Arc::new(crate::browser::tab_registry::TabRegistry::new()),
         );
         (registry, backend)
     }
@@ -582,6 +611,39 @@ mod tests {
     use crate::browser::engine::Engine;
     use crate::browser::error::BrowserError;
     use crate::browser::wait_probe::WAIT_PROBE_FOUND;
+
+    /// **ONE spelling of "which profile this backend drives" (Task-14 debt).**
+    ///
+    /// The registry keys on `req.profile` and the sidecar names
+    /// `req.session_key`; a constructor that ALSO took a separate `profile`
+    /// argument carried one fact as two strings free to disagree (判据 §1).
+    /// The argument is deleted: the `LaunchRequest` the caller built is the
+    /// authority, and the single production construction site
+    /// (`manager::get_backend`'s `Cdp` arm, via `launch_request_for`) writes
+    /// both fields from the one principal-scoped profile key.
+    ///
+    /// A source pin, not a behavioural one: the disagreement this prevents is
+    /// between two ARGUMENTS, observable only in the signature.
+    /// `production_prefix` + `code_text` so a comment spelling the old
+    /// parameter cannot satisfy it (the recogniser-inversion trap the
+    /// permit guard above names).
+    #[test]
+    fn backend_profile_and_registry_key_are_one_spelling() {
+        let src = include_str!("mod.rs");
+        let production = crate::utils::source_scan::code_text(
+            &crate::utils::source_scan::production_prefix(src),
+        );
+        let new_fn = production
+            .split("pub fn new(")
+            .nth(1)
+            .expect("the constructor exists");
+        let sig_end = new_fn.find(") -> Self").expect("signature end");
+        let sig = &new_fn[..sig_end];
+        assert!(
+            !sig.contains("profile"),
+            "a second profile argument is a second truth (判据 §1) — build the \n             LaunchRequest and its profile from one source instead: {sig}"
+        );
+    }
 
     /// Whether `src` carries a MODULE-level permit that includes `dead_code`.
     ///
