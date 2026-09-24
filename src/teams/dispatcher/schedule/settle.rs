@@ -47,8 +47,8 @@ use crate::agents::swarm::tasks::{
 use crate::gateway::channel::{ChannelId, OutboundMessage};
 use crate::sync_primitives::Arc;
 use crate::workflow::{
-    workflow_origin, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_KEY, WORKFLOW_RUN_ID_KEY,
-    WORKFLOW_STEP_KEY,
+    workflow_origin, NOTIFIED_BY_CANCEL, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_BY_KEY,
+    WORKFLOW_NOTIFIED_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
 };
 
 use super::select::is_dispatcher_managed;
@@ -59,6 +59,91 @@ use super::TeamDispatcher;
 /// `cancel` action stamps before its status writes; a human retry happens on
 /// a much longer timescale.
 const REOPEN_REARM_GRACE_SECS: u64 = 120;
+
+/// Was `notified_anchor` written by the `workflow` tool's `cancel` action?
+///
+/// The re-arm rule needs to distinguish two stampers of
+/// [`WORKFLOW_NOTIFIED_KEY`]:
+///
+/// - The settle sweep itself (which only stamps AFTER observing the run
+///   fully settled — no mid-write window to protect).
+/// - The `cancel` action (which stamps BEFORE its status writes land, so a
+///   marked run legitimately has unsettled tasks for a moment).
+///
+/// Unknown provenance (rows stamped before [`WORKFLOW_NOTIFIED_BY_KEY`] was
+/// introduced) returns `false` — callers fall back to the age-only grace
+/// rule, which is the previous behaviour. **Pure** — no I/O, no clock.
+#[must_use]
+pub(crate) fn is_cancel_provenance(task: &CoordTask) -> bool {
+    task.metadata
+        .get(WORKFLOW_NOTIFIED_BY_KEY)
+        .and_then(|v| v.as_str())
+        == Some(NOTIFIED_BY_CANCEL)
+}
+
+/// Should a marked-and-now-unsettled run be re-armed (its `workflow_notified`
+/// marker cleared) so the sweep delivers the corrected terminal outcome?
+///
+/// Caller has already determined "this run is no longer all settled"; this
+/// function answers the *only* remaining question — is the durable stamp
+/// still authoritative, or has it been overtaken by a real reopen?
+///
+/// Rule (preserves the inline logic this function was extracted from):
+///
+/// - Settle-sweep provenance → stamp written after full settlement, no
+///   window to protect, re-arm unconditionally.
+/// - Cancel provenance → stamp may sit mid-cancel for a few seconds; re-arm
+///   only once `marker_age >= grace_secs` (so a cancel in flight is not
+///   raced by a re-arm).
+/// - Unknown provenance (no `_by` key) → fall back to the age rule, i.e.
+///   re-arm only after the grace window — the previous behaviour.
+///
+/// `grace_secs` is [`REOPEN_REARM_GRACE_SECS`] in production; tests substitute
+/// other values to exercise the boundary without sleeping. **Pure** — no I/O,
+/// no clock; the caller passes `now_epoch`.
+#[must_use]
+pub(crate) fn should_rearm_on_reopen(
+    notified_anchor: &CoordTask,
+    now_epoch: u64,
+    grace_secs: u64,
+) -> bool {
+    // A task with no stamp is not a re-arm target — the dispatcher's caller
+    // already filters for stamped anchors before asking, but the function is
+    // also total on a no-stamp input so future callers cannot trip on it. A
+    // no-stamp task carries no durable marker to clear, so re-arming would
+    // be a no-op at best and a future-confusing write at worst.
+    let stamped = match notified_anchor
+        .metadata
+        .get(WORKFLOW_NOTIFIED_KEY)
+        .and_then(|v| v.as_u64())
+    {
+        Some(s) => s,
+        None => return false,
+    };
+    let marker_age = now_epoch.saturating_sub(stamped);
+
+    if is_cancel_provenance(notified_anchor) {
+        // Cancel provenance is the only stamper with a real mid-write window
+        // to protect. Past the grace, the stamp has either landed (cancel
+        // succeeded) or been clobbered by a real reopen — either way, the
+        // marker no longer describes reality.
+        marker_age >= grace_secs
+    } else if notified_anchor
+        .metadata
+        .get(WORKFLOW_NOTIFIED_BY_KEY)
+        .is_some()
+    {
+        // Settle provenance explicitly recorded → no grace needed. The
+        // settle sweep only stamps after observing full settlement, so
+        // there is no mid-write window to protect.
+        true
+    } else {
+        // Unknown provenance (no `_by` key, rows stamped before
+        // WORKFLOW_NOTIFIED_BY_KEY existed) → age rule, matching the
+        // pre-provenance behaviour: only re-arm past the grace.
+        marker_age >= grace_secs
+    }
+}
 
 /// Render the terminal summary for one settled run (pure aggregation).
 ///
@@ -175,38 +260,15 @@ impl TeamDispatcher {
                 // (a step retried via workflow_step_review / task_control).
                 // Clear the marker so its true final outcome notifies again —
                 // otherwise every post-retry ending is silent forever.
-                // Grace-gated on the marker's age: the `cancel` action stamps
-                // the marker BEFORE its status writes land, so for a few
-                // moments a marked run legitimately has unsettled tasks —
-                // clearing in that window would defeat the cancel
-                // suppression. A human retry-reopen happens minutes later.
-                let marker_age = anchor
-                    .metadata
-                    .get(WORKFLOW_NOTIFIED_KEY)
-                    .and_then(|v| v.as_u64())
-                    .map_or(u64::MAX, |stamped| {
-                        Self::now_epoch().saturating_sub(stamped)
-                    });
-                // The grace protects the `cancel` stamper's mid-write window
-                // and nothing else. THIS sweep only stamps after observing the
-                // run fully settled, so its own marker has no window — waiting
-                // out the grace on it just loses the commonest reopen of all
-                // ("it failed" → the user replies "retry" within seconds), and
-                // the corrected run's real outcome is then never announced.
-                // Unknown provenance (rows stamped before the key existed)
-                // keeps the age rule, i.e. the previous behaviour.
-                //
-                // Cancel stamper writes `_by=NOTIFIED_BY_CANCEL` mid-write
-                // (before its status writes land); only cancel provenance
-                // gets the grace gate. Anything stamped by the settle sweep
-                // itself is safe to clear immediately, since this same
-                // sweep only stamps after observing the run fully settled.
-                let is_cancel_provenance = anchor
-                    .metadata
-                    .get(crate::workflow::WORKFLOW_NOTIFIED_BY_KEY)
-                    .and_then(|v| v.as_str())
-                    == Some(crate::workflow::NOTIFIED_BY_CANCEL);
-                if !all_settled && (!is_cancel_provenance || marker_age >= REOPEN_REARM_GRACE_SECS)
+                // `should_rearm_on_reopen` encodes the full grace / provenance
+                // rule (cancel vs settle vs unknown); see its doc comment for
+                // why each provenance takes the path it does.
+                if !all_settled
+                    && should_rearm_on_reopen(
+                        anchor,
+                        Self::now_epoch(),
+                        REOPEN_REARM_GRACE_SECS,
+                    )
                 {
                     let cleared = merge_metadata_patch(
                         &anchor.metadata,
@@ -473,5 +535,193 @@ mod tests {
             "at most 3 detail lines"
         );
         assert!(s.contains("more failed steps omitted"));
+    }
+
+    // --- D4 regression tests for the WORKFLOW_NOTIFIED_KEY re-arm rule ---
+    //
+    // The settle sweep's once-only notification must survive a `cancel` mid-
+    // write window but re-arm when a real reopen leaves the run unsettled
+    // past the grace. These tests pin the invariants so a future refactor
+    // cannot silently break the dual-layer protection (in-process claim set
+    // + durable stamp) by, say, removing the grace or applying it to settle-
+    // stamped markers. Pure functions on a `CoordTask` snapshot — no
+    // dispatcher fixture, no clock.
+
+    /// A notified anchor carrying only the stamp (no `_by` key, no
+    /// provenance) — the "unknown provenance" branch.
+    fn stamped_anchor(stamp: u64) -> CoordTask {
+        task(
+            "t-anchor",
+            "step",
+            CoordTaskStatus::InProgress,
+            None,
+        )
+        .with_metadata(serde_json::json!({
+            WORKFLOW_STEP_KEY: "step",
+            WORKFLOW_NOTIFIED_KEY: stamp,
+        }))
+    }
+
+    /// A notified anchor with cancel provenance (stamped by the `cancel`
+    /// action before its status writes land).
+    fn cancel_stamped_anchor(stamp: u64) -> CoordTask {
+        task(
+            "t-anchor",
+            "step",
+            CoordTaskStatus::InProgress,
+            None,
+        )
+        .with_metadata(serde_json::json!({
+            WORKFLOW_STEP_KEY: "step",
+            WORKFLOW_NOTIFIED_KEY: stamp,
+            WORKFLOW_NOTIFIED_BY_KEY: NOTIFIED_BY_CANCEL,
+        }))
+    }
+
+    /// A notified anchor with settle provenance (stamped by the settle sweep
+    /// after observing the run fully settled).
+    fn settle_stamped_anchor(stamp: u64) -> CoordTask {
+        task(
+            "t-anchor",
+            "step",
+            CoordTaskStatus::InProgress,
+            None,
+        )
+        .with_metadata(serde_json::json!({
+            WORKFLOW_STEP_KEY: "step",
+            WORKFLOW_NOTIFIED_KEY: stamp,
+            WORKFLOW_NOTIFIED_BY_KEY: crate::workflow::NOTIFIED_BY_SETTLE,
+        }))
+    }
+
+    #[test]
+    fn cancel_stamp_within_grace_does_not_rearm() {
+        // A cancel stamper writes the marker mid-write; for a few seconds
+        // the run legitimately has unsettled tasks. Re-arming here would
+        // defeat the cancel suppression and double-push the user a summary
+        // they already produced.
+        let stamped_at = 1_000u64;
+        let anchor = cancel_stamped_anchor(stamped_at);
+        // 5 seconds after stamp → well within REOPEN_REARM_GRACE_SECS (120).
+        assert!(!should_rearm_on_reopen(&anchor, stamped_at + 5, REOPEN_REARM_GRACE_SECS));
+        // 119 seconds after stamp → still within grace.
+        assert!(!should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 119,
+            REOPEN_REARM_GRACE_SECS
+        ));
+    }
+
+    #[test]
+    fn cancel_stamp_past_grace_arms_reopen() {
+        // Past the grace window, the cancel stamper has either landed or
+        // been clobbered by a real reopen. Either way the marker no longer
+        // describes reality, so re-arm.
+        let stamped_at = 1_000u64;
+        let anchor = cancel_stamped_anchor(stamped_at);
+        // Boundary: stamp_age == grace → re-arm (saturating_sub handles this).
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at + REOPEN_REARM_GRACE_SECS,
+            REOPEN_REARM_GRACE_SECS
+        ));
+        // Well past grace → re-arm.
+        assert!(should_rearm_on_reopen(&anchor, stamped_at + 130, REOPEN_REARM_GRACE_SECS));
+    }
+
+    #[test]
+    fn settle_stamp_does_not_apply_grace() {
+        // The settle sweep only stamps after observing the run fully
+        // settled, so there is no mid-write window to protect. A 1-second-
+        // old settle stamp must still re-arm: this is the commonest reopen
+        // of all ("it failed" → user replies retry within seconds), and the
+        // grace must not blind the sweep to it.
+        let stamped_at = 1_000u64;
+        let anchor = settle_stamped_anchor(stamped_at);
+        assert!(should_rearm_on_reopen(&anchor, stamped_at + 1, REOPEN_REARM_GRACE_SECS));
+        // Even an immediate re-check (now == stamp) re-arms, since there is
+        // no grace for settle provenance.
+        assert!(should_rearm_on_reopen(&anchor, stamped_at, REOPEN_REARM_GRACE_SECS));
+    }
+
+    #[test]
+    fn unknown_provenance_keeps_age_rule() {
+        // Rows stamped before WORKFLOW_NOTIFIED_BY_KEY existed carry only the
+        // stamp; the rule for those is the previous (age-only) behaviour,
+        // preserved exactly. Within grace → no re-arm; past grace → re-arm.
+        let stamped_at = 1_000u64;
+        let anchor = stamped_anchor(stamped_at);
+        assert!(!should_rearm_on_reopen(&anchor, stamped_at + 5, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at + REOPEN_REARM_GRACE_SECS,
+            REOPEN_REARM_GRACE_SECS
+        ));
+        assert!(should_rearm_on_reopen(&anchor, stamped_at + 200, REOPEN_REARM_GRACE_SECS));
+    }
+
+    #[test]
+    fn no_notification_anchor_is_not_a_rearm_target() {
+        // A task that never carried the stamp is not a rearm target: the
+        // sweep's caller only asks `should_rearm_on_reopen` of tasks that
+        // already have the stamp. A no-stamp task returns false here so
+        // the function is total over its input domain.
+        let anchor = task("t-no-stamp", "step", CoordTaskStatus::InProgress, None);
+        assert!(!should_rearm_on_reopen(&anchor, 1_000, REOPEN_REARM_GRACE_SECS));
+    }
+
+    #[test]
+    fn is_cancel_provenance_detects_by_value() {
+        // Only the exact `NOTIFIED_BY_CANCEL` string counts as cancel
+        // provenance. Anything else (settle, unknown, typo) is not cancel.
+        let cancel = cancel_stamped_anchor(1_000);
+        assert!(is_cancel_provenance(&cancel));
+        let settle = settle_stamped_anchor(1_000);
+        assert!(!is_cancel_provenance(&settle));
+        let unknown = stamped_anchor(1_000);
+        assert!(!is_cancel_provenance(&unknown));
+        // Typo / wrong-case provenance is NOT cancel provenance — guards
+        // against drift if the constant is ever reworded.
+        let typo = task("t-typo", "step", CoordTaskStatus::InProgress, None)
+            .with_metadata(serde_json::json!({
+                WORKFLOW_STEP_KEY: "step",
+                WORKFLOW_NOTIFIED_KEY: 1_000u64,
+                WORKFLOW_NOTIFIED_BY_KEY: "Cancel", // capital C
+            }));
+        assert!(!is_cancel_provenance(&typo));
+        // A non-string _by (e.g. accidental null) is not cancel provenance.
+        let wrong_shape = task("t-shape", "step", CoordTaskStatus::InProgress, None)
+            .with_metadata(serde_json::json!({
+                WORKFLOW_STEP_KEY: "step",
+                WORKFLOW_NOTIFIED_KEY: 1_000u64,
+                WORKFLOW_NOTIFIED_BY_KEY: serde_json::Value::Null,
+            }));
+        assert!(!is_cancel_provenance(&wrong_shape));
+    }
+
+    #[test]
+    fn is_cancel_provenance_is_false_for_settle_provenance() {
+        // Explicit regression assertion for the boundary case the grace rule
+        // depends on: settle-stamped runs must NEVER be treated as cancel
+        // provenance (and therefore must never go through the cancel grace).
+        let settle = settle_stamped_anchor(1_000);
+        assert!(!is_cancel_provenance(&settle));
+        // And the full rearm path confirms it: a settle-stamped anchor at
+        // stamp_age == 1 re-arms, where a cancel-stamped one would not.
+        assert!(should_rearm_on_reopen(&settle, 1_001, REOPEN_REARM_GRACE_SECS));
+        let cancel = cancel_stamped_anchor(1_000);
+        assert!(!should_rearm_on_reopen(&cancel, 1_001, REOPEN_REARM_GRACE_SECS));
+    }
+
+    // Helper for building a task with arbitrary metadata. Lives below the
+    // tests so the existing `task(...)` helper above is not touched.
+    trait CoordTaskExt {
+        fn with_metadata(self, metadata: serde_json::Value) -> CoordTask;
+    }
+    impl CoordTaskExt for CoordTask {
+        fn with_metadata(mut self, metadata: serde_json::Value) -> CoordTask {
+            self.metadata = metadata;
+            self
+        }
     }
 }
