@@ -4868,7 +4868,7 @@ Expected: 11 个阶段 `verdict: rc=0`，每个的 `assertions: N (floor F)` 满
 - **F7 · Panel 丢弃 `pty.input` / `pty.resize` 的错误（T21）**：`views/terminal/mod.rs` 的 `let _ =`——墓碑文本到了线上，这两张脸不显示。既有。
 - **F8 · Settled 的 PTY 行在终端脸上仍 `no_such_session`（T21）**：`tombstone_report` 只对 `Interrupted` 给 `Some`；正常退出 / 被关 / 从未起来的 shell 在 `terminal{read,wait,explain}` 与 `pty.*` 上读作不存在。
 - **F9 · 文件后端 fork seeding 是会话总数的第二个派生（T5a）**：`file_backend` 的 `branch_from_checkpoint` 从消息行求和 seed 新会话的总数——与 `bill_run_from_fold` 并行的第二个派生（既有，只在文件后端）。判据 #12。
-- **F10 · 一枚 `billed:false` 落地的 meta 没有修复路径（T5a）**：T5b 只盖**缺失**的 meta；已戳未记 ≡ 已戳已记，持久地分不开。
+- ~~**F10 · 一枚 `billed:false` 落地的 meta 没有修复路径（T5a）**~~ — **已关闭**（`7244c8b2f`）：run-identity A5 P3 让 `stamp_and_bill_in_range` 把戳与计并进**同一次** store 操作——SQLite 在一个 IMMEDIATE 事务里做，文件后端在同一把锁下做、计费写失败就把戳回滚；projector 先 `fold_run_bill` 折叠再从 fold 给出的锚戳下去，报 `BillOutcome::{Billed, NothingToBill, Unfoldable}`。裁定 U3：文件后端两次落盘不原子，进程崩溃恰落 transcript 写与 metadata 写之间时该 run 少计一次（方向是少计，永不重计）。原文：T5b 只盖**缺失**的 meta；已戳未记 ≡ 已戳已记，持久地分不开。
 - **F11 · mid-RPC 崩溃后的过期投影行（T3 review，裁定 REVERSED 不进 T4）**：需要新的事件 store 读（retired seqs ∩ projected seqs）+ 投影侧集合删除 + 四个 store double；窗口既有、只影响显示（日志是 SSOT）。
 - **F12 · `execute.rs` prevent_continuation 臂丢掉 `Ok(stop_msg)`（T9）**：循环的 `Ok` 字符串绑成 `_response` 丢掉——无 `ResponseChunk`、无 `RunComplete`，hook-stop 收据投影出的那一行**就是**报告；收据被拒 = 静默停止（只 log）。既有断线，判据 #7。同族：非 hook 的其它 pre-seed 出口（`inner.rs:76` workspace 消失、`:1037` / `:1449` orchestrator 未接线）仍擦掉回合（行号测于 T9，`37fb7e965`）。
 - **F13 · 用户自装的 `btw` 同名工具在 RPC fast path 上无闸（T12 顾虑 A）**：非出厂世界；安全行为变更，T12 之外。

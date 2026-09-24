@@ -350,10 +350,14 @@ impl SessionManager {
             // used to, and it was invisible only because every row's tokens were
             // 0 (the projector's feeder event was never emitted). Now that the
             // rows carry real per-call tokens, adding them here as well as in
-            // `update_session_usage` — which the projector calls once per run,
-            // when the run's `AssistantRunMeta` lands, with the fold of that
-            // run's `AssistantMessage.usage` (`session::usage_fold`) — would
-            // bill the session twice for the same tokens. One writer, one fold.
+            // the run's bill — landed once per run, when the run's
+            // `AssistantRunMeta` lands, by `stamp_and_bill_in_range`'s fold of
+            // that run's `AssistantMessage.usage` (`session::usage_fold`) —
+            // would bill the session twice for the same tokens. One writer,
+            // one fold. (`update_session_usage` has no production caller: a
+            // run is billed only through `stamp_and_bill_in_range`, inside
+            // the stamp's own operation; calling it here instead would
+            // bypass that stamp's idempotence guard — F10.)
             // The same preview the FILE backend keeps in
             // `FileSessionStore::append_message` — same 120-char cap, same
             // char-boundary-safe truncation. This column had no writer at all

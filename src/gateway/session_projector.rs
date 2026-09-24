@@ -975,7 +975,12 @@ impl FoldedBill {
 /// anchors on the last `RunStarted` it finds — the restarted-drain case,
 /// where this process never saw the marker go by. That is also the shape I2
 /// fixes: `ctx.run_start` may be stale-low, but the anchor this function
-/// returns is always this run's own opener (or nothing), never a stale one.
+/// returns is never stale — it is POSITIONAL, the last live `RunStarted`
+/// before `meta_seq`, not "this run's own opener" by construction. That is
+/// this run's own opener on a log written after `execute()` began holding
+/// the run slot through the meta append; on the historical
+/// meta-after-next-opener shape (`run_span.rs`'s `collect_run_spans` doc),
+/// it is the NEXT run's opener.
 async fn fold_run_bill(
     id: &SessionId,
     meta_seq: EventSeq,

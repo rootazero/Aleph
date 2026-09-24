@@ -802,14 +802,19 @@ impl SessionStore for FileSessionStore {
             // transcript; the row is fixed at the boundary now, so there is
             // nothing left for it to protect against.
             meta.last_active_at = at.timestamp();
-            // On a live session the token/model columns are accumulated by
-            // `update_session_usage` only (the projector, once per run when its
-            // `AssistantRunMeta` lands, from the fold of the run's messages) —
-            // see the twin comment in the SQLite backend's `add_message_full`.
-            // Accumulating them here as well would bill the session twice for
-            // the same tokens now that message rows carry real ones. The other
-            // writer of the same columns is `branch_from_checkpoint` below,
-            // which seeds a NEW child row once from the checkpoint's rows.
+            // On a live session the token/model columns are accumulated by the
+            // run's bill only (the projector, once per run when its
+            // `AssistantRunMeta` lands, via `stamp_and_bill_in_range`'s fold
+            // of the run's messages) — see the twin comment in the SQLite
+            // backend's `add_message_full`. Accumulating them here as well
+            // would bill the session twice for the same tokens now that
+            // message rows carry real ones. The other writer of the same
+            // columns is `branch_from_checkpoint` below, which seeds a NEW
+            // child row once from the checkpoint's rows.
+            // (`update_session_usage` has no production caller: a run is
+            // billed only through `stamp_and_bill_in_range`, inside the
+            // stamp's own operation; calling it here instead would bypass
+            // that stamp's idempotence guard — F10.)
             if meta.derived_title.is_none() && msg.role == "user" {
                 let title = msg.content.trim();
                 let title = if title.chars().count() > 60 {

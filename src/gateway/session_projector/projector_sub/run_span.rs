@@ -194,9 +194,10 @@ pub(crate) fn collect_run_spans(
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
 /// rows strictly between), so a later heal reads `AlreadyStamped` and bills
 /// nothing: the stamp is the idempotence guard, exactly as on the live path.
-/// The bill is [`fold_run_bill`] over `(start, end]`, handed to
-/// `stamp_and_bill_in_range` so it lands with the stamp — read before the
-/// stamp, the same as the live path (F10); the cost and model are `None`
+/// The bill is [`fold_run_bill`] over `[start, end)` — the fold's own range,
+/// not the stamp's — handed to `stamp_and_bill_in_range` so it lands with
+/// the stamp — read before the stamp, the same as the live path (F10); the
+/// cost and model are `None`
 /// because there is no meta to take them from, so a synthesized bill adds
 /// tokens and never dollars. A run whose provider reported no usage is
 /// stamped (the join is still owed) and not billed — nothing to add. A fold
