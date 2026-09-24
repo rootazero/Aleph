@@ -17,15 +17,16 @@
 //! - Approval: `PermissionRequest` / `Notification`
 //! - Gateway: `GatewayStart` / `GatewayStop`
 //!
-//! # Command-hook output contract
+//! # Command-hook decision contract
 //!
-//! A `command`-type hook signals decisions via stdout in one of two ways:
-//!
-//! 1. **Line-prefix protocol** (Aleph-native) — see [`parse_command_output`].
-//! 2. **JSON decision object** (Claude-Code / hermes interop) — when the entire
-//!    stdout is a JSON object it is decoded by the `json_output` module and
-//!    mapped onto the same [`HookResult`] fields. Non-JSON output falls back to
-//!    (1), so the two contracts coexist without ambiguity.
+//! ONE function, [`derive_decision`], turns a command hook's `(exit code,
+//! stdout, stderr)` into a decision. Exit `2` blocks with stderr as the
+//! reason (Claude Code's most common hook idiom); exit `0` reads stdout in
+//! one of two ways — a JSON decision object (`json_output`, Claude-Code /
+//! hermes interop) or the Aleph-native line-prefix protocol
+//! ([`parse_command_output`]); any other exit code is a non-blocking error.
+//! HTTP and plugin actions have no process exit code and read their body as
+//! stdout would be read on exit `0`.
 //!
 //! # Usage
 //!
@@ -59,6 +60,7 @@ pub use output_budget::{budget_hook_contexts, join_messages};
 pub(crate) use user_settings::default_kind_for_event;
 pub use user_settings::load_user_hooks;
 
+use crate::extension::types::HookKind;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -341,6 +343,73 @@ impl HookResult {
             .or_else(|| self.additional_contexts.first())
             .cloned()
             .unwrap_or_else(|| default.to_string())
+    }
+}
+
+/// Reason attached to an exit-2 block whose hook wrote nothing to stderr.
+/// A block must never be silent (same rule as `json_output`'s
+/// `DEFAULT_BLOCK_MESSAGE`); the wording names the exit code so the model
+/// can tell "a script refused" from "a policy refused".
+pub(crate) const EXIT2_DEFAULT_REASON: &str = "Blocked by hook (exit 2, no reason on stderr).";
+
+/// Fold one command-hook outcome — process exit code, stdout, stderr — into
+/// the accumulated [`HookResult`].
+///
+/// THE ONE derivation of "what did this hook decide". Both interceptor and
+/// observer seams call it (`executor.rs`), and it is the only caller of the
+/// two stdout parsers, so the exit-code contract and the stdout contracts
+/// cannot disagree. Claude Code's rules (hooks reference, "Exit codes"):
+///
+/// * exit `0` — stdout IS the decision: a `{…}` object goes through
+///   `json_output`, anything else through the line-prefix protocol
+///   ([`parse_command_output`]).
+/// * exit `2` — **blocking**. Reason = `hookSpecificOutput.permissionDecisionReason`
+///   when stdout carries one, else stderr, else [`EXIT2_DEFAULT_REASON`].
+///   No other JSON field is applied ("cannot be overridden by JSON").
+/// * any other code — non-blocking error: no decision is read from stdout
+///   (the hook failed; what it printed is diagnostics), stderr is logged.
+///
+/// `exit_code == None` means "no process exit code" — HTTP and plugin actions
+/// (whose transport already decided success) and a signal-killed command —
+/// and keeps the pre-existing behaviour: stdout is parsed as a decision.
+///
+/// `kind` bounds what a block may do. An [`HookKind::Observer`] runs on
+/// seams that never read the result, so exit 2 there is logged at `warn!`
+/// and nothing else: a CC hook registered on an observer-only seam must be
+/// neither a silent no-op nor a block that the seam would ignore anyway.
+pub(crate) fn derive_decision(
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    kind: HookKind,
+    result: &mut HookResult,
+) {
+    match exit_code {
+        Some(2) => {
+            let reason = json_output::block_reason_hint(stdout)
+                .or_else(|| {
+                    let s = stderr.trim();
+                    (!s.is_empty()).then(|| s.to_string())
+                })
+                .unwrap_or_else(|| EXIT2_DEFAULT_REASON.to_string());
+            match kind {
+                HookKind::Interceptor => {
+                    result.blocked = true;
+                    result.block_reason = Some(reason.clone());
+                    result.permission_decision = Some(PermissionDecision::Block { reason });
+                }
+                HookKind::Observer => tracing::warn!(
+                    reason = %reason,
+                    "observer hook exited 2 (a blocking exit) on a seam that cannot block; logged only"
+                ),
+            }
+        }
+        Some(0) | None => parse_command_output(stdout, result),
+        Some(code) => tracing::warn!(
+            exit_code = code,
+            stderr = %stderr.trim(),
+            "hook exited non-zero (non-blocking error); its stdout is not read as a decision"
+        ),
     }
 }
 
@@ -1284,5 +1353,119 @@ mod tests {
         )
         .await;
         assert!(sentinel.exists(), "MessageSent observer must run");
+    }
+
+    /// The exit-code × stdout × kind matrix, on the ONE derivation.
+    fn derived(exit: Option<i32>, stdout: &str, stderr: &str, kind: HookKind) -> HookResult {
+        let mut r = HookResult::default();
+        derive_decision(exit, stdout, stderr, kind, &mut r);
+        r
+    }
+
+    #[test]
+    fn exit_2_on_an_interceptor_blocks_with_stderr_as_the_reason() {
+        let r = derived(
+            Some(2),
+            "",
+            "path is outside the repo\n",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("path is outside the repo"));
+        assert_eq!(
+            r.permission_decision,
+            Some(PermissionDecision::Block {
+                reason: "path is outside the repo".into()
+            })
+        );
+        assert!(!r.denied, "exit 2 is a retryable block, not a policy deny");
+    }
+
+    #[test]
+    fn exit_2_with_empty_stderr_still_blocks_with_the_default_reason() {
+        let r = derived(Some(2), "", "   \n", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some(EXIT2_DEFAULT_REASON));
+    }
+
+    #[test]
+    fn exit_2_cannot_be_overridden_by_a_json_allow_on_stdout() {
+        // CC: "exit 2 … cannot be overridden by JSON".
+        let r = derived(
+            Some(2),
+            r#"{"decision":"approve"}"#,
+            "nope",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked, "stdout JSON must not lift an exit-2 block");
+        assert_eq!(r.block_reason.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn exit_2_takes_permission_decision_reason_over_stderr() {
+        let stdout = r#"{"hookSpecificOutput":{"permissionDecisionReason":"from json"}}"#;
+        let r = derived(Some(2), stdout, "from stderr", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("from json"));
+    }
+
+    #[test]
+    fn exit_2_on_an_observer_only_logs() {
+        // An observer seam never reads the result, so "block" there would be
+        // a lie either way; the derivation must not pretend.
+        let r = derived(Some(2), "", "reason", HookKind::Observer);
+        assert!(!r.blocked);
+        assert!(r.permission_decision.is_none());
+    }
+
+    #[test]
+    fn exit_0_json_deny_is_applied() {
+        let r = derived(
+            Some(0),
+            r#"{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"p"}}"#,
+            "",
+            HookKind::Interceptor,
+        );
+        assert!(r.denied);
+        assert_eq!(r.deny_reason.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn exit_0_line_prefix_block_is_applied() {
+        let r = derived(Some(0), "block: not now\n", "", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("not now"));
+    }
+
+    #[test]
+    fn other_non_zero_is_non_blocking_and_reads_no_decision_from_stdout() {
+        // CC: any other code = non-blocking error; the hook FAILED, so what it
+        // printed is diagnostics, not a decision.
+        let r = derived(
+            Some(1),
+            "deny: should be ignored\n",
+            "boom",
+            HookKind::Interceptor,
+        );
+        assert!(!r.blocked && !r.denied);
+        assert!(r.permission_decision.is_none());
+        assert!(
+            r.messages.is_empty(),
+            "a failed hook's stdout must not become model context"
+        );
+    }
+
+    #[test]
+    fn no_exit_code_parses_stdout_like_before() {
+        // HTTP / plugin actions (and a signal-killed command) have no process
+        // exit code; they keep the pre-existing "stdout is the decision" path.
+        let r = derived(
+            None,
+            r#"{"decision":"block","reason":"r"}"#,
+            "",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("r"));
     }
 }

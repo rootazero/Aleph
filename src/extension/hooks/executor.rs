@@ -677,6 +677,9 @@ impl HookExecutor {
             warn!("Hook command exited with status {:?}", status.code());
         }
 
+        // `exit_code` is consumed by `derive_decision` at both call sites
+        // (`execute_interceptors` / `execute_observers`) — exit 2 blocks an
+        // interceptor even when stdout is empty (the CC `>&2; exit 2` idiom).
         Ok(ActionResult {
             success: status.success(),
             output: if stdout.is_empty() {
@@ -921,14 +924,36 @@ impl HookExecutor {
                 match action_result {
                     Ok(ar) => {
                         match action {
-                            HookAction::Command { .. }
-                            | HookAction::Http { .. }
-                            | HookAction::Plugin { .. } => {
-                                if let Some(ref output) = ar.output {
-                                    super::parse_command_output(output, &mut accumulated);
-                                    if accumulated.blocked || accumulated.denied {
-                                        return Ok((current_context, accumulated));
-                                    }
+                            HookAction::Command { .. } => {
+                                // Exit code, stdout and stderr go through the
+                                // ONE derivation; exit 2 blocks here even when
+                                // stdout is empty (the CC `>&2; exit 2` idiom).
+                                super::derive_decision(
+                                    ar.exit_code,
+                                    ar.output.as_deref().unwrap_or(""),
+                                    ar.error.as_deref().unwrap_or(""),
+                                    HookKind::Interceptor,
+                                    &mut accumulated,
+                                );
+                                if accumulated.blocked || accumulated.denied {
+                                    return Ok((current_context, accumulated));
+                                }
+                            }
+                            HookAction::Http { .. } | HookAction::Plugin { .. } => {
+                                // `ActionResult::exit_code` is the HTTP status
+                                // here (`Some(200)`), not a process code — pass
+                                // `None` so the transport's own success verdict
+                                // stands and the body is read as the decision,
+                                // exactly as before.
+                                super::derive_decision(
+                                    None,
+                                    ar.output.as_deref().unwrap_or(""),
+                                    "",
+                                    HookKind::Interceptor,
+                                    &mut accumulated,
+                                );
+                                if accumulated.blocked || accumulated.denied {
+                                    return Ok((current_context, accumulated));
                                 }
                             }
                             HookAction::Prompt { .. } => {
@@ -1112,7 +1137,7 @@ impl HookExecutor {
             .map(|hook| async move {
                 let timeout_override = hook.timeout_secs.map(Duration::from_secs);
                 for action in &hook.actions {
-                    if let Err(e) = self
+                    match self
                         .execute_action(
                             action,
                             context,
@@ -1123,10 +1148,25 @@ impl HookExecutor {
                         )
                         .await
                     {
-                        warn!(
+                        Ok(ar) => {
+                            // Same derivation as the interceptor seam, with the
+                            // observer kind: exit 2 is logged, never applied.
+                            // `scratch` is dropped — observers cannot modify.
+                            if let HookAction::Command { .. } = action {
+                                let mut scratch = super::HookResult::default();
+                                super::derive_decision(
+                                    ar.exit_code,
+                                    ar.output.as_deref().unwrap_or(""),
+                                    ar.error.as_deref().unwrap_or(""),
+                                    HookKind::Observer,
+                                    &mut scratch,
+                                );
+                            }
+                        }
+                        Err(e) => warn!(
                             "Observer hook action from plugin '{}' failed: {}",
                             hook.plugin_name, e
-                        );
+                        ),
                     }
                 }
             })
@@ -1558,6 +1598,42 @@ mod tests {
             result.action_failed,
             "must be flagged as an infrastructure failure, not a hook decision"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exit_2_command_hook_blocks_the_interceptor_seam_with_its_stderr() {
+        // The most common Claude Code hook idiom. Before this task the exit
+        // code was recorded on `ActionResult` and never consulted, so this
+        // hook let the tool through.
+        use crate::extension::hooks::HookContext;
+        let hook = interceptor_command_hook("echo 'outside the repo' >&2; exit 2");
+        let executor = HookExecutor::new(vec![hook]);
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("interceptor pass returns Ok on a hook decision");
+        assert!(result.blocked, "exit 2 must block");
+        assert_eq!(result.block_reason.as_deref(), Some("outside the repo"));
+        assert!(
+            !result.action_failed,
+            "exit 2 is a hook DECISION, not an infrastructure failure"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exit_1_command_hook_is_non_blocking() {
+        use crate::extension::hooks::HookContext;
+        let hook = interceptor_command_hook("echo 'deny: nope'; exit 1");
+        let executor = HookExecutor::new(vec![hook]);
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("Ok");
+        assert!(!result.blocked && !result.denied, "exit 1 is non-blocking");
+        assert_eq!(result.action_results.len(), 1);
+        assert_eq!(result.action_results[0].exit_code, Some(1));
     }
 
     #[cfg(unix)]

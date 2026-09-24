@@ -100,6 +100,23 @@ pub(super) fn apply_json_decision(stdout: &str, result: &mut HookResult) -> bool
     true
 }
 
+/// The reason an exit-2 block should carry when stdout ALSO holds a JSON
+/// object: CC reads `hookSpecificOutput.permissionDecisionReason` first and
+/// falls back to stderr. Everything else in that object is ignored on exit 2
+/// ("cannot be overridden by JSON"), which is why this returns one string and
+/// does not touch a `HookResult`.
+pub(super) fn block_reason_hint(stdout: &str) -> Option<String> {
+    let trimmed = stdout.trim();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let parsed: JsonHookOutput = serde_json::from_str(trimmed).ok()?;
+    parsed
+        .hook_specific_output
+        .and_then(|h| h.permission_decision_reason)
+        .filter(|r| !r.trim().is_empty())
+}
+
 impl JsonHookOutput {
     /// Map the parsed envelope onto [`HookResult`], honouring last-writer-wins
     /// for `permission_decision` exactly like the line-prefix parser.
