@@ -26,6 +26,14 @@ use crate::providers::presets::{get_preset, ProviderPreset, PRESETS};
 ///
 /// Entries are keyed by preset id. Removing one is an improvement; adding one
 /// should come with a note on why the figure could not be confirmed.
+///
+/// Entries below are grouped by the reason no figure can be confirmed:
+///   * `relay` (lmstudio, t8star, anyscale, replicate, lepton) — BYO model,
+///     window is whatever the deployment loaded.
+///   * `uncatalogued-vendor` (baichuan, hunyuan, spark, inflection) — vendor
+///     window has not been published in English docs / not been confirmable
+///     from the operator's locale.
+///   * `self-hosted` (nous) — window depends on the deployment.
 const UNCATALOGUED_FAMILIES: &[(&str, &str)] = &[
     ("baichuan", "Baichuan4 window not published in English docs"),
     (
