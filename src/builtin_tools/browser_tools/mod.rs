@@ -208,18 +208,47 @@ pub(crate) async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<Strin
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }
 
+/// The caller's own key for `profile` — the principal boundary of the browser
+/// tool face (r11 N5). Every tool reaches a browser through this or through a
+/// `make_backend*` that calls it; `principal_profile_census` pins the tools
+/// that address live state directly.
+///
+/// `ambient_principal`, not `ambient_actor`: the latter falls back to the
+/// turn's agent id, which would mint a `default__main` profile.
+pub(crate) fn resolve_caller_profile(
+    manager: &ProfileManager,
+    profile: &str,
+) -> Result<String, BrowserError> {
+    manager.principal_profile(
+        profile,
+        crate::gateway::visibility::ambient_principal().as_deref(),
+    )
+}
+
+/// The backend for an ALREADY-RESOLVED key (the output of
+/// [`resolve_caller_profile`]). Handing it a raw `args.profile` skips the
+/// principal boundary.
+pub(crate) fn backend_for_key(
+    manager: &ProfileManager,
+    key: &str,
+) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
+    manager.record_activity(key);
+    manager.get_backend(key)
+}
+
 /// Create the appropriate backend for the given profile.
 ///
-/// Single routing source: delegates to [`ProfileManager::get_backend`], which
-/// owns the driver→backend mapping and headless resolution. Unknown profiles
-/// yield [`BrowserError::ProfileNotFound`] — no silent fallback to a Managed
-/// backend under a name the user never configured.
+/// Single routing source: resolves the caller's key, then delegates to
+/// [`ProfileManager::get_backend`], which owns the driver→backend mapping and
+/// headless resolution. Unknown profiles yield
+/// [`BrowserError::ProfileNotFound`] — no silent fallback to a Managed backend
+/// under a name the user never configured.
 pub(crate) fn make_backend(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
-    manager.record_activity(profile);
-    manager.get_backend(profile)
+    let key = resolve_caller_profile(manager, profile)?;
+    backend_for_key(manager, &key)
 }
 
 /// Create the appropriate backend and resolve the active tab ID.
@@ -227,12 +256,13 @@ pub(crate) async fn make_backend_and_tab(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile)?;
+    let key = resolve_caller_profile(manager, profile)?;
+    let backend = backend_for_key(manager, &key)?;
     let tab_id = get_active_tab(backend.as_ref()).await?;
     // Reset the per-tab idle timer. Tracked for the drivers whose browser
     // Aleph launched (`Managed` and `Cdp`), never for the user's own
     // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
-    manager.touch_tab(profile, &tab_id);
+    manager.touch_tab(&key, &tab_id);
     Ok((backend, tab_id))
 }
 
@@ -253,7 +283,8 @@ pub(crate) async fn make_backend_and_tab_guarded(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile)?;
+    let key = resolve_caller_profile(manager, profile)?;
+    let backend = backend_for_key(manager, &key)?;
     let tabs = backend.list_tabs().await?;
     let tab_id = tab_registry::active_tab_id(&tabs).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
@@ -267,7 +298,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
     // Reset the per-tab idle timer. Tracked for the drivers whose browser
     // Aleph launched (`Managed` and `Cdp`), never for the user's own
     // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
-    manager.touch_tab(profile, &tab_id);
+    manager.touch_tab(&key, &tab_id);
     Ok((backend, tab_id))
 }
 
@@ -1307,5 +1338,84 @@ mod driver_claim_census {
                  to name the cdp one: {desc}"
             );
         }
+    }
+}
+
+/// r11 N5: the principal boundary of the browser tool face is
+/// [`resolve_caller_profile`]. A tool that hands `args.profile` straight to a
+/// manager method addressing LIVE browser state (a session, an engine, a tab)
+/// skips it, and on a member's behalf addresses the owner's browser.
+///
+/// Recognises ONE spelling: `.<method>(&args.profile` — how every tool in this
+/// directory names its profile today. A tool that first binds
+/// `let p = &args.profile;` and passes `p` is invisible to it (判据 §3).
+/// `get_driver` / `get_config` are deliberately absent: they read config, and
+/// a principal's copy carries the configured driver unchanged.
+#[cfg(test)]
+mod principal_profile_census {
+    use super::*;
+    use crate::browser::profile::BrowserSystemConfig;
+
+    const LIVE_STATE_METHODS: &[&str] = &[
+        "get_backend",
+        "record_activity",
+        "touch_tab",
+        "forget_tab",
+        "session_active",
+        "prepare_engine",
+        "switch_engine",
+        "engine_handle",
+        "engine_handle_for",
+        "launch_request_for",
+        "launch_request_for_engine",
+        "live_endpoint",
+    ];
+
+    #[test]
+    fn no_browser_tool_addresses_live_state_with_the_raw_profile_argument() {
+        let mut offenders = Vec::new();
+        for (module, src) in super::approval_wiring_census::SOURCES {
+            let code = crate::utils::source_scan::code_text(
+                &crate::utils::source_scan::production_prefix(&src.replace('\r', "")),
+            );
+            for method in LIVE_STATE_METHODS {
+                if code.contains(&format!(".{method}(&args.profile")) {
+                    offenders.push(format!("{module}.rs: .{method}(&args.profile"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "resolve the caller's key first (`resolve_caller_profile`) and pass THAT:\n{offenders:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tool_face_composes_the_ambient_principal() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let manager_ref = &manager;
+        let as_user = move |user: &str| {
+            let attr = crate::scope::ScopeAttribution::personal(user);
+            crate::scope::with_scope(Some(attr), async move {
+                resolve_caller_profile(manager_ref, "default")
+            })
+        };
+        assert_eq!(as_user("u-alice").await.unwrap(), "default__u-alice");
+        assert_eq!(
+            as_user(crate::gateway::security::store::OWNER_USER_ID)
+                .await
+                .unwrap(),
+            "default"
+        );
+        assert_eq!(
+            resolve_caller_profile(&manager, "default").unwrap(),
+            "default"
+        );
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        let refused = crate::scope::with_scope(Some(bob), async {
+            resolve_caller_profile(&manager, "default__u-alice")
+        })
+        .await;
+        assert!(matches!(refused, Err(BrowserError::ProfileNotFound(_))));
     }
 }

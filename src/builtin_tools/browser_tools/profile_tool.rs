@@ -71,9 +71,11 @@ impl AlephTool for BrowserProfileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             ProfileAction::List => {
+                // The caller's view (r11 N5): configured names only, with the
+                // liveness of the caller's own copy.
                 let profiles = self
                     .manager
-                    .list_profiles()
+                    .list_profiles_for(crate::gateway::visibility::ambient_principal().as_deref())
                     .into_iter()
                     .map(|(name, active)| {
                         let driver = self
@@ -96,18 +98,21 @@ impl AlephTool for BrowserProfileTool {
                 })
             }
             ProfileAction::GetState { name } => {
-                if self.manager.get_config(&name).is_none() {
-                    return Ok(BrowserProfileOutput {
-                        success: false,
-                        profiles: None,
-                        state: None,
-                        message: Some(format!("Profile '{name}' not found")),
-                    });
-                }
-                let active = self.manager.session_active(&name);
+                let key = match super::resolve_caller_profile(&self.manager, &name) {
+                    Ok(key) => key,
+                    Err(e) => {
+                        return Ok(BrowserProfileOutput {
+                            success: false,
+                            profiles: None,
+                            state: None,
+                            message: Some(e.to_string()),
+                        });
+                    }
+                };
+                let active = self.manager.session_active(&key);
                 let driver = self
                     .manager
-                    .get_driver(&name)
+                    .get_driver(&key)
                     .map_or_else(|| "unknown".to_string(), |d| format!("{d:?}"));
                 Ok(BrowserProfileOutput {
                     success: true,
@@ -197,5 +202,25 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn a_member_lists_configured_names_with_its_own_liveness() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        manager.principal_profile("default", Some("u-bob")).unwrap();
+        let tool = BrowserProfileTool::new(Arc::clone(&manager));
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let out = crate::scope::with_scope(Some(alice), async {
+            tool.call(BrowserProfileArgs {
+                action: ProfileAction::List,
+            })
+            .await
+        })
+        .await
+        .unwrap();
+        let names: Vec<String> = out.profiles.unwrap().into_iter().map(|p| p.name).collect();
+        assert!(names.contains(&"default".to_string()), "{names:?}");
+        assert!(names.iter().all(|n| !n.contains("__")), "{names:?}");
+        assert!(!names.contains(&"user".to_string()), "{names:?}");
     }
 }
