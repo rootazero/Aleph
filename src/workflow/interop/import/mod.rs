@@ -343,6 +343,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     review: call.opts.review,
                     timeout_secs: call.opts.timeout_secs,
                     max_retries: call.opts.max_retries,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 });
                 // Surface a `schema:` that could not be captured (unknown const
                 // ref or a non-data literal) — the step imports, but say the
@@ -399,6 +402,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 });
                 if parallel_depth > 0 {
                     parallel_group.push(i);
@@ -626,6 +632,9 @@ await agent('deploy to prod', { "phase": "Ship", review: true, timeoutSecs: 900 
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowManifestStep {
                     id: "b".into(),
@@ -646,6 +655,9 @@ await agent('deploy to prod', { "phase": "Ship", review: true, timeoutSecs: 900 
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         }
@@ -744,6 +756,9 @@ const r = await pipeline(items, s1, s2)
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&original);
@@ -969,6 +984,9 @@ await agent('fix more')
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1064,6 +1082,9 @@ await agent('fix more')
                 tolerate_failed_deps: true,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1365,6 +1386,9 @@ await agent('fix more')
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1405,6 +1429,9 @@ await agent('fix more')
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1451,6 +1478,9 @@ await agent('fix more')
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
+        parallel_group: None,
+        collect_from: Vec::new(),
+        reduce: None,
         }
     }
 
@@ -1665,6 +1695,9 @@ await agent('fix more')
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowManifestStep {
                     id: "run".into(),
@@ -1685,6 +1718,9 @@ await agent('fix more')
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         };
@@ -1778,6 +1814,9 @@ await agent('write it up')
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let js = render_workflow_js(&m);

@@ -33,7 +33,7 @@ use serde_json::Value;
 
 use crate::error::Result;
 use crate::workflow::compile::StepPins;
-use crate::workflow::def::{WorkflowDef, WorkflowStepDef, WorkflowStepKind};
+use crate::workflow::def::{CollectReduce, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 
 // NOTE: no `JsonSchema` derive — these types never appear in a tool arg schema
 // (the `workflow` tool's args use `WorkflowDef`), so deriving it would be dead
@@ -189,6 +189,24 @@ pub struct WorkflowManifestStep {
         alias = "max_retries"
     )]
     pub max_retries: Option<u32>,
+    /// Parallel-group label (see `WorkflowStepDef::parallel_group`). Carried
+    /// into task metadata at materialisation time so `status` reporting and
+    /// the `.workflow.js` live view can group the run's steps the same way
+    /// they were authored. `None` and empty strings both mean "ungrouped".
+    /// Omitted on the wire when unset (byte-identical legacy manifests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_group: Option<String>,
+    /// Collect-step sources (see `WorkflowStepDef::collect_from`). Executable
+    /// core — meaningful only when `kind == collect`, but the field itself
+    /// is structural so a step can be migrated from agent → collect without
+    /// losing its upstream reference set in transit. Omitted when empty
+    /// (byte-identical legacy manifests).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collect_from: Vec<String>,
+    /// Collect-step reducer (see `WorkflowStepDef::reduce`). Executable core.
+    /// `None` → `Concat` at materialisation. Omitted on the wire when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce: Option<CollectReduce>,
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
@@ -242,6 +260,9 @@ impl WorkflowManifest {
                     tolerate_failed_deps: s.tolerate_failed_deps,
                     timeout_secs: s.timeout_seconds,
                     max_retries: s.max_retries,
+                    parallel_group: s.parallel_group.clone(),
+                    collect_from: s.collect_from.clone(),
+                    reduce: s.reduce,
                 })
                 .collect(),
         }
@@ -278,6 +299,12 @@ impl WorkflowManifest {
             step.isolation = prev.isolation.clone();
             step.agent_type = prev.agent_type.clone();
             step.effort = prev.effort.clone();
+            step.parallel_group = prev.parallel_group.clone();
+            // collect_from / reduce are executable (the reducer decides the
+            // deliverable shape) and live on `WorkflowStepDef` too, so they
+            // ride the same preservation path as the run-budget overrides.
+            step.collect_from = prev.collect_from.clone();
+            step.reduce = prev.reduce;
         }
         fresh
     }
@@ -432,6 +459,9 @@ impl WorkflowManifest {
                     tolerate_failed_deps: s.tolerate_failed_deps,
                     timeout_seconds: s.timeout_secs,
                     max_retries: s.max_retries,
+                    parallel_group: s.parallel_group.clone(),
+                    collect_from: s.collect_from.clone(),
+                    reduce: s.reduce,
                 })
                 .collect(),
         }
@@ -459,6 +489,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowStepDef {
                     id: "b".into(),
@@ -472,6 +505,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         }
@@ -586,6 +622,9 @@ mod tests {
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let def = manifest.to_def();
@@ -622,6 +661,9 @@ mod tests {
                 tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         let v = serde_json::to_value(&manifest).unwrap();
@@ -743,6 +785,9 @@ mod tests {
                 tolerate_failed_deps: false,
                 timeout_seconds: None,
                 max_retries: None,
+                parallel_group: None,
+                collect_from: Vec::new(),
+                reduce: None,
             }],
         };
         // The clarify kind + choices survive the manifest projection both ways.

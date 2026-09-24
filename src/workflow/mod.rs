@@ -18,6 +18,7 @@
 
 pub mod budget;
 pub mod clarify;
+pub mod collect;
 pub mod compile;
 pub mod def;
 pub mod determinism;
@@ -30,13 +31,15 @@ pub mod store;
 // `workflow::proposal::…`, `workflow::clarify::…`) at its call sites.
 pub use budget::{BudgetOutcome, BudgetSnapshot, WorkflowRunBudget};
 pub use clarify::{ClarifyContext, CLARIFY_DELIVERY_PENDING_KEY};
+pub use collect::{is_collect_task, CollectTaskMeta, COLLECT_META_KEY, COLLECT_OWNER};
 pub use compile::{
-    materialize, workflow_effort_think_level, workflow_model_override, workflow_origin,
-    MaterializedWorkflow, StepPins, NOTIFIED_BY_CANCEL, NOTIFIED_BY_SETTLE, WORKFLOW_EFFORT_KEY,
-    WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_BY_KEY, WORKFLOW_NOTIFIED_KEY,
-    WORKFLOW_ORIGIN_KEY, WORKFLOW_PHASE_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_SCHEMA_KEY,
-    WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
+    materialize, parallel_groups_for, workflow_effort_think_level, workflow_model_override,
+    workflow_origin, MaterializedWorkflow, StepPins, NOTIFIED_BY_CANCEL, NOTIFIED_BY_SETTLE,
+    WORKFLOW_EFFORT_KEY, WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_BY_KEY,
+    WORKFLOW_NOTIFIED_KEY, WORKFLOW_ORIGIN_KEY, WORKFLOW_PARALLEL_GROUP_KEY,
+    WORKFLOW_PARALLEL_INDEX_KEY, WORKFLOW_PARALLEL_SIZE_KEY, WORKFLOW_PHASE_KEY,
+    WORKFLOW_RUN_ID_KEY, WORKFLOW_SCHEMA_KEY, WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
 };
-pub use def::{render_prompt, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
+pub use def::{render_prompt, CollectReduce, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use determinism::{audit_step_prompt, DeterminismFinding, DeterminismFindingKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};

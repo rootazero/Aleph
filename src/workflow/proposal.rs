@@ -136,6 +136,9 @@ pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<Workfl
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         });
     }
     if steps.len() < 2 {
