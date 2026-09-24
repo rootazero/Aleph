@@ -197,6 +197,10 @@ pub enum SettleReason {
     /// having closed at admission — e.g. the gate refused for a non-busy
     /// reason. Belt-and-braces twin of [`SettleReason::Admitted`].
     AttemptConcluded,
+    /// Round 11 (N10): at boot reinjection the person the queued message acts
+    /// for was deactivated or deleted. Tombstoned rather than left queued,
+    /// which would re-ask on every boot forever.
+    AuthorityRefused,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -392,8 +396,10 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 /// schedulers, and re-delivering their queued input here would double-drive
 /// them; then a survivor `select` declines is left journaled exactly as
 /// found, for the next call (the predicate sees the parsed key — compare it
-/// whole, `to_key_string() ==` or set membership, never by substring). What
-/// remains has its `RunRequest` rebuilt from the journaled payload
+/// whole, `to_key_string() ==` or set membership, never by substring); then
+/// fire-time authority (round 11): refused ⇒ tombstoned
+/// (`SettleReason::AuthorityRefused`), unknown ⇒ left journaled for the next
+/// call. What remains has its `RunRequest` rebuilt from the journaled payload
 /// (`pending_media` starts empty, `sandbox_override` is `None` — neither is
 /// set by the two lane surfaces; see the module doc), emits through the
 /// gateway bus plus the origin-channel fanout when the session has a bound
@@ -443,12 +449,41 @@ pub async fn reinject_survivors(
                 "busy-queue reinject: agent gone; leaving record queued");
             continue;
         };
+        // Fire-time authority (round 11, N10): the journaled payload froze
+        // the role at enqueue time, possibly for a person deactivated or
+        // demoted since. Resolve against the session row owner and the
+        // payload's own author/role.
+        let mut metadata = payload.metadata.clone();
+        let verdict = match agent.session_store().get_metadata(&session_key).await {
+            Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
+                "session row unreadable: {e}"
+            )),
+            Ok(row) => crate::gateway::fire_gate::authorize_session_run(
+                |subject| crate::scope::authority::resolve(&subject),
+                row.as_ref(),
+                &mut metadata,
+            ),
+        };
+        match verdict {
+            crate::gateway::fire_gate::FireVerdict::Proceed => {}
+            crate::gateway::fire_gate::FireVerdict::Refused(reason) => {
+                tracing::warn!(run_id = %run_id, reason = %reason,
+                    "busy-queue reinject: authority refused; tombstoning the record");
+                record_settled(&run_id, SettleReason::AuthorityRefused);
+                continue;
+            }
+            crate::gateway::fire_gate::FireVerdict::Unknown(reason) => {
+                tracing::warn!(run_id = %run_id, reason = %reason,
+                    "busy-queue reinject: authority unknown; leaving record queued");
+                continue;
+            }
+        }
         let request = crate::gateway::execution_engine::RunRequest {
             run_id: payload.run_id.clone(),
             input: payload.input.clone(),
             session_key: session_key.clone(),
             timeout_secs: payload.timeout_secs,
-            metadata: payload.metadata.clone(),
+            metadata: metadata.clone(),
             attachments: payload.attachments.clone(),
             pending_media: Default::default(),
             sandbox_override: None,
@@ -496,7 +531,7 @@ pub async fn reinject_survivors(
         // dropping the message.
         let ticket = super::register_run(
             &session_key,
-            &payload.metadata,
+            &metadata,
             cfg.max_per_session,
             &payload.run_id,
         );

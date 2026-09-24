@@ -75,6 +75,46 @@ pub(crate) fn subject_from_metadata(metadata: &HashMap<String, String>) -> FireS
     }
 }
 
+/// The subject of a run rebuilt for an existing SESSION (boot resume, announce
+/// delivery, busy-queue reinjection): owner/scope from the durable session
+/// row, author and role from what the request carries. `row = None` (no row)
+/// contributes no owner — Legacy unless an author rides the metadata.
+#[must_use]
+pub(crate) fn subject_for_session_row<'a>(
+    row: Option<&'a crate::gateway::session_store::types::SessionMetadata>,
+    metadata: &'a HashMap<String, String>,
+) -> FireSubject<'a> {
+    FireSubject {
+        owner: row.and_then(|r| r.owner_user_id.as_deref()),
+        scope: row.and_then(|r| r.scope_id.as_deref()),
+        author: metadata
+            .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+            .map(String::as_str),
+        carried_role: metadata.get("caller_role").map(String::as_str),
+    }
+}
+
+/// Resolve and apply fire-time authority for a run rebuilt for an existing
+/// session, in one step: [`subject_for_session_row`] → `resolve` → [`apply`].
+///
+/// The resolver is a parameter so the whole mapping — including WHICH grant
+/// lands on `metadata` — is driven by tests with `resolve_with` (no lib test
+/// may install the process-global users store). Production passes
+/// `|subject| crate::scope::authority::resolve(&subject)`, spelled at each
+/// executor's own site because the `RunRequest` producer census greps it there.
+#[must_use]
+pub(crate) fn authorize_session_run<R>(
+    resolve: R,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    metadata: &mut HashMap<String, String>,
+) -> FireVerdict
+where
+    R: FnOnce(FireSubject<'_>) -> FireAuthority,
+{
+    let authority = resolve(subject_for_session_row(row, metadata));
+    apply(authority, metadata)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +230,71 @@ mod tests {
         let authority = resolve_with(None, &subject_from_metadata(&meta));
         assert_eq!(apply(authority, &mut meta), FireVerdict::Proceed);
         assert_eq!(meta, before);
+    }
+
+    /// N8/N10: a session row's owner is the person when no author rides the
+    /// metadata; a member's session resumed/reinjected with no role (read as
+    /// operator) is stamped `member`.
+    #[test]
+    fn a_members_session_row_resolves_to_member() {
+        let store = users();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let mut meta = HashMap::new();
+        let authority = resolve_with(Some(&store), &subject_for_session_row(Some(&row), &meta));
+        assert_eq!(apply(authority, &mut meta), FireVerdict::Proceed);
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    /// N10: the author frozen into a queued payload wins over the row owner.
+    #[test]
+    fn a_carried_author_outranks_the_session_row_owner() {
+        let store = users();
+        store
+            .update_user("u-bob", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-alice".into()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-room".into()).render()),
+            ..Default::default()
+        };
+        let mut meta = HashMap::new();
+        meta.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            "u-bob".to_string(),
+        );
+        let authority = resolve_with(Some(&store), &subject_for_session_row(Some(&row), &meta));
+        assert!(matches!(apply(authority, &mut meta), FireVerdict::Refused(_)));
+    }
+
+    /// Ruling (b): the grant the executors' shared seam stamps is the one the
+    /// resolver returned for THIS row — a member owner comes out `member`
+    /// with the row's scope pair, and the resolver was asked about that row.
+    #[test]
+    fn a_session_run_is_stamped_with_the_resolved_grant() {
+        let store = users();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let mut asked = None;
+        let mut meta = HashMap::new();
+        let verdict = authorize_session_run(
+            |subject| {
+                asked = subject.owner.map(str::to_string);
+                resolve_with(Some(&store), &subject)
+            },
+            Some(&row),
+            &mut meta,
+        );
+        assert_eq!(verdict, FireVerdict::Proceed);
+        assert_eq!(asked.as_deref(), Some("u-bob"));
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+        let scope = crate::scope::scope_from_metadata(&meta).expect("the grant stamps the pair");
+        assert_eq!(scope.owner_user_id, "u-bob");
     }
 }

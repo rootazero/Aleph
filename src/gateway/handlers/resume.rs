@@ -470,6 +470,8 @@ mod tests {
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
             ResumeRefusal::IntentStampFailed("stamp append failed".into()),
             ResumeRefusal::TailReadFailed("range read failed".into()),
+            ResumeRefusal::AuthorityRefused("principal deactivated".into()),
+            ResumeRefusal::AuthorityUnknown("users store read failed".into()),
         ] {
             assert_eq!(
                 status_of(&refused_report(refusal.clone())),

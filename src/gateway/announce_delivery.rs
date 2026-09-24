@@ -23,6 +23,7 @@
 //!   live run at its next turn boundary rather than spawning a second one.
 //! - **busy elsewhere → bounded retries**, then give up quietly and leave the
 //!   result reachable through the tool that produced it.
+//! - **may its owner still act?** — fire-time authority (round 11), re-asked on every attempt; refused ends the ladder, unknown waits like busy.
 //!
 //! What stays with each caller is exactly what differs: which event it listens
 //! for, what the notice says, what "already collected" means for its own
@@ -169,6 +170,13 @@ pub(crate) async fn deliver(
 
     let mut metadata = HashMap::new();
     metadata.insert(metadata_key.to_string(), key.clone());
+    // Unattended, like cron (round 11, N9): an announce run fires precisely
+    // when the person has walked away, so an approval-gated tool must fail
+    // closed instead of parking on a card nobody answers.
+    metadata.insert(
+        crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+        "true".to_string(),
+    );
 
     for delay_secs in RETRY_DELAYS_SECS {
         if delay_secs > 0 {
@@ -189,12 +197,52 @@ pub(crate) async fn deliver(
             }
         }
 
+        // Fire-time authority, asked on EVERY attempt (round 11, N9): the
+        // parent session's owner may be deactivated or demoted during the
+        // two-minute retry schedule. Granted stamps the scope pair (the run
+        // used to carry none) and the member ceiling; Unknown waits for the
+        // next attempt like a busy parent does (R-a).
+        let mut attempt_metadata = metadata.clone();
+        let verdict = match agent.session_store().get_metadata(&session_key).await {
+            Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
+                "parent session row unreadable: {e}"
+            )),
+            Ok(row) => crate::gateway::fire_gate::authorize_session_run(
+                |subject| crate::scope::authority::resolve(&subject),
+                row.as_ref(),
+                &mut attempt_metadata,
+            ),
+        };
+        match verdict {
+            crate::gateway::fire_gate::FireVerdict::Proceed => {}
+            crate::gateway::fire_gate::FireVerdict::Refused(reason) => {
+                warn!(
+                    announce = kind,
+                    key = %key,
+                    session = %session_id,
+                    reason = %reason,
+                    "announce refused: the parent session's owner may no longer act; {fallback}"
+                );
+                return;
+            }
+            crate::gateway::fire_gate::FireVerdict::Unknown(reason) => {
+                warn!(
+                    announce = kind,
+                    key = %key,
+                    session = %session_id,
+                    reason = %reason,
+                    "announce authority unknown; retrying on the next attempt"
+                );
+                continue;
+            }
+        }
+
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
             input: input.clone(),
             session_key: session_key.clone(),
             timeout_secs: None,
-            metadata: metadata.clone(),
+            metadata: attempt_metadata,
             attachments: Vec::new(),
             pending_media: crate::gateway::media::PendingMedia::default(),
             sandbox_override: None,
@@ -239,6 +287,6 @@ pub(crate) async fn deliver(
         announce = kind,
         key = %key,
         session = %session_id,
-        "parent stayed busy through all retries; {fallback}"
+        "parent stayed busy, or its authority could not be established, through all retries; {fallback}"
     );
 }

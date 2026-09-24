@@ -335,6 +335,13 @@ pub enum ResumeRefusal {
     /// pass-through string on the wire — no client switches on reason words —
     /// so it needs no renderer of its own.
     TailReadFailed(String),
+    /// Fire-time authority (round 11, N8): the person this session's run acts
+    /// for is deactivated or deleted. Settled — the resume must not run.
+    AuthorityRefused(String),
+    /// Fire-time authority could not be established (the users store or the
+    /// session row could not be read, ruling R-a). The log is intact; the run
+    /// stays resumable via `agent.resume` once the store answers.
+    AuthorityUnknown(String),
 }
 
 impl ResumeRefusal {
@@ -349,6 +356,8 @@ impl ResumeRefusal {
             Self::RetriggerFailed(_) => "retrigger_failed",
             Self::IntentStampFailed(_) => "intent_stamp_failed",
             Self::TailReadFailed(_) => "tail_read_failed",
+            Self::AuthorityRefused(_) => "authority_refused",
+            Self::AuthorityUnknown(_) => "authority_unknown",
         }
     }
 
@@ -361,7 +370,9 @@ impl ResumeRefusal {
             Self::BoundaryRepairFailed(e)
             | Self::RetriggerFailed(e)
             | Self::IntentStampFailed(e)
-            | Self::TailReadFailed(e) => e.clone(),
+            | Self::TailReadFailed(e)
+            | Self::AuthorityRefused(e)
+            | Self::AuthorityUnknown(e) => e.clone(),
         }
     }
 }
@@ -845,6 +856,7 @@ async fn retrigger_emitter(
 /// (pre-P1) session stamps nothing and resumes exactly as it did before — the
 /// same zero-change carve-out `goal_wait::rehydrate_owner_scope` and cron's
 /// executor take, from the same durable columns.
+/// The authority half (who, at what role, and whether at all) is decided afterwards in [`ResumeCoordinator::retrigger`].
 pub(crate) fn resume_metadata(
     workspace_override: Option<&std::path::Path>,
     session_meta: Option<&crate::gateway::session_store::types::SessionMetadata>,
@@ -876,11 +888,29 @@ pub(crate) fn resume_metadata(
     // CHANNEL-origin sessions; a Panel session takes its early-return branch.
     //
     // Boot resume and the `/v1/admin` route have no caller scope, so this
-    // writes nothing there and their behaviour is byte-identical.
+    // writes nothing there — but that is no longer the whole answer:
+    // `retrigger` then resolves the session owner's fire-time authority
+    // (`scope::authority::resolve`), which stamps `caller_role = "member"`
+    // over an absent role whenever that person is a member, and refuses the
+    // resume outright for a deactivated or deleted one (round 11, N8).
     if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
         metadata.insert("caller_role".to_string(), role);
     }
     metadata
+}
+
+/// Map a fire-time verdict onto a resume refusal. Pure, so the two refusal
+/// arms are testable without a coordinator.
+fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(), ResumeRefusal> {
+    match verdict {
+        crate::gateway::fire_gate::FireVerdict::Proceed => Ok(()),
+        crate::gateway::fire_gate::FireVerdict::Refused(r) => {
+            Err(ResumeRefusal::AuthorityRefused(r))
+        }
+        crate::gateway::fire_gate::FireVerdict::Unknown(r) => {
+            Err(ResumeRefusal::AuthorityUnknown(r))
+        }
+    }
 }
 
 /// When this candidate was last *alive*, in recording time.
@@ -2158,10 +2188,17 @@ impl ResumeCoordinator {
             .await
             .ok_or(ResumeRefusal::AgentMissing)?;
 
-        let mut metadata = resume_metadata(
-            workspace_override.as_deref(),
-            self.persisted_session_meta(session_id).await.as_ref(),
-        );
+        // The durable row is both the scope source and the authority owner.
+        // Unreadable = "I do not know whose run this is" (R-a): refuse THIS
+        // attempt rather than resume it unscoped as operator.
+        let row = self
+            .session_store
+            .get_metadata(session_id)
+            .await
+            .map_err(|e| {
+                ResumeRefusal::AuthorityUnknown(format!("session row unreadable: {e}"))
+            })?;
+        let mut metadata = resume_metadata(workspace_override.as_deref(), row.as_ref());
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
         // ④ The crashed run's knobs. `extend` after the identity stamp so a
@@ -2170,6 +2207,14 @@ impl ResumeCoordinator {
         // this ordering keeps that true by construction rather than by
         // inspection.
         metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // Fire-time authority (round 11, N8), resolved LAST so its stamp is
+        // the final word on scope / author / role: the session owner's
+        // CURRENT status and role, not whatever was true when the run crashed.
+        resume_authority(crate::gateway::fire_gate::authorize_session_run(
+            |subject| crate::scope::authority::resolve(&subject),
+            row.as_ref(),
+            &mut metadata,
+        ))?;
         // A replayed `/btw` stamp makes this resume a side question. Read
         // here, before `metadata` moves into the request, because the
         // emitter choice below depends on it.
@@ -2222,28 +2267,6 @@ impl ResumeCoordinator {
             .execute(request, agent, emitter)
             .await
             .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")))
-    }
-
-    /// The resumed session's durable row, or `None` when it cannot be read.
-    ///
-    /// A store error is logged and swallowed: an unscoped resume is the
-    /// pre-existing behaviour, and refusing to resume over it would turn a
-    /// crash recovery into a lost conversation.
-    async fn persisted_session_meta(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<crate::gateway::session_store::types::SessionMetadata> {
-        match self.session_store.get_metadata(session_id).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    error = %e,
-                    "resume: session metadata unreadable; resuming unscoped"
-                );
-                None
-            }
-        }
     }
 
     /// Re-derive the run identity the session's origin channel imposes.
@@ -2607,6 +2630,8 @@ mod tests {
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
             ResumeRefusal::IntentStampFailed("stamp append failed".into()),
             ResumeRefusal::TailReadFailed("range read failed".into()),
+            ResumeRefusal::AuthorityRefused("principal deactivated".into()),
+            ResumeRefusal::AuthorityUnknown("users store read failed".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");
@@ -3143,6 +3168,43 @@ mod tests {
             crate::scope::ScopeId::Project("p-standup".into())
         );
         assert_eq!(scope.owner_user_id, "u-alice");
+    }
+
+    /// N8: a member's session resumed at boot (no caller role in scope) used
+    /// to run as operator. The resolved authority stamps `member`.
+    #[test]
+    fn a_boot_resumed_member_session_runs_as_member() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::gateway::session_store::types::SessionMetadata;
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let mut meta = resume_metadata(None, Some(&row));
+        let authority = crate::scope::authority::resolve_with(
+            Some(&users),
+            &crate::gateway::fire_gate::subject_for_session_row(Some(&row), &meta),
+        );
+        resume_authority(crate::gateway::fire_gate::apply(authority, &mut meta))
+            .expect("an active member resumes");
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    #[test]
+    fn a_refused_or_unknown_authority_is_its_own_refusal() {
+        use crate::gateway::fire_gate::FireVerdict;
+        assert!(matches!(
+            resume_authority(FireVerdict::Refused("principal deactivated".into())),
+            Err(ResumeRefusal::AuthorityRefused(ref r)) if r.contains("deactivated")
+        ));
+        assert!(matches!(
+            resume_authority(FireVerdict::Unknown("disk I/O".into())),
+            Err(ResumeRefusal::AuthorityUnknown(_))
+        ));
+        assert!(resume_authority(FireVerdict::Proceed).is_ok());
     }
 
     /// A legacy (pre-P1) row, or no row at all, stamps nothing — the resume

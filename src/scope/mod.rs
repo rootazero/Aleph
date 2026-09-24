@@ -174,10 +174,15 @@ pub fn current_scope() -> Option<ScopeAttribution> {
 /// identity, checked at `connect` against the device binding, while the scope
 /// is whatever the run was seeded with.
 ///
-/// `None` means "no ambient owner" and is deliberately unrestricted — cron,
-/// background sweeps, A2A and in-process tests behave exactly as they did
-/// before P1 (zero-change guarantee), matching
-/// [`crate::gateway::visibility::visible_owner_filter`].
+/// `None` means "no ambient owner" and is deliberately unrestricted, matching
+/// [`crate::gateway::visibility::visible_owner_filter`]. Since round 11 it no
+/// longer describes the background executors: cron, heartbeat, goal/loop
+/// continuations, the team dispatcher, boot resume, announce delivery and
+/// busy-queue reinjection each resolve the owner's fire-time authority
+/// (`scope::authority::resolve`) and stamp or re-establish the result, so
+/// their runs read a live owner here. What still reads `None`: background
+/// sweeps that start no run, A2A peers and `/v1` bearer calls (no Aleph
+/// principal), Legacy rows with no owner, and in-process tests.
 #[must_use]
 pub fn ambient_owner() -> Option<String> {
     crate::gateway::caller_identity::current_caller_user()

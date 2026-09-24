@@ -306,6 +306,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "the Panel/RPC path; resolve_attribution + caller_role, the shape every other producer mirrors",
         ingress: Ingress::Human { stamp_in:"src/gateway/handlers/agent.rs" },
         ingress_why: "`build_run_request` is the one funnel behind every Panel / TUI / CLI run entrance, and it stamps BEFORE the agent-authorization gate — a refused attempt is still a person at the keyboard. An external script driving `chat.send` stamps too; that approximation is accepted, because the alternative (asking the wire who is typing) is a claim the caller controls",
+        authority: Authority::LiveCaller { seam: "current_caller_role" },
+        authority_why: "an RPC from a live connection; its identity is checked at connect against the device binding, and deactivation revokes that user's devices, so no connection outlives the status",
     },
     RunProducer {
         file: "src/gateway/inbound_router/executor.rs",
@@ -313,6 +315,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "channel inbound; principal from pairing_store::sender_user",
         ingress: Ingress::Human { stamp_in: "src/gateway/inbound_router/mod.rs" },
         ingress_why: "a channel message, stamped UPSTREAM of this file: `handle_message`'s permission-granted arm, not the builder here. A stranger refused by policy is not 'the user', and stamping at the builder would let anyone who can reach the bot hold the sensor open",
+        authority: Authority::LiveCaller { seam: "sender_user" },
+        authority_why: "a channel message from a paired sender, resolved at arrival; deactivation withdraws the sender's channel approvals",
     },
     RunProducer {
         file: "src/gateway/resume_coordinator.rs",
@@ -320,6 +324,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the persisted session row's columns; caller_role added 2026-08-09",
         ingress: Ingress::Machine,
         ingress_why: "boot-time continuation of a run a restart interrupted; the human message that started it stamped when it arrived. Re-stamping here would let a crash-restart loop hold the sensor open with nobody present",
+        authority: Authority::Resolves,
+        authority_why: "boot/on-demand resume of a crashed run; retrigger resolves the session owner's authority (round 11, N8)",
     },
     RunProducer {
         file: "src/teams/broadcast/mod.rs",
@@ -327,6 +333,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the ambient scope carried across two spawns; both keys added 2026-08-09",
         ingress: Ingress::Machine,
         ingress_why: "team fan-out: one human message spawns N of these, and they land whenever the fan-out reaches them — the keystroke they descend from already stamped",
+        authority: Authority::LiveCaller { seam: "CarriedAttribution::capture" },
+        authority_why: "teams.chat.send fan-out captured from the live gateway dispatch and re-established per member",
     },
     RunProducer {
         file: "src/builtin_tools/sessions/send_tool.rs",
@@ -334,6 +342,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "agent-to-agent dispatch; carries the initiating run's pair",
         ingress: Ingress::Machine,
         ingress_why: "model-driven delegation. The model is not the user, and a self-delegating loop stamping here would starve dreaming for as long as it ran",
+        authority: Authority::LiveCaller { seam: "build_sub_metadata" },
+        authority_why: "a tool call inside a run whose own authority was established at its entry; carries that run's pair and role",
     },
     RunProducer {
         file: "src/tasks/cron/executor.rs",
@@ -341,6 +351,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "rehydrated from CronJob.scope_id; unattended, so no caller_role by design",
         ingress: Ingress::Machine,
         ingress_why: "scheduled work, and the textbook case this axis exists for: a job that ticks more often than the idle threshold would push the dream window past every night, forever, with no error anywhere",
+        authority: Authority::Resolves,
+        authority_why: "execute_cron_job resolves the job owner at fire time (round 11, T05)",
     },
     RunProducer {
         file: "src/gateway/execution_engine/execute.rs",
@@ -348,6 +360,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "continuation runs carry the source run's metadata forward",
         ingress: Ingress::Machine,
         ingress_why: "a continuation of a run whoever started it already stamped",
+        authority: Authority::Resolves,
+        authority_why: "spawn_continuation_run resolves the carried author/owner after confirm_fire (round 11, T07)",
     },
     RunProducer {
         file: "src/gateway/execution_engine/steering.rs",
@@ -355,6 +369,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "orphan-burst rescue clones the interrupted request's metadata",
         ingress: Ingress::Machine,
         ingress_why: "rescue of an already-admitted request. A real steering message is a different path — it reached `build_run_request` on its way in and stamped there",
+        authority: Authority::LiveCaller { seam: "build_steering_rescue_request" },
+        authority_why: "rescue of a request this process admitted moments earlier; clones its already-resolved metadata",
     },
     RunProducer {
         file: "src/gateway/busy_queue/durable.rs",
@@ -362,6 +378,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "boot reinjection rebuilds the request from the journaled payload, whose metadata round-trips the original arrival's scope/caller stamps verbatim",
         ingress: Ingress::Machine,
         ingress_why: "boot-time re-delivery of a message the human sent before the crash — the keystroke stamped at the original arrival (mirrors resume_coordinator: re-stamping here would let a crash-restart loop hold the sensor open with nobody present)",
+        authority: Authority::Resolves,
+        authority_why: "boot reinjection resolves the session owner plus the payload's author/role (round 11, N10)",
     },
     RunProducer {
         file: "src/teams/dispatcher/runner.rs",
@@ -369,6 +387,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the ambient scope/turn-context: team_delegate reaches task_run_metadata with the leader run's task-locals live; the autonomous dispatcher re-establishes the task's resolved authority around the spawn (schedule/mod.rs, round 11 N1) — only a Legacy task stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "dispatched work, autonomous in the case that matters; the delegating turn stamped if a human drove it",
+        authority: Authority::ResolvedUpstream { resolver: "src/teams/dispatcher/schedule/mod.rs" },
+        authority_why: "the autonomous dispatcher resolves before the claim and re-establishes (round 11, N1); team_delegate reaches it with live task-locals",
     },
     RunProducer {
         file: "src/tasks/heartbeat/executor.rs",
@@ -376,13 +396,17 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "admin-gated org-level engine; carries no owner_user_id at all",
         ingress: Ingress::Machine,
         ingress_why: "a periodic engine — same starvation shape as cron, and on a shorter period",
+        authority: Authority::ResolvedUpstream { resolver: "src/tasks/heartbeat/service/timer.rs" },
+        authority_why: "the timer resolves the task owner before the L1 probe (round 11, T06, N3)",
     },
     RunProducer {
         file: "src/gateway/announce_delivery.rs",
-        attribution: "unattributed",
-        attribution_why: "the shared announce ladder (background sub-agents and background bash jobs); an announcement run is derived from a completed unit, not from a caller — the classification `subagent_announce.rs` carried before the ladder was extracted",
+        attribution: "stamps",
+        attribution_why: "from the parent session row via scope::authority::resolve → Granted::stamp (round 11, N9)",
         ingress: Ingress::Machine,
         ingress_why: "derived from a completed unit of work, not from anyone's keystroke — and it fires precisely when the person has walked away",
+        authority: Authority::Resolves,
+        authority_why: "re-asks the parent session owner on every retry attempt (round 11, N9)",
     },
     RunProducer {
         file: "src/gateway/openai_api/completions/agent.rs",
@@ -390,6 +414,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "the /v1 compat surface authenticates a bearer operator, not an Aleph principal",
         ingress: Ingress::Machine,
         ingress_why: "a bearer-token API client is as likely to be an unattended script as a person, and the two are indistinguishable on this wire. Classified by the asymmetry, not by a guess: reading it as human costs permanent silent starvation whenever something polls it, reading it as machine costs at most one dream cycle that fails to yield to somebody typing into a third-party client",
+        authority: Authority::LiveCaller { seam: "openai_api::auth" },
+        authority_why: "a bearer-authenticated live HTTP call; the /v1 surface authenticates an operator bearer, not an Aleph principal",
     },
     RunProducer {
         file: "src/a2a/adapter/server/bridge.rs",
@@ -397,6 +423,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "an A2A peer is a remote agent, not a user in this install's users table",
         ingress: Ingress::Machine,
         ingress_why: "the peer is a remote agent; if a human is behind it, they are behind it on their own install, where their own chokepoint stamped",
+        authority: Authority::LiveCaller { seam: "handle_message" },
+        authority_why: "a live A2A peer request; the peer is a remote agent, not a principal in this users table",
     },
 ];
 
@@ -417,7 +445,26 @@ struct RunProducer {
     attribution_why: &'static str,
     ingress: Ingress,
     ingress_why: &'static str,
+    authority: Authority,
+    authority_why: &'static str,
 }
+
+/// Round 11's third axis — see
+/// `every_run_producer_answers_the_fire_time_authority_question`.
+#[derive(Clone, Copy)]
+enum Authority {
+    /// This file's production code resolves fire-time authority itself.
+    Resolves,
+    /// Every background caller of this producer resolved it first, in `resolver`.
+    ResolvedUpstream { resolver: &'static str },
+    /// A person is live on this path when the request is built; `seam` is the
+    /// token proving the file still reads that live identity.
+    LiveCaller { seam: &'static str },
+}
+
+/// The call a `Resolves` / `ResolvedUpstream` answer must still contain.
+/// Path-qualified on purpose: `resolve_with` (test injection) must not count.
+const AUTHORITY_RESOLVE: &str = "authority::resolve(";
 
 /// The call every `stamps` producer must contain.
 const SCOPE_STAMP: &str = "scope::stamp_metadata(";
@@ -622,10 +669,14 @@ fn scope_stamping_producers_are_all_accounted_for() {
         if producer.attribution != "stamps" {
             continue;
         }
-        let stamps = sources
-            .iter()
-            .find(|(rel, _)| rel == producer.file)
-            .is_some_and(|(_, head)| code_only(head).contains(SCOPE_STAMP));
+        // A `Resolves` producer stamps through `Granted::stamp` (which calls
+        // `scope::stamp_metadata` inside `scope/authority.rs`), so its own
+        // file need not spell the call.
+        let stamps = matches!(producer.authority, Authority::Resolves)
+            || sources
+                .iter()
+                .find(|(rel, _)| rel == producer.file)
+                .is_some_and(|(_, head)| code_only(head).contains(SCOPE_STAMP));
         assert!(
             stamps,
             "{} is classified `stamps` but does not call {SCOPE_STAMP} — either it stopped \
@@ -634,6 +685,89 @@ fn scope_stamping_producers_are_all_accounted_for() {
             producer.file, producer.attribution_why
         );
     }
+}
+
+/// Round 11: every production `RunRequest` producer answers "whose authority
+/// does this run execute under, decided WHEN?". Nine background executors
+/// each used to answer it at creation time or never (spec §3.2), and N8–N10
+/// were found by reading code — this is the pin that would have caught them.
+/// A tenth producer cannot compile into `RUN_REQUEST_PRODUCERS` without an
+/// `authority` answer, and cannot stay out of it
+/// (`scope_stamping_producers_are_all_accounted_for`).
+///
+/// Every answer is self-checking:
+/// - `Resolves` — the producer's own production code calls
+///   `scope::authority::resolve(`.
+/// - `ResolvedUpstream` — the named resolver file does, and every
+///   background caller of this producer goes through it.
+/// - `LiveCaller` — the producer still reads the live identity `seam` names,
+///   and does NOT resolve itself (it would then be misclassified).
+#[test]
+fn every_run_producer_answers_the_fire_time_authority_question() {
+    use crate::utils::source_scan::{code_text, production_prefix};
+
+    let code_of = |rel: &str| -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        code_text(&production_prefix(&text.replace("\r\n", "\n")))
+    };
+    // Every wrong answer is collected before asserting, so one red names ALL
+    // the producers that went back to creation-time authority, not the first.
+    let mut wrong: Vec<String> = Vec::new();
+    let mut resolved = 0usize;
+    for p in RUN_REQUEST_PRODUCERS {
+        match p.authority {
+            Authority::Resolves => {
+                if code_of(p.file).contains(AUTHORITY_RESOLVE) {
+                    resolved += 1;
+                } else {
+                    wrong.push(format!(
+                        "{} is classified `Resolves` but its production code no longer calls \
+                         {AUTHORITY_RESOLVE} — every run it starts executes under whatever \
+                         authority was frozen at creation. Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+            }
+            Authority::ResolvedUpstream { resolver } => {
+                if code_of(resolver).contains(AUTHORITY_RESOLVE) {
+                    resolved += 1;
+                } else {
+                    wrong.push(format!(
+                        "{} relies on {resolver} to resolve fire-time authority, and {resolver} \
+                         no longer calls {AUTHORITY_RESOLVE}. Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+            }
+            Authority::LiveCaller { seam } => {
+                let code = code_of(p.file);
+                if !code.contains(seam) {
+                    wrong.push(format!(
+                        "{} is classified `LiveCaller` via `{seam}`, which its production code \
+                         no longer contains — the live identity it relied on may be gone. \
+                         Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+                if code.contains(AUTHORITY_RESOLVE) {
+                    wrong.push(format!(
+                        "{} now resolves fire-time authority itself — reclassify it `Resolves`",
+                        p.file
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    // Measured at the round-11 landing: 5 `Resolves` (resume, cron,
+    // continuations, busy-queue, announce) + 2 `ResolvedUpstream` (team
+    // dispatcher, heartbeat). A shrink means an executor went back to
+    // creation-time authority.
+    assert!(
+        resolved >= 7,
+        "only {resolved} producers resolve fire-time authority; 7 were measured at round 11"
+    );
 }
 
 /// Nothing under `execution_engine/` may read the raw scope stamp out of a
