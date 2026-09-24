@@ -42,6 +42,17 @@ where
 /// payload and the environment of the same command read the same answer.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct SessionFacts {
+    /// The payload's `cwd` AND `$CLAUDE_PROJECT_DIR` — one value, so the two
+    /// cannot disagree. The fire site's explicit `working_dir`, else the run's
+    /// project root (`projects::with_project_root`, the same task-local the
+    /// project-scope gate reads), else the workspace the run is authorised to
+    /// execute in (`sandbox::context::with_exec_workspace`). `None` outside a
+    /// run: never the daemon's own cwd (the lie `thinker/runtime_context.rs`
+    /// already removed once), never the hook's `plugin_root`.
+    ///
+    /// Read from the RAW task-local, not `VisibilityCtx::for_session`: that
+    /// one falls back to the daemon cwd itself, so it is never `None`.
+    pub(super) cwd: Option<PathBuf>,
     /// `transcript_path`, from the published [`TranscriptSource`].
     pub(super) transcript_path: Option<PathBuf>,
 }
@@ -49,6 +60,11 @@ pub(super) struct SessionFacts {
 impl SessionFacts {
     pub(super) fn derive(context: &HookContext) -> Self {
         Self {
+            cwd: context
+                .working_dir
+                .clone()
+                .or_else(crate::projects::current_project_root)
+                .or_else(crate::sandbox::context::current_exec_workspace),
             transcript_path: TRANSCRIPTS
                 .try_with(|source| source.transcript_path(&context.session_id))
                 .ok()

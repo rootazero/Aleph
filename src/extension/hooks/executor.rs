@@ -107,7 +107,7 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// Build a Claude Code-style event payload as a JSON value.
 ///
 /// Schema (keyed `snake_case` to match the rest of the hook surface):
-/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, <CC_POST_TOOL_RESULT_KEY>?, tool_error?, cwd, transcript_path?, permission_mode?, env? }`
+/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, <CC_POST_TOOL_RESULT_KEY>?, tool_error?, cwd?, transcript_path?, permission_mode?, env? }`
 ///
 /// Shared by the stdin/HTTP string form ([`build_event_payload`]) and the
 /// plugin-hook path, which passes the value straight to `execute_plugin_hook`
@@ -152,13 +152,8 @@ fn build_event_payload_value(
     if let Some(e) = context.tool_error {
         payload.insert("tool_error".into(), Value::Bool(e));
     }
-    // CC always sends `cwd`; the tool-dispatch seam sets no `working_dir`, so
-    // fall back to the process cwd rather than omitting the key there.
-    let cwd = context
-        .working_dir
-        .clone()
-        .or_else(|| std::env::current_dir().ok());
-    if let Some(c) = cwd {
+    // Omitted when unknown (outside a run) — see `SessionFacts::cwd`.
+    if let Some(c) = &facts.cwd {
         payload.insert("cwd".into(), Value::String(c.to_string_lossy().to_string()));
     }
     if let Some(t) = &facts.transcript_path {
@@ -611,9 +606,18 @@ impl HookExecutor {
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
         // Claude Code's project-directory variable (`$CLAUDE_PROJECT_DIR`),
-        // the one every CC hook script reaches for first. Same value as the
-        // payload's `cwd`.
-        cmd.env("CLAUDE_PROJECT_DIR", working_dir);
+        // the one every CC hook script reaches for first: `facts.cwd`, the
+        // value the payload's `cwd` is written from. Removed rather than
+        // inherited when unknown, so a daemon launched from inside a Claude
+        // Code session cannot hand its own value to every hook.
+        match &facts.cwd {
+            Some(dir) => {
+                cmd.env("CLAUDE_PROJECT_DIR", dir);
+            }
+            None => {
+                cmd.env_remove("CLAUDE_PROJECT_DIR");
+            }
+        }
         // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by
         // `plugin update` (stage → backup → swap), so a hook that wants state
         // that outlives an upgrade had no addressable path until this line
@@ -2063,20 +2067,111 @@ mod tests {
     }
 
     #[test]
-    fn unknown_transcript_and_mode_are_omitted_not_blanked() {
+    fn unknown_session_facts_and_mode_are_omitted_not_blanked() {
         // A hook must not be handed `""` for a path that does not exist or a
         // mode nobody resolved (`BeforeAgentStart` fires before the tier is
-        // known): absent means "unknown", an empty string reads as a value.
+        // known), nor the daemon's own cwd for a directory nobody published:
+        // absent means "unknown", a value reads as a fact.
         use crate::extension::hooks::HookContext;
         let ctx = HookContext::new("s").with_tool_name("bash");
         let json: serde_json::Value =
             serde_json::from_str(&event_payload_json(HookEvent::BeforeToolCall, &ctx)).unwrap();
+        assert!(json.get("cwd").is_none());
         assert!(json.get("transcript_path").is_none());
         assert!(json.get("permission_mode").is_none());
         assert!(
             json.get(CC_POST_TOOL_RESULT_KEY).is_none(),
             "no output → no result key"
         );
+    }
+
+    /// A `SessionStart` observer whose command writes its stdin to
+    /// `<dir>/stdin.json` and its environment to `<dir>/env`. Its
+    /// `plugin_root` is `dir` — deliberately NOT any project the tests
+    /// publish, so a `CLAUDE_PROJECT_DIR` that fell back to it is visible.
+    #[cfg(unix)]
+    fn dumping_executor(dir: &std::path::Path) -> HookExecutor {
+        let mut hook = dummy_hook("user:global");
+        hook.event = HookEvent::SessionStart;
+        hook.plugin_root = dir.to_path_buf();
+        hook.actions = vec![HookAction::Command {
+            command: format!("cat > '{0}/stdin.json'; env > '{0}/env'", dir.display()),
+        }];
+        HookExecutor::new(vec![hook])
+    }
+
+    /// What the hook saw: `(stdin cwd, $CLAUDE_PROJECT_DIR)`.
+    #[cfg(unix)]
+    fn seen_by_hook(dir: &std::path::Path) -> (Option<String>, Option<String>) {
+        let stdin: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("stdin.json")).expect("the hook ran"),
+        )
+        .unwrap();
+        let env = std::fs::read_to_string(dir.join("env")).unwrap();
+        (
+            stdin["cwd"].as_str().map(str::to_string),
+            env.lines()
+                .find_map(|l| l.strip_prefix("CLAUDE_PROJECT_DIR="))
+                .map(str::to_string),
+        )
+    }
+
+    /// Inside a project run both the payload's `cwd` and the command's
+    /// `$CLAUDE_PROJECT_DIR` name the project — not `plugin_root` (one level
+    /// too deep for a project settings hook), not the daemon's cwd.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inside_a_project_run_cwd_and_claude_project_dir_are_the_project() {
+        let hook_dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let exec = dumping_executor(hook_dir.path());
+        let ctx = HookContext::new("s");
+        crate::projects::with_project_root(
+            Some(project.path().to_path_buf()),
+            exec.execute_observers(HookEvent::SessionStart, &ctx),
+        )
+        .await;
+        let want = project.path().to_string_lossy().to_string();
+        assert_eq!(
+            seen_by_hook(hook_dir.path()),
+            (Some(want.clone()), Some(want))
+        );
+    }
+
+    /// A run with no project still has an authorised workspace; that is the
+    /// session's directory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_run_without_a_project_reports_its_exec_workspace() {
+        let hook_dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let exec = dumping_executor(hook_dir.path());
+        let ctx = HookContext::new("s");
+        crate::projects::with_project_root(
+            None,
+            crate::sandbox::context::with_exec_workspace(
+                Some(workspace.path().to_path_buf()),
+                exec.execute_observers(HookEvent::SessionStart, &ctx),
+            ),
+        )
+        .await;
+        let want = workspace.path().to_string_lossy().to_string();
+        assert_eq!(
+            seen_by_hook(hook_dir.path()),
+            (Some(want.clone()), Some(want))
+        );
+    }
+
+    /// Outside any run nobody can name the session's directory: both are
+    /// absent — not the daemon's cwd, not `plugin_root`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn outside_any_run_neither_cwd_nor_claude_project_dir_is_sent() {
+        let hook_dir = tempfile::tempdir().unwrap();
+        let exec = dumping_executor(hook_dir.path());
+        exec.execute_observers(HookEvent::SessionStart, &HookContext::new("s"))
+            .await;
+        assert_eq!(seen_by_hook(hook_dir.path()), (None, None));
     }
 
     /// A published source that has no file for THIS session answers nothing,
