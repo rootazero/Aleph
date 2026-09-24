@@ -454,7 +454,7 @@ git add -A && git commit -m "browser: pre-dispatch ref staleness precheck on ref
   ```
   ≤20 entries, ≤2048 bytes; refs remain valid (they're minted, just not rendered).
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```rust
 #[test]
@@ -473,11 +473,11 @@ fn omitted_section_bounds_itself_and_counts_the_rest() {
 fn untruncated_snapshot_has_no_omitted_section() { /* section absent, not empty */ }
 ```
 
-- [ ] **Step 2: Verify fail.**
+- [x] **Step 2: Verify fail.**
 
-- [ ] **Step 3: Implement** — the role set comes from the same table/谓词 that decides interactivity in `roles.rs`; if that decision is scattered, the task is to make it one function first, then consume it (that unification is in-scope; a hand-copied list is not). Section bytes count against the same snapshot budget — never exceed `max_chars` because of the hint.
+- [x] **Step 3: Implement** — the role set comes from the same table/谓词 that decides interactivity in `roles.rs`; if that decision is scattered, the task is to make it one function first, then consume it (that unification is in-scope; a hand-copied list is not). Section bytes count against the same snapshot budget — never exceed `max_chars` because of the hint.
 
-- [ ] **Step 4: Verify + commit**
+- [x] **Step 4: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib page_state 2>&1 | tail -5`
 ```bash
