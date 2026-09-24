@@ -8,7 +8,8 @@
 //!   arguments as data ([`inline_shell_command`])
 //! - `@./path` - relative file reference (from skill directory), expanded only
 //!   where the `@` is the template's own text; one that cannot be read stays
-//!   as written
+//!   as written. An argument may complete the path (`@./$1`), never make it
+//!   absolute or leave the directory
 //! - `@/path` - absolute file reference: rejected (left as written)
 
 use super::error::{ExtensionError, ExtensionResult};
@@ -419,28 +420,31 @@ impl SkillTemplate {
 
     /// Resolve a file path from the template syntax
     fn resolve_path(&self, path_str: &str) -> ExtensionResult<PathBuf> {
-        let path = if let Some(relative) = path_str.strip_prefix("./") {
-            // Relative path from base_dir
-            let resolved = self.base_dir.join(relative);
-
-            // Security check: ensure the resolved path is within base_dir
-            self.validate_path_security(&resolved)?;
-
-            resolved
-        } else if path_str.starts_with('/') {
-            // Absolute paths are not allowed — they bypass base_dir containment
-            return Err(ExtensionError::file_reference(
+        let absolute = || {
+            ExtensionError::file_reference(
                 path_str,
                 "Absolute paths are not allowed in file references; use relative paths (./path) instead",
-            ));
-        } else {
-            // Treat as relative
-            let resolved = self.base_dir.join(path_str);
-            self.validate_path_security(&resolved)?;
-            resolved
+            )
         };
-
-        Ok(path)
+        // Absolute paths are not allowed — they bypass base_dir containment
+        if path_str.starts_with('/') {
+            return Err(absolute());
+        }
+        // `./` only spells "relative"; what follows it must be relative too.
+        // An argument completes `@./$1` into `@.//etc/passwd`: that remainder
+        // is rooted, and `join` would REPLACE `base_dir` with it (a Windows
+        // `C:\` is a `Prefix`).
+        let relative = path_str.strip_prefix("./").unwrap_or(path_str);
+        if Path::new(relative)
+            .components()
+            .any(|c| matches!(c, Component::RootDir | Component::Prefix(_)))
+        {
+            return Err(absolute());
+        }
+        let resolved = self.base_dir.join(relative);
+        // Security check: ensure the resolved path is within base_dir
+        self.validate_path_security(&resolved)?;
+        Ok(resolved)
     }
 
     /// Validate that a path doesn't escape the base directory (for relative paths)
@@ -459,17 +463,25 @@ impl SkillTemplate {
             ));
         }
 
-        // If the file exists, canonicalize and verify containment within base_dir
+        // If the file exists, canonicalize and verify containment within
+        // base_dir. A canonicalization that fails refuses rather than skips
+        // the check: containment that cannot be shown was not shown — and
+        // the base can be gone while its command is still registered (a
+        // `plugin update` swap).
         if resolved.exists() {
-            if let (Ok(canonical_path), Ok(canonical_base)) =
+            let (Ok(canonical_path), Ok(canonical_base)) =
                 (resolved.canonicalize(), self.base_dir.canonicalize())
-            {
-                if !canonical_path.starts_with(&canonical_base) {
-                    return Err(ExtensionError::file_reference(
-                        resolved,
-                        "Resolved path escapes the base directory",
-                    ));
-                }
+            else {
+                return Err(ExtensionError::file_reference(
+                    resolved,
+                    "Cannot verify that the path stays inside the base directory",
+                ));
+            };
+            if !canonical_path.starts_with(&canonical_base) {
+                return Err(ExtensionError::file_reference(
+                    resolved,
+                    "Resolved path escapes the base directory",
+                ));
             }
         }
 
@@ -639,6 +651,82 @@ mod tests {
                 .unwrap(),
             "[NOTES] [NOTES]"
         );
+    }
+
+    /// `<tmp>/skill` as the base with its own `inside.txt`, and a real
+    /// `<tmp>/outside.txt` beside it: the tempdir, the base, the outside path.
+    fn escape_fixture() -> (TempDir, PathBuf, String) {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("skill");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::write(base.join("inside.txt"), "INSIDE").unwrap();
+        std::fs::write(temp.path().join("outside.txt"), "OUTSIDE").unwrap();
+        let outside = temp.path().join("outside.txt").display().to_string();
+        (temp, base, outside)
+    }
+
+    /// Each `(template, arguments)` rendered against `base`, no shell.
+    async fn render_each(base: &Path, cases: &[(&str, String)]) -> Vec<String> {
+        let mut out = Vec::new();
+        for (template, arguments) in cases {
+            let t = SkillTemplate::with_base_dir(template, base.to_path_buf());
+            out.push(t.render(arguments, &no_shell()).await.unwrap());
+        }
+        out
+    }
+
+    /// An argument that completes a template reference (`@./$1`, `@$1`)
+    /// cannot take it out of the base directory — by `..`, or by an
+    /// absolute path the `./` of the template runs into.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn an_argument_completing_a_reference_stays_inside_the_base_directory() {
+        let (_temp, base, outside) = escape_fixture();
+        let cases = [
+            ("@./$1", format!("./{outside}")),
+            ("@$1", "./../outside.txt".to_string()),
+            ("@./$1", outside.clone()),
+            ("@$1", format!("./{outside}")),
+        ];
+        let rendered = render_each(&base, &cases).await;
+        for (text, (template, arguments)) in rendered.iter().zip(&cases) {
+            assert!(
+                !text.contains("OUTSIDE"),
+                "`{template}` + `{arguments}` read a file outside the base: {text}"
+            );
+            assert!(text.starts_with('@'), "not left as written: {text}");
+        }
+    }
+
+    /// The command directory can be gone while its command is still
+    /// registered (a `plugin update` swap): containment that cannot be
+    /// checked is a refusal, and an argument-completed absolute path is
+    /// refused before any check.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn an_argument_completed_absolute_path_is_not_read_when_the_base_is_gone() {
+        let (temp, _base, outside) = escape_fixture();
+        let gone = temp.path().join("gone/commands");
+        let cases = [("@./$1", outside.clone()), ("@$1", format!("./{outside}"))];
+        for text in render_each(&gone, &cases).await {
+            assert!(
+                !text.contains("OUTSIDE"),
+                "read through a missing base: {text}"
+            );
+        }
+    }
+
+    /// Absolute is refused as such, not only when it lands outside: the
+    /// template's `@/…` is never read even inside the base
+    /// (`test_file_reference_absolute_blocked`), and neither is one an
+    /// argument spells after the template's `./`.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn an_argument_completed_absolute_path_is_not_read_even_inside_the_base() {
+        let (_temp, base, _outside) = escape_fixture();
+        let inside = base.join("inside.txt").display().to_string();
+        let rendered = render_each(&base, &[("@./$1", inside.clone())]).await;
+        assert_eq!(rendered, [format!("@./{inside}")]);
     }
 
     /// An `@` the arguments bring is data: not read, even when the file is
