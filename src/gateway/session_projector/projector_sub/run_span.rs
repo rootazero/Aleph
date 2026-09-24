@@ -19,12 +19,12 @@ use super::missed_seqs::RepairReport;
 /// where (if anywhere) it closed, how many assistant messages it produced,
 /// and whether an `AssistantRunMeta` landed on it.
 pub(crate) struct RunSpan {
-    /// The id its `RunStarted` carries — the harness-minted MARKER id
-    /// (`runner_impl.rs`), which is NOT the engine's `RunRequest.run_id` the
-    /// meta carries — equal since 2026-09-24 (F1), different in older logs;
-    /// the join is positional, so either reads the same. It is what a
-    /// synthesized stamp writes under the row's `run_id` key, and it names
-    /// this span in log lines; it is never compared to a meta's id.
+    /// The id its `RunStarted` carries. Since 2026-09-24 (F1) that is the
+    /// engine's `RunRequest.run_id`, the same id the meta carries; in older
+    /// logs it is a harness-minted marker id (`runner_impl.rs`) that no meta
+    /// names. The join is positional, so both shapes read the same. It is
+    /// what a synthesized stamp writes under the row's `run_id` key, and it
+    /// names this span in log lines; it is never compared to a meta's id.
     run_id: String,
     /// Seq of the `RunStarted` that opened it.
     start: EventSeq,
