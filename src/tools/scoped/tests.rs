@@ -588,6 +588,85 @@ async fn before_tool_hook_deny_returns_permission_denied() {
     }
 }
 
+/// Names `.1` as the transcript of session `.0` and of nothing else.
+#[cfg(unix)]
+struct OneTranscript(&'static str, PathBuf);
+
+#[cfg(unix)]
+impl crate::extension::hooks::TranscriptSource for OneTranscript {
+    fn transcript_path(&self, session_id: &str) -> Option<PathBuf> {
+        (session_id == self.0).then(|| self.1.clone())
+    }
+}
+
+/// A real tool call through the chokepoint hands its hooks the Claude Code
+/// envelope on both faces: `permission_mode` from the tier the gate enforces
+/// (the one fact this seam supplies), `cwd` / `$CLAUDE_PROJECT_DIR` /
+/// `transcript_path` from what the run published (the executor derives
+/// them), and — after the result budget has flattened the output to text —
+/// the tool's own answer as a `tool_response` OBJECT.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_real_tool_call_hands_its_hooks_the_claude_code_envelope() {
+    use crate::config::types::policies::ExecTier;
+    let dir = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("transcript.jsonl");
+    let pre = dir.path().join("pre.json");
+    let post = dir.path().join("post.json");
+    let post_env = dir.path().join("post.env");
+    let executor = Arc::new(HookExecutor::new(vec![
+        make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            &format!("cat > '{}'", pre.display()),
+        ),
+        make_command_hook(
+            HookEvent::AfterToolCall,
+            HookKind::Observer,
+            &format!("cat > '{}'; env > '{}'", post.display(), post_env.display()),
+        ),
+    ]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_hook_executor(executor, "agent:main:main");
+    crate::projects::with_project_root(
+        Some(project.path().to_path_buf()),
+        crate::extension::hooks::with_transcript_source(
+            Arc::new(OneTranscript("agent:main:main", transcript.clone())),
+            svc.execute("echo", json!({"k": "v"})),
+        ),
+    )
+    .await
+    .expect("echo runs under Full");
+
+    let project_dir = project.path().to_string_lossy().to_string();
+    let read = |file: &PathBuf| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(file).expect("the hook ran")).unwrap()
+    };
+    for (face, seen) in [("PreToolUse", read(&pre)), ("PostToolUse", read(&post))] {
+        assert_eq!(
+            seen["permission_mode"],
+            ExecTier::Full.cc_permission_mode(),
+            "{face}"
+        );
+        assert_eq!(seen["cwd"], project_dir.as_str(), "{face}");
+        assert_eq!(
+            seen["transcript_path"],
+            transcript.to_string_lossy().as_ref(),
+            "{face}"
+        );
+        assert_eq!(seen["tool_input"], json!({"k": "v"}), "{face}");
+    }
+    assert_eq!(read(&post)["tool_response"], json!({"k": "v"}));
+    let env = std::fs::read_to_string(&post_env).unwrap();
+    assert!(
+        env.lines()
+            .any(|l| l == format!("CLAUDE_PROJECT_DIR={project_dir}")),
+        "{env}"
+    );
+}
+
 // -------------------------------------------------------------------------
 // `HookEvent::PermissionDenied`: every `ToolError::PermissionDenied` leaving
 // the chokepoint fires the observer. One test per deny arm, so a fire-site

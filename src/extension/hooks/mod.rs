@@ -106,9 +106,12 @@ pub struct HookContext {
     /// Whether the tool execution resulted in an error
     pub tool_error: Option<bool>,
     /// This turn's execution tier in Claude Code's `permission_mode`
-    /// spelling (`ExecTier::cc_permission_mode`). `None` on seams that fire
-    /// before the tier is resolved (`BeforeAgentStart`) and on the global
-    /// fire-and-forget observers (gateway / channel / provider events).
+    /// spelling (`ExecTier::cc_permission_mode`). Unlike `cwd` and
+    /// `transcript_path` (derived by the executor, `session_facts`), only a
+    /// fire site that holds the tier can say it: tool dispatch
+    /// (`build_hook_context`) and the turn-start seams in
+    /// `run_loop/inner.rs`. Every other face leaves it `None` and the payload
+    /// omits the key — unknown, not a default tier.
     pub permission_mode: Option<&'static str>,
 }
 

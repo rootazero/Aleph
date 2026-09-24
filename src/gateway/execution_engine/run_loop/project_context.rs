@@ -12,8 +12,11 @@ use crate::gateway::agent_instance::AgentInstance;
 /// correlation handles. Lifecycle events have no tool, so the tool fields
 /// stay unset.
 ///
-/// `permission_mode` is `None` on seams that fire before the tier is
-/// resolved (`BeforeAgentStart`, `AgentEnd`) — see the callers.
+/// `permission_mode` is `None` at the two callers in `run_loop/mod.rs`
+/// (`BeforeAgentStart`, `AgentEnd`): the tier is resolved inside
+/// `run_agent_loop_inner` and not returned from it, so neither end of the run
+/// can name it. `transcript_path` and `cwd` are not set here at all — the hook
+/// executor derives them for every face (`extension::hooks::session_facts`).
 pub(crate) fn lifecycle_hook_context(
     session_id: &str,
     run_id: &str,
