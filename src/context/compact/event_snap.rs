@@ -62,13 +62,21 @@ pub(crate) fn snap_out_of_open_run(events: &[SessionEventRecord], cut: usize) ->
     if closed_after_cut.is_empty() {
         return cut;
     }
-    events[..cut]
-        .iter()
-        .position(|r| {
-            matches!(&r.event, SessionEvent::RunStarted { run_id, .. }
-                if closed_after_cut.contains(run_id.as_str()))
-        })
-        .unwrap_or(cut)
+    // Each closer pairs with the LAST opener under its id before the cut: one
+    // engine run can leave several brackets under one id (the fallback retry
+    // loop), and only the last one is the bracket this closer ends. The cut
+    // then goes back to the earliest such opener, so every run closed in the
+    // kept tail keeps its opener too.
+    let mut earliest: Option<usize> = None;
+    for id in &closed_after_cut {
+        let opener = events[..cut].iter().rposition(|r| {
+            matches!(&r.event, SessionEvent::RunStarted { run_id, .. } if run_id.as_str() == *id)
+        });
+        if let Some(pos) = opener {
+            earliest = Some(earliest.map_or(pos, |e| e.min(pos)));
+        }
+    }
+    earliest.unwrap_or(cut)
 }
 
 #[cfg(test)]
@@ -167,5 +175,40 @@ mod tests {
         assert_eq!(snap_out_of_open_run(&events, 1), 1);
         // No RunFinished in the kept tail → nothing to protect.
         assert_eq!(snap_out_of_open_run(&events[..4], 3), 3);
+    }
+
+    /// One engine run can leave several brackets under ONE id (the fallback
+    /// retry loop re-dispatches under the same run). The closer after the cut
+    /// pairs with the LAST opener before it — index 3 — not the first one: the
+    /// first-match scan pulled the cut back to 0 and compacted nothing.
+    #[test]
+    fn a_reused_run_id_snaps_to_the_opener_its_closer_pairs_with() {
+        let events = vec![
+            run(1, "r", false),
+            user(2),
+            run(3, "r", true),
+            run(4, "r", false),
+            user(5),
+            user(6),
+            run(7, "r", true),
+        ];
+        assert_eq!(snap_out_of_open_run(&events, 5), 3);
+    }
+
+    /// Two runs close after the cut. Each closer pairs with its own id's last
+    /// opener, and the cut goes back to the EARLIER of the two — "the nearest
+    /// matching opener" (b's, index 2) would leave a's opener in the retired
+    /// prefix while its closer stays live.
+    #[test]
+    fn two_runs_closed_after_the_cut_snap_to_the_earlier_opener() {
+        let events = vec![
+            run(1, "a", false),
+            user(2),
+            run(3, "b", false),
+            user(4),
+            run(5, "a", true),
+            run(6, "b", true),
+        ];
+        assert_eq!(snap_out_of_open_run(&events, 4), 0);
     }
 }
