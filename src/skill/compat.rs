@@ -34,7 +34,7 @@ pub struct SkillInfo {
     /// which is what the slash-command envelope and then the run loop read.
     ///
     /// Plugin *commands* are registered through this same shape with no
-    /// manifest behind them; theirs is the command file's own
+    /// manifest behind them; theirs, if any, is the command file's own
     /// `allowed-tools:`, already mapped to Aleph names at parse time
     /// (`slash_effect::plugin_command_skill_info`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

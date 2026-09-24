@@ -24,11 +24,12 @@
 //!
 //! # `allowed-tools:`
 //!
-//! [`normalize_allowed_tools`] is the single normaliser for the
-//! [`ALLOWED_TOOLS_KEY`] frontmatter block. It lives here rather than in
-//! `manifest.rs` so the key's spelling and the lenient shape-handling that
-//! spelling requires cannot drift apart, and so a fourth ingestion path finds
-//! them together instead of writing a fourth `Option<Vec<String>>`.
+//! [`read_allowed_tools`] is the single reader of the [`ALLOWED_TOOLS_KEY`]
+//! frontmatter block's shapes, and [`normalize_allowed_tools`] is the skill
+//! policy on top of it. They live here rather than in `manifest.rs` so the
+//! key's spelling and the lenient shape-handling that spelling requires cannot
+//! drift apart, and so a fourth ingestion path finds them together instead of
+//! writing a fourth `Option<Vec<String>>`.
 //!
 //! The census in this module's tests is the guard that keeps that true.
 
@@ -182,65 +183,101 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// carry this meaning: `""` "reads identically to a key that was never
 /// written". An author who means deny-all has `[]`, which is unambiguous in
 /// every reader.
+///
+/// # This is the *skill* policy
+///
+/// The shapes are read by [`read_allowed_tools`]; this function is what a
+/// skill makes of the two it cannot use. A plugin command reads the same
+/// shapes and answers those two with deny-all instead
+/// (`extension::manifest::parsers::command_allowed_tools`): a command's list
+/// only narrows the turn, and it has no second reader to fall back on.
 #[must_use]
 pub fn normalize_allowed_tools(
     raw: Option<&crate::yaml::Value>,
     skill_name: &str,
 ) -> Option<Vec<String>> {
-    let value = raw?;
-    let names: Vec<String> = match value {
-        crate::yaml::Value::Null => return None,
-        crate::yaml::Value::Sequence(items) => items
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect(),
-        crate::yaml::Value::String(s) => {
-            // Empty entries are dropped rather than forwarded as unknown
-            // names: a trailing comma is a typo, and costing the author their
-            // slash command over one would be a worse answer than they asked
-            // for.
-            let names: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if names.is_empty() {
-                // Same typo, one step further — and `Some(vec![])` here would
-                // be deny-all, arriving silently. Deny-all is spelled `[]`.
-                tracing::warn!(
-                    skill = %skill_name,
-                    value = %s,
-                    key = ALLOWED_TOOLS_KEY,
-                    "skill declares `allowed-tools:` as a scalar that names no tool — read as \
-                     no declaration, the skill keeps the full tool surface. Write \
-                     `allowed-tools: []` if you meant to allow nothing"
-                );
-                return None;
-            }
-            return Some(names);
-        }
-        other => {
+    match read_allowed_tools(raw) {
+        Ok(names) => names,
+        // Same typo as a trailing comma, one step further — and
+        // `Some(vec![])` here would be deny-all, arriving silently. Deny-all
+        // is spelled `[]`.
+        Err(UnusableAllowedTools::NamesNothing) => {
             tracing::warn!(
                 skill = %skill_name,
-                shape = ?other,
+                value = ?raw,
+                key = ALLOWED_TOOLS_KEY,
+                "skill declares `allowed-tools:` as a scalar that names no tool — read as \
+                 no declaration, the skill keeps the full tool surface. Write \
+                 `allowed-tools: []` if you meant to allow nothing"
+            );
+            None
+        }
+        Err(UnusableAllowedTools::Shape) => {
+            tracing::warn!(
+                skill = %skill_name,
+                shape = ?raw,
                 key = ALLOWED_TOOLS_KEY,
                 "skill declares `allowed-tools:` in a shape that is neither a list nor a \
                  comma-separated string — ignored, the skill keeps the full tool surface"
             );
-            return None;
+            None
         }
+    }
+}
+
+/// Why a present [`ALLOWED_TOOLS_KEY`] value gives no list to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnusableAllowedTools {
+    /// A scalar with no tool in it: `,`, `""`, `"   "`.
+    NamesNothing,
+    /// Neither a sequence nor a string: a mapping, a number, a bool.
+    Shape,
+}
+
+/// The shapes of the [`ALLOWED_TOOLS_KEY`] block, with no policy and no log:
+/// the one reader both a skill ([`normalize_allowed_tools`]) and a plugin
+/// command build on, each deciding for itself what an unusable value means.
+///
+/// `Ok(None)` — absent or null, no declaration. `Ok(Some(names))` — a YAML
+/// sequence or a comma-separated string; a sequence that comes out empty is
+/// `allowed-tools: []`, the explicit deny-all. `Err(why)` — present, and
+/// unusable.
+///
+/// Blank entries are dropped rather than forwarded as unknown names: a
+/// trailing comma is a typo, and costing the author their slash command over
+/// one would be a worse answer than they asked for.
+pub(crate) fn read_allowed_tools(
+    raw: Option<&crate::yaml::Value>,
+) -> Result<Option<Vec<String>>, UnusableAllowedTools> {
+    let Some(value) = raw else {
+        return Ok(None);
     };
-    // Sequence arm only — the scalar arm returned above. Blank entries are
-    // dropped rather than forwarded as unknown names, but the *result* is
-    // still `Some`: a sequence that comes out empty is `allowed-tools: []`,
-    // which is a declaration and must stay deny-all.
-    Some(
-        names
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-    )
+    match value {
+        crate::yaml::Value::Null => Ok(None),
+        crate::yaml::Value::Sequence(items) => Ok(Some(
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )),
+        crate::yaml::Value::String(s) => {
+            let names: Vec<String> = s
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect();
+            if names.is_empty() {
+                Err(UnusableAllowedTools::NamesNothing)
+            } else {
+                Ok(Some(names))
+            }
+        }
+        _ => Err(UnusableAllowedTools::Shape),
+    }
 }
 
 #[cfg(test)]
@@ -512,7 +549,8 @@ mod tests {
             offenders.is_empty(),
             "`{ALLOWED_TOOLS_KEY}` is hand-written in a serde attribute at {offenders:?}. \
              Use `rename_all = \"kebab-case\"` + a field named `allowed_tools`, route the \
-             value through `skill::frontmatter::normalize_allowed_tools`, and make sure the \
+             value through `skill::frontmatter::read_allowed_tools` (a skill: \
+             `normalize_allowed_tools`), and make sure the \
              new path actually reaches an enforcement point before honouring the key at all."
         );
     }
@@ -535,13 +573,15 @@ mod tests {
     ///   listed so the scan's blindness to it is a recorded decision rather
     ///   than an accident.
     /// * `extension/manifest/parsers.rs` — a plugin's `commands/*.md`; it
-    ///   delegates the shape to [`normalize_allowed_tools`] and maps the names
+    ///   delegates the shape to [`read_allowed_tools`] and maps the names
     ///   through the CC alias table. It reaches an enforcement point for
     ///   commands only (`slash_effect::plugin_command_skill_info` →
-    ///   `register_skills` → `slash_skill_scope`; pinned end to end by
-    ///   `lifecycle::tests::a_mounted_commands_frontmatter_reaches_its_catalog_row`),
-    ///   and leaves a skill's declaration uncarried — `skill/manifest.rs`
-    ///   reads the same SKILL.md.
+    ///   `register_skills` → `slash_skill_scope`; the file → catalog-row half
+    ///   is pinned by
+    ///   `lifecycle::tests::a_mounted_commands_frontmatter_reaches_its_catalog_row`,
+    ///   the row → run-loop half by `slash_skill_scope`'s wire tests), and
+    ///   leaves a skill's declaration uncarried — `skill/manifest.rs` reads the
+    ///   same SKILL.md.
     #[test]
     fn yaml_frontmatter_readers_of_allowed_tools_are_an_enumerated_set() {
         const ALLOWED: [&str; 3] = [

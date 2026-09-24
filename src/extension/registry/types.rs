@@ -232,7 +232,9 @@ pub struct SkillRegistration {
     #[serde(default)]
     pub plugin_id: String,
 
-    /// Claude Code `argument-hint:`, verbatim (`"[pr-number] [priority]"`).
+    /// Claude Code `argument-hint:` as the text the author wrote
+    /// (`"[pr-number] [priority]"`; an unquoted `[pr-number]`, which YAML reads
+    /// as a list, is rendered back to `[pr-number]` — `manifest/parsers.rs`).
     /// Read for commands by `slash_effect::plugin_command_skill_info`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
@@ -247,7 +249,7 @@ pub struct SkillRegistration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
 
-    /// Claude Code `model:`, verbatim (`"sonnet"`, a full model id, …).
+    /// Claude Code `model:` as written (`"sonnet"`, a full model id, …).
     /// Carried for the slash dispatch's per-turn model pin (P4.7c); nothing
     /// reads it yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]

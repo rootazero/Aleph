@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::registry::{AgentRegistration, SkillRegistration};
@@ -51,14 +51,20 @@ use crate::extension::types::McpServerConfig;
 ///    and *that* reading honours `allowed-tools`, including the comma-scalar
 ///    shape.
 ///
-/// Before the cut the field was a strict `Option<Vec<String>>`, and that was
-/// actively harmful: an upstream skill writing `allowed-tools: Read, Grep,
+/// # Every Claude Code key here is raw YAML
+///
+/// Before the cut `allowed-tools` was a strict `Option<Vec<String>>`, and that
+/// was actively harmful: an upstream skill writing `allowed-tools: Read, Grep,
 /// Bash(cargo *)` made the YAML parser reject the whole frontmatter, so the
-/// skill was dropped from the plugin over a key this path never read. The
-/// field is now raw YAML read through
-/// `skill::frontmatter::normalize_allowed_tools` (the reader `skill::manifest`
-/// uses), which takes both the comma-scalar and the sequence form, so that
-/// failure mode does not come back.
+/// skill was dropped from the plugin over a key this path never read. A typed
+/// field fails the file, not the key. So each Claude Code key is taken as
+/// `crate::yaml::Value` and read leniently: `allowed-tools` by
+/// `skill::frontmatter::read_allowed_tools` (the shape reader
+/// `skill::manifest` also builds on), the others by [`hint_text`],
+/// [`model_text`] and [`model_invocation_disabled`]. Upstream's own reference
+/// writes `argument-hint: [pr-number]` unquoted — a YAML flow sequence — which
+/// is exactly the shape a `String` field would reject. An unusable value warns
+/// and costs its key, never the file.
 ///
 /// [`SkillType::Command`]: crate::extension::types::SkillType::Command
 /// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
@@ -74,15 +80,68 @@ struct SkillFm {
     #[serde(default)]
     category: Option<String>,
     /// Claude Code command frontmatter. `argument-hint`, `model` and
-    /// `disable-model-invocation` are carried verbatim for both flavours.
+    /// `disable-model-invocation` are carried for both flavours.
     #[serde(default)]
-    argument_hint: Option<String>,
+    argument_hint: Option<crate::yaml::Value>,
     #[serde(default)]
     allowed_tools: Option<crate::yaml::Value>,
     #[serde(default)]
-    model: Option<String>,
+    model: Option<crate::yaml::Value>,
     #[serde(default)]
-    disable_model_invocation: Option<bool>,
+    disable_model_invocation: Option<crate::yaml::Value>,
+}
+
+/// A YAML scalar as text: a string as written, a number or bool as its
+/// literal. `None` for anything else.
+fn scalar_text(value: &crate::yaml::Value) -> Option<String> {
+    match value {
+        crate::yaml::Value::String(s) => Some(s.clone()),
+        crate::yaml::Value::Number(n) => Some(n.to_string()),
+        crate::yaml::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// `argument-hint:` as the text the author wrote. Claude Code documents the
+/// key as text and writes it unquoted — `argument-hint: [pr-number]` — which
+/// YAML reads as a flow sequence; a sequence of scalars is therefore
+/// re-rendered as that flow text (`[pr-number]`, `[a, b]`). Any other shape
+/// warns and gives no hint.
+fn hint_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String> {
+    let value = raw.filter(|v| !v.is_null())?;
+    if let Some(text) = scalar_text(value) {
+        return Some(text);
+    }
+    let words = value
+        .as_sequence()
+        .and_then(|items| items.iter().map(scalar_text).collect::<Option<Vec<_>>>());
+    if words.is_none() {
+        warn!(path = %md_path.display(), value = ?value, "`argument-hint:` is neither text nor a list of words; ignored");
+    }
+    words.map(|w| format!("[{}]", w.join(", ")))
+}
+
+/// `model:` as text; any non-scalar shape warns and names no model.
+fn model_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String> {
+    let value = raw.filter(|v| !v.is_null())?;
+    let text = scalar_text(value);
+    if text.is_none() {
+        warn!(path = %md_path.display(), value = ?value, "`model:` is not text; ignored");
+    }
+    text
+}
+
+/// `disable-model-invocation:` — a bool; anything else warns and reads as
+/// `false`, the key's own default.
+fn model_invocation_disabled(raw: Option<&crate::yaml::Value>, md_path: &Path) -> bool {
+    match raw {
+        None | Some(crate::yaml::Value::Null) => false,
+        Some(crate::yaml::Value::Bool(b)) => *b,
+        Some(other) => {
+            warn!(path = %md_path.display(), value = ?other, "`disable-model-invocation:` is not a bool; read as false");
+            false
+        }
+    }
 }
 
 /// Frontmatter for agent .md files, targeting `AgentRegistration` output
@@ -378,30 +437,67 @@ fn parse_skill_registration(
         // files. Dropping it (the old `..Default::default()`) left plugin skills
         // with an empty base dir, forcing the model to guess paths / `cat`.
         source_path: md_path.to_path_buf(),
-        argument_hint: fm.argument_hint,
+        argument_hint: hint_text(fm.argument_hint.as_ref(), md_path),
         allowed_tools,
-        model: fm.model,
-        disable_model_invocation: fm.disable_model_invocation.unwrap_or(false),
+        model: model_text(fm.model.as_ref(), md_path),
+        disable_model_invocation: model_invocation_disabled(
+            fm.disable_model_invocation.as_ref(),
+            md_path,
+        ),
         ..Default::default()
     }))
 }
 
 /// A command's `allowed-tools:` as Aleph tool names, RESTRICT mode: the list
-/// narrows the turn's tool surface, so a scoped `Bash(...)` folds to bare
-/// `bash` and the tier gate still governs the call. An entry with no Aleph
-/// tool is dropped with a warn rather than forwarded — `register_skills`
-/// refuses the whole command over one unknown name, and losing the slash
-/// command over `TodoWrite` is the worse answer. Dropping only narrows: a
-/// declaration whose every entry drops is `Some(vec![])`, deny-all, never
-/// `None` (which would hand back the full surface the author tried to shrink).
+/// narrows the turn's tool surface. `None` only when the key is absent or
+/// null — the one reading that keeps the full surface.
+///
+/// * A scoped entry is coarsened: `Bash(git *)` folds to bare `bash`, so the
+///   argument scope is not enforced (the tier gate still governs every call).
+///   Logged at `info`.
+/// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
+///   `register_skills` refuses the whole command over one unknown name, and
+///   losing the slash command over `TodoWrite` is the worse answer.
+/// * Dropping only narrows: a declaration whose every entry drops is
+///   `Some(vec![])`, deny-all.
+/// * So is a present value in a shape that names no tool (a number, a map, a
+///   bool, `","`). It is still a declaration — the author tried to restrict the
+///   command — and reading it as absent would hand back the full surface. (A
+///   skill answers the same shapes the other way; see
+///   `skill::frontmatter::normalize_allowed_tools`.)
 fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Option<Vec<String>> {
-    let declared = crate::skill::frontmatter::normalize_allowed_tools(raw, command)?;
+    let declared = match crate::skill::frontmatter::read_allowed_tools(raw) {
+        Ok(declared) => declared?,
+        Err(why) => {
+            warn!(
+                command,
+                value = ?raw,
+                why = ?why,
+                "command declares `allowed-tools:` in a shape that names no tool; read as \
+                 deny-all, the command can call no tools. Write a list or a comma-separated \
+                 string of tool names"
+            );
+            return Some(Vec::new());
+        }
+    };
     let mapped: Vec<String> = declared
         .iter()
         .filter_map(|entry| {
             let aleph = crate::extension::hooks::normalize_cc_tool_entry(entry, true);
-            if aleph.is_none() {
-                warn!(command, entry = %entry, "allowed-tools entry has no Aleph tool; dropped");
+            match &aleph {
+                None => {
+                    warn!(command, entry = %entry, "allowed-tools entry has no Aleph tool; dropped");
+                }
+                Some(tool) if crate::extension::hooks::scoped_tool_head(entry).is_some() => {
+                    info!(
+                        command,
+                        entry = %entry,
+                        tool = %tool,
+                        "scoped allowed-tools entry coarsened to the whole tool; its argument \
+                         scope is not enforced"
+                    );
+                }
+                Some(_) => {}
             }
             aleph
         })
@@ -1323,6 +1419,132 @@ mod tests {
             panic!("skill")
         };
         assert_eq!(reg.allowed_tools.as_deref(), Some(&[][..]));
+    }
+
+    /// Every command in `dir/commands`, by name.
+    fn commands_by_name(dir: &Path) -> HashMap<String, SkillRegistration> {
+        parse_commands_dir(dir, "commands", "plug")
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Skill(s) => Some((s.name.clone(), s)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A present `allowed-tools` this path cannot read is a declaration all
+    /// the same: the author tried to restrict the command. Reading it as
+    /// "no declaration" would hand back the full surface, so it is deny-all.
+    #[test]
+    fn a_command_with_an_unusable_allowed_tools_is_deny_all() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        for (name, value) in [
+            ("number", "42"),
+            ("map", "{Bash: git}"),
+            ("boolean", "true"),
+            ("comma", "\",\""),
+        ] {
+            fs::write(
+                cmds.join(format!("{name}.md")),
+                format!("---\nallowed-tools: {value}\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        let regs = commands_by_name(dir.path());
+        for name in ["number", "map", "boolean", "comma"] {
+            assert_eq!(
+                regs[name].allowed_tools.as_deref(),
+                Some(&[][..]),
+                "`{name}` must be deny-all, never the full surface"
+            );
+        }
+    }
+
+    /// Claude Code documents `argument-hint: [pr-number]` unquoted — a YAML
+    /// flow sequence. A strict string field rejected the whole frontmatter
+    /// and the command vanished; the hint is re-rendered as the text the
+    /// author wrote.
+    #[test]
+    fn an_unquoted_bracket_argument_hint_keeps_the_command() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("new-sdk-app.md"),
+            "---\ndescription: new app\nargument-hint: [project-name]\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            cmds.join("two.md"),
+            "---\nargument-hint: [pr-number, priority]\n---\nbody\n",
+        )
+        .unwrap();
+        let regs = commands_by_name(dir.path());
+        assert_eq!(
+            regs["new-sdk-app"].argument_hint.as_deref(),
+            Some("[project-name]")
+        );
+        assert_eq!(
+            regs["two"].argument_hint.as_deref(),
+            Some("[pr-number, priority]")
+        );
+    }
+
+    /// The same leniency for the other Claude Code keys: an odd shape costs
+    /// the key, never the file.
+    #[test]
+    fn odd_model_and_disable_model_invocation_shapes_keep_the_file() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("odd.md"),
+            "---\nmodel: [sonnet]\ndisable-model-invocation: \"yes\"\n---\nbody\n",
+        )
+        .unwrap();
+        let skill = dir.path().join("skills").join("understand");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: understand\ndescription: d\nargument-hint: [\"[path] [--full]\"]\n---\nBody.",
+        )
+        .unwrap();
+
+        let regs = commands_by_name(dir.path());
+        let odd = &regs["odd"];
+        assert!(odd.model.is_none(), "a sequence names no model");
+        assert!(!odd.disable_model_invocation, "a non-bool reads as false");
+        let skills = parse_skills_dir(dir.path(), "skills", "plug").unwrap();
+        let CapabilityDeclaration::Skill(understand) = &skills[0] else {
+            panic!("the skill must survive its `argument-hint`")
+        };
+        assert_eq!(
+            understand.argument_hint.as_deref(),
+            Some("[[path] [--full]]")
+        );
+    }
+
+    /// Claude Code's `Skill` is how a command uses a skill; Aleph's
+    /// `skill_read` loads one. Dropping it left commands whose body says
+    /// "load skill X first" with no way to do so.
+    #[test]
+    fn a_command_declaring_skill_keeps_skill_read() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("health.md"),
+            "---\nallowed-tools: Skill, Read\n---\nLoad the skill first.\n",
+        )
+        .unwrap();
+        let regs = commands_by_name(dir.path());
+        assert_eq!(
+            regs["health"].allowed_tools.as_deref(),
+            Some(&["skill_read".to_string(), "file_read".to_string()][..])
+        );
     }
 
     #[test]

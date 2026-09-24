@@ -1082,6 +1082,8 @@ mod tests {
     /// `register_skills`. `routing_capabilities` is what `slash_skill_scope`
     /// narrows the run with; `usage` (`/help`) and `param_hint`
     /// (`commands.list` → completion menus) are the hint's two display faces.
+    /// The frontmatter is written the way upstream writes it: the hint
+    /// unquoted (a YAML flow sequence), `Skill` among the tools.
     #[tokio::test]
     async fn a_mounted_commands_frontmatter_reaches_its_catalog_row() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
@@ -1091,8 +1093,8 @@ mod tests {
             tmp.path().join("plugins/alpha/commands/review.md"),
             "---\n\
              description: review a change\n\
-             argument-hint: \"[pr-number]\"\n\
-             allowed-tools: Bash(git *), Read\n\
+             argument-hint: [pr-number]\n\
+             allowed-tools: Bash(git *), Read, Skill\n\
              ---\n\
              Review $1.\n",
         )
@@ -1111,7 +1113,13 @@ mod tests {
         let review = row("alpha:review");
         assert_eq!(
             review.routing_capabilities.as_deref(),
-            Some(&["bash".to_string(), "file_read".to_string()][..]),
+            Some(
+                &[
+                    "bash".to_string(),
+                    "file_read".to_string(),
+                    "skill_read".to_string()
+                ][..]
+            ),
             "CC `allowed-tools` arrives as Aleph names"
         );
         assert_eq!(review.usage.as_deref(), Some("/alpha:review [pr-number]"));

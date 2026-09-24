@@ -24,20 +24,24 @@ pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
     ("Agent", "subagent"),
     ("AskUserQuestion", "ask_user"),
     ("ToolSearch", "tool_search"),
+    // CC's `Skill` invokes a skill; `skill_read` is how Aleph loads one. Not
+    // the same verb, but it is the tool that has to stay on the surface for a
+    // command whose `allowed-tools` says `Skill` and whose body says "load
+    // skill X first". A hook matcher on `Skill` fires on `skill_read`.
+    ("Skill", "skill_read"),
 ];
 
 /// Claude Code tools with no Aleph counterpart: `LS` (Aleph folds it into
-/// `file_ops list`), `Skill` (CC invokes a skill; Aleph `skill_read` reads
-/// one — different verb), `TodoWrite` (Aleph `scratchpad` is a different
-/// shape), and the rest have no analogue. A hook matcher naming one matches
-/// nothing, which is the correct fail-closed answer; an `allowed-tools:` /
-/// `tools:` entry naming one is dropped by [`normalize_cc_tool_entry`]. A CC
-/// tool in neither table is forwarded under its own name, and the registry
-/// refuses it by name (`register_skills`).
+/// `file_ops list`), `TodoWrite` (Aleph `scratchpad` is a different shape),
+/// and the rest have no analogue. A hook matcher naming one matches nothing,
+/// which is the correct fail-closed answer; an `allowed-tools:` / `tools:`
+/// entry naming one is dropped by [`normalize_cc_tool_entry`], which for a
+/// command's restrict list means the command cannot use it. A CC tool in
+/// neither table is forwarded under its own name, and the registry refuses it
+/// by name (`register_skills`).
 pub(crate) const CC_TOOLS_WITHOUT_COUNTERPART: &[&str] = &[
     "NotebookEdit",
     "LS",
-    "Skill",
     "SlashCommand",
     "TodoWrite",
     "KillShell",
@@ -61,6 +65,11 @@ pub(crate) fn aleph_name(cc: &str) -> Option<&'static str> {
 /// `mcp_config::plugin_server_id`), so the same prefix yields CC's
 /// `mcp__plugin_{plugin}_{server}__{tool}`. [`normalize_cc_tool_entry`] is
 /// the inverse.
+///
+/// Exact up to 64 characters only: Aleph cuts an MCP key to 64
+/// (`sanitize_tool_name`) and Claude Code does not, so for a longer tool the
+/// spelling produced here is a truncation of the one CC uses. A hook matcher
+/// that spells the full long CC name misses; a prefix pattern still matches.
 pub(crate) fn cc_spellings(aleph: &str) -> Vec<String> {
     let mut out: Vec<String> = CC_TOOL_ALIASES
         .iter()
@@ -89,7 +98,10 @@ pub(crate) fn cc_spellings(aleph: &str) -> Vec<String> {
 ///   `mcp__plugin_<plugin>_<server>__<tool>` → `plugin_<plugin>_<server>__<tool>`.
 ///   Nothing is taken apart, so an underscore in a plugin or server name
 ///   cannot move the boundary. `mcp__<server>` (every tool of one server)
-///   names no single Aleph tool and is `None`.
+///   names no single Aleph tool and is `None`. Exact up to 64 characters only
+///   (see [`cc_spellings`]): a longer CC name, stripped, is longer than the
+///   64-character key Aleph registered, names nothing, and the registry
+///   refuses it by name.
 /// * a [`CC_TOOLS_WITHOUT_COUNTERPART`] name is `None`.
 /// * an Aleph name, or `*`, passes through unchanged.
 pub(crate) fn normalize_cc_tool_entry(entry: &str, fold_scoped_bash: bool) -> Option<String> {
@@ -97,9 +109,9 @@ pub(crate) fn normalize_cc_tool_entry(entry: &str, fold_scoped_bash: bool) -> Op
     if entry.is_empty() || CC_TOOLS_WITHOUT_COUNTERPART.contains(&entry) {
         return None;
     }
-    if let Some((head, _scope)) = entry.split_once('(') {
+    if let Some(head) = scoped_tool_head(entry) {
         return if fold_scoped_bash {
-            aleph_name(head.trim()).map(str::to_string)
+            aleph_name(head).map(str::to_string)
         } else {
             None
         };
@@ -109,6 +121,17 @@ pub(crate) fn normalize_cc_tool_entry(entry: &str, fold_scoped_bash: bool) -> Op
         return (!server.is_empty() && !tool.is_empty()).then(|| rest.to_string());
     }
     Some(aleph_name(entry).map_or_else(|| entry.to_string(), str::to_string))
+}
+
+/// The tool half of a Claude Code per-argument scoped entry —
+/// `Bash(git *)` → `Bash` — or `None` for an unscoped one. The one
+/// recognition of "scoped": [`normalize_cc_tool_entry`] folds or drops on it,
+/// and a command's reader logs the coarsening with it.
+pub(crate) fn scoped_tool_head(entry: &str) -> Option<&str> {
+    entry
+        .trim()
+        .split_once('(')
+        .map(|(head, _scope)| head.trim())
 }
 
 #[cfg(test)]
@@ -142,6 +165,9 @@ mod tests {
         assert_eq!(aleph_name("Read"), Some("file_read"));
         assert_eq!(aleph_name("bash"), None, "an Aleph name is not a CC name");
         assert_eq!(aleph_name("NotebookEdit"), None, "documented gap");
+        // A command's `Skill` must keep the tool that loads a skill.
+        assert_eq!(aleph_name("Skill"), Some("skill_read"));
+        assert_eq!(cc_spellings("skill_read"), vec!["Skill"]);
     }
 
     #[test]

@@ -51,11 +51,11 @@ pub(crate) fn plugin_command_skill_infos(commands: &[SkillRegistration]) -> Vec<
 
 /// Register the entries and return the disposer that removes exactly them.
 /// A command the catalog refuses (an `allowed-tools:` name the registry does
-/// not know — every name has been through the CC alias table, so it is not a
-/// CC spelling; an MCP tool whose server has not registered yet is the known
-/// false negative, see `resolve_skill_tool_scope`) is simply not in the id
-/// list the disposer removes, and `register_skills` has already warned by
-/// name.
+/// not know at registration time — e.g. a CC tool in neither of
+/// `extension::hooks`' alias tables, which is forwarded under its own name,
+/// or an MCP tool whose server has not registered yet, the known false
+/// negative of `resolve_skill_tool_scope`) is simply not in the id list the
+/// disposer removes, and `register_skills` has already warned by name.
 pub(crate) async fn register_slash_commands_effect(
     catalog: Arc<ToolCatalog>,
     infos: Vec<SkillInfo>,
