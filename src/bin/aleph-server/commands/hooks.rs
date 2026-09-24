@@ -118,12 +118,23 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     }
 
     if entry.status == ConsentStatus::Approved {
-        // An approved entry is never rewritten, so a hook refused since —
-        // its script edited, or run from another root — is re-reviewed by
+        // An approved entry is never rebound, so a hook refused since — its
+        // script edited, or run from another root — is re-reviewed by
         // revoking first: the next fire records what it runs now.
         println!(
             "Hook is already approved. If the server refuses it (its script or root changed), \
              run `aleph hooks revoke {}` and review it again after it next fires.",
+            entry.fingerprint
+        );
+        return Ok(());
+    }
+
+    // `approve` mints no approval without a root; say so rather than ask.
+    if entry.plugin_root.is_none() {
+        println!(
+            "This entry has no recorded root, so it cannot be approved yet: let the hook fire \
+             once (that records the directory it runs from), then run `aleph hooks test {}` \
+             again.",
             entry.fingerprint
         );
         return Ok(());

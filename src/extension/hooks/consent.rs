@@ -32,11 +32,19 @@
 //!   case — another repo can ship a plugin with the same id.
 //!
 //! Within its key, an approval also attests to what `aleph hooks test`
-//! reviewed: the hook's root directory ([`ConsentEntry::plugin_root`]) and,
-//! when the command names one, the script's content. The same key from
-//! another root, or an edited script, is refused until it is revoked and
-//! reviewed again ([`ShellHookConsent::is_approved`]). A pending entry is
-//! refreshed by every fire, so what the review runs is what production runs.
+//! reviewed: the hook's root directory ([`ConsentEntry::plugin_root`]) and
+//! the content of the script its command names — found through an absolute
+//! or `~/` path, a path variable (`${CLAUDE_PLUGIN_ROOT}` and its spellings,
+//! a plugin's `_DATA` pair), `$CLAUDE_PROJECT_DIR` in a project-bound hook,
+//! or a path relative to the hook's root; when it names several, the first.
+//! A script found only through `PATH`, through any other variable, or
+//! through `$CLAUDE_PROJECT_DIR` in a hook that fires everywhere (a different
+//! directory each session) is not content-bound: that approval is of the
+//! command string. The same key from another root, or an edited bound
+//! script, is refused until it is revoked and reviewed again
+//! ([`ShellHookConsent::is_approved`]). A pending entry is refreshed by every
+//! fire, so what the review runs is what production runs. No approval is
+//! ever minted without a root ([`ShellHookConsent::approve`]).
 //!
 //! **Migration.** An entry recorded before the project binding carries no
 //! project. It is kept on disk as it is — never rewritten, never deleted —
@@ -471,8 +479,8 @@ impl ShellHookConsent {
     }
 
     /// Approve a hook by fingerprint (or unique prefix). Returns the approved
-    /// entry, or `None` when no entry matches the prefix — or when the
-    /// entry's root is no longer `reviewed_root`.
+    /// entry, or `None` when no entry matches the prefix, when the entry's
+    /// root is no longer `reviewed_root` — or when there is no root at all.
     ///
     /// `reviewed_root` is the [`plugin_root`](ConsentEntry::plugin_root) the
     /// operator's review ran against (`aleph hooks test` reads it from the
@@ -481,6 +489,14 @@ impl ShellHookConsent {
     /// that review and this call; approving it anyway would bind the
     /// approval to a directory nobody reviewed. Checked under the registry
     /// lock, with the write.
+    ///
+    /// No approval is minted without a root: it would bind no directory, and
+    /// follow its key to wherever that plugin id is installed next. An entry
+    /// without one (recorded before roots were kept) gets its root from its
+    /// next fire, and can be approved after that. This is where the line is
+    /// drawn for root-less approvals: one that already exists keeps working
+    /// ([`Self::is_approved`], module doc — only a hook that fires
+    /// everywhere can still be looked up under one), and none is ever added.
     pub fn approve(
         &self,
         fingerprint_prefix: &str,
@@ -492,7 +508,9 @@ impl ShellHookConsent {
                 return false;
             };
             match entries.get_mut(&key) {
-                Some(entry) if entry.plugin_root.as_deref() == reviewed_root => {
+                Some(entry)
+                    if reviewed_root.is_some() && entry.plugin_root.as_deref() == reviewed_root =>
+                {
                     // Re-hash at approval time, not record time: the operator
                     // just reviewed (and `aleph hooks test` just RAN) the
                     // script as it exists NOW, so that content is what the
@@ -513,7 +531,7 @@ impl ShellHookConsent {
                     approved = Some(entry.clone());
                     true
                 }
-                // No such entry, or it moved to a root nobody reviewed.
+                // No such entry, no root, or it moved to a root nobody reviewed.
                 _ => false,
             }
         })?;
@@ -1082,6 +1100,38 @@ mod tests {
             .unwrap();
         assert!(outcome.is_none(), "approved a root nobody reviewed");
         assert_eq!(consent.entries()[0].status, ConsentStatus::Pending);
+    }
+
+    /// A pending entry recorded before roots were kept cannot be approved as
+    /// it is: the approval would bind no directory. Its next fire records the
+    /// root, and then it can.
+    #[test]
+    fn a_pending_entry_without_a_root_cannot_be_approved_until_it_fires() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shell-hooks-allowlist.json");
+        let fp = ShellHookConsent::fingerprint("fmt", None, "lint");
+        let legacy = serde_json::json!({ "version": 1, "entries": [{
+            "fingerprint": fp, "plugin_name": "fmt", "command": "lint",
+            "status": "pending", "first_seen": 1
+        }] });
+        std::fs::write(&path, legacy.to_string()).expect("seed legacy registry");
+        let consent = ShellHookConsent::with_path(&path);
+
+        assert!(
+            consent.approve(&fp, None).unwrap().is_none(),
+            "minted an approval bound to no root"
+        );
+        assert_eq!(consent.entries()[0].status, ConsentStatus::Pending);
+
+        consent.record_pending(
+            "fmt",
+            &ScopeKey::Global,
+            "lint",
+            "PreToolUse",
+            Path::new("/a"),
+        );
+        let entry = consent.approve(&fp, Some(Path::new("/a"))).unwrap();
+        assert_eq!(entry.and_then(|e| e.plugin_root), Some(PathBuf::from("/a")));
     }
 
     /// An approval recorded before roots were kept attests to no root; like
