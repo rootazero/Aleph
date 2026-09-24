@@ -164,10 +164,10 @@ registry 从「一键一认领」变成「一个认领多把键」——又一�
 | **V1** | split 之后，发给**父键**的 steer / busy 消息落进哪份日志（Panel 这类显式键的调用方会继续寻址父） | §3.2 的唤醒对象、以及父上是否会出现第二个 run |
 | **V2** | §3.3 父段 partial meta 的 `turn_id` 取哪一个；meta 臂与 fold 是否读它 | partial meta 的形状 |
 | **V3** | subagent 的 run 走不走 `runner_impl`；走的话它们拿到的是哪个 `RunRequest.run_id` | §2 的覆盖面 — 〔amended〕**已结**：不走，也不写 marker（§1） |
-| **V4** | 日志之外以 `run_id` 为键的全部位置（tracker、`agent.run_*`、`task_traces`、Panel、busy queue durable） | §2 的判据 #19 普查 — 〔amended〕计划 Task 1 执行，结论写回这里 |
+| **V4** | 日志之外以 `run_id` 为键的全部位置（tracker、`agent.run_*`、`task_traces`、Panel、busy queue durable） | §2 的判据 #19 普查 — 〔amended〕计划 Task 1 执行，结论写回这里。**已结**（Task 1，1d678e010）：生产写者 6、按 id 读者 2、日志外无 marker id 键；表见计划 Task 1 |
 | **V5** | registry 里「键 ↔ 认领一一对应」的全部假设 | §3.5 的判据 #19 普查 |
 | **V6** | `update_session_usage` / `stamp_assistant_metadata_in_range` 的全部调用者（剥掉测试模块） | §4 第 2 条的删改范围 — 〔amended〕**已结**（§4 第 2 条） |
-| **V7** | 改动后 `harness/tests/budget.rs` 实测值 | §5 的「不动 harness」 — 〔amended〕计划 Task 1 量基线、Task 8 / Task 12 复量 |
+| **V7** | 改动后 `harness/tests/budget.rs` 实测值 | §5 的「不动 harness」 — 〔amended〕计划 Task 1 量基线、Task 8 / Task 12 复量。**已结**（Task 1，1d678e010）：基线实测 5266 / `CEILING` 5266（`the_harness_line_budget_does_not_grow` PASS，零余量；测试通过时不打印总数，按 `budgeted_lines` 口径逐文件手算得出，见计划 Task 1） |
 | **V8** | registry 用 `SessionKey`、split 用 `SessionId`——`adopt_run` 的生产实现在哪一层做转换 | §3.1 的接口形状 |
 
 ---
