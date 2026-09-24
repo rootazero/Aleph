@@ -1,16 +1,28 @@
 //! The process-global handle to the users table, for code that runs with
 //! no request in hand.
 //!
-//! One consumer today: the fire-time authority resolver
+//! Two consumers today: the fire-time authority resolver
 //! (`crate::scope::authority::resolve`), which every background trigger asks
-//! "is the person this work acts for still here, and in what role?". A
-//! trigger has no gateway dispatch around it, so it cannot be handed the
-//! store the way an RPC handler is; threading it through each executor's
-//! constructor is the per-executor parameter chain this slot replaces.
+//! "is the person this work acts for still here, and in what role?", and
+//! [`multi_user`], the one answer to "does this server have people besides
+//! the machine owner?". A trigger has no gateway dispatch around it, so it
+//! cannot be handed the store the way an RPC handler is; threading it through
+//! each executor's constructor is the per-executor parameter chain this slot
+//! replaces.
 
-use super::SecurityStore;
+use super::{SecurityStore, OWNER_USER_ID};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
+
+/// What boot installed: the store, and whether it is the in-memory fallback
+/// `initialize_vault` opens when the on-disk `security.db` cannot be opened.
+pub struct InstalledUsersStore {
+    store: Arc<SecurityStore>,
+    /// `Some(reason)` when the store is the in-memory fallback. Its users
+    /// table holds only the bootstrap owner, so "no such row" there says
+    /// nothing about whether a person exists.
+    degraded: Option<String>,
+}
 
 /// `FailsOpen`, named as what it is: with nothing installed the resolver
 /// answers `Legacy` for every subject, so a deactivated principal's cron
@@ -19,9 +31,10 @@ use crate::sync_primitives::Arc;
 /// behaviour tests and minimal servers have always had (they never had a
 /// store to ask), which is why the variant is honest rather than alarming
 /// there, and why boot installs this unconditionally: `initialize_vault`
-/// always yields a store (on disk, else in memory), so there is no decline
+/// always yields a store (on disk, else in memory — the latter installed
+/// DEGRADED, see [`install_degraded_users_store`]), so there is no decline
 /// arm to write.
-static USERS_STORE: CapabilitySlot<Arc<SecurityStore>> =
+static USERS_STORE: CapabilitySlot<InstalledUsersStore> =
     CapabilitySlot::new("security/users-store", MissingSemantics::FailsOpen);
 
 /// The handle above, type-erased for the roster — see
@@ -36,14 +49,108 @@ pub(crate) const fn users_store_slot() -> &'static dyn SlotStatus {
 /// consumer shares, so a deactivation or demotion `users.update` writes is
 /// what the next background fire reads.
 pub fn install_users_store(store: Arc<SecurityStore>) {
-    let _ = USERS_STORE.install(store);
+    let _ = USERS_STORE.install(InstalledUsersStore {
+        store,
+        degraded: None,
+    });
 }
 
-/// Read the installed store. `None` = boot never installed one; see the
-/// static's doc for what the one consumer does with that.
+/// Install the in-memory FALLBACK store, marked degraded with `reason`.
+///
+/// RPC handlers never read this slot (they are handed the store), so they
+/// keep using the fallback exactly as before. Only the two readers of
+/// [`users_authority`] see the mark: the fire-time resolver answers
+/// `Unknown` (not `Gone`) for anyone but the owner, and [`multi_user`] answers
+/// `true` — a table that lost its rows is no evidence of a single-user
+/// install (判据 §8, §15).
+pub fn install_degraded_users_store(store: Arc<SecurityStore>, reason: String) {
+    let _ = USERS_STORE.install(InstalledUsersStore {
+        store,
+        degraded: Some(reason),
+    });
+}
+
+/// What the users table can vouch for — the slot's state as the fire-time
+/// resolver and [`multi_user`] read it, and the seam their tests inject
+/// (no lib test installs the process global).
+#[derive(Clone, Copy)]
+pub enum UsersAuthority<'a> {
+    /// Nothing installed: tests and minimal servers.
+    Absent,
+    /// The durable users table.
+    Durable(&'a SecurityStore),
+    /// The in-memory fallback: it holds only the bootstrap owner.
+    Degraded {
+        store: &'a SecurityStore,
+        reason: &'a str,
+    },
+}
+
+impl<'a> UsersAuthority<'a> {
+    /// A store handed in explicitly is taken as durable; `None` is absent.
+    #[must_use]
+    pub fn from_store(store: Option<&'a SecurityStore>) -> Self {
+        store.map_or(Self::Absent, Self::Durable)
+    }
+}
+
+/// The installed slot as a [`UsersAuthority`].
 #[must_use]
-pub(crate) fn users_store() -> Option<Arc<SecurityStore>> {
-    USERS_STORE.get().cloned()
+pub(crate) fn users_authority() -> UsersAuthority<'static> {
+    match USERS_STORE.get() {
+        None => UsersAuthority::Absent,
+        Some(InstalledUsersStore {
+            store,
+            degraded: None,
+        }) => UsersAuthority::Durable(store),
+        Some(InstalledUsersStore {
+            store,
+            degraded: Some(reason),
+        }) => UsersAuthority::Degraded { store, reason },
+    }
+}
+
+/// Does this server have people besides the machine owner? — THE one
+/// derivation of "multi-user mode", read from table content, never from
+/// whether a store is installed (boot installs one on every server, so that
+/// test is constant-true in production, 判据 §2).
+///
+/// Consumers — the None-principal ruling's two call sites:
+/// `visibility::run_principal` (room creation, legacy `memory_events` rows)
+/// and `browser_tools::caller_browser_principal` (profile selection).
+/// `scope::authority`'s `FireAuthority::Legacy` does NOT route through this:
+/// it answers a different question (is there a store to check a person
+/// against at all).
+#[must_use]
+pub(crate) fn multi_user() -> bool {
+    multi_user_in(users_authority())
+}
+
+/// [`multi_user`] for an explicit store — `None` is "no store installed".
+/// The test seam: no lib test installs the process global.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn multi_user_with(store: Option<&SecurityStore>) -> bool {
+    multi_user_in(UsersAuthority::from_store(store))
+}
+
+/// | slot state | answer |
+/// |---|---|
+/// | nothing installed | `false` |
+/// | only `OWNER_USER_ID` has a row | `false` |
+/// | any other row, in any status | `true` |
+/// | the read fails | `true` (fail closed, 判据 §8) |
+/// | the in-memory fallback | `true` (its table lost the rows that would say) |
+#[must_use]
+pub(crate) fn multi_user_in(users: UsersAuthority<'_>) -> bool {
+    match users {
+        UsersAuthority::Absent => false,
+        UsersAuthority::Degraded { .. } => true,
+        UsersAuthority::Durable(store) => match store.list_users() {
+            Ok(users) => users.iter().any(|user| user.user_id != OWNER_USER_ID),
+            Err(_) => true,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -69,10 +176,53 @@ mod tests {
     /// owned cron job or heartbeat would then resolve its owner against
     /// that store — and be refused as `Gone`. Tests inject a store through
     /// `scope::authority::resolve_with` instead.
+    /// "Multi-user" is table content: owner-only is single-user, any other
+    /// row (active or not) is multi-user, and the fallback store is treated
+    /// as multi-user because it lost the rows that would say otherwise.
+    #[test]
+    fn multi_user_mode_is_read_from_the_users_table() {
+        use crate::gateway::security::store::{UserRole, UserStatus};
+        assert!(!multi_user_with(None), "no store installed");
+
+        let store = SecurityStore::in_memory().unwrap();
+        store.ensure_bootstrap_owner().unwrap();
+        assert!(!multi_user_with(Some(&store)), "only the owner has a row");
+
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        store
+            .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        assert!(
+            multi_user_with(Some(&store)),
+            "a second person, even a deactivated one"
+        );
+
+        let fallback = SecurityStore::in_memory().unwrap();
+        fallback.ensure_bootstrap_owner().unwrap();
+        assert!(multi_user_in(UsersAuthority::Degraded {
+            store: &fallback,
+            reason: "security.db could not be opened",
+        }));
+
+        let broken = SecurityStore::in_memory().unwrap();
+        broken
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute_batch("DROP TABLE users")
+            .unwrap();
+        assert!(
+            multi_user_with(Some(&broken)),
+            "a users read that fails is not evidence of a single-user install"
+        );
+    }
+
     #[test]
     fn no_lib_test_installs_the_process_global_users_store() {
         assert!(
-            users_store().is_none(),
+            matches!(users_authority(), UsersAuthority::Absent),
             "some lib test called install_users_store; use resolve_with"
         );
     }

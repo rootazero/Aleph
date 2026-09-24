@@ -524,8 +524,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // written by `users.update` is what the next cron / heartbeat fire
     // sees. Unconditional: `initialize_vault` always yields a store (on
     // disk, else in memory), so this slot has no decline arm. Missing it is
-    // `FailsOpen` — every fire would resolve `Legacy`.
-    alephcore::gateway::security::store::install_users_store(auth_bundle.security_store.clone());
+    // `FailsOpen` — every fire would resolve `Legacy`. The in-memory fallback
+    // is installed DEGRADED: it holds only the owner, so a member's missing
+    // row there must read as unknown, not gone (final review I3).
+    match auth_bundle.security_store_fallback.clone() {
+        None => alephcore::gateway::security::store::install_users_store(
+            auth_bundle.security_store.clone(),
+        ),
+        Some(reason) => alephcore::gateway::security::store::install_degraded_users_store(
+            auth_bundle.security_store.clone(),
+            reason,
+        ),
+    }
 
     // Bound the ledger's growth now that a real ledger exists to bound:
     // drop spend rows older than `spend::period::RETENTION_PERIODS` past

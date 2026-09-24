@@ -26,7 +26,8 @@
 
 use std::collections::HashMap;
 
-use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+use crate::gateway::security::store::slot::UsersAuthority;
+use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus, OWNER_USER_ID};
 use crate::scope::{CarriedAttribution, ScopeAttribution};
 
 /// Why a fire was refused. Both are CONFIRMED facts read from the store.
@@ -171,18 +172,45 @@ pub fn checked_person<'a>(subject: &FireSubject<'a>) -> Option<(&'a str, bool)> 
 
 /// Resolve against an explicit store. `None` store ⇒ `Legacy` — the
 /// `FailsOpen` contract of `security/users-store`, stated at the slot.
+/// A store handed in here is taken as the durable table; the degraded
+/// (in-memory fallback) state is [`resolve_with_users`]'s.
 ///
 /// An empty author or owner is read as absent: a malformed
 /// `AUTHOR_USER_KEY` of `""` falls back to the owner instead of being looked
 /// up (and refused as `Gone`), and both empty is `Legacy`.
 #[must_use]
 pub fn resolve_with(users: Option<&SecurityStore>, subject: &FireSubject<'_>) -> FireAuthority {
+    resolve_with_users(UsersAuthority::from_store(users), subject)
+}
+
+/// Resolve against the users slot's state — the seam that carries the
+/// degraded mark.
+///
+/// Under [`UsersAuthority::Degraded`] (boot fell back to the in-memory store,
+/// which holds only the bootstrap owner) a checked person other than
+/// [`OWNER_USER_ID`] is `Unknown`, never `Gone`: that table's missing row is
+/// "I could not look", and `Gone` pauses, disables and tombstones work in
+/// ways the durable store's return cannot undo (判据 §8, §15). The owner
+/// resolves as always — it cannot be deactivated or demoted, so the
+/// fallback's answer for it is the real one.
+#[must_use]
+pub(crate) fn resolve_with_users(
+    users: UsersAuthority<'_>,
+    subject: &FireSubject<'_>,
+) -> FireAuthority {
     let author = subject.author.filter(|s| !s.is_empty());
     let Some((person, _)) = checked_person(subject) else {
         return FireAuthority::Legacy;
     };
-    let Some(users) = users else {
-        return FireAuthority::Legacy;
+    let users = match users {
+        UsersAuthority::Absent => return FireAuthority::Legacy,
+        UsersAuthority::Durable(store) => store,
+        UsersAuthority::Degraded { reason, .. } if person != OWNER_USER_ID => {
+            return FireAuthority::Unknown(format!(
+                "users store is the in-memory fallback: {reason}"
+            ));
+        }
+        UsersAuthority::Degraded { store, .. } => store,
     };
     let record = match users.get_user(person) {
         Err(e) => return FireAuthority::Unknown(e.to_string()),
@@ -207,19 +235,20 @@ pub fn resolve_with(users: Option<&SecurityStore>, subject: &FireSubject<'_>) ->
 }
 
 /// Resolve against the boot-installed users store
-/// (`security::store::slot::users_store`). With none installed — tests,
+/// (`security::store::slot::users_authority`). With none installed — tests,
 /// minimal servers — every subject is `Legacy`.
 #[must_use]
 pub fn resolve(subject: &FireSubject<'_>) -> FireAuthority {
-    let users = crate::gateway::security::store::slot::users_store();
-    resolve_with(users.as_deref(), subject)
+    resolve_with_users(
+        crate::gateway::security::store::slot::users_authority(),
+        subject,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::gateway::execution_engine::AUTHOR_USER_KEY;
-    use crate::gateway::security::store::OWNER_USER_ID;
 
     /// `u-owner` (active Admin, bootstrapped), `u-alice` (active Member),
     /// `u-walled` (deactivated Member).
@@ -231,6 +260,47 @@ mod tests {
         s.update_user("u-walled", None, None, Some(UserStatus::Deactivated))
             .unwrap();
         s
+    }
+
+    /// The in-memory fallback store (boot could not open `security.db`)
+    /// holds only the owner: a member's missing row there is `Unknown`, never
+    /// `Gone`, while the owner still resolves and an unattributed row stays
+    /// `Legacy`. The same table read as durable says `Gone` — which is exactly
+    /// what the degraded mark exists to prevent.
+    #[test]
+    fn a_degraded_store_leaves_members_unknown_and_still_resolves_the_owner() {
+        let fallback = SecurityStore::in_memory().unwrap();
+        fallback.ensure_bootstrap_owner().unwrap();
+        let degraded = UsersAuthority::Degraded {
+            store: &fallback,
+            reason: "security.db could not be opened",
+        };
+        let member = FireSubject {
+            owner: Some("u-alice"),
+            ..FireSubject::default()
+        };
+        match resolve_with_users(degraded, &member) {
+            FireAuthority::Unknown(why) => {
+                assert!(why.contains("in-memory fallback"), "{why}");
+            }
+            other => panic!("a member against the fallback store must be Unknown, got {other:?}"),
+        }
+        assert_eq!(
+            resolve_with(Some(&fallback), &member),
+            FireAuthority::Refused(RefusalReason::Gone)
+        );
+        let owner = FireSubject {
+            owner: Some(OWNER_USER_ID),
+            ..FireSubject::default()
+        };
+        assert!(matches!(
+            resolve_with_users(degraded, &owner),
+            FireAuthority::Granted(_)
+        ));
+        assert_eq!(
+            resolve_with_users(degraded, &FireSubject::default()),
+            FireAuthority::Legacy
+        );
     }
 
     fn owned<'a>(owner: &'a str, scope: &'a str) -> FireSubject<'a> {

@@ -209,12 +209,35 @@ pub(crate) async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<Strin
 }
 
 /// The person the browser face acts for: `Ok(Some(person))`, or `Ok(None)` on
-/// the legacy single-user install (no users store — an actor-less run is the
-/// machine owner, unchanged). A run nobody is attached to on a server with a
-/// users store is refused: a managed profile is per person, and "I do not
-/// know who this is" must not resolve to the owner's browser (判据 §8).
+/// a single-user server (an actor-less run is the machine owner, unchanged).
+/// A run nobody is attached to on a multi-user server is refused: a managed
+/// profile is per person, and "I do not know who this is" must not resolve
+/// to the owner's browser (判据 §8).
 pub(crate) fn caller_browser_principal() -> Result<Option<String>, BrowserError> {
-    browser_principal(crate::gateway::visibility::run_principal())
+    caller_browser_principal_in(crate::gateway::security::store::slot::multi_user())
+}
+
+/// [`caller_browser_principal`] with the server's mode explicit — lib tests
+/// never install the users store, so this is where multi-user is tested.
+///
+/// In a project room with no seeded speaker, `ambient_principal` falls back
+/// to the room's CREATOR: that is work rebuilt from a session row (boot
+/// resume, announce delivery) whose initiator is unknown. Composing the
+/// creator's key would hand a member's work the creator's browser, so nobody
+/// is attached instead and the mode decides.
+pub(crate) fn caller_browser_principal_in(
+    multi_user: bool,
+) -> Result<Option<String>, BrowserError> {
+    let in_room = crate::scope::current_scope()
+        .is_some_and(|attr| matches!(attr.scope, crate::scope::ScopeId::Project(_)));
+    let person = if in_room && crate::scope::current_room_author().is_none() {
+        None
+    } else {
+        crate::gateway::visibility::ambient_principal()
+    };
+    browser_principal(crate::gateway::visibility::run_principal_with(
+        person, multi_user,
+    ))
 }
 
 /// [`caller_browser_principal`] for an explicit verdict — lib tests never
@@ -1550,10 +1573,10 @@ mod principal_profile_census {
         }
     }
 
-    /// The None-principal ruling (r11) on the browser face: with no users
-    /// store installed an actor-less run keeps the owner's profile, as
-    /// before; with one installed, a run nobody is attached to is refused
-    /// with a reason instead of being handed the owner's browser (判据 §8).
+    /// The None-principal ruling (r11) on the browser face: on a single-user
+    /// server an actor-less run keeps the owner's profile, as before; on a
+    /// multi-user server a run nobody is attached to is refused with a reason
+    /// instead of being handed the owner's browser (判据 §8).
     #[test]
     fn a_run_with_no_person_selects_no_profile_on_a_server_with_users() {
         use crate::gateway::visibility::run_principal_with;
@@ -1580,6 +1603,47 @@ mod principal_profile_census {
                 .as_deref(),
             Some("u-alice")
         );
+    }
+
+    /// A room run rebuilt from a session row carries no speaker, and
+    /// `ambient_principal` then names the room's CREATOR. The browser must not
+    /// compose the creator's key for it: on a multi-user server it is refused
+    /// with the reason; with a speaker seeded it is the speaker's own profile.
+    #[tokio::test]
+    async fn a_room_run_without_a_speaker_gets_no_one_s_browser() {
+        let room = || {
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project("p-room".to_string()),
+            })
+        };
+        let refused = crate::scope::with_scope(room(), async { caller_browser_principal_in(true) })
+            .await
+            .expect_err("no speaker in a room on a multi-user server");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+
+        let spoken = crate::scope::with_scope(
+            room(),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                caller_browser_principal_in(true)
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(spoken.as_deref(), Some("u-bob"));
+
+        // Through the real entry point (single-user in lib tests): the key is
+        // the owner's bare name, never the creator's composed one.
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let key = crate::scope::with_scope(room(), async {
+            resolve_caller_profile(&manager, "default")
+        })
+        .await
+        .unwrap();
+        assert_eq!(key, "default");
     }
 
     #[tokio::test]

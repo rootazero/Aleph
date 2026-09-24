@@ -204,35 +204,34 @@ pub fn ambient_actor() -> Option<String> {
 pub enum RunPrincipal {
     /// [`ambient_principal`] named a person.
     Person(String),
-    /// Nobody is attached and no users store is installed: the legacy
-    /// single-user install, where "nobody" has always meant the machine
-    /// owner. The same notion `crate::scope::authority::FireAuthority::Legacy`
-    /// answers with no store installed.
+    /// Nobody is attached on a single-user server (no person but the machine
+    /// owner in the users table, or no table at all), where "nobody" has
+    /// always meant the owner.
     Legacy,
-    /// Nobody is attached on a server that has a users table: "I do not know
-    /// who this is", which is never permission (判据 §8). A per-person
-    /// resource refuses, and says why.
+    /// Nobody is attached on a multi-user server: "I do not know who this
+    /// is", which is never permission (判据 §8). A per-person resource
+    /// refuses, and says why.
     Unattached,
 }
 
 /// [`RunPrincipal`] for the current execution context:
-/// [`ambient_principal`], and whether the users store is installed
-/// (`security::store::slot::users_store`).
+/// [`ambient_principal`], and the one "multi-user mode" derivation
+/// (`security::store::slot::multi_user`, read from the users table).
 #[must_use]
 pub fn run_principal() -> RunPrincipal {
     run_principal_with(
         ambient_principal(),
-        crate::gateway::security::store::slot::users_store().is_some(),
+        crate::gateway::security::store::slot::multi_user(),
     )
 }
 
 /// [`run_principal`] with both inputs explicit — lib tests never install the
 /// process-global users store, so this is where both modes are tested.
 #[must_use]
-pub fn run_principal_with(principal: Option<String>, users_store_installed: bool) -> RunPrincipal {
+pub fn run_principal_with(principal: Option<String>, multi_user: bool) -> RunPrincipal {
     match principal {
         Some(person) => RunPrincipal::Person(person),
-        None if users_store_installed => RunPrincipal::Unattached,
+        None if multi_user => RunPrincipal::Unattached,
         None => RunPrincipal::Legacy,
     }
 }
@@ -1455,10 +1454,9 @@ mod tests {
         );
     }
 
-    /// The None-principal ruling (r11): with no users store installed an
-    /// actor-less run is the legacy single-user owner and keeps today's
-    /// behaviour; with one installed, "nobody attached" is unknown and is
-    /// refused (判据 §8).
+    /// The None-principal ruling (r11): on a single-user server an actor-less
+    /// run is the owner and keeps today's behaviour; on a multi-user server
+    /// "nobody attached" is unknown and is refused (判据 §8).
     #[test]
     fn legacy_memory_rows_need_a_person_on_a_server_with_users() {
         use crate::memory::events::UnpartitionedRows;
@@ -1476,6 +1474,105 @@ mod tests {
             unattributed_memory_events_for(&run_principal_with(None, false), &["main".to_string()]),
             UnpartitionedRows::Admit
         );
+    }
+
+    /// Landmine H's roster (`src/gateway/CLAUDE.md`) as a pin rather than a
+    /// counted prose list: every production file that calls `ambient_actor()`,
+    /// how many times, and how many of those calls COMPOSE — record or build a
+    /// person from the answer (an owner column, an audit / ledger principal, a
+    /// key), which falls back to the turn's AGENT id when nobody is ambient.
+    /// The composing calls are parked violations; new code composes from
+    /// `ambient_principal()`. The rest COMPARE (with an owner column, a
+    /// partition suffix, `allowed_users`). The compose column is a recorded
+    /// classification, not something a scan can check; the file set and the
+    /// call counts are checked. A new file, or a new call in a listed one,
+    /// turns this red: classify it here — and if it composes, do not.
+    #[test]
+    fn every_production_caller_of_ambient_actor_is_classified() {
+        /// (file, production calls, of which COMPOSE)
+        const CALLERS: &[(&str, usize, usize)] = &[
+            // COMPOSE: identity rotate / revoke ledger principal.
+            ("src/identity/ledger.rs", 2, 2),
+            // COMPOSE: exec-approval ledger principal.
+            ("src/sandbox/exec_approval/gate.rs", 1, 1),
+            // COMPOSE: `ledger_principal` and the ToolDenied record.
+            ("src/tools/scoped/ledger.rs", 2, 2),
+            // COMPOSE: `Grant::by` and the approval record principal.
+            ("src/tools/scoped/dispatch.rs", 2, 2),
+            // COMPOSE: the signed record principal.
+            ("src/builtin_tools/agent_identity.rs", 1, 1),
+            // COMPOSE: the team canvas message author.
+            ("src/gateway/handlers/teams/canvas.rs", 1, 1),
+            // COMPOSE: three `apply_from` op authors; COMPARE: one visibility check.
+            ("src/builtin_tools/canvas.rs", 4, 3),
+            // COMPOSE: two `authority_change` audit actors; COMPARE: `Self::actor()`
+            // (list / room / require_owner). Room creation composes from
+            // `run_principal()` since the r11 fix wave.
+            ("src/builtin_tools/project_manage.rs", 3, 2),
+            // COMPOSE: the `authority_change` audit actor.
+            ("src/builtin_tools/agent_manage/update.rs", 1, 1),
+            // COMPOSE: spawn's `created_by`; COMPARE: two ownership checks.
+            ("src/gateway/handlers/pty.rs", 3, 1),
+            // COMPOSE: `namespace_explicit_project_id` builds a project id.
+            ("src/builtin_tools/scratchpad.rs", 1, 1),
+            // COMPARE only from here on.
+            ("src/teams/dispatcher/runner.rs", 2, 0),
+            ("src/teams/scoped.rs", 1, 0),
+            ("src/teams/broadcast/mod.rs", 1, 0),
+            ("src/gateway/visibility.rs", 3, 0),
+            ("src/gateway/handlers/runtime.rs", 1, 0),
+            ("src/builtin_tools/note_manage/helpers.rs", 1, 0),
+            ("src/builtin_tools/memory_search.rs", 1, 0),
+            ("src/builtin_tools/sessions/send_tool.rs", 2, 0),
+            ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
+            ("src/builtin_tools/terminal.rs", 1, 0),
+        ];
+        fn calls_of_ambient_actor(code: &str) -> usize {
+            let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+            code.match_indices("ambient_actor(")
+                .filter(|(at, _)| {
+                    let head = code.get(..*at).unwrap_or_default();
+                    !head.chars().next_back().is_some_and(is_ident)
+                        && !head.trim_end().ends_with("fn")
+                })
+                .count()
+        }
+        // The scan must see a call and must not see the definition (判据 §3).
+        assert_eq!(
+            calls_of_ambient_actor(
+                "pub fn ambient_actor() {}\nlet a = visibility::ambient_actor();\n\
+                 let b = my_ambient_actor();"
+            ),
+            1
+        );
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found: std::collections::BTreeMap<String, usize> =
+            crate::utils::source_scan::rust_sources_under(&root)
+                .into_iter()
+                .filter_map(|(rel, text)| {
+                    let code = crate::utils::source_scan::code_text(
+                        &crate::utils::source_scan::production_text(
+                            std::path::Path::new(&rel),
+                            &text,
+                        ),
+                    );
+                    let calls = calls_of_ambient_actor(&code);
+                    (calls > 0).then_some((rel, calls))
+                })
+                .collect();
+        let expected: std::collections::BTreeMap<String, usize> = CALLERS
+            .iter()
+            .map(|(file, calls, _)| ((*file).to_string(), *calls))
+            .collect();
+        assert_eq!(
+            found, expected,
+            "a production `ambient_actor()` call appeared, moved or went away. Classify it in \
+             CALLERS; if it records or builds a person, compose from `ambient_principal()` instead"
+        );
+        for (file, calls, compose) in CALLERS {
+            assert!(compose <= calls, "{file}: more composing calls than calls");
+        }
     }
 
     /// In a project room the timeline's output reaches every member, so the
