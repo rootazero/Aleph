@@ -127,17 +127,34 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
 }
 
 /// The PRINCIPAL the current execution context acts for — a user id, never an
-/// agent id — or `None` for an unrestricted internal caller.
+/// agent id — or `None` for an unrestricted internal caller. The ONE "who is
+/// the person" derivation (plan amendment AM-1): the spend floor
+/// (`providers::metering`), the task-author stamp
+/// (`agents::swarm::tasks::stamp_task_author`) and, through
+/// [`ambient_actor`], every "who is asking" predicate read it.
 ///
-/// [`ambient_actor`] minus its last arm. That arm falls back to the turn's
-/// AGENT id (`main`), which is harmless for predicates that compare it with a
-/// partition suffix (an agent id never equals `u-*`) and wrong for a caller
-/// that COMPOSES with the answer: a browser profile keyed `default__main`, or
-/// a legacy-row admission granted to "main", names a principal that does not
-/// exist.
+/// Order:
+/// 1. [`crate::scope::current_room_author`] — this turn's live SPEAKER, the
+///    seeded `AUTHOR_USER_KEY`, whatever the scope. **Not**
+///    [`crate::scope::ambient_room_author`]: that filters through
+///    `room_author`, the transcript byline, which answers `None` for any
+///    non-`Project` scope and, in a room with no seeded speaker, names the
+///    room's CREATOR. A fire-time grant with a named author but no scope
+///    (a NULL-owner team) would then have no person at all, so the
+///    `allowed_users` fence admitted it while spend charged the author.
+/// 2. [`crate::scope::ambient_owner`] — the gateway caller when one is live,
+///    else the run's scope owner (in a room with no seeded speaker, its
+///    creator — the only person left to name).
+///
+/// It is [`ambient_actor`] minus that function's last arm, which falls back
+/// to the turn's AGENT id (`main`): harmless for predicates that compare it
+/// with a partition suffix (an agent id never equals `u-*`), wrong for a
+/// caller that COMPOSES with the answer — a browser profile keyed
+/// `default__main`, a spend row charged to an agent, or a task author the
+/// users table has never heard of.
 #[must_use]
 pub fn ambient_principal() -> Option<String> {
-    crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner)
+    crate::scope::current_room_author().or_else(crate::scope::ambient_owner)
 }
 
 /// The user a visibility check made from INSIDE an agent run acts for — the
@@ -146,16 +163,17 @@ pub fn ambient_principal() -> Option<String> {
 /// `CALLER_USER` is dead past the `tokio::spawn` every run crosses, so a
 /// predicate built on [`visible_owner_filter`] alone is fail-OPEN for every
 /// tool call. The resolution order is the one the rest of the crate already
-/// established:
+/// established, and it is [`ambient_principal`]'s:
 ///
-/// 1. [`crate::scope::ambient_room_author`] — this turn's SPEAKER, when the run
-///    is a project room. In a room the ambient scope's `owner_user_id` names the
-///    room's CREATOR, identically for every member (that is what shares the
-///    memory partition), so asking the roster about it answers "does this room
-///    still exist" rather than "may this person read". The speaker is the actor.
+/// 1. [`crate::scope::current_room_author`] — this turn's seeded SPEAKER. In a
+///    room the ambient scope's `owner_user_id` names the room's CREATOR,
+///    identically for every member (that is what shares the memory
+///    partition), so asking the roster about it answers "does this room still
+///    exist" rather than "may this person read". The speaker is the actor.
 /// 2. [`crate::scope::ambient_owner`] — the gateway caller when one is live,
-///    else the run's ambient owner. `None` outside a room, so this is the
-///    ordinary answer for a personal / org run.
+///    else the run's ambient owner: the ordinary answer for a personal / org
+///    run with no seeded speaker.
+/// 3. The turn's agent id (below) — the arm [`ambient_principal`] leaves out.
 ///
 /// `None` means "no ambient actor" and is deliberately unrestricted (cron,
 /// background sweeps, in-process tests), matching every other predicate here.
@@ -869,8 +887,8 @@ mod tests {
 
     /// In a room the ambient scope's owner is the room's CREATOR, identically
     /// for every member, so the roster question has to be asked about the
-    /// SPEAKER. `ambient_actor` prefers `scope::ambient_room_author` for
-    /// exactly this reason.
+    /// SPEAKER. `ambient_actor` (through `ambient_principal`) prefers the
+    /// seeded speaker, `scope::current_room_author`, for exactly this reason.
     #[tokio::test]
     async fn the_run_side_resolver_prefers_the_rooms_speaker_over_its_creator() {
         let in_room = crate::scope::ScopeAttribution {

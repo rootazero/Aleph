@@ -197,8 +197,10 @@ pub struct MemberRunOutcome {
 /// (`schedule/mod.rs`) has no live caller either, but since round 11 it does
 /// not spawn bare: it resolves the task's fire-time authority
 /// (`scope::authority::resolve` over the task author and the team row's
-/// owner/scope) and launches `run_task` through `spawn_under_authority`,
-/// which re-establishes the granted scope, role ceiling and author — so these
+/// owner/scope, in `schedule::authority::authorize_claim`) and launches
+/// `run_task` through the `AuthorizedLaunch` it returns
+/// (`spawn_under_authority`), which re-establishes the granted scope, role
+/// ceiling and author — so these
 /// reads are live there too. Only a Legacy task (no owner, no author) reads
 /// `None` everywhere and stamps nothing, byte-identical to before.
 pub(in crate::teams::dispatcher) fn task_run_metadata(
@@ -396,8 +398,11 @@ pub async fn execute_member_task(
     // Resolver is `ambient_actor()` — the only one that survives the spawn a
     // team run always executes inside (`CALLER_USER` is dead there, and
     // `ambient_owner()` in a room is its creator rather than the speaker).
-    // `None` (the background dispatcher, cron, tests) is unrestricted, like
-    // every sibling predicate.
+    // The autonomous dispatcher re-establishes the task's resolved authority
+    // around this call (round 11, N1), so there the actor is the task's
+    // author (else the team owner). `None` — a Legacy dispatcher task with no
+    // author and no owner, cron, tests — is unrestricted, like every sibling
+    // predicate.
     if let Some(allowed) = agent_registry.get_allowed_users(agent_id).await {
         let actor = crate::gateway::visibility::ambient_actor();
         if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
@@ -1069,19 +1074,5 @@ mod tests {
             !admitted,
             "an agent whose allowed_users names only Alice must refuse Bob's task"
         );
-    }
-
-    /// Legacy (no owner, no author): the dispatcher still spawns bare and
-    /// stamps nothing — byte-identical to HEAD.
-    #[tokio::test]
-    async fn a_legacy_dispatcher_task_still_stamps_nothing() {
-        let m = crate::teams::dispatcher::schedule::spawn_under_authority(None, async {
-            task_run_metadata("t1", "task-9", None, None)
-        })
-        .await
-        .unwrap();
-        assert!(crate::scope::scope_from_metadata(&m).is_none());
-        assert!(!m.contains_key("caller_role"));
-        assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
     }
 }

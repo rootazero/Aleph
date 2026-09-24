@@ -275,7 +275,7 @@ where
 /// its principal ([`crate::spend::principal_from_metadata`], resolved off
 /// `request.metadata` the same way [`with_request_scope`] resolves scope —
 /// see that resolver's doc for why it is unconditionally equivalent to the
-/// floor arm's `ambient_principal`) is over its ceiling for the period.
+/// floor arm's `visibility::ambient_principal`) is over its ceiling for the period.
 ///
 /// Both engines call this — `ExecutionEngine::execute` (`execute.rs`, ahead
 /// of `admit_run`) and `SimpleExecutionEngine::execute` (`simple.rs`, which

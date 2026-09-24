@@ -836,7 +836,7 @@ fn every_run_producer_declares_whether_a_human_is_at_the_other_end() {
 }
 
 // ============================================================================
-// G13 — spend::ambient_principal / spend::principal_from_metadata agree
+// G13 — the spend floor arm (visibility::ambient_principal) / spend::principal_from_metadata agree
 // ============================================================================
 //
 // `crate::spend`'s two principal resolvers need this exact function's
@@ -859,7 +859,10 @@ async fn spend_principal_resolvers_agree_when_metadata_carries_an_author() {
     let admission = crate::spend::principal_from_metadata(&request.metadata);
 
     // Floor arm: resolved from inside the nest `with_request_scope` seeds.
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(
         admission, floor,
@@ -884,7 +887,10 @@ async fn spend_principal_resolvers_agree_falling_back_to_the_scope_owner() {
     let request = minimal_request(metadata);
 
     let admission = crate::spend::principal_from_metadata(&request.metadata);
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(admission, floor);
     assert_eq!(
@@ -913,7 +919,10 @@ async fn spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key() {
     let request = minimal_request(metadata);
 
     let admission = crate::spend::principal_from_metadata(&request.metadata);
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(
         admission, floor,

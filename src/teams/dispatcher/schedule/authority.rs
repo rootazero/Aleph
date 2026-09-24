@@ -4,11 +4,12 @@
 //! decides at CLAIM time whose authority the member run executes under: the
 //! task's author (stamped by `CoordTaskStore::create_task`), else the team's
 //! owner/scope, else — for a legacy NULL-owner team — the session that
-//! created the task. `schedule::dispatch_once` asks
-//! `scope::authority::resolve` with these facts, maps the verdict through
-//! [`claim_authority`] and launches the run through
-//! [`spawn_under_authority`], so `runner::task_run_metadata` and the
-//! `allowed_users` fence read live task-locals instead of `None`.
+//! created the task. `schedule::dispatch_once` hands
+//! `scope::authority::resolve` to [`authorize_claim`], which reads these
+//! facts, asks the resolver and maps the verdict; the member run is then
+//! launched through the returned [`AuthorizedLaunch`], so
+//! `runner::task_run_metadata` and the `allowed_users` fence read live
+//! task-locals instead of `None`.
 //!
 //! Why a carrier and not `gateway::fire_gate::apply`: `fire_gate` stamps a
 //! `Granted` onto a metadata map the executor already holds. The dispatcher
@@ -18,13 +19,16 @@
 //! to be re-established around the spawn, not stamped.
 
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate};
-use crate::scope::authority::{FireAuthority, FireSubject};
+use crate::scope::authority::{FireAuthority, FireSubject, RefusalReason};
 
 /// The persisted facts one task's authority is resolved from.
 pub(super) struct TaskFireFacts {
     owner: Option<String>,
     scope: Option<String>,
     author: Option<String>,
+    /// Where `owner` was read from, for a refusal that has to name the
+    /// person it checked: `"team owner"` or `"origin session owner"`.
+    owner_label: &'static str,
 }
 
 impl TaskFireFacts {
@@ -37,6 +41,20 @@ impl TaskFireFacts {
             scope: self.scope.as_deref(),
             author: self.author.as_deref(),
             carried_role: None,
+        }
+    }
+
+    /// The person the resolver checked, labelled: the task author when one
+    /// is carried, else the owner — `resolve_with`'s own `author.or(owner)`,
+    /// with the same "an empty id is absent" reading.
+    fn checked_principal(&self) -> Option<(&'static str, &str)> {
+        match self.author.as_deref().filter(|a| !a.is_empty()) {
+            Some(author) => Some(("task author", author)),
+            None => self
+                .owner
+                .as_deref()
+                .filter(|o| !o.is_empty())
+                .map(|owner| (self.owner_label, owner)),
         }
     }
 }
@@ -65,6 +83,7 @@ pub(super) async fn task_fire_facts(
                     owner: team.owner_user_id,
                     scope: team.scope_id,
                     author,
+                    owner_label: "team owner",
                 });
             }
         }
@@ -83,6 +102,7 @@ pub(super) async fn task_fire_facts(
                     owner: row.owner_user_id,
                     scope: row.scope_id,
                     author,
+                    owner_label: "origin session owner",
                 });
             }
         }
@@ -91,76 +111,140 @@ pub(super) async fn task_fire_facts(
         owner: None,
         scope: None,
         author,
+        owner_label: "team owner",
     })
 }
 
-/// What the claim loop does with one task after the authority answer.
-pub(super) enum ClaimAuthority {
-    /// Claim and launch. `Some` re-establishes the granted attribution around
-    /// the spawn; `None` (Legacy) spawns bare, byte-identical to before.
-    Launch {
-        carried: Option<crate::scope::CarriedAttribution>,
-    },
-    /// Do not claim this tick. Already acted on: a refusal has parked the
-    /// task `Paused` with its reason; an unknown answer left it `Pending`.
-    Hold,
+/// A claim the fire-time authority admitted. The only way to launch the
+/// member run: the carrier is private, so `dispatch_once` cannot build,
+/// swap or shadow it — it can only spawn what [`authorize_claim`] resolved.
+pub(super) struct AuthorizedLaunch {
+    /// `Some` re-establishes the granted attribution around the spawn;
+    /// `None` (Legacy) spawns bare, byte-identical to before round 11.
+    carried: Option<crate::scope::CarriedAttribution>,
 }
 
-/// Map a fire-time verdict onto the claim loop — the one place the
-/// dispatcher turns a [`FireAuthority`] into a launch decision, kept out of
-/// `dispatch_once` so a test can drive it with `resolve_with` (no lib test may
-/// install the global users store that `resolve` reads).
+impl AuthorizedLaunch {
+    /// Spawn `fut` under the resolved authority.
+    pub(super) fn spawn<F, T>(self, fut: F) -> tokio::task::JoinHandle<T>
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        spawn_under_authority(self.carried, fut)
+    }
+}
+
+/// The dispatcher's whole fire-time authority step, as ONE seam: read the
+/// task's facts, ask `resolve`, map the verdict. `dispatch_once` passes
+/// `scope::authority::resolve`; tests pass `resolve_with` over their own
+/// store (no lib test may install the global users store `resolve` reads),
+/// so the chain a test drives is the production chain.
 ///
-/// Ruling R-a / 判据 §8: `Unknown` is NOT a failure. The task is not failed,
-/// not paused, not retried-as-failed and releases no dependents — it stays
-/// `Pending` and is asked about again on the next tick. Only a settled
-/// `Refused` stops it, and says why (§14).
-pub(super) async fn claim_authority(
-    verdict: FireAuthority,
+/// `None` = do not claim this tick, already acted on:
+/// - facts unreadable, or `Unknown`: ruling R-a / 判据 §8 — NOT a failure.
+///   The task is not failed, not paused, not retried-as-failed and releases
+///   no dependents; it stays `Pending` and is asked about again next tick.
+/// - `Refused`: parked `Paused`, with the reason and the checked principal
+///   named (§14).
+pub(super) async fn authorize_claim<R>(
+    resolve: R,
+    teams: &dyn crate::teams::TeamStore,
+    sessions: &dyn crate::gateway::session_store::SessionStore,
     tasks: &dyn CoordTaskStore,
-    task_id: &str,
-) -> ClaimAuthority {
-    let reason = verdict.reason();
-    match verdict {
-        FireAuthority::Legacy => ClaimAuthority::Launch { carried: None },
-        FireAuthority::Granted(granted) => ClaimAuthority::Launch {
-            carried: Some(granted.carried()),
-        },
-        FireAuthority::Refused(_) => {
-            let reason = reason.unwrap_or_else(|| "authority refused".to_string());
-            pause_for_refused_authority(tasks, task_id, &reason).await;
-            ClaimAuthority::Hold
+    task: &CoordTask,
+) -> Option<AuthorizedLaunch>
+where
+    R: Fn(FireSubject<'_>) -> FireAuthority,
+{
+    let facts = match task_fire_facts(teams, sessions, task).await {
+        Ok(facts) => facts,
+        Err(e) => {
+            tracing::warn!(task_id = %task.id, error = %e,
+                "dispatcher: authority unknown (owner row unreadable); task left pending");
+            return None;
         }
-        FireAuthority::Unknown(_) => {
-            tracing::warn!(task_id = %task_id, reason = ?reason,
+    };
+    match resolve(facts.subject()) {
+        FireAuthority::Legacy => Some(AuthorizedLaunch { carried: None }),
+        FireAuthority::Granted(granted) => Some(AuthorizedLaunch {
+            carried: Some(granted.carried()),
+        }),
+        FireAuthority::Refused(refusal) => {
+            pause_for_refused_authority(tasks, task, refusal, facts.checked_principal()).await;
+            None
+        }
+        unknown @ FireAuthority::Unknown(_) => {
+            tracing::warn!(task_id = %task.id, reason = ?unknown.reason(),
                 "dispatcher: authority unknown; task left pending");
-            ClaimAuthority::Hold
+            None
         }
     }
 }
 
+/// The text a refused task carries on its `result`, where the task drawer
+/// shows it. Starts with [`FireAuthority::reason`]'s wording, names the
+/// person that was checked, and gives the exit that actually exists for
+/// that refusal:
+/// - Deactivated: an administrator reactivates the person, then the task is
+///   set back to pending (the next tick asks again).
+/// - Gone: the person no longer exists and the author is pinned, so no
+///   resume can ever succeed and there is no verb that reassigns a task's
+///   author — stop it (cancel) and create it again as a current user.
+fn refusal_text(refusal: RefusalReason, checked: Option<(&'static str, &str)>) -> String {
+    let reason = FireAuthority::Refused(refusal)
+        .reason()
+        .unwrap_or_else(|| "authority refused".to_string());
+    let (who, id) = match checked {
+        Some((label, id)) => (format!("{label} `{id}`"), format!("`{id}`")),
+        None => (
+            "the checked principal".to_string(),
+            "that person".to_string(),
+        ),
+    };
+    match refusal {
+        RefusalReason::Deactivated => format!(
+            "Paused by the dispatcher: {reason} — {who} is deactivated. An administrator \
+             can reactivate {id}; then set this task back to pending."
+        ),
+        RefusalReason::Gone => format!(
+            "Paused by the dispatcher: {reason} — {who} no longer exists, so this task can \
+             never run as them. Stop it (cancel) and create it again as a current user."
+        ),
+    }
+}
+
 /// A settled refusal (deactivated / deleted person): park the task `Paused`
-/// with the reason on its `result`, where the task drawer shows it. Paused is
-/// never claimed and does not satisfy dependents, so nothing downstream runs
-/// under the refused authority. Resuming (`task_update status=pending`) asks
-/// again on the next tick.
+/// with [`refusal_text`] on its `result`. Paused is never claimed and does
+/// not satisfy dependents, so nothing downstream runs under the refused
+/// authority.
+///
+/// Nulls `PAUSED_FROM_KEY` in the same write, like the two twin pause
+/// surfaces (`team_task_control pause`, `teams.workflow` pause): the task is
+/// Pending here, so a stale `paused_from` left by an earlier pause→retry
+/// cycle would otherwise make a later resume restore it to WaitingReview.
 pub(super) async fn pause_for_refused_authority(
     tasks: &dyn CoordTaskStore,
-    task_id: &str,
-    reason: &str,
+    task: &CoordTask,
+    refusal: RefusalReason,
+    checked: Option<(&'static str, &str)>,
 ) {
+    let text = refusal_text(refusal, checked);
     let update = CoordTaskUpdate {
         status: Some(CoordTaskStatus::Paused),
-        result: Some(format!(
-            "Paused by the dispatcher: {reason}. Set it back to pending once an \
-             administrator has reactivated that person."
+        result: Some(text.clone()),
+        metadata: Some(crate::agents::swarm::tasks::merge_metadata_patch(
+            &task.metadata,
+            serde_json::json!({
+                crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+            }),
         )),
         ..Default::default()
     };
-    match tasks.update_task(task_id, update).await {
-        Ok(_) => tracing::warn!(task_id = %task_id, reason = %reason,
+    match tasks.update_task(&task.id, update).await {
+        Ok(_) => tracing::warn!(task_id = %task.id, reason = %text,
             "dispatcher: task authority refused at claim time; task paused"),
-        Err(e) => tracing::warn!(task_id = %task_id, error = %e,
+        Err(e) => tracing::warn!(task_id = %task.id, error = %e,
             "dispatcher: failed to pause a task whose authority was refused"),
     }
 }
@@ -346,6 +430,43 @@ mod tests {
         assert_eq!(facts.subject().owner, Some("u-carol"));
     }
 
+    /// A users store where `u-alice` is an active Admin, `u-bob` an active
+    /// Member and `u-walled` a deactivated Member (`u-owner` is bootstrapped).
+    fn users() -> SecurityStore {
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        users
+            .create_user("u-walled", "Walled", UserRole::Member)
+            .unwrap();
+        users
+            .update_user("u-walled", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        users
+    }
+
+    /// A pending, dispatcher-managed task with NO ambient person at creation
+    /// (an internal producer), so it carries no author.
+    async fn authorless_task(coord: &SqliteCoordTaskStore, team_id: Option<String>) -> CoordTask {
+        coord
+            .create_task(NewCoordTask {
+                team_id,
+                subject: "s".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: serde_json::json!({ "managed_by": "dispatcher" }),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// M1: the refusal pause is the third pause surface, and like its two
+    /// twins it nulls a stale `paused_from` in the same write — otherwise a
+    /// later `team_task_control resume` restores the task to WaitingReview.
     #[tokio::test]
     async fn a_refused_task_is_paused_with_the_reason_on_its_result() {
         let coord = coord().await;
@@ -357,12 +478,21 @@ mod tests {
                 owner: Some("worker".into()),
                 priority: Priority::Normal,
                 blocked_by: vec![],
-                metadata: serde_json::json!({ "managed_by": "dispatcher" }),
+                metadata: serde_json::json!({
+                    "managed_by": "dispatcher",
+                    crate::agents::swarm::tasks::PAUSED_FROM_KEY: "waiting_review",
+                }),
             })
             .await
             .unwrap();
 
-        pause_for_refused_authority(&coord, &created.id, "principal deactivated").await;
+        pause_for_refused_authority(
+            &coord,
+            &created,
+            RefusalReason::Deactivated,
+            Some(("task author", "u-bob")),
+        )
+        .await;
 
         let after = coord.get_task(&created.id).await.unwrap().unwrap();
         assert_eq!(after.status, CoordTaskStatus::Paused);
@@ -370,27 +500,33 @@ mod tests {
             .result
             .as_deref()
             .is_some_and(|r| r.contains("principal deactivated")));
+        assert!(
+            after
+                .metadata
+                .get(crate::agents::swarm::tasks::PAUSED_FROM_KEY)
+                .is_none(),
+            "a stale paused_from must be nulled in the pausing write: {}",
+            after.metadata
+        );
+        assert_eq!(after.metadata["managed_by"], "dispatcher");
     }
 
-    /// Ruling (b) / 判据 §4: the GRANT the resolver produced is the one the
-    /// member run executes under — not `Granted::legacy`, not a bare spawn.
-    /// Drives the production chain from the stored rows: `create_task`
-    /// stamps Bob, `task_fire_facts` reads Alice's room off the team row,
-    /// the resolver caps Bob (a member) at `member`, and [`claim_authority`]
-    /// hands over the carrier `dispatch_once` spawns under. Re-established
-    /// here with `reestablish` directly so this test and the
-    /// `spawn_under_authority` one in `runner.rs` each have exactly one
-    /// mutation that reddens them.
+    /// Ruling (b) / 判据 §4, review I3: the GRANT the resolver produced is the
+    /// one the member run executes under — not `Granted::legacy`, not a bare
+    /// spawn. Drives the one production seam end to end from the stored rows:
+    /// `create_task` stamps Bob, `authorize_claim` reads Alice's room off the
+    /// team row and asks the injected resolver, which caps Bob (a member) at
+    /// `member`, and the returned `AuthorizedLaunch` is what `dispatch_once`
+    /// spawns. The distinct author (Bob, not the room's owner Alice) and the
+    /// distinct role (`member`, not the absent = operator default) must both
+    /// arrive, with the room's scope.
     #[tokio::test]
     async fn a_granted_claim_launches_under_the_resolved_member_authority() {
-        let users = SecurityStore::in_memory().unwrap();
-        users
-            .create_user("u-alice", "Alice", UserRole::Admin)
-            .unwrap();
-        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let users = users();
         let teams = teams().await;
         let coord = coord().await;
         let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
         let team = team_owned_by(
             &teams,
             "u-alice",
@@ -399,19 +535,21 @@ mod tests {
         .await;
         let t = authored_task(&coord, &team.id, "u-bob").await;
 
-        let facts = task_fire_facts(&teams, &sessions(&dir), &t).await.unwrap();
-        let verdict = resolve_with(Some(&users), &facts.subject());
-        let ClaimAuthority::Launch {
-            carried: Some(carried),
-        } = claim_authority(verdict, &coord, &t.id).await
-        else {
-            panic!("an active member author must launch under a carried grant");
-        };
-        let (m, admitted) = tokio::spawn(
-            carried.reestablish(async { run_metadata_and_fence(Some(vec!["u-alice".into()])) }),
+        let Some(launch) = authorize_claim(
+            |s| resolve_with(Some(&users), &s),
+            &teams,
+            &sessions,
+            &coord,
+            &t,
         )
         .await
-        .unwrap();
+        else {
+            panic!("an active member author must be admitted");
+        };
+        let (m, admitted) = launch
+            .spawn(async { run_metadata_and_fence(Some(vec!["u-alice".into()])) })
+            .await
+            .unwrap();
 
         assert_eq!(m.get("caller_role").map(String::as_str), Some("member"));
         assert_eq!(
@@ -420,9 +558,72 @@ mod tests {
             Some("u-bob")
         );
         assert_eq!(
-            crate::scope::scope_from_metadata(&m).map(|a| a.owner_user_id),
-            Some("u-alice".to_string())
+            crate::scope::scope_from_metadata(&m),
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".into(),
+                scope: crate::scope::ScopeId::Project("p-room".into()),
+            })
         );
+        assert!(!admitted, "an agent fenced to Alice must refuse Bob's task");
+    }
+
+    /// Review I4 (AM-1): a grant with a named author but NO scope — a legacy
+    /// NULL-owner team with no origin session. The person must be the author
+    /// for BOTH the `allowed_users` fence (`ambient_actor`) and the spend floor
+    /// (`Principal::from_person(ambient_principal())`). Reading the person
+    /// through `scope::ambient_room_author` (the transcript byline) answers
+    /// `None` with no Project scope, so the fence saw nobody and admitted
+    /// while spend charged the author.
+    #[tokio::test]
+    async fn a_scopeless_grant_names_its_author_to_the_fence_and_to_spend() {
+        let users = users();
+        let teams = teams().await;
+        let coord = coord().await;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
+        let legacy = teams
+            .create_team(NewTeam {
+                name: "legacy".into(),
+                description: String::new(),
+                leader_id: "lead".into(),
+            })
+            .await
+            .unwrap();
+        let t = authored_task(&coord, &legacy.id, "u-bob").await;
+
+        let Some(launch) = authorize_claim(
+            |s| resolve_with(Some(&users), &s),
+            &teams,
+            &sessions,
+            &coord,
+            &t,
+        )
+        .await
+        else {
+            panic!("an active member author must be admitted");
+        };
+        let (actor, spend, admitted) = launch
+            .spawn(async {
+                let actor = crate::gateway::visibility::ambient_actor();
+                let spend = crate::spend::Principal::from_person(
+                    crate::gateway::visibility::ambient_principal(),
+                );
+                let allowed = vec!["u-alice".to_string()];
+                let admitted = crate::config::types::agent_admits_user(
+                    Some(allowed.as_slice()),
+                    actor.as_deref(),
+                );
+                (actor, spend, admitted)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            actor.as_deref(),
+            Some("u-bob"),
+            "the fence must see the author"
+        );
+        assert_eq!(spend, crate::spend::Principal::User("u-bob".to_string()));
         assert!(!admitted, "an agent fenced to Alice must refuse Bob's task");
     }
 
@@ -437,6 +638,7 @@ mod tests {
         let teams = teams().await;
         let coord = coord().await;
         let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
         let team = team_owned_by(
             &teams,
             OWNER_USER_ID,
@@ -448,27 +650,36 @@ mod tests {
             t.metadata[crate::gateway::execution_engine::AUTHOR_USER_KEY],
             OWNER_USER_ID
         );
+        let facts = task_fire_facts(&teams, &sessions, &t).await.unwrap();
+        assert!(
+            matches!(
+                resolve_with(Some(&users), &facts.subject()),
+                FireAuthority::Granted(_)
+            ),
+            "u-owner rows resolve Granted"
+        );
 
         for allowed in [
             Some(vec![OWNER_USER_ID.to_string()]),
             None,
             Some(Vec::new()),
         ] {
-            let facts = task_fire_facts(&teams, &sessions(&dir), &t).await.unwrap();
-            let verdict = resolve_with(Some(&users), &facts.subject());
-            assert!(
-                matches!(verdict, FireAuthority::Granted(_)),
-                "u-owner rows resolve Granted"
-            );
-            let ClaimAuthority::Launch { carried } = claim_authority(verdict, &coord, &t.id).await
+            let Some(launch) = authorize_claim(
+                |s| resolve_with(Some(&users), &s),
+                &teams,
+                &sessions,
+                &coord,
+                &t,
+            )
+            .await
             else {
                 panic!("an active admin must launch");
             };
             let fence = allowed.clone();
-            let (m, admitted) =
-                spawn_under_authority(carried, async move { run_metadata_and_fence(fence) })
-                    .await
-                    .unwrap();
+            let (m, admitted) = launch
+                .spawn(async move { run_metadata_and_fence(fence) })
+                .await
+                .unwrap();
             assert!(
                 !m.contains_key("caller_role"),
                 "an active admin gets no caller_role ceiling ({allowed:?}): {m:?}"
@@ -490,71 +701,147 @@ mod tests {
     /// neither launched nor paused nor failed; it stays Pending, untouched.
     #[tokio::test]
     async fn an_unknown_authority_holds_the_task_pending_and_unmarked() {
+        let teams = teams().await;
         let coord = coord().await;
-        let created = coord
-            .create_task(NewCoordTask {
-                team_id: None,
-                subject: "s".into(),
-                description: String::new(),
-                owner: Some("worker".into()),
-                priority: Priority::Normal,
-                blocked_by: vec![],
-                metadata: serde_json::json!({ "managed_by": "dispatcher" }),
-            })
-            .await
-            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
+        let created = authorless_task(&coord, None).await;
 
-        let decision = claim_authority(
-            FireAuthority::Unknown("disk I/O error".into()),
+        let launch = authorize_claim(
+            |_| FireAuthority::Unknown("disk I/O error".into()),
+            &teams,
+            &sessions,
             &coord,
-            &created.id,
+            &created,
         )
         .await;
 
-        assert!(matches!(decision, ClaimAuthority::Hold));
+        assert!(launch.is_none(), "an unknown answer must not launch");
         let after = coord.get_task(&created.id).await.unwrap().unwrap();
         assert_eq!(after.status, CoordTaskStatus::Pending);
         assert_eq!(after.result, None, "an unknown answer writes no outcome");
     }
 
-    /// A settled refusal at the claim: held AND parked Paused with the reason.
+    /// A settled refusal at the claim: held AND parked Paused, naming the
+    /// author it checked and the way out (reactivate).
     #[tokio::test]
     async fn a_refused_claim_is_held_and_paused_with_the_principal_named() {
-        let users = SecurityStore::in_memory().unwrap();
-        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
-        users
-            .update_user("u-bob", None, None, Some(UserStatus::Deactivated))
-            .unwrap();
+        let users = users();
         let teams = teams().await;
         let coord = coord().await;
         let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
         let team = team_owned_by(
             &teams,
             OWNER_USER_ID,
             crate::scope::ScopeId::Project("p-room".into()),
         )
         .await;
-        let t = authored_task(&coord, &team.id, "u-bob").await;
+        let t = authored_task(&coord, &team.id, "u-walled").await;
 
-        let facts = task_fire_facts(&teams, &sessions(&dir), &t).await.unwrap();
-        let verdict = resolve_with(Some(&users), &facts.subject());
-        assert!(matches!(
-            claim_authority(verdict, &coord, &t.id).await,
-            ClaimAuthority::Hold
-        ));
+        let launch = authorize_claim(
+            |s| resolve_with(Some(&users), &s),
+            &teams,
+            &sessions,
+            &coord,
+            &t,
+        )
+        .await;
+
+        assert!(launch.is_none());
         let after = coord.get_task(&t.id).await.unwrap().unwrap();
         assert_eq!(after.status, CoordTaskStatus::Paused);
-        assert!(after
+        let result = after.result.unwrap_or_default();
+        assert!(result.contains("principal deactivated"), "{result}");
+        assert!(result.contains("task author `u-walled`"), "{result}");
+        assert!(result.contains("reactivate"), "{result}");
+    }
+
+    /// Review I2: a deleted principal cannot be reactivated, so the text must
+    /// not say so — it names the person and the real exit (stop the task and
+    /// create it again; no verb reassigns a task's pinned author).
+    #[tokio::test]
+    async fn a_gone_author_is_paused_without_reactivate_advice() {
+        let users = users();
+        let teams = teams().await;
+        let coord = coord().await;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
+        let team = team_owned_by(
+            &teams,
+            OWNER_USER_ID,
+            crate::scope::ScopeId::Project("p-room".into()),
+        )
+        .await;
+        let t = authored_task(&coord, &team.id, "u-ghost").await;
+
+        let launch = authorize_claim(
+            |s| resolve_with(Some(&users), &s),
+            &teams,
+            &sessions,
+            &coord,
+            &t,
+        )
+        .await;
+
+        assert!(launch.is_none());
+        let after = coord.get_task(&t.id).await.unwrap().unwrap();
+        assert_eq!(after.status, CoordTaskStatus::Paused);
+        let result = after.result.unwrap_or_default();
+        assert!(result.contains("principal gone"), "{result}");
+        assert!(result.contains("task author `u-ghost`"), "{result}");
+        assert!(result.contains("cancel"), "{result}");
+        assert!(
+            !result.contains("reactivat"),
+            "a deleted person cannot be reactivated: {result}"
+        );
+    }
+
+    /// With no author the OWNER is the person checked, and the refusal says
+    /// so — "team owner", not "task author".
+    #[tokio::test]
+    async fn an_authorless_refusal_names_the_team_owner() {
+        let users = users();
+        let teams = teams().await;
+        let coord = coord().await;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions(&dir);
+        let team = team_owned_by(
+            &teams,
+            "u-walled",
+            crate::scope::ScopeId::Personal("u-walled".into()),
+        )
+        .await;
+        let t = authorless_task(&coord, Some(team.id.clone())).await;
+
+        let launch = authorize_claim(
+            |s| resolve_with(Some(&users), &s),
+            &teams,
+            &sessions,
+            &coord,
+            &t,
+        )
+        .await;
+
+        assert!(launch.is_none());
+        let result = coord
+            .get_task(&t.id)
+            .await
+            .unwrap()
+            .unwrap()
             .result
-            .as_deref()
-            .is_some_and(|r| r.contains("principal deactivated")));
+            .unwrap_or_default();
+        assert!(result.contains("team owner `u-walled`"), "{result}");
     }
 
     /// Ruling (b), the one seam no behaviour test can reach: `dispatch_once`
-    /// resolves through the GLOBAL users store, which no lib test may
-    /// install, so the wiring "resolve these facts → map → spawn under the
-    /// result" is pinned at the source. A swap to a bare `tokio::spawn`
-    /// (the N1 shape) or a resolver over any other subject goes red here.
+    /// passes the GLOBAL resolver, which no lib test may install. Pinned at
+    /// the source: the claim loop hands exactly `scope::authority::resolve`
+    /// to `authorize_claim` and launches the member run through the
+    /// `AuthorizedLaunch` it returned — whose carrier it cannot construct or
+    /// replace. A bare `tokio::spawn` (the N1 shape), a direct
+    /// `spawn_under_authority` or any other resolver goes red here.
+    /// Whitespace is stripped first so formatting cannot move the pin.
     #[test]
     fn dispatch_once_launches_every_claimed_task_under_its_resolved_authority() {
         let src = include_str!("mod.rs");
@@ -568,24 +855,36 @@ mod tests {
         let body: String = src[start..end]
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+            .flat_map(|l| l.chars())
+            .filter(|c| !c.is_whitespace())
+            .collect();
         assert_eq!(
-            body.matches("crate::scope::authority::resolve(&facts.subject())")
-                .count(),
+            body.matches(
+                "authority::authorize_claim(|subject|crate::scope::authority::resolve(&subject),"
+            )
+            .count(),
             1,
-            "the claim loop resolves exactly the stored facts"
+            "the claim loop authorizes through the production resolver exactly once"
         );
-        assert_eq!(body.matches("authority::claim_authority(").count(), 1);
         assert_eq!(
-            body.matches("spawn_under_authority(carried,").count(),
+            body.matches("authority::resolve(").count(),
             1,
-            "the member run is launched under the resolved carrier"
+            "no second resolver call beside the seam"
+        );
+        assert_eq!(
+            body.matches("launch.spawn(").count(),
+            1,
+            "the member run is launched through the authorized launch"
         );
         assert_eq!(
             body.matches("tokio::spawn(").count(),
             0,
-            "a bare spawn in the claim loop drops every task-local (N1)"
+            "a bare spawn (N1)"
+        );
+        assert_eq!(
+            body.matches("spawn_under_authority(").count(),
+            0,
+            "the claim loop must not pick its own carrier"
         );
     }
 }

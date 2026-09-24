@@ -1556,7 +1556,8 @@ unknown models. See `pricing.rs`'s module doc.
   the accurate one is "every call made on a principal's behalf is metered".
 - **Unattributable spend has a name, and it is not a person.** Spend
   produced where no principal can be resolved
-  (`principal_from_metadata`/`ambient_principal`'s fallback arm) lands on
+  (`principal_from_metadata` / `Principal::from_person(visibility::ambient_principal())`'s
+  fallback arm) lands on
   `Principal::Unattributed`, the `"@unattributed"` row `spend.query` reports
   alongside every real principal's row. It is the ledger's honest account
   of spend nobody could be billed to — not a user who is somehow both
