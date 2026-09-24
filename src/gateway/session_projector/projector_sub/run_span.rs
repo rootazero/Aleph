@@ -194,12 +194,13 @@ pub(crate) fn collect_run_spans(
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
 /// rows strictly between), so a later heal reads `AlreadyStamped` and bills
 /// nothing: the stamp is the idempotence guard, exactly as on the live path.
-/// The bill is [`bill_run_from_fold`] with `run_start = start` and the fold
-/// read up to `end`; the cost and model are `None` because there is no meta
-/// to take them from, so a synthesized bill adds tokens and never dollars.
-/// A run whose provider reported no usage
-/// is stamped (the join is still owed) and not billed — nothing to add, and
-/// `bill_run_from_fold` says nothing about it.
+/// The bill is [`fold_run_bill`] over `(start, end]`, handed to
+/// `stamp_and_bill_in_range` so it lands with the stamp — read before the
+/// stamp, the same as the live path (F10); the cost and model are `None`
+/// because there is no meta to take them from, so a synthesized bill adds
+/// tokens and never dollars. A run whose provider reported no usage is
+/// stamped (the join is still owed) and not billed — nothing to add. A fold
+/// that cannot be read synthesizes nothing and sets `errored`.
 ///
 /// `NoRowInRange` here means the run's row is a hole this pass could not
 /// fill — it is in `retry`, `up_to_date` is already false, and the pass that
@@ -233,20 +234,28 @@ pub(crate) async fn synthesize_missing_stamps(
         else {
             continue;
         };
+        let ctx = ProjectionCtx {
+            store,
+            events: Some(event_store),
+            present,
+            run_start: span.start,
+            bus: None,
+        };
+        // Folded first, for the same reason as the meta arm (F10).
+        let Some((bill, if_stamped)) = fold_run_bill(id, end, &ctx, &span.run_id, None, None, None)
+            .await
+            .plan()
+        else {
+            report.errored = true;
+            continue;
+        };
         match store
-            .stamp_and_bill_in_range(id, span.start, end, &meta, None)
+            .stamp_and_bill_in_range(id, span.start, end, &meta, bill.as_ref())
             .await
         {
             Ok(StampOutcome::Stamped) => {
                 report.stamps_synthesized += 1;
-                let ctx = ProjectionCtx {
-                    store,
-                    events: Some(event_store),
-                    present,
-                    run_start: span.start,
-                    bus: None,
-                };
-                if bill_run_from_fold(id, end, &ctx, &span.run_id, None, None, None).await {
+                if if_stamped == BillOutcome::Billed {
                     report.usage_rebilled += 1;
                 }
             }
@@ -256,7 +265,7 @@ pub(crate) async fn synthesize_missing_stamps(
                     session = ?id,
                     run_id = %span.run_id,
                     error = %e,
-                    "heal: synthesized stamp failed"
+                    "heal: synthesized stamp-and-bill failed"
                 );
                 report.errored = true;
             }
@@ -266,4 +275,4 @@ pub(crate) async fn synthesize_missing_stamps(
 
 // Pulled in for the `synthesize_missing_stamps` body. Defined in the parent
 // module's body (after the split these stay in `session_projector.rs`).
-use super::super::{bill_run_from_fold, ProjectionCtx};
+use super::super::{fold_run_bill, BillOutcome, ProjectionCtx};

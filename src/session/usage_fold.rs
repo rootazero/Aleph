@@ -8,7 +8,7 @@
 //! materialisation of this fold, accumulated one run at a time by the
 //! projector when the run's meta lands, or when a whole-session heal
 //! synthesizes the stamp of a finished run whose meta never did
-//! (`session_projector::bill_run_from_fold`, its one biller for both) — the
+//! (`session_projector::fold_run_bill`, its one biller for both) — the
 //! row is a face, not a second derivation.
 use crate::session::events::{SessionEvent, SessionEventRecord};
 

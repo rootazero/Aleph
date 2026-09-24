@@ -37,7 +37,9 @@ pub struct RepairReport {
     /// Of the stamps above (re-applied or synthesized), how many also
     /// accumulated the run's spend. A stamp that found the row already
     /// carrying this run's id bills nothing — that is what makes a replay,
-    /// and a second heal, non-double-billing.
+    /// and a second heal, non-double-billing. Only a stamp whose bill was
+    /// Billed counts; NothingToBill and Unfoldable stamps are counted in the
+    /// stamp counters alone.
     pub usage_rebilled: usize,
     /// Nothing was missing, nothing was stamped, and nothing was deferred.
     ///

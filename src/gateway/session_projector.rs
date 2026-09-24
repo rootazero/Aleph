@@ -6,7 +6,7 @@
 //! `AssistantMessage` per Think step, so calls and rows are 1:1. The session
 //! row's counters are the fold of those same events (`session::usage_fold`),
 //! accumulated once per run when its `AssistantRunMeta` lands — see
-//! [`bill_run_from_fold`] — or, for a run that finished but whose meta never
+//! [`fold_run_bill`] — or, for a run that finished but whose meta never
 //! reached the log, when a whole-session heal synthesizes that stamp
 //! ([`synthesize_missing_stamps`]).
 //!
@@ -53,7 +53,7 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::gateway::session_store::types::MessageRecord;
-use crate::gateway::session_store::{SessionStore, StampOutcome};
+use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::projection::{parse_source_seq, project_row, row_id};
@@ -499,9 +499,9 @@ async fn heal_session(
         };
         match project_event(id, rec, &ctx).await {
             Projected::Row => report.holes_filled += 1,
-            Projected::Stamped { billed } => {
+            Projected::Stamped { bill } => {
                 report.stamps_reapplied += 1;
-                if billed {
+                if bill == BillOutcome::Billed {
                     report.usage_rebilled += 1;
                 }
             }
@@ -676,14 +676,28 @@ pub(crate) struct ProjectionCtx<'a> {
     pub bus: Option<&'a Arc<GatewayEventBus>>,
 }
 
+/// What happened to a run's spend when its stamp landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BillOutcome {
+    /// The fold found spend, and it was accumulated with the stamp.
+    Billed,
+    /// Nothing to add: no usage on the run's messages and no price.
+    NothingToBill,
+    /// Nothing to fold from — no event log installed, or no `RunStarted`
+    /// before the meta (a `/compact` retired the opener, or a legacy log).
+    /// The row is stamped and the spend is NOT accumulated, said at `warn!`
+    /// rather than read as "billed nothing" (criterion #8).
+    Unfoldable,
+}
+
 /// What one projection step did — the drain's and the heal's shared vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Projected {
     /// A transcript row was appended.
     Row,
-    /// An `AssistantRunMeta` stamp landed on a row that had none. `billed` says
-    /// whether the run's spend was accumulated in the same step.
-    Stamped { billed: bool },
+    /// An `AssistantRunMeta` stamp landed on a row that had none, together
+    /// with whatever the run owed (`bill`).
+    Stamped { bill: BillOutcome },
     /// Nothing to do: not row-producing, already present, already stamped,
     /// deliberately retired, or a stamp with no row in its run's range.
     Nothing,
@@ -792,13 +806,30 @@ pub(crate) async fn project_event(
             else {
                 return Projected::Nothing;
             };
+            // Fold BEFORE the stamp (F10): the stamp is the bill's idempotence
+            // guard, so a stamp that landed without its bill could never be
+            // billed again. A failed read writes nothing and retries.
+            let Some((bill, if_stamped)) = fold_run_bill(
+                id,
+                rec.seq,
+                ctx,
+                run_id,
+                *cost_usd,
+                model.as_deref(),
+                model_provider.as_deref(),
+            )
+            .await
+            .plan()
+            else {
+                return Projected::Retry;
+            };
             // The row this run's numbers belong to is the last assistant row
             // BETWEEN the run's own `RunStarted` and this meta — not "the last
             // assistant row in the table", which on a session with two runs
             // (or with a later row already back-filled) is somebody else's.
             match ctx
                 .store
-                .stamp_and_bill_in_range(id, ctx.run_start, rec.seq, &meta, None)
+                .stamp_and_bill_in_range(id, ctx.run_start, rec.seq, &meta, bill.as_ref())
                 .await
             {
                 Ok(StampOutcome::AlreadyStamped) => Projected::Nothing,
@@ -825,30 +856,21 @@ pub(crate) async fn project_event(
                     Projected::Nothing
                 }
                 Ok(StampOutcome::Stamped) => {
-                    // Accumulate this run's spend onto the session row, exactly
-                    // once: the stamp above is the idempotence guard, because a
-                    // replay of the same meta returns `AlreadyStamped` and never
-                    // reaches this arm.
-                    //
-                    // The tokens come from the run's own messages (the usage
-                    // fold), the cost and model from this meta. `add_message_full`
-                    // does not add each row's tokens onto the same columns — it
-                    // did, silently, for as long as the rows carried zeros.
-                    Projected::Stamped {
-                        billed: bill_run_from_fold(
-                            id,
-                            rec.seq,
-                            ctx,
-                            run_id,
-                            *cost_usd,
-                            model.as_deref(),
-                            model_provider.as_deref(),
-                        )
-                        .await,
+                    // The spend landed with the stamp (or there was none):
+                    // one store operation, so a replay reads `AlreadyStamped`
+                    // and never reaches this arm again.
+                    if if_stamped == BillOutcome::Unfoldable {
+                        tracing::warn!(
+                            session = ?id,
+                            run_id = %run_id,
+                            "projector: run meta stamped, but its spend cannot be folded \
+                             (no event log, or no RunStarted before it); not accumulated"
+                        );
                     }
+                    Projected::Stamped { bill: if_stamped }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "projector: stamp run-meta failed");
+                    tracing::warn!(error = %e, "projector: stamp-and-bill of run-meta failed; nothing landed, retried");
                     Projected::Retry
                 }
             }
@@ -898,26 +920,41 @@ pub(crate) async fn project_event(
     }
 }
 
-/// Accumulate the run's spend onto the session row from the usage fold —
-/// exactly once, guarded by the stamp that just landed. The tokens are
-/// [`crate::session::usage_fold::run_usage_totals`] over the log slice
-/// `[ctx.run_start, meta_seq)`, anchored on the last `RunStarted` in it; the
-/// cost and model are the meta's own — `None` from
-/// [`synthesize_missing_stamps`], which has no meta and passes the run's
-/// `RunFinished` seq as `meta_seq`.
-///
-/// `false` = nothing was accumulated — either it could not be told (no log
-/// installed, an unreadable slice, no `RunStarted` to anchor on, a refused
-/// `update_session_usage`: each such path warns) or there was nothing to add
-/// (a run whose messages carried no usage and whose meta carries no price: no
-/// warn). The heal counts it as "not rebilled" either way; the distinction
-/// lives in the log line. A run with messages that carried no usage bills a
-/// FLOOR (`UsageTotals::without_usage`), said at `debug!` on the way through.
+/// What the usage fold says a run owes, read BEFORE its stamp is written.
+pub(crate) enum FoldedBill {
+    Owe(RunBill),
+    Nothing,
+    Unfoldable,
+    /// The slice could not be read. Nothing may be written: the stamp is the
+    /// bill's idempotence guard, so stamping now would forfeit the bill.
+    ReadFailed,
+}
+
+impl FoldedBill {
+    /// The bill to hand the store and the outcome to report if the stamp
+    /// lands; `None` = the fold failed and the caller writes nothing.
+    pub(crate) fn plan(self) -> Option<(Option<RunBill>, BillOutcome)> {
+        match self {
+            Self::Owe(bill) => Some((Some(bill), BillOutcome::Billed)),
+            Self::Nothing => Some((None, BillOutcome::NothingToBill)),
+            Self::Unfoldable => Some((None, BillOutcome::Unfoldable)),
+            Self::ReadFailed => None,
+        }
+    }
+}
+
+/// Fold the run's spend from the log slice `[ctx.run_start, meta_seq)`,
+/// anchored on the last `RunStarted` in it
+/// ([`crate::session::usage_fold::run_usage_totals`]). The cost and model are
+/// the meta's own — `None` from [`synthesize_missing_stamps`], which has no
+/// meta and passes the run's `RunFinished` seq as `meta_seq`. Read BEFORE the
+/// stamp (F10): the log is append-only, so the slice is fixed once the meta
+/// exists, and a read that fails leaves nothing half-written.
 ///
 /// `ctx.run_start == 0` ⇒ the slice starts at the log head and the fold
-/// anchors on the last `RunStarted` it finds — the restarted-drain case, where
-/// this process never saw the marker go by.
-async fn bill_run_from_fold(
+/// anchors on the last `RunStarted` it finds — the restarted-drain case,
+/// where this process never saw the marker go by.
+pub(crate) async fn fold_run_bill(
     id: &SessionId,
     meta_seq: EventSeq,
     ctx: &ProjectionCtx<'_>,
@@ -925,10 +962,9 @@ async fn bill_run_from_fold(
     cost_usd: Option<f64>,
     model: Option<&str>,
     provider: Option<&str>,
-) -> bool {
+) -> FoldedBill {
     let Some(events) = ctx.events else {
-        tracing::warn!(session = ?id, run_id, "projector: no event log; run spend not accumulated");
-        return false;
+        return FoldedBill::Unfoldable;
     };
     let slice = match events
         .load_events_range(id, Some(ctx.run_start), Some(meta_seq))
@@ -936,17 +972,12 @@ async fn bill_run_from_fold(
     {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(session = ?id, run_id, error = %e, "projector: usage fold read failed");
-            return false;
+            tracing::warn!(session = ?id, run_id, error = %e, "projector: usage fold read failed; nothing written, retried");
+            return FoldedBill::ReadFailed;
         }
     };
     let Some(totals) = crate::session::usage_fold::run_usage_totals(&slice) else {
-        tracing::warn!(
-            session = ?id,
-            run_id,
-            "projector: run meta with no RunStarted before it; spend not accumulated"
-        );
-        return false;
+        return FoldedBill::Unfoldable;
     };
     if totals.without_usage > 0 {
         tracing::debug!(
@@ -958,26 +989,15 @@ async fn bill_run_from_fold(
         );
     }
     if totals.input == 0 && totals.output == 0 && cost_usd.is_none() {
-        return false;
+        return FoldedBill::Nothing;
     }
-    match ctx
-        .store
-        .update_session_usage(
-            id,
-            i64::try_from(totals.input).unwrap_or(i64::MAX),
-            i64::try_from(totals.output).unwrap_or(i64::MAX),
-            cost_usd.unwrap_or(0.0),
-            model,
-            provider,
-        )
-        .await
-    {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::warn!(session = ?id, run_id, error = %e, "projector: session usage accumulation failed");
-            false
-        }
-    }
+    FoldedBill::Owe(RunBill {
+        input_tokens: i64::try_from(totals.input).unwrap_or(i64::MAX),
+        output_tokens: i64::try_from(totals.output).unwrap_or(i64::MAX),
+        cost_usd: cost_usd.unwrap_or(0.0),
+        model: model.map(str::to_string),
+        model_provider: provider.map(str::to_string),
+    })
 }
 
 impl SessionEventObserver for MessageProjector {
@@ -1432,6 +1452,175 @@ mod tests {
         }
     }
 
+    /// An event log whose retirement answer is "live" but whose range read
+    /// fails — the fold's read, not the retirement check, is what breaks.
+    struct UnreadableRange;
+
+    #[async_trait::async_trait]
+    impl SessionEventStore for UnreadableRange {
+        async fn append_batch(
+            &self,
+            _id: &SessionId,
+            _first_seq: EventSeq,
+            _events: &[(SessionEvent, i64)],
+            _retire: Option<Retire>,
+            _durability: Durability,
+        ) -> Result<(), SessionError> {
+            Ok(())
+        }
+        async fn load_all_events(
+            &self,
+            _id: &SessionId,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Ok(Vec::new())
+        }
+        async fn load_events_range(
+            &self,
+            _id: &SessionId,
+            _from: Option<EventSeq>,
+            _to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Err(SessionError::Storage("event log unreadable".into()))
+        }
+        async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
+            Ok(1)
+        }
+        async fn retire_from(
+            &self,
+            _id: &SessionId,
+            _from_seq: EventSeq,
+        ) -> Result<usize, SessionError> {
+            Ok(0)
+        }
+        async fn is_retired(&self, _id: &SessionId, _seq: EventSeq) -> Result<bool, SessionError> {
+            Ok(false)
+        }
+        async fn load_run_markers(
+            &self,
+        ) -> Result<Vec<(SessionId, crate::session::store::MarkerSlice)>, SessionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// F10: the fold is read BEFORE the stamp. A read that fails writes
+    /// nothing — the seq is retried — instead of landing a stamp whose bill
+    /// can then never be retried.
+    #[tokio::test]
+    async fn an_unreadable_fold_is_retried_and_stamps_nothing() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "unreadable_fold.db");
+        let id = SessionId::ephemeral("unreadable-fold");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+        let events: Arc<dyn SessionEventStore> = Arc::new(UnreadableRange);
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&events),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Retry
+        );
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("the row is there");
+        assert!(row.metadata.is_none(), "nothing stamped: {:?}", row.metadata);
+    }
+
+    /// F10 through the projector: the store refuses the bill, the meta is
+    /// retried with its row unstamped, and the retry bills it once.
+    #[tokio::test]
+    async fn a_refused_bill_is_retried_and_the_retry_bills_once() {
+        let temp = tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("refused_bill.db"),
+                max_messages: 10_000,
+                compaction_keep: 5_000,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let store: Arc<dyn SessionStore> = manager.clone();
+        let id = SessionId::ephemeral("refused-bill");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(&id, &one_billed_run(tid, "run_a")).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        manager
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_bill BEFORE UPDATE OF input_tokens ON sessions \
+                 BEGIN SELECT RAISE(ABORT, 'injected bill failure'); END;",
+            )
+            .unwrap();
+        let meta_rec = rec(4, run_meta(tid, "run_a"));
+        assert_eq!(project_event(&id, &meta_rec, &ctx).await, Projected::Retry);
+
+        manager.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_bill;").unwrap();
+        assert_eq!(
+            project_event(&id, &meta_rec, &ctx).await,
+            Projected::Stamped { bill: BillOutcome::Billed }
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
+    }
+
+    /// Review Focus 4: a meta whose opener is gone (retired by `/compact`)
+    /// stamps its row and bills nothing — and the heal SAYS so: one stamp
+    /// re-applied, zero rebilled, tokens untouched.
+    #[tokio::test]
+    async fn a_heal_counts_an_unfoldable_stamp_as_not_rebilled() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "unfoldable_heal.db");
+        let id = SessionId::ephemeral("unfoldable-heal");
+        store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(
+            &id,
+            &[(2, assistant_msg_billed(tid, 45, 25)), (4, run_meta(tid, "run_a"))],
+        )
+        .await;
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log);
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let mut run_start = HashMap::new();
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert_eq!(
+            (report.holes_filled, report.stamps_reapplied, report.usage_rebilled),
+            (1, 1, 0),
+            "{report:?}"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (0, 0));
+    }
+
     /// An unreadable retirement flag is neither "retired" nor "live". The old
     /// code read it as "retired", dropped the row, and returned — which on a
     /// session that then finished cleanly lost the row for good.
@@ -1649,8 +1838,9 @@ mod tests {
         }
 
         // Run A opened at seq 1, its meta at seq 3 → row seq 2. No log is
-        // pinned: this test is about WHERE the stamp lands, and without a log
-        // the fold has nothing to bill from, which the outcome says.
+        // pinned: this test is about WHERE the stamp lands; without a log
+        // there is nothing to fold, which the outcome names (Unfoldable),
+        // rather than reading as "billed nothing".
         let never = |_: EventSeq| false;
         let ctx_a = ProjectionCtx {
             store: &store,
@@ -1661,7 +1851,7 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(3, run_meta(tid, "run_a")), &ctx_a).await,
-            Projected::Stamped { billed: false }
+            Projected::Stamped { bill: BillOutcome::Unfoldable }
         );
 
         let rows = store.get_history(&id, None).await.unwrap();
@@ -1839,7 +2029,7 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta_without_gauge(tid, "run_a")), &ctx).await,
-            Projected::Stamped { billed: false },
+            Projected::Stamped { bill: BillOutcome::NothingToBill },
             "no usage, no price: stamped, nothing to bill"
         );
         let row = store
@@ -1909,7 +2099,7 @@ mod tests {
         let meta_rec = rec(4, run_meta(tid, "run_a"));
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
-            Projected::Stamped { billed: true }
+            Projected::Stamped { bill: BillOutcome::Billed }
         );
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
@@ -1962,7 +2152,7 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
-            Projected::Stamped { billed: false }
+            Projected::Stamped { bill: BillOutcome::Unfoldable }
         );
 
         let row = store

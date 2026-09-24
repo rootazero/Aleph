@@ -1009,4 +1009,64 @@ mod tests {
             .unwrap();
         assert_eq!(metadata, None, "the stamp rolled back");
     }
+
+    /// The sqlite twin of the file backend's
+    /// `a_billed_stamp_announces_but_an_already_stamped_replay_does_not`:
+    /// exactly one `SessionUpdated` follows a billed stamp, and an
+    /// `AlreadyStamped` replay announces nothing.
+    #[tokio::test]
+    async fn a_billed_stamp_announces_but_an_already_stamped_replay_does_not() {
+        let temp = tempdir().unwrap();
+        let key = SessionKey::from_key_string("agent:sqlitebillnotify:main").unwrap();
+        let store = store_with_row(&temp, &key).await;
+        let bus = std::sync::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = store.with_event_bus(bus);
+        let meta = serde_json::json!({ "run_id": "r" });
+        let bill = stamp_bill(45, 25);
+
+        assert_eq!(
+            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        let mut announced = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == &key.to_key_string() {
+                    announced += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced, 1,
+            "exactly one SessionUpdated must follow a billed stamp"
+        );
+
+        assert_eq!(
+            SessionStore::stamp_and_bill_in_range(&store, &key, 1, 4, &meta, Some(&bill))
+                .await
+                .unwrap(),
+            StampOutcome::AlreadyStamped
+        );
+        let mut announced_on_replay = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                if session_key == &key.to_key_string() {
+                    announced_on_replay += 1;
+                }
+            }
+        }
+        assert_eq!(
+            announced_on_replay, 0,
+            "an AlreadyStamped replay adds nothing and must not announce"
+        );
+    }
 }
