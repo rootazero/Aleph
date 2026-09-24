@@ -130,13 +130,17 @@ pub struct ResumeReport {
     /// the model reads the same "outcome unknown" sentence twice, the second
     /// time as prose that no longer references the call it answers.
     ///
-    /// **The owning scheduler is running it**: a delegated session that the
-    /// engine has a live turn on gets neither the repair nor the marker close,
-    /// because both are appends and a `RunFinished` written into the middle of
-    /// a running turn makes the real finish land as a `FinishWithoutStart` on
-    /// a session that is then permanently mis-read. Unlike the first producer
-    /// this one is reachable from the boot scan: the dispatcher's own tick can
-    /// re-dispatch a task while the scan is still walking the list.
+    /// **The engine is running it**: a session the engine has a live turn on
+    /// gets no append from any arm (`defer_if_running`). For a delegated
+    /// session that means neither the repair nor the marker close, because a
+    /// `RunFinished` written into the middle of a running turn makes the real
+    /// finish land as a `FinishWithoutStart` on a session that is then
+    /// permanently mis-read. For an interrupted or unanswered one it also
+    /// means no stamp and no retrigger: the live run would otherwise be read
+    /// as the open one and resumed a second time. Unlike the first producer
+    /// this one is reachable from the boot scan: the dispatcher's own tick, or
+    /// a new inbound message, can start a run while the scan is still walking
+    /// the list.
     pub busy: usize,
     /// Candidates this pass would not act on, and why. One entry per refusal,
     /// carrying the session so a multi-session boot report names which.
@@ -1034,6 +1038,34 @@ impl ResumeCoordinator {
         self.execution_adapter.running_sessions().contains(&key)
     }
 
+    /// Leave a session alone, counted as `busy`, while the engine has a turn
+    /// in flight on it. Returns `true` when the caller must stop.
+    ///
+    /// The one gate every arm that appends to a candidate's log asks before
+    /// its first append: the delegated hand-back, the interrupted repair and
+    /// the unanswered stamp. The scan runs while the gateway is already
+    /// accepting requests, so a candidate that reduced as open or unanswered
+    /// when its markers were loaded may have a live run by the time its turn
+    /// comes. That run's own records are then what the arm reads, and every
+    /// append it makes — a `ToolError` for an in-flight call, a closer, a
+    /// stamp, a duplicate retrigger — lands in the middle of it.
+    ///
+    /// Check-then-act: a run admitted between this read and the arm's first
+    /// append still races it. Closing that window needs the coordinator to
+    /// hold the engine's claim on the session for the repair's span, which it
+    /// does not have (FOLLOW-UP F28 / F30).
+    fn defer_if_running(&self, session_id: &SessionId, report: &mut ResumeReport) -> bool {
+        if !self.is_running(session_id) {
+            return false;
+        }
+        tracing::info!(
+            session = ?session_id,
+            "resume: the engine is running this session right now; leaving the log alone"
+        );
+        report.busy += 1;
+        true
+    }
+
     fn try_claim_resume(&self, session_id: &SessionId) -> Option<ResumeSlot<'_>> {
         let key = session_id.to_key_string();
         let inserted = self
@@ -1316,12 +1348,7 @@ impl ResumeCoordinator {
                 // mid-turn, and a `RunFinished` appended into the middle of a
                 // live run is the `FinishWithoutStart` this round exists to
                 // stop producing.
-                if self.is_running(session_id) {
-                    tracing::info!(
-                        session = ?session_id,
-                        "resume: its own scheduler is running it right now; leaving the log alone"
-                    );
-                    report.busy += 1;
+                if self.defer_if_running(session_id, report) {
                     return;
                 }
                 tracing::info!(
@@ -1465,6 +1492,9 @@ impl ResumeCoordinator {
         attempts: u32,
         report: &mut ResumeReport,
     ) {
+        if self.defer_if_running(session_id, report) {
+            return;
+        }
         let events = match self.event_store.load_all_events(session_id).await {
             Ok(events) => events,
             // A row this build cannot decode is the log refusing to be read,
@@ -1780,6 +1810,9 @@ impl ResumeCoordinator {
         attempts: u32,
         report: &mut ResumeReport,
     ) {
+        if self.defer_if_running(session_id, report) {
+            return;
+        }
         let Some(user_at) = user_at else {
             tracing::warn!(
                 session = ?session_id,
