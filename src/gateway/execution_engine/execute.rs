@@ -343,6 +343,20 @@ where
         configured.unwrap_or(crate::config::types::policies::DEFAULT_BTW_FORK_TURNS)
     }
 
+    /// The fast path handed this run to the agent loop: it is `Running`, on
+    /// the model its request now names. A `/command` may just have pinned one
+    /// (`slash_command_body::admit`), and the busy lane's steer-fold check
+    /// (`steering::find_busy_sibling`) compares this stored copy — not the
+    /// request the run was admitted with — against an incoming message.
+    pub(super) async fn mark_fallen_through(&self, run_id: &str, request: &RunRequest) {
+        if let Some(run) = self.active_runs.write().await.get_mut(run_id) {
+            run.state = RunState::Running;
+            run.request
+                .model_override
+                .clone_from(&request.model_override);
+        }
+    }
+
     /// Execute a run request
     ///
     /// Returns a stream of events for the run.
@@ -811,11 +825,9 @@ where
                         .await;
                 }
                 Err(ExecutionError::Fallthrough { ref reason }) => {
-                    // Skills/custom commands need LLM processing — fall through to agent loop
-                    let mut runs = self.active_runs.write().await;
-                    if let Some(run) = runs.get_mut(&run_id) {
-                        run.state = RunState::Running;
-                    }
+                    // Skills/custom commands need LLM processing — fall through
+                    // to the agent loop.
+                    //
                     // Round-2 B7: a `/moa <prompt>` arriving through a channel
                     // reaches this fallthrough with the RAW "/moa ..." text
                     // still in request.input (the channel-path intercept can't
@@ -838,17 +850,21 @@ where
                         reason = %reason,
                         "Command falling through to agent loop"
                     );
-                    // A plugin COMMAND renders its body here, not with the
-                    // skill scope above: the fast path just judged its owning
-                    // plugin visible to this session (face ④), and only the
+                    // A plugin COMMAND is admitted here, not with the skill
+                    // scope above: the fast path just judged its owning plugin
+                    // visible to this session (face ④), and only the
                     // registration that owner holds under the exact key the
-                    // mode names renders (`slash_command_body::owned_command`),
-                    // so a hidden plugin's inline commands never run. The `!` expansions
-                    // and `@file` reads happen once, now; the block rides the
-                    // run loop's transient blocks and the command's `model:`
-                    // this turn's `model_override`. A command that cannot run
-                    // as written fails the turn visibly.
-                    if let Err(why) = super::slash_command_body::stamp(&mut request, &agent).await {
+                    // mode names is admitted (`slash_command_body::owned_command`).
+                    // Admission judges the command's `model:` (a refused one
+                    // fails the turn visibly, before anything runs) and spawns
+                    // nothing: the body renders in the run loop, after the
+                    // turn-start hooks let the turn go ahead.
+                    //
+                    // No `active_runs` guard may be alive across this call:
+                    // the refusal below takes that lock again.
+                    let admitted = super::slash_command_body::admit(&mut request).await;
+                    self.mark_fallen_through(&run_id, &request).await;
+                    if let Err(why) = admitted {
                         return self
                             .finalize_fast_path_error(
                                 &run_id,

@@ -447,11 +447,11 @@ pub(super) async fn ensure_session_under_request_scope(
 /// (project mode), else the agent's own workspace.
 ///
 /// The one derivation behind the run's `FsScope` / exec-workspace task-locals
-/// ([`ExecutionEngine::run_agent_loop`]), its `effective_workspace` (which
-/// adds the vanished-override check) and the directory a `/command`'s inline
-/// shell commands run in (`slash_command_body`), which renders before either
-/// task-local is entered. Not validated: a caller that needs an existing
-/// directory checks it.
+/// ([`ExecutionEngine::run_agent_loop`]) and its `effective_workspace` (which
+/// adds the vanished-override check) — and, through the latter, the directory
+/// a `/command`'s inline shell commands run in
+/// (`slash_command_body::render_admitted`). Not validated: a caller that needs
+/// an existing directory checks it.
 pub(super) fn run_workspace(request: &RunRequest, agent: &AgentInstance) -> std::path::PathBuf {
     request
         .workspace_override

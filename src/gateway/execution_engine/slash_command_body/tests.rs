@@ -36,7 +36,7 @@ struct Fixture {
     root: PathBuf,
     work: PathBuf,
     consent: Arc<ShellHookConsent>,
-    manager: ExtensionManager,
+    manager: Arc<ExtensionManager>,
 }
 
 impl Fixture {
@@ -47,18 +47,20 @@ impl Fixture {
         let work = tmp.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
         let consent = Arc::new(ShellHookConsent::with_path(tmp.path().join("allow.json")));
-        let manager = ExtensionManager::new(ExtensionConfig {
-            discovery: DiscoveryConfig {
-                working_dir: tmp.path().to_path_buf(),
-                scan_claude_dirs: false,
-                scan_project_dirs: false,
-                max_upward_depth: 0,
-            },
-            plugins_config_path: Some(tmp.path().join("plugins.toml")),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+        let manager = Arc::new(
+            ExtensionManager::new(ExtensionConfig {
+                discovery: DiscoveryConfig {
+                    working_dir: tmp.path().to_path_buf(),
+                    scan_claude_dirs: false,
+                    scan_project_dirs: false,
+                    max_upward_depth: 0,
+                },
+                plugins_config_path: Some(tmp.path().join("plugins.toml")),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
         {
             let mut registry = manager.get_plugin_registry_mut().await;
             let mut record = PluginRecord::new(
@@ -112,29 +114,44 @@ impl Fixture {
         }
     }
 
-    /// `/plug:greet <args>` through `resolve_command_turn` — the registry,
-    /// the record, the settings and the consented shell production uses —
-    /// with `<tmp>/work` as the run's directory.
-    async fn turn(&self, args: &str) -> Result<Option<CommandTurn>, String> {
+    /// `/plug:greet <args>` through `render_command` — the registry, the
+    /// record, the settings and the consented shell production uses — with
+    /// `<tmp>/work` as the run's directory: its `<command>` block.
+    async fn block(&self, args: &str) -> String {
         let mode = serde_json::json!({
             "type": "skill", "skill_id": "plug:greet", "owning_plugin": PLUGIN, "args": args
         });
-        resolve_command_turn(
+        render_command(
             &mode,
             Some(self.work.clone()),
-            None,
             &self.manager,
             Arc::clone(&self.consent),
         )
         .await
+        .expect("renders")
+        .expect("a command turn")
+        .1
     }
 
-    async fn block(&self, args: &str) -> String {
-        self.turn(args)
-            .await
-            .expect("renders")
-            .expect("a command turn")
-            .block
+    /// The two production steps for `request`: [`admit`] (the fast path's
+    /// fallthrough arm), then [`render_admitted`] (the run loop, after its
+    /// turn-start seams) in the run's own directory.
+    async fn admit_and_render(
+        &self,
+        request: &mut RunRequest,
+        agent: &crate::gateway::agent_instance::AgentInstance,
+    ) -> Result<Option<String>, String> {
+        admit_with(request, &self.manager).await?;
+        let run_dir = super::super::run_loop::run_workspace(request, agent);
+        render_admitted(
+            request,
+            &run_dir,
+            Some(&self.manager),
+            Arc::clone(&self.consent),
+            &CancellationToken::new(),
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 
     /// A `/plug:greet World` request whose slash mode is the real envelope —
@@ -233,7 +250,7 @@ async fn a_skill_mode_that_names_a_real_skill_is_not_a_command_turn() {
         serde_json::json!({"type": "skill", "skill_id": "not-registered", "args": ""}),
         serde_json::json!({"type": "direct_tool", "tool_id": "plug:greet", "args": ""}),
     ] {
-        let turn = resolve_command_turn(&mode, None, None, &f.manager, Arc::clone(&f.consent))
+        let turn = render_command(&mode, None, &f.manager, Arc::clone(&f.consent))
             .await
             .unwrap();
         assert!(turn.is_none(), "{mode}");
@@ -255,14 +272,11 @@ async fn a_bare_skill_never_renders_a_same_named_plugin_command() {
     let mut request =
         envelope_request(catalog_entry("greet", None), "/greet World", f.work.clone()).await;
 
-    stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
+    let block = f
+        .admit_and_render(&mut request, &agent)
         .await
         .expect("the skill's turn goes ahead");
-    assert_eq!(
-        transient_block(&request.metadata),
-        None,
-        "rendered a plugin command for a skill"
-    );
+    assert_eq!(block, None, "rendered a plugin command for a skill");
     assert!(
         !f.work.join("RAN").exists(),
         "a plugin's inline command ran for a skill"
@@ -284,10 +298,9 @@ async fn only_the_judged_owners_command_under_its_exact_key_renders() {
         serde_json::json!({"type": "skill", "skill_id": "greet", "owning_plugin": PLUGIN, "args": ""}),
         serde_json::json!({"type": "skill", "skill_id": "plug:greet", "args": ""}),
     ] {
-        let turn = resolve_command_turn(
+        let turn = render_command(
             &mode,
             Some(f.work.clone()),
-            None,
             &f.manager,
             Arc::clone(&f.consent),
         )
@@ -437,10 +450,9 @@ async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
     let mode = serde_json::json!({
         "type": "skill", "skill_id": "orphan:greet", "owning_plugin": "orphan", "args": "you"
     });
-    let turn = resolve_command_turn(
+    let (_, block) = render_command(
         &mode,
         Some(f.work.clone()),
-        None,
         &f.manager,
         Arc::clone(&f.consent),
     )
@@ -448,9 +460,10 @@ async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
     .unwrap()
     .expect("a command turn");
     assert!(
-        turn.block.contains("Hi you [[!`echo hi` not run"),
-        "{}",
-        turn.block
+        block.contains(
+            "Hi you [[!`echo hi` not run: the plugin that ships this command has no record here]]"
+        ),
+        "{block}"
     );
     assert!(
         f.consent.entries().is_empty(),
@@ -497,25 +510,25 @@ fn a_declared_model_pins_this_turn_only_when_the_request_has_none() {
     assert!(why.contains("retired"), "{why}");
 }
 
-/// The execute.rs seam end to end below the fast path: the real slash
-/// envelope in, the rendered block in the TRANSIENT slot the run loop reads,
-/// the raw `/command` still the input — the text the run loop persists as
-/// the user turn — and the command's model as this turn's override. The
-/// rescue then strips both.
+/// Both production steps below the fast path: the real slash envelope in,
+/// the rendered block handed to the run loop's TRANSIENT blocks and nowhere
+/// else — no metadata value holds it — the raw `/command` still the input
+/// (the text the run loop persists as the user turn), and the command's model
+/// as this turn's override. The rescue then strips the admission and the pin.
 #[tokio::test]
 #[cfg(unix)]
-async fn stamp_renders_into_the_transient_slot_and_leaves_the_input_raw() {
+async fn an_admitted_command_renders_for_the_transient_blocks_and_leaves_the_input_raw() {
     let f = Fixture::new("Say hello to $1 from !`pwd -P`.", Some("claude-sonnet-5")).await;
     f.approve("pwd -P");
     let temp = TempDir::new().unwrap();
     let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
     let mut request = f.request(f.work.clone()).await;
 
-    stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
+    let block = f
+        .admit_and_render(&mut request, &agent)
         .await
-        .expect("the command renders");
-
-    let block = transient_block(&request.metadata).expect("a transient block");
+        .expect("the command renders")
+        .expect("a command block");
     assert!(
         block.starts_with("<command name=\"greet\" plugin=\"plug\" invoked=\"/plug:greet\">"),
         "{block}"
@@ -534,7 +547,14 @@ async fn stamp_renders_into_the_transient_slot_and_leaves_the_input_raw() {
         .filter(|(_, value)| value.contains("Say hello to World"))
         .map(|(key, _)| key)
         .collect();
-    assert_eq!(carriers, [BODY_KEY], "the body rides one key only");
+    assert!(
+        carriers.is_empty(),
+        "the body rides in metadata: {carriers:?}"
+    );
+    assert_eq!(
+        request.metadata.get(ADMITTED_KEY).map(String::as_str),
+        Some("plug:greet")
+    );
     assert_eq!(
         request.model_override,
         Some(ModelOverride::Raw {
@@ -544,7 +564,17 @@ async fn stamp_renders_into_the_transient_slot_and_leaves_the_input_raw() {
 
     let kept = strip(&mut request.metadata, request.model_override.clone());
     assert_eq!(kept, None, "the command's pin was for its own turn");
-    assert_eq!(transient_block(&request.metadata), None);
+    let run_dir = super::super::run_loop::run_workspace(&request, &agent);
+    let again = render_admitted(
+        &request,
+        &run_dir,
+        Some(&f.manager),
+        Arc::clone(&f.consent),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again, None, "a stripped request renders its command again");
 }
 
 /// The composer's pick outranks the command's `model:`, and survives the
@@ -560,11 +590,9 @@ async fn the_users_model_pick_survives_the_command_and_the_rescue() {
     };
     request.model_override = Some(user.clone());
 
-    stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
-        .await
-        .unwrap();
+    let block = f.admit_and_render(&mut request, &agent).await.unwrap();
     assert_eq!(request.model_override.as_ref(), Some(&user));
-    assert!(transient_block(&request.metadata).is_some());
+    assert!(block.is_some());
     assert_eq!(
         strip(&mut request.metadata, request.model_override.clone()),
         Some(user)
@@ -580,18 +608,20 @@ async fn a_vanished_run_directory_withholds_the_inline_commands() {
     let temp = TempDir::new().unwrap();
     let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
     let mut request = f.request(f.work.join("gone")).await;
-    stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
+    let block = f
+        .admit_and_render(&mut request, &agent)
         .await
+        .unwrap()
         .unwrap();
-    let block = transient_block(&request.metadata).unwrap();
     assert!(
         block.contains("[[!`echo hi` not run: no working directory is known for this turn]]"),
         "{block}"
     );
 }
 
-/// A `model:` the provider would fail stops the turn BEFORE the body renders:
-/// its approved inline command never runs, and nothing is stamped.
+/// A `model:` the provider would fail stops the turn at admission, BEFORE the
+/// body renders: nothing is admitted, so the run loop renders nothing and the
+/// approved inline command never runs.
 #[tokio::test]
 #[cfg(unix)]
 async fn a_retired_model_stops_the_turn_before_any_inline_command_runs() {
@@ -601,19 +631,31 @@ async fn a_retired_model_stops_the_turn_before_any_inline_command_runs() {
     let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
     let mut request = f.request(f.work.clone()).await;
 
-    let why = stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
+    let why = f
+        .admit_and_render(&mut request, &agent)
         .await
         .expect_err("a retired model refuses the turn");
     assert!(why.starts_with("/plug:greet was not run:"), "{why}");
-    assert!(!f.work.join("RAN").exists(), "an inline command ran first");
-    assert_eq!(transient_block(&request.metadata), None);
+    assert!(!request.metadata.contains_key(ADMITTED_KEY));
+    let run_dir = super::super::run_loop::run_workspace(&request, &agent);
+    let rendered = render_admitted(
+        &request,
+        &run_dir,
+        Some(&f.manager),
+        Arc::clone(&f.consent),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rendered, None);
+    assert!(!f.work.join("RAN").exists(), "an inline command ran");
     assert_eq!(request.model_override, None);
 }
 
 /// Nobody under `execution_engine/` spells the two metadata keys but this
-/// module — every reader goes through `transient_block` / `strip`, so a
-/// second reader cannot re-deliver the body (a continuation) or keep the
-/// command's model past its turn. Literals are kept and comments dropped.
+/// module — every reader goes through `render_admitted` / `strip`, so a
+/// second reader cannot render the command again (a continuation) or keep
+/// the command's model past its turn. Literals are kept and comments dropped.
 #[test]
 fn only_this_module_spells_its_metadata_keys() {
     use crate::utils::source_scan::{code_keeping_literals, production_text, rust_sources_under};
@@ -633,7 +675,7 @@ fn only_this_module_spells_its_metadata_keys() {
         }
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
         let code = code_keeping_literals(&production_text(&path, text));
-        for key in [BODY_KEY, MODEL_PIN_KEY] {
+        for key in [ADMITTED_KEY, MODEL_PIN_KEY] {
             if code.contains(&format!("\"{key}\"")) {
                 offenders.push(format!("{rel}: {key}"));
             }
@@ -642,16 +684,21 @@ fn only_this_module_spells_its_metadata_keys() {
     assert!(offenders.is_empty(), "{offenders:?}");
 }
 
-/// The two fire sites, by position:
-/// - `execute.rs` renders exactly once, inside the fast path's
-///   `Fallthrough` arm — so after face ④ judged the owner visible, and never
-///   for a command the fast path refused or served;
-/// - `run_loop/inner.rs` reads the block exactly once, before the first
-///   `transient_blocks.push` — the command is the turn's instruction, every
-///   reminder annotates it.
+/// The fire sites, by position:
+/// - the owner gate runs inside the fast path, before its dispatch;
+/// - `execute.rs` admits exactly once, inside the fast path's `Fallthrough`
+///   arm — after face ④ judged the owner, never for a command the fast path
+///   refused or served — with no `active_runs` guard alive across the call
+///   (its refusal takes that lock again), and then records the run's model
+///   for the busy lane;
+/// - `run_loop/inner.rs` renders exactly once, AFTER its `UserPromptSubmit`
+///   seam (and so after `BeforeAgentStart`, which fires earlier in
+///   `run_agent_loop`) and before the transient context is joined, in the
+///   run's own directory, and inserts the block at index 0 — the command is
+///   the turn's instruction, every reminder annotates it.
 ///
-/// Comment lines are stripped first, so the prose that names both anchors
-/// can neither satisfy nor defeat a `find`.
+/// Comment lines are stripped first, so the prose that names the anchors can
+/// neither satisfy nor defeat a `find`.
 #[test]
 fn the_body_renders_after_the_owner_gate_and_is_pushed_first() {
     use crate::utils::source_scan::{production_prefix, strip_comment_lines};
@@ -683,31 +730,41 @@ fn the_body_renders_after_the_owner_gate_and_is_pushed_first() {
         &execute,
         "Err(ExecutionError::Fallthrough { ref reason }) => {",
     );
-    let render = once(&execute, "slash_command_body::stamp(");
+    let admit = once(&execute, "slash_command_body::admit(");
+    let marked = once(&execute, ".mark_fallen_through(");
     let refused = execute
         .get(fallthrough..)
         .and_then(|rest| rest.find("Err(ref e) => {"))
         .map(|at| at + fallthrough)
         .expect("the fast path's refusal arm follows the fallthrough arm");
     assert!(
-        fast_path < fallthrough && fallthrough < render && render < refused,
-        "execute.rs must render the command inside the Fallthrough arm, after the fast path \
-         (face ④) — positions: fast path {fast_path}, fallthrough {fallthrough}, render \
-         {render}, refusal arm {refused}"
+        fast_path < fallthrough && fallthrough < admit && admit < marked && marked < refused,
+        "execute.rs must admit the command inside the Fallthrough arm, after the fast path \
+         (face ④), then record the run's model — positions: fast path {fast_path}, fallthrough \
+         {fallthrough}, admit {admit}, mark {marked}, refusal arm {refused}"
+    );
+    let arm = execute.get(fallthrough..refused).unwrap_or_default();
+    assert!(
+        !arm.contains("active_runs"),
+        "the Fallthrough arm must not hold `active_runs` itself: a guard alive across \
+         `admit` deadlocks its refusal"
     );
 
     let inner = strip_comment_lines(&production_prefix(include_str!("../run_loop/inner.rs")));
-    let declared = once(&inner, "let mut transient_blocks");
-    let read = once(&inner, "slash_command_body::transient_block(");
-    let first_push = inner
-        .get(declared..)
-        .and_then(|rest| rest.find("transient_blocks.push("))
-        .map(|at| at + declared)
-        .expect("the loop pushes its reminders");
+    let prompt_seam = once(&inner, "execute_interceptors(HookEvent::UserPromptSubmit");
+    let render = once(&inner, "slash_command_body::render_admitted(");
+    let first = once(&inner, "transient_blocks.insert(0, block)");
+    let joined = once(&inner, "let transient_context =");
     assert!(
-        declared < read && read < first_push,
-        "inner.rs must push the command block before every reminder — positions: declared \
-         {declared}, read {read}, first push {first_push}"
+        prompt_seam < render && render < first && first < joined,
+        "inner.rs must render the command after its UserPromptSubmit seam and put it first — \
+         positions: seam {prompt_seam}, render {render}, insert {first}, joined {joined}"
+    );
+    assert!(
+        inner
+            .get(render..first)
+            .is_some_and(|call| call.contains("&effective_workspace")),
+        "the render runs in the run's own directory (`run_workspace`)"
     );
 }
 
@@ -717,8 +774,9 @@ fn the_body_renders_after_the_owner_gate_and_is_pushed_first() {
 ///   clones, before it builds the continuation — or the body is delivered,
 ///   and the command's model pinned, a second time;
 /// - "where does this run work" has ONE derivation: the helper holds the
-///   only `agent.workspace()` fallback, and its three readers (the run's
-///   task-locals, `effective_workspace`, this module's render) call it.
+///   only `agent.workspace()` fallback, and its two callers (the run's
+///   task-locals, `effective_workspace`) call it; the render runs in
+///   `effective_workspace` (pinned above).
 #[test]
 fn the_rescue_strips_the_command_and_the_run_directory_has_one_derivation() {
     use crate::utils::source_scan::{production_prefix, strip_comment_lines};
@@ -756,7 +814,171 @@ fn the_rescue_strips_the_command_and_the_run_directory_has_one_derivation() {
     );
     assert_eq!(
         count("run_workspace(request, "),
-        3,
+        2,
         "a reader stopped calling `run_workspace`"
+    );
+}
+
+/// Admit `/plug:greet` (body: an approved `touch RAN`) the way the fallthrough
+/// arm does, then drive the run loop that renders it — `run_agent_loop_inner`
+/// with an optional `UserPromptSubmit` interceptor running `hook`. Returns
+/// whether the inline command ran. The run runs in the agent's own workspace
+/// (no `workspace_override`: an override would be registered in the real
+/// project catalogue).
+#[cfg(unix)]
+async fn run_loop_with_prompt_hook(hook: Option<&str>) -> bool {
+    use crate::extension::hooks::HookExecutor;
+    use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+    let f = Fixture::new("[!`touch RAN`]", None).await;
+    f.approve("touch RAN");
+    let temp = TempDir::new().unwrap();
+    let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+    std::fs::create_dir_all(agent.workspace()).unwrap();
+    let mut request = f.request(f.work.clone()).await;
+    request.workspace_override = None;
+    admit_with(&mut request, &f.manager)
+        .await
+        .expect("admitted");
+
+    let engine = super::super::engine::ExecutionEngine::new(
+        Default::default(),
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        Arc::new(super::super::tests::EmptyToolRegistry),
+        Vec::new(),
+        None,
+    )
+    .with_inline_consent(Arc::clone(&f.consent));
+    let executor = hook.map(|command| {
+        Arc::new(HookExecutor::new(vec![HookConfig {
+            event: HookEvent::UserPromptSubmit,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::Normal,
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: command.to_string(),
+            }],
+            plugin_name: "turn-start-test".to_string(),
+            plugin_root: temp.path().to_path_buf(),
+            handler: None,
+            timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
+        }]))
+    });
+    let result = engine
+        .run_agent_loop_inner(
+            "run-cmd",
+            &request,
+            Arc::clone(&agent),
+            Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                tokio::time::Instant::now() + Duration::from_secs(60),
+            )),
+            None,
+            CancellationToken::new(),
+            Some(Arc::clone(&f.manager)),
+            executor,
+            "cmd-hooks".to_string(),
+            Arc::new(std::sync::Mutex::new(None)),
+        )
+        .await;
+    // Neither run reaches a provider: the deny ends one, and the test engine
+    // has no orchestrator to dispatch the other to.
+    assert!(result.is_err(), "{result:?}");
+    agent.workspace().join("RAN").exists()
+}
+
+/// S2. A turn-start hook that stops the turn stops the command's inline
+/// shell too: the body renders in the run loop only after `UserPromptSubmit`
+/// let the turn go ahead.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_turn_start_deny_hook_stops_the_commands_inline_shell() {
+    assert!(
+        !run_loop_with_prompt_hook(Some("echo 'deny: stopped by the test'")).await,
+        "an approved inline command ran for a turn its UserPromptSubmit hook denied"
+    );
+}
+
+/// S2's other half: the same loop does render the admitted command — and
+/// run its approved inline command — when nothing stops the turn.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_run_loop_renders_an_admitted_command_when_its_hooks_allow() {
+    assert!(
+        run_loop_with_prompt_hook(None).await,
+        "the run loop never rendered the admitted command"
+    );
+}
+
+/// S8. A stopped turn does not wait on its command's inline shell: the render
+/// races the run's cancel token.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cancelled_turn_renders_nothing() {
+    let f = Fixture::new("[!`touch RAN`]", None).await;
+    f.approve("touch RAN");
+    let mut request = f.request(f.work.clone()).await;
+    admit_with(&mut request, &f.manager).await.unwrap();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let rendered = render_admitted(
+        &request,
+        &f.work,
+        Some(&f.manager),
+        Arc::clone(&f.consent),
+        &cancel,
+    )
+    .await;
+    assert!(
+        matches!(rendered, Err(ExecutionError::Cancelled)),
+        "{rendered:?}"
+    );
+    assert!(
+        !f.work.join("RAN").exists(),
+        "a cancelled turn ran an inline command"
+    );
+}
+
+/// S11. The busy lane compares an incoming message's model against the
+/// RUNNING copy of the request; once a `/command` pinned its model, that copy
+/// must say so — or a steer on another model folds into this run.
+#[tokio::test]
+async fn the_busy_lane_sees_the_model_a_command_pinned() {
+    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+    let mut request = f.request(f.work.clone()).await;
+    let engine = super::super::tests::test_engine();
+    engine.active_runs.write().await.insert(
+        request.run_id.clone(),
+        super::super::ActiveRun {
+            request: request.clone(),
+            state: super::super::RunState::Running,
+            started_at: chrono::Utc::now(),
+            admitted_at: std::time::Instant::now(),
+            completed_at: None,
+            steps_completed: 0,
+            current_tool: None,
+            cancel_tx: None,
+            seq_counter: crate::sync_primitives::AtomicU64::new(0),
+            chunk_counter: crate::sync_primitives::AtomicU32::new(0),
+        },
+    );
+    admit_with(&mut request, &f.manager).await.unwrap();
+    engine.mark_fallen_through(&request.run_id, &request).await;
+
+    let sibling = super::super::steering::find_busy_sibling(
+        &engine.active_runs,
+        "a-later-message",
+        &request.session_key,
+    )
+    .await
+    .expect("the run is running");
+    assert_eq!(
+        sibling.model_override,
+        Some(ModelOverride::Raw {
+            model: "claude-sonnet-5".into()
+        })
     );
 }

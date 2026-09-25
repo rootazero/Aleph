@@ -138,6 +138,12 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// weaker derivation: a fallback that resolved `/foo` a *different* way
     /// is precisely the drift this cell exists to remove.
     pub(super) command_parser: crate::command::CommandParserCell,
+    /// The consent registry a `/command`'s inline shell commands are checked
+    /// against (`slash_command_body::render_admitted`, in the run loop): the
+    /// process-wide one a plugin's `hooks.json` commands use. Held here rather
+    /// than taken from the run's hook-executor snapshot, which is `None` when
+    /// no hook is registered.
+    pub(super) inline_consent: Arc<crate::extension::hooks::ShellHookConsent>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -183,9 +189,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             planner_provider: None,
             capture_registry: None,
             command_parser: Arc::new(tokio::sync::RwLock::new(None)),
+            inline_consent: crate::extension::hooks::ShellHookConsent::shared(),
         };
         super::concurrency_handle::install_global(&engine.concurrency);
         engine
+    }
+
+    /// Check inline commands against `consent` instead of the process-wide
+    /// registry (a test's own file).
+    #[cfg(test)]
+    pub(super) fn with_inline_consent(
+        mut self,
+        consent: Arc<crate::extension::hooks::ShellHookConsent>,
+    ) -> Self {
+        self.inline_consent = consent;
+        self
     }
 
     /// Inject the deferred channel-registry cell so the R5 progress sink can

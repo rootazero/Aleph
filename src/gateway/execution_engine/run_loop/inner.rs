@@ -407,13 +407,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // first-user-message content — equal to the raw input.
         let effective_user_input: String = request.input.clone();
         let mut transient_blocks: Vec<String> = Vec::new();
-        // A `/command` turn: the command's rendered body, FIRST — it is this
-        // turn's instruction, and every reminder below annotates it. Rides
-        // the transient channel, so the persisted user turn stays the raw
-        // `/command args` (`slash_command_body` module doc).
-        transient_blocks.extend(super::super::slash_command_body::transient_block(
-            &request.metadata,
-        ));
         for c in &session_start_blocks {
             transient_blocks.push(format!(
                 "<system-reminder>\n{}\n</system-reminder>",
@@ -487,6 +480,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
             }
+        }
+
+        // A `/command` turn: the command's body renders HERE — after both
+        // turn-start seams (`BeforeAgentStart` in `run_agent_loop`, the
+        // `UserPromptSubmit` above) let the turn go ahead, so a hook that
+        // stops the turn stops its inline commands too — and goes FIRST: it is
+        // this turn's instruction, every reminder annotates it. It rides the
+        // transient channel, so the persisted user turn stays the raw
+        // `/command args` (`slash_command_body` module doc).
+        if let Some(block) = super::super::slash_command_body::render_admitted(
+            request,
+            &effective_workspace,
+            extension_manager.as_deref(),
+            Arc::clone(&self.inline_consent),
+            &cancel_token,
+        )
+        .await?
+        {
+            transient_blocks.insert(0, block);
         }
 
         // Project-mode context: advertise the project's own skills so the model

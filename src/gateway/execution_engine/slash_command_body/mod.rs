@@ -7,24 +7,31 @@
 //! slash resolver fell through to the agent loop with the raw `/command args`
 //! and the body sat in `SkillRegistration.content`, parsed and never read.
 //!
-//! **Where it renders.** The fast path's fallthrough arm in `execute.rs`
-//! calls [`stamp`] — after `execute_slash_command_fast_path` has judged the
-//! command's owning plugin visible to this session (`extension::visibility`
-//! face ④). The registration rendered is found from the same fact the gate
-//! judged ([`owned_command`]: the mode's owner, the exact qualified key), so
-//! the inline commands of a plugin the session cannot see never run — not
-//! even through a bundled skill that shares the command's bare name.
-//! [`stamp`] renders the body once — the `` !`cmd` `` expansions and
-//! `@file` reads happen there — and leaves the `<command>` block in the
-//! request's metadata; the run loop pushes it FIRST into its transient
-//! blocks ([`transient_block`]).
+//! **Two steps, two places.**
+//! - [`admit`] runs in the fast path's fallthrough arm in `execute.rs`, right
+//!   after `execute_slash_command_fast_path` judged the command's owning
+//!   plugin visible to this session (`extension::visibility` face ④). It
+//!   finds the registration from the same fact the gate judged
+//!   ([`owned_command`]: the mode's owner, the exact qualified key), judges
+//!   its `model:` — a refused model fails the turn before anything runs — and
+//!   marks the request as carrying that command. It spawns nothing.
+//! - [`render_admitted`] runs in the run loop, AFTER the turn-start seams
+//!   (`BeforeAgentStart`, `UserPromptSubmit`) let the turn go ahead, so a deny
+//!   hook stops the command's inline shell too. It renders the body — the
+//!   `` !`cmd` `` expansions and `@file` reads happen there, raced against the
+//!   run's cancel token — and the run loop puts the `<command>` block FIRST
+//!   in its transient blocks.
+//!
+//! The inline commands of a plugin the session cannot see therefore never
+//! run — not even through a bundled skill that shares the command's bare
+//! name.
 //!
 //! **Not persisted.** The transient channel (`transient_blocks` →
 //! `HarnessDeps::recall_context`) is delivered to the model every Think and
 //! never written to the session log, so the stored user turn — and the
 //! session title derived from it — stays the raw `/command args`. Claude Code
 //! persists the expansion instead; `PLUGIN_SYSTEM.md` records the difference.
-//! A steering rescue strips the block ([`strip`]); a crash resume re-drives
+//! A steering rescue strips the command ([`strip`]); a crash resume re-drives
 //! the log, which never held it.
 //!
 //! **Inline commands** run through [`ConsentedShell`]: the consent registry a
@@ -36,9 +43,11 @@
 //! ([`command_model_pin`]).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
 
 use crate::extension::hooks::{
     read_capped, ShellHookConsent, INLINE_COMMAND_EVENT, MAX_HOOK_OUTPUT_BYTES,
@@ -49,17 +58,16 @@ use crate::extension::{
     inline_shell_command, ExtensionError, ExtensionManager, InlineArgs, InlineShell, InlineSite,
     PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
 };
-use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::model_override::ModelOverride;
 use crate::sync_primitives::Arc;
 
-use super::RunRequest;
+use super::{ExecutionError, RunRequest};
 
-/// Request-metadata key carrying a `/command` turn's rendered `<command>`
-/// block. Written by [`stamp`], read by [`transient_block`], removed by
-/// [`strip`]; nothing outside this module spells it.
-const BODY_KEY: &str = "slash_command_body";
+/// Request-metadata key naming the plugin command [`admit`] admitted for this
+/// turn (its qualified id). Written by [`admit`], read by [`render_admitted`],
+/// removed by [`strip`]; nothing outside this module spells it.
+const ADMITTED_KEY: &str = "slash_command_admitted";
 
 /// Request-metadata key present when `model_override` is the command's
 /// `model:` rather than the request's own pick, so [`strip`] can tell the two
@@ -72,60 +80,37 @@ const MODEL_PIN_KEY: &str = "slash_command_model";
 /// expansion.
 const INLINE_SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// What a resolved `/command` contributes to its turn.
-pub(super) struct CommandTurn {
-    /// The `<command …>…</command>` block for the transient blocks.
-    pub block: String,
-    /// The command's `model:` as this turn's override, when it applies
-    /// ([`command_model_pin`]).
-    pub model_pin: Option<ModelOverride>,
-}
-
-/// Render this turn's plugin command into the request, if its slash mode
-/// names one: the `<command>` block into metadata, the command's `model:`
-/// into `model_override`. The fast path's fallthrough arm calls this, after
-/// the owning plugin was judged visible.
+/// Admit this turn's plugin command, if its slash mode names one: judge its
+/// `model:` into `model_override` and mark the request for
+/// [`render_admitted`]. The fast path's fallthrough arm calls this, right
+/// after the owning plugin was judged visible. Spawns nothing.
 ///
 /// `Err` is the user-facing reason the turn cannot go ahead as the command
-/// wrote it (a retired `model:`, a body over the file-reference cap); the
-/// caller fails the run with it rather than sending the raw `/command` alone.
-pub(super) async fn stamp(request: &mut RunRequest, agent: &AgentInstance) -> Result<(), String> {
+/// wrote it (a retired `model:`); the caller fails the run with it rather
+/// than sending the raw `/command` alone.
+pub(super) async fn admit(request: &mut RunRequest) -> Result<(), String> {
     let Some(manager) = crate::extension::try_extension_manager() else {
         return Ok(());
     };
-    stamp_with(request, agent, manager, ShellHookConsent::shared()).await
+    admit_with(request, manager).await
 }
 
-/// [`stamp`] with its two process globals handed in.
-pub(super) async fn stamp_with(
+/// [`admit`] with the extension manager handed in.
+pub(super) async fn admit_with(
     request: &mut RunRequest,
-    agent: &AgentInstance,
     manager: &ExtensionManager,
-    consent: Arc<ShellHookConsent>,
 ) -> Result<(), String> {
-    let Some(mode) = request
-        .metadata
-        .get(SLASH_COMMAND_MODE_KEY)
-        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-    else {
+    let Some(mode) = slash_mode(&request.metadata) else {
         return Ok(());
     };
-    // The run's own directory — the value its tools and exec jail get, from
-    // the same derivation — and only if it is there to run in.
-    let cwd = Some(super::run_loop::run_workspace(request, agent)).filter(|d| d.is_dir());
-    let Some(turn) = resolve_command_turn(
-        &mode,
-        cwd,
-        request.model_override.as_ref(),
-        manager,
-        consent,
-    )
-    .await?
-    else {
+    let Some(reg) = owned_command(&mode, &*manager.get_plugin_registry().await).cloned() else {
         return Ok(());
     };
-    request.metadata.insert(BODY_KEY.to_string(), turn.block);
-    if let Some(pin) = turn.model_pin {
+    let qualified = reg.qualified_name();
+    let pin = command_model_pin(request.model_override.as_ref(), reg.model.as_deref())
+        .map_err(|why| format!("/{qualified} was not run: {why}"))?;
+    request.metadata.insert(ADMITTED_KEY.to_string(), qualified);
+    if let Some(pin) = pin {
         request
             .metadata
             .insert(MODEL_PIN_KEY.to_string(), pin.model().to_string());
@@ -134,23 +119,62 @@ pub(super) async fn stamp_with(
     Ok(())
 }
 
-/// Resolve the slash-mode JSON to a command turn: `Ok(None)` when the mode is
-/// not a `type: "skill"` envelope naming a [`SkillType::Command`]
-/// registration. The model is judged BEFORE the body renders, so a turn that
-/// is refused runs none of its inline commands.
-pub(super) async fn resolve_command_turn(
+/// Render the command [`admit`] admitted for this turn: its `<command>`
+/// block, or `None` when the turn carries no command. The run loop calls
+/// this after its turn-start seams let the turn go ahead.
+///
+/// `run_dir` is the run's own directory (`run_loop::run_workspace`); inline
+/// commands run in it only if it is there. The render races `cancel`: a
+/// stopped turn stops waiting on its inline commands (whose children are
+/// killed on drop). An admitted command that can no longer be found under the
+/// same key, or whose body cannot be rendered, fails the turn visibly.
+pub(super) async fn render_admitted(
+    request: &RunRequest,
+    run_dir: &Path,
+    manager: Option<&ExtensionManager>,
+    consent: Arc<ShellHookConsent>,
+    cancel: &CancellationToken,
+) -> Result<Option<String>, ExecutionError> {
+    let Some(admitted) = request.metadata.get(ADMITTED_KEY) else {
+        return Ok(None);
+    };
+    let refused =
+        |why: &str| ExecutionError::Failed(format!("/{admitted} could not be rendered: {why}"));
+    let (Some(manager), Some(mode)) = (manager, slash_mode(&request.metadata)) else {
+        return Err(refused("the extension manager is gone"));
+    };
+    let cwd = Some(run_dir.to_path_buf()).filter(|d| d.is_dir());
+    let render = render_command(&mode, cwd, manager, consent);
+    let rendered = tokio::select! {
+        biased;
+        () = cancel.cancelled() => return Err(ExecutionError::Cancelled),
+        rendered = render => rendered.map_err(|why| refused(&why))?,
+    };
+    match rendered {
+        Some((qualified, block)) if qualified == *admitted => Ok(Some(block)),
+        _ => Err(refused("it is no longer registered")),
+    }
+}
+
+/// The slash-mode JSON a request carries, if any.
+fn slash_mode(metadata: &HashMap<String, String>) -> Option<serde_json::Value> {
+    metadata
+        .get(SLASH_COMMAND_MODE_KEY)
+        .and_then(|m| serde_json::from_str(m).ok())
+}
+
+/// Render the plugin command a slash mode names ([`owned_command`]): its
+/// qualified id and its `<command>` block, or `Ok(None)` when the mode names
+/// none. `Err` is the render's own failure (the file-reference cap).
+pub(super) async fn render_command(
     mode: &serde_json::Value,
     cwd: Option<PathBuf>,
-    requested_model: Option<&ModelOverride>,
     manager: &ExtensionManager,
     consent: Arc<ShellHookConsent>,
-) -> Result<Option<CommandTurn>, String> {
+) -> Result<Option<(String, String)>, String> {
     if mode.get("type").and_then(serde_json::Value::as_str) != Some("skill") {
         return Ok(None);
     }
-    let Some(skill_id) = mode.get("skill_id").and_then(serde_json::Value::as_str) else {
-        return Ok(None);
-    };
     let args = mode
         .get("args")
         .and_then(serde_json::Value::as_str)
@@ -168,10 +192,9 @@ pub(super) async fn resolve_command_turn(
             .map(|record| (record.root_dir.clone(), record.scope_key.clone()));
         (reg, plugin)
     };
-    let model_pin = command_model_pin(requested_model, reg.model.as_deref())
-        .map_err(|why| format!("/{skill_id} was not run: {why}"))?;
-    let shell = match plugin {
-        Some((plugin_root, scope)) => Some(ConsentedShell {
+    let qualified = reg.qualified_name();
+    let shell: Box<dyn InlineShell> = match plugin {
+        Some((plugin_root, scope)) => Box::new(ConsentedShell {
             settings_env: manager
                 .plugin_settings_env(&reg.plugin_id, SettingsForm::WithoutSecrets)
                 .await,
@@ -182,16 +205,27 @@ pub(super) async fn resolve_command_turn(
             consent,
         }),
         // A registration whose plugin has no record cannot be tied to an
-        // install root or a consent key: its inline commands are withheld.
-        None => None,
+        // install root or a consent key.
+        None => Box::new(Withheld(
+            "the plugin that ships this command has no record here",
+        )),
     };
-    let rendered = render_registration(&reg, args, shell.as_ref().map(|s| s as &dyn InlineShell))
+    let rendered = render_registration(&reg, args, Some(&*shell))
         .await
-        .map_err(|e| format!("/{skill_id} could not be rendered: {e}"))?;
-    Ok(Some(CommandTurn {
-        block: wrap_block(skill_id, &reg.plugin_id, &rendered),
-        model_pin,
-    }))
+        .map_err(|e| e.to_string())?;
+    let block = wrap_block(&qualified, &reg.plugin_id, &rendered);
+    Ok(Some((qualified, block)))
+}
+
+/// An inline-command runner that runs nothing: every `` !`cmd` `` becomes a
+/// visible placeholder naming why.
+struct Withheld(&'static str);
+
+#[async_trait::async_trait]
+impl InlineShell for Withheld {
+    async fn run(&self, cmd: &str, _args: &InlineArgs<'_>) -> Result<String, String> {
+        Err(format!("[!`{cmd}` not run: {}]", self.0))
+    }
 }
 
 /// The plugin command a slash mode names — the one the fast path's owner gate
@@ -317,21 +351,17 @@ pub(super) fn command_model_pin(
     }))
 }
 
-/// The rendered `<command>` block [`stamp`] left for this turn, if any.
-pub(super) fn transient_block(metadata: &HashMap<String, String>) -> Option<String> {
-    metadata.get(BODY_KEY).cloned()
-}
-
 /// Drop a command turn's residue from metadata that is being re-driven as a
-/// plain loop continuation (the steering rescue): the rendered body — a
-/// second delivery would be a second instruction — and the model pin the
-/// command declared, which was for its own turn. Returns the model override
-/// the continuation keeps: the request's own pick, never the command's.
+/// plain loop continuation (the steering rescue): the admitted command — a
+/// second render would be a second instruction, and would run its inline
+/// commands again — and the model pin the command declared, which was for its
+/// own turn. Returns the model override the continuation keeps: the
+/// request's own pick, never the command's.
 pub(super) fn strip(
     metadata: &mut HashMap<String, String>,
     model_override: Option<ModelOverride>,
 ) -> Option<ModelOverride> {
-    metadata.remove(BODY_KEY);
+    metadata.remove(ADMITTED_KEY);
     if metadata.remove(MODEL_PIN_KEY).is_some() {
         None
     } else {
