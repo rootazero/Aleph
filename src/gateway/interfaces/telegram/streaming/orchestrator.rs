@@ -16,7 +16,6 @@ pub struct StreamOrchestrator {
     delivery: TelegramDelivery,
     tracker: Arc<Mutex<LaneDeliveryTracker>>,
     status_controller: StatusReactionController,
-    config: StreamingOptions,
     event_rx: mpsc::Receiver<StreamEvent>,
     reasoning_extractor: Option<ReasoningExtractor>,
     /// This run answers a `/btw` side question, so the answer lane's settled
@@ -72,7 +71,6 @@ impl StreamOrchestrator {
                 delivery,
                 tracker,
                 status_controller,
-                config,
                 event_rx,
                 reasoning_extractor,
                 side_answer,
@@ -117,14 +115,6 @@ impl StreamOrchestrator {
                         }
                     } else if let Err(e) = answer_lane.write_chunk(delta).await {
                         tracing::warn!("Failed to write answer chunk: {}", e);
-                    }
-                }
-                StreamEvent::ReasoningBlock { content, .. } => {
-                    if self.config.reasoning_lane_enabled {
-                        let reasoning_lane = self.get_lane(LaneId::Reasoning);
-                        if let Err(e) = reasoning_lane.write_chunk(content).await {
-                            tracing::warn!("Failed to write reasoning chunk: {}", e);
-                        }
                     }
                 }
                 StreamEvent::ToolStart { tool_name, .. } => {

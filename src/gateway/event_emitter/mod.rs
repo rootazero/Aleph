@@ -16,7 +16,7 @@ mod tests;
 
 // Re-export all public types
 pub use types::{
-    ConfidenceLevel, OutputMode, ReasoningStepType, RunSummary, StreamEvent, ToolErrorItem,
+    OutputMode, RunSummary, StreamEvent, ToolErrorItem,
     ToolResult, ToolSummaryItem, UncertaintyAction,
 };
 

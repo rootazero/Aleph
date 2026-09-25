@@ -107,7 +107,7 @@ pub struct ReplyEmitter {
     /// never emitted `ModelResolved` (older execution paths).
     pub(crate) model_label: Mutex<Option<String>>,
 
-    /// Accumulated reasoning text from `StreamEvent::Reasoning` / `ReasoningBlock`.
+    /// Accumulated reasoning text from `StreamEvent::Reasoning`.
     pub(crate) reasoning_buffer: Mutex<String>,
 }
 

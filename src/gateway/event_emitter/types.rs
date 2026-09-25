@@ -21,30 +21,6 @@ pub enum EventEmitError {
     EventBus(String),
 }
 
-/// Confidence level for reasoning blocks
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)] // only consumed by `StreamEvent::ReasoningBlock` — see F3 audit note
-pub enum ConfidenceLevel {
-    High,
-    Medium,
-    Low,
-    Unknown,
-}
-
-/// Semantic type of a reasoning step
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)] // only consumed by `StreamEvent::ReasoningBlock` — see F3 audit note
-pub enum ReasoningStepType {
-    Observation,
-    Analysis,
-    Planning,
-    Decision,
-    Reflection,
-    Verification,
-}
-
 /// Streaming event types for real-time agent feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -232,32 +208,6 @@ pub enum StreamEvent {
         answered: usize,
     },
 
-    /// Structured reasoning block with semantic type
-    ///
-    /// This is the enhanced version of the basic Reasoning event,
-    /// providing semantic structure for better UI rendering.
-    ///
-    /// Currently no in-tree producer emits this variant; the constructor
-    /// `reasoning_block` / `reasoning_block_with_confidence` is exercised only
-    /// by the unit tests. The wire shape is kept because the TUI / CLI already
-    /// deserialize it (otherwise a future emitter would silently break them).
-    #[allow(dead_code)] // no production emit site yet — see F3 audit note
-    ReasoningBlock {
-        run_id: String,
-        seq: u64,
-        /// Semantic step type (observation, analysis, planning, etc.)
-        step_type: ReasoningStepType,
-        /// Human-readable label for this block
-        label: String,
-        /// Content of this reasoning block
-        content: String,
-        /// Confidence level if determinable
-        #[serde(skip_serializing_if = "Option::is_none")]
-        confidence: Option<ConfidenceLevel>,
-        /// Is this the final block before action?
-        is_final: bool,
-    },
-
     /// Uncertainty signal from the AI
     ///
     /// Emitted when the AI explicitly expresses uncertainty,
@@ -334,49 +284,6 @@ impl UncertaintyAction {
 }
 
 impl StreamEvent {
-    /// Create a new `ReasoningBlock` event
-    #[allow(dead_code)] // no production emit site yet — see F3 audit note
-    pub fn reasoning_block(
-        run_id: impl Into<String>,
-        seq: u64,
-        step_type: ReasoningStepType,
-        label: impl Into<String>,
-        content: impl Into<String>,
-        is_final: bool,
-    ) -> Self {
-        Self::ReasoningBlock {
-            run_id: run_id.into(),
-            seq,
-            step_type,
-            label: label.into(),
-            content: content.into(),
-            confidence: None,
-            is_final,
-        }
-    }
-
-    /// Create a new `ReasoningBlock` event with confidence
-    #[allow(dead_code)] // no production emit site yet — see F3 audit note
-    pub fn reasoning_block_with_confidence(
-        run_id: impl Into<String>,
-        seq: u64,
-        step_type: ReasoningStepType,
-        label: impl Into<String>,
-        content: impl Into<String>,
-        confidence: ConfidenceLevel,
-        is_final: bool,
-    ) -> Self {
-        Self::ReasoningBlock {
-            run_id: run_id.into(),
-            seq,
-            step_type,
-            label: label.into(),
-            content: content.into(),
-            confidence: Some(confidence),
-            is_final,
-        }
-    }
-
     /// Create a new `UncertaintySignal` event
     #[allow(dead_code)] // no production emit site yet — see F3 audit note
     pub fn uncertainty_signal(

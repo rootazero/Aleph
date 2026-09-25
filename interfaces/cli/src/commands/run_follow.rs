@@ -265,16 +265,7 @@ pub async fn follow_run(
                     }
                 }
             }
-            StreamEvent::Reasoning { content, .. } => {
-                if opts.verbose && !opts.json {
-                    if let Some(line) = exec_echo::render_reasoning(&content) {
-                        eprintln!("{line}");
-                    }
-                }
-            }
-            StreamEvent::ReasoningBlock { content, .. }
-                if opts.verbose && !agent_trace_seen && !opts.json =>
-            {
+            StreamEvent::Reasoning { content, .. } if opts.verbose && !opts.json => {
                 if let Some(line) = exec_echo::render_reasoning(&content) {
                     eprintln!("{line}");
                 }

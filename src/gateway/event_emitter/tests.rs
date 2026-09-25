@@ -74,41 +74,6 @@ async fn test_tool_lifecycle() {
 }
 
 #[test]
-fn test_reasoning_block_serialization() {
-    let event = StreamEvent::reasoning_block(
-        "run-123",
-        1,
-        ReasoningStepType::Analysis,
-        "Analyzing options",
-        "Comparing Redis vs in-memory cache",
-        false,
-    );
-
-    let json = serde_json::to_string(&event).unwrap();
-    assert!(json.contains("reasoning_block"));
-    assert!(json.contains("analysis"));
-    assert!(json.contains("Analyzing options"));
-}
-
-#[test]
-fn test_reasoning_block_with_confidence() {
-    let event = StreamEvent::reasoning_block_with_confidence(
-        "run-123",
-        2,
-        ReasoningStepType::Decision,
-        "Final decision",
-        "Will use Redis",
-        ConfidenceLevel::High,
-        true,
-    );
-
-    let json = serde_json::to_string(&event).unwrap();
-    assert!(json.contains("decision"));
-    assert!(json.contains("high"));
-    assert!(json.contains("is_final"));
-}
-
-#[test]
 fn test_uncertainty_signal() {
     let event = StreamEvent::uncertainty_signal(
         "run-123",
@@ -130,22 +95,6 @@ fn test_uncertainty_action_description() {
     assert!(UncertaintyAction::AskForClarification
         .description()
         .contains("clarification"));
-}
-
-#[test]
-fn test_deserialize_reasoning_block() {
-    let json = r#"{"type":"reasoning_block","run_id":"r1","seq":1,"step_type":"observation","label":"Look","content":"Seeing the code","confidence":null,"is_final":false}"#;
-    let event: StreamEvent = serde_json::from_str(json).unwrap();
-
-    if let StreamEvent::ReasoningBlock {
-        step_type, label, ..
-    } = event
-    {
-        assert_eq!(step_type, ReasoningStepType::Observation);
-        assert_eq!(label, "Look");
-    } else {
-        panic!("Wrong event type");
-    }
 }
 
 #[test]
