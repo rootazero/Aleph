@@ -58,7 +58,7 @@ pub struct WebFetchArgs {
     #[serde(default)]
     pub extract_mode: ExtractMode,
     /// What you are looking for. On a page too large to return whole, only the
-    /// sections matching it come back, plus a handle to search the rest.
+    /// sections matching it come back, plus a handle to the rest.
     //
     // Retrieval, not a second LLM hop (the claude-code approach): the main
     // loop reads this output anyway, and ranking sections by the model's own

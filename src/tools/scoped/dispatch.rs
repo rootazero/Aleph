@@ -667,7 +667,14 @@ impl ScopedToolService {
                                     st.execute(input, cancel).await
                                 }
                                 RoutingTarget::Inner => {
-                                    self.inner.execute(&name_owned, input, cancel).await
+                                    // A tool that offloads its own output names
+                                    // only the retrieval tools this dispatch can
+                                    // call, as Layer 2 does below.
+                                    crate::tools::result_processing::with_recovery_tools(
+                                        self.recovery_tools(),
+                                        self.inner.execute(&name_owned, input, cancel),
+                                    )
+                                    .await
                                 }
                                 RoutingTarget::Missing => {
                                     return Err(ToolError::Execution {

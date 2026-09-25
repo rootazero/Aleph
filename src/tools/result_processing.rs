@@ -180,15 +180,46 @@ pub(crate) fn resolve_result_budget_under(
     explicit: Option<usize>,
     ceiling: usize,
 ) -> Option<usize> {
-    match name {
-        "read_file" | "Read" | "file_read" => return None,
-        _ => {}
+    if is_read_family(name) {
+        return None;
     }
     Some(
         explicit
             .unwrap_or(DEFAULT_RESULT_BUDGET_TOKENS)
             .min(ceiling),
     )
+}
+
+/// The read family: tools whose result is exactly the window the model asked
+/// for. Never offloaded — not by Layer 2 ([`resolve_result_budget`]) and not
+/// by the per-turn spill (`turn_budget::TurnResultBudget::record`) — because
+/// the only way back from an offloaded read is another read.
+#[must_use]
+pub(crate) fn is_read_family(tool_name: &str) -> bool {
+    matches!(tool_name, "read_file" | "Read" | "file_read")
+}
+
+tokio::task_local! {
+    /// The retrieval tools callable in the dispatch this future runs under,
+    /// scoped by the dispatcher around the tool's own execution. A tool that
+    /// offloads its own output (`web_fetch`'s fetch by intent) names only
+    /// these in its footer, as Layer 2 does.
+    static DISPATCH_RECOVERY_TOOLS: RecoveryTools;
+}
+
+/// Run `fut` with `tools` as its [`dispatch_recovery_tools`].
+pub(crate) async fn with_recovery_tools<F: std::future::Future>(
+    tools: RecoveryTools,
+    fut: F,
+) -> F::Output {
+    DISPATCH_RECOVERY_TOOLS.scope(tools, fut).await
+}
+
+/// The dispatcher's callable retrieval tools, or `None` outside a dispatch
+/// (a direct call, a test): the caller then cannot see the gates.
+#[must_use]
+pub(crate) fn dispatch_recovery_tools() -> Option<RecoveryTools> {
+    DISPATCH_RECOVERY_TOOLS.try_with(|t| *t).ok()
 }
 
 /// Which retrieval tools the model can call, this turn, to get an offloaded
@@ -209,8 +240,7 @@ pub struct RecoveryTools {
 
 impl RecoveryTools {
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes: [`recovery_footer`] (the browser offload, `web_fetch`'s fetch
-    /// by intent), and
+    /// assumes: [`recovery_footer`] (the browser offload), and
     /// `ToolService::recovery_tools`'s default for a service that has no gates
     /// to consult. The harness Layer-3 spill asks its `ToolService`, which
     /// answers from the turn's gates when it is a `ScopedToolService`.
@@ -375,10 +405,9 @@ pub fn apply_result_budget(
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
 ///
-/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`)
-/// and `web_fetch`'s fetch by intent (`web_fetch::intent`), which offload for
-/// the same reason as Layer 2 and must hand the model the same recovery handle.
-/// Neither can see the turn's tool gates, so this form
+/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`),
+/// which offloads for the same reason as Layer 2 and must hand the model the
+/// same recovery handle. It cannot see the turn's tool gates, so this form
 /// assumes [`RecoveryTools::ALL`]; a caller that can — the dispatcher's Layer 2,
 /// and the harness Layer-3 spill through `ToolService::recovery_tools` — goes
 /// through [`recovery_footer_for`]. (The spill once called `persist_if_large`

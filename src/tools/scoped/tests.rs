@@ -4357,3 +4357,52 @@ async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
         rows[0].event
     );
 }
+
+/// Reports the retrieval tools its dispatch scoped for it.
+struct RecoveryProbe;
+
+#[async_trait::async_trait]
+impl LoopTool for RecoveryProbe {
+    fn name(&self) -> &str {
+        "recovery_probe"
+    }
+    fn description(&self) -> &str {
+        "reports dispatch_recovery_tools"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        let seen = match crate::tools::result_processing::dispatch_recovery_tools() {
+            Some(t) => format!("ctx_search={} file_read={}", t.ctx_search, t.file_read),
+            None => "unscoped".to_string(),
+        };
+        LoopToolResult::Success {
+            output: json!(seen),
+        }
+    }
+}
+
+/// A tool that offloads its own output (`web_fetch`'s fetch by intent) sees
+/// the same callable retrieval tools Layer 2 derives for this dispatch — here
+/// `file_read` is registered and `ctx_search` is not — so its footer never
+/// names a tool the model cannot call.
+///
+/// Mutation-checked: dropping the dispatcher's `with_recovery_tools` scope
+/// turns this red (`unscoped`).
+#[tokio::test]
+async fn a_dispatched_tool_sees_the_dispatchs_callable_retrieval_tools() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(RecoveryProbe));
+    registry.register(Box::new(NamedStub::new("file_read")));
+    let svc = ScopedToolService::new(Arc::new(registry), BTreeSet::new());
+    let out = svc
+        .execute("recovery_probe", json!({}))
+        .await
+        .expect("the probe runs");
+    let text = out.value.as_str().unwrap_or_default().to_string();
+    assert!(
+        text.contains("ctx_search=false file_read=true"),
+        "got {text:?}"
+    );
+}

@@ -41,12 +41,17 @@ pub(super) fn sections_for_prompt(
     };
     // Stored fenced, like any offloaded web page: the footer then carries no
     // preview of the untrusted text outside a fence.
-    let (footer, _) = crate::tools::result_processing::recovery_footer(
+    // The footer names only the retrieval tools the dispatch can call; outside
+    // a dispatch nothing is known about the gates, and both are assumed.
+    let recovery = crate::tools::result_processing::dispatch_recovery_tools()
+        .unwrap_or(crate::tools::result_processing::RecoveryTools::ALL);
+    let (footer, _) = crate::tools::result_processing::recovery_footer_for(
         Some(store),
         call_id,
         super::WebFetchTool::NAME,
         &wrap_external_content(page, source()),
         0,
+        recovery,
     )?;
     let label = source_label(super::WebFetchTool::NAME, call_id);
     let mut picked: Vec<(i64, String)> = Vec::new();
@@ -168,5 +173,38 @@ mod tests {
         .expect("the store takes the page");
         assert!(out.contains("no section matched"), "{out}");
         assert!(out.contains("Paragraph 0 is"), "{out}");
+    }
+
+    /// The footer names only what the dispatch can call: here `file_read`,
+    /// not `ctx_search` — a subagent given `web_fetch` without `ctx_search`
+    /// must not be handed a search it cannot run.
+    ///
+    /// Mutation-checked: footing with `RecoveryTools::ALL` regardless turns
+    /// this red.
+    #[tokio::test]
+    async fn the_footer_names_only_the_retrieval_tools_the_dispatch_can_call() {
+        let (_dir, store) = store();
+        let only_read = crate::tools::result_processing::RecoveryTools {
+            ctx_search: false,
+            file_read: true,
+        };
+        let out = crate::tools::result_processing::with_recovery_tools(only_read, async {
+            sections_for_prompt(
+                &store,
+                "call_intent_3",
+                "https://example.com/p",
+                "flux capacitor",
+                &long_page(),
+                2_000,
+            )
+        })
+        .await
+        .expect("the store takes the page");
+        let footer = out
+            .split("[Full output persisted: ")
+            .nth(1)
+            .expect("a footer");
+        assert!(!footer.contains("ctx_search"), "{footer}");
+        assert!(footer.contains("file_read"), "{footer}");
     }
 }

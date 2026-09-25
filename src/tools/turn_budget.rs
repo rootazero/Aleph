@@ -219,7 +219,11 @@ impl TurnResultBudget {
 
     /// Record a new result; when it takes the turn over budget, return the
     /// instruction to spill **it** — never an earlier one (see the module doc).
-    /// An already-persisted result (a Layer-2 marker) is not spilled again.
+    /// An already-persisted result (a Layer-2 marker) is not spilled again, and
+    /// a read-family result is never spilled: it is the window the model asked
+    /// for, and a spilled read hands back a marker to read again
+    /// (`result_processing::is_read_family`). Its tokens still count, so the
+    /// results after it spill sooner.
     ///
     /// At most one instruction; the `Vec` is the caller's existing shape.
     #[must_use]
@@ -227,7 +231,10 @@ impl TurnResultBudget {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
-        if state.cumulative <= self.max_turn_tokens || result.already_persisted {
+        if state.cumulative <= self.max_turn_tokens
+            || result.already_persisted
+            || crate::tools::result_processing::is_read_family(&result.tool_name)
+        {
             return Vec::new();
         }
         // Approximate: spilling the result is expected to reduce its
@@ -394,6 +401,35 @@ mod tests {
         let id = tid(99);
         b.end_turn(&id);
         assert_eq!(b.cumulative(&id), 0);
+    }
+
+    /// B4: a read is the window the model asked for; spilling it hands back
+    /// a marker to read again. Over budget, it stays — and its tokens still
+    /// count, so the next non-read result spills.
+    ///
+    /// Mutation-checked: dropping the read-family clause in `record` turns
+    /// this red.
+    #[test]
+    fn a_read_over_the_turn_budget_is_never_spilled_but_still_counts() {
+        let budget = TurnResultBudget::new(1_000);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let result = |call: &str, tool: &str| TurnResult {
+            call_id: call.to_string(),
+            tool_name: tool.to_string(),
+            tokens_in_context: 800,
+            in_context_text: "x".repeat(10),
+            already_persisted: false,
+        };
+        assert!(budget.record(&id, result("r1", "file_read")).is_empty());
+        assert!(
+            budget.record(&id, result("r2", "file_read")).is_empty(),
+            "a read past the budget is not spilled"
+        );
+        assert_eq!(
+            budget.record(&id, result("b1", "bash")).len(),
+            1,
+            "the reads' tokens counted, so the next result spills"
+        );
     }
 
     // ---- window-aware budgets (B14) ----

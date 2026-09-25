@@ -3422,13 +3422,13 @@ mod tests {
     /// (the `ctx_search` row zeroed, the ceiling lowered by its old value);
     /// `ctx_search` was the only row that moved.
     ///
-    /// 2026-09-26 (context-slim round, B4): 105_167 -> 104_429 B (-738), all of
-    /// it `web_fetch` (1_536 -> 798): the `prompt` argument's doc carried a
+    /// 2026-09-26 (context-slim round, B4): 105_167 -> 104_422 B (-745), all of
+    /// it `web_fetch` (1_536 -> 791): the `prompt` argument's doc carried a
     /// design rationale into the schema; it now says only what the model does
     /// with it (fetch by intent), and the rationale is a `//` comment. Read off
     /// this guard's own ledger (the `web_fetch` row zeroed, the ceiling lowered
     /// by its old value); `web_fetch` was the only row that moved.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_429;
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_422;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3510,7 +3510,7 @@ mod tests {
         ("strategy", 2322),
         ("system", 1256),
         ("voice_mode_set", 717),
-        ("web_fetch", 798),
+        ("web_fetch", 791),
     ];
 
     /// The tool map with nothing wired — the deterministic half of what the
