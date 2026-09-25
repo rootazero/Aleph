@@ -344,7 +344,7 @@ impl ToolResultStore {
     ///
     /// The ungated half of [`Self::persist_if_large`], for a caller that decides
     /// "is this large" on one string and stores another:
-    /// `result_processing::recovery_footer` gates on the flattened text the
+    /// `result_processing::recovery_footer_for` gates on the flattened text the
     /// model would otherwise receive and stores its line-preserving rendering,
     /// whose token estimate is a different number (see `tool_output::render`).
     /// The marker's token count describes what is on disk.

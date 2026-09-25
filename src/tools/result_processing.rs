@@ -240,7 +240,7 @@ pub struct RecoveryTools {
 
 impl RecoveryTools {
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes: [`recovery_footer`] (the browser offload), and
+    /// assumes: [`dispatch_recovery_tools`]'s fallback outside a dispatch, and
     /// `ToolService::recovery_tools`'s default for a service that has no gates
     /// to consult. The harness Layer-3 spill asks its `ToolService`, which
     /// answers from the turn's gates when it is a `ScopedToolService`.
@@ -400,38 +400,18 @@ pub fn apply_result_budget(
 
 /// Offload `full` to the result store and build the recovery footer the model
 /// uses to get the dropped detail back: the persist marker plus a hint naming
-/// how to read it back.
+/// how to read it back — naming only the retrieval tools in `recovery`, the
+/// ones the model can call. A writer derives that set from where it runs: the
+/// dispatcher from its gates, the harness Layer-3 spill from
+/// `ToolService::recovery_tools`, a tool offloading its own output from
+/// [`dispatch_recovery_tools`] (falling back to [`RecoveryTools::ALL`] only
+/// outside a dispatch, where nothing about the gates is known).
 ///
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
-///
-/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`),
-/// which offloads for the same reason as Layer 2 and must hand the model the
-/// same recovery handle. It cannot see the turn's tool gates, so this form
-/// assumes [`RecoveryTools::ALL`]; a caller that can — the dispatcher's Layer 2,
-/// and the harness Layer-3 spill through `ToolService::recovery_tools` — goes
-/// through [`recovery_footer_for`]. (The spill once called `persist_if_large`
-/// directly and so emitted a marker with **no** `ctx_search` hint over a blob
-/// that was never indexed — the model was pointed at a file it could only
-/// re-read whole, defeating the offload.)
-pub(crate) fn recovery_footer(
-    store: Option<&ToolResultStore>,
-    tool_call_id: &str,
-    tool_name: &str,
-    full: &str,
-    threshold: usize,
-) -> Option<(String, Option<PathBuf>)> {
-    recovery_footer_for(
-        store,
-        tool_call_id,
-        tool_name,
-        full,
-        threshold,
-        RecoveryTools::ALL,
-    )
-}
-
-/// [`recovery_footer`] with the retrieval tools the footer may name.
+/// (The spill once called `persist_if_large` directly and so emitted a marker
+/// with **no** `ctx_search` hint over a blob that was never indexed — the model
+/// was pointed at a file it could only re-read whole, defeating the offload.)
 ///
 /// Every writer of an offloaded original goes through here, which is why the
 /// line-preserving rendering happens here and not at ingress: a flattened typed
@@ -1559,8 +1539,8 @@ mod tests {
 
     /// The parse itself now lives beside the writer
     /// (`result_store::extract_persisted_path`); this keeps the assertion that
-    /// THIS module's `recovery_footer` still gets a path back out of the marker
-    /// it just produced, which is the part `recovery_footer`'s callers rely on.
+    /// THIS module's `recovery_footer_for` still gets a path back out of the marker
+    /// it just produced, which is the part `recovery_footer_for`'s callers rely on.
     #[test]
     fn parse_marker_path_roundtrip() {
         let marker = "[Full output persisted: /tmp/aleph/x.txt (1234 tokens, bash)]";
