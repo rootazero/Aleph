@@ -840,8 +840,10 @@ where
                     );
                     // A plugin COMMAND renders its body here, not with the
                     // skill scope above: the fast path just judged its owning
-                    // plugin visible to this session (face ④), so a hidden
-                    // plugin's inline commands never run. The `!` expansions
+                    // plugin visible to this session (face ④), and only the
+                    // registration that owner holds under the exact key the
+                    // mode names renders (`slash_command_body::owned_command`),
+                    // so a hidden plugin's inline commands never run. The `!` expansions
                     // and `@file` reads happen once, now; the block rides the
                     // run loop's transient blocks and the command's `model:`
                     // this turn's `model_override`. A command that cannot run

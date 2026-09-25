@@ -10,8 +10,11 @@
 //! **Where it renders.** The fast path's fallthrough arm in `execute.rs`
 //! calls [`stamp`] — after `execute_slash_command_fast_path` has judged the
 //! command's owning plugin visible to this session (`extension::visibility`
-//! face ④), so the inline commands of a plugin the session cannot see never
-//! run. [`stamp`] renders the body once — the `` !`cmd` `` expansions and
+//! face ④). The registration rendered is found from the same fact the gate
+//! judged ([`owned_command`]: the mode's owner, the exact qualified key), so
+//! the inline commands of a plugin the session cannot see never run — not
+//! even through a bundled skill that shares the command's bare name.
+//! [`stamp`] renders the body once — the `` !`cmd` `` expansions and
 //! `@file` reads happen there — and leaves the `<command>` block in the
 //! request's metadata; the run loop pushes it FIRST into its transient
 //! blocks ([`transient_block`]).
@@ -44,7 +47,7 @@ use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
     inline_shell_command, ExtensionError, ExtensionManager, InlineArgs, InlineShell, InlineSite,
-    SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
+    PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
 };
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
@@ -157,11 +160,7 @@ pub(super) async fn resolve_command_turn(
     // visibility key the consent entry is filed under.
     let (reg, plugin) = {
         let registry = manager.get_plugin_registry().await;
-        let Some(reg) = registry
-            .get_skill(skill_id)
-            .filter(|s| s.skill_type == SkillType::Command)
-            .cloned()
-        else {
+        let Some(reg) = owned_command(mode, &registry).cloned() else {
             return Ok(None);
         };
         let plugin = registry
@@ -193,6 +192,38 @@ pub(super) async fn resolve_command_turn(
         block: wrap_block(skill_id, &reg.plugin_id, &rendered),
         model_pin,
     }))
+}
+
+/// The plugin command a slash mode names — the one the fast path's owner gate
+/// judged — or `None`.
+///
+/// The gate (`extension::visibility::slash_owner_admits`) judges
+/// `mode["owning_plugin"]`: the owner of the catalog row the parser resolved.
+/// This finds the registration by that same fact, never by a second lookup
+/// that could land elsewhere:
+/// - no owner ⇒ the row is not a plugin's (a bundled or user skill), so no
+///   plugin command renders for it;
+/// - a bare `skill_id` is refused before any lookup: `PluginRegistry::get_skill`
+///   answers a bare name by scanning every active plugin, so the bundled
+///   `/code-review` skill would render a same-named plugin command — its
+///   body, its `model:`, its approved inline commands — whether or not the
+///   session can see that plugin;
+/// - the registration at the exact key must be a command of that owner,
+///   under that exact qualified name.
+fn owned_command<'r>(
+    mode: &serde_json::Value,
+    registry: &'r PluginRegistry,
+) -> Option<&'r SkillRegistration> {
+    let owner = mode.get("owning_plugin")?.as_str()?;
+    let skill_id = mode.get("skill_id")?.as_str()?;
+    if !skill_id.contains(':') {
+        return None;
+    }
+    registry.get_skill(skill_id).filter(|reg| {
+        reg.skill_type == SkillType::Command
+            && reg.plugin_id == owner
+            && reg.qualified_name() == skill_id
+    })
 }
 
 /// Render one registration's body with the Claude Code / pi grammar. `@./file`

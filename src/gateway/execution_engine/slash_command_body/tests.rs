@@ -116,7 +116,9 @@ impl Fixture {
     /// the record, the settings and the consented shell production uses —
     /// with `<tmp>/work` as the run's directory.
     async fn turn(&self, args: &str) -> Result<Option<CommandTurn>, String> {
-        let mode = serde_json::json!({"type": "skill", "skill_id": "plug:greet", "args": args});
+        let mode = serde_json::json!({
+            "type": "skill", "skill_id": "plug:greet", "owning_plugin": PLUGIN, "args": args
+        });
         resolve_command_turn(
             &mode,
             Some(self.work.clone()),
@@ -139,35 +141,51 @@ impl Fixture {
     /// the catalog's entry for the command, the command parser, and the
     /// serializer both slash faces stamp with — run in `workspace`.
     async fn request(&self, workspace: PathBuf) -> RunRequest {
-        let catalog = crate::sync_primitives::Arc::new(crate::tool_metadata::ToolCatalog::new());
-        let rejected = catalog
-            .register_skills(&[crate::skill::SkillInfo {
-                id: "plug:greet".into(),
-                name: "greet".into(),
-                description: "greets".into(),
-                scope: crate::domain::skill::PromptScope::System,
-                version: None,
-                allowed_tools: None,
-                argument_hint: None,
-                plugin_id: Some(PLUGIN.into()),
-            }])
-            .await;
-        assert!(rejected.is_empty(), "{rejected:?}");
-        let parsed = crate::command::CommandParser::new(catalog)
-            .parse_async("/plug:greet World")
-            .await
-            .expect("the command resolves");
-        let mode = crate::gateway::inbound_router::serialize_parsed_command(&parsed)
-            .expect("a command serializes");
-        let session = crate::gateway::router::SessionKey::main("slash-command-body");
-        let mut request = super::super::tests::gate_test_request(&session, "cmd-run");
-        request.input = "/plug:greet World".into();
-        request
-            .metadata
-            .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
-        request.workspace_override = Some(workspace);
-        request
+        let entry = catalog_entry("plug:greet", Some(PLUGIN));
+        envelope_request(entry, "/plug:greet World", workspace).await
     }
+}
+
+/// The catalog's entry for a slash command: `id`, owned by `plugin` (a
+/// plugin command's row) or by nobody (a bundled or user skill's row).
+fn catalog_entry(id: &str, plugin: Option<&str>) -> crate::skill::SkillInfo {
+    crate::skill::SkillInfo {
+        id: id.into(),
+        name: id.rsplit(':').next().unwrap_or(id).into(),
+        description: "a slash command".into(),
+        scope: crate::domain::skill::PromptScope::System,
+        version: None,
+        allowed_tools: None,
+        argument_hint: None,
+        plugin_id: plugin.map(str::to_string),
+    }
+}
+
+/// A request for `input` whose slash mode is the real envelope — `entry`
+/// registered in a catalog, the command parser, and the serializer both
+/// slash faces stamp with — run in `workspace`.
+async fn envelope_request(
+    entry: crate::skill::SkillInfo,
+    input: &str,
+    workspace: PathBuf,
+) -> RunRequest {
+    let catalog = crate::sync_primitives::Arc::new(crate::tool_metadata::ToolCatalog::new());
+    let rejected = catalog.register_skills(&[entry]).await;
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let parsed = crate::command::CommandParser::new(catalog)
+        .parse_async(input)
+        .await
+        .expect("the command resolves");
+    let mode = crate::gateway::inbound_router::serialize_parsed_command(&parsed)
+        .expect("a command serializes");
+    let session = crate::gateway::router::SessionKey::main("slash-command-body");
+    let mut request = super::super::tests::gate_test_request(&session, "cmd-run");
+    request.input = input.into();
+    request
+        .metadata
+        .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
+    request.workspace_override = Some(workspace);
+    request
 }
 
 fn no_args() -> InlineArgs<'static> {
@@ -211,7 +229,7 @@ async fn a_skill_mode_that_names_a_real_skill_is_not_a_command_turn() {
             ..command("a skill body")
         });
     for mode in [
-        serde_json::json!({"type": "skill", "skill_id": "plug:helper", "args": ""}),
+        serde_json::json!({"type": "skill", "skill_id": "plug:helper", "owning_plugin": PLUGIN, "args": ""}),
         serde_json::json!({"type": "skill", "skill_id": "not-registered", "args": ""}),
         serde_json::json!({"type": "direct_tool", "tool_id": "plug:greet", "args": ""}),
     ] {
@@ -220,6 +238,67 @@ async fn a_skill_mode_that_names_a_real_skill_is_not_a_command_turn() {
             .unwrap();
         assert!(turn.is_none(), "{mode}");
     }
+}
+
+/// S1. A bundled or user skill and a plugin command can share a bare name
+/// (`/code-review`). The parser resolved the SKILL's row — no owner, so the
+/// owner gate admitted it — and the plugin's command must not render in its
+/// place: not its body, not its model, above all not its approved inline
+/// commands, whether or not the session can see that plugin.
+#[tokio::test]
+#[cfg(unix)]
+async fn a_bare_skill_never_renders_a_same_named_plugin_command() {
+    let f = Fixture::new("Squatted [!`touch RAN`]", Some("claude-sonnet-5")).await;
+    f.approve("touch RAN");
+    let temp = TempDir::new().unwrap();
+    let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+    let mut request =
+        envelope_request(catalog_entry("greet", None), "/greet World", f.work.clone()).await;
+
+    stamp_with(&mut request, &agent, &f.manager, Arc::clone(&f.consent))
+        .await
+        .expect("the skill's turn goes ahead");
+    assert_eq!(
+        transient_block(&request.metadata),
+        None,
+        "rendered a plugin command for a skill"
+    );
+    assert!(
+        !f.work.join("RAN").exists(),
+        "a plugin's inline command ran for a skill"
+    );
+    assert_eq!(
+        request.model_override, None,
+        "a plugin command's model pinned a skill's turn"
+    );
+}
+
+/// S1. The registration rendered is the one the owner gate judged: a mode
+/// whose owner is another plugin, a bare id even with the right owner, and a
+/// mode with no owner at all name no command of `plug`.
+#[tokio::test]
+async fn only_the_judged_owners_command_under_its_exact_key_renders() {
+    let f = Fixture::new("Hello [!`echo hi`]", None).await;
+    for mode in [
+        serde_json::json!({"type": "skill", "skill_id": "plug:greet", "owning_plugin": "other", "args": ""}),
+        serde_json::json!({"type": "skill", "skill_id": "greet", "owning_plugin": PLUGIN, "args": ""}),
+        serde_json::json!({"type": "skill", "skill_id": "plug:greet", "args": ""}),
+    ] {
+        let turn = resolve_command_turn(
+            &mode,
+            Some(f.work.clone()),
+            None,
+            &f.manager,
+            Arc::clone(&f.consent),
+        )
+        .await
+        .unwrap();
+        assert!(turn.is_none(), "rendered for {mode}");
+    }
+    assert!(
+        f.consent.entries().is_empty(),
+        "an inline command was reached"
+    );
 }
 
 /// Filed like a `hooks.json` command — under the plugin id, the plugin's
@@ -355,7 +434,9 @@ async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
             plugin_id: "orphan".into(),
             ..command("Hi $1 [!`echo hi`]")
         });
-    let mode = serde_json::json!({"type": "skill", "skill_id": "orphan:greet", "args": "you"});
+    let mode = serde_json::json!({
+        "type": "skill", "skill_id": "orphan:greet", "owning_plugin": "orphan", "args": "you"
+    });
     let turn = resolve_command_turn(
         &mode,
         Some(f.work.clone()),
@@ -582,6 +663,19 @@ fn the_body_renders_after_the_owner_gate_and_is_pushed_first() {
         );
         code.find(needle).expect("counted once above")
     };
+
+    // "After the owner gate" means the gate is still where the fast path
+    // runs it: inside `execute_slash_command_fast_path`, before it dispatches
+    // on the mode's type.
+    let slash = strip_comment_lines(&production_prefix(include_str!("../slash_command.rs")));
+    let fast_path_fn = once(&slash, "async fn execute_slash_command_fast_path");
+    let gate = once(&slash, "slash_owner_admits(");
+    let dispatch = once(&slash, "match mode_type {");
+    assert!(
+        fast_path_fn < gate && gate < dispatch,
+        "the owner gate must run inside the fast path, before its dispatch — positions: fast \
+         path {fast_path_fn}, gate {gate}, dispatch {dispatch}"
+    );
 
     let execute = strip_comment_lines(&production_prefix(include_str!("../execute.rs")));
     let fast_path = once(&execute, ".execute_slash_command_fast_path(");
