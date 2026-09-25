@@ -645,6 +645,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 let mut budget_inner = ContextBudget::new(cfg);
                 // Count reasoning as this run's provider will send it.
                 budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
+                budget_inner.set_server_clears_tool_results(llm.clears_tool_results_server_side());
                 budget_inner.publish_message_tokens_as(session_id.to_key_string());
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
@@ -756,7 +757,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Stage list + preventive-band gate live in ONE place
                 // (`preflight::default_pipeline`) so the subagent spawner builds
                 // the identical pipeline instead of re-deriving it.
-                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
+                    cfg,
+                    llm.as_ref(),
+                ));
                 (Some(budget), Some(compactor), Some(pipeline))
             }
             None => (None, None, None),

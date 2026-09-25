@@ -2894,3 +2894,22 @@ async fn layer3_spill_footer_follows_the_scoped_services_allow_set() {
         "the callable fallback:\n{gated}"
     );
 }
+
+/// A result that already carries a Layer-2 persist marker — here below an
+/// inline error digest, not at byte 0 — is never offloaded a second time: the
+/// turn budget does not spend a spill re-offloading a marker.
+#[tokio::test]
+async fn layer3_spill_leaves_an_already_persisted_marker_alone() {
+    let original = "error: build failed (3 errors)\n\
+                    [Full output persisted: /tmp/x/c0_bash.txt (9000 tokens, bash)]\n\
+                    [Read it back with file_read on that path — page it with offset/limit]";
+    let tools = ScriptedTools::new(vec![Ok(ok_output(serde_json::Value::String(
+        original.to_string(),
+    )))]);
+    let (_s, store) = scratch_store();
+    let text = spilled_result_text(tools, "bash", store).await;
+    assert_eq!(
+        text, original,
+        "a persisted marker must pass Layer 3 untouched"
+    );
+}

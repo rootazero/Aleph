@@ -235,6 +235,14 @@ pub trait ProtocolAdapter: Send + Sync {
     fn wire_family(&self) -> &'static str {
         self.name()
     }
+
+    /// Whether a request built from `config` asks the server to clear old tool
+    /// results itself (Anthropic `context_management`). The same derivation
+    /// `build_request` uses to put the edit on the wire; the local passes that
+    /// rewrite old tool results stand down when it is true. Default `false`.
+    fn clears_tool_results_server_side(&self, _config: &ProviderConfig) -> bool {
+        false
+    }
 }
 
 // =============================================================================

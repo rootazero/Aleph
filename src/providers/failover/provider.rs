@@ -2025,6 +2025,13 @@ impl AiProvider for FailoverProvider {
     ) -> crate::providers::reasoning_replay::ReasoningReplay {
         self.primary.current().reasoning_replay(model)
     }
+
+    /// The live primary's answer, read once per run by the preflight
+    /// pipeline; a failover onto a target that does not clear keeps the local
+    /// passes off for the rest of that run (a documented gap).
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.primary.current().clears_tool_results_server_side()
+    }
 }
 
 #[cfg(test)]

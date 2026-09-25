@@ -224,6 +224,12 @@ pub struct AnthropicCapabilities {
     /// not offered on Foundry or third-party proxies. Which *models* bind is a
     /// catalog fact (`model_catalog::binds_thinking_to_prefix`), not this bit.
     pub supports_thinking_block_binding: bool,
+    /// Server-side context editing (`context_management` + `anthropic-beta:
+    /// context-management-2025-06-27`). Claude API only here: Bedrock / Vertex
+    /// / Foundry list it as beta but it is unverified through them (U1), and a
+    /// third-party proxy has no reason to know the field. The docs make it
+    /// available "on all supported Claude models", so no per-model gate.
+    pub supports_context_editing: bool,
 }
 
 // =============================================================================
@@ -256,6 +262,7 @@ pub fn resolve_anthropic_capabilities(
             supports_context_1m: false,
             requires_reasoning_content_in_tool_input: false,
             supports_thinking_block_binding: true,
+            supports_context_editing: true,
         },
         AnthropicEndpointClass::Custom => {
             // Decode host + path once for per-family overlays.
@@ -288,6 +295,7 @@ pub fn resolve_anthropic_capabilities(
                 // turn it off below.
                 requires_reasoning_content_in_tool_input: true,
                 supports_thinking_block_binding: false,
+                supports_context_editing: false,
             };
 
             // MiniMax: drop fine-grained-tool-streaming + context-1m (see hermes
@@ -909,6 +917,7 @@ mod tests {
             "claude-3-5-sonnet-20241022",
             None,
             false,
+            false,
             &official_caps(),
         );
         // Should include the two always-on betas
@@ -924,6 +933,7 @@ mod tests {
             "claude-opus-4-20250514",
             None,
             false,
+            false,
             &official_caps(),
         );
         assert!(headers.contains("interleaved-thinking-2025-05-14"));
@@ -935,6 +945,7 @@ mod tests {
         let headers = AnthropicProtocol::build_beta_headers(
             "claude-sonnet-4-5",
             None,
+            false,
             false,
             &official_caps(),
         );
@@ -951,7 +962,7 @@ mod tests {
             Some("https://api.minimax.io/anthropic/v1/messages"),
         );
         let headers =
-            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet", None, false, &caps);
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet", None, false, false, &caps);
         assert!(
             !headers.contains("fine-grained-tool-streaming-2025-05-14"),
             "MiniMax must not see fine-grained-tool-streaming, got {}",
@@ -973,7 +984,7 @@ mod tests {
             Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
         );
         let headers =
-            AnthropicProtocol::build_beta_headers("claude-sonnet-4-6", None, false, &caps);
+            AnthropicProtocol::build_beta_headers("claude-sonnet-4-6", None, false, false, &caps);
         assert!(
             headers.contains("context-1m-2025-08-07"),
             "Azure + claude-4 must enable context-1m, got {}",
@@ -990,8 +1001,13 @@ mod tests {
             AnthropicEndpointClass::Custom,
             Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
         );
-        let headers =
-            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022", None, false, &caps);
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-3-5-sonnet-20241022",
+            None,
+            false,
+            false,
+            &caps,
+        );
         // 1M context is meaningless on pre-4 models — gate keeps headers clean
         assert!(!headers.contains("context-1m-2025-08-07"));
     }
@@ -999,7 +1015,8 @@ mod tests {
     #[test]
     fn beta_headers_omits_context_1m_on_official_by_default() {
         let caps = official_caps();
-        let headers = AnthropicProtocol::build_beta_headers("claude-opus-4-7", None, false, &caps);
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-opus-4-7", None, false, false, &caps);
         // Native Anthropic 400s on subscriptions without long-context beta.
         assert!(!headers.contains("context-1m-2025-08-07"));
     }

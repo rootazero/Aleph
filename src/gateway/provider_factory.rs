@@ -96,6 +96,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         top_logprobs: None,
         metadata_user_id: None,
         effort: None,
+        server_context_editing: Default::default(),
     };
 
     let provider = create_provider("claude", config)
@@ -168,6 +169,7 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         top_logprobs: None,
         metadata_user_id: None,
         effort: None,
+        server_context_editing: Default::default(),
     };
 
     let provider = create_provider("openai", config)

@@ -30,6 +30,9 @@ const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
 /// drop is reported in the response's `input_transformations`.
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
+/// Server-side context editing (`context_management.edits`).
+const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
+
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     #[must_use]
@@ -363,10 +366,14 @@ impl AnthropicProtocol {
     /// - `thinking-binding-controls-2026-08-01` — prefix-bound model (catalog
     ///   fact) on a host that accepts the controls (policy fact), never on the
     ///   OAuth path
+    /// - `context-management-2025-06-27` when `context_editing` — the caller
+    ///   passes [`Self::server_context_editing_applies`], the same value that
+    ///   put `context_management` in the body, so the two never disagree
     pub(super) fn build_beta_headers(
         model: &str,
         api_key: Option<&str>,
         extended_cache_ttl: bool,
+        context_editing: bool,
         caps: &AnthropicCapabilities,
     ) -> String {
         let mut betas: Vec<&'static str> = Vec::new();
@@ -404,7 +411,26 @@ impl AnthropicProtocol {
         if !oauth && caps.supports_thinking_block_binding && binds_thinking_to_prefix(model) {
             betas.push(THINKING_BINDING_BETA);
         }
+        if context_editing {
+            betas.push(CONTEXT_MANAGEMENT_BETA);
+        }
         betas.join(",")
+    }
+
+    /// Whether a request built from `config` carries server-side context
+    /// editing: the provider enabled it, the host accepts it (a policy fact —
+    /// the docs make it available on every supported Claude model, so there is
+    /// no model gate), and the request is not on the OAuth identity path (U1:
+    /// unverified there). The one derivation behind the body field, its beta
+    /// header, the local passes standing down, and the "enabled but not
+    /// honoured" warning.
+    pub(crate) fn server_context_editing_applies(
+        config: &ProviderConfig,
+        caps: &AnthropicCapabilities,
+    ) -> bool {
+        config.server_context_editing.enabled
+            && caps.supports_context_editing
+            && !config.api_key.as_deref().is_some_and(Self::is_oauth_token)
     }
 
     /// True for Claude 4-family models (opus-4-*, sonnet-4-*, haiku-4-*).

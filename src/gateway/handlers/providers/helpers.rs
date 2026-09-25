@@ -161,6 +161,7 @@ pub(super) fn build_provider_config_for_persistence(
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         },
     };
 

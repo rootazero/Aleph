@@ -305,11 +305,28 @@ impl HttpProvider {
             "Creating HttpProvider"
         );
 
-        Ok(Self {
+        let provider = Self {
             name,
             config,
             adapter,
-        })
+        };
+        if provider.server_context_editing_unhonoured() {
+            tracing::warn!(
+                provider = %provider.name,
+                protocol = provider.adapter.name(),
+                "server_context_editing is enabled but this provider's requests cannot carry \
+                 it (first-party Anthropic host only, not the OAuth path) — the setting has \
+                 no effect and Aleph's own tool-result pruning stays on"
+            );
+        }
+        Ok(provider)
+    }
+
+    /// `server_context_editing.enabled` on a provider whose requests cannot
+    /// carry it (not the 1P Anthropic host, or the OAuth identity path).
+    pub(crate) fn server_context_editing_unhonoured(&self) -> bool {
+        self.config.server_context_editing.enabled
+            && !self.adapter.clears_tool_results_server_side(&self.config)
     }
 
     /// The messages this target actually receives: the pre-send choke point
@@ -941,6 +958,10 @@ impl AiProvider for HttpProvider {
         )
     }
 
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.adapter.clears_tool_results_server_side(&self.config)
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }
@@ -1332,3 +1353,6 @@ mod replay_tests;
 
 #[cfg(test)]
 mod tool_text_tests;
+
+#[cfg(test)]
+mod context_editing_tests;

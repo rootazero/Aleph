@@ -776,6 +776,7 @@ mod tests {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         }
     }
 
