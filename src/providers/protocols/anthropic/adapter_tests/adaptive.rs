@@ -330,9 +330,9 @@ fn build_request_omits_thinking_on_gen5_model_when_off() {
     use crate::agents::thinking::ThinkLevel;
     use crate::providers::message::UnifiedMessage;
     let msgs = [UnifiedMessage::user("Hi")];
-    // Generation-5 models 400 on an explicit `{type:"disabled"}` block —
-    // omission is the only off-switch (claude-api: "omit the thinking param
-    // entirely instead").
+    // Generation-5 models 400 on an explicit `{type:"disabled"}` block and
+    // have no off switch (thinking is always on), so `Off` omits the field
+    // (claude-api: "omit the thinking param entirely instead").
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
     let mut config = ProviderConfig::test_config("claude-fable-5");
     config.api_key = Some("sk-ant-api-test".to_string());
@@ -399,7 +399,6 @@ fn adjust_max_tokens_raises_cap_above_legacy_budget() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(20_000),
         display: None,
-        block_binding: None,
     };
     // 16k default cap <= 20k budget → bumped to budget + 1024 reserve.
     let adjusted =
@@ -414,7 +413,6 @@ fn adjust_max_tokens_keeps_cap_when_already_above_budget() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(10_000),
         display: None,
-        block_binding: None,
     };
     let adjusted =
         AnthropicProtocol::adjust_max_tokens_for_thinking_budget(16_384, Some(&thinking));
@@ -432,7 +430,6 @@ fn adjust_max_tokens_ignores_adaptive_and_absent_thinking() {
         thinking_type: "adaptive".to_string(),
         budget_tokens: None,
         display: Some("summarized".to_string()),
-        block_binding: None,
     };
     assert_eq!(
         AnthropicProtocol::adjust_max_tokens_for_thinking_budget(8_192, Some(&adaptive)),

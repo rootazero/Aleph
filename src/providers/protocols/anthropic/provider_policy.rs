@@ -218,8 +218,8 @@ pub struct AnthropicCapabilities {
     /// tool arguments. Hosts whose rule was never verified keep it ON: an
     /// uncertain vendor stays on today's behaviour rather than being stripped.
     pub requires_reasoning_content_in_tool_input: bool,
-    /// `thinking.block_binding` + `anthropic-beta:
-    /// thinking-binding-controls-2026-08-01`. Claude API only: the controls
+    /// `anthropic-beta: thinking-binding-controls-2026-08-01` (preserved-thinking
+    /// controls; Aleph sends the header alone). Claude API only: the controls
     /// arrive per model on Bedrock/Vertex (header rejected until then) and are
     /// not offered on Foundry or third-party proxies. Which *models* bind is a
     /// catalog fact (`model_catalog::binds_thinking_to_prefix`), not this bit.
@@ -767,7 +767,7 @@ mod tests {
         }
     }
 
-    /// `thinking.block_binding` + its beta header are rejected wherever the
+    /// The thinking-binding beta header is rejected wherever the
     /// controls have not shipped (Bedrock/Vertex until per-model launch,
     /// Foundry never, every third-party proxy). Only the 1P host gets them.
     #[test]
@@ -796,7 +796,7 @@ mod tests {
                 !build_anthropic_policy(Some(base_url))
                     .capabilities
                     .supports_thinking_block_binding,
-                "{base_url} must not be sent thinking.block_binding"
+                "{base_url} must not be sent the thinking-binding beta"
             );
         }
     }

@@ -4,9 +4,9 @@
 //!   hosts whose rule was never verified (Kimi/Moonshot, MiniMax, unknown
 //!   proxies). Genuine-Claude hosts (1P / Bedrock / Vertex / Foundry) never
 //!   get them.
-//! - `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` + the
-//!   `thinking-binding-controls-2026-08-01` beta — only for prefix-bound
-//!   models (catalog fact) on the 1P host (policy fact).
+//! - the `thinking-binding-controls-2026-08-01` beta header — only for
+//!   prefix-bound models (catalog fact) on the 1P host (policy fact), never on
+//!   the OAuth identity path. The body's `thinking` is never touched by it.
 //!
 //! Every assertion here reads the serialized request, not an intermediate
 //! value: the question is what reaches the wire.
@@ -138,99 +138,99 @@ fn unverified_hosts_keep_the_reasoning_content_copy_on_every_tool_use() {
     }
 }
 
-// ── R-G3: thinking.block_binding + beta on prefix-bound models ──────────────
+// ── R-G3: the binding beta header on prefix-bound models ───────────────────
+
+const BINDING_MODELS: [&str; 3] = ["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"];
+const LEVELS: [Option<ThinkLevel>; 3] = [None, Some(ThinkLevel::Off), Some(ThinkLevel::High)];
+
+fn oauth_beta_header(model: &str, level: Option<ThinkLevel>) -> String {
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs).with_think_level(level);
+    let mut config = config_for(model, None);
+    config.api_key = Some("sk-ant-oat01-test-token".to_string());
+    let request = build_http(&payload, &config);
+    request
+        .headers()
+        .get("anthropic-beta")
+        .map(|v| v.to_str().expect("ascii header").to_string())
+        .unwrap_or_default()
+}
 
 #[test]
-fn prefix_bound_model_on_first_party_sends_drop_block_and_its_beta() {
-    // No think level: the model thinks by default, so an omitted `thinking`
-    // becomes a bare adaptive block — no display, no effort added.
-    let thinking = thinking_of("claude-opus-5-5", None, None);
-    assert_eq!(
-        thinking,
-        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}})
-    );
-    assert!(beta_header("claude-opus-5-5", None, None).contains(BINDING_BETA));
+fn prefix_bound_models_on_first_party_carry_the_binding_beta_at_every_level() {
+    for model in BINDING_MODELS {
+        for level in LEVELS {
+            assert!(
+                beta_header(model, None, level).contains(BINDING_BETA),
+                "{model} / {level:?}: binding beta expected on 1P"
+            );
+        }
+    }
+}
 
-    // With a think level the existing effort/display semantics are unchanged;
-    // the binding rides along.
+/// The controls live in the header only. The body's `thinking` is exactly
+/// what the think level made it before the controls existed — in particular
+/// no level and a generation-5 `Off` both stay an omitted field.
+#[test]
+fn the_binding_beta_never_changes_the_thinking_field() {
+    assert!(thinking_of("claude-opus-5-5", None, None).is_null());
+    assert!(thinking_of("claude-mythos-5-1", None, Some(ThinkLevel::Off)).is_null());
+
     let msgs = [UnifiedMessage::user("hi")];
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
     let body = build_body(&payload, &config_for("claude-fable-5-1", None));
-    assert_eq!(body["thinking"]["type"], "adaptive");
-    assert_eq!(body["thinking"]["display"], "summarized");
     assert_eq!(
-        body["thinking"]["block_binding"]["prefix_mismatch_behavior"],
-        "drop_block"
+        body["thinking"],
+        json!({"type": "adaptive", "display": "summarized"})
     );
     assert_eq!(body["output_config"]["effort"], "high");
+
+    // Same field with and without the beta: a host that never gets the
+    // header serializes the identical `thinking`.
+    for model in BINDING_MODELS {
+        for level in LEVELS {
+            assert_eq!(
+                thinking_of(model, None, level),
+                thinking_of(model, Some(BEDROCK), level),
+                "{model} / {level:?}: the header must not reshape `thinking`"
+            );
+        }
+    }
 }
 
 #[test]
-fn explicit_off_on_a_prefix_bound_model_still_carries_the_binding() {
-    // Gen-5 has no off switch other than omission (which runs adaptive), so
-    // `Off` produced no `thinking` before; now it is the bare adaptive block.
-    let thinking = thinking_of("claude-mythos-5-1", None, Some(ThinkLevel::Off));
-    assert_eq!(thinking["type"], "adaptive");
-    assert!(thinking.get("display").is_none());
-    assert_eq!(
-        thinking["block_binding"]["prefix_mismatch_behavior"],
-        "drop_block"
-    );
-}
-
-#[test]
-fn binding_is_absent_off_first_party_and_on_unbound_models() {
+fn binding_beta_is_absent_off_first_party_and_on_unbound_models() {
     for (model, base_url) in [
         ("claude-opus-5-5", Some(BEDROCK)),
         ("claude-opus-5-5", Some(VERTEX)),
         ("claude-opus-5-5", Some(FOUNDRY)),
+        ("claude-opus-5-5", Some(MOONSHOT)),
         ("claude-opus-4-8", None),
         ("claude-opus-5", None),
         ("claude-fable-5", None),
     ] {
-        let thinking = thinking_of(model, base_url, Some(ThinkLevel::High));
-        assert!(
-            thinking.get("block_binding").is_none(),
-            "{model} @ {base_url:?}: no block_binding expected, got {thinking}"
-        );
         assert!(
             !beta_header(model, base_url, Some(ThinkLevel::High)).contains(BINDING_BETA),
             "{model} @ {base_url:?}: no binding beta expected"
         );
     }
-    // An unbound model with no think level keeps its omitted `thinking`.
-    assert!(thinking_of("claude-opus-4-8", None, None).is_null());
 }
 
-/// Sending `block_binding` without the header is a 400 ("Extra inputs are not
-/// permitted"). Whatever the matrix, the field must never appear alone.
+/// U1: the Claude Code OAuth identity path keeps today's beta stack — the
+/// new beta is not verified there.
 #[test]
-fn block_binding_field_never_reaches_the_wire_without_its_beta() {
-    for model in [
-        "claude-opus-5-5",
-        "claude-fable-5-1",
-        "claude-mythos-5-1",
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-sonnet-4-6",
-    ] {
-        for base_url in [
-            None,
-            Some(BEDROCK),
-            Some(VERTEX),
-            Some(FOUNDRY),
-            Some(MOONSHOT),
-        ] {
-            for level in [None, Some(ThinkLevel::Off), Some(ThinkLevel::High)] {
-                let has_field = thinking_of(model, base_url, level)
-                    .get("block_binding")
-                    .is_some();
-                let has_beta = beta_header(model, base_url, level).contains(BINDING_BETA);
-                assert!(
-                    !has_field || has_beta,
-                    "{model} @ {base_url:?} / {level:?}: block_binding without its beta header"
-                );
-            }
+fn oauth_identity_path_never_gets_the_binding_beta() {
+    for model in BINDING_MODELS {
+        for level in LEVELS {
+            let header = oauth_beta_header(model, level);
+            assert!(
+                header.contains("oauth-2025-04-20"),
+                "{model}: the request must be on the OAuth path, got {header}"
+            );
+            assert!(
+                !header.contains(BINDING_BETA),
+                "{model} / {level:?}: OAuth must not get the binding beta, got {header}"
+            );
         }
     }
 }

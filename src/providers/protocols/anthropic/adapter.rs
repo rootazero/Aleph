@@ -328,9 +328,10 @@ impl ProtocolAdapter for AnthropicProtocol {
                 // enabled — the caller's "off" would be silently ignored. Emit
                 // `{type:"disabled"}` to actually turn it off (pi parity:
                 // `thinkingEnabled === false → thinking:{type:"disabled"}`).
-                // Generation-5 models (fable-5) 400 on an explicit disabled
-                // block — omission is the only off-switch there, so they get
-                // no `thinking` field at all. Older/non-adaptive models
+                // Generation-5 models (fable-5) have no off switch: thinking
+                // is always on and an explicit disabled block is a 400, so
+                // `Off` sends no `thinking` field (the API's default adaptive
+                // thinking). Older/non-adaptive models
                 // default to no-thinking, so the generic arms below disable
                 // them by omission as before.
                 Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => {
@@ -342,7 +343,6 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 thinking_type: "disabled".to_string(),
                                 budget_tokens: None,
                                 display: None,
-                                block_binding: None,
                             }),
                             None,
                         )
@@ -355,7 +355,6 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 thinking_type: "adaptive".to_string(),
                                 budget_tokens: None,
                                 display: Some("summarized".to_string()),
-                                block_binding: None,
                             }),
                             Some(eff),
                         ),
@@ -372,7 +371,6 @@ impl ProtocolAdapter for AnthropicProtocol {
                         thinking_type: "enabled".to_string(),
                         budget_tokens: Some(budget),
                         display: None,
-                        block_binding: None,
                     }),
                     None,
                 ),
@@ -533,16 +531,6 @@ impl ProtocolAdapter for AnthropicProtocol {
             (None, None, None)
         } else {
             (temperature, top_p, top_k)
-        };
-
-        // Preserved-thinking controls ride on the thinking config. Applied
-        // after the sampling gate so that gate still sees the caller's
-        // thinking choice, not the binding wrapper. The beta header below is
-        // derived from the same predicate.
-        let thinking = if Self::thinking_block_binding_applies(actual_model, &policy.capabilities) {
-            Self::with_drop_block_binding(thinking, actual_model)
-        } else {
-            thinking
         };
 
         // Cycle 4: wire metadata + effort from config. Adaptive thinking on

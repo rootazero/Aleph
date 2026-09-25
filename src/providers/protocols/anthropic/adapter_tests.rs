@@ -9,7 +9,7 @@
 //! - `adaptive`      — Claude 4.6/4.7 adaptive-thinking + xhigh downgrade.
 //! - `prefix_stability` — strict-prefix-extension cache contract on raw bodies.
 //! - `thinking_replay` — per-host / per-model thinking replay on the wire
-//!   (`reasoning_content` copies, `thinking.block_binding` + its beta).
+//!   (`reasoning_content` copies, the thinking-binding beta header).
 
 mod helpers;
 

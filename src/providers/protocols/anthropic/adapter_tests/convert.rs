@@ -268,7 +268,6 @@ fn test_thinking_block_enabled_serialization() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(10000),
         display: None,
-        block_binding: None,
     };
     let json = serde_json::to_value(&block).unwrap();
     assert_eq!(json["type"], "enabled");
@@ -283,7 +282,6 @@ fn test_thinking_block_adaptive_serialization() {
         thinking_type: "adaptive".to_string(),
         budget_tokens: None,
         display: Some("summarized".to_string()),
-        block_binding: None,
     };
     let json = serde_json::to_value(&block).unwrap();
     assert_eq!(json["type"], "adaptive");
