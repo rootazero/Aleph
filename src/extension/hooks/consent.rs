@@ -314,7 +314,9 @@ impl ShellHookConsent {
     /// `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so a plugin's own script
     /// stays content-bound and allowed. A path-shaped ARGUMENT to a program
     /// (`git diff src/app.ts`) is refused too: consent cannot tell it from a
-    /// script, and binds whichever comes first.
+    /// script, and binds whichever comes first. What the command writes to
+    /// (`2>/dev/null`, `> out/log`) and a URL are no candidate for either
+    /// (`script_candidates`); what it reads from (`sh <x.sh`) is.
     #[must_use]
     pub fn root_relative_script(
         plugin_name: &str,
@@ -961,13 +963,35 @@ fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Optio
 /// The words a command's script is looked for among, in consent's order: the
 /// first word that names itself a script, then every path-shaped word — each
 /// with the context's known variables expanded ([`ScriptContext::expand`]).
+/// What a command writes to (an output redirection's target) and a URL are
+/// not words a script can be: `2>/dev/null`, `> out/log` and `https://…`
+/// name nothing that runs. What it reads from (`<x.sh`) can be, and is judged
+/// by its target ([`redirection`]).
 fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> {
-    // Anything with a glob or a variable nobody here can resolve is not a
-    // stable path, so it is dropped entirely.
-    let tokens: Vec<String> = command
-        .split_whitespace()
-        .filter_map(|raw| context.expand(raw))
-        .collect();
+    let mut tokens: Vec<String> = Vec::new();
+    let mut writes_to_next = false;
+    for raw in command.split_whitespace() {
+        // The target of an output operator written apart (`> out/log`).
+        if std::mem::take(&mut writes_to_next) {
+            continue;
+        }
+        // Anything with a glob or a variable nobody here can resolve is not a
+        // stable path, so it is dropped entirely.
+        let Some(word) = context.expand(raw) else {
+            continue;
+        };
+        let candidate = match redirection(&word) {
+            Redirection::Writes { target_follows } => {
+                writes_to_next = target_follows;
+                continue;
+            }
+            Redirection::Reads(source) => source,
+            Redirection::Not => word.as_str(),
+        };
+        if !candidate.is_empty() && !is_url(candidate) {
+            tokens.push(candidate.to_string());
+        }
+    }
 
     // Pass 1: a token that names itself a script.
     let by_extension = tokens
@@ -983,6 +1007,51 @@ fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> 
         .filter(|t| t.contains('/') || t.contains('\\'))
         .cloned();
     by_extension.into_iter().chain(path_shaped).collect()
+}
+
+/// What a command word is as a shell redirection ([`redirection`]).
+enum Redirection<'a> {
+    /// An OUTPUT redirection (`>`, `>>`, `2>`, `&>`, `>&2`, `2>&1`, `>|`):
+    /// its target is written, never run — and binding an approval to a file
+    /// the command writes would break the approval on its next run.
+    /// `target_follows`: the operator is written apart from its target, which
+    /// is the next word.
+    Writes { target_follows: bool },
+    /// An INPUT redirection (`<`, `<<`, `<>`, `0<`): the target it reads,
+    /// which can be the very script (`sh <x.sh`). Empty when the target is
+    /// written apart: the next word, judged like any other.
+    Reads(&'a str),
+    /// Not a redirection.
+    Not,
+}
+
+/// A command word as a shell redirection ([`Redirection`]).
+fn redirection(word: &str) -> Redirection<'_> {
+    let operator = match word.strip_prefix('&') {
+        Some(rest) => rest,
+        None => word.trim_start_matches(|c: char| c.is_ascii_digit()),
+    };
+    if let Some(target) = operator.strip_prefix('>') {
+        return Redirection::Writes {
+            target_follows: target.trim_start_matches(['>', '|', '&']).is_empty(),
+        };
+    }
+    match operator.strip_prefix('<') {
+        Some(source) => Redirection::Reads(source.trim_start_matches(['<', '>'])),
+        None => Redirection::Not,
+    }
+}
+
+/// Whether a command word is a URL (`scheme://…`, the scheme a letter then
+/// letters, digits, `+`, `.` or `-`): an address, never a file the command
+/// runs or reads from its directory.
+fn is_url(word: &str) -> bool {
+    word.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    })
 }
 
 /// The file a candidate word names: `~/` from the home directory, an
@@ -1138,6 +1207,50 @@ mod tests {
         assert_eq!(relative("git status --short"), None);
         assert_eq!(relative("gh pr view $1"), None);
         assert_eq!(relative(&format!("sh {abs} src/app.ts")), None);
+    }
+
+    /// A redirection's target is judged by direction: what a command writes
+    /// to is never its script, glued (`2>/dev/null`) or apart (`> out/log`);
+    /// what it reads from can be (`sh <scripts/x.sh`). A URL names no file.
+    /// The inline refusal and consent's binding share the candidates, so each
+    /// case holds for both.
+    #[test]
+    fn a_redirection_is_judged_by_what_it_reads_and_a_url_is_no_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(root.path().join("x.sh"), "true").unwrap();
+        std::fs::write(root.path().join("last-run"), "then").unwrap();
+        let relative = |command: &str| {
+            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+        };
+        for writes in [
+            "git status 2>/dev/null",
+            "git rev-parse --git-dir 2>/dev/null",
+            "git log >out/log.txt",
+            "git log > out/log.txt",
+            "make 2>&1 >>build/log",
+            "make &> build/log",
+        ] {
+            assert_eq!(relative(writes), None, "{writes}");
+        }
+        assert_eq!(relative("curl -s https://example.com/x"), None);
+        assert_eq!(relative("curl -s \"HTTPS://example.com/a/b\""), None);
+        assert_eq!(
+            relative("sh scripts/x.sh 2>&1"),
+            Some("scripts/x.sh".into())
+        );
+        assert_eq!(relative("sh <scripts/x.sh"), Some("scripts/x.sh".into()));
+        assert_eq!(relative("sh < scripts/x.sh"), Some("scripts/x.sh".into()));
+
+        // Consent's binding, on the same candidates: an input redirection
+        // binds the script it feeds; an output target is never bound.
+        let context = ScriptContext::new("plug", None, Some(root.path()));
+        let fed = format!("sh <{}/x.sh", root.path().display());
+        assert_eq!(
+            script_path_from_command(&fed, &context),
+            Some(root.path().join("x.sh"))
+        );
+        let written = format!("date >{}/last-run", root.path().display());
+        assert_eq!(script_path_from_command(&written, &context), None);
     }
 
     /// Recording under `Global` is exactly how every entry looked before the

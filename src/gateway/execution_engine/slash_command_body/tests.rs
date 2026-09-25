@@ -441,6 +441,44 @@ async fn an_inline_command_naming_a_relative_script_never_runs() {
     );
 }
 
+/// N3. What a command writes to and a URL are not its script: an approved
+/// `git status --short 2>/dev/null` runs, an unapproved `curl … https://…` is
+/// filed for review like any command (not refused as a relative path), and a
+/// relative script is still refused with its output redirected.
+#[tokio::test]
+#[cfg(unix)]
+async fn a_redirection_or_a_url_is_not_a_relative_script() {
+    let status = "git status --short 2>/dev/null";
+    let curl = "curl -s https://example.com/x";
+    let script = "sh scripts/x.sh 2>&1";
+    let f = Fixture::new(&format!("[!`{status}`] [!`{curl}`] [!`{script}`]"), None).await;
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&f.work)
+        .status()
+        .expect("git runs");
+    assert!(init.success());
+    std::fs::write(f.work.join("new.txt"), "x").unwrap();
+    f.approve(status);
+
+    let block = f.block("").await;
+    assert!(block.contains("[?? new.txt"), "{block}");
+    assert!(
+        block.contains(&format!("[[!`{curl}` not run: pending operator approval")),
+        "{block}"
+    );
+    assert!(
+        f.consent.entries().iter().any(|e| e.command == curl),
+        "the URL command was not filed for review"
+    );
+    assert!(
+        block.contains(&format!(
+            "[[!`{script}` not run: `scripts/x.sh` is a relative path"
+        )),
+        "{block}"
+    );
+}
+
 /// S7. The consent key has no event, so a `hooks.json` command with the same
 /// text shares it. An approval given to the hook — reviewed without
 /// arguments, in its root — does not cover the inline face.
