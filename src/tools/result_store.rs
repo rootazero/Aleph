@@ -333,10 +333,23 @@ impl ToolResultStore {
         content: &str,
         threshold_tokens: usize,
     ) -> Option<String> {
-        let tokens = estimate_tokens_smart(content);
-        if tokens <= threshold_tokens {
+        if estimate_tokens_smart(content) <= threshold_tokens {
             return None;
         }
+        self.persist(tool_call_id, tool_name, content)
+    }
+
+    /// Persist `content` unconditionally and return its reference marker, or
+    /// `None` when the write failed (logged here).
+    ///
+    /// The ungated half of [`Self::persist_if_large`], for a caller that decides
+    /// "is this large" on one string and stores another:
+    /// `result_processing::recovery_footer` gates on the flattened text the
+    /// model would otherwise receive and stores its line-preserving rendering,
+    /// whose token estimate is a different number (see `tool_output::render`).
+    /// The marker's token count describes what is on disk.
+    pub fn persist(&self, tool_call_id: &str, tool_name: &str, content: &str) -> Option<String> {
+        let tokens = estimate_tokens_smart(content);
 
         // Use a sanitized filename: {tool_call_id}_{tool_name}.txt
         let safe_name = format!(
