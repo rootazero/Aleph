@@ -135,10 +135,15 @@ fn footer(view: &ContextView) -> Vec<String> {
     let mut out = vec![first];
     // What tool output cost on its way in — not a row, because it is a
     // session-long sum, not a share of the window this prompt occupies. The
-    // heading says since when: the server keeps it in memory, so it is not a
-    // lifetime total. Two lines, because one would clip on a narrow overlay.
+    // heading says since when, from the server's own start of counting: it
+    // keeps the tally in memory, so a restart or a dropped record starts it
+    // over. Two lines, because one would clip on a narrow overlay.
     if let Some(t) = view.tool_output {
-        out.push("tool output, this session since server start:".to_string());
+        out.push(match t.since_unix_ms.and_then(since_label) {
+            Some(since) => format!("tool output since {since}:"),
+            // A server that predates the field: the start is not known.
+            None => "tool output, this session (start unknown):".to_string(),
+        });
         out.push(format!(
             "  {} produced \u{2192} {} kept \u{00b7} {} offloaded \u{00b7} {} call{}",
             compact_tokens(t.produced_tokens),
@@ -148,6 +153,9 @@ fn footer(view: &ContextView) -> Vec<String> {
             if t.calls == 1 { "" } else { "s" },
         ));
     }
+    if view.rows.rows.iter().any(|r| r.estimated) {
+        out.push("~ estimated from the messages sent".to_string());
+    }
     // Only when there IS a remainder: naming `Other` when the row is not on
     // screen would describe something the reader cannot see.
     if view.rows.other > 0 {
@@ -156,6 +164,19 @@ fn footer(view: &ContextView) -> Vec<String> {
         );
     }
     out
+}
+
+/// `HH:MM` in local time, with the date when it is not today — a tally
+/// counted since yesterday must not read as since this morning.
+fn since_label(unix_ms: u64) -> Option<String> {
+    let at = chrono::DateTime::from_timestamp_millis(i64::try_from(unix_ms).ok()?)?
+        .with_timezone(&chrono::Local);
+    let today = chrono::Local::now().date_naive();
+    Some(if at.date_naive() == today {
+        at.format("%H:%M").to_string()
+    } else {
+        at.format("%m-%d %H:%M").to_string()
+    })
 }
 
 /// Render the overlay, centred over the transcript like the `/agents` detail
@@ -259,7 +280,12 @@ fn row_line(row: &ContextRow, total: Option<u64>, label_width: usize) -> Line<'s
         ));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::raw(format!("{:>7}", compact_tokens(row.tokens))));
+    let tokens = if row.estimated {
+        format!("~{}", compact_tokens(row.tokens))
+    } else {
+        compact_tokens(row.tokens)
+    };
+    spans.push(Span::raw(format!("{tokens:>7}")));
     spans.push(Span::styled(
         format!(" {:>4}", share(row.tokens, total)),
         Style::default().fg(theme().muted),
@@ -330,16 +356,6 @@ mod tests {
             .join("\n")
     }
 
-    /// **B7's guard.** A breakdown whose `provider_reported` is unknown — the
-    /// state the gateway ALWAYS sends, and which stays unknown while this
-    /// session has no gauge — paints `?`, never a zero.
-    ///
-    /// Asserting `0% ` would pass on a broken path: `total: None` collapsed to
-    /// `unwrap_or(0)` renders `0% · 0 of 200.0k`, which reads as an empty
-    /// window rather than an unmeasured one.
-    ///
-    /// Mutation-checked: `total.map_or_else(UNKNOWN, ..)` → `unwrap_or(0)` in
-    /// either `headline` or `share` turns this red.
     /// The conversation half is painted as its per-kind rows, and the
     /// session's tool-output tally as a footer line — the two fields the
     /// server now fills, each with a line of code that shows it.
@@ -351,11 +367,17 @@ mod tests {
             reasoning: 3_000,
             other: 1_500,
         });
+        let since = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(9, 5, 0)
+            .and_then(|t| t.and_local_timezone(chrono::Local).single())
+            .expect("a local 09:05 today");
         b.tool_output = Some(ToolOutputIngress {
             calls: 7,
             produced_tokens: 90_000,
             in_context_tokens: 14_000,
             offloaded: 2,
+            since_unix_ms: u64::try_from(since.timestamp_millis()).ok(),
         });
         // 80 columns: the tally must fit the common terminal, not only a wide one.
         let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
@@ -367,12 +389,38 @@ mod tests {
             assert!(screen.contains(label), "missing {label}:\n{screen}");
         }
         assert!(
-            screen.contains("tool output, this session since server start:")
+            screen.contains("tool output since 09:05:")
                 && screen.contains("2 offloaded \u{00b7} 7 calls"),
             "the tally must be painted with what it measures and from when:\n{screen}"
         );
+        assert!(
+            screen.contains("~12.0k") && screen.contains("~ estimated"),
+            "estimated rows are marked as estimates:\n{screen}"
+        );
     }
 
+    /// A server that predates `since_unix_ms` gets no invented start time.
+    #[test]
+    fn a_tally_without_a_start_says_so() {
+        let mut b = breakdown();
+        b.tool_output = Some(ToolOutputIngress {
+            calls: 1,
+            ..ToolOutputIngress::default()
+        });
+        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
+        assert!(screen.contains("(start unknown)"), "{screen}");
+    }
+
+    /// **B7's guard.** A breakdown whose `provider_reported` is unknown — the
+    /// state the gateway ALWAYS sends, and which stays unknown while this
+    /// session has no gauge — paints `?`, never a zero.
+    ///
+    /// Asserting `0% ` would pass on a broken path: `total: None` collapsed to
+    /// `unwrap_or(0)` renders `0% · 0 of 200.0k`, which reads as an empty
+    /// window rather than an unmeasured one.
+    ///
+    /// Mutation-checked: `total.map_or_else(UNKNOWN, ..)` → `unwrap_or(0)` in
+    /// either `headline` or `share` turns this red.
     #[test]
     fn an_unmeasured_total_paints_a_question_mark_not_a_zero() {
         let view = ContextView::new(&breakdown(), None);

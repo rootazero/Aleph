@@ -33,7 +33,8 @@
 //!   reasoning projection as the pressure gauge. `None` until the turn's
 //!   first prompt has been measured.
 //! * `tool_output` — the session's tool-output ingress (produced vs admitted
-//!   tokens, offloads) since this process started, tallied by the dispatcher.
+//!   tokens, offloads), tallied by the dispatcher, with the moment counting
+//!   began (`since_unix_ms`) — a label says since when from that field.
 //!
 //! # The layer rows are the assembly BEFORE the budget trim
 //!
@@ -163,6 +164,7 @@ pub async fn handle_context_breakdown(
         produced_tokens: t.produced_tokens,
         in_context_tokens: t.in_context_tokens,
         offloaded: t.offloaded,
+        since_unix_ms: Some(record.counting_since),
     });
 
     // `layout: None` = this turn built no system prompt at all, so there are no
@@ -427,7 +429,7 @@ mod tests {
         registry.record_turn(&key_str, Some(untrimmed_layout(vec![])), vec![]);
         registry.record_messages(
             &key_str,
-            registry.current_turn(&key_str).expect("recorded"),
+            registry.current_stamp(&key_str).expect("recorded"),
             crate::context::budget::pressure::MessageTokenSplit {
                 tool_results: 900,
                 reasoning: 120,
@@ -436,6 +438,7 @@ mod tests {
         );
         registry.record_tool_output(&key_str, 20_000, 1_500, true);
 
+        let since = registry.latest(&key_str).expect("recorded").counting_since;
         let resp = call(&key_str, sessions, "u-alice").await;
         let out: ContextBreakdown =
             serde_json::from_value(resp.result.expect("success")).expect("contract type");
@@ -455,6 +458,7 @@ mod tests {
                 produced_tokens: 20_000,
                 in_context_tokens: 1_500,
                 offloaded: 1,
+                since_unix_ms: Some(since),
             })
         );
     }

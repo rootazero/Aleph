@@ -38,14 +38,20 @@
 //! * `messages` — the conversation half of a prompt as it left for the
 //!   provider, measured by that run's `ContextBudget` every time it measures a
 //!   prompt ([`PromptSizeRegistry::record_messages`]). It is a fact about the
-//!   turn, so it is stamped with the turn it belongs to and dropped when the
-//!   record has moved on: a late write from an earlier run cannot sit beside a
-//!   later run's layers. `record_turn` clears it, and it stays `None` until the
-//!   new run measures its first prompt.
-//! * `tool_output` — the session's tool-output ingress, summed over every
-//!   call counted by this process ([`PromptSizeRegistry::record_tool_output`]).
+//!   turn, so it carries the stamp of the `record_turn` it belongs to and is
+//!   dropped when the record has moved on: a late write from an earlier run
+//!   cannot sit beside a later run's layers. The stamp is registry-wide and
+//!   never reused — a per-record turn number restarts at 1 when an evicted
+//!   record is recreated, and a run bound before the eviction would match it.
+//!   `record_turn` clears `messages`, and it stays `None` until the new run
+//!   measures its first prompt.
+//! * `tool_output` — the session's tool-output ingress, summed over the calls
+//!   counted since `counting_since` ([`PromptSizeRegistry::record_tool_output`]).
 //!   It is a fact about the session, not the turn, so `record_turn` carries it
-//!   over. A restart resets it, and so does evicting the record.
+//!   over, and `counting_since` with it. The tally lives as long as the record.
+//!
+//! Every write refreshes the record's place in the eviction order, so a
+//! session whose run is busy writing is never the "stalest" one.
 //!
 //! Neither writer creates a record: without a measured turn there is no
 //! layout or tool list to report beside them, and an invented empty one would
@@ -76,10 +82,12 @@ pub struct ToolOutputTally {
     pub calls: u64,
     /// Estimated tokens the tools produced (the output before Layer 2).
     pub produced_tokens: u64,
-    /// Estimated tokens of those results that entered the conversation
-    /// (`ProcessedResult::tokens_in_context`).
+    /// Estimated tokens of those results that Layer 2 admitted into the
+    /// conversation (`ProcessedResult::tokens_in_context`).
     pub in_context_tokens: u64,
-    /// Results whose full output was offloaded to the result store.
+    /// Results whose full output Layer 2 offloaded to the result store. A
+    /// result the per-turn budget (Layer 3, the harness Act phase) spills
+    /// afterwards is not counted, and its tokens stay in `in_context_tokens`.
     pub offloaded: u64,
 }
 
@@ -107,9 +115,15 @@ pub struct PromptSizeRecord {
     /// The message tokens of this turn's last prompt sent, split by kind.
     /// `None` until the turn's first prompt has been measured.
     pub messages: Option<MessageTokenSplit>,
-    /// The session's tool-output ingress in this process. `None` until a
-    /// call has been counted.
+    /// The session's tool-output ingress since `counting_since`. `None` until
+    /// a call has been counted.
     pub tool_output: Option<ToolOutputTally>,
+    /// When this record — and so its tally — was created (Unix ms). Carried
+    /// across `record_turn`; a restart or an eviction starts a new one.
+    pub counting_since: u64,
+    /// Identifies the `record_turn` this record describes, registry-wide and
+    /// never reused (see the module doc). Not on the wire.
+    stamp: u64,
     /// Write order within this process. Exists ONLY to give eviction a total
     /// order: a wall-clock stamp has millisecond resolution, and 256 inserts
     /// finish inside one millisecond, so `min_by_key` over a timestamp picks
@@ -159,6 +173,7 @@ impl PromptSizeRegistry {
         let previous = inner.records.get(session_key);
         let turn = previous.map_or(0, |r| r.turn) + 1;
         let tool_output = previous.and_then(|r| r.tool_output);
+        let counting_since = previous.map_or_else(now_unix_ms, |r| r.counting_since);
         inner.records.insert(
             session_key.to_string(),
             PromptSizeRecord {
@@ -167,30 +182,53 @@ impl PromptSizeRegistry {
                 tools,
                 messages: None,
                 tool_output,
+                counting_since,
+                stamp: seq,
                 write_seq: seq,
             },
         );
     }
 
-    /// The turn `session_key`'s record describes, or `None` when this process
+    /// The stamp of the turn `session_key`'s record describes — what
+    /// [`Self::record_messages`] must present — or `None` when this process
     /// has measured no turn for it.
     #[must_use]
-    pub fn current_turn(&self, session_key: &str) -> Option<u64> {
+    pub fn current_stamp(&self, session_key: &str) -> Option<u64> {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .records
             .get(session_key)
-            .map(|r| r.turn)
+            .map(|r| r.stamp)
     }
 
-    /// Record the message split of a prompt `turn` sent. Dropped when the
-    /// record is gone or describes another turn — see the module doc.
-    pub fn record_messages(&self, session_key: &str, turn: u64, split: MessageTokenSplit) {
-        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+    /// Record the message split of a prompt sent on the turn `stamp`. Dropped
+    /// when the record is gone or describes another turn — see the module doc.
+    pub fn record_messages(&self, session_key: &str, stamp: u64, split: MessageTokenSplit) {
+        self.update_turn(session_key, stamp, |r| r.messages = Some(split));
+    }
+
+    /// Forget the message split of the turn `stamp`: its prompts are no longer
+    /// this session's (the run split into a child session), so what was
+    /// measured last is no longer this session's to report.
+    pub fn clear_messages(&self, session_key: &str, stamp: u64) {
+        self.update_turn(session_key, stamp, |r| r.messages = None);
+    }
+
+    fn update_turn(
+        &self,
+        session_key: &str,
+        stamp: u64,
+        write: impl FnOnce(&mut PromptSizeRecord),
+    ) {
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let inner = &mut *guard;
+        let seq = inner.next_seq;
         if let Some(record) = inner.records.get_mut(session_key) {
-            if record.turn == turn {
-                record.messages = Some(split);
+            if record.stamp == stamp {
+                write(record);
+                record.write_seq = seq;
+                inner.next_seq += 1;
             }
         }
     }
@@ -204,8 +242,12 @@ impl PromptSizeRegistry {
         in_context_tokens: usize,
         offloaded: bool,
     ) {
-        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let inner = &mut *guard;
+        let seq = inner.next_seq;
         if let Some(record) = inner.records.get_mut(session_key) {
+            record.write_seq = seq;
+            inner.next_seq += 1;
             let t = record
                 .tool_output
                 .get_or_insert_with(ToolOutputTally::default);
@@ -238,6 +280,12 @@ impl PromptSizeRegistry {
             .records
             .len()
     }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Process-wide handle. `ConsumerDecides`: the single consumer
@@ -404,7 +452,7 @@ mod tests {
         );
 
         reg.record_turn("s1", None, vec![]);
-        let t1 = reg.current_turn("s1").unwrap();
+        let t1 = reg.current_stamp("s1").unwrap();
         reg.record_messages("s1", t1, split(5));
         assert_eq!(reg.latest("s1").unwrap().messages, Some(split(5)));
 
@@ -449,6 +497,63 @@ mod tests {
                 offloaded: 1,
             })
         );
+    }
+
+    /// F7: a run bound to a record that was later evicted and recreated must
+    /// not write onto the new record, although the new record's `turn`
+    /// restarts at the same number.
+    #[test]
+    fn a_stamp_outlives_nothing_it_did_not_name() {
+        let reg = PromptSizeRegistry::default();
+        reg.record_turn("a", None, vec![]);
+        let bound = reg.current_stamp("a").unwrap();
+        for i in 0..MAX_TRACKED_SESSIONS {
+            reg.record_turn(&format!("other{i}"), None, vec![]);
+        }
+        assert!(reg.latest("a").is_none(), "evicted");
+        reg.record_turn("a", None, vec![]);
+        assert_eq!(
+            reg.latest("a").unwrap().turn,
+            1,
+            "the turn number restarted"
+        );
+        reg.record_messages("a", bound, split(5));
+        assert_eq!(
+            reg.latest("a").unwrap().messages,
+            None,
+            "the pre-eviction run's write must not land on the new record"
+        );
+    }
+
+    /// F4: a session busy writing tool output while 256 others record turns
+    /// is not the stalest one; its record survives the overflow.
+    ///
+    /// Mutation-checked: not refreshing `write_seq` in `record_tool_output`
+    /// turns this red.
+    #[test]
+    fn a_session_that_keeps_writing_is_not_evicted_as_stale() {
+        let reg = PromptSizeRegistry::default();
+        reg.record_turn("a", None, vec![]);
+        for i in 0..MAX_TRACKED_SESSIONS {
+            reg.record_turn(&format!("other{i}"), None, vec![]);
+            reg.record_tool_output("a", 10, 10, false);
+        }
+        assert!(reg.latest("a").is_some(), "the active session survived");
+        assert!(reg.latest("other0").is_none(), "the stalest other went");
+    }
+
+    /// F3: counting starts with the record and is carried across turns, so the
+    /// "since" a label shows is when this tally actually began.
+    #[test]
+    fn the_tally_is_counted_since_the_record_began() {
+        let reg = PromptSizeRegistry::default();
+        reg.record_turn("s1", None, vec![]);
+        let since = reg.latest("s1").unwrap().counting_since;
+        assert!(since > 0);
+        // Past the millisecond, so restarting the count would show.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        reg.record_turn("s1", None, vec![]);
+        assert_eq!(reg.latest("s1").unwrap().counting_since, since);
     }
 
     #[test]

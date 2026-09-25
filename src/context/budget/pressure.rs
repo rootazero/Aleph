@@ -350,9 +350,12 @@ impl std::ops::AddAssign for MessageTokenSplit {
 /// [`estimate_message_tokens_aware`], split by kind (see [`MessageTokenSplit`]).
 ///
 /// Reasoning is attributed as its marginal cost: the message's prose estimate
-/// with the thinking blocks minus the estimate without them. Text and thinking
-/// are still estimated together, so the total — and therefore every pressure
-/// figure — is unchanged by the split.
+/// with the thinking blocks minus the estimate without them, both at the one
+/// density detected on the combined text. Text and thinking are still estimated
+/// together, so the total — and therefore every pressure figure — is unchanged
+/// by the split; and because both sides use the same density, the marginal is
+/// never negative (a density detected separately on the text alone can flip
+/// between code and prose and saturate the reasoning to zero).
 #[must_use]
 pub fn estimate_message_tokens_split(msg: &UnifiedMessage, prose_ratio: f64) -> MessageTokenSplit {
     let mut prose = String::new();
@@ -387,7 +390,13 @@ pub fn estimate_message_tokens_split(msg: &UnifiedMessage, prose_ratio: f64) -> 
     }
     let prose_tokens = estimate_tokens_aware(&prose, prose_ratio);
     let reasoning = if has_thinking {
-        prose_tokens.saturating_sub(estimate_tokens_aware(&text_only, prose_ratio))
+        let ratio = content_ratio_with_baseline(&prose, prose_ratio);
+        let text_tokens = if ratio > 0.0 {
+            ((text_only.chars().count() as f64) / ratio).ceil() as usize
+        } else {
+            0
+        };
+        prose_tokens.saturating_sub(text_tokens)
     } else {
         0
     };
@@ -712,6 +721,40 @@ mod tests {
             estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
             estimate_tokens_aware(&serde_json::json!(log).to_string(), CODE_RATIO),
             "the escaped copy is not what the model is sent"
+        );
+    }
+
+    /// F6: prose reasoning ahead of code-like text. Detected on the text alone
+    /// the answer is code (denser); detected on the combined text the leading
+    /// prose wins — so two separate estimates put the combined BELOW the text
+    /// alone and the reasoning saturated to zero. One density for both sides
+    /// keeps the marginal positive and the total unchanged.
+    ///
+    /// Mutation-checked: estimating the text alone with its own density
+    /// (`estimate_tokens_aware(&text_only, ..)`) turns this red.
+    #[test]
+    fn prose_reasoning_before_code_text_still_costs_something() {
+        let thinking = "weighing the two options\n".repeat(12);
+        let code = "let x = compute(a, b);\n".repeat(44);
+        assert!(thinking.len() >= 290 && code.len() >= 990);
+        let msg = UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking,
+                    signature: None,
+                    earlier_turn: false,
+                },
+                ContentBlock::Text {
+                    text: code,
+                    cache_control: None,
+                },
+            ],
+        };
+        let split = estimate_message_tokens_split(&msg, DEFAULT_PROSE_RATIO);
+        assert!(split.reasoning > 0, "{split:?}");
+        assert_eq!(
+            split.total(),
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO)
         );
     }
 

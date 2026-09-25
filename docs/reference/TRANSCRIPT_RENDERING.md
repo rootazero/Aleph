@@ -290,10 +290,12 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `min_by_key` 在随机的 HashMap 序上挑一个）。
 
 同一条记录还带着另外两个事实（一个会话一条记录，不是三张同键的表）：`messages` 由这一轮的 `ContextBudget`
-每次量 prompt 时经 `record_messages(key, turn, split)` 写入，**盖着它所属的轮号**，记录已换到别的轮就丢弃——
-迟到的写入没法和下一轮的 layers 并排；`record_turn` 把它清成 `None`。`tool_output` 是会话级的，由 `record_tool_output`
-在分发点累加，`record_turn` **沿用**它。两个写者都**不创建记录**：没有量过的轮，就没有可以并排报告的 layout 和 tools，
-凭空建一条空的等于说「这一轮没建 prompt」。
+每次量 prompt 时经 `record_messages(key, stamp, split)` 写入，**盖着它所属那次 `record_turn` 的戳**（全登记簿单调、
+永不复用——逐出后重建的记录轮号从 1 重来，按轮号比会让逐出前绑定的 run 写进新记录），记录已换到别的轮就丢弃——
+迟到的写入没法和下一轮的 layers 并排；`record_turn` 把它清成 `None`；会话分裂（`ContextBudget::record_split`）也清掉它并解绑，
+子会话的对话不会记到父会话名下。`tool_output` 是会话级的，由 `record_tool_output` 在分发点累加，`record_turn` **沿用**它
+和它的起算时刻 `counting_since`。两个写者都**不创建记录**：没有量过的轮，就没有可以并排报告的 layout 和 tools，
+凭空建一条空的等于说「这一轮没建 prompt」。每次写都刷新记录在逐出序里的位置，正在写的会话不会被当成最陈旧的逐出。
 
 **一个字段刻意留空而不是填上**：
 
@@ -310,12 +312,15 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
   按目标 provider 的 reasoning 投影（`ReasoningReplay::projected`）**之后**，用的是**唯一那个**逐消息估算器
   （`estimate_message_tokens_split`；`estimate_message_tokens_aware` 就是它的 `total()`，`harness_bridge::context_estimate`
   用的也是它——两者量的是不同的**集合**：运行前的日志 vs 真正发出去的 prompt，不是两个估算器）。
-  reasoning 只记**边际成本**，三项之和等于总估算。这一轮还没量过 prompt 时为 `None`。
-- `tool_output` —— 这个会话**自服务进程启动以来**的工具输出入口账：`calls` / `produced_tokens`（Layer 2 之前的输出）/
-  `in_context_tokens`（`ProcessedResult::tokens_in_context`）/ `offloaded`。在 `scoped/dispatch.rs::apply_layer_two` 记账；
+  reasoning 只记**边际成本**（两边用合并文本上测出的同一个密度，边际不会被夹成 0），三项之和等于总估算。
+  这一轮还没量过 prompt 时为 `None`。它是**未校准的估算**：`reconcile` 把它标成估算行（TUI 前缀 `~`），
+  矛盾判定只看**实测**行（layers + tools）；估算行超出 provider 计数留下的余量时按比例缩进去，行之和等于总数。
+- `tool_output` —— 这个会话自 `since_unix_ms` 起的工具输出入口账：`calls` / `produced_tokens`（Layer 2 之前的输出）/
+  `in_context_tokens`（`ProcessedResult::tokens_in_context`）/ `offloaded`（**只算 Layer 2**；Layer 3 按轮预算事后溢出的结果
+  不在其中，它的 token 仍算在 `in_context_tokens` 里）。在 `scoped/dispatch.rs::apply_layer_two` 记账；
   被委派的角色（`identity::current_actor()` 有值）**不记**——它跑在父会话的 service 与 `TURN_CONTEXT` 下，
-  但它的结果进的是子会话的上下文。**进程内存**：重启清零，记录被逐出也清零；所以标签必须说「这个会话、自服务启动以来」，
-  **不能**读起来像终身总数（判据 §17）——wire 类型的 doc 与 TUI `/context` 页脚都这么写。
+  但它的结果进的是子会话的上下文。标签的「从何时起」**由 `since_unix_ms` 派生**（TUI：`tool output since HH:MM`），
+  什么会让它重新起算只写在 wire 类型的 doc 上一处。
 - 子代理会话**没有记录**：`subagent_spawner` 走 `build_system_prompt_parts` 的 Basic 路径，从不 `record_turn`，
   所以对子会话的 `context.breakdown` 仍是 `RESOURCE_NOT_FOUND`，它的 `ContextBudget` 也无处可写。
 

@@ -58,21 +58,26 @@ impl MessageTokens {
 }
 
 /// What this session's tool output cost on its way into the context, summed
-/// over the session's tool calls **since the server process started** — not a
-/// lifetime total. The server keeps it in process memory: a restart resets
-/// it, and so does the server dropping the session's record (it keeps the most
-/// recently measured sessions). A label for it must say "this session, since
-/// the server started", not imply a total.
+/// over the calls counted since `since_unix_ms` — not a lifetime total. A
+/// label for it must say since when, from that field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolOutputIngress {
     /// Tool calls counted.
     pub calls: u64,
     /// Estimated tokens the tools produced.
     pub produced_tokens: u64,
-    /// Estimated tokens of those results that entered the conversation.
+    /// Estimated tokens of those results that Layer 2 (the per-result budget)
+    /// admitted into the conversation.
     pub in_context_tokens: u64,
-    /// Results whose full output was offloaded to the result store.
+    /// Results whose full output Layer 2 offloaded to the result store. A
+    /// result the per-turn budget (Layer 3) spills afterwards is not counted
+    /// here, and its tokens stay in `in_context_tokens`.
     pub offloaded: u64,
+    /// When counting began (Unix ms): the server keeps the tally in memory, so
+    /// it starts over when the process restarts or drops the session's record.
+    /// `None` from a server that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,9 +94,9 @@ pub struct ContextBreakdown {
     /// `messages_tokens` as a number keeps parsing.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<MessageTokens>,
-    /// This session's tool-output ingress since the server process started
-    /// (see [`ToolOutputIngress`] for what resets it). `None` when no tool
-    /// call of the session has been counted.
+    /// This session's tool-output ingress since
+    /// [`ToolOutputIngress::since_unix_ms`]. `None` when no tool call of the
+    /// session has been counted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_output: Option<ToolOutputIngress>,
     /// `None` right after a compaction until a fresh response arrives — a
@@ -289,6 +294,7 @@ mod tests {
                 produced_tokens: 9,
                 in_context_tokens: 4,
                 offloaded: 1,
+                since_unix_ms: Some(1_700_000_000_000),
             }),
             provider_reported: None,
             context_window: Some(200_000),
