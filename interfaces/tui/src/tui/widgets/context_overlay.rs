@@ -134,10 +134,13 @@ fn footer(view: &ContextView) -> Vec<String> {
     }
     let mut out = vec![first];
     // What tool output cost on its way in — not a row, because it is a
-    // session-long sum, not a share of the window this prompt occupies.
+    // session-long sum, not a share of the window this prompt occupies. The
+    // heading says since when: the server keeps it in memory, so it is not a
+    // lifetime total. Two lines, because one would clip on a narrow overlay.
     if let Some(t) = view.tool_output {
+        out.push("tool output, this session since server start:".to_string());
         out.push(format!(
-            "tool output: {} produced \u{2192} {} kept \u{00b7} {} offloaded ({} call{})",
+            "  {} produced \u{2192} {} kept \u{00b7} {} offloaded \u{00b7} {} call{}",
             compact_tokens(t.produced_tokens),
             compact_tokens(t.in_context_tokens),
             t.offloaded,
@@ -354,7 +357,8 @@ mod tests {
             in_context_tokens: 14_000,
             offloaded: 2,
         });
-        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 110, 24);
+        // 80 columns: the tally must fit the common terminal, not only a wide one.
+        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
         for label in [
             "Messages: tool results",
             "Messages: reasoning",
@@ -363,8 +367,9 @@ mod tests {
             assert!(screen.contains(label), "missing {label}:\n{screen}");
         }
         assert!(
-            screen.contains("tool output:") && screen.contains("2 offloaded (7 calls)"),
-            "the tally line must be painted:\n{screen}"
+            screen.contains("tool output, this session since server start:")
+                && screen.contains("2 offloaded \u{00b7} 7 calls"),
+            "the tally must be painted with what it measures and from when:\n{screen}"
         );
     }
 

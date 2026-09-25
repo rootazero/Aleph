@@ -5,7 +5,6 @@
 //! agent loop (compact, split the session, or compact to fit).
 
 pub mod cheap_passes;
-pub mod message_breakdown;
 pub mod preflight;
 pub mod pressure;
 
@@ -318,10 +317,10 @@ pub struct ContextBudget {
     /// The primary target's reasoning policy: pressure counts the reasoning
     /// the wire will carry, via the same projection `HttpProvider` applies.
     reasoning_replay: ReasoningReplay,
-    /// The session this budget measures prompts for, when its runner told it
-    /// ([`Self::publish_message_tokens_as`]). Each measured prompt's message
-    /// split is then published to [`message_breakdown`] under this key.
-    breakdown_session: Option<String>,
+    /// The session and turn this budget measures prompts for, when its runner
+    /// told it ([`Self::publish_message_tokens_as`]). Each measured prompt's
+    /// message split is then recorded on that turn's prompt-size record.
+    breakdown_turn: Option<(String, u64)>,
 }
 
 impl ContextBudget {
@@ -362,7 +361,7 @@ impl ContextBudget {
             max_splits: config.max_splits,
             calibration: None,
             reasoning_replay: ReasoningReplay::default(),
-            breakdown_session: None,
+            breakdown_turn: None,
         }
     }
 
@@ -378,16 +377,27 @@ impl ContextBudget {
         &self.reasoning_replay
     }
 
-    /// Publish every measured prompt's message tokens, split by kind, under
-    /// `session_key` for `context.breakdown` ([`message_breakdown`]). The
-    /// figures are the uncalibrated estimate, like every other breakdown row.
+    /// Record every measured prompt's message tokens, split by kind, on
+    /// `session_key`'s prompt-size record for `context.breakdown`. The figures
+    /// are the uncalibrated estimate, like every other breakdown row.
+    ///
+    /// Call it after the run's `record_turn`: the budget binds to the turn the
+    /// record holds now, so a later run's record never receives this run's
+    /// figures. With no record (or no registry) there is nothing to bind to,
+    /// and nothing is recorded.
     pub fn publish_message_tokens_as(&mut self, session_key: impl Into<String>) {
-        self.breakdown_session = Some(session_key.into());
+        let session_key = session_key.into();
+        self.breakdown_turn = crate::thinker::prompt_size_registry::global_prompt_size_registry()
+            .and_then(|reg| reg.current_turn(&session_key))
+            .map(|turn| (session_key, turn));
     }
 
     fn publish(&self, split: MessageTokenSplit) {
-        if let Some(key) = self.breakdown_session.as_deref() {
-            message_breakdown::publish(key, split);
+        let Some((key, turn)) = self.breakdown_turn.as_ref() else {
+            return;
+        };
+        if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+            reg.record_messages(key, *turn, split);
         }
     }
 
@@ -666,13 +676,19 @@ mod tests {
         }
     }
 
-    /// T-G8: a budget told its session publishes each measured prompt's
-    /// message split — of the projection the target is sent, so a target that
-    /// gets no reasoning shows none — and an untold budget publishes nothing.
+    /// T-G8: a budget told its session records each measured prompt's
+    /// message split on that session's turn — of the projection the target is
+    /// sent, so a target that gets no reasoning shows none — and an untold
+    /// budget records nothing.
+    ///
+    /// Mutation-checked: dropping `publish` from `before_turn`, or measuring
+    /// `messages.iter()` instead of the projection, turns this red.
     #[test]
     fn a_measured_prompt_publishes_its_projected_split_for_its_session() {
         use crate::providers::message::ContentBlock;
+        let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
         let key = format!("test:breakdown:{}", uuid::Uuid::new_v4());
+        let messages_of = |key: &str| registry.latest(key).and_then(|r| r.messages);
         let msgs = vec![
             UnifiedMessage::user("question"),
             UnifiedMessage::Assistant {
@@ -698,16 +714,22 @@ mod tests {
             ),
         ];
         let mut budget = ContextBudget::new(&default_config());
+        budget.publish_message_tokens_as(key.clone());
         let _ = budget.before_turn(&msgs, "", 0);
+        registry.record_turn(&key, None, vec![]);
         assert_eq!(
-            message_breakdown::latest(&key),
+            messages_of(&key),
             None,
-            "untold budgets publish nothing"
+            "a budget told before the turn was recorded has no turn to write to"
         );
+
+        let mut budget = ContextBudget::new(&default_config());
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert_eq!(messages_of(&key), None, "untold budgets publish nothing");
 
         budget.publish_message_tokens_as(key.clone());
         let _ = budget.before_turn(&msgs, "", 0);
-        let kept = message_breakdown::latest(&key).expect("published");
+        let kept = messages_of(&key).expect("published");
         assert!(
             kept.reasoning > 0 && kept.tool_results > 0 && kept.other > 0,
             "{kept:?}"
@@ -715,7 +737,7 @@ mod tests {
 
         budget.set_reasoning_replay(ReasoningReplay::Drop);
         let _ = budget.before_turn(&msgs, "", 0);
-        let dropped = message_breakdown::latest(&key).expect("published");
+        let dropped = messages_of(&key).expect("published");
         assert_eq!(
             dropped.reasoning, 0,
             "a target sent no reasoning shows none"

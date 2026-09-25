@@ -39,9 +39,10 @@ pub struct ContextView {
     /// Size of the dynamic half **as actually sent**. `None` means the turn
     /// built no system prompt at all — never "nothing was trimmed".
     pub dynamic_sent_bytes: Option<u64>,
-    /// This session's tool output since the server started: tokens produced
-    /// against tokens admitted into the context, and how many results were
-    /// offloaded. `None` when no tool call has been counted.
+    /// This session's tool output since the server process started (not a
+    /// lifetime total): tokens produced against tokens admitted into the
+    /// context, and how many results were offloaded. `None` when no tool call
+    /// has been counted.
     pub tool_output: Option<ToolOutputIngress>,
     /// First visible row, for a layer list taller than the overlay.
     pub scroll: usize,

@@ -25,15 +25,15 @@
 //! It is an `Option` that serializes away when `None`, so a client renders
 //! "unknown" rather than a zero (判据 §8).
 //!
-//! Two more come from their own recorders, keyed by the same canonical key:
+//! Two more ride on the same record, so one read gives one consistent answer:
 //!
-//! * `messages` — the conversation half of the last prompt sent, split by
-//!   kind. Published by `ContextBudget` when it measures a prompt on its way
-//!   out (`context::budget::message_breakdown`), with the same estimator and
-//!   the same reasoning projection as the pressure gauge. `None` until a turn
-//!   of the session has been measured since the server started.
+//! * `messages` — the conversation half of this turn's last prompt sent,
+//!   split by kind. Recorded by the run's `ContextBudget` each time it
+//!   measures a prompt on its way out, with the same estimator and the same
+//!   reasoning projection as the pressure gauge. `None` until the turn's
+//!   first prompt has been measured.
 //! * `tool_output` — the session's tool-output ingress (produced vs admitted
-//!   tokens, offloads), tallied by the dispatcher (`tools::ingress_tally`).
+//!   tokens, offloads) since this process started, tallied by the dispatcher.
 //!
 //! # The layer rows are the assembly BEFORE the budget trim
 //!
@@ -153,19 +153,17 @@ pub async fn handle_context_breakdown(
         None => None,
     };
 
-    let messages =
-        crate::context::budget::message_breakdown::latest(&canonical_key).map(|m| MessageTokens {
-            tool_results: m.tool_results as u64,
-            reasoning: m.reasoning as u64,
-            other: m.other as u64,
-        });
-    let tool_output =
-        crate::tools::ingress_tally::tally(&canonical_key).map(|t| ToolOutputIngress {
-            calls: t.calls,
-            produced_tokens: t.produced_tokens,
-            in_context_tokens: t.in_context_tokens,
-            offloaded: t.offloaded,
-        });
+    let messages = record.messages.map(|m| MessageTokens {
+        tool_results: m.tool_results as u64,
+        reasoning: m.reasoning as u64,
+        other: m.other as u64,
+    });
+    let tool_output = record.tool_output.map(|t| ToolOutputIngress {
+        calls: t.calls,
+        produced_tokens: t.produced_tokens,
+        in_context_tokens: t.in_context_tokens,
+        offloaded: t.offloaded,
+    });
 
     // `layout: None` = this turn built no system prompt at all, so there are no
     // rows and no sent-size to report. Deliberately NOT an empty layout: the
@@ -413,8 +411,11 @@ mod tests {
         );
     }
 
-    /// The conversation half and the tool-output tally reach the wire from
-    /// their recorders, under the same canonical key as the layer record.
+    /// The conversation half and the tool-output tally reach the wire from the
+    /// session's record.
+    ///
+    /// Mutation-checked: answering `messages: None` in the handler turns this
+    /// red.
     #[tokio::test]
     async fn the_measured_messages_and_the_ingress_tally_cross_the_wire() {
         let registry = install_test_prompt_size_registry();
@@ -424,15 +425,16 @@ mod tests {
         let key_str = key.to_key_string();
         seed_session(&sessions, &key, "u-alice").await;
         registry.record_turn(&key_str, Some(untrimmed_layout(vec![])), vec![]);
-        crate::context::budget::message_breakdown::publish(
+        registry.record_messages(
             &key_str,
+            registry.current_turn(&key_str).expect("recorded"),
             crate::context::budget::pressure::MessageTokenSplit {
                 tool_results: 900,
                 reasoning: 120,
                 other: 300,
             },
         );
-        crate::tools::ingress_tally::record(&key_str, 20_000, 1_500, true);
+        registry.record_tool_output(&key_str, 20_000, 1_500, true);
 
         let resp = call(&key_str, sessions, "u-alice").await;
         let out: ContextBreakdown =

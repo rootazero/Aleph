@@ -20,15 +20,36 @@
 //!
 //! # One turn, one write
 //!
-//! [`PromptSizeRegistry::record_turn`] is the ONLY writer, and it replaces the
-//! whole record. That is deliberate and it is the second lesson from the same
-//! post-mortem: two writers landing at different moments produced a record
+//! [`PromptSizeRegistry::record_turn`] is the ONLY writer of a turn, and it
+//! replaces the whole record. That is deliberate and it is the second lesson
+//! from the same post-mortem: two writers landing at different moments produced a record
 //! carrying one turn's layers beside the next turn's tools, labelled with the
 //! older turn — a record describing a prompt that never existed, which is the
 //! deleted LRU's defect wearing different clothes. The layout arrives as an
 //! `Option` because a turn can legitimately build no system prompt at all
 //! (every layer source absent); that is a fact about the turn, not a reason to
 //! keep the previous turn's.
+//!
+//! # Two more facts, one record
+//!
+//! The record also carries what `context.breakdown` reports beside the
+//! prompt, so a session has one record rather than three maps keyed alike:
+//!
+//! * `messages` — the conversation half of a prompt as it left for the
+//!   provider, measured by that run's `ContextBudget` every time it measures a
+//!   prompt ([`PromptSizeRegistry::record_messages`]). It is a fact about the
+//!   turn, so it is stamped with the turn it belongs to and dropped when the
+//!   record has moved on: a late write from an earlier run cannot sit beside a
+//!   later run's layers. `record_turn` clears it, and it stays `None` until the
+//!   new run measures its first prompt.
+//! * `tool_output` — the session's tool-output ingress, summed over every
+//!   call counted by this process ([`PromptSizeRegistry::record_tool_output`]).
+//!   It is a fact about the session, not the turn, so `record_turn` carries it
+//!   over. A restart resets it, and so does evicting the record.
+//!
+//! Neither writer creates a record: without a measured turn there is no
+//! layout or tool list to report beside them, and an invented empty one would
+//! say "this turn built no prompt".
 //!
 //! # What a missing record means
 //!
@@ -40,6 +61,7 @@
 use std::collections::HashMap;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
+use crate::context::budget::pressure::MessageTokenSplit;
 use crate::sync_primitives::{Arc, Mutex, PoisonError};
 use crate::thinker::prompt_builder::PromptLayout;
 
@@ -47,10 +69,24 @@ use crate::thinker::prompt_builder::PromptLayout;
 /// sessions and each record is a few hundred bytes; the stalest is evicted.
 pub const MAX_TRACKED_SESSIONS: usize = 256;
 
+/// One session's tool output, summed over every call this process counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolOutputTally {
+    /// Tool calls whose result went through Layer 2.
+    pub calls: u64,
+    /// Estimated tokens the tools produced (the output before Layer 2).
+    pub produced_tokens: u64,
+    /// Estimated tokens of those results that entered the conversation
+    /// (`ProcessedResult::tokens_in_context`).
+    pub in_context_tokens: u64,
+    /// Results whose full output was offloaded to the result store.
+    pub offloaded: u64,
+}
+
 /// One session's most recently measured turn.
 ///
-/// Every field describes the SAME turn — see the module doc's "One turn, one
-/// write".
+/// `turn`, `layout`, `tools` and `messages` describe the SAME turn — see the
+/// module doc's "One turn, one write". `tool_output` describes the session.
 #[derive(Debug, Clone, Default)]
 pub struct PromptSizeRecord {
     /// How many turns this process has measured for the session. Monotonic
@@ -68,6 +104,12 @@ pub struct PromptSizeRecord {
     /// `build_system_prompt_cached_with_mode_measured` call). Layer bytes and
     /// tool bytes therefore cannot double-count.
     pub tools: Vec<(String, u64, u64)>,
+    /// The message tokens of this turn's last prompt sent, split by kind.
+    /// `None` until the turn's first prompt has been measured.
+    pub messages: Option<MessageTokenSplit>,
+    /// The session's tool-output ingress in this process. `None` until a
+    /// call has been counted.
+    pub tool_output: Option<ToolOutputTally>,
     /// Write order within this process. Exists ONLY to give eviction a total
     /// order: a wall-clock stamp has millisecond resolution, and 256 inserts
     /// finish inside one millisecond, so `min_by_key` over a timestamp picks
@@ -114,16 +156,64 @@ impl PromptSizeRegistry {
                 inner.records.remove(&oldest);
             }
         }
-        let turn = inner.records.get(session_key).map_or(0, |r| r.turn) + 1;
+        let previous = inner.records.get(session_key);
+        let turn = previous.map_or(0, |r| r.turn) + 1;
+        let tool_output = previous.and_then(|r| r.tool_output);
         inner.records.insert(
             session_key.to_string(),
             PromptSizeRecord {
                 turn,
                 layout,
                 tools,
+                messages: None,
+                tool_output,
                 write_seq: seq,
             },
         );
+    }
+
+    /// The turn `session_key`'s record describes, or `None` when this process
+    /// has measured no turn for it.
+    #[must_use]
+    pub fn current_turn(&self, session_key: &str) -> Option<u64> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .records
+            .get(session_key)
+            .map(|r| r.turn)
+    }
+
+    /// Record the message split of a prompt `turn` sent. Dropped when the
+    /// record is gone or describes another turn — see the module doc.
+    pub fn record_messages(&self, session_key: &str, turn: u64, split: MessageTokenSplit) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(record) = inner.records.get_mut(session_key) {
+            if record.turn == turn {
+                record.messages = Some(split);
+            }
+        }
+    }
+
+    /// Add one tool call to the session's tally. Dropped when this process
+    /// has no record for the session — see the module doc.
+    pub fn record_tool_output(
+        &self,
+        session_key: &str,
+        produced_tokens: usize,
+        in_context_tokens: usize,
+        offloaded: bool,
+    ) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(record) = inner.records.get_mut(session_key) {
+            let t = record
+                .tool_output
+                .get_or_insert_with(ToolOutputTally::default);
+            t.calls = t.calls.saturating_add(1);
+            t.produced_tokens = t.produced_tokens.saturating_add(produced_tokens as u64);
+            t.in_context_tokens = t.in_context_tokens.saturating_add(in_context_tokens as u64);
+            t.offloaded = t.offloaded.saturating_add(u64::from(offloaded));
+        }
     }
 
     /// The latest record for `session_key`, or `None` when this process has
@@ -288,6 +378,77 @@ mod tests {
             "turn 1's layers must not survive beside turn 2's tools"
         );
         assert_eq!(rec.tools.len(), 2, "the tools are this turn's");
+    }
+
+    fn split(tool_results: usize) -> MessageTokenSplit {
+        MessageTokenSplit {
+            tool_results,
+            reasoning: 0,
+            other: 10,
+        }
+    }
+
+    /// A split lands only on the turn it was measured for: a write from a run
+    /// the record has moved past is dropped, and a new turn starts unmeasured
+    /// rather than showing the previous run's messages beside its own layers.
+    ///
+    /// Mutation-checked: dropping the `record.turn == turn` check, or carrying
+    /// `messages` over in `record_turn`, turns this red.
+    #[test]
+    fn a_message_split_belongs_to_the_turn_it_was_measured_for() {
+        let reg = PromptSizeRegistry::default();
+        reg.record_messages("s1", 1, split(5));
+        assert!(
+            reg.latest("s1").is_none(),
+            "a split does not create a record"
+        );
+
+        reg.record_turn("s1", None, vec![]);
+        let t1 = reg.current_turn("s1").unwrap();
+        reg.record_messages("s1", t1, split(5));
+        assert_eq!(reg.latest("s1").unwrap().messages, Some(split(5)));
+
+        reg.record_turn("s1", None, vec![]);
+        assert_eq!(
+            reg.latest("s1").unwrap().messages,
+            None,
+            "turn 2 has not been measured yet"
+        );
+        reg.record_messages("s1", t1, split(7));
+        assert_eq!(
+            reg.latest("s1").unwrap().messages,
+            None,
+            "turn 1's late write must not land on turn 2"
+        );
+    }
+
+    /// The tally is the session's, so it survives the turn replacement that
+    /// clears everything turn-scoped; and it is never the thing that creates
+    /// a record.
+    ///
+    /// Mutation-checked: `tool_output: None` in `record_turn` turns this red.
+    #[test]
+    fn the_tool_output_tally_spans_turns_and_needs_a_record() {
+        let reg = PromptSizeRegistry::default();
+        reg.record_tool_output("s1", 100, 100, false);
+        assert!(
+            reg.latest("s1").is_none(),
+            "a tally does not create a record"
+        );
+
+        reg.record_turn("s1", None, vec![]);
+        reg.record_tool_output("s1", 10_000, 1_200, true);
+        reg.record_turn("s1", None, vec![]);
+        reg.record_tool_output("s1", 300, 300, false);
+        assert_eq!(
+            reg.latest("s1").unwrap().tool_output,
+            Some(ToolOutputTally {
+                calls: 2,
+                produced_tokens: 10_300,
+                in_context_tokens: 1_500,
+                offloaded: 1,
+            })
+        );
     }
 
     #[test]

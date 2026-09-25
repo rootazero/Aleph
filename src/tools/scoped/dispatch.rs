@@ -1562,21 +1562,23 @@ impl ScopedToolService {
 
         // What this result cost on its way in: the tokens the tool produced
         // (the untouched original when ingress reduced it) against the tokens
-        // Layer 2 admitted. `context.breakdown` reports the per-session sum.
+        // Layer 2 admitted, summed on the session's prompt-size record for
+        // `context.breakdown`.
         // Not under a delegated role: it runs on its parent's service and
         // `TURN_CONTEXT` (`identity::actor`), but its results enter the child's
         // context, so counting them here would charge the parent for output
         // it never received.
         let session = crate::tools::turn_context::current_session_key()
             .filter(|_| crate::identity::current_actor().is_none());
-        if let Some(session) = session {
+        let registry = crate::thinker::prompt_size_registry::global_prompt_size_registry();
+        if let (Some(session), Some(registry)) = (session, registry) {
             let produced = crate::context::budget::pressure::estimate_tokens_smart(
                 outcome
                     .reduced_from
                     .as_deref()
                     .unwrap_or(&outcome.model_facing),
             );
-            crate::tools::ingress_tally::record(
+            registry.record_tool_output(
                 &session,
                 produced,
                 processed.tokens_in_context,
@@ -1986,12 +1988,19 @@ mod tests {
         );
     }
 
+    /// A turn whose session has a prompt-size record, as every run the
+    /// runner drives does by the time its tools execute.
     fn tally_turn() -> (crate::tools::turn_context::TurnContext, String) {
         let key = crate::routing::session_key::SessionKey::main(format!(
             "tally-{}",
             uuid::Uuid::new_v4().simple()
         ));
         let wire = key.to_key_string();
+        crate::thinker::prompt_size_registry::install_test_prompt_size_registry().record_turn(
+            &wire,
+            None,
+            vec![],
+        );
         let turn = crate::tools::turn_context::TurnContext {
             session_key: key,
             run_id: String::new(),
@@ -2024,6 +2033,12 @@ mod tests {
         )
     }
 
+    fn tally_of(session: &str) -> Option<crate::thinker::prompt_size_registry::ToolOutputTally> {
+        crate::thinker::prompt_size_registry::install_test_prompt_size_registry()
+            .latest(session)
+            .and_then(|r| r.tool_output)
+    }
+
     fn soon() -> std::time::Instant {
         std::time::Instant::now() + std::time::Duration::from_secs(5)
     }
@@ -2041,7 +2056,7 @@ mod tests {
         crate::tools::turn_context::TURN_CONTEXT
             .scope(turn, svc.apply_layer_two("bash", long_listing(), soon()))
             .await;
-        let t = crate::tools::ingress_tally::tally(&session).expect("the call was counted");
+        let t = tally_of(&session).expect("the call was counted");
         assert_eq!(t.calls, 1);
         assert!(t.in_context_tokens > 0, "{t:?}");
         assert!(
@@ -2066,6 +2081,6 @@ mod tests {
                 ),
             )
             .await;
-        assert_eq!(crate::tools::ingress_tally::tally(&session), None);
+        assert_eq!(tally_of(&session), None);
     }
 }
