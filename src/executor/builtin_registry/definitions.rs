@@ -2982,7 +2982,17 @@ mod tests {
     /// approval sentence named `aleph hooks test`, a command only the server
     /// binary has, and now names `aleph-server hooks test`. A correction to an
     /// existing runtime fact, not a new sentence.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_911;
+    ///
+    /// 2026-09-25 (context-slim round, B1): 115_911 -> 115_888 B (-23), all of
+    /// it `ctx_search`'s DESCRIPTION (352 -> 329 B — it now says each query
+    /// returns section text, several queries go in one call, and repeats are
+    /// marked; it dropped a restated chunk size the index owns). Lowered, not
+    /// left as headroom: slack above a measurement is allowance already issued
+    /// (判据 §13). Read off this test's panic with the ceiling floored to `1`
+    /// on macOS (aarch64-apple-darwin): 96_292 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge, `bash` at 4_740 (the Unix assembly), so
+    /// the +30 Windows gap recorded above is carried forward unchanged.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_888;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3404,7 +3414,14 @@ mod tests {
     /// per-tool ledger names `hooks_manage` (2_219 -> 2_226) as the only row
     /// that moved: the `command` field doc named `aleph hooks test`, a
     /// server-only command, and now names `aleph-server hooks test`.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_198;
+    ///
+    /// 2026-09-25 (context-slim round, B1): 105_198 -> 105_167 B (-31), all of
+    /// it `ctx_search` (579 -> 548): a `queries` array joined `query` and
+    /// `limit`, and the argument docs shrank because the sentences they carried
+    /// moved to the DESCRIPTION the tool owns. Read off this guard's own ledger
+    /// (the `ctx_search` row zeroed, the ceiling lowered by its old value);
+    /// `ctx_search` was the only row that moved.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_167;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3444,7 +3461,7 @@ mod tests {
         ("channel_pairing", 743),
         ("code_check", 837),
         ("code_exec", 2128),
-        ("ctx_search", 579),
+        ("ctx_search", 548),
         ("desktop", 20275),
         ("file_edit", 2480),
         ("file_ops", 2989),

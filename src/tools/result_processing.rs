@@ -24,6 +24,7 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
+use crate::tool_output::render::Rendered;
 use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
@@ -309,11 +310,13 @@ pub fn apply_result_budget(
     // Over budget. Persist the original (or `text` when there was no hygiene
     // pass) and compose the inline body above the recovery footer.
     let persist_source = original.unwrap_or(text);
-    if let Some((footer, path)) = recovery_footer_for(
+    let rendered = crate::tool_output::render::line_preserving(persist_source);
+    if let Some((footer, path)) = offload(
         store,
         tool_call_id,
         tool_name,
         persist_source,
+        &rendered,
         budget,
         recovery,
     ) {
@@ -325,9 +328,15 @@ pub fn apply_result_budget(
             // is usually a wall of diagnostics, and the middle is where the
             // failure is named.
             Some(_) => distill_or_truncate(text, budget.saturating_sub(footer_tokens)),
-            // Opaque: a bounded error preview only, as before — visible without
-            // a ctx_search round-trip, absent when there is no error signal.
-            None => inline_error_digest(text, Some(budget)).unwrap_or_default(),
+            // Opaque: a bounded error preview only — visible without a
+            // ctx_search round-trip, absent when there is no error signal.
+            // Read off the rendering (here `persist_source` IS `text`): a typed
+            // result's flat envelope is one line, which a line digest cannot
+            // read, so it used to come back empty for every typed result. Not
+            // for a fenced result: the digest lines are the untrusted text
+            // itself and would sit above the marker, outside the fence.
+            None if rendered.fenced => String::new(),
+            None => inline_error_digest(&rendered.text, Some(budget)).unwrap_or_default(),
         };
         let composed = if body.is_empty() {
             footer
@@ -406,20 +415,43 @@ pub(crate) fn recovery_footer_for(
     threshold: usize,
     recovery: RecoveryTools,
 ) -> Option<(String, Option<PathBuf>)> {
+    let rendered = crate::tool_output::render::line_preserving(full);
+    offload(
+        store,
+        tool_call_id,
+        tool_name,
+        full,
+        &rendered,
+        threshold,
+        recovery,
+    )
+}
+
+/// The shared body of [`recovery_footer_for`], for a caller that already holds
+/// the rendering (the opaque arm of [`apply_result_budget`] reads it too).
+/// `gate` is the flat text the size check reads; `rendered` is what is stored.
+fn offload(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    gate: &str,
+    rendered: &Rendered<'_>,
+    threshold: usize,
+    recovery: RecoveryTools,
+) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
-    if estimate_tokens_smart(full) <= threshold {
+    if estimate_tokens_smart(gate) <= threshold {
         return None;
     }
-    let body = crate::tool_output::render::line_preserving(full);
-    let marker = store.persist(tool_call_id, tool_name, &body)?;
+    let marker = store.persist(tool_call_id, tool_name, &rendered.text)?;
     let path = extract_persisted_path(&marker).map(PathBuf::from);
     // Index the offloaded blob so the model can BM25-retrieve only the relevant
     // sections via `ctx_search` instead of re-reading the whole file (which would
     // defeat the offload). Indexed even when `ctx_search` is not callable this
     // turn: the blob outlives the turn, and the gates are per turn. Best-effort:
     // on failure the marker's path is still readable.
-    let indexed = store.index_output(tool_call_id, tool_name, &body);
-    let footer = match footer_hint(indexed.as_ref(), recovery) {
+    let indexed = store.index_output(tool_call_id, tool_name, &rendered.text);
+    let footer = match footer_hint(indexed.as_ref(), recovery, rendered.fenced) {
         Some(hint) => format!("{marker}\n{hint}"),
         None => marker,
     };
@@ -430,9 +462,18 @@ pub(crate) fn recovery_footer_for(
 /// back — naming only a tool it can call. `ctx_search` when the blob indexed
 /// into sections and the tool is callable; otherwise `file_read` when that is
 /// callable; otherwise nothing, and the marker's path is the whole handle.
-fn footer_hint(indexed: Option<&IndexOutcome>, recovery: RecoveryTools) -> Option<String> {
+///
+/// `fenced` (the producing tool marked the output as external content, see
+/// [`Rendered::fenced`]) drops the "First sections:" preview: previews are the
+/// sections' first lines, i.e. the untrusted text itself, and this footer sits
+/// outside any fence.
+fn footer_hint(
+    indexed: Option<&IndexOutcome>,
+    recovery: RecoveryTools,
+    fenced: bool,
+) -> Option<String> {
     match indexed.filter(|o| o.sections > 0) {
-        Some(outcome) if recovery.ctx_search => Some(search_hint(outcome)),
+        Some(outcome) if recovery.ctx_search => Some(search_hint(outcome, !fenced)),
         _ if recovery.file_read => Some(FILE_READ_HINT.to_string()),
         _ => None,
     }
@@ -646,10 +687,10 @@ fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage
 
 /// Build the model-facing hint appended to a persist marker when the output
 /// was also indexed for retrieval. Tells the model it can `ctx_search` the
-/// offloaded blob instead of re-reading the whole file, and lists the first
-/// few section titles as orientation. Kept to a few hundred bytes so the
-/// offload's token saving is preserved.
-fn search_hint(outcome: &IndexOutcome) -> String {
+/// offloaded blob instead of re-reading the whole file, and — when `previews`
+/// — lists the first few section titles as orientation. Kept to a few hundred
+/// bytes so the offload's token saving is preserved.
+fn search_hint(outcome: &IndexOutcome, previews: bool) -> String {
     // With a single section the "First sections:" preview is the head of the one
     // section — i.e. text the model already has immediately above this hint.
     // Orientation is only worth its bytes when there is something to choose
@@ -660,7 +701,7 @@ fn search_hint(outcome: &IndexOutcome) -> String {
     // result carried. It goes through the same scrub as unfenced external text
     // so a line that spells a fence marker or a chat-template token cannot act
     // as one here.
-    let preview = if outcome.sections > 1 {
+    let preview = if previews && outcome.sections > 1 {
         let previews: Vec<String> = outcome
             .previews
             .iter()
@@ -1340,7 +1381,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let flat = serde_json::json!({ "stdout": prose, "exit_code": 0 }).to_string();
-        let rendered = crate::tool_output::render::line_preserving(&flat);
+        let rendered = crate::tool_output::render::line_preserving(&flat).text;
         let threshold = (estimate_tokens_smart(&flat) + estimate_tokens_smart(&rendered)) / 2;
         assert!(
             estimate_tokens_smart(&rendered) <= threshold
@@ -1362,6 +1403,112 @@ mod tests {
         let (_, path) = footer.expect("over the threshold as the model would see it ⇒ offloaded");
         let blob = std::fs::read_to_string(path.expect("a path")).unwrap();
         assert_eq!(blob, rendered, "and what is stored is the rendering");
+    }
+
+    /// An opaque typed result — hygiene found nothing to reduce because every
+    /// field is one short line — used to reach the model as the bare marker:
+    /// the error digest read the flat envelope, which is one line. Read off the
+    /// rendering, the error line is found. The source is not fenced, so the
+    /// "First sections:" orientation stays.
+    #[test]
+    fn an_opaque_typed_result_gets_its_error_digest_from_the_rendering() {
+        let (_scratch, store, _base) = test_store("opaque_digest");
+        let mut steps: Vec<serde_json::Value> = (0..400)
+            .map(|i| serde_json::json!({ "name": format!("step {i}"), "status": "ok" }))
+            .collect();
+        steps.push(serde_json::json!({
+            "name": "link",
+            "status": "error: linker failed with exit code 1",
+        }));
+        let mut value = serde_json::json!({ "steps": steps });
+        let outcome = crate::tool_output::ingress::clean_for_ingress("bash", &mut value, Some(300));
+        assert!(
+            outcome.reduced_from.is_none(),
+            "precondition: opaque — hygiene had nothing to reduce"
+        );
+
+        let out = apply_result_budget(
+            "c-opaque-typed",
+            "bash",
+            &outcome.model_facing,
+            Some(&store),
+            Some(300),
+            None,
+            RecoveryTools::ALL,
+        );
+
+        assert!(out.persisted_path.is_some());
+        assert!(
+            out.text.contains("Output digest") && out.text.contains("linker failed"),
+            "the error line must be inlined above the marker: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("First sections:"),
+            "an unfenced source keeps its orientation preview: {}",
+            out.text
+        );
+    }
+
+    /// For output its tool fenced as external content, the footer carries the
+    /// marker and the retrieval hint only: no section-title preview and no
+    /// error digest, because both are the untrusted text itself and the footer
+    /// sits outside the fence. "Fenced" is read off the fields by the same
+    /// test the ingress rewrites use — not from a list of tools.
+    #[test]
+    fn a_fenced_source_gets_no_preview_and_no_digest_outside_its_fence() {
+        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        let (_scratch, store, _base) = test_store("fenced_footer");
+        let src = ContentSource::McpTool {
+            server: "srv".into(),
+            tool: "rows".into(),
+        };
+        let mut blocks: Vec<serde_json::Value> = (0..300)
+            .map(|i| {
+                serde_json::json!({
+                    "type": "text",
+                    "text": wrap_external_content(&format!("row {i} is fine"), src.clone()),
+                })
+            })
+            .collect();
+        blocks.push(serde_json::json!({
+            "type": "text",
+            "text": wrap_external_content("error: linker failed with exit code 1", src.clone()),
+        }));
+        let mut value = serde_json::json!({ "content": blocks });
+        let outcome =
+            crate::tool_output::ingress::clean_for_ingress("srv__rows", &mut value, Some(300));
+        assert!(
+            outcome.reduced_from.is_none(),
+            "precondition: opaque — no field is big enough to reduce"
+        );
+
+        let out = apply_result_budget(
+            "c-fenced",
+            "srv__rows",
+            &outcome.model_facing,
+            Some(&store),
+            Some(300),
+            None,
+            RecoveryTools::ALL,
+        );
+
+        assert!(
+            out.text.contains("[Full output persisted: "),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("ctx_search("),
+            "the handle stays: {}",
+            out.text
+        );
+        assert!(!out.text.contains("First sections:"), "{}", out.text);
+        assert!(
+            !out.text.contains("linker failed"),
+            "untrusted lines must not sit outside the fence: {}",
+            out.text
+        );
     }
 
     #[test]

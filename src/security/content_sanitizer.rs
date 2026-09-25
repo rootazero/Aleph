@@ -80,8 +80,23 @@ impl ContentSource {
 ///    inject arbitrary header tokens. The model-side LLM that reads the source
 ///    attribute is not a browser, but boundary parsers that match on quotes
 ///    will still break.
+/// 3. **Line-break** — the header is ONE line: [`split_external_fence`] and
+///    every reader of the fence take the opening marker to end at the first
+///    newline. A value carrying a line break (an MCP server names its own
+///    tools) would push the rest of the header into the interior. Every
+///    control character and the two Unicode line/paragraph separators become a
+///    space.
 fn sanitize_label_attr(value: &str) -> String {
     value
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
         .replace('"', "&quot;")
         .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
         .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_")
@@ -826,6 +841,30 @@ mod tests {
         assert!(hostile.contains("&quot;"), "{hostile}");
         let split = split_external_fence(&hostile).expect("still one well-formed fence");
         assert_eq!(split.interior, "body");
+    }
+
+    /// A tool name with a line break in it (an MCP server picks its own) must
+    /// not split the header: the opening marker is one line or the fence is
+    /// not a fence.
+    #[test]
+    fn a_line_break_in_a_label_value_cannot_split_the_header() {
+        let wrapped = wrap_external_content(
+            "body",
+            ContentSource::McpTool {
+                server: "srv\r\nx".to_string(),
+                tool: "a\nb\u{2028}c\u{2029}d\u{85}e\u{0B}f".to_string(),
+            },
+        );
+        let split = split_external_fence(&wrapped).expect("still one well-formed fence");
+        assert_eq!(split.interior, "body", "{wrapped}");
+        for sep in ['\n', '\r', '\u{2028}', '\u{2029}', '\u{85}', '\u{0B}'] {
+            assert!(!split.open.contains(sep), "{sep:?} in header: {wrapped:?}");
+        }
+        assert!(
+            split.open.contains("tool=\"a b c d e f\""),
+            "{}",
+            split.open
+        );
     }
 
     #[test]

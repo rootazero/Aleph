@@ -829,6 +829,16 @@ mod tests {
             !blob.contains("sk-ant-api03"),
             "the persisted copy is read back into context, so it must be redacted"
         );
+        // Page content carries the page's fence on disk too — and that is what
+        // tells the footer to keep the page's own lines out of it.
+        assert!(
+            crate::security::content_sanitizer::split_external_fence(&blob).is_some(),
+            "the blob must be one well-formed fence"
+        );
+        assert!(
+            !footer.contains("First sections:"),
+            "untrusted section titles must not be echoed outside the fence: {footer}"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

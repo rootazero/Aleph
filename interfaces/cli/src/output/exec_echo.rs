@@ -134,7 +134,10 @@ pub fn tool_preview(tool_name: &str, input: &Value) -> String {
     let s = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or("");
     let raw = match tool_name {
         "bash" | "code_exec" | "code_check" => s("cmd"),
-        "search" => s("query"),
+        "search" | "ctx_search" => {
+            let query = shared_ui_logic::transcript::query_text(input).unwrap_or_default();
+            return truncate(&redact(&query).replace('\n', " "), PREVIEW_MAX);
+        }
         "web_fetch" => s("url"),
         "remember" | "ask_user" => s("text"),
         "vision" => s("prompt"),
@@ -748,6 +751,13 @@ mod tests {
     fn search_preview_extracts_query() {
         let input = json!({"query": "rust async"});
         assert_eq!(tool_preview("search", &input), "rust async");
+    }
+
+    #[test]
+    fn a_multi_query_preview_shows_every_query() {
+        let input = json!({"queries": ["failing test", "timeout"]});
+        assert_eq!(tool_preview("ctx_search", &input), "failing test · timeout");
+        assert_eq!(tool_preview("search", &input), "failing test · timeout");
     }
 
     #[test]
