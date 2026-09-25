@@ -407,6 +407,60 @@ async fn an_approved_inline_command_is_withheld_when_no_directory_is_known() {
     );
 }
 
+/// S3. Consent reviews and hashes a relative script in the plugin's ROOT,
+/// while an inline command runs in the SESSION's directory: an approved
+/// `sh scripts/check.sh` would attest to the plugin's copy and run the
+/// project's. It is withheld, approval or not; the plugin's own script,
+/// written through `${CLAUDE_PLUGIN_ROOT}`, runs.
+#[tokio::test]
+#[cfg(unix)]
+async fn an_inline_command_naming_a_relative_script_never_runs() {
+    let rooted = "sh ${CLAUDE_PLUGIN_ROOT}/scripts/check.sh";
+    let f = Fixture::new(&format!("[!`sh scripts/check.sh`] [!`{rooted}`]"), None).await;
+    for (dir, script) in [
+        (&f.root, "printf PLUGIN\n"),
+        (&f.work, "touch RAN; printf PROJECT\n"),
+    ] {
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/check.sh"), script).unwrap();
+    }
+    f.approve("sh scripts/check.sh");
+    f.approve(rooted);
+
+    let block = f.block("").await;
+    assert!(
+        block.contains("[[!`sh scripts/check.sh` not run: `scripts/check.sh` is a relative path"),
+        "{block}"
+    );
+    assert!(!f.work.join("RAN").exists(), "the project's script ran");
+    assert!(
+        block.contains("[PLUGIN]"),
+        "the plugin's own script did not run: {block}"
+    );
+}
+
+/// S7. The consent key has no event, so a `hooks.json` command with the same
+/// text shares it. An approval given to the hook — reviewed without
+/// arguments, in its root — does not cover the inline face.
+#[tokio::test]
+async fn an_approval_given_to_a_hook_does_not_run_the_inline_command() {
+    let f = Fixture::new("", None).await;
+    f.consent
+        .record_pending(PLUGIN, &ScopeKey::Global, "echo hi", "PreToolUse", &f.root);
+    let key = ShellHookConsent::fingerprint(PLUGIN, None, "echo hi");
+    f.consent
+        .approve(&key, Some(&f.root))
+        .unwrap()
+        .expect("approved as a hook");
+
+    let out = f
+        .shell(Some(f.work.clone()))
+        .run("echo hi", &no_args())
+        .await;
+    let placeholder = out.expect_err("a hook's approval runs no inline command");
+    assert!(placeholder.contains("given to a hook"), "{placeholder}");
+}
+
 /// The plugin's settings reach an inline command, minus every key that
 /// holds a vault reference: whoever sends `/command` picks its arguments.
 #[tokio::test]

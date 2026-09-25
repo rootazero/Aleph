@@ -374,7 +374,9 @@ pub(super) fn strip(
 /// `hooks.json` shell command (`HookExecutor::execute_command`), so
 /// `aleph hooks list` / `aleph hooks test` are the one review surface for
 /// every shell a plugin can reach. The entry is filed under
-/// [`INLINE_COMMAND_EVENT`] with the template's own text.
+/// [`INLINE_COMMAND_EVENT`] with the template's own text; only an approval
+/// that says so covers it. A command naming a relative script is never
+/// filed or run ([`ShellHookConsent::root_relative_script`]).
 ///
 /// Approved, the command runs through the production builder in the run's
 /// directory, with the plugin's settings minus every secret
@@ -395,6 +397,24 @@ pub(super) struct ConsentedShell {
 #[async_trait::async_trait]
 impl InlineShell for ConsentedShell {
     async fn run(&self, cmd: &str, args: &InlineArgs<'_>) -> Result<String, String> {
+        let project = match &self.scope {
+            ScopeKey::Project(root) => Some(root.as_path()),
+            ScopeKey::Global => None,
+        };
+        // Consent would review a relative script in the plugin's root while
+        // this runs the session's copy: never filed, never run.
+        if let Some(word) = ShellHookConsent::root_relative_script(
+            &self.plugin_id,
+            project,
+            Some(&self.plugin_root),
+            cmd,
+        ) {
+            return Err(format!(
+                "[!`{cmd}` not run: `{word}` is a relative path — consent would review the \
+                 plugin's copy while this runs the session's; the plugin should write \
+                 `${{CLAUDE_PLUGIN_ROOT}}/{word}` for its own script]"
+            ));
+        }
         if !self
             .consent
             .is_approved(&self.plugin_id, &self.scope, &self.plugin_root, cmd)
@@ -413,6 +433,20 @@ impl InlineShell for ConsentedShell {
             );
             return Err(format!(
                 "[!`{cmd}` not run: pending operator approval — `aleph hooks list` / `aleph hooks test`]"
+            ));
+        }
+        // The key has no event, so a `hooks.json` command with the same text
+        // shares it — and an approval given to that hook, reviewed without
+        // arguments in its root, does not cover this sender-driven face.
+        let key = ShellHookConsent::fingerprint(&self.plugin_id, project, cmd);
+        if self
+            .consent
+            .find(&key)
+            .is_some_and(|entry| entry.event != INLINE_COMMAND_EVENT)
+        {
+            return Err(format!(
+                "[!`{cmd}` not run: its approval was given to a hook with the same text — \
+                 `aleph hooks revoke {key}`, then review it as an inline command]"
             ));
         }
         let Some(cwd) = self.cwd.as_deref() else {

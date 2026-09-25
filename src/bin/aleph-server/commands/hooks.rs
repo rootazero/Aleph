@@ -251,6 +251,21 @@ fn run_for_review(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
 fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
     use alephcore::extension::{inline_shell_command, InlineArgs, InlineSite};
 
+    // The server never runs such a command (it withholds it before consent),
+    // so it is never reviewed or approved here either.
+    if let Some(word) = ShellHookConsent::root_relative_script(
+        &entry.plugin_name,
+        entry.project_root.as_deref(),
+        entry.plugin_root.as_deref(),
+        &entry.command,
+    ) {
+        return Err(format!(
+            "the inline command names the relative path `{word}`: consent would review the \
+             plugin's copy while it runs the session's, so the server never runs it and it \
+             cannot be approved. The plugin should write `${{CLAUDE_PLUGIN_ROOT}}/{word}`."
+        )
+        .into());
+    }
     refuse_shell_metachars(&entry.command)?;
     println!(
         "(inline command: run in {} with no arguments — production runs it in the session's \
@@ -587,6 +602,31 @@ mod tests {
             read("pwd.txt").trim_end(),
             std::fs::canonicalize(cwd.path()).unwrap().to_string_lossy()
         );
+    }
+
+    /// An inline command naming a relative script is refused before it runs:
+    /// the review would run whatever `scripts/x.sh` this shell's directory
+    /// holds while consent hashes the plugin's copy.
+    #[cfg(unix)]
+    #[test]
+    fn a_reviewed_inline_command_naming_a_relative_script_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        for dir in [root.path(), cwd.path()] {
+            std::fs::create_dir_all(dir.join("scripts")).unwrap();
+            std::fs::write(dir.join("scripts/x.sh"), "touch RAN\n").unwrap();
+        }
+        let entry = ConsentEntry {
+            plugin_name: "plug".into(),
+            event: INLINE_COMMAND_EVENT.into(),
+            ..pending_entry("sh scripts/x.sh", root.path())
+        };
+
+        let refusal = run_for_review(&entry, cwd.path()).expect_err("a relative script is refused");
+        assert!(refusal.to_string().contains("scripts/x.sh"), "{refusal}");
+        for dir in [root.path(), cwd.path()] {
+            assert!(!dir.join("RAN").exists(), "the relative script ran");
+        }
     }
 
     /// A pending `user:global` entry for `command`, recorded from `root`.

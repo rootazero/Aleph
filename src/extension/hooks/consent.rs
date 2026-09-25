@@ -300,6 +300,40 @@ impl ShellHookConsent {
         hex16(&hasher.finalize())
     }
 
+    /// The script word of an INLINE command (a plugin command's `` !`cmd` ``,
+    /// [`INLINE_COMMAND_EVENT`]) that consent cannot bind to what runs, if any.
+    ///
+    /// Consent finds a command's script among its candidate words, in its
+    /// order, and resolves a relative word against the hook's root — the
+    /// directory a hook runs in. An inline command runs in the session's
+    /// directory instead, so a relative script word would be reviewed and
+    /// hashed as the plugin's copy (or, when the plugin ships none, bound to
+    /// nothing) while the session's copy runs. The first candidate that is
+    /// relative decides (`Some(word)`); one that is an existing absolute or
+    /// `~/` file is what consent binds — correctly — and ends the scan.
+    /// `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so a plugin's own script
+    /// stays content-bound and allowed. A path-shaped ARGUMENT to a program
+    /// (`git diff src/app.ts`) is refused too: consent cannot tell it from a
+    /// script, and binds whichever comes first.
+    #[must_use]
+    pub fn root_relative_script(
+        plugin_name: &str,
+        project_root: Option<&Path>,
+        plugin_root: Option<&Path>,
+        command: &str,
+    ) -> Option<String> {
+        let context = ScriptContext::new(plugin_name, project_root, plugin_root);
+        for token in script_candidates(command, &context) {
+            if !token.starts_with("~/") && !Path::new(&token).is_absolute() {
+                return Some(token);
+            }
+            if candidate_path(&token, &context).is_some_and(|path| path.is_file()) {
+                return None;
+            }
+        }
+        None
+    }
+
     /// Default registry path: `<config_dir>/shell-hooks-allowlist.json`.
     ///
     /// Resolved through `utils::paths::get_config_dir` like every other piece
@@ -804,7 +838,10 @@ const SCRIPT_EXTENSIONS: [&str; 7] = [".sh", ".bash", ".zsh", ".py", ".js", ".ts
 /// that hook's child.
 struct ScriptContext<'a> {
     /// The hook's root: its root path variables' value, and the directory
-    /// the command runs in (so what a relative path is relative to).
+    /// a hook's command runs in (so what a relative path is relative to).
+    /// A plugin command's inline command runs in the session's directory
+    /// instead, which is why it may not name a relative script
+    /// ([`ShellHookConsent::root_relative_script`]).
     root: Option<&'a Path>,
     /// A plugin hook's data directory (`${CLAUDE_PLUGIN_DATA}` …).
     data: Option<PathBuf>,
@@ -915,6 +952,16 @@ fn replace_variable(text: &str, name: &str, value: &str) -> String {
 /// first, and hashing every token would make the common case pay for a shape
 /// nobody writes.
 fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Option<PathBuf> {
+    script_candidates(command, context)
+        .iter()
+        .filter_map(|token| candidate_path(token, context))
+        .find(|path| path.is_file())
+}
+
+/// The words a command's script is looked for among, in consent's order: the
+/// first word that names itself a script, then every path-shaped word — each
+/// with the context's known variables expanded ([`ScriptContext::expand`]).
+fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> {
     // Anything with a glob or a variable nobody here can resolve is not a
     // stable path, so it is dropped entirely.
     let tokens: Vec<String> = command
@@ -923,36 +970,31 @@ fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Optio
         .collect();
 
     // Pass 1: a token that names itself a script.
-    let by_extension = tokens.iter().find(|t| {
-        let lower = t.to_ascii_lowercase();
-        SCRIPT_EXTENSIONS.iter().any(|e| lower.ends_with(e))
-    });
+    let by_extension = tokens
+        .iter()
+        .find(|t| {
+            let lower = t.to_ascii_lowercase();
+            SCRIPT_EXTENSIONS.iter().any(|e| lower.ends_with(e))
+        })
+        .cloned();
     // Pass 2: fall back to anything path-shaped (a bare `./hook`, no extension).
-    let candidates = by_extension.into_iter().chain(
-        tokens
-            .iter()
-            .filter(|t| t.contains('/') || t.contains('\\')),
-    );
+    let path_shaped = tokens
+        .iter()
+        .filter(|t| t.contains('/') || t.contains('\\'))
+        .cloned();
+    by_extension.into_iter().chain(path_shaped).collect()
+}
 
-    for token in candidates {
-        let path = match token.strip_prefix("~/") {
-            Some(rest) => match dirs::home_dir() {
-                Some(h) => h.join(rest),
-                None => continue,
-            },
-            None if Path::new(token).is_absolute() => PathBuf::from(token),
-            // Relative to where the command runs — the hook's root — never
-            // to wherever this process happens to be.
-            None => match context.root {
-                Some(root) => root.join(token),
-                None => continue,
-            },
-        };
-        if path.is_file() {
-            return Some(path);
-        }
+/// The file a candidate word names: `~/` from the home directory, an
+/// absolute path as written, a relative one from where a hook runs — its
+/// root — never from wherever this process happens to be. `None` when that
+/// base is unknown.
+fn candidate_path(token: &str, context: &ScriptContext<'_>) -> Option<PathBuf> {
+    match token.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().map(|home| home.join(rest)),
+        None if Path::new(token).is_absolute() => Some(PathBuf::from(token)),
+        None => context.root.map(|root| root.join(token)),
     }
-    None
 }
 
 /// `sha256` (16 hex chars) of the script `command` invokes, or `None` when
@@ -1071,6 +1113,31 @@ mod tests {
             "{notes:?}"
         );
         assert!(notes.contains(&("lint".to_string(), false)), "{notes:?}");
+    }
+
+    /// Which inline commands name a script consent would resolve in the wrong
+    /// directory: a relative script word is refused, the plugin's own
+    /// `${CLAUDE_PLUGIN_ROOT}/…` script is not, nor is a command with no
+    /// path at all; an existing absolute script binds, and a relative
+    /// argument after it is data to that script.
+    #[test]
+    fn a_relative_script_word_is_named_and_a_plugin_root_script_is_not() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(root.path().join("check.sh"), "true").unwrap();
+        let abs = root.path().join("check.sh").display().to_string();
+        let relative = |command: &str| {
+            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+        };
+        assert_eq!(
+            relative("sh scripts/check.sh"),
+            Some("scripts/check.sh".into())
+        );
+        assert_eq!(relative("./run"), Some("./run".into()));
+        assert_eq!(relative("git diff src/app.ts"), Some("src/app.ts".into()));
+        assert_eq!(relative("sh ${CLAUDE_PLUGIN_ROOT}/check.sh"), None);
+        assert_eq!(relative("git status --short"), None);
+        assert_eq!(relative("gh pr view $1"), None);
+        assert_eq!(relative(&format!("sh {abs} src/app.ts")), None);
     }
 
     /// Recording under `Global` is exactly how every entry looked before the
