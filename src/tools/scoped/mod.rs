@@ -194,6 +194,13 @@ impl ToolService for ScopedToolService {
         self.effective_exec_tier()
     }
 
+    /// The derivation this service's own Layer-2 footer uses (the inherent
+    /// `recovery_tools`, which method resolution picks over this one) — one
+    /// derivation, read here by the harness's Layer-3 spill.
+    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        Self::recovery_tools(self)
+    }
+
     async fn list(&self) -> Vec<ToolDefinition> {
         // Take a single health snapshot so the filter is consistent across
         // every tool in this list call.

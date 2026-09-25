@@ -90,9 +90,6 @@ impl SystemBlock {
 /// - `thinking_type`: "enabled" | "disabled" | "adaptive"
 /// - `budget_tokens`: Required for "enabled", optional for "adaptive"
 /// - `display`: "summarized" (default) | "omitted"
-/// - `block_binding`: preserved-thinking controls; only valid alongside
-///   "adaptive" / "enabled" and only with the
-///   `thinking-binding-controls-2026-08-01` beta header (400 otherwise)
 #[derive(Debug, Serialize)]
 pub struct ThinkingBlock {
     #[serde(rename = "type")]
@@ -101,25 +98,6 @@ pub struct ThinkingBlock {
     pub budget_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_binding: Option<BlockBinding>,
-}
-
-/// `thinking.block_binding` — what the API does with a replayed thinking block
-/// whose conversation prefix no longer matches the one that produced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct BlockBinding {
-    pub prefix_mismatch_behavior: PrefixMismatchBehavior,
-}
-
-/// Only the variant Aleph sends. `"error"` (the enforced-account default
-/// without the header) is what already happens when the field is absent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrefixMismatchBehavior {
-    /// Drop the first mismatched block and every later one for this request,
-    /// and report each drop in the response's `input_transformations`.
-    DropBlock,
 }
 
 /// Output configuration for controlling response quality and format.

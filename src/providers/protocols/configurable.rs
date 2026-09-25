@@ -358,6 +358,14 @@ impl ProtocolAdapter for ConfigurableProtocol {
         // Leaked once at construction (see `name_static`); no per-call allocation.
         self.name_static
     }
+
+    /// `build_request` delegates to the base protocol, so the wire is the
+    /// base's. A fully custom (template) protocol speaks its own.
+    fn wire_family(&self) -> &'static str {
+        self.base_protocol
+            .as_ref()
+            .map_or(self.name_static, |base| base.wire_family())
+    }
 }
 
 #[cfg(test)]

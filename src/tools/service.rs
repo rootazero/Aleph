@@ -234,6 +234,20 @@ pub trait ToolService: Send + Sync + 'static {
         None
     }
 
+    /// The retrieval tools a recovery footer may name this turn — see
+    /// [`RecoveryTools`](crate::tools::result_processing::RecoveryTools).
+    /// `ScopedToolService` answers from the turn's gates (the same derivation
+    /// its own Layer-2 footer uses); the harness's Layer-3 spill asks here.
+    ///
+    /// The default, `ALL`, is what a caller that cannot see any gate has always
+    /// assumed. Every production DECORATOR must forward it, and one that
+    /// narrows the callable set must narrow this too; one that forgets
+    /// degrades to `ALL`, i.e. a footer that may name a tool the model cannot
+    /// call.
+    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        crate::tools::result_processing::RecoveryTools::ALL
+    }
+
     /// Resource-scope-aware concurrency claim for the named call, given the
     /// concrete input the LLM emitted. The harness parallel fast path admits a
     /// batch only when [`crate::tools::concurrency::batch_parallelizable`]

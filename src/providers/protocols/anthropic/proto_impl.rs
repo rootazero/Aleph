@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::providers::anthropic::{
-    BlockBinding, ContentBlock, ImageSource, Message, MessageContent, PrefixMismatchBehavior,
-    SystemBlock, ThinkingBlock,
+    ContentBlock, ImageSource, Message, MessageContent, SystemBlock, ThinkingBlock,
 };
 use crate::providers::message::UnifiedMessage;
 use crate::providers::model_catalog::binds_thinking_to_prefix;
@@ -24,8 +23,11 @@ use super::{sanitize_anthropic_tool_name, AnthropicProtocol, CLAUDE_CODE_IDENTIT
 /// `adjustMaxTokensForThinking` (`minOutputTokens = 1024`).
 const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
 
-/// Beta that unlocks `thinking.block_binding` and adds `input_transformations`
-/// to responses.
+/// Preserved-thinking controls. Sent alone (no `thinking.block_binding` field)
+/// it opts the request into the beta's default, `drop_block`: a replayed
+/// thinking block whose conversation prefix changed — and every later one —
+/// is dropped for that request instead of failing it with a 400, and each
+/// drop is reported in the response's `input_transformations`.
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 impl AnthropicProtocol {
@@ -358,7 +360,9 @@ impl AnthropicProtocol {
     /// - OAuth stack (`claude-code-20250219` + `oauth-2025-04-20` + `token-restricted`)
     ///   when the API key is an Anthropic OAuth token — see `is_oauth_token`
     /// - `extended-cache-ttl-2025-04-11` when `extended_cache_ttl` is true (Long retention)
-    /// - `thinking-binding-controls-2026-08-01` — [`Self::thinking_block_binding_applies`]
+    /// - `thinking-binding-controls-2026-08-01` — prefix-bound model (catalog
+    ///   fact) on a host that accepts the controls (policy fact), never on the
+    ///   OAuth path
     pub(super) fn build_beta_headers(
         model: &str,
         api_key: Option<&str>,
@@ -380,7 +384,8 @@ impl AnthropicProtocol {
         if caps.supports_context_1m && Self::is_claude_4_family(model) {
             betas.push("context-1m-2025-08-07");
         }
-        if api_key.is_some_and(Self::is_oauth_token) {
+        let oauth = api_key.is_some_and(Self::is_oauth_token);
+        if oauth {
             // OAuth requests need the full Claude Code beta stack — without
             // claude-code/oauth Anthropic's OAuth infrastructure intermittently
             // 500s; without token-restricted the token's scope check fails.
@@ -391,59 +396,15 @@ impl AnthropicProtocol {
         if extended_cache_ttl {
             betas.push("extended-cache-ttl-2025-04-11");
         }
-        if Self::thinking_block_binding_applies(model, caps) {
+        // Aleph cannot prove the history it replays is append-only, and on a
+        // prefix-bound model any edit before a thinking block invalidates it
+        // and every later one. The header alone selects `drop_block` (see
+        // `THINKING_BINDING_BETA`); the `thinking` body is left as the think
+        // level made it. The OAuth identity path keeps its beta stack (U1).
+        if !oauth && caps.supports_thinking_block_binding && binds_thinking_to_prefix(model) {
             betas.push(THINKING_BINDING_BETA);
         }
         betas.join(",")
-    }
-
-    /// True when this request should carry `thinking.block_binding` and its
-    /// beta header: the model binds thinking to the conversation prefix (a
-    /// catalog fact) AND the host accepts the controls (a policy fact).
-    ///
-    /// The one derivation both halves read. The field without the header is a
-    /// 400 ("Extra inputs are not permitted"); the header without the field
-    /// selects the beta's own default, which is also `drop_block`.
-    pub(super) fn thinking_block_binding_applies(
-        model: &str,
-        caps: &AnthropicCapabilities,
-    ) -> bool {
-        caps.supports_thinking_block_binding && binds_thinking_to_prefix(model)
-    }
-
-    /// Attach `block_binding: drop_block` to the request's thinking config.
-    ///
-    /// This adapter cannot prove the history it is handed is append-only, and
-    /// on a prefix-bound model any edit before a thinking block invalidates it
-    /// and every later one; enforced accounts would 400 on the replay. With
-    /// `drop_block` the API drops those blocks for this request instead and
-    /// reports each drop in `input_transformations`.
-    ///
-    /// An omitted `thinking` becomes a bare `{type:"adaptive"}` only on models
-    /// that already think by default (generation 5+), where the two are the
-    /// same request — no `display`, no effort is added. Anywhere else an
-    /// omitted block stays omitted (adding one would switch thinking on), and a
-    /// `disabled` block is left alone (the field is not accepted beside it).
-    pub(super) fn with_drop_block_binding(
-        thinking: Option<ThinkingBlock>,
-        model: &str,
-    ) -> Option<ThinkingBlock> {
-        let binding = Some(BlockBinding {
-            prefix_mismatch_behavior: PrefixMismatchBehavior::DropBlock,
-        });
-        match thinking {
-            None if Self::omits_disabled_thinking(model) => Some(ThinkingBlock {
-                thinking_type: "adaptive".to_string(),
-                budget_tokens: None,
-                display: None,
-                block_binding: binding,
-            }),
-            Some(t) if t.thinking_type != "disabled" => Some(ThinkingBlock {
-                block_binding: binding,
-                ..t
-            }),
-            other => other,
-        }
     }
 
     /// True for Claude 4-family models (opus-4-*, sonnet-4-*, haiku-4-*).
@@ -571,10 +532,20 @@ impl AnthropicProtocol {
         Self::claude_version(model).is_some_and(|v| v >= (4, 7))
     }
 
-    /// True for generation-5 models (`claude-fable-5`, …) where an explicit
-    /// `thinking: {type: "disabled"}` block returns a 400 — the only way to
-    /// run without thinking is to **omit** the `thinking` field entirely.
-    /// 4.6–4.8 still accept (and need) the explicit disabled block to
+    /// True for generation-5 models (`claude-*-5*`): a requested `Off` **omits**
+    /// the `thinking` field instead of sending `{type: "disabled"}`. On every
+    /// one of them omission runs the default adaptive thinking; whether an
+    /// explicit disabled block would have turned it off is per model:
+    ///
+    /// - Fable 5 / 5.1, Mythos 5 / 5.1, Opus 5.5 — no off switch (`disabled`
+    ///   is a 400), so omission is the only valid request.
+    /// - Opus 5 — `disabled` is accepted at effort `high` or lower (400 at
+    ///   `xhigh` / `max`).
+    /// - Sonnet 5 — `disabled` is accepted.
+    ///
+    /// So on Opus 5 and Sonnet 5 a requested `Off` still thinks (known gap,
+    /// kept: the vendor's guidance there is a lower effort rather than
+    /// disabling). 4.6–4.8 accept (and need) the explicit disabled block to
     /// suppress their default thinking, so this gates only 5.x+.
     pub(super) fn omits_disabled_thinking(model: &str) -> bool {
         Self::claude_version(model).is_some_and(|v| v >= (5, 0))

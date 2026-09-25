@@ -1427,9 +1427,22 @@ impl HarnessRunner for AgentHarnessRunner {
             .get_events(&session_id, None, None)
             .await
             .unwrap_or_default();
-        let history = self
-            .default_provider
-            .current()
+        //    Reasoning is counted as the provider the next turn would use
+        //    sends it: `run` resolves a pinned provider through
+        //    `effective_model_directive` → `named_providers`, else the default
+        //    chain — the same resolution here, so a DeepSeek-pinned session
+        //    under an Anthropic default counts DeepSeek's reasoning_content.
+        let pinned_provider = effective_model_directive(
+            None,
+            crate::providers::session_model_handle::get_session_model(&canonical_key),
+            self.agent_registry
+                .get(&agent_id)
+                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
+        )
+        .and_then(|(provider, _)| provider)
+        .and_then(|p| self.named_providers.get(&p).cloned());
+        let serving = pinned_provider.unwrap_or_else(|| self.default_provider.current());
+        let history = serving
             .reasoning_replay((!model.is_empty()).then_some(model.as_str()))
             .project(&crate::harness::agent::prompt::build_prompt(&events, 0));
 

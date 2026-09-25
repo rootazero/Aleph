@@ -1083,31 +1083,26 @@ impl AgentHarness {
             in_context_text: text,
             already_persisted,
         };
+        // `record` only ever spills the result it was just handed, so the
+        // rewrite lands BEFORE the SessionEvent is emitted: the LLM sees the
+        // marker instead of the full text.
         let spills = budget.record(budget_turn_id, record);
-        if spills.is_empty() {
+        let Some(spill) = spills.into_iter().find(|s| s.call_id == call.id) else {
             return;
-        }
+        };
         let Some(store) = self.deps.result_store.as_ref() else {
             return;
         };
-        use crate::tools::result_processing::recovery_footer;
-        let offload = |s: &crate::tools::turn_budget::SpillInstruction| {
-            recovery_footer(Some(store), &s.call_id, &s.tool_name, &s.original_text, 0)
-        };
-        for spill in spills {
-            if spill.call_id != call.id {
-                // Earlier-iteration spill: its SessionEvent::ToolResult is
-                // already persisted, so post-hoc rewrite from here isn't
-                // possible. The marker file is still written for recovery;
-                // cheap_passes surfaces it on the next preflight.
-                let _ = offload(&spill);
-                continue;
-            }
-            // Same-turn newest spill: rewrite output BEFORE the SessionEvent
-            // is emitted so the LLM sees the marker instead of the full text.
-            if let Some((footer, _)) = offload(&spill) {
-                output.value = serde_json::Value::String(footer);
-            }
+        let footer = crate::tools::result_processing::recovery_footer_for(
+            Some(store),
+            &spill.call_id,
+            &spill.tool_name,
+            &spill.original_text,
+            0,
+            self.deps.tools.recovery_tools(),
+        );
+        if let Some((footer, _)) = footer {
+            output.value = serde_json::Value::String(footer);
         }
     }
 

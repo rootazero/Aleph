@@ -176,11 +176,18 @@ impl OpenAiProtocol {
                         .collect();
 
                     let msg_content = if text.is_empty() { None } else { Some(text) };
-                    // Any thinking left here survived the target's reasoning
-                    // projection, so it is exactly what this host asked for —
-                    // an empty one included (a host that needs the field).
+                    // Unsigned thinking left here survived the target's
+                    // reasoning projection, so it is exactly what this host
+                    // asked for — an empty one included (a host that needs the
+                    // field). A signed block belongs to the protocol that
+                    // signed it and is never written back here, even on paths
+                    // that skip the projection (`stream_raw`).
                     let reasoning = content.iter().find_map(|b| match b {
-                        crate::providers::message::ContentBlock::Thinking { thinking, .. } => {
+                        crate::providers::message::ContentBlock::Thinking {
+                            thinking,
+                            signature: None,
+                            ..
+                        } => {
                             // rust-doctor-disable-next-line excessive-clone
                             Some(thinking.clone())
                         }
