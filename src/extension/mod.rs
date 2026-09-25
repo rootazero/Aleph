@@ -285,13 +285,20 @@ pub struct ExtensionManager {
 /// when it is not a delegatable sub-agent.
 ///
 /// Mirrors the disk-agent loader (`crate::agents::loader`): the markdown
-/// `content` (system-prompt body) is intentionally dropped — `AgentDef` is
-/// frontmatter / section-key based and disk agents discard their body the same
-/// way, so a plugin sub-agent runs through the standard sub-agent prompt flow.
-/// The declared `tools` map (name → allowed) becomes allow / deny lists; absent,
-/// the constructor default (`["*"]`) is kept, matching a disk agent with no tool
-/// frontmatter (a subagent is spawned by an already-privileged primary and the
-/// recursion guard blocks re-spawning, so wildcard-by-default is safe here too).
+/// `content` is the sub-agent's system prompt, through the same mapping the
+/// disk loader uses (`agents::system_prompt`).
+///
+/// The declared `tools` map (name → allowed) becomes allow / deny lists:
+/// * absent — the constructor default (`["*"]`) is kept, matching a disk agent
+///   with no tool frontmatter and Claude Code's "omitted = inherit" (a
+///   subagent is spawned by an already-privileged primary and the recursion
+///   guard blocks re-spawning, so wildcard-by-default is safe here too);
+/// * empty — a declaration that names no tool: deny-all, never the wildcard.
+///   `parse_single_agent` writes it for a `tools:` whose every entry had no
+///   Aleph tool, or whose shape named none (the restrict-list policy);
+/// * `true` entries — the allowlist;
+/// * only `false` entries — a deny list over the wildcard: every tool except
+///   those.
 fn plugin_agent_to_def(
     reg: &crate::extension::AgentRegistration,
 ) -> Option<crate::agents::AgentDef> {
@@ -317,7 +324,8 @@ fn plugin_agent_to_def(
             .collect();
         allowed.sort();
         denied.sort();
-        if !allowed.is_empty() {
+        // An empty map is a declaration too: `allowed` stays empty ⇒ deny-all.
+        if !allowed.is_empty() || tools.is_empty() {
             def = def.with_allowed_tools(allowed);
         }
         if !denied.is_empty() {
@@ -329,6 +337,9 @@ fn plugin_agent_to_def(
     }
     if let Some(model) = &reg.model {
         def = def.with_model_hint(model.clone());
+    }
+    if let Some(prompt) = crate::agents::system_prompt::body_to_system_prompt(id, &reg.content) {
+        def = def.with_system_prompt(prompt);
     }
     def.source = crate::agents::AgentSource::Plugin;
     Some(def)
@@ -1163,14 +1174,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_agent_to_def_maps_subagent_and_drops_body() {
+    fn plugin_agent_to_def_maps_subagent_and_keeps_body() {
         use crate::extension::types::AgentMode as ExtMode;
         use crate::extension::AgentRegistration;
 
         let mut reg = AgentRegistration {
             name: "deployer".into(),
             description: Some("Ship the app".into()),
-            content: "SYSTEM PROMPT BODY — must be dropped like disk agents".into(),
+            content: "You are the deployer.\n".into(),
             mode: ExtMode::Subagent,
             ..Default::default()
         };
@@ -1190,6 +1201,7 @@ mod tests {
         assert_eq!(def.model_hint.as_deref(), Some("fast"));
         assert!(def.is_tool_allowed("bash"), "declared-allowed tool");
         assert!(!def.is_tool_allowed("file_write"), "declared-denied tool");
+        assert_eq!(def.system_prompt.as_deref(), Some("You are the deployer."));
 
         // A primary-only plugin agent is not a delegatable sub-agent.
         let primary = AgentRegistration {
@@ -1206,6 +1218,107 @@ mod tests {
             ..Default::default()
         };
         assert!(plugin_agent_to_def(&blank).is_none());
+    }
+
+    #[test]
+    fn disk_and_plugin_agents_share_one_body_mapping() {
+        // The same body through both loaders lands as the same prompt —
+        // a second mapping is where the two would drift (判据 §16).
+        use crate::extension::types::AgentMode as ExtMode;
+        let body = "\n\nYou are X.\n\n";
+        let reg = crate::extension::AgentRegistration {
+            name: "x".into(),
+            content: body.into(),
+            mode: ExtMode::Subagent,
+            ..Default::default()
+        };
+        let via_plugin = plugin_agent_to_def(&reg).unwrap().system_prompt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.md");
+        std::fs::write(
+            &path,
+            format!("---\nid: x\ndescription: d\nwhen_to_use: w\n---{body}"),
+        )
+        .unwrap();
+        let via_disk = crate::agents::loader::parse_file(&path, crate::agents::AgentSource::User)
+            .unwrap()
+            .system_prompt;
+        assert_eq!(via_plugin, via_disk);
+        assert_eq!(via_disk.as_deref(), Some("You are X."));
+    }
+
+    /// Every plugin agent in `<dir>/agents`, parsed by the production scan and
+    /// converted by the production `plugin_agent_to_def`, by name.
+    fn plugin_agent_defs(dir: &std::path::Path) -> HashMap<String, crate::agents::AgentDef> {
+        crate::extension::manifest::parsers::parse_agents_dir(dir, "agents", "plug")
+            .unwrap()
+            .into_iter()
+            .filter_map(|cap| match cap {
+                crate::extension::capability::CapabilityDeclaration::Agent(reg) => {
+                    plugin_agent_to_def(&reg).map(|def| (def.id.clone(), def))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A Claude Code agent's `tools:` only narrows. A declaration that names
+    /// no Aleph tool — every entry dropped, or a shape with no name in it — is
+    /// deny-all, never the constructor wildcard (判据 §8). Absent `tools:`
+    /// keeps the wildcard (Claude Code: omitted = inherit).
+    #[test]
+    fn an_agent_tools_list_that_names_nothing_allows_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for (name, tools) in [
+            ("no-counterpart", "tools: NotebookEdit"),
+            ("comma", "tools: \",\""),
+            ("empty-list", "tools: []"),
+            ("map", "tools: {Read: true}"),
+            ("absent", ""),
+        ] {
+            std::fs::write(
+                agents.join(format!("{name}.md")),
+                format!("---\nname: {name}\ndescription: d\n{tools}\n---\nYou are {name}.\n"),
+            )
+            .unwrap();
+        }
+        let defs = plugin_agent_defs(dir.path());
+        for name in ["no-counterpart", "comma", "empty-list", "map"] {
+            let def = &defs[name];
+            assert!(
+                def.allowed_tools.is_empty(),
+                "`{name}`: {:?}",
+                def.allowed_tools
+            );
+            for tool in ["file_read", "bash", "grep", "skill_read"] {
+                assert!(
+                    !def.is_tool_allowed(tool),
+                    "`{name}` must allow no `{tool}`"
+                );
+            }
+        }
+        let absent = &defs["absent"];
+        assert_eq!(absent.allowed_tools, vec!["*"]);
+        assert!(absent.is_tool_allowed("file_read"));
+    }
+
+    /// A `tools` map of only `false` entries (a runtime registration's deny
+    /// list) keeps its meaning: every tool except those.
+    #[test]
+    fn a_false_only_tools_map_denies_those_and_keeps_the_rest() {
+        let reg = crate::extension::AgentRegistration {
+            name: "d".into(),
+            mode: crate::extension::types::AgentMode::Subagent,
+            tools: Some(HashMap::from([("bash".to_string(), false)])),
+            ..Default::default()
+        };
+        let def = plugin_agent_to_def(&reg).unwrap();
+        assert_eq!(def.allowed_tools, vec!["*"]);
+        assert_eq!(def.denied_tools, vec!["bash"]);
+        assert!(!def.is_tool_allowed("bash"));
+        assert!(def.is_tool_allowed("file_read"));
     }
 
     /// Build an isolated manager whose only project plugin root is `dir`, with

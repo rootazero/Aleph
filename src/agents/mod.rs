@@ -15,6 +15,7 @@ mod run_context;
 mod types;
 
 pub mod loader;
+pub(crate) mod system_prompt;
 pub(crate) mod tool_sets;
 
 pub mod allowlist_tool_service;

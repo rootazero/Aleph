@@ -1,11 +1,11 @@
 //! Claude Code tool names ↔ Aleph tool names — the one table.
 //!
 //! Three readers, one derivation: the hook matcher (`executor.rs`,
-//! `matches_pattern`), a CC command's `allowed-tools:`
-//! (`manifest/parsers.rs`, `command_allowed_tools`) and a CC agent's `tools:`
-//! (P4.8). Each reader used to be a place where `Read` would
-//! silently name nothing. Every right-hand side is checked against the real
-//! tool registry by `every_aleph_target_is_a_real_tool_name`.
+//! `matches_pattern`), a CC command's `allowed-tools:` and a CC agent's
+//! `tools:` (both `manifest/parsers.rs`, `restrict_tool_list`). Each reader
+//! used to be a place where `Read` would silently name nothing. Every
+//! right-hand side is checked against the real tool registry by
+//! `every_aleph_target_is_a_real_tool_name`.
 
 /// `(claude_code_name, aleph_name)`. Left side is exact and case-sensitive
 /// (CC matchers are). Names with no Aleph counterpart are deliberately
@@ -36,9 +36,11 @@ pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
 /// and the rest have no analogue. A hook matcher naming one matches nothing,
 /// which is the correct fail-closed answer; an `allowed-tools:` / `tools:`
 /// entry naming one is dropped by [`normalize_cc_tool_entry`], which for a
-/// command's restrict list means the command cannot use it. A CC tool in
-/// neither table is forwarded under its own name, and the registry refuses it
-/// by name (`register_skills`).
+/// command's or an agent's restrict list means it cannot use it. A CC tool in
+/// neither table is forwarded under its own name (the restrict-list reader
+/// warns when the name is not spelled like an Aleph tool): a command's
+/// registry refuses it by name (`register_skills`), an agent's allowlist
+/// matches no tool with it.
 pub(crate) const CC_TOOLS_WITHOUT_COUNTERPART: &[&str] = &[
     "NotebookEdit",
     "LS",

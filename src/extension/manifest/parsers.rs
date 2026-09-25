@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::registry::{AgentRegistration, SkillRegistration};
@@ -26,7 +26,7 @@ use crate::extension::types::McpServerConfig;
 /// # `allowed-tools` is honoured for commands, and only for commands
 ///
 /// For a [`SkillType::Command`] the key is mapped to Aleph names here
-/// ([`command_allowed_tools`]) and carried on the registration;
+/// ([`restrict_tool_list`]) and carried on the registration;
 /// `slash_effect::plugin_command_skill_info` projects it onto the command's
 /// `SkillInfo`, `register_skills` validates it into
 /// `UnifiedTool::routing_capabilities`, and `slash_skill_scope` narrows the
@@ -169,7 +169,18 @@ fn model_invocation_disabled(raw: Option<&crate::yaml::Value>, md_path: &Path) -
     }
 }
 
-/// Frontmatter for agent .md files, targeting `AgentRegistration` output
+/// Frontmatter for agent .md files, targeting `AgentRegistration` output.
+///
+/// Claude Code's agent keys beyond `name` / `description` / `model`:
+/// * `tools` — raw YAML, read by `skill::frontmatter::read_allowed_tools` (a
+///   list, or the comma-separated scalar most upstream agents write) and
+///   narrowed by the restrict-list policy a command's `allowed-tools` uses
+///   ([`restrict_tool_list`]). A typed `Vec<String>` would fail every
+///   comma-scalar file outright.
+/// * `permissionMode` — raw YAML, logged with the tier it would map to and
+///   never applied ([`log_unapplied_permission_mode`]).
+/// * `color` — UI-only upstream. Not a field: serde ignores it, and nothing
+///   would read it (`AgentRegistration.color` has no reader).
 #[derive(Debug, Default, Deserialize)]
 struct AgentFm {
     #[serde(default)]
@@ -178,6 +189,10 @@ struct AgentFm {
     description: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    tools: Option<crate::yaml::Value>,
+    #[serde(default, rename = "permissionMode")]
+    permission_mode: Option<crate::yaml::Value>,
 }
 
 // ============================================================================
@@ -445,7 +460,7 @@ fn parse_skill_registration(
     let name = fm.name.unwrap_or_else(|| default_name.to_string());
     // Commands only; `SkillFm`'s doc says why a skill's copy is not carried.
     let allowed_tools = if skill_type == crate::extension::types::SkillType::Command {
-        command_allowed_tools(fm.allowed_tools.as_ref(), &name)
+        restrict_tool_list(fm.allowed_tools.as_ref(), COMMAND_FACE, &name)
     } else {
         None
     };
@@ -474,9 +489,30 @@ fn parse_skill_registration(
     }))
 }
 
-/// A command's `allowed-tools:` as Aleph tool names, RESTRICT mode: the list
-/// narrows the turn's tool surface. `None` only when the key is absent or
-/// null — the one reading that keeps the full surface.
+/// Who declared a restrict list, for its log lines. The policy is one; only
+/// the words differ: a plugin command writes `allowed-tools:`, a plugin
+/// agent writes `tools:`.
+#[derive(Debug, Clone, Copy)]
+struct RestrictFace {
+    /// `command` / `agent` — who is narrowed.
+    kind: &'static str,
+    /// The frontmatter key as the author spells it.
+    key: &'static str,
+}
+
+const COMMAND_FACE: RestrictFace = RestrictFace {
+    kind: "command",
+    key: "allowed-tools",
+};
+
+const AGENT_FACE: RestrictFace = RestrictFace {
+    kind: "agent",
+    key: "tools",
+};
+
+/// A restrict list — a command's `allowed-tools:`, an agent's `tools:` — as
+/// Aleph tool names: the list narrows what `name` may call. `None` only when
+/// the key is absent or null — the one reading that keeps the full surface.
 ///
 /// * A scoped entry is coarsened: `Bash(git *)` folds to bare `bash`, so the
 ///   argument scope is not enforced (the tier gate still governs every call).
@@ -484,26 +520,36 @@ fn parse_skill_registration(
 /// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
 ///   `register_skills` refuses the whole command over one unknown name, and
 ///   losing the slash command over `TodoWrite` is the worse answer.
+/// * An entry in neither alias table that is not spelled like an Aleph tool
+///   ([`aleph_tool_shaped`]) is forwarded as written, with a warn: it is most
+///   likely a Claude Code tool Aleph has no row for, and it names nothing
+///   unless a tool is registered under exactly that name — which cannot be
+///   known here, before plugin and MCP tools are registered.
 /// * A list item that is not a tool name at all (a number, a map, a blank)
 ///   is dropped with a warn too.
 /// * Dropping only narrows: a declaration whose every entry drops is
 ///   `Some(vec![])`, deny-all, and says so.
 /// * So is a present value in a shape that names no tool (a number, a map, a
-///   bool, `","`). It is still a declaration — the author tried to restrict the
-///   command — and reading it as absent would hand back the full surface. (A
+///   bool, `","`). It is still a declaration — the author tried to restrict
+///   `name` — and reading it as absent would hand back the full surface. (A
 ///   skill answers the same shapes the other way; see
 ///   `skill::frontmatter::normalize_allowed_tools`.)
-fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Option<Vec<String>> {
+fn restrict_tool_list(
+    raw: Option<&crate::yaml::Value>,
+    face: RestrictFace,
+    name: &str,
+) -> Option<Vec<String>> {
+    let RestrictFace { kind, key } = face;
     let declared = match crate::skill::frontmatter::read_allowed_tools(raw) {
         Ok(declared) => declared?,
         Err(why) => {
             warn!(
-                command,
+                kind,
+                name,
                 value = ?raw,
                 why = ?why,
-                "command declares `allowed-tools:` in a shape that names no tool; read as \
-                 deny-all, the command can call no tools. Write a list or a comma-separated \
-                 string of tool names"
+                "{kind} declares `{key}:` in a shape that names no tool; read as deny-all, the \
+                 {kind} can call no tools. Write a list or a comma-separated string of tool names"
             );
             return Some(Vec::new());
         }
@@ -515,8 +561,8 @@ fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Opt
         .map_or(0, |items| items.len().saturating_sub(declared.len()));
     if unreadable > 0 {
         warn!(
-            command,
-            unreadable, "allowed-tools list items that are not tool names were dropped"
+            kind,
+            name, unreadable, "{key} list items that are not tool names were dropped"
         );
     }
     let mapped: Vec<String> = declared
@@ -525,15 +571,26 @@ fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Opt
             let aleph = crate::extension::hooks::normalize_cc_tool_entry(entry, true);
             match &aleph {
                 None => {
-                    warn!(command, entry = %entry, "allowed-tools entry has no Aleph tool; dropped");
+                    warn!(kind, name, entry = %entry, "{key} entry has no Aleph tool; dropped");
                 }
                 Some(tool) if crate::extension::hooks::scoped_tool_head(entry).is_some() => {
                     info!(
-                        command,
+                        kind,
+                        name,
                         entry = %entry,
                         tool = %tool,
-                        "scoped allowed-tools entry coarsened to the whole tool; its argument \
-                         scope is not enforced"
+                        "scoped {key} entry coarsened to the whole tool; its argument scope is \
+                         not enforced"
+                    );
+                }
+                Some(tool) if tool.as_str() == entry.trim() && !aleph_tool_shaped(tool) => {
+                    warn!(
+                        kind,
+                        name,
+                        entry = %entry,
+                        "{key} entry is neither a Claude Code tool Aleph knows nor spelled like \
+                         an Aleph tool; forwarded as written, it names no tool unless one is \
+                         registered under exactly that name"
                     );
                 }
                 Some(_) => {}
@@ -543,12 +600,58 @@ fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Opt
         .collect();
     if mapped.is_empty() && (!declared.is_empty() || unreadable > 0) {
         warn!(
-            command,
+            kind,
+            name,
             declared = ?declared,
-            "every allowed-tools entry was dropped; the command can call no tools"
+            "every {key} entry was dropped; the {kind} can call no tools"
         );
     }
     Some(mapped)
+}
+
+/// Spelled like an Aleph tool name: the `*` wildcard, an MCP `server__tool`
+/// key (its tool half is the server's own spelling), or lowercase ASCII,
+/// digits, `_` and `-`. Claude Code tool names are `PascalCase`, so a
+/// forwarded entry that fails this is almost certainly one of them.
+fn aleph_tool_shaped(name: &str) -> bool {
+    name == "*"
+        || name.contains("__")
+        || (!name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'))
+}
+
+/// Claude Code's agent `permissionMode`, logged with the Aleph tier it would
+/// map to 1:1 and never applied: a sub-agent has no tier of its own. It runs
+/// on its parent's `ScopedToolService`, and `agents::allowlist_tool_service`
+/// narrows WHICH tools a child may call, never whether a call pauses. An
+/// `AgentDef` tier field would have no consumer.
+///
+/// | `permissionMode` | 1:1 tier |
+/// |---|---|
+/// | `plan` | `Plan` |
+/// | `default` | `Ask` |
+/// | `auto` | `Auto` |
+/// | `bypassPermissions` | `Full` |
+/// | `acceptEdits`, `dontAsk`, anything else | none |
+fn log_unapplied_permission_mode(raw: Option<&crate::yaml::Value>, agent: &str) {
+    let Some(value) = raw.filter(|v| !v.is_null()) else {
+        return;
+    };
+    let would_be = match scalar_text(value).as_deref() {
+        Some("plan") => "Plan",
+        Some("default") => "Ask",
+        Some("auto") => "Auto",
+        Some("bypassPermissions") => "Full",
+        _ => "no Aleph tier",
+    };
+    debug!(
+        agent,
+        permission_mode = ?value,
+        would_be,
+        "agent permissionMode is not applied: a sub-agent runs on its parent's tier"
+    );
 }
 
 /// Parse a single skill markdown file (`skills/`) into a `Skill` capability.
@@ -632,14 +735,26 @@ fn parse_single_agent(
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
+    let name = fm.name.unwrap_or_else(|| default_name.to_string());
+    log_unapplied_permission_mode(fm.permission_mode.as_ref(), &name);
+    // An agent's `tools:` only narrows, like a command's `allowed-tools:`:
+    // the same policy, and every entry an allow. An empty map is deny-all
+    // (`plugin_agent_to_def`).
+    let tools = restrict_tool_list(fm.tools.as_ref(), AGENT_FACE, &name).map(|names| {
+        names
+            .into_iter()
+            .map(|tool| (tool, true))
+            .collect::<HashMap<String, bool>>()
+    });
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
-        name: fm.name.unwrap_or_else(|| default_name.to_string()),
+        name,
         description: fm
             .description
             .and_then(|d| if d.is_empty() { None } else { Some(d) }),
         content: body,
         model: fm.model,
+        tools,
         plugin_id: plugin_id.to_string(),
         ..Default::default()
     }))
@@ -1325,6 +1440,121 @@ mod tests {
             }
             other => panic!("Expected Agent, got {:?}", other),
         }
+    }
+
+    /// The one agent in `<dir>/agents`, parsed by the production scan.
+    fn only_agent(dir: &Path) -> AgentRegistration {
+        let caps = parse_agents_dir(dir, "agents", "plug").unwrap();
+        assert_eq!(caps.len(), 1, "exactly one agent file must survive");
+        match caps.into_iter().next() {
+            Some(CapabilityDeclaration::Agent(reg)) => reg,
+            other => panic!("Expected Agent, got {other:?}"),
+        }
+    }
+
+    fn write_agent(dir: &Path, file: &str, text: &str) {
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(agents.join(file), text).unwrap();
+    }
+
+    #[test]
+    fn cc_agent_frontmatter_tools_are_mapped_and_permission_mode_is_tolerated() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "validator.md",
+            "---\nname: validator\ndescription: Validates plugins\nmodel: inherit\ncolor: yellow\n\
+             permissionMode: plan\ntools: [\"Read\", \"Grep\", \"Bash\", \"NotebookEdit\"]\n---\n\
+             You are an expert plugin validator.\n",
+        );
+        let reg = only_agent(dir.path());
+        assert_eq!(reg.content, "You are an expert plugin validator.");
+        let tools = reg.tools.as_ref().expect("tools mapped");
+        // Right-hand sides of `CC_TOOL_ALIASES`: Read → file_read,
+        // Grep → grep, Bash → bash.
+        assert_eq!(tools.get("file_read"), Some(&true));
+        assert_eq!(tools.get("grep"), Some(&true));
+        assert_eq!(tools.get("bash"), Some(&true));
+        assert!(
+            !tools.contains_key("NotebookEdit"),
+            "no Aleph counterpart → dropped, not forwarded"
+        );
+        assert_eq!(tools.len(), 3);
+        assert_eq!(reg.model.as_deref(), Some("inherit"));
+    }
+
+    /// 24 of 28 marketplace agents write `tools: Read, Grep, Bash` — the comma
+    /// scalar. A `Vec<String>` field would have failed those files outright.
+    /// `Skill` maps to `skill_read` here as it does for a command.
+    #[test]
+    fn cc_agent_comma_scalar_tools_are_mapped() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "reviewer.md",
+            "---\nname: reviewer\ndescription: Reviews\ntools: Read, Grep, Bash(git diff:*), Skill\n---\n\
+             You review.\n",
+        );
+        let reg = only_agent(dir.path());
+        let mut tools: Vec<(String, bool)> = reg.tools.expect("tools mapped").into_iter().collect();
+        tools.sort();
+        assert_eq!(
+            tools,
+            vec![
+                ("bash".to_string(), true),
+                ("file_read".to_string(), true),
+                ("grep".to_string(), true),
+                ("skill_read".to_string(), true),
+            ]
+        );
+    }
+
+    /// A name that is neither a Claude Code tool Aleph knows nor spelled like
+    /// an Aleph tool is forwarded as written — and says so. Aleph-shaped names
+    /// (a builtin, an MCP `server__tool`) stay quiet: they may be registered
+    /// later and cannot be checked at parse time.
+    #[test]
+    fn an_unknown_cc_tool_name_in_agent_tools_warns() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "odd.md",
+            "---\nname: odd\ntools: Read, NotebookRead, srv__lookup, file_ops\n---\nbody\n",
+        );
+        let (reg, warnings) = warnings_during(|| only_agent(dir.path()));
+        let tools = reg.tools.expect("tools mapped");
+        assert_eq!(
+            tools.get("NotebookRead"),
+            Some(&true),
+            "forwarded as written"
+        );
+        assert!(
+            warnings.contains("NotebookRead"),
+            "the unknown name is named: {warnings}"
+        );
+        for quiet in ["srv__lookup", "file_ops", "Read"] {
+            assert!(
+                !warnings.contains(&format!("entry={quiet}")),
+                "`{quiet}` must not warn: {warnings}"
+            );
+        }
+    }
+
+    /// `permissionMode` and `color` are Claude Code keys Aleph does not apply.
+    /// An odd shape of either costs nothing — never the file.
+    #[test]
+    fn odd_permission_mode_and_color_shapes_keep_the_agent() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "odd.md",
+            "---\nname: odd\npermissionMode: [plan]\ncolor: {r: 1}\n---\nYou are odd.\n",
+        );
+        let reg = only_agent(dir.path());
+        assert_eq!(reg.content, "You are odd.");
+        assert!(reg.tools.is_none(), "absent `tools:` declares nothing");
+        assert!(reg.color.is_none(), "Claude Code's colour is not carried");
     }
 
     #[test]

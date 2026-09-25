@@ -260,10 +260,10 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// # This is the *skill* policy
 ///
 /// The shapes are read by [`read_allowed_tools`]; this function is what a
-/// skill makes of the two it cannot use. A plugin command reads the same
-/// shapes and answers those two with deny-all instead
-/// (`extension::manifest::parsers::command_allowed_tools`): a command's list
-/// only narrows the turn, and it has no second reader to fall back on.
+/// skill makes of the two it cannot use. A plugin command's `allowed-tools`
+/// and a plugin agent's `tools` read the same shapes and answer those two
+/// with deny-all instead (`extension::manifest::parsers::restrict_tool_list`):
+/// their lists only narrow, and they have no second reader to fall back on.
 #[must_use]
 pub fn normalize_allowed_tools(
     raw: Option<&crate::yaml::Value>,

@@ -268,6 +268,17 @@ pub struct AgentDef {
     /// back-compat; `None` (default) keeps the shared-cwd behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<IsolationMode>,
+    /// The markdown body of the agent's definition file, injected verbatim
+    /// after the sub-agent role header (`AgentRoleLayer`). `None` for builtins
+    /// and for files with an empty body. Set only through
+    /// `agents::system_prompt::body_to_system_prompt`.
+    ///
+    /// `#[serde(skip)]`: the body has one persisted home, the `.md` file. No
+    /// serde path carries it, so a def written anywhere cannot become a second
+    /// copy that drifts from the file, and a response that happens to encode a
+    /// def does not grow by the author's whole prompt.
+    #[serde(skip)]
+    pub system_prompt: Option<String>,
 }
 
 impl AgentDef {
@@ -291,7 +302,15 @@ impl AgentDef {
             mcp_servers: vec![],
             isolation: None,
             allowed_tools_explicit: false,
+            system_prompt: None,
         }
+    }
+
+    /// Set the system prompt body (the agent file's markdown below the frontmatter).
+    #[must_use]
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
     }
 
     /// Set one-line description
@@ -599,6 +618,18 @@ mod tests {
         );
         let back: AgentDef = serde_json::from_str(&json).unwrap();
         assert!(back.provider_hint.is_none());
+    }
+
+    /// The body's one persisted home is the `.md` file: no serde path carries
+    /// it, so an encoded def is never a second copy of the author's prompt.
+    #[test]
+    fn system_prompt_never_travels_through_serde() {
+        let def = AgentDef::new("a", AgentMode::SubAgent).with_system_prompt("BODY-MARKER-91c2");
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("BODY-MARKER-91c2"), "{json}");
+        assert!(!json.contains("system_prompt"), "{json}");
+        let back: AgentDef = serde_json::from_str(&json).unwrap();
+        assert!(back.system_prompt.is_none());
     }
 
     #[test]
