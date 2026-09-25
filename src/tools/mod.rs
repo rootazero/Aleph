@@ -42,6 +42,7 @@ pub mod fs_scope;
 pub mod gather_budget;
 pub mod in_flight;
 pub mod info;
+pub mod ingress_tally;
 pub mod name_repair;
 pub mod no_progress;
 pub mod path_locks;

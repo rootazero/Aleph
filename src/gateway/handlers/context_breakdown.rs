@@ -9,7 +9,7 @@
 //! `ToolService` the harness handed the model. Nothing is re-derived at read
 //! time, because a re-derivation describes a prompt that was never sent.
 //!
-//! Two fields are deliberately left absent rather than filled:
+//! One field is deliberately left absent rather than filled:
 //!
 //! * `provider_reported` — the provider's own token count for the same turn.
 //!   We do not have it here, and a locally computed total dressed as the
@@ -21,14 +21,19 @@
 //!   field from the live gauge first. That requirement is now also stated on
 //!   the wire type and on `reconcile` itself, because those are what a client
 //!   author reads (判据 §7).
-//! * `messages_tokens` — the conversation half of the window. Same rule:
-//!   this method measures the PROMPT (system layers + tool schemas), and the
-//!   history side has its own, differently-derived estimator
-//!   (`harness_bridge::context_estimate`). Reporting one through the other's
-//!   door would make two answers out of one question.
 //!
-//! Both are `Option`s that serialize away when `None`, so a client renders
+//! It is an `Option` that serializes away when `None`, so a client renders
 //! "unknown" rather than a zero (判据 §8).
+//!
+//! Two more come from their own recorders, keyed by the same canonical key:
+//!
+//! * `messages` — the conversation half of the last prompt sent, split by
+//!   kind. Published by `ContextBudget` when it measures a prompt on its way
+//!   out (`context::budget::message_breakdown`), with the same estimator and
+//!   the same reasoning projection as the pressure gauge. `None` until a turn
+//!   of the session has been measured since the server started.
+//! * `tool_output` — the session's tool-output ingress (produced vs admitted
+//!   tokens, offloads), tallied by the dispatcher (`tools::ingress_tally`).
 //!
 //! # The layer rows are the assembly BEFORE the budget trim
 //!
@@ -60,7 +65,9 @@
 //! canonical form (case, whitespace) still resolves to the same session, and
 //! must not then be told its measured prompt does not exist.
 
-use aleph_protocol::{ContextBreakdown, LayerSizeView, ToolSchemaSize};
+use aleph_protocol::{
+    ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolSchemaSize,
+};
 
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, RESOURCE_NOT_FOUND,
@@ -146,6 +153,20 @@ pub async fn handle_context_breakdown(
         None => None,
     };
 
+    let messages =
+        crate::context::budget::message_breakdown::latest(&canonical_key).map(|m| MessageTokens {
+            tool_results: m.tool_results as u64,
+            reasoning: m.reasoning as u64,
+            other: m.other as u64,
+        });
+    let tool_output =
+        crate::tools::ingress_tally::tally(&canonical_key).map(|t| ToolOutputIngress {
+            calls: t.calls,
+            produced_tokens: t.produced_tokens,
+            in_context_tokens: t.in_context_tokens,
+            offloaded: t.offloaded,
+        });
+
     // `layout: None` = this turn built no system prompt at all, so there are no
     // rows and no sent-size to report. Deliberately NOT an empty layout: the
     // absent `dynamic_bytes_sent` says "nothing was measured", where a `0`
@@ -181,7 +202,8 @@ pub async fn handle_context_breakdown(
                 description_bytes: *description_bytes,
             })
             .collect(),
-        messages_tokens: None,
+        messages,
+        tool_output,
         provider_reported: None,
         context_window,
         dynamic_bytes_sent,
@@ -352,7 +374,14 @@ mod tests {
             out.provider_reported, None,
             "we do not have the provider's count, and must not invent one"
         );
-        assert_eq!(out.messages_tokens, None);
+        assert_eq!(
+            out.messages, None,
+            "no turn of this session has been measured"
+        );
+        assert_eq!(
+            out.tool_output, None,
+            "no tool call of this session has been counted"
+        );
         assert_eq!(
             out.dynamic_bytes_sent,
             Some(120),
@@ -381,6 +410,50 @@ mod tests {
             keys(&value),
             keys(&expected),
             "envelope keys must equal ContextBreakdown's exactly"
+        );
+    }
+
+    /// The conversation half and the tool-output tally reach the wire from
+    /// their recorders, under the same canonical key as the layer record.
+    #[tokio::test]
+    async fn the_measured_messages_and_the_ingress_tally_cross_the_wire() {
+        let registry = install_test_prompt_size_registry();
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main(format!("ctxbd-msgs-{}", uuid::Uuid::new_v4().simple()));
+        let key_str = key.to_key_string();
+        seed_session(&sessions, &key, "u-alice").await;
+        registry.record_turn(&key_str, Some(untrimmed_layout(vec![])), vec![]);
+        crate::context::budget::message_breakdown::publish(
+            &key_str,
+            crate::context::budget::pressure::MessageTokenSplit {
+                tool_results: 900,
+                reasoning: 120,
+                other: 300,
+            },
+        );
+        crate::tools::ingress_tally::record(&key_str, 20_000, 1_500, true);
+
+        let resp = call(&key_str, sessions, "u-alice").await;
+        let out: ContextBreakdown =
+            serde_json::from_value(resp.result.expect("success")).expect("contract type");
+
+        assert_eq!(
+            out.messages,
+            Some(MessageTokens {
+                tool_results: 900,
+                reasoning: 120,
+                other: 300,
+            })
+        );
+        assert_eq!(
+            out.tool_output,
+            Some(ToolOutputIngress {
+                calls: 1,
+                produced_tokens: 20_000,
+                in_context_tokens: 1_500,
+                offloaded: 1,
+            })
         );
     }
 

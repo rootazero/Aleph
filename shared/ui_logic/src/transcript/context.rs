@@ -61,12 +61,23 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
             bytes: Some(tool_bytes),
         });
     }
-    if let Some(m) = b.messages_tokens {
-        rows.push(ContextRow {
-            label: "Messages".into(),
-            tokens: m,
-            bytes: None,
-        });
+    // The conversation half, one row per kind that has tokens: what the
+    // tool results, the replayed reasoning and the rest of the history each
+    // cost in the last prompt sent.
+    if let Some(m) = b.messages {
+        for (label, tokens) in [
+            ("Messages: tool results", m.tool_results),
+            ("Messages: reasoning", m.reasoning),
+            ("Messages: other", m.other),
+        ] {
+            if tokens > 0 {
+                rows.push(ContextRow {
+                    label: label.into(),
+                    tokens,
+                    bytes: None,
+                });
+            }
+        }
     }
     let ours: u64 = rows.iter().map(|r| r.tokens).sum();
     let total = match b.provider_reported {
@@ -116,7 +127,9 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::context_breakdown::{LayerSizeView, ToolSchemaSize, UsageTokens};
+    use aleph_protocol::context_breakdown::{
+        LayerSizeView, MessageTokens, ToolSchemaSize, UsageTokens,
+    };
     fn breakdown(provider: Option<UsageTokens>) -> ContextBreakdown {
         ContextBreakdown {
             session_key: "k".into(),
@@ -132,12 +145,38 @@ mod tests {
                 schema_bytes: 400,
                 description_bytes: 0,
             }],
-            messages_tokens: Some(500),
+            messages: Some(MessageTokens {
+                tool_results: 300,
+                reasoning: 100,
+                other: 100,
+            }),
+            tool_output: None,
             provider_reported: provider,
             context_window: Some(200_000),
             dynamic_bytes_sent: None,
         }
     }
+    /// A kind with no tokens gets no row: the overlay is a table of what
+    /// occupies the window, and a zero row is a line with nothing in it.
+    #[test]
+    fn an_empty_message_kind_gets_no_row() {
+        let mut b = breakdown(None);
+        b.messages = Some(MessageTokens {
+            tool_results: 40,
+            reasoning: 0,
+            other: 10,
+        });
+        let labels: Vec<String> = reconcile(&b).rows.into_iter().map(|r| r.label).collect();
+        assert!(
+            labels.contains(&"Messages: tool results".to_string()),
+            "{labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "Messages: reasoning"),
+            "{labels:?}"
+        );
+    }
+
     #[test]
     fn provider_wins_when_it_disagrees_and_the_remainder_is_an_explicit_other_row() {
         let r = reconcile(&breakdown(Some(UsageTokens {
@@ -195,8 +234,8 @@ mod tests {
         assert!(r.rows.iter().all(|x| x.label != "Other"));
         assert_eq!(
             r.rows.len(),
-            3,
-            "System/Tools/Messages rows survive untouched"
+            5,
+            "System/Tools and the three message rows survive untouched"
         );
         assert_eq!(
             r.rows[0],
@@ -215,12 +254,15 @@ mod tests {
             }
         );
         assert_eq!(
-            r.rows[2],
-            ContextRow {
-                label: "Messages".into(),
-                tokens: 500,
-                bytes: None
-            }
+            r.rows[2..]
+                .iter()
+                .map(|row| (row.label.as_str(), row.tokens, row.bytes))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Messages: tool results", 300, None),
+                ("Messages: reasoning", 100, None),
+                ("Messages: other", 100, None),
+            ]
         );
     }
     #[test]

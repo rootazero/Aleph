@@ -1560,6 +1560,30 @@ impl ScopedToolService {
             self.recovery_tools(),
         );
 
+        // What this result cost on its way in: the tokens the tool produced
+        // (the untouched original when ingress reduced it) against the tokens
+        // Layer 2 admitted. `context.breakdown` reports the per-session sum.
+        // Not under a delegated role: it runs on its parent's service and
+        // `TURN_CONTEXT` (`identity::actor`), but its results enter the child's
+        // context, so counting them here would charge the parent for output
+        // it never received.
+        let session = crate::tools::turn_context::current_session_key()
+            .filter(|_| crate::identity::current_actor().is_none());
+        if let Some(session) = session {
+            let produced = crate::context::budget::pressure::estimate_tokens_smart(
+                outcome
+                    .reduced_from
+                    .as_deref()
+                    .unwrap_or(&outcome.model_facing),
+            );
+            crate::tools::ingress_tally::record(
+                &session,
+                produced,
+                processed.tokens_in_context,
+                processed.persisted_path.is_some(),
+            );
+        }
+
         // Extension hooks observe large tool results offloaded to disk.
         if let Some(ref path) = processed.persisted_path {
             if let Some(executor) = self.hook_executor.as_ref() {
@@ -1960,5 +1984,88 @@ mod tests {
         assert!(
             matches!(out.metadata.presentation, Some(aleph_protocol::Presentation::FileChanges { ref changes }) if changes.len() == 1)
         );
+    }
+
+    fn tally_turn() -> (crate::tools::turn_context::TurnContext, String) {
+        let key = crate::routing::session_key::SessionKey::main(format!(
+            "tally-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let wire = key.to_key_string();
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: key,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        (turn, wire)
+    }
+
+    fn long_listing() -> ToolOutput {
+        ToolOutput {
+            value: Value::String(
+                (0..20_000)
+                    .map(|i| format!("line {i} of a long listing\n"))
+                    .collect(),
+            ),
+            metadata: Default::default(),
+        }
+    }
+
+    fn bare_service() -> ScopedToolService {
+        ScopedToolService::new(
+            Arc::new(crate::tools::runtime::LoopToolRegistry::new()),
+            std::collections::BTreeSet::new(),
+        )
+    }
+
+    fn soon() -> std::time::Instant {
+        std::time::Instant::now() + std::time::Duration::from_secs(5)
+    }
+
+    /// `ProcessedResult::tokens_in_context` reaches the session's tally: one
+    /// call, admitted tokens from Layer 2, produced tokens from the output
+    /// before Layer 2 cut it — so an over-budget result reads as reduced.
+    ///
+    /// Mutation-checked: dropping the `record` call, or charging `produced`
+    /// from `processed.text` instead of the pre-budget output, turns this red.
+    #[tokio::test]
+    async fn layer_two_counts_what_it_admitted_against_the_turns_session() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service();
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, svc.apply_layer_two("bash", long_listing(), soon()))
+            .await;
+        let t = crate::tools::ingress_tally::tally(&session).expect("the call was counted");
+        assert_eq!(t.calls, 1);
+        assert!(t.in_context_tokens > 0, "{t:?}");
+        assert!(
+            t.produced_tokens > t.in_context_tokens,
+            "an over-budget result must read as reduced: {t:?}"
+        );
+    }
+
+    /// A delegated role's results enter the child's context, not the turn's.
+    ///
+    /// Mutation-checked: removing the `current_actor` filter turns this red.
+    #[tokio::test]
+    async fn a_delegated_roles_results_are_not_charged_to_the_parent() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service();
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(
+                turn,
+                crate::identity::as_actor(
+                    "researcher",
+                    svc.apply_layer_two("bash", long_listing(), soon()),
+                ),
+            )
+            .await;
+        assert_eq!(crate::tools::ingress_tally::tally(&session), None);
     }
 }

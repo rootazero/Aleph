@@ -5,6 +5,7 @@
 //! agent loop (compact, split the session, or compact to fit).
 
 pub mod cheap_passes;
+pub mod message_breakdown;
 pub mod preflight;
 pub mod pressure;
 
@@ -317,10 +318,10 @@ pub struct ContextBudget {
     /// The primary target's reasoning policy: pressure counts the reasoning
     /// the wire will carry, via the same projection `HttpProvider` applies.
     reasoning_replay: ReasoningReplay,
-    /// The message estimate of the prompt last measured on its way out
-    /// (`before_turn`, and `note_compaction_effect` when compaction rewrote
-    /// it), split by kind. Uncalibrated, like every other breakdown figure.
-    last_message_tokens: Option<MessageTokenSplit>,
+    /// The session this budget measures prompts for, when its runner told it
+    /// ([`Self::publish_message_tokens_as`]). Each measured prompt's message
+    /// split is then published to [`message_breakdown`] under this key.
+    breakdown_session: Option<String>,
 }
 
 impl ContextBudget {
@@ -361,7 +362,7 @@ impl ContextBudget {
             max_splits: config.max_splits,
             calibration: None,
             reasoning_replay: ReasoningReplay::default(),
-            last_message_tokens: None,
+            breakdown_session: None,
         }
     }
 
@@ -377,11 +378,17 @@ impl ContextBudget {
         &self.reasoning_replay
     }
 
-    /// The last measured prompt's message tokens, split by kind — `None` until
-    /// a turn has been measured.
-    #[must_use]
-    pub const fn last_message_tokens(&self) -> Option<MessageTokenSplit> {
-        self.last_message_tokens
+    /// Publish every measured prompt's message tokens, split by kind, under
+    /// `session_key` for `context.breakdown` ([`message_breakdown`]). The
+    /// figures are the uncalibrated estimate, like every other breakdown row.
+    pub fn publish_message_tokens_as(&mut self, session_key: impl Into<String>) {
+        self.breakdown_session = Some(session_key.into());
+    }
+
+    fn publish(&self, split: MessageTokenSplit) {
+        if let Some(key) = self.breakdown_session.as_deref() {
+            message_breakdown::publish(key, split);
+        }
     }
 
     /// Total token budget.
@@ -461,7 +468,7 @@ impl ContextBudget {
         );
         let pressure = pressure.calibrated(self.calibration.unwrap_or(1.0));
         self.last_pressure = Some(pressure);
-        self.last_message_tokens = Some(split);
+        self.publish(split);
 
         // Bootstrap overhead warnings (system prompt + tool definitions)
         if pressure.budget_tokens > 0 {
@@ -561,7 +568,7 @@ impl ContextBudget {
             self.token_estimate_ratio,
         );
         let after = after.calibrated(self.calibration.unwrap_or(1.0));
-        self.last_message_tokens = Some(split);
+        self.publish(split);
         if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
             self.circuit_breaker.record_success();
         }
@@ -657,6 +664,63 @@ mod tests {
             circuit_breaker_max: 3,
             max_splits: 3,
         }
+    }
+
+    /// T-G8: a budget told its session publishes each measured prompt's
+    /// message split — of the projection the target is sent, so a target that
+    /// gets no reasoning shows none — and an untold budget publishes nothing.
+    #[test]
+    fn a_measured_prompt_publishes_its_projected_split_for_its_session() {
+        use crate::providers::message::ContentBlock;
+        let key = format!("test:breakdown:{}", uuid::Uuid::new_v4());
+        let msgs = vec![
+            UnifiedMessage::user("question"),
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "reason about it ".repeat(50),
+                        signature: Some("sig".into()),
+                        earlier_turn: false,
+                    },
+                    ContentBlock::ToolCall {
+                        id: "c1".into(),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({ "command": "ls" }),
+                        thought_signature: None,
+                    },
+                ],
+            },
+            UnifiedMessage::tool_result_json(
+                "c1",
+                "bash",
+                serde_json::json!("some output line\n".repeat(100)),
+                false,
+            ),
+        ];
+        let mut budget = ContextBudget::new(&default_config());
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert_eq!(
+            message_breakdown::latest(&key),
+            None,
+            "untold budgets publish nothing"
+        );
+
+        budget.publish_message_tokens_as(key.clone());
+        let _ = budget.before_turn(&msgs, "", 0);
+        let kept = message_breakdown::latest(&key).expect("published");
+        assert!(
+            kept.reasoning > 0 && kept.tool_results > 0 && kept.other > 0,
+            "{kept:?}"
+        );
+
+        budget.set_reasoning_replay(ReasoningReplay::Drop);
+        let _ = budget.before_turn(&msgs, "", 0);
+        let dropped = message_breakdown::latest(&key).expect("published");
+        assert_eq!(
+            dropped.reasoning, 0,
+            "a target sent no reasoning shows none"
+        );
+        assert_eq!(dropped.tool_results, kept.tool_results);
     }
 
     #[test]

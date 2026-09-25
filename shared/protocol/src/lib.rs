@@ -63,14 +63,15 @@ pub mod workspace;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
+pub use context_breakdown::{
+    ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolOutputPage,
+    ToolOutputSource, ToolSchemaSize, UsageTokens,
+};
 pub use events::{
     cache_hit_ratio, peer_message_is_renderable, AgentTraceEvent, AgentTraceSessionOutcome,
     AgentTraceState, AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart,
     AgentTraceToolResult, AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption,
     AskUserQuestion, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
-};
-pub use context_breakdown::{
-    ContextBreakdown, LayerSizeView, ToolOutputPage, ToolOutputSource, ToolSchemaSize, UsageTokens,
 };
 pub use file_change::{
     FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation, Unavailable,
