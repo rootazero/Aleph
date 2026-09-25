@@ -8,7 +8,9 @@ pub mod cheap_passes;
 pub mod preflight;
 pub mod pressure;
 
-use crate::context::budget::pressure::{estimate_message_tokens_aware, estimate_tokens_aware};
+use crate::context::budget::pressure::{
+    estimate_message_tokens_split, estimate_tokens_aware, MessageTokenSplit,
+};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::reasoning_replay::ReasoningReplay;
 
@@ -74,13 +76,45 @@ impl ContextPressure {
     /// schema actually sent to the provider. Keeping it a plain `usize` (rather
     /// than a `&[ToolDefinition]`) decouples this module from any tool-def type
     /// and lets the harness count the exact wire schema (`tool_metadata::ToolDefinition`).
-    pub(crate) fn compute(
-        messages: &[UnifiedMessage],
+    ///
+    /// `messages` is any sequence of message borrows — in production the
+    /// reasoning-replay projection, borrowed (`ReasoningReplay::projected`), so
+    /// computing pressure never clones the history.
+    pub(crate) fn compute<I>(
+        messages: I,
         system_prompt: &str,
         tool_schema_tokens: usize,
         token_budget: u64,
         ratio: f64,
-    ) -> Self {
+    ) -> Self
+    where
+        I: IntoIterator,
+        I::Item: std::borrow::Borrow<UnifiedMessage>,
+    {
+        Self::compute_with_split(
+            messages,
+            system_prompt,
+            tool_schema_tokens,
+            token_budget,
+            ratio,
+        )
+        .0
+    }
+
+    /// [`Self::compute`], also returning the messages' estimate split by kind
+    /// — from the same single pass, so the split sums to the snapshot's
+    /// message tokens exactly.
+    pub(crate) fn compute_with_split<I>(
+        messages: I,
+        system_prompt: &str,
+        tool_schema_tokens: usize,
+        token_budget: u64,
+        ratio: f64,
+    ) -> (Self, MessageTokenSplit)
+    where
+        I: IntoIterator,
+        I::Item: std::borrow::Borrow<UnifiedMessage>,
+    {
         // Content-aware estimation: `ratio` is the prose anchor, but CJK/code
         // content overrides it with denser ratios. This fixes the flat-ratio
         // blind spot (a fixed 3.5 under-counts CJK ~2.3× and code ~1.4×) that
@@ -95,13 +129,13 @@ impl ContextPressure {
         // tokens. `estimate_message_tokens_aware` adds the per-image charge so a
         // vision-heavy context reports its true pressure and compaction fires in
         // time. Image-free messages are byte-identical to the old text estimate.
-        let msg_tokens: usize = messages
-            .iter()
-            .map(|m| estimate_message_tokens_aware(m, ratio))
-            .sum();
-        let used = overhead + msg_tokens;
+        let mut split = MessageTokenSplit::default();
+        for m in messages {
+            split += estimate_message_tokens_split(std::borrow::Borrow::borrow(&m), ratio);
+        }
+        let used = overhead + split.total();
         let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
-        Self {
+        let pressure = Self {
             used_tokens: used,
             budget_tokens: budget,
             ratio: if budget == 0 {
@@ -111,7 +145,8 @@ impl ContextPressure {
             },
             overhead_tokens: overhead,
             available_for_messages: budget.saturating_sub(overhead),
-        }
+        };
+        (pressure, split)
     }
 
     /// Scale every token figure by a calibration `factor` (observed / estimated)
@@ -282,6 +317,10 @@ pub struct ContextBudget {
     /// The primary target's reasoning policy: pressure counts the reasoning
     /// the wire will carry, via the same projection `HttpProvider` applies.
     reasoning_replay: ReasoningReplay,
+    /// The message estimate of the prompt last measured on its way out
+    /// (`before_turn`, and `note_compaction_effect` when compaction rewrote
+    /// it), split by kind. Uncalibrated, like every other breakdown figure.
+    last_message_tokens: Option<MessageTokenSplit>,
 }
 
 impl ContextBudget {
@@ -322,6 +361,7 @@ impl ContextBudget {
             max_splits: config.max_splits,
             calibration: None,
             reasoning_replay: ReasoningReplay::default(),
+            last_message_tokens: None,
         }
     }
 
@@ -335,6 +375,13 @@ impl ContextBudget {
     #[must_use]
     pub const fn reasoning_replay(&self) -> &ReasoningReplay {
         &self.reasoning_replay
+    }
+
+    /// The last measured prompt's message tokens, split by kind — `None` until
+    /// a turn has been measured.
+    #[must_use]
+    pub const fn last_message_tokens(&self) -> Option<MessageTokenSplit> {
+        self.last_message_tokens
     }
 
     /// Total token budget.
@@ -386,7 +433,7 @@ impl ContextBudget {
         tool_schema_tokens: usize,
     ) -> ContextPressure {
         ContextPressure::compute(
-            &self.reasoning_replay.project(messages),
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
@@ -405,15 +452,16 @@ impl ContextBudget {
         system_prompt: &str,
         tool_schema_tokens: usize,
     ) -> LoopDirective {
-        let pressure = ContextPressure::compute(
-            &self.reasoning_replay.project(messages),
+        let (pressure, split) = ContextPressure::compute_with_split(
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        )
-        .calibrated(self.calibration.unwrap_or(1.0));
+        );
+        let pressure = pressure.calibrated(self.calibration.unwrap_or(1.0));
         self.last_pressure = Some(pressure);
+        self.last_message_tokens = Some(split);
 
         // Bootstrap overhead warnings (system prompt + tool definitions)
         if pressure.budget_tokens > 0 {
@@ -505,14 +553,15 @@ impl ContextBudget {
         let Some(before) = self.last_pressure else {
             return;
         };
-        let after = ContextPressure::compute(
-            &self.reasoning_replay.project(messages),
+        let (after, split) = ContextPressure::compute_with_split(
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        )
-        .calibrated(self.calibration.unwrap_or(1.0));
+        );
+        let after = after.calibrated(self.calibration.unwrap_or(1.0));
+        self.last_message_tokens = Some(split);
         if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
             self.circuit_breaker.record_success();
         }
