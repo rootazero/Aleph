@@ -1557,6 +1557,7 @@ impl ScopedToolService {
             self.result_store.as_deref(),
             budget,
             outcome.reduced_from.as_deref(),
+            self.recovery_tools(),
         );
 
         // Extension hooks observe large tool results offloaded to disk.

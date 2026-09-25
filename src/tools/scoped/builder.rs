@@ -457,6 +457,27 @@ impl ScopedToolService {
         self.allowed.is_empty() || self.allowed.contains(name)
     }
 
+    /// The retrieval tools this turn can dispatch — all the Layer-2 recovery
+    /// footer may name (a footer that says "use `ctx_search`" to an agent that
+    /// cannot call it is a handle that fails on first use).
+    ///
+    /// "Can dispatch" is the three facts `execute()` checks before a builtin
+    /// runs: the name resolves in this registry, passes the allow set, and is
+    /// not hidden by the permission policy (a denial the plan tier alone
+    /// created stays listed — see [`Self::is_hidden_from_model`]).
+    pub(super) fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        use crate::tools::AlephTool;
+        let callable = |name: &str| {
+            self.inner.resolve(name).is_some()
+                && self.is_allowed(name)
+                && !self.is_hidden_from_model(name)
+        };
+        crate::tools::result_processing::RecoveryTools {
+            ctx_search: callable(<crate::builtin_tools::CtxSearchTool as AlephTool>::NAME),
+            file_read: callable(<crate::builtin_tools::FileReadTool as AlephTool>::NAME),
+        }
+    }
+
     /// Build `ToolDefinitionMetadata` for a loop tool from what the tool
     /// declares plus the static budget + idempotency tables — the same data
     /// `BuiltinHandler::definition()` surfaces through the handler path.

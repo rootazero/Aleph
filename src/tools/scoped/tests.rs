@@ -2965,6 +2965,95 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
     );
 }
 
+/// T-G12: the recovery footer is an instruction to the model ("use
+/// `ctx_search` …"), so it may only name a retrieval tool this turn can
+/// actually dispatch. Both ways a tool stops being callable are exercised —
+/// absent from the agent's allow set, and denied by `[policies.tool_permissions]`
+/// — plus the positive half, so a footer that simply never names anything
+/// cannot pass.
+#[tokio::test]
+async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
+    use crate::extension::PermissionAction;
+
+    async fn footer_of(svc: ScopedToolService) -> String {
+        let out = svc.execute("bash", json!({})).await.expect("tool succeeds");
+        let text = out
+            .value
+            .as_str()
+            .expect("layer 2 flattens to text")
+            .to_string();
+        assert!(
+            text.contains("[Full output persisted: "),
+            "precondition: the result was offloaded:\n{text}"
+        );
+        text
+    }
+    fn registry() -> StdArc<LoopToolRegistry> {
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(FailingTestRunner));
+        r.register(Box::new(StubTool {
+            tool_name: "ctx_search",
+        }));
+        r.register(Box::new(StubTool {
+            tool_name: "file_read",
+        }));
+        StdArc::new(r)
+    }
+    let allow =
+        |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| (*n).to_string()).collect() };
+
+    // Positive half: both callable ⇒ the search hint is offered.
+    let (_s1, store) = hygiene_store("footer_both");
+    let both = footer_of(
+        ScopedToolService::new(registry(), allow(&["bash", "ctx_search", "file_read"]))
+            .with_result_store(store),
+    )
+    .await;
+    assert!(both.contains("ctx_search("), "both callable:\n{both}");
+
+    // Not in the agent's allow set.
+    let (_s2, store) = hygiene_store("footer_not_allowed");
+    let not_allowed = footer_of(
+        ScopedToolService::new(registry(), allow(&["bash", "file_read"])).with_result_store(store),
+    )
+    .await;
+    assert!(
+        !not_allowed.contains("ctx_search"),
+        "ctx_search is not in the allow set, yet the footer names it:\n{not_allowed}"
+    );
+    assert!(
+        not_allowed.contains("file_read"),
+        "the callable fallback must be named instead:\n{not_allowed}"
+    );
+
+    // Denied by policy (and hidden from the model's list).
+    let (_s3, store) = hygiene_store("footer_denied");
+    let denied = footer_of(
+        ScopedToolService::new(registry(), BTreeSet::new())
+            .with_tool_permissions(perms(
+                PermissionAction::Allow,
+                &[("ctx_search", PermissionAction::Deny)],
+            ))
+            .with_result_store(store),
+    )
+    .await;
+    assert!(
+        !denied.contains("ctx_search"),
+        "ctx_search is policy-denied, yet the footer names it:\n{denied}"
+    );
+    assert!(denied.contains("file_read"), "fallback:\n{denied}");
+
+    // Neither callable ⇒ the bare marker (its path) is the whole handle.
+    let (_s4, store) = hygiene_store("footer_neither");
+    let neither =
+        footer_of(ScopedToolService::new(registry(), allow(&["bash"])).with_result_store(store))
+            .await;
+    assert!(
+        !neither.contains("ctx_search") && !neither.contains("file_read"),
+        "no retrieval tool is callable, so none may be named:\n{neither}"
+    );
+}
+
 // -------------------------------------------------------------------------
 // Extension usage recording at the chokepoint
 //

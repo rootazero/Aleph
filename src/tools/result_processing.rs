@@ -185,6 +185,32 @@ fn resolve_result_budget_under(
     declared.map(|n| n.min(ceiling))
 }
 
+/// Which retrieval tools the model can call, this turn, to get an offloaded
+/// original back.
+///
+/// The recovery footer is an instruction to the model, so it may only name
+/// tools that will actually dispatch: "use `ctx_search`" said to an agent whose
+/// allow set or `[policies.tool_permissions]` excludes it is a handle that fails
+/// on first use. [`apply_result_budget`] takes this from its caller because only
+/// the dispatcher can see the turn's gates (`ScopedToolService::recovery_tools`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryTools {
+    /// `ctx_search` is dispatchable.
+    pub ctx_search: bool,
+    /// `file_read` is dispatchable.
+    pub file_read: bool,
+}
+
+impl RecoveryTools {
+    /// Both callable — what a caller that cannot see the turn's tool gates
+    /// assumes. Today that is every [`recovery_footer`] caller: the harness
+    /// Layer-3 spill and the browser offload.
+    pub const ALL: Self = Self {
+        ctx_search: true,
+        file_read: true,
+    };
+}
+
 /// Output of [`apply_result_budget`]. `text` is what the LLM should see.
 /// `persisted_path` is `Some(path)` iff the original text was offloaded
 /// to disk via `ToolResultStore::persist_if_large`.
@@ -215,6 +241,9 @@ pub struct ProcessedResult {
 ///    `ctx_search` round-trip (an extra LLM turn that re-sends the whole
 ///    context). Opaque output keeps the marker-only behaviour, because there we
 ///    cannot tell signal from noise and a head/tail slice would be a guess.
+///
+/// `recovery` names the retrieval tools the footer may point at; see
+/// [`RecoveryTools`].
 pub fn apply_result_budget(
     tool_call_id: &str,
     tool_name: &str,
@@ -222,6 +251,7 @@ pub fn apply_result_budget(
     store: Option<&ToolResultStore>,
     budget: Option<usize>,
     reduced_from: Option<&str>,
+    recovery: RecoveryTools,
 ) -> ProcessedResult {
     let tokens = estimate_tokens_smart(text);
     let Some(budget) = budget else {
@@ -259,7 +289,7 @@ pub fn apply_result_budget(
                 persisted_path: None,
             };
         };
-        return match recovery_footer(store, tool_call_id, tool_name, full, budget) {
+        return match recovery_footer_for(store, tool_call_id, tool_name, full, budget, recovery) {
             Some((footer, path)) => {
                 let body = format!("{text}\n{footer}");
                 ProcessedResult {
@@ -279,9 +309,14 @@ pub fn apply_result_budget(
     // Over budget. Persist the original (or `text` when there was no hygiene
     // pass) and compose the inline body above the recovery footer.
     let persist_source = original.unwrap_or(text);
-    if let Some((footer, path)) =
-        recovery_footer(store, tool_call_id, tool_name, persist_source, budget)
-    {
+    if let Some((footer, path)) = recovery_footer_for(
+        store,
+        tool_call_id,
+        tool_name,
+        persist_source,
+        budget,
+        recovery,
+    ) {
         let footer_tokens = estimate_tokens_smart(&footer);
         let body = match original {
             // Content-typed: inline the signal, sized so body + footer still
@@ -317,17 +352,22 @@ pub fn apply_result_budget(
 }
 
 /// Offload `full` to the result store and build the recovery footer the model
-/// uses to get the dropped detail back: the persist marker plus, when the blob
-/// indexed into sections, a `ctx_search` hint.
+/// uses to get the dropped detail back: the persist marker plus a hint naming
+/// how to read it back.
 ///
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
 ///
-/// `pub(crate)` for the harness Layer-3 turn spill (`harness/agent/act.rs`),
-/// which offloads for the same reason and must hand the model the same recovery
-/// handle. It used to call `persist_if_large` directly and so emitted a marker
-/// with **no** `ctx_search` hint over a blob that was never indexed — the model
-/// was pointed at a file it could only re-read whole, defeating the offload.
+/// `pub(crate)` for the harness Layer-3 turn spill (`harness/agent/act.rs`) and
+/// the browser offload (`browser_tools::offload_content_to`), which offload for
+/// the same reason and must hand the model the same recovery handle. The spill
+/// used to call `persist_if_large` directly and so emitted a marker with **no**
+/// `ctx_search` hint over a blob that was never indexed — the model was pointed
+/// at a file it could only re-read whole, defeating the offload.
+///
+/// Neither of those two callers can see the turn's tool gates, so this form
+/// assumes [`RecoveryTools::ALL`]; the dispatcher, which can, goes through
+/// [`recovery_footer_for`].
 pub(crate) fn recovery_footer(
     store: Option<&ToolResultStore>,
     tool_call_id: &str,
@@ -335,20 +375,72 @@ pub(crate) fn recovery_footer(
     full: &str,
     threshold: usize,
 ) -> Option<(String, Option<PathBuf>)> {
+    recovery_footer_for(
+        store,
+        tool_call_id,
+        tool_name,
+        full,
+        threshold,
+        RecoveryTools::ALL,
+    )
+}
+
+/// [`recovery_footer`] with the retrieval tools the footer may name.
+///
+/// Every writer of an offloaded original goes through here, which is why the
+/// line-preserving rendering happens here and not at ingress: a flattened typed
+/// result is ONE line of JSON, and both readers of the blob work in lines —
+/// `file_read` pages by line and clamps an overlong one, `ContentIndex` chunks
+/// by line count — so stored as-is it is one section and one clipped line:
+/// found, never read. See [`crate::tool_output::render`].
+///
+/// The size gate is measured on `full` as given, not on the rendering: the
+/// estimator charges one-line JSON at the code ratio and rendered prose at a
+/// cheaper one, so gating on the rendering could call an over-budget result
+/// "small", skip the offload, and send the caller to truncation.
+pub(crate) fn recovery_footer_for(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    full: &str,
+    threshold: usize,
+    recovery: RecoveryTools,
+) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
-    let marker = store.persist_if_large(tool_call_id, tool_name, full, threshold)?;
+    if estimate_tokens_smart(full) <= threshold {
+        return None;
+    }
+    let body = crate::tool_output::render::line_preserving(full);
+    let marker = store.persist(tool_call_id, tool_name, &body)?;
     let path = extract_persisted_path(&marker).map(PathBuf::from);
     // Index the offloaded blob so the model can BM25-retrieve only the relevant
-    // slices via `ctx_search` instead of re-reading the whole file (which would
-    // defeat the offload). Best-effort: on failure the bare persist marker still
-    // lets the model `read_file` it back.
-    let indexed = store.index_output(tool_call_id, tool_name, full);
-    let footer = match indexed.filter(|o| o.sections > 0) {
-        Some(outcome) => format!("{marker}\n{}", search_hint(&outcome)),
+    // sections via `ctx_search` instead of re-reading the whole file (which would
+    // defeat the offload). Indexed even when `ctx_search` is not callable this
+    // turn: the blob outlives the turn, and the gates are per turn. Best-effort:
+    // on failure the marker's path is still readable.
+    let indexed = store.index_output(tool_call_id, tool_name, &body);
+    let footer = match footer_hint(indexed.as_ref(), recovery) {
+        Some(hint) => format!("{marker}\n{hint}"),
         None => marker,
     };
     Some((footer, path))
 }
+
+/// The line under a persist marker telling the model how to read the blob
+/// back — naming only a tool it can call. `ctx_search` when the blob indexed
+/// into sections and the tool is callable; otherwise `file_read` when that is
+/// callable; otherwise nothing, and the marker's path is the whole handle.
+fn footer_hint(indexed: Option<&IndexOutcome>, recovery: RecoveryTools) -> Option<String> {
+    match indexed.filter(|o| o.sections > 0) {
+        Some(outcome) if recovery.ctx_search => Some(search_hint(outcome)),
+        _ if recovery.file_read => Some(FILE_READ_HINT.to_string()),
+        _ => None,
+    }
+}
+
+/// Footer hint when `ctx_search` cannot be offered but `file_read` can.
+const FILE_READ_HINT: &str =
+    "[Read it back with file_read on that path — page it with offset/limit]";
 
 /// Rescue inline image payloads from a structured tool-result value into the
 /// out-of-band [`ToolImage`] channel, BEFORE the value is flattened to text and
@@ -562,20 +654,31 @@ fn search_hint(outcome: &IndexOutcome) -> String {
     // section — i.e. text the model already has immediately above this hint.
     // Orientation is only worth its bytes when there is something to choose
     // between.
+    //
+    // A preview is a section's first line, i.e. tool output — possibly a web
+    // page's or an MCP server's — and this hint sits OUTSIDE any fence the
+    // result carried. It goes through the same scrub as unfenced external text
+    // so a line that spells a fence marker or a chat-template token cannot act
+    // as one here.
     let preview = if outcome.sections > 1 {
-        outcome.previews.join(" · ")
+        let previews: Vec<String> = outcome
+            .previews
+            .iter()
+            .map(|p| crate::security::content_sanitizer::sanitize_external_text(p))
+            .collect();
+        previews.join(" · ")
     } else {
         String::new()
     };
     if preview.is_empty() {
         format!(
-            "[Indexed {} sections — use ctx_search(query=\"…\") to retrieve only \
+            "[Indexed {} sections — use ctx_search(queries=[\"…\"]) to retrieve only \
              the relevant parts instead of re-reading the whole file]",
             outcome.sections
         )
     } else {
         format!(
-            "[Indexed {} sections — use ctx_search(query=\"…\") to retrieve only the \
+            "[Indexed {} sections — use ctx_search(queries=[\"…\"]) to retrieve only the \
              relevant parts instead of re-reading the whole file. First sections: {}]",
             outcome.sections, preview
         )
@@ -1140,7 +1243,15 @@ mod tests {
     #[test]
     fn small_text_unchanged() {
         let (_scratch, store, _base) = test_store("small_unchanged");
-        let out = apply_result_budget("c1", "bash", "hello", Some(&store), Some(10_000), None);
+        let out = apply_result_budget(
+            "c1",
+            "bash",
+            "hello",
+            Some(&store),
+            Some(10_000),
+            None,
+            RecoveryTools::ALL,
+        );
         assert_eq!(out.text, "hello");
         assert!(out.persisted_path.is_none());
     }
@@ -1149,7 +1260,15 @@ mod tests {
     fn budget_none_truncates_no_persist() {
         let (_scratch, store, base) = test_store("budget_none");
         let big = "x".repeat(60_000);
-        let out = apply_result_budget("c2", "read_file", &big, Some(&store), None, None);
+        let out = apply_result_budget(
+            "c2",
+            "read_file",
+            &big,
+            Some(&store),
+            None,
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(
             out.persisted_path.is_none(),
             "must not persist when budget is None"
@@ -1175,7 +1294,15 @@ mod tests {
             .map(|i| format!("line {i} payload alpha beta gamma"))
             .collect::<Vec<_>>()
             .join("\n");
-        let out = apply_result_budget("c3", "bash", &big, Some(&store), Some(100), None);
+        let out = apply_result_budget(
+            "c3",
+            "bash",
+            &big,
+            Some(&store),
+            Some(100),
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(
             out.text.starts_with("[Full output persisted:"),
             "expected marker, got: {}",
@@ -1200,10 +1327,55 @@ mod tests {
         assert!(!hits.is_empty(), "offloaded blob should be searchable");
     }
 
+    /// The offload gate is measured on the flattened text the model would
+    /// otherwise receive, not on the rendering that gets stored. The estimator
+    /// charges one-line JSON at the code ratio and rendered prose at a cheaper
+    /// one, so gating on the rendering would call this result "small", skip
+    /// the offload and send the caller to truncation.
+    #[test]
+    fn the_offload_gate_reads_the_flat_text_not_its_rendering() {
+        let (_scratch, store, _base) = test_store("gate_on_flat");
+        let prose = (0..200)
+            .map(|i| format!("plain sentence number {i} about nothing in particular"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let flat = serde_json::json!({ "stdout": prose, "exit_code": 0 }).to_string();
+        let rendered = crate::tool_output::render::line_preserving(&flat);
+        let threshold = (estimate_tokens_smart(&flat) + estimate_tokens_smart(&rendered)) / 2;
+        assert!(
+            estimate_tokens_smart(&rendered) <= threshold
+                && threshold < estimate_tokens_smart(&flat),
+            "precondition: the two estimates straddle the threshold ({} / {threshold} / {})",
+            estimate_tokens_smart(&rendered),
+            estimate_tokens_smart(&flat)
+        );
+
+        let footer = recovery_footer_for(
+            Some(&store),
+            "c-gate",
+            "bash",
+            &flat,
+            threshold,
+            RecoveryTools::ALL,
+        );
+
+        let (_, path) = footer.expect("over the threshold as the model would see it ⇒ offloaded");
+        let blob = std::fs::read_to_string(path.expect("a path")).unwrap();
+        assert_eq!(blob, rendered, "and what is stored is the rendering");
+    }
+
     #[test]
     fn no_store_means_truncate_only() {
         let big = "z".repeat(40_000);
-        let out = apply_result_budget("c4", "bash", &big, None, Some(100), None);
+        let out = apply_result_budget(
+            "c4",
+            "bash",
+            &big,
+            None,
+            Some(100),
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(out.persisted_path.is_none());
         assert!(!out.text.starts_with("[Full output persisted:"));
         assert!(
@@ -1250,7 +1422,15 @@ mod tests {
         }
         big.push_str("// the last line of the file\n");
 
-        let out = apply_result_budget("c-distill", "read_file", &big, Some(&store), None, None);
+        let out = apply_result_budget(
+            "c-distill",
+            "read_file",
+            &big,
+            Some(&store),
+            None,
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(out.persisted_path.is_none(), "reads are never persisted");
         assert!(
             !out.text.contains("Output digest"),
@@ -1295,6 +1475,7 @@ mod tests {
             Some(&store),
             Some(100),
             Some(&original),
+            RecoveryTools::ALL,
         );
 
         assert!(
@@ -1341,6 +1522,7 @@ mod tests {
             Some(&store),
             Some(8_000),
             Some(&original),
+            RecoveryTools::ALL,
         );
         assert!(
             out.persisted_path.is_some(),
@@ -1360,7 +1542,15 @@ mod tests {
             .map(|i| format!("line {i} payload alpha beta gamma"))
             .collect::<Vec<_>>()
             .join("\n");
-        let out = apply_result_budget("c-opaque", "bash", &big, Some(&store), Some(100), None);
+        let out = apply_result_budget(
+            "c-opaque",
+            "bash",
+            &big,
+            Some(&store),
+            Some(100),
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(
             out.text.starts_with("[Full output persisted:"),
             "marker must still lead for opaque content, got: {}",
@@ -1378,7 +1568,15 @@ mod tests {
         for i in 0..2000 {
             big.push_str(&format!("trace line {i} payload alpha beta gamma\n"));
         }
-        let out = apply_result_budget("c-persist", "bash", &big, Some(&store), Some(100), None);
+        let out = apply_result_budget(
+            "c-persist",
+            "bash",
+            &big,
+            Some(&store),
+            Some(100),
+            None,
+            RecoveryTools::ALL,
+        );
         assert!(out.persisted_path.is_some(), "should have persisted");
         // The marker is still present...
         assert!(out.text.contains("[Full output persisted:"));

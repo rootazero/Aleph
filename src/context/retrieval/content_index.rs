@@ -90,6 +90,12 @@ pub struct SearchHit {
     pub title: String,
     /// A short excerpt of the body around the match.
     pub snippet: String,
+    /// The whole chunk — up to [`DEFAULT_CHUNK_LINES`] lines of the indexed
+    /// text. `ctx_search` returns this, not the snippet: a ~14-token excerpt
+    /// tells the model *where* the match is but not what it says, and the only
+    /// other way to read the section was a `file_read` whose offset it had to
+    /// guess (section ordinals skip blank chunks, so they are not line numbers).
+    pub body: String,
     /// Fused relevance score from Reciprocal Rank Fusion across the porter and
     /// trigram indexes. Higher is more relevant; hits are returned pre-sorted
     /// descending, so callers can rely on order without re-sorting by score.
@@ -479,8 +485,8 @@ const MAX_PROX_TERMS: usize = 64;
 
 /// One ranked row from a single FTS5 index, before fusion. Carries the display
 /// fields so the fused [`SearchHit`] is built without a second `SQLite` round-trip,
-/// plus the full chunk `body` used by the proximity reranker (never surfaced to
-/// callers — it is dropped when the fused list is finalized into `SearchHit`s).
+/// including the full chunk `body`, which the proximity reranker scores and the
+/// caller receives.
 struct RankedRow {
     source: String,
     chunk_no: i64,
@@ -547,8 +553,7 @@ fn query_index(
 }
 
 /// A chunk after RRF fusion, before finalization. Holds the fused `score` plus
-/// the full `body`, which the proximity reranker needs but callers never see
-/// (it is dropped in [`finalize`]).
+/// the full `body` (scored by the proximity reranker, handed on by [`finalize`]).
 #[derive(Debug)]
 struct FusedHit {
     source: String,
@@ -650,9 +655,8 @@ fn proximity_rerank(hits: &mut [FusedHit], terms: &[String]) {
     sort_by_score_desc(hits);
 }
 
-/// Drop the internal `body` and truncate to `limit`, producing the public
-/// [`SearchHit`] list. Kept separate from fusion so truncation runs *after* any
-/// proximity rerank.
+/// Truncate to `limit`, producing the public [`SearchHit`] list. Kept separate
+/// from fusion so truncation runs *after* any proximity rerank.
 fn finalize(hits: Vec<FusedHit>, limit: usize) -> Vec<SearchHit> {
     hits.into_iter()
         .take(limit)
@@ -661,6 +665,7 @@ fn finalize(hits: Vec<FusedHit>, limit: usize) -> Vec<SearchHit> {
             chunk_no: h.chunk_no,
             title: h.title,
             snippet: h.snippet,
+            body: h.body,
             score: h.score,
         })
         .collect()
@@ -1053,7 +1058,7 @@ mod tests {
             chunk_no,
             title: format!("{source}#{chunk_no}"),
             snippet: String::new(),
-            body: String::new(),
+            body: format!("body of {source}#{chunk_no}"),
         }
     }
 
@@ -1078,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_truncates_to_limit_and_drops_body() {
+    fn finalize_truncates_to_limit_and_keeps_body() {
         let porter = vec![row("A", 0), row("B", 0), row("C", 0)];
         let trigram = vec![];
         // `rrf_fuse` no longer truncates; `finalize` does. Porter-only keeps
@@ -1087,6 +1092,29 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].source, "A");
         assert_eq!(hits[1].source, "B");
+        // The chunk text reaches the caller — `ctx_search` returns it.
+        assert_eq!(hits[0].body, row("A", 0).body);
+    }
+
+    /// The body a search hands back is the whole indexed section, not the
+    /// FTS snippet: every line of the chunk that matched.
+    #[test]
+    fn a_search_hit_carries_its_whole_section() {
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text(SESS, "bash:1", "bash", &sample_log())
+            .unwrap();
+        let hits = idx.search(SESS, "timeout", 1).unwrap();
+        let hit = hits.first().expect("the sample log has a timeout line");
+        assert!(
+            hit.body.lines().count() > 1,
+            "a section, not a line: {:?}",
+            hit.body
+        );
+        assert!(hit.body.contains("timeout"), "{:?}", hit.body);
+        assert!(
+            sample_log().contains(&hit.body),
+            "the body is verbatim indexed text"
+        );
     }
 
     // ---- proximity reranking ----
