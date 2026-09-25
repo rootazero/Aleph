@@ -559,10 +559,17 @@ async fn an_inline_command_gets_the_plugins_settings_but_no_secret() {
     );
 }
 
-/// A command whose plugin has no record cannot be tied to a root or a
-/// consent key: its inline commands are withheld, the rest renders.
+/// N10. A command renders only while its plugin has an active record here.
+/// With no record (an orphan registration), or disabled — which leaves its
+/// registrations in place — the mode names no command: nothing is admitted,
+/// nothing renders, nothing is filed for review. A command admitted while its
+/// plugin was active fails the turn visibly when the plugin is disabled
+/// before the run loop renders it.
 #[tokio::test]
-async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
+async fn a_command_renders_only_while_its_plugin_is_active_here() {
+    let temp = TempDir::new().unwrap();
+    let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+
     let f = Fixture::new("body", None).await;
     f.manager
         .get_plugin_registry_mut()
@@ -571,24 +578,63 @@ async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
             plugin_id: "orphan".into(),
             ..command("Hi $1 [!`echo hi`]")
         });
-    let mode = serde_json::json!({
+    let orphan = serde_json::json!({
         "type": "skill", "skill_id": "orphan:greet", "owning_plugin": "orphan", "args": "you"
     });
-    let (_, block) = render_command(
-        &mode,
+    let rendered = render_command(
+        &orphan,
         Some(f.work.clone()),
         None,
         &f.manager,
         Arc::clone(&f.consent),
     )
     .await
-    .unwrap()
-    .expect("a command turn");
+    .unwrap();
+    assert_eq!(rendered, None, "an orphan registration rendered");
+
+    let f = Fixture::new("Hi [!`echo hi`]", None).await;
+    assert!(f
+        .manager
+        .get_plugin_registry_mut()
+        .await
+        .disable_plugin(PLUGIN));
     assert!(
-        block.contains(
-            "Hi you [[!`echo hi` not run: the plugin that ships this command has no record here]]"
-        ),
-        "{block}"
+        f.manager
+            .get_plugin_registry()
+            .await
+            .get_skill("plug:greet")
+            .is_some(),
+        "disabling a plugin keeps its registrations"
+    );
+    let mut request = f.request(f.work.clone()).await;
+    let rendered = f.admit_and_render(&mut request, &agent).await.unwrap();
+    assert_eq!(rendered, None, "a disabled plugin's command rendered");
+    assert!(!request.metadata.contains_key(ADMITTED_KEY));
+
+    let f = Fixture::new("Hi [!`echo hi`]", None).await;
+    let mut request = f.request(f.work.clone()).await;
+    admit_with(&mut request, &f.manager).await.unwrap();
+    assert!(request.metadata.contains_key(ADMITTED_KEY));
+    f.manager
+        .get_plugin_registry_mut()
+        .await
+        .disable_plugin(PLUGIN);
+    let run_dir = super::super::run_loop::run_workspace(&request, &agent);
+    let refused = render_admitted(
+        &request,
+        &run_dir,
+        &turn_permissions(&request, &agent).await,
+        Some(&f.manager),
+        Arc::clone(&f.consent),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect_err("a command disabled after admission must not render");
+    assert!(
+        refused
+            .to_string()
+            .contains("no longer an active plugin's command"),
+        "{refused}"
     );
     assert!(
         f.consent.entries().is_empty(),

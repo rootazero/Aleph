@@ -417,21 +417,35 @@ impl ShellHookConsent {
         plugin_root: &Path,
         command: &str,
     ) -> bool {
+        self.approved_entry(plugin_name, scope, plugin_root, command)
+            .is_some()
+    }
+
+    /// [`Self::is_approved`], answered with the entry that approves — from
+    /// ONE read of the registry. A caller that must also judge what the
+    /// approval was given to (its [`event`](ConsentEntry::event)) judges the
+    /// very entry that approved, never a second lookup that a revoke could
+    /// land between.
+    pub fn approved_entry(
+        &self,
+        plugin_name: &str,
+        scope: &ScopeKey,
+        plugin_root: &Path,
+        command: &str,
+    ) -> Option<ConsentEntry> {
         self.reload_if_stale();
         let fp = Self::fingerprint(plugin_name, bound_project(scope), command);
-        let (approved_root, recorded) = {
+        let entry = {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
             match cache.entries.get(&fp) {
-                Some(e) if e.status == ConsentStatus::Approved => {
-                    (e.plugin_root.clone(), e.script_fingerprint.clone())
-                }
+                Some(e) if e.status == ConsentStatus::Approved => e.clone(),
                 // Missing or still pending — not approved either way.
-                _ => return false,
+                _ => return None,
             }
         };
 
-        if let Some(approved_root) = approved_root {
-            if !same_dir(&approved_root, plugin_root) {
+        if let Some(approved_root) = &entry.plugin_root {
+            if !same_dir(approved_root, plugin_root) {
                 warn!(
                     plugin = plugin_name,
                     command,
@@ -441,12 +455,15 @@ impl ShellHookConsent {
                      `aleph hooks revoke <fingerprint>`, then review it again with \
                      `aleph hooks test <fingerprint>` after it next fires."
                 );
-                return false;
+                return None;
             }
         }
 
         let context = ScriptContext::new(plugin_name, bound_project(scope), Some(plugin_root));
-        match (recorded, script_fingerprint(command, &context)) {
+        let bound = match (
+            entry.script_fingerprint.as_deref(),
+            script_fingerprint(command, &context),
+        ) {
             // No script to bind, then or now (`echo hi`): the approval is of
             // the command string alone.
             (None, None) => true,
@@ -463,7 +480,7 @@ impl ShellHookConsent {
                 );
                 false
             }
-            (Some(approved), Some(current)) if approved == current => true,
+            (Some(approved), Some(current)) if approved == current.as_str() => true,
             (Some(_), Some(_)) => {
                 warn!(
                     plugin = plugin_name,
@@ -484,7 +501,8 @@ impl ShellHookConsent {
                 );
                 false
             }
-        }
+        };
+        bound.then_some(entry)
     }
 
     /// Record an un-approved shell hook as `pending` so the operator can

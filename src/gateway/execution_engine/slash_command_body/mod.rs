@@ -58,7 +58,7 @@ use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
     inline_shell_command, ExtensionError, ExtensionManager, InlineArgs, InlineShell, InlineSite,
-    PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
+    PluginRecord, PluginRegistry, SkillRegistration, SkillTemplate, SkillType, TemplateCtx,
 };
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::model_override::ModelOverride;
@@ -106,7 +106,9 @@ pub(super) async fn admit_with(
     let Some(mode) = slash_mode(&request.metadata) else {
         return Ok(());
     };
-    let Some(reg) = owned_command(&mode, &*manager.get_plugin_registry().await).cloned() else {
+    let Some(reg) =
+        owned_command(&mode, &*manager.get_plugin_registry().await).map(|(reg, _)| reg.clone())
+    else {
         return Ok(());
     };
     let qualified = reg.qualified_name();
@@ -159,7 +161,7 @@ pub(super) async fn render_admitted(
     };
     match rendered {
         Some((qualified, block)) if qualified == *admitted => Ok(Some(block)),
-        _ => Err(refused("it is no longer registered")),
+        _ => Err(refused("it is no longer an active plugin's command")),
     }
 }
 
@@ -223,20 +225,21 @@ pub(super) async fn render_command(
     // One registry read for the registration and its plugin's record: the
     // install root (not `reg.base_dir()`, which is `<root>/commands`) and the
     // visibility key the consent entry is filed under.
-    let (reg, plugin) = {
+    let (reg, plugin_root, scope) = {
         let registry = manager.get_plugin_registry().await;
-        let Some(reg) = owned_command(mode, &registry).cloned() else {
+        let Some((reg, record)) = owned_command(mode, &registry) else {
             return Ok(None);
         };
-        let plugin = registry
-            .get_plugin(&reg.plugin_id)
-            .map(|record| (record.root_dir.clone(), record.scope_key.clone()));
-        (reg, plugin)
+        (
+            reg.clone(),
+            record.root_dir.clone(),
+            record.scope_key.clone(),
+        )
     };
     let qualified = reg.qualified_name();
-    let shell: Box<dyn InlineShell> = match (refusal, plugin) {
-        (Some(reason), _) => Box::new(Withheld(reason)),
-        (None, Some((plugin_root, scope))) => Box::new(ConsentedShell {
+    let shell: Box<dyn InlineShell> = match refusal {
+        Some(reason) => Box::new(Withheld(reason)),
+        None => Box::new(ConsentedShell {
             settings_env: manager
                 .plugin_settings_env(&reg.plugin_id, SettingsForm::WithoutSecrets)
                 .await,
@@ -246,11 +249,6 @@ pub(super) async fn render_command(
             cwd,
             consent,
         }),
-        // A registration whose plugin has no record cannot be tied to an
-        // install root or a consent key.
-        (None, None) => Box::new(Withheld(
-            "the plugin that ships this command has no record here",
-        )),
     };
     let rendered = render_registration(&reg, args, Some(&*shell))
         .await
@@ -285,21 +283,31 @@ impl InlineShell for Withheld {
 ///   body, its `model:`, its approved inline commands — whether or not the
 ///   session can see that plugin;
 /// - the registration at the exact key must be a command of that owner,
-///   under that exact qualified name.
+///   under that exact qualified name;
+/// - that plugin must have a record here, and an active one: disabling a
+///   plugin leaves its registrations in place
+///   (`PluginRegistry::disable_plugin`), and `get_skill` answers an exact
+///   key without asking. The record comes back with the registration — the
+///   install root and visibility key its inline commands are consented
+///   under.
 fn owned_command<'r>(
     mode: &serde_json::Value,
     registry: &'r PluginRegistry,
-) -> Option<&'r SkillRegistration> {
+) -> Option<(&'r SkillRegistration, &'r PluginRecord)> {
     let owner = mode.get("owning_plugin")?.as_str()?;
     let skill_id = mode.get("skill_id")?.as_str()?;
     if !skill_id.contains(':') {
         return None;
     }
-    registry.get_skill(skill_id).filter(|reg| {
+    let reg = registry.get_skill(skill_id).filter(|reg| {
         reg.skill_type == SkillType::Command
             && reg.plugin_id == owner
             && reg.qualified_name() == skill_id
-    })
+    })?;
+    let record = registry
+        .get_plugin(&reg.plugin_id)
+        .filter(|record| record.status.is_active())?;
+    Some((reg, record))
 }
 
 /// Render one registration's body with the Claude Code / pi grammar. `@./file`
@@ -457,10 +465,10 @@ impl InlineShell for ConsentedShell {
                  `${{CLAUDE_PLUGIN_ROOT}}/{word}` for its own script]"
             ));
         }
-        if !self
-            .consent
-            .is_approved(&self.plugin_id, &self.scope, &self.plugin_root, cmd)
-        {
+        let approval =
+            self.consent
+                .approved_entry(&self.plugin_id, &self.scope, &self.plugin_root, cmd);
+        let Some(approval) = approval else {
             self.consent.record_pending(
                 &self.plugin_id,
                 &self.scope,
@@ -476,19 +484,16 @@ impl InlineShell for ConsentedShell {
             return Err(format!(
                 "[!`{cmd}` not run: pending operator approval — `aleph hooks list` / `aleph hooks test`]"
             ));
-        }
+        };
         // The key has no event, so a `hooks.json` command with the same text
         // shares it — and an approval given to that hook, reviewed without
         // arguments in its root, does not cover this sender-driven face.
-        let key = ShellHookConsent::fingerprint(&self.plugin_id, project, cmd);
-        if self
-            .consent
-            .find(&key)
-            .is_some_and(|entry| entry.event != INLINE_COMMAND_EVENT)
-        {
+        // Judged on the entry that approved, from the same read.
+        if approval.event != INLINE_COMMAND_EVENT {
             return Err(format!(
                 "[!`{cmd}` not run: its approval was given to a hook with the same text — \
-                 `aleph hooks revoke {key}`, then review it as an inline command]"
+                 `aleph hooks revoke {}`, then review it as an inline command]",
+                approval.fingerprint
             ));
         }
         let Some(cwd) = self.cwd.as_deref() else {
