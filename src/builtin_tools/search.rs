@@ -493,9 +493,10 @@ impl AlephTool for SearchTool {
         self.call_impl(args).await.map_err(Into::into)
     }
 
-    /// Above the global default, below `web_fetch`'s page budget per result:
-    /// with `full_content` set this call carries N page bodies where a fetch
-    /// carries one, so the ceiling is on the call, not on the page.
+    /// Declared, not inherited from the global default, and set below
+    /// `web_fetch`'s page budget: with `full_content` set this call carries N
+    /// page bodies where a fetch carries one, so the ceiling is on the call,
+    /// not on the page.
     fn max_result_tokens(&self) -> Option<usize> {
         Some(8_000)
     }

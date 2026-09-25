@@ -392,7 +392,6 @@ impl UnifiedToolsConfig {
                 // New tools use defaults (not in legacy config)
                 clipboard: None,
                 screen_capture: None,
-                search: None,
             },
             mcp: HashMap::new(),
         };
@@ -487,10 +486,6 @@ pub struct NativeToolsConfig {
     /// Screen capture service configuration
     #[serde(default)]
     pub screen_capture: Option<ScreenCaptureToolConfig>,
-
-    /// Search tool service configuration
-    #[serde(default)]
-    pub search: Option<SearchToolConfig>,
 }
 
 // =============================================================================
@@ -634,40 +629,6 @@ impl Default for ScreenCaptureToolConfig {
             enabled: true,
             max_dimension: default_max_dimension(),
             jpeg_quality: default_jpeg_quality(),
-        }
-    }
-}
-
-/// Search tool configuration (wraps existing `SearchRegistry` as tool)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SearchToolConfig {
-    /// Enable search tool
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Default maximum number of search results
-    #[serde(default = "default_search_tool_max_results")]
-    pub default_max_results: usize,
-
-    /// Default search timeout in seconds
-    #[serde(default = "default_search_tool_timeout_seconds")]
-    pub default_timeout_seconds: u64,
-}
-
-pub const fn default_search_tool_max_results() -> usize {
-    5
-}
-
-pub const fn default_search_tool_timeout_seconds() -> u64 {
-    10
-}
-
-impl Default for SearchToolConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            default_max_results: default_search_tool_max_results(),
-            default_timeout_seconds: default_search_tool_timeout_seconds(),
         }
     }
 }

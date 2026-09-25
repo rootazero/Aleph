@@ -111,6 +111,13 @@ const TOLERATED: &[Tolerated] = &[
         retired: true,
     },
     Tolerated {
+        path: "unified_tools.native.search",
+        why: "retired 2026-09-25 — `SearchToolConfig` (enabled / default_max_results / \
+              default_timeout_seconds) had zero readers; the `search` tool reads the top-level \
+              [search] section",
+        retired: true,
+    },
+    Tolerated {
         path: "profiles.*.cache_strategy",
         why: "retired — prompt caching is decided by the protocol adapters, there is no dial; \
               see src/config/types/profile.rs",
@@ -429,6 +436,24 @@ mod tests {
             entry.retired,
             "the table is inert, so it must be flagged retired (info!), not foreign-owned (debug!)"
         );
+    }
+
+    /// `[unified_tools.native.search]` lost its schema field when it was found
+    /// to have no reader. An operator's file that still carries it must keep
+    /// booting, and must be told "retired", not "reaches no code".
+    #[test]
+    fn the_retired_native_search_table_parses_and_is_not_reported_dead() {
+        let (_config, dead) = deserialize_reporting_dead_keys::<crate::config::Config>(
+            "[unified_tools.native.search]\nenabled = true\ndefault_max_results = 5\n",
+        )
+        .expect("a retired table must still parse: Config has no deny_unknown_fields");
+
+        assert!(
+            dead.is_empty(),
+            "must be reported as retired, not dead: {dead:?}"
+        );
+        let entry = tolerated_entry("unified_tools.native.search").expect("tolerated");
+        assert!(entry.retired);
     }
 
     /// The two foreign-owned entries are only correct while the reader they

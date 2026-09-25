@@ -226,6 +226,15 @@ pub fn chars_for_result_token_budget(budget_tokens: usize) -> usize {
     ((budget_tokens as f64) * CODE_RATIO) as usize
 }
 
+/// The inverse of [`chars_for_result_token_budget`]: the token budget whose
+/// result-space character allowance is `chars`. For a caller whose limit is
+/// stated in characters but whose sizing helper takes a token budget — handing
+/// it the character count instead reads the limit 2.5× too generously.
+#[must_use]
+pub fn result_tokens_for_chars(chars: usize) -> usize {
+    ((chars as f64) / CODE_RATIO) as usize
+}
+
 /// Estimates token count using content-aware ratio detection with an explicit
 /// prose baseline.
 ///

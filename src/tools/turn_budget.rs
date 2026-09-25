@@ -9,10 +9,12 @@
 //! and rewrites the in-flight history entry from full text to the
 //! returned marker.
 //!
-//! Spill order is **LIFO**: the most recently recorded non-persisted
-//! result is the first candidate. Older results in the same turn have
-//! either been processed already or were small enough to stay verbatim,
-//! so dropping them adds little value while costing more recall.
+//! Only the result **just recorded** is ever spilled. It is the one entry the
+//! caller can still rewrite before it is emitted; every earlier result of the
+//! turn is already in the transcript, so "spilling" one of those writes a blob
+//! and saves nothing — and booking its tokens as reclaimed would let the turn
+//! run on as though it were back under budget when it is not. A turn whose
+//! newest result cannot be spilled stays over budget, and says so.
 
 use std::collections::HashMap;
 
@@ -167,7 +169,7 @@ pub struct TurnResult {
     pub already_persisted: bool,
 }
 
-/// Instruction for the caller to evict a recorded result.
+/// Instruction for the caller to evict the result it just recorded.
 #[derive(Debug, Clone)]
 pub struct SpillInstruction {
     pub call_id: String,
@@ -180,12 +182,11 @@ pub struct SpillInstruction {
 
 #[derive(Debug, Default)]
 struct TurnState {
-    /// Stack ordered oldest → newest. Spill scans from the back.
-    results: Vec<TurnResult>,
+    /// Tokens the turn's results occupy in context, after any spill.
     cumulative: usize,
 }
 
-/// LIFO turn-budget tracker. Cheap to `Clone` — wraps an `Arc<Mutex<_>>`.
+/// Per-turn budget tracker. Cheap to `Clone` — wraps an `Arc<Mutex<_>>`.
 #[derive(Debug, Clone)]
 pub struct TurnResultBudget {
     inner: Arc<Mutex<HashMap<TurnId, TurnState>>>,
@@ -214,43 +215,30 @@ impl TurnResultBudget {
         g.entry(id).or_default();
     }
 
-    /// Record a new result; return spill instructions if the cumulative
-    /// total exceeds the budget. Spill order is LIFO over non-persisted
-    /// entries; already-persisted entries are skipped.
+    /// Record a new result; when it takes the turn over budget, return the
+    /// instruction to spill **it** — never an earlier one (see the module doc).
+    /// An already-persisted result (a Layer-2 marker) is not spilled again.
+    ///
+    /// At most one instruction; the `Vec` is the caller's existing shape.
     #[must_use]
     pub fn record(&self, id: &TurnId, result: TurnResult) -> Vec<SpillInstruction> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
-        state.results.push(result);
-
-        let mut instructions = Vec::new();
-        while state.cumulative > self.max_turn_tokens {
-            let idx = state
-                .results
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, r)| !r.already_persisted)
-                .map(|(i, _)| i);
-            let Some(idx) = idx else {
-                break; // Nothing left to spill; remain over budget.
-            };
-            let r = &mut state.results[idx];
-            instructions.push(SpillInstruction {
-                call_id: r.call_id.clone(),
-                tool_name: r.tool_name.clone(),
-                original_text: std::mem::take(&mut r.in_context_text),
-            });
-            // Approximate: spilling the result is expected to reduce its
-            // in-context footprint to ~10 % of the original (the marker
-            // length). Credit 90 % back to the cumulative.
-            let credit = r.tokens_in_context.saturating_mul(9) / 10;
-            state.cumulative = state.cumulative.saturating_sub(credit);
-            r.tokens_in_context = r.tokens_in_context.saturating_sub(credit);
-            r.already_persisted = true;
+        if state.cumulative <= self.max_turn_tokens || result.already_persisted {
+            return Vec::new();
         }
-        instructions
+        // Approximate: spilling the result is expected to reduce its
+        // in-context footprint to ~10 % of the original (the marker length).
+        // Credit 90 % back — a saving this spill actually makes, because the
+        // caller rewrites this result before it is emitted.
+        let credit = result.tokens_in_context.saturating_mul(9) / 10;
+        state.cumulative = state.cumulative.saturating_sub(credit);
+        vec![SpillInstruction {
+            call_id: result.call_id,
+            tool_name: result.tool_name,
+            original_text: result.in_context_text,
+        }]
     }
 
     /// Clear tracking for the given turn. Safe to call on a missing
@@ -370,6 +358,32 @@ mod tests {
         let instr_c3 = b.record(&id, result("c3", 30));
         assert_eq!(instr_c3.len(), 1);
         assert_eq!(instr_c3[0].call_id, "c3");
+    }
+
+    /// T-G6: an earlier result of the turn is already in the transcript, so
+    /// evicting it writes a blob and saves nothing. When the result that tips
+    /// the turn over is itself unspillable (a Layer-2 marker), nothing is
+    /// spilled and no credit is booked — the turn honestly stays over.
+    #[test]
+    fn only_the_just_recorded_result_is_ever_spilled() {
+        let b = TurnResultBudget::new(100);
+        let id = tid(1);
+        b.begin_turn(id);
+        assert!(b.record(&id, result("c1", 90)).is_empty());
+        let mut marker = result("c2", 40);
+        marker.already_persisted = true;
+
+        let instr = b.record(&id, marker);
+
+        assert!(
+            instr.is_empty(),
+            "c1 is already emitted; spilling it saves nothing: {instr:?}"
+        );
+        assert_eq!(
+            b.cumulative(&id),
+            130,
+            "no credit may be booked for a spill that did not happen"
+        );
     }
 
     #[test]
