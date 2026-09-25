@@ -1436,7 +1436,10 @@ fn build_context_triple(
         // count is per child.
         .with_cheap_provider(cheap_summary.cloned()),
     );
-    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
+        cfg,
+        llm.as_ref(),
+    ));
     (Some(budget), Some(compactor), Some(pipeline))
 }
 

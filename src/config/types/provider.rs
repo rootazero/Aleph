@@ -28,6 +28,33 @@ pub enum CacheRetention {
 }
 
 // =============================================================================
+// ServerContextEditing
+// =============================================================================
+
+/// Anthropic server-side context editing (beta `context-management-2025-06-27`):
+/// the API clears old tool results before the prompt reaches the model, with
+/// its own defaults (clear once input passes 100k tokens, keep the 3 most
+/// recent tool uses). Default off.
+///
+/// Honoured only where the request can carry it — the first-party Anthropic
+/// host, not on the OAuth identity path; a provider that enables it anywhere
+/// else logs a warning at construction instead of silently doing nothing. When
+/// it is honoured, Aleph's own passes that rewrite old tool results stand down
+/// for runs on this provider (one problem, one answer).
+///
+/// Known costs, documented rather than modelled: the local pressure estimate
+/// keeps counting the tool results the server has already cleared, so on a
+/// large window local compaction can fire earlier than it needs to; and the
+/// stand-down is decided per run, so a failover onto a target that does not
+/// clear keeps the local passes off for the rest of that run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ServerContextEditing {
+    /// Send `context_management.edits: [clear_tool_uses]`.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+// =============================================================================
 // ResponseFormat
 // =============================================================================
 
@@ -243,6 +270,10 @@ pub struct ProviderConfig {
     /// None = field omitted (thinking disabled).
     #[serde(default)]
     pub effort: Option<String>,
+
+    /// Server-side context editing (Anthropic). See [`ServerContextEditing`].
+    #[serde(default)]
+    pub server_context_editing: ServerContextEditing,
 }
 
 pub fn default_provider_color() -> String {
@@ -326,6 +357,7 @@ impl ProviderConfig {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: ServerContextEditing::default(),
         }
     }
 }
@@ -333,6 +365,60 @@ impl ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R8: the setting is reachable through the surface the model edits
+    /// config with (`self_config` → `ConfigPatcher`, a deep-merge through the
+    /// whole serde type), survives the write to disk, and survives a later
+    /// edit of an unrelated field of the same provider.
+    #[tokio::test]
+    async fn server_context_editing_round_trips_through_the_config_patcher() {
+        use crate::config::backup::ConfigBackup;
+        use crate::config::patcher::{ConfigPatcher, PatchRequest};
+        use crate::config::Config;
+
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("config.toml");
+        Config::default().save_to_file(&path).expect("seed config");
+        let shared = crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(Config::default()));
+        let patcher = ConfigPatcher::new(
+            shared.clone(),
+            path.clone(),
+            ConfigBackup::new(dir.join("backups"), 10),
+        );
+        patcher.record_mtime().await;
+
+        let patch = |value: serde_json::Value| PatchRequest {
+            path: "providers.claude".to_string(),
+            patch: value,
+            health_check: false,
+            dry_run: false,
+        };
+        let enabled = |config: &Config| config.providers["claude"].server_context_editing.enabled;
+
+        let applied = patcher
+            .apply(patch(serde_json::json!({
+                "protocol": "anthropic",
+                "models": ["claude-sonnet-4-6"],
+                "server_context_editing": { "enabled": true },
+            })))
+            .await
+            .expect("patch");
+        assert!(applied.success);
+        assert!(enabled(&*shared.read().await), "in memory");
+        assert!(
+            enabled(&Config::load_from_file(&path).expect("reload")),
+            "on disk"
+        );
+
+        patcher
+            .apply(patch(serde_json::json!({ "timeout_seconds": 90 })))
+            .await
+            .expect("unrelated patch");
+        let reloaded = Config::load_from_file(&path).expect("reload");
+        assert_eq!(reloaded.providers["claude"].timeout_seconds, 90);
+        assert!(enabled(&reloaded), "an unrelated edit must not turn it off");
+    }
 
     #[test]
     fn test_protocol_default() {
@@ -381,6 +467,7 @@ mod tests {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -419,6 +506,7 @@ mod tests {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         };
         assert_eq!(config.protocol(), "openai");
     }

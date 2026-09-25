@@ -620,6 +620,14 @@ impl ProtocolAdapter for AnthropicProtocol {
             }
         }
 
+        // Server-side context editing: only the strategy type, so the API's own
+        // defaults (trigger, keep) apply rather than a second copy of them.
+        let context_editing = Self::server_context_editing_applies(config, &policy.capabilities);
+        if context_editing {
+            body["context_management"] =
+                serde_json::json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+        }
+
         // Resolve prompt-cache retention for this request. An endpoint that
         // does not advertise `supports_cache_control` is treated exactly like
         // `cache_retention = "off"`: both mean "no cache_control anywhere on
@@ -703,6 +711,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             actual_model,
             Some(api_key),
             extended_cache_ttl,
+            context_editing,
             &policy.capabilities,
         );
         let mut req = self
@@ -947,6 +956,14 @@ impl ProtocolAdapter for AnthropicProtocol {
 
     fn name(&self) -> &'static str {
         "anthropic"
+    }
+
+    fn clears_tool_results_server_side(&self, config: &ProviderConfig) -> bool {
+        let policy =
+            crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
+                config.base_url.as_deref(),
+            );
+        Self::server_context_editing_applies(config, &policy.capabilities)
     }
 
     /// Forgive dotted variants of Claude model ids.

@@ -304,17 +304,32 @@ impl PreflightPipeline {
 /// bodies before the pruner and the image stripper see them. The three stages
 /// are commutative for correctness (none touches the others' targets); the
 /// order is for log readability and minor cache wins.
+///
+/// `llm` is the run's provider. When it asks the server to clear old tool
+/// results ([`AiProvider::clears_tool_results_server_side`]), the two stages
+/// that rewrite old tool results — `FileOpSupersedeStage` and
+/// `ToolResultPruningStage` — are left out: one problem, one answer. Decided
+/// once per run, so a failover onto a target that does not clear keeps them
+/// off for the rest of that run (a documented gap).
+///
+/// [`AiProvider::clears_tool_results_server_side`]: crate::providers::AiProvider::clears_tool_results_server_side
 #[must_use]
-pub fn default_pipeline(cfg: &super::ContextBudgetConfig) -> PreflightPipeline {
+pub fn default_pipeline(
+    cfg: &super::ContextBudgetConfig,
+    llm: &dyn crate::providers::AiProvider,
+) -> PreflightPipeline {
     use super::cheap_passes::{
         FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
     };
     let preventive_floor = cfg.preventive_floor();
-    let stages: Vec<Box<dyn PreflightStage>> = vec![
-        Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
-        Box::new(ToolResultPruningStage::default()),
-        Box::new(HistoricalImageStrippingStage),
-    ];
+    let mut stages: Vec<Box<dyn PreflightStage>> = Vec::new();
+    if !llm.clears_tool_results_server_side() {
+        stages.push(Box::new(
+            FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor),
+        ));
+        stages.push(Box::new(ToolResultPruningStage::default()));
+    }
+    stages.push(Box::new(HistoricalImageStrippingStage));
     PreflightPipeline::new(stages)
         .with_min_pressure_ratio(preventive_floor)
         .with_cache_stability(
@@ -714,5 +729,87 @@ mod tests {
 
         assert_eq!(freed, 0);
         assert!(msgs.iter().all(|m| rendered(m).starts_with("big")));
+    }
+
+    /// A provider that answers the server-side clearing question with a
+    /// fixed value; nothing else about it is used.
+    struct Clearing(bool);
+    impl crate::providers::AiProvider for Clearing {
+        fn process<'a>(
+            &'a self,
+            _p: crate::providers::adapter::RequestPayload<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            unreachable!("the pipeline never calls the provider")
+        }
+        fn name(&self) -> &str {
+            "clearing"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+        fn clears_tool_results_server_side(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// U3, one problem one answer: when the run's provider clears old tool
+    /// results server-side, the production pipeline rewrites none of them —
+    /// and when it does not, the same history is pruned (the positive half,
+    /// so a pipeline that never prunes cannot pass).
+    #[tokio::test]
+    async fn a_provider_that_clears_server_side_stands_the_tool_result_passes_down() {
+        let cfg = super::super::ContextBudgetConfig {
+            token_budget: 10_000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 3.5,
+            fresh_tail_count: 2,
+            summarizer_input_budget: 48_000,
+            circuit_breaker_max: 3,
+            max_splits: 3,
+        };
+        let history = || -> Vec<UnifiedMessage> {
+            (0..12)
+                .map(|i| {
+                    UnifiedMessage::tool_result_json(
+                        format!("call-{i}"),
+                        "bash",
+                        serde_json::Value::String(format!("line {i}\n").repeat(400)),
+                        false,
+                    )
+                })
+                .collect()
+        };
+        let pressure = make_pressure(0.95);
+
+        let mut local = history();
+        let freed = default_pipeline(&cfg, &Clearing(false))
+            .run(&mut local, &pressure, 2)
+            .await;
+        assert!(freed > 0, "precondition: this history is prunable locally");
+
+        let mut server = history();
+        let freed = default_pipeline(&cfg, &Clearing(true))
+            .run(&mut server, &pressure, 2)
+            .await;
+        assert_eq!(freed, 0);
+        assert_eq!(
+            server
+                .iter()
+                .map(UnifiedMessage::transcript_text)
+                .collect::<Vec<_>>(),
+            history()
+                .iter()
+                .map(UnifiedMessage::transcript_text)
+                .collect::<Vec<_>>(),
+            "no tool result may be rewritten when the server clears them"
+        );
     }
 }

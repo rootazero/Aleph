@@ -756,7 +756,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Stage list + preventive-band gate live in ONE place
                 // (`preflight::default_pipeline`) so the subagent spawner builds
                 // the identical pipeline instead of re-deriving it.
-                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
+                    cfg,
+                    llm.as_ref(),
+                ));
                 (Some(budget), Some(compactor), Some(pipeline))
             }
             None => (None, None, None),

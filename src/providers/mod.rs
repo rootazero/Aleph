@@ -327,6 +327,16 @@ pub trait AiProvider: Send + Sync {
         reasoning_replay::ReasoningReplay::for_target(&self.protocol(), None, model)
     }
 
+    /// Whether this provider's calls ask the server to clear old tool results
+    /// (Anthropic server-side context editing), so the local passes that
+    /// rewrite old tool results must stand down for runs on it — one problem,
+    /// one answer. `HttpProvider` answers from its adapter; wrappers delegate
+    /// to their live primary, like [`AiProvider::reasoning_replay`]. Default
+    /// `false`.
+    fn clears_tool_results_server_side(&self) -> bool {
+        false
+    }
+
     /// Downcast to `HttpProvider` for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for `HttpProvider` instances.

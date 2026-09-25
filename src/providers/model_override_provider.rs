@@ -114,6 +114,10 @@ impl AiProvider for ModelOverrideProvider {
     ) -> crate::providers::reasoning_replay::ReasoningReplay {
         self.inner.reasoning_replay(Some(&self.model))
     }
+
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.inner.clears_tool_results_server_side()
+    }
 }
 
 #[cfg(test)]
