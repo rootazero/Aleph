@@ -198,6 +198,100 @@ pub(crate) async fn current_page_block(
     manager.check_url(&url).await.err().map(|v| v.to_string())
 }
 
+/// Pre-dispatch staleness check for snapshot refs (B4).
+///
+/// The cdp backend's `resolve_target` already refuses a stale ref before any
+/// WIRE call; this check refuses it before any SIDE EFFECT at the tool layer
+/// — before the dispatch, before the effect probe's one-shot listener is
+/// installed — and adds one signal the backend does not have: **URL drift**
+/// (`TabRegistry::last_url`, T1) against the tab's currently observed URL. A
+/// ref minted against `last_url` whose tab now shows a different URL is the
+/// `StaleReason::Navigated` case made visible one layer up (an SPA
+/// `pushState` changes the URL without changing the loader, so
+/// `RefTable::resolve` alone answers `Ok` for it).
+///
+/// **Honest asymmetry, stated:** only the cdp backend owns a `RefTable`, so
+/// on the two legacy drivers this check is a no-op and their refs keep the
+/// dispatch-time behaviour they always had. The capability row
+/// `ref_precheck` (`browser::engine::capability`) says the same thing to the
+/// model.
+///
+/// Fail-closed means: refuse when we KNOW the ref is stale. What we do not
+/// know is passed through to the dispatch, which owns the authoritative
+/// error for it (an unknown tab, a non-minted ref string — the backend's own
+/// message for a CSS selector is better than anything this layer could say).
+pub(crate) async fn precheck_ref(
+    manager: &ProfileManager,
+    backend: &Arc<dyn BrowserBackend>,
+    profile: &str,
+    tab_id: &str,
+    ref_id: &str,
+) -> Result<(), BrowserError> {
+    use crate::browser::page_state::refs::is_minted_shape;
+    // Not a ref this table mints — maybe a CSS selector for the other driver.
+    // The backend's own refusal names that distinction; do not pre-empt it.
+    if !is_minted_shape(ref_id) {
+        return Ok(());
+    }
+    let Some(cdp) = backend
+        .as_ref()
+        .as_any()
+        .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+    else {
+        // Legacy drivers own no RefTable: skip, don't fake a verdict (判据 §8).
+        return Ok(());
+    };
+    // `handle()` is deliberately non-launching; after `make_backend_and_tab*`
+    // succeeded, the engine exists, so this cannot become the observer that
+    // creates the browser it was checking on.
+    let handle = cdp.handle().await?;
+    let key = resolve_caller_profile(manager, profile)?;
+    // Read the registry BEFORE locking the tab table: two locks, one order.
+    let last_url = manager.tab_registry().last_url(&key, tab_id);
+    let tabs = handle.tabs.lock().await;
+    let Some(entry) = tabs.entries.get(tab_id) else {
+        // The tab question has its own structured answers (TabGone /
+        // TabNotFound) at dispatch; the precheck speaks only about refs.
+        return Ok(());
+    };
+    precheck_ref_entry(&entry.refs, last_url.as_deref(), &entry.url, ref_id)
+}
+
+/// The pure half of [`precheck_ref`], split out so the verdicts are testable
+/// without a live engine: a hand-built `RefTable` is the whole fixture.
+fn precheck_ref_entry(
+    refs: &crate::browser::page_state::RefTable,
+    last_url: Option<&str>,
+    current_url: &str,
+    ref_id: &str,
+) -> Result<(), BrowserError> {
+    use crate::browser::error::StaleReason;
+    use crate::browser::page_state::refs::RefId;
+    if let Err(reason) = refs.resolve(&RefId(ref_id.to_string())) {
+        // A minted-shape ref this table never issued — e.g. minted by a
+        // DIFFERENT profile's snapshot — resolves to `Unknown`, and that is
+        // the answer it gets: not a panic, not a click on nothing (Review
+        // Focus #3).
+        return Err(BrowserError::StaleRef {
+            ref_id: ref_id.to_string(),
+            reason,
+        });
+    }
+    // The resolve said "live", but the tab's URL moved since the registry
+    // last recorded it — an in-page navigation (pushState/hash) that no new
+    // loader announced. Both URLs must be known to say "drifted"; one
+    // missing is "I do not know", which is not a refusal (判据 §8).
+    if let Some(last) = last_url {
+        if last != current_url {
+            return Err(BrowserError::StaleRef {
+                ref_id: ref_id.to_string(),
+                reason: StaleReason::Navigated,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Get the active tab from the backend, or return an error if none are open.
 ///
 /// "Which tab is active" is answered in exactly one place —
@@ -1095,11 +1189,10 @@ mod tests {
     /// here.
     #[test]
     fn recovery_registry_entries_name_real_tools() {
-        let names: std::collections::HashSet<&str> =
-            crate::executor::BUILTIN_TOOL_DEFINITIONS
-                .iter()
-                .map(|d| d.name)
-                .collect();
+        let names: std::collections::HashSet<&str> = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name)
+            .collect();
         assert!(!names.is_empty(), "the derivation read an empty table");
         for entry in recovery::REGISTRY {
             assert!(
@@ -1126,12 +1219,207 @@ mod tests {
             .lines()
             .find(|l| l.starts_with(recovery::RECOVERY_LINE_PREFIX))
             .unwrap_or_else(|| panic!("no recovery trailer in: {out}"));
-        let v: serde_json::Value = serde_json::from_str(
-            &line[recovery::RECOVERY_LINE_PREFIX.len()..],
-        )
-        .expect("trailer is JSON");
+        let v: serde_json::Value =
+            serde_json::from_str(&line[recovery::RECOVERY_LINE_PREFIX.len()..])
+                .expect("trailer is JSON");
         assert_eq!(v["category"], "stale_ref");
         assert!(v["next_actions"][0]["tool"].as_str().is_some());
+    }
+
+    // ---------------------------------------------------------------
+    // Ref pre-dispatch precheck (B4): verdicts, drift, and wiring order.
+    // ---------------------------------------------------------------
+
+    fn ref_table_with_live_and_retired() -> (crate::browser::page_state::RefTable, String, String) {
+        use crate::browser::page_state::refs::RefKey;
+        let mut table = crate::browser::page_state::RefTable::new();
+        let key = |node: u64| RefKey {
+            frame_id: "F".into(),
+            loader_id: "L1".into(),
+            backend_node_id: node,
+        };
+        table.reset_for_document("L1");
+        table.mint(&key(1), 1); // a live ref of the retired document
+        let retired = table.mint(&key(2), 1).0;
+        table.reset_for_document("L2"); // navigation retires `retired`
+        let live2 = table.mint(&key(1), 2).0;
+        (table, retired, live2)
+    }
+
+    /// A stale ref is refused before any page side effect. The dispatch
+    /// itself is the cdp backend's business; what this layer pins is the
+    /// VERDICT — and the wiring-order pin below pins that the verdict is
+    /// consulted before the dispatch call in each ref-taking tool.
+    #[test]
+    fn precheck_refuses_a_retired_ref_as_navigated() {
+        let (table, retired, live) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, Some("https://a/"), "https://a/", &retired)
+            .expect_err("a retired ref must be refused");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Navigated,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        // The live ref of the CURRENT document passes.
+        precheck_ref_entry(&table, Some("https://a/"), "https://a/", &live)
+            .expect("a live ref passes");
+    }
+
+    /// Review Focus #3: a minted-shape ref this profile's table never issued
+    /// (minted by a DIFFERENT profile's snapshot) is `StaleReason::Unknown` —
+    /// not a panic, not a click on nothing.
+    #[test]
+    fn cross_profile_ref_is_unknown_not_a_panic() {
+        let (table, _, _) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, None, "https://a/", "e999")
+            .expect_err("a foreign ref must be refused");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Unknown,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        // …and the recovery contract reads it as a stale ref, naming
+        // browser_snapshot as the next move.
+        let recovery = recovery::recovery_for(&err);
+        assert_eq!(
+            recovery.category,
+            recovery::BrowserFailureCategory::StaleRef
+        );
+        assert!(recovery
+            .next_actions
+            .iter()
+            .any(|a| a.tool == "browser_snapshot"));
+    }
+
+    /// The drift signal: resolve says "live" (same loader — an SPA
+    /// `pushState` changed the URL), but the tab's URL no longer matches what
+    /// the registry recorded, so the ref cannot be trusted to mean what the
+    /// snapshot meant. Refused as `Navigated`, and the recovery message says
+    /// the page navigated and names `browser_snapshot`.
+    #[test]
+    fn url_drift_since_snapshot_is_named() {
+        let (table, _, live) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, Some("https://a/"), "https://b/", &live)
+            .expect_err("a drifted URL must refuse even a resolving ref");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Navigated,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        let msg = backend_error_text(&ProfileManager::new(BrowserSystemConfig::default()), &err);
+        assert!(
+            msg.contains("navigated"),
+            "message must name the drift: {msg}"
+        );
+        assert!(
+            msg.contains("browser_snapshot"),
+            "message must name the remedy: {msg}"
+        );
+        // One side unknown is "I do not know", not drift (判据 §8).
+        precheck_ref_entry(&table, None, "https://b/", &live).expect("no recorded URL: pass");
+    }
+
+    /// A string that was never a ref of ours is not the precheck's question.
+    /// The pure half answers only what the table knows — `#go` is `Unknown`
+    /// there — and the ASYNC half's shape gate passes it through before the
+    /// table is ever asked, so the backend's own CSS-selector refusal keeps
+    /// its job (the gate is the first line of `precheck_ref`, source-pinned).
+    #[test]
+    fn the_shape_gate_passes_non_minted_strings_before_any_table_lookup() {
+        let (table, _, _) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, None, "https://a/", "#go")
+            .expect_err("to the bare table, a non-ref is Unknown");
+        assert!(matches!(
+            err,
+            BrowserError::StaleRef {
+                reason: crate::browser::error::StaleReason::Unknown,
+                ..
+            }
+        ));
+        let src =
+            crate::utils::source_scan::production_prefix(&include_str!("mod.rs").replace('\r', ""));
+        let fn_at = src
+            .find("async fn precheck_ref(")
+            .expect("precheck_ref exists");
+        let body = &src[fn_at..];
+        let gate = body
+            .find("is_minted_shape(ref_id)")
+            .expect("the shape gate");
+        let table = body.find("downcast_ref").expect("the backend downcast");
+        assert!(
+            gate < table,
+            "the shape gate must run before the table is reached"
+        );
+    }
+
+    /// Honest asymmetry: off the cdp backend the precheck is a no-op (legacy
+    /// drivers own no RefTable), so a stale-looking ref on a FakeBackend
+    /// passes through to the dispatch rather than being judged by a table
+    /// that does not exist (判据 §8 — a skipped check must not fabricate a
+    /// verdict in either direction).
+    #[tokio::test]
+    async fn precheck_skips_backends_without_a_ref_table() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let backend: Arc<dyn BrowserBackend> = Arc::new(
+            crate::browser::testkit::FakeBackend::new(None)
+                .with_tabs_text("1: https://a/ [selected]"),
+        );
+        precheck_ref(&manager, &backend, "default", "1", "e999")
+            .await
+            .expect("no RefTable → no verdict, the dispatch owns the answer");
+    }
+
+    /// The five ref-taking tools must consult the precheck AFTER the
+    /// backend+tab resolution and BEFORE the dispatch — a check that runs
+    /// after the side effect is not a check. Source-pinned per tool, in the
+    /// shape `the_guarded_path_lists_tabs_exactly_once` already established:
+    /// a FakeBackend test cannot see the order, because the precheck is a
+    /// deliberate no-op off the cdp backend (honest asymmetry).
+    #[test]
+    fn ref_tools_precheck_before_they_dispatch() {
+        for (tool, src, dispatch) in [
+            ("click", include_str!("click.rs"), ".click(&tab_id"),
+            (
+                "type_text",
+                include_str!("type_text.rs"),
+                ".type_text(&tab_id",
+            ),
+            (
+                "fill_form",
+                include_str!("fill_form.rs"),
+                ".fill_form(&tab_id",
+            ),
+            ("select", include_str!("select.rs"), ".select(&tab_id"),
+            ("hover", include_str!("hover.rs"), ".hover(&tab_id"),
+        ] {
+            let prod = crate::utils::source_scan::production_prefix(&src.replace('\r', ""));
+            let precheck = prod
+                .find("precheck_ref(")
+                .unwrap_or_else(|| panic!("{tool} never calls precheck_ref"));
+            let dispatch_at = prod
+                .find(dispatch)
+                .unwrap_or_else(|| panic!("{tool} no longer dispatches via `{dispatch}`"));
+            assert!(
+                precheck < dispatch_at,
+                "{tool}: precheck_ref runs after the dispatch — the side effect \
+                 would already be spent"
+            );
+        }
     }
 
     // ---------------------------------------------------------------

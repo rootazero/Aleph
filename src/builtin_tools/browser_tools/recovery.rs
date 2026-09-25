@@ -479,7 +479,10 @@ mod tests {
             reason: StaleReason::Navigated,
         };
         let out = attach("ref e7 is stale".to_string(), &err);
-        assert!(out.starts_with("ref e7 is stale"), "error prose first: {out}");
+        assert!(
+            out.starts_with("ref e7 is stale"),
+            "error prose first: {out}"
+        );
         let line = out
             .lines()
             .find(|l| l.starts_with(RECOVERY_LINE_PREFIX))

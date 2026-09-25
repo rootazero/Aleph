@@ -623,6 +623,7 @@ pub(crate) mod test_support {
             pdf: Cap::Supported,
             insert_text: Cap::Supported,
             effect_probe: Cap::Supported,
+            ref_precheck: Cap::Supported,
             measured_on: "test fixture",
         }
     }
