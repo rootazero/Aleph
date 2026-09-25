@@ -541,6 +541,12 @@ marketplace 仓」「manifest 坏了」，只有第一种值得继续敲字。�
 `installable` + `unavailable_reason`，来源是 `PluginSearchResult::installable_path`
 ——**install 自己执行的那个谓词**，不是渲染端对 source 枚举的第二次解读。
 
+**marketplace 条目的 `source` 对象也只有一个读者（2026-09-20）**：判别键在磁盘上拼作 `source.source`
+（`claude-plugins-official` 当天的 310 条里 258 条对象形全是这个拼法，0 条 `type`），在官方文档里拼作
+`source.type`。两种拼法都进 `MarketplacePluginSource::external_kind()`（`marketplace/types.rs`）——先读
+`source` 再读 `type`——而不是各建一个 serde 字段：对象形本来就不逐字段建模（五个无消费者的 struct，R10），
+拒绝消息引用的那个词才是唯一要读的东西。
+
 ---
 
 ## 模型面：`plugin_manage` 工具
