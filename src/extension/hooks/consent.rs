@@ -991,7 +991,9 @@ fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Optio
 /// What a command writes to (an output redirection's target) and a URL are
 /// not words a script can be: `2>/dev/null`, `> out/log` and `https://…`
 /// name nothing that runs. What it reads from (`<x.sh`) can be, and is judged
-/// by its target ([`redirection`]).
+/// by its target ([`redirection`]). A redirection is recognised on the word
+/// as written, before quotes are removed: a quoted `'>'` or `"2>"` is an
+/// argument the shell passes on, and the word after it is judged.
 fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut writes_to_next = false;
@@ -1000,21 +1002,22 @@ fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> 
         if std::mem::take(&mut writes_to_next) {
             continue;
         }
-        // Anything with a glob or a variable nobody here can resolve is not a
-        // stable path, so it is dropped entirely.
-        let Some(word) = context.expand(raw) else {
-            continue;
-        };
-        let candidate = match redirection(&word) {
+        let written = match redirection(raw) {
             Redirection::Writes { target_follows } => {
                 writes_to_next = target_follows;
                 continue;
             }
             Redirection::Reads(source) => source,
-            Redirection::Not => word.as_str(),
+            Redirection::Not => raw,
         };
-        if !candidate.is_empty() && !is_url(candidate) {
-            tokens.push(candidate.to_string());
+        // Anything with a glob or a variable nobody here can resolve is not a
+        // stable path, so it is dropped entirely — and so is the empty
+        // source of a `<` written apart from its target.
+        let Some(candidate) = context.expand(written) else {
+            continue;
+        };
+        if !is_url(&candidate) {
+            tokens.push(candidate);
         }
     }
 
@@ -1276,6 +1279,24 @@ mod tests {
         );
         let written = format!("date >{}/last-run", root.path().display());
         assert_eq!(script_path_from_command(&written, &context), None);
+    }
+
+    /// A redirection is recognised on the word as written: a quoted `'>'` or
+    /// `"2>"` is an argument the shell passes on, so the word after it is
+    /// judged — here a relative script, refused — instead of being skipped as
+    /// a write target. Unquoted, the operator still writes.
+    #[test]
+    fn a_quoted_redirection_operator_is_an_argument() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let relative = |command: &str| {
+            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+        };
+        assert_eq!(
+            relative(r#"bash -c 'sh "$1"' '>' ./x.sh"#),
+            Some("./x.sh".into())
+        );
+        assert_eq!(relative(r#"echo "2>" ./x.sh"#), Some("./x.sh".into()));
+        assert_eq!(relative("echo hi > ./x.sh"), None);
     }
 
     /// Recording under `Global` is exactly how every entry looked before the
