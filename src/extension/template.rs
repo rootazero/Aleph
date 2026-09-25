@@ -69,8 +69,12 @@ const ARGUMENTS_VAR: &str = "ARGUMENTS";
 /// settings live in the daemon's environment, and whoever sends the
 /// `/command` picks the arguments of a command whose output the model reads
 /// (`` !`printenv $1` ``). An ssh agent socket is a credential channel too and
-/// is not inherited. A proxy URL can carry a credential; it is inherited
-/// because an inline command runs only for an operator, whose network it is.
+/// is not inherited; nor is `XDG_RUNTIME_DIR`, the directory of the user's
+/// control sockets — its `bus` is where dbus falls back to without
+/// `DBUS_SESSION_BUS_ADDRESS`, and it reaches the keyring (Secret Service)
+/// and `systemctl --user`. A proxy URL can carry a credential; it is
+/// inherited because an inline command runs only for an operator, whose
+/// network it is.
 const INHERITED_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -89,12 +93,11 @@ const INHERITED_ENV: &[&str] = &[
     "LC_MONETARY",
     "LC_NUMERIC",
     "LC_TIME",
-    // XDG base directories.
+    // XDG base directories — not `XDG_RUNTIME_DIR` (see above).
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
-    "XDG_RUNTIME_DIR",
     "XDG_CONFIG_DIRS",
     "XDG_DATA_DIRS",
     // Network: proxies (both spellings programs read) and private CAs.
@@ -1254,7 +1257,8 @@ mod tests {
     /// S4. The daemon's environment does not reach an inline command: a
     /// variable only the daemon has (where its provider keys and bot tokens
     /// live) is absent — and so is an `LC_` name that is no locale category
-    /// (N7) — while what a shell needs — `PATH` — is inherited as the
+    /// (N7), and the control-socket directory `XDG_RUNTIME_DIR` (N8-a) —
+    /// while what a shell needs — `PATH` — is inherited as the
     /// daemon's own value (a shell started without one may set a default of
     /// its own, so "some PATH" would prove nothing), and so is a proxy (N8).
     #[tokio::test]
@@ -1279,6 +1283,8 @@ mod tests {
             // locale categories are inherited.
             ("LC_SMUGGLED_TOKEN", "from-the-daemon"),
             ("HTTPS_PROXY", "http://proxy.test:3128"),
+            // Where the user's dbus / keyring / `systemctl --user` sockets live.
+            ("XDG_RUNTIME_DIR", "/run/user/test"),
         ];
         let _sentinel = Sentinel(
             set.iter()
@@ -1290,7 +1296,7 @@ mod tests {
         }
         let cwd = TempDir::new().unwrap();
         let out = inline_shell_command(
-            r#"printf '%s|%s|%s|%s' "${ALEPH_TEST_SECRET-unset}" "${LC_SMUGGLED_TOKEN-unset}" "${HTTPS_PROXY-unset}" "$PATH""#,
+            r#"printf '%s|%s|%s|%s|%s' "${ALEPH_TEST_SECRET-unset}" "${LC_SMUGGLED_TOKEN-unset}" "${XDG_RUNTIME_DIR-unset}" "${HTTPS_PROXY-unset}" "$PATH""#,
             &InlineArgs {
                 raw: "",
                 positional: &[],
@@ -1306,7 +1312,7 @@ mod tests {
         let path = std::env::var("PATH").expect("the test process has a PATH");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            format!("unset|unset|http://proxy.test:3128|{path}")
+            format!("unset|unset|unset|http://proxy.test:3128|{path}")
         );
     }
 
