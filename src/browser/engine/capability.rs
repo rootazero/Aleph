@@ -114,6 +114,18 @@ pub struct EngineCapabilities {
     /// state to persist across those two calls, and its synthetic
     /// `Input.dispatch*` events to reach page-installed listeners.
     pub effect_probe: Cap,
+    /// `browser_click`, `browser_type`, `browser_fill_form`, `browser_select`
+    /// and `browser_hover` — the pre-dispatch ref staleness check
+    /// (`browser_tools::precheck_ref`): a pure lookup against the cdp
+    /// backend's per-tab `RefTable` plus the tab registry's URL-drift signal.
+    ///
+    /// Engine-agnostic by construction: the check reads Aleph's own tab state
+    /// and sends NO round-trip to the engine, so there is nothing per-engine
+    /// to measure and both engines are `Supported`. The honest asymmetry is
+    /// one level up, at the DRIVER: the two legacy drivers own no `RefTable`,
+    /// so the check skips them (a skip, not a pass) — and this engine-keyed
+    /// table cannot say so, which is why the doc does.
+    pub ref_precheck: Cap,
     /// The build each row above was measured against. A capability claim with
     /// no measurement date is a list that expires without telling anyone.
     pub measured_on: &'static str,
@@ -124,13 +136,14 @@ pub struct EngineCapabilities {
 /// being described, serialised or falsified, so Task 16's
 /// `cap_fields_covers_every_cap_typed_field_of_the_struct` derives the expected
 /// set from this file's own source (判据 §3).
-pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 6] = [
+pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 7] = [
     ("js_dialogs", |c| c.js_dialogs),
     ("drag", |c| c.drag),
     ("file_upload", |c| c.file_upload),
     ("pdf", |c| c.pdf),
     ("insert_text", |c| c.insert_text),
     ("effect_probe", |c| c.effect_probe),
+    ("ref_precheck", |c| c.ref_precheck),
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
@@ -212,6 +225,9 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // (判据 §8); `qa/browser_dual`'s `caps` stage is the expiry check that
     // re-asks the question against a real binary.
     effect_probe: Cap::Unsupported,
+    // A pure lookup against Aleph's own per-tab `RefTable` — no engine
+    // round-trip, so nothing to measure per engine (see the field doc).
+    ref_precheck: Cap::Supported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -245,6 +261,8 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     // 152/153 rely on the first; every `browser_click` relies on the
     // second). `qa/browser_dual`'s `caps` stage is the expiry check.
     effect_probe: Cap::Supported,
+    // Engine-agnostic: a local table read, no wire call (see the field doc).
+    ref_precheck: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
     // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
@@ -398,7 +416,7 @@ mod tests {
     /// — are both unmeasured on that engine. An unknown may not be spent as
     /// a permission (判据 §8), so obscura's row is `Unsupported` until a real
     /// binary answers them.
-    const NOT_PROBED: [(&str, &str); 2] = [
+    const NOT_PROBED: [(&str, &str); 3] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
@@ -410,6 +428,12 @@ mod tests {
             "no obscura binary on the implementing machine; window-global persistence \
              across Runtime.evaluate calls and listener delivery of synthetic Input \
              events are both unmeasured on that engine (判据 §8: fail-closed)",
+        ),
+        (
+            "ref_precheck",
+            "no engine round-trip to probe: the check is a pure lookup against the cdp \
+             backend's per-tab RefTable plus the tab registry's URL-drift signal, so the \
+             wire matrix has no label that could decide it",
         ),
     ];
 
@@ -542,6 +566,13 @@ mod tests {
             ("effect_probe", "browser_click"),
             ("effect_probe", "browser_type"),
             ("effect_probe", "browser_fill_form"),
+            // The precheck guards the five ref-taking verbs; the doc must
+            // name all five for the same reason.
+            ("ref_precheck", "browser_click"),
+            ("ref_precheck", "browser_type"),
+            ("ref_precheck", "browser_fill_form"),
+            ("ref_precheck", "browser_select"),
+            ("ref_precheck", "browser_hover"),
         ] {
             assert!(
                 CAP_FIELDS.iter().any(|(n, _)| *n == name),

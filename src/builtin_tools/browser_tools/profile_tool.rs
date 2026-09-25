@@ -81,7 +81,7 @@ impl AlephTool for BrowserProfileTool {
                             success: false,
                             profiles: None,
                             state: None,
-                            message: Some(e.to_string()),
+                            message: Some(super::backend_error_text(&self.manager, &e)),
                         });
                     }
                 };
@@ -117,7 +117,7 @@ impl AlephTool for BrowserProfileTool {
                             success: false,
                             profiles: None,
                             state: None,
-                            message: Some(e.to_string()),
+                            message: Some(super::backend_error_text(&self.manager, &e)),
                         });
                     }
                 };

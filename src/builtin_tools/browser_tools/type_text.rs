@@ -111,23 +111,38 @@ impl AlephTool for BrowserTypeTool {
         }
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.type_text(&tab_id, target, &args.text).await {
-                Ok(()) => Ok(BrowserTypeOutput {
-                    success: true,
-                    message: Some(format!(
-                        "Typed {} chars in profile '{}'",
-                        args.text.chars().count(),
-                        args.profile
-                    )),
-                }),
-                Err(e) => Ok(BrowserTypeOutput {
-                    success: false,
-                    message: Some(format!(
-                        "Type failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
-            },
+            Ok((backend, tab_id)) => {
+                // Fail-closed: a ref we KNOW is stale is refused before the
+                // dispatch, not after its side effects.
+                if let crate::browser::types::ActionTarget::Ref { ref_id } = &target {
+                    if let Err(e) =
+                        super::precheck_ref(&self.manager, &backend, &args.profile, &tab_id, ref_id)
+                            .await
+                    {
+                        return Ok(BrowserTypeOutput {
+                            success: false,
+                            message: Some(super::backend_error_text(&self.manager, &e)),
+                        });
+                    }
+                }
+                match backend.type_text(&tab_id, target, &args.text).await {
+                    Ok(()) => Ok(BrowserTypeOutput {
+                        success: true,
+                        message: Some(format!(
+                            "Typed {} chars in profile '{}'",
+                            args.text.chars().count(),
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserTypeOutput {
+                        success: false,
+                        message: Some(format!(
+                            "Type failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
+                    }),
+                }
+            }
             Err(e) => Ok(BrowserTypeOutput {
                 success: false,
                 message: Some(super::backend_error_text(&self.manager, &e)),
