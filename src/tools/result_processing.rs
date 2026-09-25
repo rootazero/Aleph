@@ -30,10 +30,18 @@ use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
 /// Global default budget for tools that declare no
-/// [`crate::tools::AlephTool::MAX_RESULT_TOKENS`]. It descends from the
-/// historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
-/// since-deleted `pipeline` module this one replaced.
-pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
+/// [`crate::tools::AlephTool::MAX_RESULT_TOKENS`] — every tool but the read
+/// family. A result over it is offloaded and indexed (Layer 2), and the model
+/// retrieves the part it needs with `ctx_search`; so the gate is set to what a
+/// result typically needs in context, not to what it might contain.
+pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 4_000;
+
+/// The read family's window ([`read_backstop_tokens`]), and so the largest
+/// per-result budget any result gets. A read returns exactly the lines the
+/// model asked for (`offset`/`limit`) and is never offloaded — offloading a
+/// read would hand back a marker to read again — so cutting its window below
+/// what was asked only turns one read into several.
+pub const MAX_RESULT_BUDGET_TOKENS: usize = 8_000;
 
 /// Process-wide ceiling on every per-result budget, installed at boot from the
 /// model's usable window (`turn_budget::budget_for_window`). Absent = no
@@ -47,7 +55,7 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 /// ceiling at all. It is deliberately not the crate's `DEFAULT_RESULT_BUDGET_
 /// TOKENS`: that constant is the per-result *default budget*, a different
 /// number in a different role, and a diagnostic printing it here would tell an
-/// operator reads are clamped to 8 000 tokens when in fact nothing is clamped.
+/// operator results are clamped to it when in fact nothing is clamped.
 ///
 /// ⚠️ This handle has TWO production ways to end up uninstalled and they read
 /// identically:
@@ -74,21 +82,20 @@ static RESULT_BUDGET_CEILING: CapabilitySlot<usize> = CapabilitySlot::new(
 
 /// Install the process-wide per-result ceiling. Called once at boot.
 ///
-/// A ceiling at or above [`DEFAULT_RESULT_BUDGET_TOKENS`] is **ignored**: it
-/// would clip the budgets tools declare above the default (`web_fetch`'s 10k)
-/// without buying anything, and this knob exists solely to clamp *down* on
-/// small-window models. So a large-window model installs nothing and behaves
-/// byte-for-byte as it does today.
+/// A ceiling at or above [`MAX_RESULT_BUDGET_TOKENS`] is **ignored**: it
+/// clamps no budget in play, and this knob exists solely to clamp *down* on
+/// small-window models. So a large-window model installs nothing.
 pub fn set_global_result_budget_ceiling(ceiling: usize) {
-    if ceiling >= DEFAULT_RESULT_BUDGET_TOKENS {
+    if ceiling >= MAX_RESULT_BUDGET_TOKENS {
         // Not a failure — a decision, and the one an operator is most likely to
         // mistake for a wiring gap, because the resulting read (`usize::MAX`)
         // is byte-for-byte what a boot that never got here leaves behind.
         RESULT_BUDGET_CEILING.decline(
             "this model's context window needs no per-result clamp: the ceiling \
              derived from `[context_budget] token_budget` is at or above the \
-             8_000-token default, and this knob only ever clamps DOWN. A \
-             smaller-window model (or a smaller `token_budget`) installs one.",
+             largest per-result budget (the read window), and this knob only \
+             ever clamps DOWN. A smaller-window model (or a smaller \
+             `token_budget`) installs one.",
         );
         return;
     }
@@ -123,7 +130,8 @@ fn result_budget_ceiling() -> usize {
 }
 
 /// The token bound a read-family result is actually enforced against — the
-/// global default, clamped by the boot-installed window ceiling.
+/// read window ([`MAX_RESULT_BUDGET_TOKENS`]), clamped by the boot-installed
+/// window ceiling.
 ///
 /// Exposed because `file_read` sizes its own window to stay under this. Reading
 /// the constant alone is not enough: on a small-window model the ceiling moves
@@ -132,7 +140,7 @@ fn result_budget_ceiling() -> usize {
 /// self-sizing exists to prevent.
 #[must_use]
 pub(crate) fn read_backstop_tokens() -> usize {
-    DEFAULT_RESULT_BUDGET_TOKENS.min(result_budget_ceiling())
+    MAX_RESULT_BUDGET_TOKENS.min(result_budget_ceiling())
 }
 
 /// Resolve a tool's per-result token budget.
@@ -201,7 +209,8 @@ pub struct RecoveryTools {
 
 impl RecoveryTools {
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes: [`recovery_footer`] (the browser offload), and
+    /// assumes: [`recovery_footer`] (the browser offload, `web_fetch`'s fetch
+    /// by intent), and
     /// `ToolService::recovery_tools`'s default for a service that has no gates
     /// to consult. The harness Layer-3 spill asks its `ToolService`, which
     /// answers from the turn's gates when it is a `ScopedToolService`.
@@ -265,8 +274,8 @@ pub fn apply_result_budget(
         // this threshold, so this branch is now a backstop rather than a path.
         //
         // The boot-installed window ceiling applies here too. It used to be
-        // bypassed on this branch, which handed a 2 400-token-window model an
-        // 8 000-token read allowance — the one case the knob exists to prevent.
+        // bypassed on this branch, which handed a 2 400-token-window model the
+        // full read allowance — the one case the knob exists to prevent.
         let truncated = truncate_with_budget(text, read_backstop_tokens());
         let tokens_after = estimate_tokens_smart(&truncated);
         return ProcessedResult {
@@ -366,9 +375,10 @@ pub fn apply_result_budget(
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
 ///
-/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`),
-/// which offloads for the same reason as Layer 2 and must hand the model the
-/// same recovery handle. It cannot see the turn's tool gates, so this form
+/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`)
+/// and `web_fetch`'s fetch by intent (`web_fetch::intent`), which offload for
+/// the same reason as Layer 2 and must hand the model the same recovery handle.
+/// Neither can see the turn's tool gates, so this form
 /// assumes [`RecoveryTools::ALL`]; a caller that can — the dispatcher's Layer 2,
 /// and the harness Layer-3 spill through `ToolService::recovery_tools` — goes
 /// through [`recovery_footer_for`]. (The spill once called `persist_if_large`
@@ -897,9 +907,10 @@ mod tests {
         assert!(digest.contains("error[E0308]"), "got: {digest}");
     }
 
-    /// The preview's line cap is a budget knob, not a constant: the default
-    /// budget reproduces the historical 8 lines exactly, a tighter budget
-    /// shrinks it, and the floor keeps it from shrinking past usefulness.
+    /// The preview's line cap is a budget knob, not a constant: the knob
+    /// reference budget reproduces the shipped 8 lines exactly, a tighter
+    /// budget — the default one included — shrinks it, and the floor keeps it
+    /// from shrinking past usefulness.
     #[test]
     fn the_error_preview_scales_with_the_budget() {
         let mut text = String::from("running 2001 tests\n");
@@ -910,15 +921,25 @@ mod tests {
 
         let count_errors =
             |digest: &str| digest.lines().filter(|l| l.starts_with("error:")).count();
-        let default_budget =
-            inline_error_digest(&text, Some(DEFAULT_RESULT_BUDGET_TOKENS)).expect("distills");
+        let reference = inline_error_digest(
+            &text,
+            Some(crate::tool_output::KNOB_REFERENCE_BUDGET_TOKENS),
+        )
+        .expect("distills");
         assert_eq!(
-            count_errors(&default_budget),
+            count_errors(&reference),
             8,
-            "the default budget reproduces the shipped 8-line cap:\n{default_budget}"
+            "the reference budget reproduces the shipped 8-line cap:\n{reference}"
         );
         let no_budget = inline_error_digest(&text, None).expect("distills");
-        assert_eq!(no_budget, default_budget, "None is the default behaviour");
+        assert_eq!(no_budget, reference, "None is the reference behaviour");
+        let default_n = count_errors(
+            &inline_error_digest(&text, Some(DEFAULT_RESULT_BUDGET_TOKENS)).expect("distills"),
+        );
+        assert!(
+            (2..8).contains(&default_n),
+            "the default budget is below the reference, so it tightens: {default_n}"
+        );
         let tight = inline_error_digest(&text, Some(300)).expect("distills");
         let tight_n = count_errors(&tight);
         assert!(
@@ -1193,8 +1214,8 @@ mod tests {
 
     #[test]
     fn window_ceiling_caps_declared_budgets_not_just_the_default() {
-        // A 16k-window model yields a 2_400 per-result ceiling. `web_fetch`'s
-        // declared 10k is exactly the value that must come down — a ceiling
+        // A 16k-window model yields a 2_400 per-result ceiling. A declared
+        // budget above it is exactly the value that must come down — a ceiling
         // applied only to the `None` fallback would leave the biggest offender
         // untouched.
         let ceiling = 2_400;
@@ -1237,11 +1258,13 @@ mod tests {
     }
 
     #[test]
-    fn ceiling_at_or_above_the_default_is_refused() {
-        // A large-window model must not install a ceiling at all — an 8_000 one
-        // would silently clip `web_fetch`'s declared 10k, which is a regression,
-        // not a fix. The installer drops it, so the global stays uncapped.
-        set_global_result_budget_ceiling(DEFAULT_RESULT_BUDGET_TOKENS);
+    fn ceiling_at_or_above_the_read_window_is_refused() {
+        // A large-window model must not install a ceiling at all: one at or
+        // above the largest per-result budget clamps nothing. The installer
+        // drops it, so the global stays uncapped. (Never call it here with a
+        // value below `MAX_RESULT_BUDGET_TOKENS`: that installs a process-wide
+        // ceiling under every other test in this binary.)
+        set_global_result_budget_ceiling(MAX_RESULT_BUDGET_TOKENS);
         set_global_result_budget_ceiling(50_000);
         assert_eq!(
             resolve_result_budget("web_fetch", Some(10_000)),

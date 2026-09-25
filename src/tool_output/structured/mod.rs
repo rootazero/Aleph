@@ -623,16 +623,21 @@ mod tests {
         assert!(clamped.contains("+200 chars"), "got: {clamped}");
     }
 
-    /// The reference budget reproduces the shipped caps exactly, so the
-    /// overwhelmingly common tool call is byte-for-byte unaffected by profiles
-    /// existing at all.
+    /// The reference budget reproduces the shipped caps exactly; the default
+    /// result budget, half of it, gets a tighter profile — the artifact has to
+    /// fit the budget it is sized for.
     #[test]
-    fn the_default_budget_reproduces_the_default_profile() {
+    fn the_reference_budget_reproduces_the_default_profile() {
         assert_eq!(
+            Profile::for_token_budget(crate::tool_output::KNOB_REFERENCE_BUDGET_TOKENS),
+            Profile::DEFAULT,
+        );
+        assert_ne!(
             Profile::for_token_budget(
                 crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS
             ),
             Profile::DEFAULT,
+            "the default budget is below the reference, so its profile is tighter"
         );
         // A larger budget must not *raise* the caps: `log_signal` also encodes
         // "a digest orients, it does not reproduce the log".

@@ -3421,7 +3421,14 @@ mod tests {
     /// moved to the DESCRIPTION the tool owns. Read off this guard's own ledger
     /// (the `ctx_search` row zeroed, the ceiling lowered by its old value);
     /// `ctx_search` was the only row that moved.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_167;
+    ///
+    /// 2026-09-26 (context-slim round, B4): 105_167 -> 104_429 B (-738), all of
+    /// it `web_fetch` (1_536 -> 798): the `prompt` argument's doc carried a
+    /// design rationale into the schema; it now says only what the model does
+    /// with it (fetch by intent), and the rationale is a `//` comment. Read off
+    /// this guard's own ledger (the `web_fetch` row zeroed, the ceiling lowered
+    /// by its old value); `web_fetch` was the only row that moved.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_429;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3503,7 +3510,7 @@ mod tests {
         ("strategy", 2322),
         ("system", 1256),
         ("voice_mode_set", 717),
-        ("web_fetch", 1536),
+        ("web_fetch", 798),
     ];
 
     /// The tool map with nothing wired — the deterministic half of what the
@@ -4027,24 +4034,21 @@ mod tests {
         assert!(names.contains(&"session_send".to_string()));
     }
 
-    /// T-G4: a tool's per-result budget has one source — its
-    /// `AlephTool::MAX_RESULT_TOKENS`, stamped on its registry entry — and the
-    /// move there changed no budget in effect. Over every tool this registry
-    /// builds:
+    /// T-G4 / B4: a tool's per-result budget has one source — its
+    /// `AlephTool::MAX_RESULT_TOKENS`, stamped on its registry entry — and no
+    /// builtin declares one: every tool but the read family is gated at the
+    /// default. Over every tool this registry builds:
     ///
-    /// * **zero behaviour change** — what each tool now resolves to equals
-    ///   what the deleted name table resolved it to (the table is kept below,
-    ///   verbatim, as the "before"; production passed no declaration then);
+    /// * **the budget in effect** is the default, or `None` for the read
+    ///   family (a declaration that crept back in fails here);
     /// * **the declaration reaches the entry** — for every tool the factory
     ///   can construct, the entry carries exactly what the tool declares, so
     ///   a registration path that forgets to stamp it fails here.
     #[tokio::test]
-    async fn result_budgets_come_from_declarations_and_match_the_retired_name_table() {
-        fn retired_name_table(name: &str) -> Option<usize> {
+    async fn result_budgets_come_from_declarations_and_default_everywhere() {
+        fn expected(name: &str) -> Option<usize> {
             match name {
                 "read_file" | "Read" | "file_read" => None,
-                "Grep" | "search_files" => Some(6_000),
-                "web_fetch" => Some(10_000),
                 _ => Some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS),
             }
         }
@@ -4062,8 +4066,8 @@ mod tests {
                     entry.max_result_tokens,
                     usize::MAX,
                 ),
-                retired_name_table(name),
-                "{name}: the budget in effect changed"
+                expected(name),
+                "{name}: the budget in effect is not the default"
             );
             if let Some(tool) = create_tool_boxed(name, None) {
                 constructed += 1;
@@ -4078,7 +4082,7 @@ mod tests {
             constructed > 10,
             "the declaration half must actually run: {constructed}"
         );
-        // The table's `Grep | search_files` row had no owner: no registered
+        // The retired name table's `Grep | search_files` row had no owner: no registered
         // tool carries either name (builtins are lowercase `grep`; MCP names
         // are qualified `server__tool`), so it is recorded dead, not migrated.
         for dead in ["Grep", "search_files"] {
@@ -4087,10 +4091,10 @@ mod tests {
                 "{dead} is registered now — the retired 6_000 row needs an owner"
             );
         }
-        // The declarations the table used to shadow are the ones now in effect.
-        assert_eq!(map["web_fetch"].max_result_tokens, Some(10_000));
-        assert_eq!(map["bash"].max_result_tokens, Some(8_000));
-        assert_eq!(map["search"].max_result_tokens, Some(8_000));
+        // The three that declared a larger budget until B4 no longer do.
+        for name in ["web_fetch", "bash", "search"] {
+            assert_eq!(map[name].max_result_tokens, None, "{name}");
+        }
     }
 
     #[test]

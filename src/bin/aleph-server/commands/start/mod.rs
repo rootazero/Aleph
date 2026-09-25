@@ -3528,9 +3528,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Both budget layers are sized from the model's usable window rather than
     // from fixed constants (B14). `token_budget` is the same figure the context
     // compactor derives from provider/capabilities, so a 32k local model no
-    // longer gets an 8k-per-result / 50k-per-turn budget it cannot possibly
-    // honor. Large windows clamp back up to the historical constants, so the
-    // common case is unchanged. No `[context_budget]` → no window → constants.
+    // longer gets fixed budgets it cannot possibly honor. Large windows clamp
+    // back up to the constants. No `[context_budget]` → no window → constants.
+    // The first value is a CEILING over every per-result budget (the default
+    // and the larger read window), not the default budget itself.
     let window_tokens = alephcore::orchestrator::build_context_budget_config(
         &app_config_snapshot,
         &app_config_snapshot
@@ -3542,7 +3543,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     .map(|cb| cb.token_budget);
     let (per_result_tokens, max_turn_tokens) = window_tokens.map_or(
         (
-            alephcore::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+            alephcore::tools::result_processing::MAX_RESULT_BUDGET_TOKENS,
             alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
         ),
         alephcore::tools::turn_budget::budget_for_window,
@@ -3569,7 +3570,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
                      (<config_dir>/data/tool_results/global/, session-scoped handles, \
-                     max_result_tokens={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
+                     result_ceiling={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
                 );
             }
         }

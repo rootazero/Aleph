@@ -1191,7 +1191,7 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
 /// The `source` label an offloaded output is indexed under:
 /// `{tool_name}:{last 8 chars of the call id}`. [`tool_of_source_label`] is its
 /// inverse; the two live together so the format has one owner.
-fn source_label(tool_name: &str, tool_call_id: &str) -> String {
+pub(crate) fn source_label(tool_name: &str, tool_call_id: &str) -> String {
     format!("{tool_name}:{}", short_call_id(tool_call_id))
 }
 

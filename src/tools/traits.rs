@@ -77,8 +77,12 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// tool's `UnifiedTool` at registration (`builder/core_tools.rs`),
     /// `RegistryToolAdapter` carries it into the loop registry, and
     /// [`crate::tools::result_processing::resolve_result_budget`] applies it.
-    /// Declare it on tools whose output is reliably larger or smaller than the
-    /// norm (a web fetch returns whole pages).
+    /// Declare a larger one only where the output IS what the model explicitly
+    /// windowed, so offloading it would just be read back whole. A result that
+    /// is merely large (a build log, a page) is better offloaded: the model
+    /// retrieves the part it needs with `ctx_search`. No builtin declares one;
+    /// the read family is the windowed case and has its own rule
+    /// (`result_processing::read_backstop_tokens`).
     const MAX_RESULT_TOKENS: Option<usize> = None;
 
     /// Input argument type (must derive `JsonSchema` for auto-schema generation)
