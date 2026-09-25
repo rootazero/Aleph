@@ -59,6 +59,50 @@ static INLINE_SHELL_REGEX: LazyLock<Regex> =
 /// string from (`$ARGUMENTS`).
 const ARGUMENTS_VAR: &str = "ARGUMENTS";
 
+/// The daemon's environment an inline command inherits: what a shell and the
+/// programs it starts need to run — where programs are, whose home and
+/// account, the shell, the locale (`LANG` and every `LC_*`), the terminal,
+/// the temp directory, the time zone — and nothing that can carry a
+/// credential. Everything else is cleared: provider API keys, channel bot
+/// tokens and Aleph's own settings live in the daemon's environment, and
+/// whoever sends the `/command` picks the arguments of a command whose output
+/// the model reads (`` !`printenv $1` ``). An ssh agent socket is a credential
+/// channel too and is not inherited.
+const INHERITED_ENV: [&str; 9] = [
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "TZ",
+];
+
+/// On Windows, additionally what `cmd.exe` and most programs fail without:
+/// the system root and drive, the command interpreter, the executable
+/// extensions, and the temp and profile directories.
+const INHERITED_ENV_WINDOWS: [&str; 9] = [
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "USERNAME",
+];
+
+/// Whether an inline command inherits the daemon's variable `name`
+/// ([`INHERITED_ENV`]). Windows names are case-insensitive (`Path`).
+fn inherited(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let name = if cfg!(windows) {
+        name.to_ascii_uppercase()
+    } else {
+        name.to_string()
+    };
+    INHERITED_ENV.contains(&name.as_str())
+        || name.starts_with("LC_")
+        || (cfg!(windows) && INHERITED_ENV_WINDOWS.contains(&name.as_str()))
+}
+
 /// Runs one `` !`cmd` `` body for [`SkillTemplate::render`].
 ///
 /// The template knows nothing about consent, cwd or timeouts — the caller
@@ -133,11 +177,15 @@ pub struct InlineSite<'a> {
 /// the line is parsed — so no argument reaches an inline command there:
 /// nothing is appended and `ARGUMENTS` is removed, not exported.
 ///
-/// The environment otherwise mirrors a plugin command hook's: every spelling
-/// of the plugin root and data directory, and `CLAUDE_PROJECT_DIR`, is set
-/// from `site` when known and removed when not — never the daemon's own value
-/// (a daemon launched from inside a Claude Code session has them). The data
-/// directory is created when the command names it, as for a hook.
+/// The daemon's environment is cleared first, except what a shell needs
+/// ([`INHERITED_ENV`]) — unlike a plugin command hook, which inherits all of
+/// it: an inline command's arguments are picked by whoever sends the
+/// `/command`, and its output is read by the model. On top of that, the
+/// variables a hook is told: every spelling of the plugin root and data
+/// directory, and `CLAUDE_PROJECT_DIR`, set from `site` when known and
+/// removed when not — never the daemon's own value (a daemon launched from
+/// inside a Claude Code session has them). The data directory is created
+/// when the command names it, as for a hook.
 ///
 /// The child runs in `site.cwd` with stdin closed (`/dev/null`) and is killed
 /// when the handle is dropped, so a timeout does not orphan it. The caller
@@ -149,18 +197,18 @@ pub fn inline_shell_command(
     site: &InlineSite<'_>,
 ) -> tokio::process::Command {
     use crate::utils::no_window::NoWindow;
-    let mut command = if cfg!(windows) {
-        let mut c = tokio::process::Command::new("cmd");
-        c.args(["/C", cmd]).env_remove(ARGUMENTS_VAR);
-        c
+    let mut command = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" });
+    command
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(name, _)| inherited(name)));
+    if cfg!(windows) {
+        command.args(["/C", cmd]);
     } else {
-        let mut c = tokio::process::Command::new("sh");
-        c.args(["-c", cmd, "sh"]).args(args.positional).env(
+        command.args(["-c", cmd, "sh"]).args(args.positional).env(
             ARGUMENTS_VAR,
             bounded_env_value(ARGUMENTS_VAR, args.raw, "$1 … $N"),
         );
-        c
-    };
+    }
     // A data directory for plugin-owned commands only, as for a hook: a
     // label that is not a plugin id has none.
     let vars = site
@@ -1159,6 +1207,46 @@ mod tests {
                 "unset",
                 here.as_str()
             ]
+        );
+    }
+
+    /// S4. The daemon's environment does not reach an inline command: a
+    /// variable only the daemon has (where its provider keys and bot tokens
+    /// live) is absent, while what a shell needs — `PATH` — is inherited as
+    /// the daemon's own value (a shell started without one may set a default
+    /// of its own, so "some PATH" would prove nothing).
+    #[tokio::test]
+    #[cfg(unix)]
+    #[serial_test::serial] // writes process env a spawned child reads
+    async fn the_daemons_environment_is_cleared_except_what_a_shell_needs() {
+        /// Removes the daemon-side value after the test.
+        struct Sentinel;
+        impl Drop for Sentinel {
+            fn drop(&mut self) {
+                std::env::remove_var("ALEPH_TEST_SECRET");
+            }
+        }
+        let _sentinel = Sentinel;
+        std::env::set_var("ALEPH_TEST_SECRET", "from-the-daemon");
+        let cwd = TempDir::new().unwrap();
+        let out = inline_shell_command(
+            r#"printf '%s|%s' "${ALEPH_TEST_SECRET-unset}" "$PATH""#,
+            &InlineArgs {
+                raw: "",
+                positional: &[],
+            },
+            &InlineSite {
+                cwd: cwd.path(),
+                plugin: None,
+            },
+        )
+        .output()
+        .await
+        .unwrap();
+        let path = std::env::var("PATH").expect("the test process has a PATH");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("unset|{path}")
         );
     }
 
