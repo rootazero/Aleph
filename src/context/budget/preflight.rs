@@ -306,11 +306,12 @@ impl PreflightPipeline {
 /// order is for log readability and minor cache wins.
 ///
 /// `llm` is the run's provider. When it asks the server to clear old tool
-/// results ([`AiProvider::clears_tool_results_server_side`]), the two stages
-/// that rewrite old tool results — `FileOpSupersedeStage` and
-/// `ToolResultPruningStage` — are left out: one problem, one answer. Decided
-/// once per run, so a failover onto a target that does not clear keeps them
-/// off for the rest of that run (a documented gap).
+/// results ([`AiProvider::clears_tool_results_server_side`]), no local stage
+/// may rewrite an old tool result: `FileOpSupersedeStage` and
+/// `ToolResultPruningStage` are left out, and image stripping keeps to
+/// user-message images (a screenshot is a tool result too). One problem, one
+/// answer. Decided once per run, so a failover onto a target that does not
+/// clear keeps them off for the rest of that run (a documented gap).
 ///
 /// [`AiProvider::clears_tool_results_server_side`]: crate::providers::AiProvider::clears_tool_results_server_side
 #[must_use]
@@ -319,17 +320,19 @@ pub fn default_pipeline(
     llm: &dyn crate::providers::AiProvider,
 ) -> PreflightPipeline {
     use super::cheap_passes::{
-        FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
+        FileOpSupersedeStage, HistoricalImageStrippingStage, HistoricalUserImageStrippingStage,
+        ToolResultPruningStage,
     };
     let preventive_floor = cfg.preventive_floor();
-    let mut stages: Vec<Box<dyn PreflightStage>> = Vec::new();
-    if !llm.clears_tool_results_server_side() {
-        stages.push(Box::new(
-            FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor),
-        ));
-        stages.push(Box::new(ToolResultPruningStage::default()));
-    }
-    stages.push(Box::new(HistoricalImageStrippingStage));
+    let stages: Vec<Box<dyn PreflightStage>> = if llm.clears_tool_results_server_side() {
+        vec![Box::new(HistoricalUserImageStrippingStage)]
+    } else {
+        vec![
+            Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
+            Box::new(ToolResultPruningStage::default()),
+            Box::new(HistoricalImageStrippingStage),
+        ]
+    };
     PreflightPipeline::new(stages)
         .with_min_pressure_ratio(preventive_floor)
         .with_cache_stability(
@@ -775,41 +778,60 @@ mod tests {
             circuit_breaker_max: 3,
             max_splits: 3,
         };
+        use crate::providers::message::ContentBlock;
+        let image = || ContentBlock::Image {
+            data: "fake_b64".to_string(),
+            mime_type: "image/png".to_string(),
+        };
+        // An old screenshot tool result, a run of large text results, and a
+        // newer user image (so the screenshot is historical), then the tail.
         let history = || -> Vec<UnifiedMessage> {
-            (0..12)
-                .map(|i| {
-                    UnifiedMessage::tool_result_json(
-                        format!("call-{i}"),
-                        "bash",
-                        serde_json::Value::String(format!("line {i}\n").repeat(400)),
-                        false,
-                    )
-                })
+            let mut h = vec![UnifiedMessage::ToolResult {
+                tool_call_id: "shot".to_string(),
+                tool_name: "desktop".to_string(),
+                content: vec![image()],
+                is_error: false,
+            }];
+            h.extend((0..12).map(|i| {
+                UnifiedMessage::tool_result_json(
+                    format!("call-{i}"),
+                    "bash",
+                    serde_json::Value::String(format!("line {i}\n").repeat(400)),
+                    false,
+                )
+            }));
+            h.push(UnifiedMessage::user_with_content(vec![image()]));
+            h.push(UnifiedMessage::user("tail 1"));
+            h.push(UnifiedMessage::user("tail 2"));
+            h
+        };
+        let tool_results = |msgs: &[UnifiedMessage]| -> Vec<serde_json::Value> {
+            msgs.iter()
+                .filter(|m| matches!(m, UnifiedMessage::ToolResult { .. }))
+                .map(|m| serde_json::to_value(m).expect("serializable"))
                 .collect()
         };
         let pressure = make_pressure(0.95);
 
         let mut local = history();
         let freed = default_pipeline(&cfg, &Clearing(false))
-            .run(&mut local, &pressure, 2)
+            .run(&mut local, &pressure, 3)
             .await;
         assert!(freed > 0, "precondition: this history is prunable locally");
+        assert_ne!(
+            serde_json::to_value(&local[0]).expect("serializable"),
+            serde_json::to_value(&history()[0]).expect("serializable"),
+            "precondition: locally, the old screenshot result is stripped"
+        );
 
         let mut server = history();
-        let freed = default_pipeline(&cfg, &Clearing(true))
-            .run(&mut server, &pressure, 2)
+        default_pipeline(&cfg, &Clearing(true))
+            .run(&mut server, &pressure, 3)
             .await;
-        assert_eq!(freed, 0);
         assert_eq!(
-            server
-                .iter()
-                .map(UnifiedMessage::transcript_text)
-                .collect::<Vec<_>>(),
-            history()
-                .iter()
-                .map(UnifiedMessage::transcript_text)
-                .collect::<Vec<_>>(),
-            "no tool result may be rewritten when the server clears them"
+            tool_results(&server),
+            tool_results(&history()),
+            "no tool result — text or image — may be rewritten when the server clears them"
         );
     }
 }

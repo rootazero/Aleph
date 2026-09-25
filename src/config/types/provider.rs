@@ -43,15 +43,39 @@ pub enum CacheRetention {
 /// for runs on this provider (one problem, one answer).
 ///
 /// Known costs, documented rather than modelled: the local pressure estimate
-/// keeps counting the tool results the server has already cleared, so on a
-/// large window local compaction can fire earlier than it needs to; and the
-/// stand-down is decided per run, so a failover onto a target that does not
-/// clear keeps the local passes off for the rest of that run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+/// keeps counting the tool results the server has already cleared — its
+/// calibration is frozen on such runs, so the post-clearing prompt the server
+/// reports is never learned as a tokenizer ratio (or carried to the next run)
+/// — so on a large window local compaction can fire earlier than it needs to;
+/// and the stand-down is decided per run, so a failover onto a target that
+/// does not clear keeps the local passes off for the rest of that run.
+///
+/// Written either as a table (`{ enabled = true }`, room for future knobs) or
+/// as the bare flag (`server_context_editing = true`): a config file that
+/// fails to parse stops the server from booting, so the natural hand-written
+/// form must not be the one that does it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]
 pub struct ServerContextEditing {
     /// Send `context_management.edits: [clear_tool_uses]`.
     #[serde(default)]
     pub enabled: bool,
+}
+
+impl<'de> Deserialize<'de> for ServerContextEditing {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Flag(bool),
+            Table {
+                #[serde(default)]
+                enabled: bool,
+            },
+        }
+        Ok(match Written::deserialize(deserializer)? {
+            Written::Flag(enabled) | Written::Table { enabled } => Self { enabled },
+        })
+    }
 }
 
 // =============================================================================
@@ -365,6 +389,26 @@ impl ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both written forms parse, and an absent key is off.
+    #[test]
+    fn server_context_editing_accepts_the_bare_flag_and_the_table() {
+        let parse = |body: &str| -> ServerContextEditing {
+            #[derive(Deserialize)]
+            struct Doc {
+                #[serde(default)]
+                server_context_editing: ServerContextEditing,
+            }
+            toml::from_str::<Doc>(body)
+                .expect("parses")
+                .server_context_editing
+        };
+        assert!(parse("server_context_editing = true").enabled);
+        assert!(!parse("server_context_editing = false").enabled);
+        assert!(parse("server_context_editing = { enabled = true }").enabled);
+        assert!(parse("[server_context_editing]\nenabled = true").enabled);
+        assert!(!parse("").enabled);
+    }
 
     /// R8: the setting is reachable through the surface the model edits
     /// config with (`self_config` → `ConfigPatcher`, a deep-merge through the

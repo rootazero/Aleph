@@ -317,6 +317,10 @@ pub struct ContextBudget {
     /// The primary target's reasoning policy: pressure counts the reasoning
     /// the wire will carry, via the same projection `HttpProvider` applies.
     reasoning_replay: ReasoningReplay,
+    /// The run's provider clears old tool results server-side, so the prompt
+    /// it reports is post-clearing while the estimate is not — that ratio is
+    /// not a tokenizer ratio, and calibration must not learn it.
+    server_clears_tool_results: bool,
     /// The session and turn this budget measures prompts for, when its runner
     /// told it ([`Self::publish_message_tokens_as`]). Each measured prompt's
     /// message split is then recorded on that turn's prompt-size record.
@@ -361,6 +365,7 @@ impl ContextBudget {
             max_splits: config.max_splits,
             calibration: None,
             reasoning_replay: ReasoningReplay::default(),
+            server_clears_tool_results: false,
             breakdown_turn: None,
         }
     }
@@ -375,6 +380,13 @@ impl ContextBudget {
     #[must_use]
     pub const fn reasoning_replay(&self) -> &ReasoningReplay {
         &self.reasoning_replay
+    }
+
+    /// The run's provider clears old tool results server-side
+    /// ([`AiProvider::clears_tool_results_server_side`](crate::providers::AiProvider::clears_tool_results_server_side)).
+    /// Freezes calibration for this budget: see [`Self::observe_actual_usage`].
+    pub fn set_server_clears_tool_results(&mut self, clears: bool) {
+        self.server_clears_tool_results = clears;
     }
 
     /// Record every measured prompt's message tokens, split by kind, on
@@ -602,7 +614,18 @@ impl ContextBudget {
     /// behaviour that the fixed char-per-token ratio cannot capture. This is
     /// strictly an accuracy improvement to the estimate that already drives every
     /// compaction decision; it adds no new decision category and makes no LLM call.
+    ///
+    /// Not while the run's provider clears old tool results server-side: the
+    /// reported prompt is then post-clearing and the estimate is not, so the
+    /// ratio would sink the factor — and the runner carries the factor over to
+    /// the next run on the same model, which may not clear (another host, OAuth,
+    /// a failover, the setting off) and would then under-count and compact late.
+    /// Such a run keeps whatever factor it was seeded with; its local estimate
+    /// over-counts once the server starts clearing (a documented gap).
     pub fn observe_actual_usage(&mut self, observed_prompt_tokens: usize) {
+        if self.server_clears_tool_results {
+            return;
+        }
         let Some(p) = self.last_pressure else {
             return;
         };
@@ -1146,6 +1169,42 @@ mod tests {
         budget.before_turn(&msgs, "", 0);
         budget.observe_actual_usage(0);
         assert_eq!(budget.calibration(), None);
+    }
+
+    /// A run whose provider clears old tool results server-side reports a
+    /// post-clearing prompt against a pre-clearing estimate. It must learn
+    /// nothing from that: the factor it was seeded with — the one the runner
+    /// writes back to the cross-run carry-over — is left exactly as it was,
+    /// and an unseeded one stays unseeded (so nothing is written back at all).
+    /// The positive half: the same observation on a non-clearing budget moves
+    /// the factor.
+    #[test]
+    fn a_clearing_run_neither_learns_nor_moves_the_carried_factor() {
+        let config = ContextBudgetConfig {
+            token_budget: 10_000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let msgs = vec![UnifiedMessage::user("x".repeat(1000))];
+        let run = |clears: bool, seed: Option<f64>| {
+            let mut budget = ContextBudget::new(&config);
+            budget.set_server_clears_tool_results(clears);
+            if let Some(seed) = seed {
+                budget.seed_calibration(seed);
+            }
+            budget.before_turn(&msgs, "", 0);
+            // The server cleared most of it: it reports far fewer tokens.
+            budget.observe_actual_usage(300);
+            budget.calibration()
+        };
+
+        assert_eq!(run(true, Some(1.2)), Some(1.2));
+        assert_eq!(run(true, None), None);
+        let learned = run(false, Some(1.2)).expect("a non-clearing run learns");
+        assert!(
+            learned < 1.2,
+            "precondition: the observation moves the factor"
+        );
     }
 
     #[test]

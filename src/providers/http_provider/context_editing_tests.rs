@@ -85,39 +85,32 @@ fn a_yaml_protocol_answers_as_the_protocol_it_extends() {
     assert!(anthropic_provider(adapter, None, true).clears_tool_results_server_side());
 }
 
-/// Enabled but unhonoured is said out loud, from the same derivation.
+/// The predicate behind the construction-time warning: enabled but not
+/// honoured on another host or on the OAuth path, quiet when honoured or not
+/// enabled. The `tracing::warn!` line itself is NOT covered here — a WARN
+/// capture through a scoped subscriber proved flaky under the parallel test
+/// runner (the event was missed on one of two runs), and a flaky guard is
+/// worse than a named gap.
 #[test]
-fn an_unhonoured_setting_is_reported_not_silent() {
-    let on_first_party = HttpProvider::new(
-        "claude".into(),
-        {
-            let mut c = ProviderConfig::test_config("claude-sonnet-4-6");
-            c.server_context_editing.enabled = true;
-            c
-        },
-        anthropic(),
+fn the_unhonoured_predicate_follows_host_and_auth() {
+    let provider = |base_url: Option<&str>, key: Option<&str>, enabled: bool| {
+        let mut c = ProviderConfig::test_config("claude-sonnet-4-6");
+        c.base_url = base_url.map(str::to_string);
+        if let Some(key) = key {
+            c.api_key = Some(key.to_string());
+        }
+        c.server_context_editing.enabled = enabled;
+        HttpProvider::new("claude".into(), c, anthropic()).expect("provider")
+    };
+    assert!(!provider(None, None, true).server_context_editing_unhonoured());
+    assert!(provider(
+        Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
+        None,
+        true
     )
-    .expect("provider");
-    assert!(!on_first_party.server_context_editing_unhonoured());
-
-    let mut bedrock = ProviderConfig::test_config("claude-sonnet-4-6");
-    bedrock.base_url = Some("https://bedrock-runtime.us-east-1.amazonaws.com".into());
-    bedrock.server_context_editing.enabled = true;
-    let bedrock = HttpProvider::new("claude".into(), bedrock, anthropic()).expect("provider");
-    assert!(bedrock.server_context_editing_unhonoured());
-
-    let mut oauth = ProviderConfig::test_config("claude-sonnet-4-6");
-    oauth.api_key = Some("sk-ant-oat01-test-token".into());
-    oauth.server_context_editing.enabled = true;
-    let oauth = HttpProvider::new("claude".into(), oauth, anthropic()).expect("provider");
-    assert!(oauth.server_context_editing_unhonoured());
-
-    // Not enabled is not "unhonoured".
-    let off = HttpProvider::new(
-        "claude".into(),
-        ProviderConfig::test_config("claude-sonnet-4-6"),
-        anthropic(),
-    )
-    .expect("provider");
-    assert!(!off.server_context_editing_unhonoured());
+    .server_context_editing_unhonoured());
+    assert!(
+        provider(None, Some("sk-ant-oat01-test-token"), true).server_context_editing_unhonoured()
+    );
+    assert!(!provider(None, None, false).server_context_editing_unhonoured());
 }

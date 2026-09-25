@@ -64,6 +64,8 @@ pub mod codex;
 pub mod default_handle;
 pub mod delta;
 pub mod failover;
+#[cfg(test)]
+mod forwarding_census;
 pub mod gemini;
 pub mod health;
 pub mod http_provider;

@@ -1415,6 +1415,7 @@ fn build_context_triple(
     let mut budget = crate::context::budget::ContextBudget::new(cfg);
     // Count reasoning as the child's provider will send it.
     budget.set_reasoning_replay(llm.reasoning_replay(None));
+    budget.set_server_clears_tool_results(llm.clears_tool_results_server_side());
     let budget = Arc::new(tokio::sync::Mutex::new(budget));
     let compactor = Arc::new(
         ContextCompactor::new(

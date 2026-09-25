@@ -645,6 +645,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 let mut budget_inner = ContextBudget::new(cfg);
                 // Count reasoning as this run's provider will send it.
                 budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
+                budget_inner.set_server_clears_tool_results(llm.clears_tool_results_server_side());
                 budget_inner.publish_message_tokens_as(session_id.to_key_string());
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
