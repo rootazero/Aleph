@@ -15,7 +15,7 @@
 //! their doc comments; this module is the first client to exist, and the join
 //! they describe is [`ContextView::new`].
 
-use aleph_protocol::context_breakdown::{ContextBreakdown, UsageTokens};
+use aleph_protocol::context_breakdown::{ContextBreakdown, ToolOutputIngress, UsageTokens};
 use shared_ui_logic::transcript::{reconcile, ContextRows};
 
 /// One `/context` snapshot: what was measured, plus where it came from.
@@ -39,6 +39,11 @@ pub struct ContextView {
     /// Size of the dynamic half **as actually sent**. `None` means the turn
     /// built no system prompt at all — never "nothing was trimmed".
     pub dynamic_sent_bytes: Option<u64>,
+    /// This session's tool output since the server process started (not a
+    /// lifetime total): tokens produced against tokens admitted into the
+    /// context, and how many results were offloaded. `None` when no tool call
+    /// has been counted.
+    pub tool_output: Option<ToolOutputIngress>,
     /// First visible row, for a layer list taller than the overlay.
     pub scroll: usize,
 }
@@ -98,6 +103,7 @@ impl ContextView {
             stable_bytes,
             dynamic_assembled_bytes,
             dynamic_sent_bytes: joined.dynamic_bytes_sent,
+            tool_output: joined.tool_output,
             scroll: 0,
         }
     }
@@ -155,7 +161,8 @@ mod tests {
                 schema_bytes: 400,
                 description_bytes: 400,
             }],
-            messages_tokens: None,
+            messages: None,
+            tool_output: None,
             provider_reported: None,
             context_window: Some(200_000),
             dynamic_bytes_sent: Some(6_000),

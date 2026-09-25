@@ -1,6 +1,6 @@
 //! Content-aware token-ratio detection for context-pressure estimation.
 
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::{value_as_model_text, ContentBlock, UnifiedMessage};
 
 // =============================================================================
 // Content-aware ratio detection
@@ -281,7 +281,16 @@ fn push_part(buf: &mut String, part: &str) {
 /// - **Prose** ([`ContentBlock::Text`] + [`ContentBlock::Thinking`]): estimated
 ///   via [`estimate_tokens_aware`] at the caller's `prose_ratio`, so CJK/code
 ///   density still applies inside natural-language blocks.
-/// - **Structured** ([`ContentBlock::Json`] tool output + [`ContentBlock::ToolCall`]
+/// - **Tool-result text** (a [`ContentBlock::Json`] whose value is a string —
+///   what every successful tool result is by the time it reaches the prompt):
+///   charged as the text the model is sent, [`value_as_model_text`], through
+///   the same content-aware [`estimate_tokens_aware`] Layer 2 measured it with
+///   when the result was admitted. It is whatever the tool printed — a log, a
+///   page, source, a one-line JSON envelope — so a fixed density would be
+///   wrong for most of it, and the detector already picks code, CJK or prose.
+///   (It used to be charged as `value.to_string()`: a quoted, escaped copy at
+///   the code anchor, which is not what goes on the wire.)
+/// - **Structured** (a non-string [`ContentBlock::Json`] + [`ContentBlock::ToolCall`]
 ///   `name`+`arguments`): estimated at the denser [`CODE_RATIO`] anchor. JSON is
 ///   symbol-dense (`{`, `"`, `:`, `,`) and tokenizes ~like source, but the old
 ///   path charged it at the 3.5 prose ratio — `looks_like_code` misses pure JSON
@@ -303,23 +312,101 @@ fn push_part(buf: &mut String, part: &str) {
 /// it converges from the right side on tool-heavy and vision-heavy contexts.
 #[must_use]
 pub fn estimate_message_tokens_aware(msg: &UnifiedMessage, prose_ratio: f64) -> usize {
+    estimate_message_tokens_split(msg, prose_ratio).total()
+}
+
+/// One message's estimate, split by what the tokens are.
+///
+/// The split is of [`estimate_message_tokens_aware`]'s own figure — it sums to
+/// it exactly — so there is one estimator, and a breakdown can never disagree
+/// with the gauge it breaks down.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessageTokenSplit {
+    /// Everything in a tool-result message: the output text, structured
+    /// output, and images it carried.
+    pub tool_results: usize,
+    /// Reasoning (`Thinking` blocks) in the messages as projected for the
+    /// target, i.e. only what that target is sent.
+    pub reasoning: usize,
+    /// Everything else: user and assistant text, tool calls, user images.
+    pub other: usize,
+}
+
+impl MessageTokenSplit {
+    #[must_use]
+    pub const fn total(&self) -> usize {
+        self.tool_results + self.reasoning + self.other
+    }
+}
+
+impl std::ops::AddAssign for MessageTokenSplit {
+    fn add_assign(&mut self, rhs: Self) {
+        self.tool_results += rhs.tool_results;
+        self.reasoning += rhs.reasoning;
+        self.other += rhs.other;
+    }
+}
+
+/// [`estimate_message_tokens_aware`], split by kind (see [`MessageTokenSplit`]).
+///
+/// Reasoning is attributed as its marginal cost: the message's prose estimate
+/// with the thinking blocks minus the estimate without them. Text and thinking
+/// are still estimated together, so the total — and therefore every pressure
+/// figure — is unchanged by the split.
+#[must_use]
+pub fn estimate_message_tokens_split(msg: &UnifiedMessage, prose_ratio: f64) -> MessageTokenSplit {
     let mut prose = String::new();
+    let mut text_only = String::new();
+    let mut has_thinking = false;
     let mut structured = String::new();
+    let mut result_text_tokens = 0usize;
     let mut image_count = 0usize;
     for block in msg.content_blocks() {
         match block {
-            ContentBlock::Text { text, .. } => push_part(&mut prose, text),
-            ContentBlock::Thinking { thinking, .. } => push_part(&mut prose, thinking),
-            ContentBlock::Json { value } => push_part(&mut structured, &value.to_string()),
+            ContentBlock::Text { text, .. } => {
+                push_part(&mut prose, text);
+                push_part(&mut text_only, text);
+            }
+            ContentBlock::Thinking { thinking, .. } => {
+                push_part(&mut prose, thinking);
+                has_thinking = true;
+            }
+            ContentBlock::Json { value } => {
+                let text = value_as_model_text(value);
+                if value.is_string() {
+                    result_text_tokens += estimate_tokens_aware(&text, prose_ratio);
+                } else {
+                    push_part(&mut structured, &text);
+                }
+            }
             ContentBlock::ToolCall {
                 name, arguments, ..
             } => push_part(&mut structured, &format!("{name} {arguments}")),
             ContentBlock::Image { .. } => image_count += 1,
         }
     }
-    estimate_tokens_aware(&prose, prose_ratio)
+    let prose_tokens = estimate_tokens_aware(&prose, prose_ratio);
+    let reasoning = if has_thinking {
+        prose_tokens.saturating_sub(estimate_tokens_aware(&text_only, prose_ratio))
+    } else {
+        0
+    };
+    let rest = prose_tokens - reasoning
         + estimate_tokens_aware(&structured, CODE_RATIO)
-        + image_count * IMAGE_TOKENS_ESTIMATE
+        + result_text_tokens
+        + image_count * IMAGE_TOKENS_ESTIMATE;
+    if matches!(msg, UnifiedMessage::ToolResult { .. }) {
+        MessageTokenSplit {
+            tool_results: rest + reasoning,
+            ..MessageTokenSplit::default()
+        }
+    } else {
+        MessageTokenSplit {
+            reasoning,
+            other: rest,
+            ..MessageTokenSplit::default()
+        }
+    }
 }
 
 // =============================================================================
@@ -608,6 +695,69 @@ mod tests {
         let all_prose_anchored = estimate_tokens_aware(text, DEFAULT_PROSE_RATIO)
             + estimate_tokens_aware(&json.to_string(), DEFAULT_PROSE_RATIO);
         assert!(estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO) >= all_prose_anchored);
+    }
+
+    /// B5: a successful tool result reaches the prompt as `Json(String)` and
+    /// goes on the wire unwrapped. It is charged as that text, content-aware —
+    /// not as the quoted, escaped `value.to_string()` at the code anchor.
+    #[test]
+    fn a_string_tool_result_is_charged_as_the_text_the_model_is_sent() {
+        let log = "running 3 tests\ntest a ... ok\ntest b ... ok\ntest c ... ok\n".repeat(40);
+        let msg = UnifiedMessage::tool_result_json("c1", "bash", serde_json::json!(log), false);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&log, DEFAULT_PROSE_RATIO),
+        );
+        assert_ne!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&serde_json::json!(log).to_string(), CODE_RATIO),
+            "the escaped copy is not what the model is sent"
+        );
+    }
+
+    /// The split is of the estimator's own figure: it sums to it, tool-result
+    /// messages land in one bucket, and reasoning is separated from the
+    /// assistant text it rides with.
+    #[test]
+    fn the_split_sums_to_the_estimate_and_buckets_by_kind() {
+        let result =
+            UnifiedMessage::tool_result_json("c1", "bash", serde_json::json!("out"), false);
+        let assistant = UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "let me reason about the next step in some detail".into(),
+                    signature: Some("sig".into()),
+                    earlier_turn: false,
+                },
+                ContentBlock::Text {
+                    text: "calling a tool".into(),
+                    cache_control: None,
+                },
+            ],
+        };
+        let user = UnifiedMessage::user("hello there");
+        for msg in [&result, &assistant, &user] {
+            let split = estimate_message_tokens_split(msg, DEFAULT_PROSE_RATIO);
+            assert_eq!(
+                split.total(),
+                estimate_message_tokens_aware(msg, DEFAULT_PROSE_RATIO)
+            );
+        }
+        let r = estimate_message_tokens_split(&result, DEFAULT_PROSE_RATIO);
+        assert!(
+            r.tool_results > 0 && r.reasoning == 0 && r.other == 0,
+            "{r:?}"
+        );
+        let a = estimate_message_tokens_split(&assistant, DEFAULT_PROSE_RATIO);
+        assert!(
+            a.reasoning > 0 && a.other > 0 && a.tool_results == 0,
+            "{a:?}"
+        );
+        let u = estimate_message_tokens_split(&user, DEFAULT_PROSE_RATIO);
+        assert!(
+            u.other > 0 && u.reasoning == 0 && u.tool_results == 0,
+            "{u:?}"
+        );
     }
 
     #[test]

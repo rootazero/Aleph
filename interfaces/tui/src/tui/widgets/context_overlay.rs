@@ -39,8 +39,7 @@ const UNKNOWN: &str = "?";
 
 /// Rows the overlay spends on something other than a measured row: two
 /// borders, the headline, the blank under it, and the key hint. The footer is
-/// counted separately because it is one or two lines depending on what there
-/// is to say.
+/// counted separately because its line count depends on what there is to say.
 const CHROME_ROWS: u16 = 5;
 
 /// `1.2 kB` / `847 B` / `3.4 MB` — byte sizes, distinct from the `k`/`M`
@@ -121,7 +120,7 @@ fn headline(view: &ContextView) -> String {
 /// does: the layer rows describe the prompt as ASSEMBLED, and for a session
 /// over the system-prompt budget they overstate what the model received.
 ///
-/// Two short lines rather than one long one, because the overlay does not wrap
+/// Short lines rather than one long one, because the overlay does not wrap
 /// — a row that wraps stops being a table — and a clipped footer is a wrong
 /// label, not a shorter one (判据 §17).
 #[must_use]
@@ -134,6 +133,21 @@ fn footer(view: &ContextView) -> Vec<String> {
         first.push_str(&format!(" \u{00b7} {} trimmed", compact_bytes(cut)));
     }
     let mut out = vec![first];
+    // What tool output cost on its way in — not a row, because it is a
+    // session-long sum, not a share of the window this prompt occupies. The
+    // heading says since when: the server keeps it in memory, so it is not a
+    // lifetime total. Two lines, because one would clip on a narrow overlay.
+    if let Some(t) = view.tool_output {
+        out.push("tool output, this session since server start:".to_string());
+        out.push(format!(
+            "  {} produced \u{2192} {} kept \u{00b7} {} offloaded \u{00b7} {} call{}",
+            compact_tokens(t.produced_tokens),
+            compact_tokens(t.in_context_tokens),
+            t.offloaded,
+            t.calls,
+            if t.calls == 1 { "" } else { "s" },
+        ));
+    }
     // Only when there IS a remainder: naming `Other` when the row is not on
     // screen would describe something the reader cannot see.
     if view.rows.other > 0 {
@@ -262,7 +276,9 @@ fn row_line(row: &ContextRow, total: Option<u64>, label_width: usize) -> Line<'s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::context_breakdown::{ContextBreakdown, LayerSizeView, ToolSchemaSize};
+    use aleph_protocol::context_breakdown::{
+        ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolSchemaSize,
+    };
     use ratatui::{backend::TestBackend, Terminal};
 
     fn breakdown() -> ContextBreakdown {
@@ -288,7 +304,8 @@ mod tests {
                 schema_bytes: 400,
                 description_bytes: 400,
             }],
-            messages_tokens: None,
+            messages: None,
+            tool_output: None,
             provider_reported: None,
             context_window: Some(200_000),
             dynamic_bytes_sent: Some(6_000),
@@ -323,6 +340,39 @@ mod tests {
     ///
     /// Mutation-checked: `total.map_or_else(UNKNOWN, ..)` → `unwrap_or(0)` in
     /// either `headline` or `share` turns this red.
+    /// The conversation half is painted as its per-kind rows, and the
+    /// session's tool-output tally as a footer line — the two fields the
+    /// server now fills, each with a line of code that shows it.
+    #[test]
+    fn the_message_split_and_the_tool_output_tally_are_painted() {
+        let mut b = breakdown();
+        b.messages = Some(MessageTokens {
+            tool_results: 12_000,
+            reasoning: 3_000,
+            other: 1_500,
+        });
+        b.tool_output = Some(ToolOutputIngress {
+            calls: 7,
+            produced_tokens: 90_000,
+            in_context_tokens: 14_000,
+            offloaded: 2,
+        });
+        // 80 columns: the tally must fit the common terminal, not only a wide one.
+        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
+        for label in [
+            "Messages: tool results",
+            "Messages: reasoning",
+            "Messages: other",
+        ] {
+            assert!(screen.contains(label), "missing {label}:\n{screen}");
+        }
+        assert!(
+            screen.contains("tool output, this session since server start:")
+                && screen.contains("2 offloaded \u{00b7} 7 calls"),
+            "the tally must be painted with what it measures and from when:\n{screen}"
+        );
+    }
+
     #[test]
     fn an_unmeasured_total_paints_a_question_mark_not_a_zero() {
         let view = ContextView::new(&breakdown(), None);

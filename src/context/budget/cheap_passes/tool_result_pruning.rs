@@ -186,12 +186,20 @@ mod tests {
         }
     }
 
+    /// A successful tool result in the shape `build_prompt` produces for it:
+    /// the logged `Value::String` as a `Json` block. The fixtures used to be
+    /// `Text` blocks, a shape production never emits for a success — which is
+    /// how a reader that saw a quoted, one-line `value.to_string()` stayed green.
+    fn produced(call: &str, tool: &str, text: impl Into<String>) -> UnifiedMessage {
+        UnifiedMessage::tool_result_json(call, tool, serde_json::Value::String(text.into()), false)
+    }
+
     fn big_tool_result() -> UnifiedMessage {
-        UnifiedMessage::tool_result("call-1", "Read", "x".repeat(2000), false)
+        produced("call-1", "Read", "x".repeat(2000))
     }
 
     fn small_tool_result() -> UnifiedMessage {
-        UnifiedMessage::tool_result("call-2", "Read", "short output", false)
+        produced("call-2", "Read", "short output")
     }
 
     #[tokio::test]
@@ -238,7 +246,7 @@ mod tests {
         // old first-line placeholder.
         let body = format!("PASS: 312 tests passed in 4.1s\n{}", "detail\n".repeat(400));
         let mut messages = vec![
-            UnifiedMessage::tool_result("call-1", "bash", body, false),
+            produced("call-1", "bash", body),
             UnifiedMessage::user("recent"),
         ];
         let stage = ToolResultPruningStage::default();
@@ -264,7 +272,7 @@ mod tests {
         // A single huge line of opaque content has no structure to route on, so
         // the first-line placeholder fallback still applies.
         let mut messages = vec![
-            UnifiedMessage::tool_result("call-1", "Read", "z".repeat(3000), false),
+            produced("call-1", "Read", "z".repeat(3000)),
             UnifiedMessage::user("recent"),
         ];
         let stage = ToolResultPruningStage::default();
@@ -289,9 +297,8 @@ mod tests {
                 tool_call_id: "call-1".to_string(),
                 tool_name: "screenshot".to_string(),
                 content: vec![
-                    ContentBlock::Text {
-                        text: text.clone(),
-                        cache_control: None,
+                    ContentBlock::Json {
+                        value: serde_json::Value::String(text.clone()),
                     },
                     ContentBlock::Image {
                         data: "iVBORw0KGgo=".repeat(50),
@@ -367,7 +374,7 @@ mod tests {
         // a subsequent `read_file`.
         let marker = "[Full output persisted: /tmp/aleph/x.txt (12000 tokens, bash)]";
         let mut messages = vec![
-            UnifiedMessage::tool_result("call-1", "bash", marker.to_string(), false),
+            produced("call-1", "bash", marker.to_string()),
             UnifiedMessage::user("recent"),
         ];
         let stage = ToolResultPruningStage::default();
@@ -389,7 +396,7 @@ mod tests {
             "[Full output persisted: /tmp/aleph/x.txt (23730 tokens, bash)]"
         );
         let mut messages = vec![
-            UnifiedMessage::tool_result("call-1", "bash", composed.clone(), false),
+            produced("call-1", "bash", composed.clone()),
             UnifiedMessage::user("recent"),
         ];
         let stage = ToolResultPruningStage::default();

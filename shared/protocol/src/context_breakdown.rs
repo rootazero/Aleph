@@ -35,6 +35,46 @@ pub struct UsageTokens {
     pub cache_creation: u64,
 }
 
+/// Estimated tokens of the conversation messages in the last prompt sent,
+/// split by what they are. Measured as the prompt left for the provider: the
+/// history after preflight trimming and compaction, projected to the reasoning
+/// that provider is actually sent. A share of the window this prompt fills —
+/// not a running total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MessageTokens {
+    /// Tool-result messages: the output text, structured output and images.
+    pub tool_results: u64,
+    /// Reasoning blocks that were replayed to the provider.
+    pub reasoning: u64,
+    /// Everything else: user and assistant text, tool calls, user images.
+    pub other: u64,
+}
+
+impl MessageTokens {
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.tool_results + self.reasoning + self.other
+    }
+}
+
+/// What this session's tool output cost on its way into the context, summed
+/// over the session's tool calls **since the server process started** — not a
+/// lifetime total. The server keeps it in process memory: a restart resets
+/// it, and so does the server dropping the session's record (it keeps the most
+/// recently measured sessions). A label for it must say "this session, since
+/// the server started", not imply a total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolOutputIngress {
+    /// Tool calls counted.
+    pub calls: u64,
+    /// Estimated tokens the tools produced.
+    pub produced_tokens: u64,
+    /// Estimated tokens of those results that entered the conversation.
+    pub in_context_tokens: u64,
+    /// Results whose full output was offloaded to the result store.
+    pub offloaded: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextBreakdown {
     pub session_key: String,
@@ -42,9 +82,18 @@ pub struct ContextBreakdown {
     pub turn: u64,
     pub layers: Vec<LayerSizeView>,
     pub tools: Vec<ToolSchemaSize>,
-    /// Estimated tokens of the conversation messages in the prompt.
+    /// The conversation half of the last prompt sent, split by kind. `None`
+    /// until this turn's first prompt has been measured. (Replaces the
+    /// `messages_tokens` key, which no server ever filled; a new key rather
+    /// than a new type under the old one, so a client that still parses
+    /// `messages_tokens` as a number keeps parsing.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub messages_tokens: Option<u64>,
+    pub messages: Option<MessageTokens>,
+    /// This session's tool-output ingress since the server process started
+    /// (see [`ToolOutputIngress`] for what resets it). `None` when no tool
+    /// call of the session has been counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output: Option<ToolOutputIngress>,
     /// `None` right after a compaction until a fresh response arrives — a
     /// first-class "unknown", rendered as `?`, never as 0.
     ///
@@ -149,7 +198,8 @@ mod tests {
                 schema_bytes: 100,
                 description_bytes: 20,
             }],
-            messages_tokens: None,
+            messages: None,
+            tool_output: None,
             provider_reported: None,
             context_window: None,
             dynamic_bytes_sent: None,
@@ -177,6 +227,78 @@ mod tests {
         let v = serde_json::json!({ "session_key": "k", "turn": 1, "layers": [], "tools": [] });
         let b: ContextBreakdown = serde_json::from_value(v).unwrap();
         assert_eq!(b.dynamic_bytes_sent, None);
+    }
+
+    /// The `context.breakdown` shape as released before `messages` and
+    /// `tool_output` existed — frozen, because it is what an old client still
+    /// deserializes into.
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ReleasedBeforeMessageSplit {
+        session_key: String,
+        turn: u64,
+        layers: Vec<LayerSizeView>,
+        tools: Vec<ToolSchemaSize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        messages_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_reported: Option<UsageTokens>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dynamic_bytes_sent: Option<u64>,
+    }
+
+    /// Both directions of the `messages_tokens` → `messages` change: a new
+    /// client reads an old server's response (even one that had filled the
+    /// old key) as "not measured", and an old client reads a new server's
+    /// response — both new keys filled — without failing.
+    ///
+    /// Mutation-checked: renaming `messages` back to `messages_tokens` (the
+    /// old key with a new type) turns the second half red.
+    #[test]
+    fn old_and_new_breakdowns_parse_across_the_messages_change() {
+        let old = ReleasedBeforeMessageSplit {
+            session_key: "k".into(),
+            turn: 2,
+            layers: vec![],
+            tools: vec![],
+            messages_tokens: Some(500),
+            provider_reported: None,
+            context_window: Some(200_000),
+            dynamic_bytes_sent: Some(10),
+        };
+        let from_old: ContextBreakdown =
+            serde_json::from_value(serde_json::to_value(&old).unwrap())
+                .expect("a new client parses an old server's response");
+        assert_eq!(from_old.messages, None);
+        assert_eq!(from_old.tool_output, None);
+        assert_eq!(from_old.context_window, Some(200_000));
+
+        let new = ContextBreakdown {
+            session_key: "k".into(),
+            turn: 2,
+            layers: vec![],
+            tools: vec![],
+            messages: Some(MessageTokens {
+                tool_results: 1,
+                reasoning: 2,
+                other: 3,
+            }),
+            tool_output: Some(ToolOutputIngress {
+                calls: 1,
+                produced_tokens: 9,
+                in_context_tokens: 4,
+                offloaded: 1,
+            }),
+            provider_reported: None,
+            context_window: Some(200_000),
+            dynamic_bytes_sent: Some(10),
+        };
+        let from_new: ReleasedBeforeMessageSplit =
+            serde_json::from_value(serde_json::to_value(&new).unwrap())
+                .expect("an old client parses a new server's response");
+        assert_eq!(from_new.messages_tokens, None);
+        assert_eq!(from_new.dynamic_bytes_sent, Some(10));
     }
 
     #[test]

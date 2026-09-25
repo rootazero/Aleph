@@ -282,22 +282,42 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 一个新装的 skill、一条刚写的记忆）重跑一遍管线，然后把结果当成「发出去的那份」报出来。
 那正是 `prompt_build.rs` 里那个被删掉的 per-session prompt LRU 的缺陷形状。
 
-**一轮一次写，整条记录替换**：`PromptSizeRegistry::record_turn(session_key, Option<PromptLayout>, tools)` 是**唯一写者**。
+**一轮一次写，整条记录替换**：`PromptSizeRegistry::record_turn(session_key, Option<PromptLayout>, tools)` 是**一轮的唯一写者**（轮号、layout、tools）。
 两个写者加一条合并规则，会产出一条**带着上一轮的 layers 和这一轮的 tools、却标着旧轮号**的记录——
 一份描述了一个从未存在过的 prompt 的记录。替换**取消了交错本身**，所以没有规则可以搞错。
 `layout` 是 `Option` 因为「这一轮压根没建系统 prompt」是关于这一轮的**事实**，不是把它写成空表加零的理由。
 `MAX_TRACKED_SESSIONS = 256`，逐出用登记簿自己锁下的单调 `write_seq` 而不是毫秒时钟（同毫秒内 256 次插入会让
 `min_by_key` 在随机的 HashMap 序上挑一个）。
 
-**两个字段刻意留空而不是填上**：
+同一条记录还带着另外两个事实（一个会话一条记录，不是三张同键的表）：`messages` 由这一轮的 `ContextBudget`
+每次量 prompt 时经 `record_messages(key, turn, split)` 写入，**盖着它所属的轮号**，记录已换到别的轮就丢弃——
+迟到的写入没法和下一轮的 layers 并排；`record_turn` 把它清成 `None`。`tool_output` 是会话级的，由 `record_tool_output`
+在分发点累加，`record_turn` **沿用**它。两个写者都**不创建记录**：没有量过的轮，就没有可以并排报告的 layout 和 tools，
+凭空建一条空的等于说「这一轮没建 prompt」。
+
+**一个字段刻意留空而不是填上**：
 
 - `provider_reported` —— 这个方法**永远**发 `None`。它测的是 **prompt**，而 provider 的计数只有 provider 的响应带得来，
   拿本地算的总数冒充是一句自信的谎（同 Task 8 对 `reconcile` 的裁定）。
   ⚠️ **客户端前置条件**：`shared_ui_logic::transcript::reconcile` 在这个字段为 `None` 时返回 `total: None` / `percent: None`，
   所以**照原样渲染服务端响应会得到没有总数、没有百分比条的一排行**。客户端必须先从它已经在收的实时 `ContextGauge` 把这个字段填上，
   再调 `reconcile`。这句话同时写在**协议类型**、**`reconcile` 自己的 doc** 和 handler 的 doc 上，因为那些才是客户端作者会读的东西（判据 §7）。
-- `messages_tokens` —— 会话历史那一半有它自己、派生方式不同的估算器（`harness_bridge::context_estimate`）。
-  从这扇门报出去会把一个问题变成两个答案。
+**另外两个字段来自同一条记录**：
+
+- `messages`（取代了从未被填过的 `messages_tokens`；**换键不换型**，还把 `messages_tokens` 当数字解析的旧客户端照样能解析）——
+  这一轮**最后一次真正发出去的** prompt 里对话那一半的 token，按 `tool_results` / `reasoning` / `other` 拆开。
+  由 `ContextBudget::before_turn` / `note_compaction_effect` 在 prompt 发出时量：preflight 裁剪与压缩**之后**、
+  按目标 provider 的 reasoning 投影（`ReasoningReplay::projected`）**之后**，用的是**唯一那个**逐消息估算器
+  （`estimate_message_tokens_split`；`estimate_message_tokens_aware` 就是它的 `total()`，`harness_bridge::context_estimate`
+  用的也是它——两者量的是不同的**集合**：运行前的日志 vs 真正发出去的 prompt，不是两个估算器）。
+  reasoning 只记**边际成本**，三项之和等于总估算。这一轮还没量过 prompt 时为 `None`。
+- `tool_output` —— 这个会话**自服务进程启动以来**的工具输出入口账：`calls` / `produced_tokens`（Layer 2 之前的输出）/
+  `in_context_tokens`（`ProcessedResult::tokens_in_context`）/ `offloaded`。在 `scoped/dispatch.rs::apply_layer_two` 记账；
+  被委派的角色（`identity::current_actor()` 有值）**不记**——它跑在父会话的 service 与 `TURN_CONTEXT` 下，
+  但它的结果进的是子会话的上下文。**进程内存**：重启清零，记录被逐出也清零；所以标签必须说「这个会话、自服务启动以来」，
+  **不能**读起来像终身总数（判据 §17）——wire 类型的 doc 与 TUI `/context` 页脚都这么写。
+- 子代理会话**没有记录**：`subagent_spawner` 走 `build_system_prompt_parts` 的 Basic 路径，从不 `record_turn`，
+  所以对子会话的 `context.breakdown` 仍是 `RESOURCE_NOT_FOUND`，它的 `ContextBudget` 也无处可写。
 
 **⚠️ layer 行是 trim 之前的组装**：`layers` 把字节归给发出它们的那一层，而这种归属**只在
 `prompt_budget::fit_dynamic_suffix_with_content` 头尾裁剪 dynamic 尾巴之前存在**——裁完之后没有哪一层拥有被裁掉的字节。
