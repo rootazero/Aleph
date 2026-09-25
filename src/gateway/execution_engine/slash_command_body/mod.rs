@@ -38,7 +38,7 @@
 //! plugin's `hooks.json` command goes through, keyed by the command's own
 //! template text, then the production builder
 //! ([`inline_shell_command`](crate::extension::inline_shell_command)) — and
-//! only for an operator on a turn whose tool gate would let the model run
+//! only for an operator, on a turn whose tool gate does not deny the model
 //! `bash` ([`inline_shell_refusal`]).
 //!
 //! **`model:`** pins this turn's model when the request carries none
@@ -470,8 +470,10 @@ pub(super) fn strip(
 /// `aleph hooks list` / `aleph hooks test` are the one review surface for
 /// every shell a plugin can reach. The entry is filed under
 /// [`INLINE_COMMAND_EVENT`] with the template's own text; only an approval
-/// that says so covers it. A command naming a relative script is never
-/// filed or run ([`ShellHookConsent::root_relative_script`]).
+/// that says so covers it. A command with a relative word ahead of the
+/// script consent binds is never filed or run
+/// ([`ShellHookConsent::root_relative_script`], which also names what it
+/// does not look at).
 ///
 /// Approved, the command runs through the production builder in the run's
 /// directory, with the plugin's settings minus every secret

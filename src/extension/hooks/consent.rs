@@ -313,10 +313,17 @@ impl ShellHookConsent {
     /// `~/` file is what consent binds — correctly — and ends the scan.
     /// `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so a plugin's own script
     /// stays content-bound and allowed. A path-shaped ARGUMENT to a program
-    /// (`git diff src/app.ts`) is refused too: consent cannot tell it from a
-    /// script, and binds whichever comes first. What the command writes to
-    /// (`2>/dev/null`, `> out/log`) and a URL are no candidate for either
-    /// (`script_candidates`); what it reads from (`sh <x.sh`) is.
+    /// (`git diff src/app.ts`) met before that point is refused too: consent
+    /// cannot tell it from a script, and binds whichever comes first. What the
+    /// command writes to (`2>/dev/null`, `> out/log`) and a URL are no
+    /// candidate for either (`script_candidates`); what it reads from
+    /// (`sh <x.sh`) is.
+    ///
+    /// The scan stops where consent's binding stops, which keeps the refusal
+    /// its exact dual: a relative word AFTER the bound script is not looked
+    /// at. `sh ${CLAUDE_PLUGIN_ROOT}/setup.sh && ./scripts/build.sh` runs the
+    /// session's `build.sh` unbound, under an approval whose content binding
+    /// covers `setup.sh` only — the text the operator approved says so.
     #[must_use]
     pub fn root_relative_script(
         plugin_name: &str,
@@ -860,8 +867,8 @@ struct ScriptContext<'a> {
     /// The hook's root: its root path variables' value, and the directory
     /// a hook's command runs in (so what a relative path is relative to).
     /// A plugin command's inline command runs in the session's directory
-    /// instead, which is why it may not name a relative script
-    /// ([`ShellHookConsent::root_relative_script`]).
+    /// instead, which is why a relative word ahead of the script consent
+    /// binds refuses it ([`ShellHookConsent::root_relative_script`]).
     root: Option<&'a Path>,
     /// A plugin hook's data directory (`${CLAUDE_PLUGIN_DATA}` …).
     data: Option<PathBuf>,
