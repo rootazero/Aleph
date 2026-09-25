@@ -700,7 +700,11 @@ const BUDGETED: [&str; 12] = [
 ///     the retrieval tools the turn's tool service reports callable
 ///     (`ToolService::recovery_tools`, +1 argument line) instead of assuming
 ///     both.
-const CEILING: usize = 5238;
+/// −5 (5238 → 5233, 2026-09-26, context-slim A6 fold-in): `act.rs`'s
+///     "already persisted?" test asks the store's own reader
+///     (`result_store::extract_persisted_ref`) instead of re-spelling the
+///     `[Full output persisted: ` prefix and its any-line scan (判据 §1).
+const CEILING: usize = 5233;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

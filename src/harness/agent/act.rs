@@ -1067,14 +1067,9 @@ impl AgentHarness {
             return;
         };
         let text = crate::providers::message::value_as_model_text(&output.value).into_owned();
-        // Layer-2 (`apply_result_budget`) may prepend an inline error digest
-        // above the `[Full output persisted: …]` marker, so it is not always at
-        // byte 0 — scan every line (mirrors `result_store::extract_persisted_ref`).
-        // A byte-0-only test would mis-flag such results as un-persisted and let
-        // the turn budget waste its spill slot re-offloading a marker.
-        let already_persisted = text
-            .lines()
-            .any(|l| l.starts_with("[Full output persisted: "));
+        // The marker may sit below a Layer-2 error digest, not at byte 0; the
+        // store's own reader finds it on any line.
+        let already_persisted = crate::tools::result_store::extract_persisted_ref(&text).is_some();
         let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
         let record = crate::tools::turn_budget::TurnResult {
             call_id: call.id.clone(),
