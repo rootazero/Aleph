@@ -20,7 +20,8 @@
 //! | caller | form | why |
 //! |---|---|---|
 //! | `publish_plugin_settings` → `PluginLoader` | runtime | the WASM guest / MCP child needs the real value |
-//! | `hooks::executor` → `settings_env` | runtime | the hook subprocess needs the real value |
+//! | `hooks::executor` → `plugin_settings_env` | runtime | the hook subprocess needs the real value |
+//! | slash-command inline shell → `plugin_settings_env` | **stored, secrets removed** | whoever sends the `/command` picks its arguments, and its output goes into the model's context ([`SettingsForm::WithoutSecrets`]) |
 //! | `plugin_manage(config_get / show)` | **stored** | this text goes into the model's context |
 //! | `plugin.config.get` RPC | **stored** | this text goes to Panel |
 //!
@@ -60,6 +61,37 @@ pub async fn resolve_settings(
         return settings.clone();
     }
     resolve_value(settings, resolver, plugin_id).await
+}
+
+/// Which form of a plugin's settings a child process is handed
+/// (`ExtensionManager::plugin_settings_env`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsForm {
+    /// Every `{{secret:NAME}}` resolved against the vault: what the plugin's
+    /// own hooks get.
+    Runtime,
+    /// The stored form minus every key that holds a vault reference — no
+    /// secret, and no placeholder in its place. What a plugin command's
+    /// inline shell command gets: anyone who can send the `/command` picks
+    /// its arguments, and its output is written into the model's context, so
+    /// a resolved secret in its environment would be one approved
+    /// `` !`printenv $1` `` away from the transcript.
+    WithoutSecrets,
+}
+
+/// `settings` without every top-level key whose value holds a
+/// `{{secret:NAME}}` reference anywhere inside it. A non-object has no keys
+/// and becomes `Null` (no settings).
+pub(crate) fn without_secret_references(settings: &serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Object(map) = settings else {
+        return serde_json::Value::Null;
+    };
+    serde_json::Value::Object(
+        map.iter()
+            .filter(|(_, value)| !contains_reference(value))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    )
 }
 
 /// Whether any string anywhere in this value carries the marker.
@@ -206,6 +238,27 @@ mod tests {
         assert_eq!(out["header"], json!("Bearer xoxb-real"));
     }
 
+    /// A key holding a reference anywhere — whole value, embedded, nested —
+    /// is gone, not replaced; every other key is kept as stored.
+    #[test]
+    fn without_secret_references_drops_every_key_that_holds_one() {
+        let stored = json!({
+            "endpoint": "https://api.example",
+            "limit": 5,
+            "token": "{{secret:SLACK_TOKEN}}",
+            "header": "Bearer {{secret:SLACK_TOKEN}}",
+            "nested": {"inner": ["{{secret:K}}"]},
+        });
+        assert_eq!(
+            without_secret_references(&stored),
+            json!({"endpoint": "https://api.example", "limit": 5})
+        );
+        assert_eq!(
+            without_secret_references(&json!("{{secret:K}}")),
+            serde_json::Value::Null
+        );
+    }
+
     /// No model-facing or UI-facing surface may ask for the resolved form.
     ///
     /// The two mistakes here are not symmetric. Using the *stored* form on a
@@ -221,20 +274,37 @@ mod tests {
     /// reads. There are zero violations today, so the broad rule costs nothing
     /// — and a list of file names would go stale the first time someone adds a
     /// third face.
+    ///
+    /// Plus one file outside those trees: the slash-command runner, whose
+    /// inline shell output is written into the model's context. And two
+    /// spellings of the resolved form — the manager method, and the
+    /// `plugin_settings_env` form that reaches it.
     #[test]
     fn no_model_or_client_facing_surface_reads_the_resolved_form() {
+        const RESOLVED: [&str; 2] = ["plugin_settings_for_runtime", "SettingsForm::Runtime"];
+        const RUNNER: &str = "src/gateway/execution_engine/slash_command_body/mod.rs";
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(RUNNER)
+                .is_file(),
+            "{RUNNER} moved — point this guard at the slash-command runner again"
+        );
         let mut offenders = Vec::new();
         let mut scanned = 0usize;
 
-        for dir in ["src/builtin_tools", "src/gateway/handlers"] {
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+        for root in ["src/builtin_tools", "src/gateway/handlers", RUNNER] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(root);
             let mut stack = vec![root];
             while let Some(path) = stack.pop() {
-                let Ok(entries) = std::fs::read_dir(&path) else {
-                    continue;
+                let files: Vec<std::path::PathBuf> = if path.is_file() {
+                    vec![path]
+                } else {
+                    let Ok(entries) = std::fs::read_dir(&path) else {
+                        continue;
+                    };
+                    entries.flatten().map(|entry| entry.path()).collect()
                 };
-                for entry in entries.flatten() {
-                    let p = entry.path();
+                for p in files {
                     if p.is_dir() {
                         stack.push(p);
                     } else if p.extension().is_some_and(|e| e == "rs") {
@@ -250,7 +320,7 @@ mod tests {
                             .filter(|l| !l.trim_start().starts_with("//"))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        if code.contains("plugin_settings_for_runtime") {
+                        if RESOLVED.iter().any(|needle| code.contains(needle)) {
                             offenders.push(p.display().to_string());
                         }
                     }

@@ -443,6 +443,22 @@ pub(super) async fn ensure_session_under_request_scope(
     .await;
 }
 
+/// The directory this run works in: the request's `workspace_override`
+/// (project mode), else the agent's own workspace.
+///
+/// The one derivation behind the run's `FsScope` / exec-workspace task-locals
+/// ([`ExecutionEngine::run_agent_loop`]), its `effective_workspace` (which
+/// adds the vanished-override check) and the directory a `/command`'s inline
+/// shell commands run in (`slash_command_body`), which renders before either
+/// task-local is entered. Not validated: a caller that needs an existing
+/// directory checks it.
+pub(super) fn run_workspace(request: &RunRequest, agent: &AgentInstance) -> std::path::PathBuf {
+    request
+        .workspace_override
+        .clone()
+        .unwrap_or_else(|| agent.workspace().to_path_buf())
+}
+
 /// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
 /// a receipt, so a reload shows "this turn was stopped by a hook" and the
 /// reducer reads `Clean` rather than `Unanswered` (which would retrigger a
@@ -683,14 +699,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // value `ToolContext::from_workspace` derives). File tools prefer the
         // task-local over the shared `ToolContextHandle`, so a concurrent run
         // rewriting the handle mid-run no longer redirects THIS run's
-        // relative-path writes into the other run's workspace. Mirrors the
-        // `effective_workspace` fallback inside `run_agent_loop_inner`
-        // (override > agent workspace); validation of the override stays in
-        // the inner fn — a vanished dir still fails the run there.
-        let scope_workspace = request
-            .workspace_override
-            .clone()
-            .unwrap_or_else(|| agent.workspace().to_path_buf());
+        // relative-path writes into the other run's workspace. The same
+        // derivation as `run_agent_loop_inner`'s `effective_workspace`
+        // ([`run_workspace`]); validation of the override stays in the inner
+        // fn — a vanished dir still fails the run there.
+        let scope_workspace = run_workspace(request, &agent);
         // Team-worktree runs (dispatcher members) carry the parent repo root
         // in metadata: build a rebasing worktree scope so the member's file
         // tools anchor at the worktree root AND parent-repo absolute paths

@@ -25,8 +25,10 @@ use tracing::{debug, warn};
 /// dumps megabytes must not flood process memory (and, via
 /// `additional_contexts`, the model's context window; the context budget
 /// pipeline is the second line of defence). codex spills oversized hook
-/// output to disk; a hard cap is the minimal Aleph equivalent.
-const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
+/// output to disk; a hard cap is the minimal Aleph equivalent. A plugin
+/// command's inline shell output (`slash_command_body`) is capped by the
+/// same number: it is prompt text too.
+pub(crate) const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
 
 /// Claude Code's PostToolUse result key, carrying the same output as the
 /// Aleph-native `tool_output` — as the tool's structure when it has one (an
@@ -797,17 +799,16 @@ impl HookExecutor {
         // The operator's configuration for this plugin, in the same env
         // spelling the plugin's MCP servers get. A hook and an MCP server from
         // one plugin reading the same setting under two different names would
-        // be two conventions for one fact. Plugin-owned hooks only.
-        if crate::extension::manifest::validate_plugin_id(plugin_name).is_ok() {
-            if let Some(manager) = crate::extension::try_extension_manager() {
-                // Runtime form: these values become the hook subprocess's
-                // environment, so a `{{secret:NAME}}` reference resolves here.
-                // The display faces deliberately keep the placeholder — see
-                // `crate::extension::plugin_secrets`.
-                let settings = manager.plugin_settings_for_runtime(plugin_name).await;
-                for (key, value) in crate::extension::plugin_vars::settings_env(&settings) {
-                    cmd.env(key, value);
-                }
+        // be two conventions for one fact. Plugin-owned hooks only (the gate
+        // is inside `plugin_settings_env`, shared with inline commands).
+        if let Some(manager) = crate::extension::try_extension_manager() {
+            // Runtime form: these values become the hook subprocess's
+            // environment, so a `{{secret:NAME}}` reference resolves here.
+            // The display faces deliberately keep the placeholder, and an
+            // inline command gets none — see `crate::extension::plugin_secrets`.
+            let form = crate::extension::plugin_secrets::SettingsForm::Runtime;
+            for (key, value) in manager.plugin_settings_env(plugin_name, form).await {
+                cmd.env(key, value);
             }
         }
 

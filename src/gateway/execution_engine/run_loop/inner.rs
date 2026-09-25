@@ -64,25 +64,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // directory can be unmounted, deleted by another process, or replaced
         // by a non-directory. Re-verify and fail the run cleanly with a
         // user-facing reason rather than discovering the disappearance
-        // mid-tool-call.
-        let effective_workspace: std::path::PathBuf = match &request.workspace_override {
-            Some(p) => {
-                if !p.is_dir() {
-                    error!(
-                        run_id = run_id,
-                        project_root = %p.display(),
-                        "project_root vanished between request and execution"
-                    );
-                    return Err(ExecutionError::Failed(format!(
-                        "project folder no longer exists: {} — pick another folder \
-                         or re-create it before retrying",
-                        p.display()
-                    )));
-                }
-                p.clone()
-            }
-            None => agent.workspace().to_path_buf(),
-        };
+        // mid-tool-call. The value itself is `super::run_workspace`, the one
+        // derivation every other reader of "where does this run work" uses.
+        if let Some(p) = request.workspace_override.as_ref().filter(|p| !p.is_dir()) {
+            error!(
+                run_id = run_id,
+                project_root = %p.display(),
+                "project_root vanished between request and execution"
+            );
+            return Err(ExecutionError::Failed(format!(
+                "project folder no longer exists: {} — pick another folder \
+                 or re-create it before retrying",
+                p.display()
+            )));
+        }
+        let effective_workspace: std::path::PathBuf = super::run_workspace(request, &agent);
 
         // Bump `last_used_at` in the project catalogue so the Panel picker
         // can sort by recency without each entry point (CLI, OpenAI-compat,
@@ -411,6 +407,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // first-user-message content — equal to the raw input.
         let effective_user_input: String = request.input.clone();
         let mut transient_blocks: Vec<String> = Vec::new();
+        // A `/command` turn: the command's rendered body, FIRST — it is this
+        // turn's instruction, and every reminder below annotates it. Rides
+        // the transient channel, so the persisted user turn stays the raw
+        // `/command args` (`slash_command_body` module doc).
+        transient_blocks.extend(super::super::slash_command_body::transient_block(
+            &request.metadata,
+        ));
         for c in &session_start_blocks {
             transient_blocks.push(format!(
                 "<system-reminder>\n{}\n</system-reminder>",

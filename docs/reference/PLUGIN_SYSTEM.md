@@ -377,7 +377,7 @@ aleph plugin list
 |---------|-----------|------|
 | `skills/*/SKILL.md` | ✅ 完全支持 | 通过 SkillSystem 加载 |
 | `agents/*.md` | ✅ 完全支持 | 自动发现 |
-| `commands/*.md` | ✅ 完全支持 | 注册到 dispatch registry，命名空间化 |
+| `commands/*.md` | ✅ 支持 | 注册为 `/插件:命令`（命名空间化）。`/cmd args` 时正文按 CC/pi 语法渲染（`$1…$N` / `${N:-默认}` / `$ARGUMENTS`、`@./文件`、`` !`cmd` ``），作为**本回合的 transient 用户内容**交给模型、**不落盘**——会话存的是原始 `/cmd args`（**与 CC 不同**：CC 把展开后的正文存成用户消息）。`` !`cmd` `` 与 `hooks.json` 命令走同一份同意清单（事件 `SlashCommand`，`aleph hooks list` / `test` 审批），在会话工作目录里跑，参数只作数据、不作源码，环境里没有任何 `{{secret:…}}` 设置。`model:` 只钉本回合（CC 别名 `sonnet`/`opus`/`haiku` 不生效；已退役的 id 直接拒绝本回合）|
 | `hooks/hooks.json` (command type) | ✅ 支持 | Shell 命令型 hook |
 | `.mcp.json` (MCP servers) | ✅ 支持 | 通过 MCP client 启动 |
 | `.claude-plugin/plugin.json` | ✅ 完全支持 | CC JSON parser |

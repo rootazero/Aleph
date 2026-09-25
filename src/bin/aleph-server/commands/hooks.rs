@@ -4,7 +4,9 @@
 //! gates them behind the consent allowlist
 //! (`~/.aleph/shell-hooks-allowlist.json`): an un-approved shell hook is
 //! skipped and recorded as `pending`. These subcommands let the operator
-//! review, test, approve, and revoke those hooks.
+//! review, test, approve, and revoke those hooks — and a plugin command's
+//! inline shell commands (`` !`cmd` ``), which the same allowlist gates under
+//! the event `SlashCommand`.
 //!
 //! The allowlist file lives outside `~/.aleph/data/` and the consent module
 //! guards it with an `fs2` lock + atomic rename, so these commands are safe
@@ -14,8 +16,8 @@ use std::io::{self, Write};
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
-    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, PLUGIN_DATA_VARIABLES,
-    PLUGIN_ROOT_VARIABLES,
+    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT,
+    PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
 };
 use alephcore::utils::no_window::NoWindow;
 
@@ -59,6 +61,9 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
         if let Some(note) = project_note(e) {
             println!("{:<18} project: {note}", "");
         }
+        if let Some(note) = e.invoker_arguments_note() {
+            println!("{:<18} {note}", "");
+        }
     }
 
     let pending = entries
@@ -91,6 +96,9 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         println!("Project:     {note}");
     }
     println!("Event:       {}", entry.event);
+    if let Some(note) = entry.invoker_arguments_note() {
+        println!("Note:        {note}");
+    }
     println!("Status:      {}", status_label(entry.status));
     // The directory the run below uses, and the one an approval binds to.
     match &entry.plugin_root {
@@ -114,7 +122,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
             println!("Skipped — hook left pending.");
             return Ok(());
         }
-        run_command_with_payload(&entry)?;
+        run_for_review(&entry, &std::env::current_dir()?)?;
     }
 
     if entry.status == ConsentStatus::Approved {
@@ -185,6 +193,94 @@ fn gated_text(line: &str) -> String {
         })
 }
 
+/// Refuse to hand `line` to a shell when it chains, substitutes or redirects
+/// ([`SHELL_METACHARS`], read through [`gated_text`]) — unless the operator
+/// set `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1`.
+fn refuse_shell_metachars(line: &str) -> CmdResult {
+    if !matches!(
+        std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    ) && gated_text(line)
+        .chars()
+        .any(|c| SHELL_METACHARS.contains(&c))
+    {
+        return Err("hook command contains shell metacharacters; \
+             refusing to invoke 'sh -c' / 'cmd /C' on it. \
+             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override."
+            .to_string()
+            .into());
+    }
+    Ok(())
+}
+
+/// Print a review run's exit status and output.
+fn print_output(output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("--- exit: {} ---", output.status);
+    if !stdout.trim().is_empty() {
+        println!("stdout:\n{}", stdout.trim_end());
+    }
+    if !stderr.trim().is_empty() {
+        println!("stderr:\n{}", stderr.trim_end());
+    }
+    println!("----------------");
+}
+
+/// The review run of `entry`: an inline command (a plugin command's
+/// `` !`cmd` ``) the way the slash-command runner spawns it, a hook the way
+/// the hook executor does. `cwd` is where an inline command runs.
+fn run_for_review(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
+    if entry.event == INLINE_COMMAND_EVENT {
+        run_inline_command(entry, cwd)
+    } else {
+        run_command_with_payload(entry)
+    }
+}
+
+/// Run a recorded inline command through the production builder
+/// ([`inline_shell_command`](alephcore::extension::inline_shell_command)),
+/// with the entry's recorded plugin root — the process the slash-command
+/// runner spawns for `/command` sent with NO arguments, in `cwd` (this
+/// shell's directory; production runs it in the session's working directory,
+/// with the sender's arguments). Not a hook run: no stdin payload, no
+/// `TOOL_NAME`, no synthetic `ARGUMENTS`. Not production's timeout, output
+/// cap, plugin settings or daemon environment either.
+fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
+    use alephcore::extension::{inline_shell_command, InlineArgs, InlineSite};
+
+    refuse_shell_metachars(&entry.command)?;
+    println!(
+        "(inline command: run in {} with no arguments — production runs it in the session's \
+         working directory, with the arguments of whoever sends the command)",
+        cwd.display()
+    );
+    let site = InlineSite {
+        cwd,
+        plugin: entry
+            .plugin_root
+            .as_deref()
+            .map(|root| (entry.plugin_name.as_str(), root)),
+    };
+    let mut command = inline_shell_command(
+        &entry.command,
+        &InlineArgs {
+            raw: "",
+            positional: &[],
+        },
+        &site,
+    );
+    let output = command
+        .as_std_mut()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    print_output(&output);
+    Ok(())
+}
+
 /// Run a recorded hook the way production runs it, on a synthetic tool call:
 /// the child is built by the same derivation
 /// ([`command_hook_invocation`](alephcore::extension::hooks::command_hook_invocation)),
@@ -202,21 +298,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
              ${{CLAUDE_PLUGIN_ROOT}} are unset in this run)"
         );
     }
-    if !matches!(
-        std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("true") | Some("yes")
-    ) && gated_text(&invocation.line)
-        .chars()
-        .any(|c| SHELL_METACHARS.contains(&c))
-    {
-        return Err("hook command contains shell metacharacters; \
-             refusing to invoke 'sh -c' / 'cmd /C' on it. \
-             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override."
-            .to_string()
-            .into());
-    }
+    refuse_shell_metachars(&invocation.line)?;
     println!("(stdin payload: {})", invocation.stdin);
 
     let mut cmd = std::process::Command::new(invocation.program);
@@ -245,17 +327,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
         let _ = stdin.write_all(invocation.stdin.as_bytes());
     }
     let output = child.wait_with_output()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("--- exit: {} ---", output.status);
-    if !stdout.trim().is_empty() {
-        println!("stdout:\n{}", stdout.trim_end());
-    }
-    if !stderr.trim().is_empty() {
-        println!("stderr:\n{}", stderr.trim_end());
-    }
-    println!("----------------");
+    print_output(&output);
     Ok(())
 }
 
@@ -472,6 +544,48 @@ mod tests {
         assert!(
             !root.path().join("chained").exists(),
             "the chained command ran"
+        );
+    }
+
+    /// A plugin command's inline command is reviewed the way the
+    /// slash-command runner spawns it — through the inline builder — not as a
+    /// hook: `ARGUMENTS` set and empty (no arguments sent), no `TOOL_NAME`,
+    /// nothing on stdin, in the directory given, with the recorded root as
+    /// its path variable. Driven through `run_for_review`, the function
+    /// `aleph hooks test` calls.
+    #[cfg(unix)]
+    #[test]
+    fn a_reviewed_inline_command_runs_as_the_slash_command_runner_spawns_it() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("probe.sh"),
+            "printf '%s' \"${ARGUMENTS-unset}\" > \"$CLAUDE_PLUGIN_ROOT/arguments.txt\"\n\
+             printf '%s' \"${TOOL_NAME-unset}\" > \"$CLAUDE_PLUGIN_ROOT/tool_name.txt\"\n\
+             cat > \"$CLAUDE_PLUGIN_ROOT/stdin.txt\"\n\
+             pwd -P > \"$CLAUDE_PLUGIN_ROOT/pwd.txt\"\n",
+        )
+        .unwrap();
+        let entry = ConsentEntry {
+            plugin_name: "plug".into(),
+            event: INLINE_COMMAND_EVENT.into(),
+            ..pending_entry("sh ${CLAUDE_PLUGIN_ROOT}/probe.sh", root.path())
+        };
+
+        run_for_review(&entry, cwd.path())
+            .expect("a path-variable reference is not a metacharacter");
+
+        let read = |name: &str| std::fs::read_to_string(root.path().join(name)).unwrap();
+        assert_eq!(
+            read("arguments.txt"),
+            "",
+            "no synthetic tool-call arguments"
+        );
+        assert_eq!(read("tool_name.txt"), "unset");
+        assert_eq!(read("stdin.txt"), "", "no hook payload on stdin");
+        assert_eq!(
+            read("pwd.txt").trim_end(),
+            std::fs::canonicalize(cwd.path()).unwrap().to_string_lossy()
         );
     }
 

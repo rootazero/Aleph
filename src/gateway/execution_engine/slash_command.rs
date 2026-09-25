@@ -277,15 +277,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
                 // Fall through to the full agent loop: there is no
-                // deterministic "run the skill" step to take here, and nothing
-                // on this path injects skill text into the prompt. The skill's
+                // deterministic "run the skill" step to take here. A SKILL's
                 // *description* is already in front of the model via the
                 // `<available_skills>` block
                 // (`thinker::layers::skill_instructions`); its *body* is
                 // reachable only through the always-resident `skill_read`
-                // tool, which the model calls itself. What this arm does
-                // contribute to the run is the `allowed_tools` scope carried
-                // on the mode JSON, which `execute.rs` lifts into
+                // tool, which the model calls itself. A plugin COMMAND's body
+                // is rendered by `execute.rs` on this `Fallthrough`
+                // (`slash_command_body`, after the owner gate above) and rides
+                // the run loop's transient blocks. What this arm contributes
+                // either way is the `allowed_tools` scope carried on the mode
+                // JSON, which `execute.rs` lifts into
                 // `slash_skill_allowed_tools` for the loop to intersect.
                 Err(ExecutionError::Fallthrough {
                     reason: format!("skill '{skill_name}'"),

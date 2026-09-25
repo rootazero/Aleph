@@ -100,6 +100,12 @@ use tracing::warn;
 /// On-disk registry schema version.
 const REGISTRY_VERSION: u32 = 1;
 
+/// The [`ConsentEntry::event`] of a plugin command's inline shell command
+/// (`` !`cmd` `` in `commands/<name>.md`), which is reviewed and approved
+/// here like a `hooks.json` command. Written by the gateway's slash-command
+/// runner; read by `aleph hooks list` / `test` to tell the two apart.
+pub const INLINE_COMMAND_EVENT: &str = "SlashCommand";
+
 /// Cheap change-detection fingerprint for the registry file: `(mtime, len)`.
 /// Length is included because some filesystems have coarse mtime resolution —
 /// an approval that lands in the same second still changes the file length.
@@ -141,7 +147,9 @@ pub struct ConsentEntry {
     /// pending ([`ShellHookConsent::record_pending`] refreshes it), and the
     /// one it was approved with afterwards. An entry recorded before this
     /// field held the spelling carries the enum's Rust name
-    /// (`BeforeToolCall`) until it next fires while pending.
+    /// (`BeforeToolCall`) until it next fires while pending. A plugin
+    /// command's inline shell command is not a hook and carries
+    /// [`INLINE_COMMAND_EVENT`].
     #[serde(default)]
     pub event: String,
     /// The hook's plugin root, which its path variables
@@ -209,6 +217,25 @@ impl ConsentEntry {
     pub fn predates_project_binding(&self) -> bool {
         self.project_root.is_none()
             && super::user_settings::PROJECT_LABELS.contains(&self.plugin_name.as_str())
+    }
+
+    /// What an approval of an inline command also approves, for the review
+    /// surfaces to print; `None` for a hook.
+    ///
+    /// Every inline command receives the arguments of whoever sends its
+    /// `/command` — as `$1 … $N`, `$@` and `$ARGUMENTS` — not only one whose
+    /// text spells them (a script it runs can read `$ARGUMENTS` from its
+    /// environment). Channel senders can send one. A shell never parses an
+    /// argument as code, but a command that passes one to a program hands
+    /// the sender that program's options (`git log $1` with `--output=…`).
+    #[must_use]
+    pub fn invoker_arguments_note(&self) -> Option<&'static str> {
+        (self.event == INLINE_COMMAND_EVENT).then_some(
+            "inline command of a plugin's slash command: it runs with the arguments of \
+             whoever sends that command ($1 … $N, $@, $ARGUMENTS), channel senders \
+             included. They arrive as data, never as code, but a program it hands them \
+             to takes them as its options.",
+        )
     }
 }
 
@@ -1017,6 +1044,33 @@ mod tests {
             reopened.entries()[0].expected_fingerprint(),
             entry.fingerprint
         );
+    }
+
+    /// The review surfaces say who picks an inline command's arguments — for
+    /// every inline command, whatever its text spells — and say nothing of
+    /// the kind for a hook.
+    #[test]
+    fn only_an_inline_command_entry_carries_the_invoker_arguments_note() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        consent.record_pending(
+            "plug",
+            &ScopeKey::Global,
+            "git status",
+            INLINE_COMMAND_EVENT,
+            root.path(),
+        );
+        consent.record_pending("plug", &ScopeKey::Global, "lint", "PreToolUse", root.path());
+        let notes: Vec<(String, bool)> = consent
+            .entries()
+            .iter()
+            .map(|e| (e.command.clone(), e.invoker_arguments_note().is_some()))
+            .collect();
+        assert!(
+            notes.contains(&("git status".to_string(), true)),
+            "{notes:?}"
+        );
+        assert!(notes.contains(&("lint".to_string(), false)), "{notes:?}");
     }
 
     /// Recording under `Global` is exactly how every entry looked before the

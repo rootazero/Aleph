@@ -768,12 +768,15 @@ where
         // without re-parsing the envelope on every Think→Act iteration. One
         // key is emitted: `slash_skill_allowed_tools`.
         //
-        // Nothing here injects skill text into the prompt, and no code
-        // anywhere does: the skill's *description* reaches the model through
-        // the `<available_skills>` block (`thinker::layers::skill_instructions`,
-        // budgeted and sanitised), and the skill's *body* only through the
-        // always-resident `skill_read` tool, which is the sole path that runs
-        // `preprocess_skill_content` and records the use.
+        // Nothing here injects skill text into the prompt: a SKILL's
+        // *description* reaches the model through the `<available_skills>`
+        // block (`thinker::layers::skill_instructions`, budgeted and
+        // sanitised), and its *body* only through the always-resident
+        // `skill_read` tool, which is the sole path that runs
+        // `preprocess_skill_content` and records the use. A plugin COMMAND's
+        // body is different — it is the user's instruction for this turn —
+        // and is rendered in the fast path's fallthrough arm below
+        // (`slash_command_body`), once its owner has been judged visible.
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
             if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
                 if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {
@@ -835,6 +838,26 @@ where
                         reason = %reason,
                         "Command falling through to agent loop"
                     );
+                    // A plugin COMMAND renders its body here, not with the
+                    // skill scope above: the fast path just judged its owning
+                    // plugin visible to this session (face ④), so a hidden
+                    // plugin's inline commands never run. The `!` expansions
+                    // and `@file` reads happen once, now; the block rides the
+                    // run loop's transient blocks and the command's `model:`
+                    // this turn's `model_override`. A command that cannot run
+                    // as written fails the turn visibly.
+                    if let Err(why) = super::slash_command_body::stamp(&mut request, &agent).await {
+                        return self
+                            .finalize_fast_path_error(
+                                &run_id,
+                                &request,
+                                &agent,
+                                &emitter,
+                                &why,
+                                trace_task_persisted,
+                            )
+                            .await;
+                    }
                     // Fall through to normal agent loop
                 }
                 Err(ref e) => {

@@ -225,6 +225,29 @@ impl ExtensionManager {
         .await
     }
 
+    /// This plugin's configuration as a child process's environment
+    /// (`plugin_vars::settings_env`), in `form` — the one derivation behind a
+    /// plugin hook's environment and a plugin command's inline shell
+    /// environment. Plugin-owned only: a settings-source label such as
+    /// `user:project` is not a plugin id and gets nothing.
+    pub(crate) async fn plugin_settings_env(
+        &self,
+        plugin_id: &str,
+        form: crate::extension::plugin_secrets::SettingsForm,
+    ) -> Vec<(String, String)> {
+        use crate::extension::plugin_secrets::{without_secret_references, SettingsForm};
+        if crate::extension::manifest::validate_plugin_id(plugin_id).is_err() {
+            return Vec::new();
+        }
+        let settings = match form {
+            SettingsForm::Runtime => self.plugin_settings_for_runtime(plugin_id).await,
+            SettingsForm::WithoutSecrets => {
+                without_secret_references(&self.plugin_settings(plugin_id).await)
+            }
+        };
+        crate::extension::plugin_vars::settings_env(&settings)
+    }
+
     /// Replace a plugin's configuration, validating it against the schema the
     /// plugin's own manifest declares.
     ///

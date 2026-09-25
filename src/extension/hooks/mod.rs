@@ -60,8 +60,8 @@ mod session_facts;
 mod user_settings;
 
 pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_tool_head};
-pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
-pub(crate) use executor::{bounded_env_value, read_capped};
+pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT};
+pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
