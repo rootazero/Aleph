@@ -41,7 +41,8 @@ mod drift_tests;
 pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor, prefix_matches};
 pub use capabilities::{
     binds_thinking_to_prefix, capabilities_for, resolve_context_window,
-    resolve_context_window_with_override, ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,
+    resolve_context_window_with_override, strips_prior_turn_thinking, ModelCapabilities,
+    CONSERVATIVE_CONTEXT_WINDOW,
 };
 pub use discovery::{cached_models, refresh_models, DiscoveredModels, DiscoveryError};
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};

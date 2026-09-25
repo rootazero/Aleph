@@ -308,7 +308,10 @@ impl OllamaProvider {
     /// block without borrowing the (non-`'static`) payload.
     fn build_chat_body(&self, payload: &RequestPayload) -> Value {
         let model = payload.model.as_deref().unwrap_or(&self.model);
-        let messages = Self::convert_messages(payload.messages, payload.system_prompt);
+        // Same reasoning projection as `HttpProvider::execute` — this provider
+        // is the one wire that does not pass through it.
+        let outbound = self.reasoning_replay(Some(model)).project(payload.messages);
+        let messages = Self::convert_messages(&outbound, payload.system_prompt);
 
         let mut body = json!({
             "model": model,

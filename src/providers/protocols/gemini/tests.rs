@@ -454,6 +454,7 @@ fn test_convert_skips_empty_messages() {
             content: vec![CB::Thinking {
                 thinking: "internal reasoning".to_string(),
                 signature: None,
+                earlier_turn: false,
             }],
         },
         UnifiedMessage::user("are you there?"),
@@ -474,6 +475,7 @@ fn test_convert_all_empty_falls_back_to_placeholder_turn() {
         content: vec![CB::Thinking {
             thinking: "only thoughts".to_string(),
             signature: None,
+            earlier_turn: false,
         }],
     }];
     let result = GeminiProtocol::convert_messages(&msgs);

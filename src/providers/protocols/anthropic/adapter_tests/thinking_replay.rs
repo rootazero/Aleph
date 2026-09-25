@@ -37,6 +37,7 @@ fn signed_tool_round() -> Vec<UnifiedMessage> {
                 ContentBlock::Thinking {
                     thinking: "I should search twice.".into(),
                     signature: Some("sig_1".into()),
+                    earlier_turn: false,
                 },
                 ContentBlock::ToolCall {
                     thought_signature: None,

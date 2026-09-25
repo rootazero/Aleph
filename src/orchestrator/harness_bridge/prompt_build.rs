@@ -37,11 +37,12 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let history_tokens: usize = messages
-            .iter()
+        let replay = self.default_provider.current().reasoning_replay(None);
+        let history_tokens: usize = replay
+            .projected(&messages)
             .map(|m| {
                 crate::context::budget::pressure::estimate_message_tokens_aware(
-                    m,
+                    &m,
                     cfg.token_estimate_ratio,
                 )
             })
@@ -89,11 +90,12 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let history_tokens: usize = messages
-            .iter()
+        let replay = self.default_provider.current().reasoning_replay(None);
+        let history_tokens: usize = replay
+            .projected(&messages)
             .map(|m| {
                 crate::context::budget::pressure::estimate_message_tokens_aware(
-                    m,
+                    &m,
                     cfg.token_estimate_ratio,
                 )
             })

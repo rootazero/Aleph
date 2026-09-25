@@ -299,6 +299,7 @@ fn test_convert_assistant_with_signed_thinking_and_tool_use() {
             UContentBlock::Thinking {
                 thinking: "Let me think...".to_string(),
                 signature: Some("sig_abc123".to_string()),
+                earlier_turn: false,
             },
             UContentBlock::ToolCall {
                 thought_signature: None,
@@ -337,6 +338,7 @@ fn test_convert_assistant_drops_unsigned_thinking() {
             UContentBlock::Thinking {
                 thinking: "unsigned reasoning".to_string(),
                 signature: None,
+                earlier_turn: false,
             },
             UContentBlock::Text {
                 text: "answer".to_string(),

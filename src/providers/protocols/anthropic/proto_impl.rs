@@ -181,6 +181,7 @@ impl AnthropicProtocol {
                             crate::providers::message::ContentBlock::Thinking {
                                 thinking,
                                 signature: Some(sig),
+                                ..
                             } => {
                                 // Replay the signed thinking block when we have its signature.
                                 // Anthropic requires a verbatim replay (thinking + signature)

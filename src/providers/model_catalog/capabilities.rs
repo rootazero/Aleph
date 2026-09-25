@@ -1169,6 +1169,39 @@ pub fn binds_thinking_to_prefix(model: &str) -> bool {
         .any(|prefix| prefix_matches(&canon, prefix))
 }
 
+/// Canonical id prefixes of Claude models whose API strips thinking blocks from
+/// turns before the current user turn by itself (Opus 4.1 and earlier, Sonnet
+/// 4.5 and earlier, every Haiku through 4.5 — docs.claude.com context-editing,
+/// "keep only the last turn's thinking" defaults). A closed list of shipped
+/// models: anything newer or unknown preserves prior-turn thinking, which is
+/// what the API does for Opus 4.5+, Sonnet 4.6+ and the Claude 5 family.
+///
+/// Membership only — order does not matter, so no shadow guard applies.
+const STRIPS_PRIOR_TURN_THINKING: &[&str] = &[
+    "claude-3",
+    "claude-opus-4-0",
+    "claude-opus-4-1",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+];
+
+/// The 4.0 generation's canonical ids (`claude-opus-4-20250514` loses its date
+/// stamp in canonicalisation). Matched exactly: as prefixes they would swallow
+/// every later 4.x model, which preserves.
+const STRIPS_PRIOR_TURN_THINKING_EXACT: &[&str] = &["claude-opus-4", "claude-sonnet-4"];
+
+/// True when `model`'s API drops thinking from earlier user turns itself, so
+/// sending it is wire weight the model never reads. Unknown models → `false`.
+#[must_use]
+pub fn strips_prior_turn_thinking(model: &str) -> bool {
+    let canon = canonicalize_model_id(model);
+    STRIPS_PRIOR_TURN_THINKING_EXACT.contains(&canon.as_str())
+        || STRIPS_PRIOR_TURN_THINKING
+            .iter()
+            .any(|prefix| prefix_matches(&canon, prefix))
+}
+
 /// Conservative context window (tokens) for models absent from the capability
 /// catalogue — keeps the occupancy gauge meaningful for custom / local models
 /// instead of failing. Matches the panel's prior unknown-model fallback so the
@@ -1365,6 +1398,42 @@ mod tests {
             "kimi-k2-thinking",
         ] {
             assert!(!binds_thinking_to_prefix(id), "{id} does not bind thinking");
+        }
+    }
+
+    /// Prior-turn thinking is stripped by the API itself only on the closed set
+    /// of older Claude models; newer and unknown models preserve it.
+    #[test]
+    fn prior_turn_thinking_is_stripped_only_by_the_older_models() {
+        for id in [
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-5",
+            "claude-3-7-sonnet-20250219",
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+        ] {
+            assert!(
+                strips_prior_turn_thinking(id),
+                "{id} strips prior-turn thinking"
+            );
+        }
+        for id in [
+            "claude-opus-4-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+            "kimi-k2-thinking",
+            "",
+        ] {
+            assert!(
+                !strips_prior_turn_thinking(id),
+                "{id} preserves prior-turn thinking"
+            );
         }
     }
 

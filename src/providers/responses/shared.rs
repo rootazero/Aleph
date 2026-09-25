@@ -533,6 +533,7 @@ mod tests {
                 ContentBlock::Thinking {
                     thinking: "summary".into(),
                     signature: Some("{\"id\":\"rs_1\",\"ec\":\"gAAAblob\"}\n".into()),
+                    earlier_turn: false,
                 },
                 ContentBlock::Text {
                     text: "answer".into(),

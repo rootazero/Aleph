@@ -556,6 +556,7 @@ mod tests {
             ContentBlock::Thinking {
                 thinking: "and a thinking trace block".to_string(),
                 signature: None,
+                earlier_turn: false,
             },
         ]);
         assert_eq!(

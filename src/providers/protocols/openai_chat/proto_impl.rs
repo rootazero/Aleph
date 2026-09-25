@@ -128,6 +128,7 @@ impl OpenAiProtocol {
                             role: "user".to_string(),
                             tool_call_id: None,
                             tool_calls: None,
+                            reasoning_content: None,
                             content: MessageContent::Multimodal { content: blocks },
                         });
                     } else {
@@ -175,9 +176,21 @@ impl OpenAiProtocol {
                         .collect();
 
                     let msg_content = if text.is_empty() { None } else { Some(text) };
+                    // Any thinking left here survived the target's reasoning
+                    // projection, so it is exactly what this host asked for —
+                    // an empty one included (a host that needs the field).
+                    let reasoning = content.iter().find_map(|b| match b {
+                        crate::providers::message::ContentBlock::Thinking { thinking, .. } => {
+                            // rust-doctor-disable-next-line excessive-clone
+                            Some(thinking.clone())
+                        }
+                        _ => None,
+                    });
 
                     if tool_calls.is_empty() {
-                        result.push(Message::text("assistant", msg_content.unwrap_or_default()));
+                        let mut msg = Message::text("assistant", msg_content.unwrap_or_default());
+                        msg.reasoning_content = reasoning;
+                        result.push(msg);
                     } else {
                         // Convert to serializable tool call format
                         let tc_out: Vec<OpenAiToolCallOut> = tool_calls
@@ -191,7 +204,9 @@ impl OpenAiProtocol {
                                 },
                             })
                             .collect();
-                        result.push(Message::assistant_with_tool_calls(msg_content, tc_out));
+                        let mut msg = Message::assistant_with_tool_calls(msg_content, tc_out);
+                        msg.reasoning_content = reasoning;
+                        result.push(msg);
                     }
                 }
                 UnifiedMessage::ToolResult {

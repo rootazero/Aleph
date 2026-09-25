@@ -16,7 +16,7 @@ use super::summary_utils::{
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -893,7 +893,7 @@ impl ContextCompactor {
         let replaced = c.end - c.start;
         let window_text: String = messages[c.start..cut_end]
             .iter()
-            .map(|m| m.text_content())
+            .map(transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let tokens_before = estimate_tokens(&window_text);
@@ -931,7 +931,7 @@ impl ContextCompactor {
         let gap_msgs = cut_end_m - gap_start;
         let gap_text: String = messages[gap_start..cut_end_m]
             .iter()
-            .map(|m| m.text_content())
+            .map(transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let gap_tokens = estimate_tokens(&gap_text);
@@ -1274,7 +1274,7 @@ fn select_window_end(
     let mut acc = 0usize;
     let mut end = start;
     while end < hard_end && end < msg_ceiling {
-        let text = messages[end].text_content();
+        let text = transcript_text(&messages[end]);
         let capped = cap_transcript_text(&text);
         acc = acc.saturating_add(estimate_tokens(capped.as_ref()));
         end += 1;
@@ -1301,7 +1301,7 @@ fn hash_window(messages: &[UnifiedMessage]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for m in messages {
         std::mem::discriminant(m).hash(&mut h);
-        m.text_content().hash(&mut h);
+        transcript_text(m).hash(&mut h);
     }
     h.finish()
 }
@@ -1330,13 +1330,34 @@ fn strip_context_summary_prefix(text: &str) -> Option<&str> {
     Some(text[line_end..].trim_start_matches('\n'))
 }
 
+/// A message's text as the compactor sees it: every block except reasoning.
+///
+/// The summary records what was said and done. The message list now carries
+/// every persisted thinking block as facts (the wire decides per target what
+/// is sent), so reading `text_content()` here would feed the side-channel
+/// summarizer — and size its windows — with reasoning no target may ever see.
+fn transcript_text(msg: &UnifiedMessage) -> String {
+    let mut parts = Vec::new();
+    for block in msg.content_blocks() {
+        match block {
+            ContentBlock::Text { text, .. } => parts.push(text.clone()),
+            ContentBlock::Json { value } => parts.push(value.to_string()),
+            ContentBlock::ToolCall {
+                name, arguments, ..
+            } => parts.push(format!("{name} {arguments}")),
+            ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => {}
+        }
+    }
+    parts.join(" ")
+}
+
 /// Serialize a slice of messages into a human-readable transcript, capping each
 /// message body via [`cap_transcript_text`] so a few huge old tool results can
 /// never blow up the side-channel summarizer prompt.
 pub(crate) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
-        let text = msg.text_content();
+        let text = transcript_text(msg);
         let capped = cap_transcript_text(&text);
         let role = match msg {
             UnifiedMessage::User { .. } => "user",
@@ -1477,12 +1498,12 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::User { .. } => "user",
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
-                let text = msg.text_content();
+                let text = transcript_text(msg);
                 lines.push(format!("tool_result({tool_name}): {}", head(&text)));
                 continue;
             }
         };
-        let text = msg.text_content();
+        let text = transcript_text(msg);
         lines.push(format!("{role}: {}", head(&text)));
     }
     lines.join("\n")

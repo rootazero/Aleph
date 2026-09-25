@@ -643,6 +643,8 @@ impl HarnessRunner for AgentHarnessRunner {
                 // three consumers consistent by construction.
                 let cfg = refined_context_budget.as_ref().unwrap_or(cfg);
                 let mut budget_inner = ContextBudget::new(cfg);
+                // Count reasoning as this run's provider will send it.
+                budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
                 // fresh per-run budget keeps breaker / split counters
@@ -1424,7 +1426,11 @@ impl HarnessRunner for AgentHarnessRunner {
             .get_events(&session_id, None, None)
             .await
             .unwrap_or_default();
-        let history = crate::harness::agent::prompt::build_prompt(&events, 0);
+        let history = self
+            .default_provider
+            .current()
+            .reasoning_replay((!model.is_empty()).then_some(model.as_str()))
+            .project(&crate::harness::agent::prompt::build_prompt(&events, 0));
 
         // 6. used = overhead + history tokens; against the resolved window.
         //    When mid-run compaction is enabled, cap at the warning band it

@@ -6,6 +6,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::providers::reasoning_replay::ReasoningReplay;
+
+const fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// Unified message type — the single data model for all provider interactions.
 ///
 /// Modeled after pi-mono's `Message = UserMessage | AssistantMessage | ToolResultMessage`.
@@ -61,17 +67,23 @@ pub enum ContentBlock {
     },
     /// Structured JSON (preserves tool output structure)
     Json { value: Value },
-    /// Thinking/reasoning trace.
+    /// Thinking/reasoning trace, carried as facts only.
     ///
-    /// `signature` is the opaque verifier returned by Anthropic-compatible APIs
-    /// alongside the thinking content. It is `None` for providers that do not
-    /// emit a signature (Gemini, `OpenAI`). Anthropic requires a signed thinking
-    /// block to be replayed verbatim on subsequent turns whenever the same
-    /// assistant message also contains `tool_use` blocks.
+    /// `signature` is the opaque verifier some APIs mint with the reasoning
+    /// (an Anthropic signed block, or the NDJSON encrypted-item lines of `OpenAI`
+    /// Responses); `None` for unsigned reasoning. `earlier_turn` says the block
+    /// belongs to a user turn before the current one. Whether a block is sent,
+    /// and how, is decided per target by
+    /// [`ReasoningReplay`](crate::providers::reasoning_replay::ReasoningReplay)
+    /// — not by whoever builds the message list.
     Thinking {
         thinking: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
+        /// `false` when unknown: an unknown block is treated as current-turn,
+        /// which is what every block was before the fact existed.
+        #[serde(default, skip_serializing_if = "is_false")]
+        earlier_turn: bool,
     },
     /// Tool call (only in Assistant messages)
     ToolCall {
@@ -328,20 +340,21 @@ impl ContentBlock {
 
 // === Message pre-processing ===
 
-/// Pre-process messages before sending to any provider.
+/// The pre-send choke point: what one target actually receives.
 ///
-/// 1. Normalizes the tool-call/tool-result pairing invariant (see
-///    [`normalize_tool_pairs`]) — the wire-level safety net that every provider
-///    call passes through.
-/// 2. Normalizes cross-model content (no-op for now, reserved for thinking signatures)
+/// 1. Applies the target's [`ReasoningReplay`] policy to the reasoning facts
+///    (the same pure projection the context estimators count).
+/// 2. Normalizes the tool-call/tool-result pairing invariant (see
+///    [`normalize_tool_pairs`]).
+///
+/// Called by `HttpProvider::execute` after failover has picked the target.
 #[must_use]
 pub fn transform_messages(
     messages: &[UnifiedMessage],
-    _target_provider: Option<&str>,
+    replay: &ReasoningReplay,
 ) -> Vec<UnifiedMessage> {
-    let mut result = messages.to_vec();
+    let mut result = replay.project(messages);
     normalize_tool_pairs(&mut result);
-    // normalize_cross_model is a no-op for now
     result
 }
 
@@ -593,7 +606,7 @@ mod tests {
             },
             UnifiedMessage::tool_result("c1", "search", "found", false),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3); // no synthetic results added
     }
 
@@ -611,7 +624,7 @@ mod tests {
             },
             // Missing ToolResult for c1!
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3); // synthetic ToolResult added
         match &result[2] {
             UnifiedMessage::ToolResult {
@@ -645,7 +658,7 @@ mod tests {
             // No result for c1, then the user keeps talking.
             UnifiedMessage::user("never mind, do something else"),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3);
         // result[1] must be the synthetic result, directly after the call.
         match &result[1] {
@@ -667,7 +680,7 @@ mod tests {
             UnifiedMessage::tool_result("gone", "search", "stale result", false),
             UnifiedMessage::user("continue"),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 2, "orphan ToolResult must be removed");
         assert!(result
             .iter()

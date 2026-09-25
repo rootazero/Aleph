@@ -642,6 +642,15 @@ impl AiProvider for MoaProvider {
         self.aggregator.serving_provider_hint()
     }
 
+    /// The aggregator is the call that carries the conversation's reasoning;
+    /// advisors read a rendered view that drops reasoning outright.
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.aggregator.reasoning_replay(model)
+    }
+
     // `as_http_provider` stays the default `None` — forwarding the aggregator's
     // HttpProvider would let a caller stream AROUND the facade and the advisors
     // would never run. Streaming is served by `execute_streaming_dyn` above,
