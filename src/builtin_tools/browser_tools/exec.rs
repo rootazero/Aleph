@@ -945,6 +945,40 @@ fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> Str
     }
 }
 
+/// The presentation-aware read ([`crate::browser::backend::BrowserBackend::snapshot_presented`]). A
+/// backend that renders from a `PageState` answers with the budget already
+/// applied and the omitted high-value controls named in `text` — that text is
+/// emitted VERBATIM (redacted and fenced, never re-bounded: a second
+/// `bound_content` could slice the controls section in half, and the contract
+/// already guarantees `text ≤ max_chars`). The FULL text still rides to the
+/// same offload [`snapshot_output`] uses, so a truncation the procedure
+/// cannot scroll back to stays recoverable (FL §3.12 ⑮ / 第五轮⑨). Every
+/// other backend presents `snapshot()`'s text uncut (`truncated: false`), and
+/// that arm delegates — the pre-wiring pipeline, byte for byte, including
+/// its offload.
+fn snapshot_presented_output(
+    manager: &ProfileManager,
+    presented: &crate::browser::types::PresentedSnapshot,
+    max_chars: usize,
+) -> String {
+    if !presented.truncated {
+        return snapshot_output(manager, &presented.text, max_chars);
+    }
+    let wrapped = super::redact_wrap(manager, &presented.text);
+    let full = presented.full_text.as_deref().unwrap_or(&presented.text);
+    match super::offload_full_content(manager, BrowserExecTool::NAME, full) {
+        Some(footer) => format!("{wrapped}\n{footer}"),
+        // The controls the cut removed are already named inside the fence, so
+        // the honest note here is the offload's absence, not the tail's loss.
+        None => format!(
+            "{wrapped}\n[snapshot truncated to {max_chars} chars and the full tree could not be \
+             offloaded here; the omitted interactive controls are named above with live refs — \
+             raise this step's max_chars for the whole tree, or add an `evaluate` step with a \
+             targeted DOM query]"
+        ),
+    }
+}
+
 /// What one executed step produced: a status word, an optional text payload
 /// (the reads), and an optional screenshot payload (kept out of `output` so it
 /// serializes as sibling `image_base64`/`format` keys — the exact shape
@@ -1316,13 +1350,13 @@ async fn run_one(
             .map_err(|e| super::backend_error_text(manager, &e)),
         PlannedAction::Snapshot { max_chars } => {
             read_guard(manager, backend, tab_id).await?;
-            let snap = backend
-                .snapshot(tab_id)
+            let presented = backend
+                .snapshot_presented(tab_id, *max_chars)
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
-            Ok(StepOutcome::read(snapshot_output(
+            Ok(StepOutcome::read(snapshot_presented_output(
                 manager,
-                &snap.snapshot_text,
+                &presented,
                 *max_chars,
             )))
         }
@@ -1832,15 +1866,17 @@ mod tests {
             vec![
                 "navigate:1:https://example.com/search",
                 // The post-navigation read (its SSRF re-check, then the read),
-                // which is also what unlatches the refs below.
+                // which is also what unlatches the refs below. The read goes
+                // through `snapshot_presented` — the presentation-aware half —
+                // never bare `snapshot`.
                 "list_tabs",
-                "snapshot",
+                "snapshot_presented",
                 "type_text:hello",
                 "press_key:Enter",
                 "wait:Text(\"Results\")",
                 // The read step's SSRF re-check, then the read itself.
                 "list_tabs",
-                "snapshot",
+                "snapshot_presented",
             ]
         );
         assert_eq!(results.len(), 6);
@@ -2002,6 +2038,75 @@ mod tests {
         assert!(
             suffix.contains("snapshot truncated to") && suffix.contains("max_chars"),
             "the model must be told what was cut and what to raise: {suffix}"
+        );
+    }
+
+    /// A backend that renders under the budget itself (the cdp one, via
+    /// `snapshot_presented`) has its presentation emitted VERBATIM: the
+    /// omitted high-value-controls section reaches the model, the emitted
+    /// page text is byte-for-byte the presented text (a second `bound_content`
+    /// could slice the section in half), and it stays within the step's
+    /// max_chars. The tail the cut removed is nowhere in the output.
+    #[tokio::test]
+    async fn a_presented_truncated_snapshot_step_emits_the_controls_section_within_budget() {
+        use crate::security::content_sanitizer::split_external_fence;
+
+        let budget = crate::builtin_tools::browser_tools::snapshot::MIN_SNAPSHOT_CHARS;
+        let presented = concat!(
+            "- button \"kept one\" [ref=e1]\n",
+            "- button \"kept two\" [ref=e2]\n",
+            "Omitted high-value controls:\n",
+            "- textbox \"Search\" [ref=e7]\n",
+            "- button \"Sign in\" [ref=e8]\n",
+            "\u{2026}and 4 more\n",
+        );
+        assert!(
+            presented.chars().count() <= budget,
+            "the fixture must fit the clamped budget"
+        );
+        // The FULL tree is what the budget actually cut: the omitted controls'
+        // rendered lines plus a long tail that must never reach the model via
+        // the presented text.
+        let mut full = String::from(presented);
+        full.push_str("- textbox \"Search\" [ref=e7]\n- button \"Sign in\" [ref=e8]\n");
+        for i in 90..130 {
+            full.push_str(&format!("- generic \"tail row {i}\" [ref=e{i}]\n"));
+        }
+        assert!(full.chars().count() > budget);
+
+        let backend = FakeBackend::new(None)
+            .with_snapshot_text(full.clone())
+            .with_presented_snapshot(presented, true, Some(full));
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Snapshot {
+            max_chars: Some(budget),
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let output = results[0].output.as_deref().expect("a snapshot step reads");
+        let fenced = split_external_fence(output).expect("whole fence");
+
+        // The presentation survives byte-for-byte — section, trailer and all.
+        assert_eq!(fenced.interior, presented, "got: {output}");
+        assert!(
+            fenced.interior.contains("Omitted high-value controls:"),
+            "the section must reach the model: {output}"
+        );
+        assert!(fenced.interior.chars().count() <= budget);
+        assert!(
+            !fenced.interior.contains("tail row"),
+            "the cut tail leaked into the presentation: {output}"
+        );
+        // The truncation note is ours, so it sits outside the fence — and in
+        // this harness-less test the offload is unavailable, so it is the
+        // honest controls-named variant.
+        assert!(
+            fenced.suffix.contains("snapshot truncated to")
+                && fenced.suffix.contains("omitted interactive controls are named above"),
+            "the note must name what the model already has: {}",
+            fenced.suffix
         );
     }
 
