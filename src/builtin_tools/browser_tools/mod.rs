@@ -18,6 +18,7 @@ pub mod open;
 pub mod pdf;
 pub mod press_key;
 pub mod profile_tool;
+pub(crate) mod recovery;
 pub mod resize;
 pub mod screenshot;
 pub mod scroll;
@@ -146,15 +147,20 @@ pub(crate) const MAX_BACKEND_ERROR_CHARS: usize = 2_000;
 /// unbalanced fence is strictly worse than none. `sanitize_external_text` is
 /// documented for exactly this case: the scrubbing without the ~150 bytes of
 /// boundary.
+/// appended after the scrub: its bytes are ours (a closed enum, static text),
+/// so the sanitizer has nothing to catch in them and truncation must not eat
+/// them. See the module doc for why the contract rides the `message` line
+/// rather than a sibling JSON key.
 pub(crate) fn backend_error_text(manager: &ProfileManager, err: &BrowserError) -> String {
     let raw = err.to_string();
     let (bounded, truncated) = bound_content_head_tail(&raw, MAX_BACKEND_ERROR_CHARS);
     let scrubbed = sanitize_external_text(&manager.redact_content(&bounded));
-    if truncated {
+    let text = if truncated {
         format!("{scrubbed} [backend error truncated to {MAX_BACKEND_ERROR_CHARS} chars]")
     } else {
         scrubbed
-    }
+    };
+    recovery::attach(text, err)
 }
 
 /// Deterministic input-side secret gate for the form-input tools
@@ -1069,6 +1075,63 @@ mod tests {
             "head+tail bounding must keep the reason: {out}"
         );
         assert!(out.contains("backend error truncated to"));
+    }
+
+    // ---------------------------------------------------------------
+    // The recovery contract (recovery.rs) — registry hygiene and wiring.
+    // ---------------------------------------------------------------
+
+    /// Every tool the recovery registry suggests must be a tool that actually
+    /// exists — a suggestion naming an unregistered tool sends the model into
+    /// a `ToolError::NotFound` it cannot recover from (the `fallback_registry`
+    /// ghost-tool lesson, FEATURE_LOCATOR §3.12: this is the fourth time the
+    /// shape is being pinned).
+    ///
+    /// The name set is DERIVED from `BUILTIN_TOOL_DEFINITIONS` — the same
+    /// table the registry advertises and `groups.rs`'s own censuses read —
+    /// never hand-copied (判据 §5). The registry names only `browser_*`
+    /// tools, all of which are unconditional entries in that table, so the
+    /// config-gated/registry-only tails of the catalogue cannot false-alarm
+    /// here.
+    #[test]
+    fn recovery_registry_entries_name_real_tools() {
+        let names: std::collections::HashSet<&str> =
+            crate::executor::BUILTIN_TOOL_DEFINITIONS
+                .iter()
+                .map(|d| d.name)
+                .collect();
+        assert!(!names.is_empty(), "the derivation read an empty table");
+        for entry in recovery::REGISTRY {
+            assert!(
+                names.contains(entry.tool),
+                "recovery suggests `{}`, which is not a registered tool",
+                entry.tool
+            );
+        }
+    }
+
+    /// The trailer is attached at the chokepoint, so a tool failure carries
+    /// the category and the next action with it — and the raw error text
+    /// stays in front (R7: data, never a replacement).
+    #[test]
+    fn backend_error_text_carries_the_recovery_trailer() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let err = BrowserError::StaleRef {
+            ref_id: "e9".into(),
+            reason: crate::browser::error::StaleReason::Navigated,
+        };
+        let out = backend_error_text(&manager, &err);
+        assert!(out.contains("ref e9 is stale"), "error prose first: {out}");
+        let line = out
+            .lines()
+            .find(|l| l.starts_with(recovery::RECOVERY_LINE_PREFIX))
+            .unwrap_or_else(|| panic!("no recovery trailer in: {out}"));
+        let v: serde_json::Value = serde_json::from_str(
+            &line[recovery::RECOVERY_LINE_PREFIX.len()..],
+        )
+        .expect("trailer is JSON");
+        assert_eq!(v["category"], "stale_ref");
+        assert!(v["next_actions"][0]["tool"].as_str().is_some());
     }
 
     // ---------------------------------------------------------------
