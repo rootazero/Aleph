@@ -61,15 +61,56 @@ const ARGUMENTS_VAR: &str = "ARGUMENTS";
 
 /// The daemon's environment an inline command inherits: what a shell and the
 /// programs it starts need to run — where programs are, whose home and
-/// account, the shell, the locale (`LANG` and every `LC_*`), the terminal,
-/// the temp directory, the time zone — and nothing that can carry a
-/// credential. Everything else is cleared: provider API keys, channel bot
-/// tokens and Aleph's own settings live in the daemon's environment, and
-/// whoever sends the `/command` picks the arguments of a command whose output
-/// the model reads (`` !`printenv $1` ``). An ssh agent socket is a credential
-/// channel too and is not inherited.
-const INHERITED_ENV: [&str; 9] = [
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "TZ",
+/// account, the shell, the locale (`LANG` and the POSIX `LC_*` categories —
+/// not every `LC_` name: `LC_*` is how ssh forwards arbitrary variables), the
+/// terminal, the temp directory, the time zone, the XDG base directories —
+/// and how they reach the network (proxies, private CA bundles). Everything
+/// else is cleared: provider API keys, channel bot tokens and Aleph's own
+/// settings live in the daemon's environment, and whoever sends the
+/// `/command` picks the arguments of a command whose output the model reads
+/// (`` !`printenv $1` ``). An ssh agent socket is a credential channel too and
+/// is not inherited. A proxy URL can carry a credential; it is inherited
+/// because an inline command runs only for an operator, whose network it is.
+const INHERITED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+    // Locale.
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_COLLATE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    // XDG base directories.
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_DIRS",
+    "XDG_DATA_DIRS",
+    // Network: proxies (both spellings programs read) and private CAs.
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
 ];
 
 /// On Windows, additionally what `cmd.exe` and most programs fail without:
@@ -99,7 +140,6 @@ fn inherited(name: &std::ffi::OsStr) -> bool {
         name.to_string()
     };
     INHERITED_ENV.contains(&name.as_str())
-        || name.starts_with("LC_")
         || (cfg!(windows) && INHERITED_ENV_WINDOWS.contains(&name.as_str()))
 }
 
@@ -177,9 +217,10 @@ pub struct InlineSite<'a> {
 /// the line is parsed — so no argument reaches an inline command there:
 /// nothing is appended and `ARGUMENTS` is removed, not exported.
 ///
-/// The daemon's environment is cleared first, except what a shell needs
-/// ([`INHERITED_ENV`]) — unlike a plugin command hook, which inherits all of
-/// it: an inline command's arguments are picked by whoever sends the
+/// The daemon's environment is cleared first, except what a shell and its
+/// programs need ([`INHERITED_ENV`]) — unlike a plugin command hook, which
+/// inherits all of it: an inline command's arguments are picked by whoever
+/// sends the
 /// `/command`, and its output is read by the model. On top of that, the
 /// variables a hook is told: every spelling of the plugin root and data
 /// directory, and `CLAUDE_PROJECT_DIR`, set from `site` when known and
@@ -1212,25 +1253,44 @@ mod tests {
 
     /// S4. The daemon's environment does not reach an inline command: a
     /// variable only the daemon has (where its provider keys and bot tokens
-    /// live) is absent, while what a shell needs — `PATH` — is inherited as
-    /// the daemon's own value (a shell started without one may set a default
-    /// of its own, so "some PATH" would prove nothing).
+    /// live) is absent — and so is an `LC_` name that is no locale category
+    /// (N7) — while what a shell needs — `PATH` — is inherited as the
+    /// daemon's own value (a shell started without one may set a default of
+    /// its own, so "some PATH" would prove nothing), and so is a proxy (N8).
     #[tokio::test]
     #[cfg(unix)]
     #[serial_test::serial] // writes process env a spawned child reads
     async fn the_daemons_environment_is_cleared_except_what_a_shell_needs() {
-        /// Removes the daemon-side value after the test.
-        struct Sentinel;
+        /// Restores the daemon-side values after the test.
+        struct Sentinel(Vec<(&'static str, Option<std::ffi::OsString>)>);
         impl Drop for Sentinel {
             fn drop(&mut self) {
-                std::env::remove_var("ALEPH_TEST_SECRET");
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
             }
         }
-        let _sentinel = Sentinel;
-        std::env::set_var("ALEPH_TEST_SECRET", "from-the-daemon");
+        let set = [
+            ("ALEPH_TEST_SECRET", "from-the-daemon"),
+            // `LC_*` is how ssh forwards arbitrary variables: only the POSIX
+            // locale categories are inherited.
+            ("LC_SMUGGLED_TOKEN", "from-the-daemon"),
+            ("HTTPS_PROXY", "http://proxy.test:3128"),
+        ];
+        let _sentinel = Sentinel(
+            set.iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for (name, value) in set {
+            std::env::set_var(name, value);
+        }
         let cwd = TempDir::new().unwrap();
         let out = inline_shell_command(
-            r#"printf '%s|%s' "${ALEPH_TEST_SECRET-unset}" "$PATH""#,
+            r#"printf '%s|%s|%s|%s' "${ALEPH_TEST_SECRET-unset}" "${LC_SMUGGLED_TOKEN-unset}" "${HTTPS_PROXY-unset}" "$PATH""#,
             &InlineArgs {
                 raw: "",
                 positional: &[],
@@ -1246,7 +1306,7 @@ mod tests {
         let path = std::env::var("PATH").expect("the test process has a PATH");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            format!("unset|{path}")
+            format!("unset|unset|http://proxy.test:3128|{path}")
         );
     }
 
