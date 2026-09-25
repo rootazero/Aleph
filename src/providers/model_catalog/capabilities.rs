@@ -1145,6 +1145,30 @@ pub fn capabilities_for(model: &str) -> Option<ModelCapabilities> {
         .map(|(_, caps)| *caps)
 }
 
+/// Canonical id prefixes of models whose signed thinking blocks are bound to
+/// the conversation prefix that produced them ("preserved thinking"): editing
+/// or removing an earlier turn invalidates every later block, and enforced
+/// accounts get a 400 for replaying one. Anthropic decides enforcement per
+/// model, so this is a list rather than a version rule; a model missing here
+/// keeps the pre-binding request shape.
+///
+/// Membership only — order does not matter, so no shadow guard applies.
+const PREFIX_BOUND_THINKING: &[&str] =
+    &["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"];
+
+/// True when `model` binds its thinking blocks to the conversation prefix.
+///
+/// A model fact, looked up through the same canonicalisation and separator
+/// folding as [`capabilities_for`]; whether a *host* can accept the matching
+/// request controls is the protocol policy's question, not this one.
+#[must_use]
+pub fn binds_thinking_to_prefix(model: &str) -> bool {
+    let canon = canonicalize_model_id(model);
+    PREFIX_BOUND_THINKING
+        .iter()
+        .any(|prefix| prefix_matches(&canon, prefix))
+}
+
 /// Conservative context window (tokens) for models absent from the capability
 /// catalogue — keeps the occupancy gauge meaningful for custom / local models
 /// instead of failing. Matches the panel's prior unknown-model fallback so the
@@ -1316,6 +1340,50 @@ mod tests {
 
         let haiku45 = capabilities_for("claude-haiku-4-5-20251001").unwrap();
         assert_eq!(haiku45.max_output_tokens, 64_000);
+    }
+
+    /// Only the three launch models bind thinking to the conversation prefix;
+    /// their predecessors in the same family do not. Canonicalisation runs
+    /// first, so vendor-tagged / dotted / dated spellings resolve the same way.
+    #[test]
+    fn prefix_bound_thinking_is_the_launch_set_only() {
+        for id in [
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+            "anthropic/claude-opus-5.5",
+            "anthropic.claude-fable-5-1",
+        ] {
+            assert!(binds_thinking_to_prefix(id), "{id} binds thinking");
+        }
+        for id in [
+            "claude-opus-5",
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-sonnet-5",
+            "claude-opus-4-8",
+            "kimi-k2-thinking",
+        ] {
+            assert!(!binds_thinking_to_prefix(id), "{id} does not bind thinking");
+        }
+    }
+
+    /// Self-protection for the binding set: every entry must be a reasoning
+    /// model the capability table already sizes (1M / 128K). A binding row
+    /// with no capability row would plan the window at the 128K conservative
+    /// default for the very models whose history can least afford a rewrite.
+    #[test]
+    fn every_prefix_bound_model_has_a_reasoning_capability_row() {
+        for prefix in PREFIX_BOUND_THINKING {
+            let caps = capabilities_for(prefix)
+                .unwrap_or_else(|| panic!("{prefix} has no capability row"));
+            assert!(
+                caps.supports_reasoning,
+                "{prefix} must be a reasoning model"
+            );
+            assert_eq!(caps.context_window, 1_000_000, "{prefix} window");
+            assert_eq!(caps.max_output_tokens, 128_000, "{prefix} output cap");
+        }
     }
 
     #[test]

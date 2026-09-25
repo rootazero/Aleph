@@ -3,13 +3,20 @@
 //! image, signed/unsigned thinking) plus `ThinkingBlock` serialization.
 
 use super::super::AnthropicProtocol;
-use crate::providers::anthropic::types::{ContentBlock, MessageContent};
+use crate::providers::anthropic::types::{ContentBlock, Message, MessageContent};
 use crate::providers::message::UnifiedMessage;
+use crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy;
+
+/// Conversion under the first-party host policy. Shapes here do not depend on
+/// the host; per-host replay behaviour is pinned in `thinking_replay`.
+fn convert(messages: &[UnifiedMessage]) -> Vec<Message> {
+    AnthropicProtocol::convert_messages(messages, &build_anthropic_policy(None).capabilities)
+}
 
 #[test]
 fn test_convert_s1_pure_text_user() {
     let msgs = [UnifiedMessage::user("Hello, Claude!")];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, "user");
@@ -26,7 +33,7 @@ fn test_convert_s2_multi_turn() {
         UnifiedMessage::assistant("Rust is a systems programming language."),
         UnifiedMessage::user("Tell me more."),
     ];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 3);
     assert_eq!(result[0].role, "user");
@@ -51,7 +58,7 @@ fn test_convert_s3_assistant_text_and_tool_call() {
             },
         ],
     }];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, "assistant");
@@ -74,7 +81,7 @@ fn test_convert_s4_tool_result() {
         "Found 3 results about Rust.",
         false,
     )];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, "user");
@@ -104,7 +111,7 @@ fn test_convert_s5_full_cycle() {
         UnifiedMessage::tool_result("call_1", "search", "Rust is great", false),
         UnifiedMessage::assistant("Based on the results, Rust is great!"),
     ];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 4);
     assert_eq!(result[0].role, "user");
@@ -132,7 +139,7 @@ fn test_convert_s6_multiple_tool_calls() {
             },
         ],
     }];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     let json = serde_json::to_value(&result[0]).unwrap();
@@ -150,7 +157,7 @@ fn test_convert_s7_consecutive_tool_results_merge() {
         UnifiedMessage::tool_result("call_1", "search", "result 1", false),
         UnifiedMessage::tool_result("call_2", "read_file", "result 2", false),
     ];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     // Consecutive ToolResults should merge into ONE user message
     assert_eq!(result.len(), 1);
@@ -172,7 +179,7 @@ fn test_convert_s8_error_tool_result() {
         "Connection timed out",
         true,
     )];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     let json = serde_json::to_value(&result[0]).unwrap();
@@ -194,7 +201,7 @@ fn test_convert_s9_tool_id_sanitization() {
             arguments: serde_json::json!({}),
         }],
     }];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     let json = serde_json::to_value(&result[0]).unwrap();
     let content = json["content"].as_array().unwrap();
@@ -216,7 +223,7 @@ fn test_convert_s9_tool_id_sanitization() {
             arguments: serde_json::json!({}),
         }],
     }];
-    let result2 = AnthropicProtocol::convert_messages(&msgs2);
+    let result2 = convert(&msgs2);
     let json2 = serde_json::to_value(&result2[0]).unwrap();
     let content2 = json2["content"].as_array().unwrap();
     let id2 = content2[0]["id"].as_str().unwrap();
@@ -238,7 +245,7 @@ fn test_convert_s10_image_content() {
             },
         ],
     }];
-    let result = AnthropicProtocol::convert_messages(&msgs);
+    let result = convert(&msgs);
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].role, "user");
@@ -261,6 +268,7 @@ fn test_thinking_block_enabled_serialization() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(10000),
         display: None,
+        block_binding: None,
     };
     let json = serde_json::to_value(&block).unwrap();
     assert_eq!(json["type"], "enabled");
@@ -275,6 +283,7 @@ fn test_thinking_block_adaptive_serialization() {
         thinking_type: "adaptive".to_string(),
         budget_tokens: None,
         display: Some("summarized".to_string()),
+        block_binding: None,
     };
     let json = serde_json::to_value(&block).unwrap();
     assert_eq!(json["type"], "adaptive");
@@ -299,7 +308,7 @@ fn test_convert_assistant_with_signed_thinking_and_tool_use() {
             },
         ],
     }];
-    let converted = AnthropicProtocol::convert_messages(&messages);
+    let converted = convert(&messages);
     assert_eq!(converted.len(), 1);
     let blocks = match &converted[0].content {
         MessageContent::Multimodal { content } => content,
@@ -335,7 +344,7 @@ fn test_convert_assistant_drops_unsigned_thinking() {
             },
         ],
     }];
-    let converted = AnthropicProtocol::convert_messages(&messages);
+    let converted = convert(&messages);
     let blocks = match &converted[0].content {
         MessageContent::Multimodal { content } => content,
         MessageContent::Text { .. } => return, // collapsed-text path is also acceptable

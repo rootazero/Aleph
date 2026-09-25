@@ -7,7 +7,8 @@
 //!   provider alias. Unifies logic that used to be duplicated in `pricing`
 //!   and `presets`.
 //! * [`capabilities`] — per-model context window / output cap / vision /
-//!   tools / reasoning flags. Previously absent in Aleph.
+//!   tools / reasoning flags, plus whether the model binds its thinking to
+//!   the conversation prefix. Previously absent in Aleph.
 //! * [`endpoint`] — classify a provider's `base_url` host as on-machine
 //!   ([`EndpointKind::Local`]) or a public API ([`EndpointKind::Cloud`]).
 //! * [`lifecycle`] — is the vendor still serving this id, or did it retire?
@@ -39,8 +40,8 @@ mod drift_tests;
 
 pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor, prefix_matches};
 pub use capabilities::{
-    capabilities_for, resolve_context_window, resolve_context_window_with_override,
-    ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,
+    binds_thinking_to_prefix, capabilities_for, resolve_context_window,
+    resolve_context_window_with_override, ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,
 };
 pub use discovery::{cached_models, refresh_models, DiscoveredModels, DiscoveryError};
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};

@@ -399,6 +399,7 @@ fn adjust_max_tokens_raises_cap_above_legacy_budget() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(20_000),
         display: None,
+        block_binding: None,
     };
     // 16k default cap <= 20k budget → bumped to budget + 1024 reserve.
     let adjusted =
@@ -413,6 +414,7 @@ fn adjust_max_tokens_keeps_cap_when_already_above_budget() {
         thinking_type: "enabled".to_string(),
         budget_tokens: Some(10_000),
         display: None,
+        block_binding: None,
     };
     let adjusted =
         AnthropicProtocol::adjust_max_tokens_for_thinking_budget(16_384, Some(&thinking));
@@ -430,6 +432,7 @@ fn adjust_max_tokens_ignores_adaptive_and_absent_thinking() {
         thinking_type: "adaptive".to_string(),
         budget_tokens: None,
         display: Some("summarized".to_string()),
+        block_binding: None,
     };
     assert_eq!(
         AnthropicProtocol::adjust_max_tokens_for_thinking_budget(8_192, Some(&adaptive)),

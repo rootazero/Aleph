@@ -183,40 +183,6 @@ impl UnifiedMessage {
         }
     }
 
-    /// Build an Assistant message from a `ProviderResponse`
-    #[must_use]
-    pub fn from_provider_response(resp: &super::adapter::ProviderResponse) -> Self {
-        let mut content = Vec::new();
-        if let Some(ref thinking) = resp.thinking {
-            content.push(ContentBlock::Thinking {
-                // rust-doctor-disable-next-line excessive-clone
-                thinking: thinking.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                signature: resp.thinking_signature.clone(),
-            });
-        }
-        if let Some(ref text) = resp.text {
-            content.push(ContentBlock::Text {
-                // rust-doctor-disable-next-line excessive-clone
-                text: text.clone(),
-                cache_control: None,
-            });
-        }
-        for tc in &resp.tool_calls {
-            content.push(ContentBlock::ToolCall {
-                // rust-doctor-disable-next-line excessive-clone
-                id: tc.id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                name: tc.name.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                arguments: tc.arguments.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                thought_signature: tc.thought_signature.clone(),
-            });
-        }
-        Self::Assistant { content }
-    }
-
     /// Get mutable access to content blocks (for PII filtering)
     pub const fn content_blocks_mut(&mut self) -> &mut Vec<ContentBlock> {
         match self {
@@ -584,42 +550,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_provider_response() {
-        use super::super::adapter::{NativeToolCall, ProviderResponse};
-        let resp = ProviderResponse {
-            text: Some("I'll search for that.".into()),
-            tool_calls: vec![NativeToolCall {
-                thought_signature: None,
-                id: "call_1".into(),
-                name: "search".into(),
-                arguments: json!({"query": "rust"}),
-            }],
-            thinking: Some("Let me think...".into()),
-            thinking_signature: Some("sig_abc123".into()),
-            ..Default::default()
-        };
-        let msg = UnifiedMessage::from_provider_response(&resp);
-        match &msg {
-            UnifiedMessage::Assistant { content } => {
-                assert_eq!(content.len(), 3); // thinking + text + tool_call
-                match &content[0] {
-                    ContentBlock::Thinking {
-                        thinking,
-                        signature,
-                    } => {
-                        assert_eq!(thinking, "Let me think...");
-                        assert_eq!(signature.as_deref(), Some("sig_abc123"));
-                    }
-                    _ => panic!("expected Thinking block"),
-                }
-                assert!(matches!(&content[1], ContentBlock::Text { .. }));
-                assert!(matches!(&content[2], ContentBlock::ToolCall { .. }));
-            }
-            _ => panic!("expected Assistant"),
-        }
-    }
-
-    #[test]
     fn test_extract_all_text() {
         let messages = vec![
             UnifiedMessage::user("hello"),
@@ -831,31 +761,5 @@ mod tests {
                 ttl: Some(EphemeralTtl::OneHour),
             },
         );
-    }
-
-    #[test]
-    fn test_from_provider_response_copies_thought_signature() {
-        use super::super::adapter::{NativeToolCall, ProviderResponse};
-        let resp = ProviderResponse {
-            tool_calls: vec![NativeToolCall {
-                id: "c1".into(),
-                name: "search".into(),
-                arguments: json!({}),
-                thought_signature: Some("sig_fpr".into()),
-            }],
-            ..Default::default()
-        };
-        let msg = UnifiedMessage::from_provider_response(&resp);
-        match &msg {
-            UnifiedMessage::Assistant { content } => match &content[0] {
-                ContentBlock::ToolCall {
-                    thought_signature, ..
-                } => {
-                    assert_eq!(thought_signature.as_deref(), Some("sig_fpr"));
-                }
-                other => panic!("expected ToolCall, got {other:?}"),
-            },
-            _ => panic!("expected Assistant"),
-        }
     }
 }

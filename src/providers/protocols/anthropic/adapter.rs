@@ -293,7 +293,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             actual_model = normalize_kimi_coding_model_id(actual_model);
         }
         let endpoint = Self::build_endpoint(config);
-        let messages = Self::convert_messages(payload.messages);
+        let messages = Self::convert_messages(payload.messages, &policy.capabilities);
 
         // Per-request overrides provider config
         let max_tokens = payload
@@ -342,6 +342,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 thinking_type: "disabled".to_string(),
                                 budget_tokens: None,
                                 display: None,
+                                block_binding: None,
                             }),
                             None,
                         )
@@ -354,6 +355,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 thinking_type: "adaptive".to_string(),
                                 budget_tokens: None,
                                 display: Some("summarized".to_string()),
+                                block_binding: None,
                             }),
                             Some(eff),
                         ),
@@ -370,6 +372,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                         thinking_type: "enabled".to_string(),
                         budget_tokens: Some(budget),
                         display: None,
+                        block_binding: None,
                     }),
                     None,
                 ),
@@ -530,6 +533,16 @@ impl ProtocolAdapter for AnthropicProtocol {
             (None, None, None)
         } else {
             (temperature, top_p, top_k)
+        };
+
+        // Preserved-thinking controls ride on the thinking config. Applied
+        // after the sampling gate so that gate still sees the caller's
+        // thinking choice, not the binding wrapper. The beta header below is
+        // derived from the same predicate.
+        let thinking = if Self::thinking_block_binding_applies(actual_model, &policy.capabilities) {
+            Self::with_drop_block_binding(thinking, actual_model)
+        } else {
+            thinking
         };
 
         // Cycle 4: wire metadata + effort from config. Adaptive thinking on
