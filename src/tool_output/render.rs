@@ -28,6 +28,18 @@ use serde_json::Value;
 
 use super::walk::MAX_WALK_DEPTH;
 
+/// A tool result as it is stored and indexed.
+pub(crate) struct Rendered<'a> {
+    /// The text to persist and index (see [`line_preserving`]).
+    pub text: Cow<'a, str>,
+    /// Some text field — or the whole text, when it is not a JSON envelope —
+    /// is a fenced payload, i.e. the tool that produced it marked it as
+    /// external, untrusted content. Decided by [`super::fence::is_fenced`],
+    /// the same test the ingress rewrites route on, over the same fields
+    /// (the ingress walk and this one share [`MAX_WALK_DEPTH`]).
+    pub fenced: bool,
+}
+
 /// Render `text` line-preserving when it is a flattened JSON envelope;
 /// otherwise return it unchanged.
 ///
@@ -45,66 +57,81 @@ use super::walk::MAX_WALK_DEPTH;
 /// compact JSON under their path — lossless, and it bounds how often a long
 /// path prefix is repeated.
 #[must_use]
-pub(crate) fn line_preserving(text: &str) -> Cow<'_, str> {
+pub(crate) fn line_preserving(text: &str) -> Rendered<'_> {
+    fn as_is(text: &str) -> Rendered<'_> {
+        Rendered {
+            text: Cow::Borrowed(text),
+            fenced: super::fence::is_fenced(text),
+        }
+    }
     if text.contains('\n') {
-        return Cow::Borrowed(text);
+        return as_is(text);
     }
     let head = text.trim_start();
     if !(head.starts_with('{') || head.starts_with('[')) {
-        return Cow::Borrowed(text);
+        return as_is(text);
     }
     match serde_json::from_str::<Value>(text) {
-        Ok(value @ (Value::Object(_) | Value::Array(_))) => Cow::Owned(render(&value)),
-        _ => Cow::Borrowed(text),
+        Ok(value @ (Value::Object(_) | Value::Array(_))) => render(&value),
+        _ => as_is(text),
     }
 }
 
-fn render(value: &Value) -> String {
-    let mut leaves = String::new();
-    let mut blocks = String::new();
-    let mut path = Vec::new();
-    visit(value, &mut path, 0, &mut leaves, &mut blocks);
-    if blocks.is_empty() {
-        return leaves;
-    }
+#[derive(Default)]
+struct Renderer {
+    leaves: String,
+    blocks: String,
+    fenced: bool,
+}
+
+fn render(value: &Value) -> Rendered<'static> {
+    let mut out = Renderer::default();
+    out.visit(value, &mut Vec::new(), 0);
+    let Renderer {
+        mut leaves,
+        blocks,
+        fenced,
+    } = out;
     leaves.push_str(&blocks);
-    leaves
+    Rendered {
+        text: Cow::Owned(leaves),
+        fenced,
+    }
 }
 
-fn visit(
-    value: &Value,
-    path: &mut Vec<String>,
-    depth: usize,
-    leaves: &mut String,
-    blocks: &mut String,
-) {
-    match value {
-        Value::Object(map) if !map.is_empty() && depth <= MAX_WALK_DEPTH => {
-            for (key, child) in map {
-                path.push(key.clone());
-                visit(child, path, depth + 1, leaves, blocks);
-                path.pop();
+impl Renderer {
+    fn visit(&mut self, value: &Value, path: &mut Vec<String>, depth: usize) {
+        match value {
+            Value::Object(map) if !map.is_empty() && depth <= MAX_WALK_DEPTH => {
+                for (key, child) in map {
+                    path.push(key.clone());
+                    self.visit(child, path, depth + 1);
+                    path.pop();
+                }
             }
-        }
-        Value::Array(items) if !items.is_empty() && depth <= MAX_WALK_DEPTH => {
-            for (idx, child) in items.iter().enumerate() {
-                path.push(idx.to_string());
-                visit(child, path, depth + 1, leaves, blocks);
-                path.pop();
+            Value::Array(items) if !items.is_empty() && depth <= MAX_WALK_DEPTH => {
+                for (idx, child) in items.iter().enumerate() {
+                    path.push(idx.to_string());
+                    self.visit(child, path, depth + 1);
+                    path.pop();
+                }
             }
-        }
-        Value::String(s) if s.contains('\n') => {
-            blocks.push_str("## ");
-            blocks.push_str(&label(path));
-            blocks.push('\n');
-            blocks.push_str(s);
-            if !s.ends_with('\n') {
-                blocks.push('\n');
+            Value::String(s) if s.contains('\n') => {
+                self.fenced |= super::fence::is_fenced(s);
+                self.blocks.push_str("## ");
+                self.blocks.push_str(&label(path));
+                self.blocks.push('\n');
+                self.blocks.push_str(s);
+                if !s.ends_with('\n') {
+                    self.blocks.push('\n');
+                }
             }
+            // A fence is never one line (its markers are lines of their own),
+            // so a single-line string cannot be fenced.
+            Value::String(s) => push_leaf(&mut self.leaves, path, s),
+            // Scalars, empty containers, and containers past the depth cap.
+            other => push_leaf(&mut self.leaves, path, &other.to_string()),
         }
-        Value::String(s) => push_leaf(leaves, path, s),
-        // Scalars, empty containers, and containers past the depth cap.
-        other => push_leaf(leaves, path, &other.to_string()),
     }
 }
 
@@ -144,7 +171,7 @@ mod tests {
             "precondition: the flat form is one line"
         );
 
-        let rendered = line_preserving(&flat);
+        let rendered = line_preserving(&flat).text;
         let lines: Vec<&str> = rendered.lines().collect();
 
         for leaf in ["success: false", "exit_code: 101", "stderr: "] {
@@ -168,7 +195,13 @@ mod tests {
         let fenced = "<<<EXTERNAL_UNTRUSTED_CONTENT id=\"x\">\nbody a\nbody b\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"x\">";
         let value = json!({ "content": [ { "type": "text", "text": fenced } ] });
 
-        let rendered = line_preserving(&value.to_string()).into_owned();
+        let flat = value.to_string();
+        let out = line_preserving(&flat);
+        assert!(
+            out.fenced,
+            "a fenced text field marks the whole result as fenced"
+        );
+        let rendered = out.text.into_owned();
 
         assert!(rendered.contains("content.0.type: text\n"), "{rendered}");
         assert!(
@@ -177,10 +210,26 @@ mod tests {
         );
     }
 
+    /// A bare fenced string (an MCP text result, a browser offload) is stored
+    /// as-is and still reported as fenced.
+    #[test]
+    fn a_bare_fenced_text_passes_through_and_is_reported_fenced() {
+        let fenced = crate::security::content_sanitizer::wrap_external_content(
+            "page line 1\npage line 2",
+            crate::security::content_sanitizer::ContentSource::BrowserContent,
+        );
+        let out = line_preserving(&fenced);
+        assert!(matches!(out.text, Cow::Borrowed(t) if t == fenced));
+        assert!(out.fenced);
+    }
+
     #[test]
     fn arrays_of_scalars_become_one_line_each() {
         let value = json!({ "files": ["a.rs", "b.rs"], "empty": [], "none": null });
-        let rendered = line_preserving(&value.to_string()).into_owned();
+        let flat = value.to_string();
+        let out = line_preserving(&flat);
+        assert!(!out.fenced);
+        let rendered = out.text.into_owned();
         for line in ["files.0: a.rs", "files.1: b.rs", "empty: []", "none: null"] {
             assert!(
                 rendered.lines().any(|l| l == line),
@@ -195,7 +244,7 @@ mod tests {
         for _ in 0..8 {
             deep = json!({ "n": deep });
         }
-        let rendered = line_preserving(&deep.to_string()).into_owned();
+        let rendered = line_preserving(&deep.to_string()).text.into_owned();
         assert!(
             rendered.contains("\"leaf\":\"x\""),
             "the part past the cap is kept, not dropped:\n{rendered}"
@@ -213,10 +262,12 @@ mod tests {
             "42",
             "\"a bare json string\"",
         ] {
+            let out = line_preserving(text);
             assert!(
-                matches!(line_preserving(text), Cow::Borrowed(t) if t == text),
+                matches!(out.text, Cow::Borrowed(t) if t == text),
                 "must pass through byte-identical: {text:?}"
             );
+            assert!(!out.fenced, "{text:?}");
         }
     }
 }

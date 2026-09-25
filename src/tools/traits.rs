@@ -68,6 +68,19 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// Human-readable description for LLM tool selection
     const DESCRIPTION: &'static str;
 
+    /// Per-result token budget for this tool's output (Layer-2
+    /// persist/truncate), or `None` (the default) for the global default.
+    ///
+    /// This is the ONLY per-tool budget source — there is no name table
+    /// behind it. It is a const rather than a method because it is read where
+    /// no tool instance exists: the executor registry stamps it onto the
+    /// tool's `UnifiedTool` at registration (`builder/core_tools.rs`),
+    /// `RegistryToolAdapter` carries it into the loop registry, and
+    /// [`crate::tools::result_processing::resolve_result_budget`] applies it.
+    /// Declare it on tools whose output is reliably larger or smaller than the
+    /// norm (a web fetch returns whole pages).
+    const MAX_RESULT_TOKENS: Option<usize> = None;
+
     /// Input argument type (must derive `JsonSchema` for auto-schema generation)
     type Args: Serialize + DeserializeOwned + JsonSchema + Send;
 
@@ -94,19 +107,6 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// and config/state writers answer `false`.
     fn mutates_file_content(&self) -> bool {
         false
-    }
-
-    /// Per-result token budget for this tool's output (Layer-2 spill/truncate).
-    ///
-    /// `Some(n)` caps the tool's result at `n` tokens before the overflow
-    /// cascade (`compress → persist-if-large → truncate`) in
-    /// [`crate::tools::result_processing::resolve_result_budget`); `None`
-    /// (the default) defers to the global default budget. Override on tools
-    /// whose output is reliably larger or smaller than the norm (e.g. a web
-    /// fetch returns whole pages). This replaces the legacy hardcoded
-    /// tool-name budget table — declare the budget where the tool lives.
-    fn max_result_tokens(&self) -> Option<usize> {
-        None
     }
 
     /// Whether this tool's schema is strict-mode compatible.
@@ -363,7 +363,7 @@ pub trait AlephToolDyn: Send + Sync {
     /// Returns a boxed future for object safety.
     fn call(&self, args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>>;
 
-    /// Per-result token budget, forwarded from [`AlephTool::max_result_tokens`].
+    /// Per-result token budget, forwarded from [`AlephTool::MAX_RESULT_TOKENS`].
     /// Defaulted so manual `AlephToolDyn` impls (tests, adapters) need not
     /// change; the blanket impl below overrides it to forward the concrete
     /// tool's value.
@@ -408,7 +408,7 @@ impl<T: AlephTool> AlephToolDyn for T {
     }
 
     fn max_result_tokens(&self) -> Option<usize> {
-        AlephTool::max_result_tokens(self)
+        T::MAX_RESULT_TOKENS
     }
 
     fn mutates_file_content(&self) -> bool {

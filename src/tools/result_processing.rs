@@ -24,13 +24,14 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
+use crate::tool_output::render::Rendered;
 use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
-/// Global default budget for tools that neither declare an explicit
-/// `max_result_tokens` nor appear in the legacy name table. It descends from
-/// the historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
+/// Global default budget for tools that declare no
+/// [`crate::tools::AlephTool::MAX_RESULT_TOKENS`]. It descends from the
+/// historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
 /// since-deleted `pipeline` module this one replaced.
 pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 
@@ -141,12 +142,15 @@ pub(crate) fn read_backstop_tokens() -> usize {
 ///    invariant — a `read_file` result is the only way the model can pull
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
-/// 2. `explicit` (typically the tool's own `max_result_tokens()` value)
-///    wins for every other name. Builtins declare their budget there now
-///    (`bash`, `web_fetch`), so they never reach the table below.
-/// 3. Otherwise a single remaining legacy entry (`search_files`/`Grep`,
-///    which has no in-crate tool to carry the trait method).
-/// 4. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
+/// 2. `explicit` — the tool's declared
+///    [`crate::tools::AlephTool::MAX_RESULT_TOKENS`], carried to the
+///    dispatcher by `RegistryToolAdapter` — wins for every other name.
+/// 3. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
+///
+/// There is no name table: the declaration is the only per-tool source, so a
+/// budget is changed where the tool lives. (A table keyed on tool names used to
+/// sit here as a second answer, and was the one actually in effect — the
+/// declarations never reached this function.)
 ///
 /// Whatever that yields is then capped by the boot-installed window ceiling
 /// (see [`set_global_result_budget_ceiling`]). The cap applies to *every*
@@ -163,7 +167,7 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
 
 /// Pure core of [`resolve_result_budget`] with the ceiling passed in, so the
 /// cap semantics are unit-testable without touching the process-wide slot.
-fn resolve_result_budget_under(
+pub(crate) fn resolve_result_budget_under(
     name: &str,
     explicit: Option<usize>,
     ceiling: usize,
@@ -172,17 +176,11 @@ fn resolve_result_budget_under(
         "read_file" | "Read" | "file_read" => return None,
         _ => {}
     }
-    // Tools whose `AlephTool::max_result_tokens()` never reaches this function
-    // because they are registered through the executor `ToolRegistry` →
-    // `RegistryToolAdapter` (which does not carry the trait value). Their budget
-    // stays here until that adapter forwards declared budgets. `bash` (8k) ==
-    // the default, so only the non-default ones need arms.
-    let declared = explicit.or(match name {
-        "Grep" | "search_files" => Some(6_000),
-        "web_fetch" => Some(10_000),
-        _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
-    });
-    declared.map(|n| n.min(ceiling))
+    Some(
+        explicit
+            .unwrap_or(DEFAULT_RESULT_BUDGET_TOKENS)
+            .min(ceiling),
+    )
 }
 
 /// Which retrieval tools the model can call, this turn, to get an offloaded
@@ -309,11 +307,13 @@ pub fn apply_result_budget(
     // Over budget. Persist the original (or `text` when there was no hygiene
     // pass) and compose the inline body above the recovery footer.
     let persist_source = original.unwrap_or(text);
-    if let Some((footer, path)) = recovery_footer_for(
+    let rendered = crate::tool_output::render::line_preserving(persist_source);
+    if let Some((footer, path)) = offload(
         store,
         tool_call_id,
         tool_name,
         persist_source,
+        &rendered,
         budget,
         recovery,
     ) {
@@ -325,9 +325,15 @@ pub fn apply_result_budget(
             // is usually a wall of diagnostics, and the middle is where the
             // failure is named.
             Some(_) => distill_or_truncate(text, budget.saturating_sub(footer_tokens)),
-            // Opaque: a bounded error preview only, as before — visible without
-            // a ctx_search round-trip, absent when there is no error signal.
-            None => inline_error_digest(text, Some(budget)).unwrap_or_default(),
+            // Opaque: a bounded error preview only — visible without a
+            // ctx_search round-trip, absent when there is no error signal.
+            // Read off the rendering (here `persist_source` IS `text`): a typed
+            // result's flat envelope is one line, which a line digest cannot
+            // read, so it used to come back empty for every typed result. Not
+            // for a fenced result: the digest lines are the untrusted text
+            // itself and would sit above the marker, outside the fence.
+            None if rendered.fenced => String::new(),
+            None => inline_error_digest(&rendered.text, Some(budget)).unwrap_or_default(),
         };
         let composed = if body.is_empty() {
             footer
@@ -406,20 +412,43 @@ pub(crate) fn recovery_footer_for(
     threshold: usize,
     recovery: RecoveryTools,
 ) -> Option<(String, Option<PathBuf>)> {
+    let rendered = crate::tool_output::render::line_preserving(full);
+    offload(
+        store,
+        tool_call_id,
+        tool_name,
+        full,
+        &rendered,
+        threshold,
+        recovery,
+    )
+}
+
+/// The shared body of [`recovery_footer_for`], for a caller that already holds
+/// the rendering (the opaque arm of [`apply_result_budget`] reads it too).
+/// `gate` is the flat text the size check reads; `rendered` is what is stored.
+fn offload(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    gate: &str,
+    rendered: &Rendered<'_>,
+    threshold: usize,
+    recovery: RecoveryTools,
+) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
-    if estimate_tokens_smart(full) <= threshold {
+    if estimate_tokens_smart(gate) <= threshold {
         return None;
     }
-    let body = crate::tool_output::render::line_preserving(full);
-    let marker = store.persist(tool_call_id, tool_name, &body)?;
+    let marker = store.persist(tool_call_id, tool_name, &rendered.text)?;
     let path = extract_persisted_path(&marker).map(PathBuf::from);
     // Index the offloaded blob so the model can BM25-retrieve only the relevant
     // sections via `ctx_search` instead of re-reading the whole file (which would
     // defeat the offload). Indexed even when `ctx_search` is not callable this
     // turn: the blob outlives the turn, and the gates are per turn. Best-effort:
     // on failure the marker's path is still readable.
-    let indexed = store.index_output(tool_call_id, tool_name, &body);
-    let footer = match footer_hint(indexed.as_ref(), recovery) {
+    let indexed = store.index_output(tool_call_id, tool_name, &rendered.text);
+    let footer = match footer_hint(indexed.as_ref(), recovery, rendered.fenced) {
         Some(hint) => format!("{marker}\n{hint}"),
         None => marker,
     };
@@ -430,9 +459,18 @@ pub(crate) fn recovery_footer_for(
 /// back — naming only a tool it can call. `ctx_search` when the blob indexed
 /// into sections and the tool is callable; otherwise `file_read` when that is
 /// callable; otherwise nothing, and the marker's path is the whole handle.
-fn footer_hint(indexed: Option<&IndexOutcome>, recovery: RecoveryTools) -> Option<String> {
+///
+/// `fenced` (the producing tool marked the output as external content, see
+/// [`Rendered::fenced`]) drops the "First sections:" preview: previews are the
+/// sections' first lines, i.e. the untrusted text itself, and this footer sits
+/// outside any fence.
+fn footer_hint(
+    indexed: Option<&IndexOutcome>,
+    recovery: RecoveryTools,
+    fenced: bool,
+) -> Option<String> {
     match indexed.filter(|o| o.sections > 0) {
-        Some(outcome) if recovery.ctx_search => Some(search_hint(outcome)),
+        Some(outcome) if recovery.ctx_search => Some(search_hint(outcome, !fenced)),
         _ if recovery.file_read => Some(FILE_READ_HINT.to_string()),
         _ => None,
     }
@@ -646,10 +684,10 @@ fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage
 
 /// Build the model-facing hint appended to a persist marker when the output
 /// was also indexed for retrieval. Tells the model it can `ctx_search` the
-/// offloaded blob instead of re-reading the whole file, and lists the first
-/// few section titles as orientation. Kept to a few hundred bytes so the
-/// offload's token saving is preserved.
-fn search_hint(outcome: &IndexOutcome) -> String {
+/// offloaded blob instead of re-reading the whole file, and — when `previews`
+/// — lists the first few section titles as orientation. Kept to a few hundred
+/// bytes so the offload's token saving is preserved.
+fn search_hint(outcome: &IndexOutcome, previews: bool) -> String {
     // With a single section the "First sections:" preview is the head of the one
     // section — i.e. text the model already has immediately above this hint.
     // Orientation is only worth its bytes when there is something to choose
@@ -660,7 +698,7 @@ fn search_hint(outcome: &IndexOutcome) -> String {
     // result carried. It goes through the same scrub as unfenced external text
     // so a line that spells a fence marker or a chat-template token cannot act
     // as one here.
-    let preview = if outcome.sections > 1 {
+    let preview = if previews && outcome.sections > 1 {
         let previews: Vec<String> = outcome
             .previews
             .iter()
@@ -1121,27 +1159,23 @@ mod tests {
     }
 
     #[test]
-    fn explicit_wins_over_fallback_table() {
+    fn explicit_wins_over_the_default() {
         assert_eq!(resolve_result_budget("bash", Some(123)), Some(123));
         assert_eq!(resolve_result_budget("custom_thing", Some(50)), Some(50));
     }
 
+    /// The name table is gone: a name carries no budget of its own, so a tool
+    /// that declares nothing gets the default whatever it is called — the
+    /// declaration is the only per-tool source.
     #[test]
-    fn explicit_budget_overrides_name_table() {
-        // Explicit budget always wins over the name table.
-        assert_eq!(
-            resolve_result_budget("web_fetch", Some(10_000)),
-            Some(10_000)
-        );
-        assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
-    }
-
-    #[test]
-    fn fallback_table_keeps_grep() {
-        // `search_files`/`Grep` has no in-crate tool to declare the trait
-        // method, so it stays in the name table (alongside `web_fetch`).
-        assert_eq!(resolve_result_budget("Grep", None), Some(6_000));
-        assert_eq!(resolve_result_budget("search_files", None), Some(6_000));
+    fn a_tool_name_alone_carries_no_budget() {
+        for name in ["web_fetch", "Grep", "search_files", "bash"] {
+            assert_eq!(
+                resolve_result_budget_under(name, None, usize::MAX),
+                Some(DEFAULT_RESULT_BUDGET_TOKENS),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -1152,19 +1186,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn web_fetch_budget_is_10k_via_name_table() {
-        // Production path: web_fetch is executor-registered, so its
-        // AlephTool-declared 10k never arrives as `explicit`. The name table
-        // must carry it (mirrors the search_files arm).
-        assert_eq!(resolve_result_budget("web_fetch", None), Some(10_000));
-    }
-
-    #[test]
-    fn explicit_budget_still_wins_over_name_table() {
-        assert_eq!(resolve_result_budget("web_fetch", Some(4_000)), Some(4_000));
-    }
-
     // ---------------------------------------------------------------
     // window ceiling (B14)
     // ---------------------------------------------------------------
@@ -1172,16 +1193,12 @@ mod tests {
     #[test]
     fn window_ceiling_caps_declared_budgets_not_just_the_default() {
         // A 16k-window model yields a 2_400 per-result ceiling. `web_fetch`'s
-        // declared 10k and `Grep`'s 6k are exactly the values that must come
-        // down — a ceiling applied only to the `None` fallback would leave the
-        // biggest offenders untouched.
+        // declared 10k is exactly the value that must come down — a ceiling
+        // applied only to the `None` fallback would leave the biggest offender
+        // untouched.
         let ceiling = 2_400;
         assert_eq!(
-            resolve_result_budget_under("web_fetch", None, ceiling),
-            Some(2_400)
-        );
-        assert_eq!(
-            resolve_result_budget_under("Grep", None, ceiling),
+            resolve_result_budget_under("web_fetch", Some(10_000), ceiling),
             Some(2_400)
         );
         assert_eq!(
@@ -1206,15 +1223,11 @@ mod tests {
 
     #[test]
     fn uncapped_ceiling_is_todays_behavior() {
-        // No ceiling installed (large window / no `[context_budget]`) → the
-        // table is byte-for-byte what it was.
+        // No ceiling installed (large window / no `[context_budget]`) → a
+        // declared budget and the default pass through unchanged.
         assert_eq!(
-            resolve_result_budget_under("web_fetch", None, usize::MAX),
+            resolve_result_budget_under("web_fetch", Some(10_000), usize::MAX),
             Some(10_000)
-        );
-        assert_eq!(
-            resolve_result_budget_under("Grep", None, usize::MAX),
-            Some(6_000)
         );
         assert_eq!(
             resolve_result_budget_under("bash", None, usize::MAX),
@@ -1230,7 +1243,7 @@ mod tests {
         set_global_result_budget_ceiling(DEFAULT_RESULT_BUDGET_TOKENS);
         set_global_result_budget_ceiling(50_000);
         assert_eq!(
-            resolve_result_budget("web_fetch", None),
+            resolve_result_budget("web_fetch", Some(10_000)),
             Some(10_000),
             "a refused ceiling must leave the process uncapped"
         );
@@ -1340,7 +1353,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let flat = serde_json::json!({ "stdout": prose, "exit_code": 0 }).to_string();
-        let rendered = crate::tool_output::render::line_preserving(&flat);
+        let rendered = crate::tool_output::render::line_preserving(&flat).text;
         let threshold = (estimate_tokens_smart(&flat) + estimate_tokens_smart(&rendered)) / 2;
         assert!(
             estimate_tokens_smart(&rendered) <= threshold
@@ -1362,6 +1375,112 @@ mod tests {
         let (_, path) = footer.expect("over the threshold as the model would see it ⇒ offloaded");
         let blob = std::fs::read_to_string(path.expect("a path")).unwrap();
         assert_eq!(blob, rendered, "and what is stored is the rendering");
+    }
+
+    /// An opaque typed result — hygiene found nothing to reduce because every
+    /// field is one short line — used to reach the model as the bare marker:
+    /// the error digest read the flat envelope, which is one line. Read off the
+    /// rendering, the error line is found. The source is not fenced, so the
+    /// "First sections:" orientation stays.
+    #[test]
+    fn an_opaque_typed_result_gets_its_error_digest_from_the_rendering() {
+        let (_scratch, store, _base) = test_store("opaque_digest");
+        let mut steps: Vec<serde_json::Value> = (0..400)
+            .map(|i| serde_json::json!({ "name": format!("step {i}"), "status": "ok" }))
+            .collect();
+        steps.push(serde_json::json!({
+            "name": "link",
+            "status": "error: linker failed with exit code 1",
+        }));
+        let mut value = serde_json::json!({ "steps": steps });
+        let outcome = crate::tool_output::ingress::clean_for_ingress("bash", &mut value, Some(300));
+        assert!(
+            outcome.reduced_from.is_none(),
+            "precondition: opaque — hygiene had nothing to reduce"
+        );
+
+        let out = apply_result_budget(
+            "c-opaque-typed",
+            "bash",
+            &outcome.model_facing,
+            Some(&store),
+            Some(300),
+            None,
+            RecoveryTools::ALL,
+        );
+
+        assert!(out.persisted_path.is_some());
+        assert!(
+            out.text.contains("Output digest") && out.text.contains("linker failed"),
+            "the error line must be inlined above the marker: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("First sections:"),
+            "an unfenced source keeps its orientation preview: {}",
+            out.text
+        );
+    }
+
+    /// For output its tool fenced as external content, the footer carries the
+    /// marker and the retrieval hint only: no section-title preview and no
+    /// error digest, because both are the untrusted text itself and the footer
+    /// sits outside the fence. "Fenced" is read off the fields by the same
+    /// test the ingress rewrites use — not from a list of tools.
+    #[test]
+    fn a_fenced_source_gets_no_preview_and_no_digest_outside_its_fence() {
+        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        let (_scratch, store, _base) = test_store("fenced_footer");
+        let src = ContentSource::McpTool {
+            server: "srv".into(),
+            tool: "rows".into(),
+        };
+        let mut blocks: Vec<serde_json::Value> = (0..300)
+            .map(|i| {
+                serde_json::json!({
+                    "type": "text",
+                    "text": wrap_external_content(&format!("row {i} is fine"), src.clone()),
+                })
+            })
+            .collect();
+        blocks.push(serde_json::json!({
+            "type": "text",
+            "text": wrap_external_content("error: linker failed with exit code 1", src.clone()),
+        }));
+        let mut value = serde_json::json!({ "content": blocks });
+        let outcome =
+            crate::tool_output::ingress::clean_for_ingress("srv__rows", &mut value, Some(300));
+        assert!(
+            outcome.reduced_from.is_none(),
+            "precondition: opaque — no field is big enough to reduce"
+        );
+
+        let out = apply_result_budget(
+            "c-fenced",
+            "srv__rows",
+            &outcome.model_facing,
+            Some(&store),
+            Some(300),
+            None,
+            RecoveryTools::ALL,
+        );
+
+        assert!(
+            out.text.contains("[Full output persisted: "),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("ctx_search("),
+            "the handle stays: {}",
+            out.text
+        );
+        assert!(!out.text.contains("First sections:"), "{}", out.text);
+        assert!(
+            !out.text.contains("linker failed"),
+            "untrusted lines must not sit outside the fence: {}",
+            out.text
+        );
     }
 
     #[test]

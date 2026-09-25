@@ -67,6 +67,14 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters_schema: Option<Value>,
 
+    /// Per-result token budget the tool declares
+    /// ([`crate::tools::AlephTool::MAX_RESULT_TOKENS`]), stamped at
+    /// registration and carried by `RegistryToolAdapter` to the Layer-2
+    /// resolver. `None` = the global default. Runtime-only: it is not part of
+    /// the tool's wire description, so it is never serialized.
+    #[serde(skip)]
+    pub max_result_tokens: Option<usize>,
+
     /// Whether this tool is currently active/enabled
     /// Disabled tools are excluded from routing and prompt generation.
     /// Mutation is `pub(crate)` so the registry's lock-protected writers are
@@ -224,6 +232,7 @@ impl UnifiedTool {
             description: description.into(),
             source,
             parameters_schema: None,
+            max_result_tokens: None,
             is_active: true,
             requires_confirmation: false,
             safety_level: ToolSafetyLevel::default(),

@@ -551,7 +551,7 @@ impl ToolResultStore {
         // the same call still replaces its own chunks (the `(source,
         // chunk_no)` identity) instead of colliding with another call of the
         // same tool.
-        let source = format!("{tool_name}:{}", short_call_id(tool_call_id));
+        let source = source_label(tool_name, tool_call_id);
         match idx.index_text(&self.session, &source, tool_name, content) {
             Ok(out) => Some(out),
             Err(e) => {
@@ -1188,6 +1188,31 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
 /// Last 8 chars of a tool call id (char-safe). Call-id *prefixes* are constant
 /// (`toolu_…`, `call_…`), so the tail is the distinctive part — the head would
 /// collide across every call of the run.
+/// The `source` label an offloaded output is indexed under:
+/// `{tool_name}:{last 8 chars of the call id}`. [`tool_of_source_label`] is its
+/// inverse; the two live together so the format has one owner.
+fn source_label(tool_name: &str, tool_call_id: &str) -> String {
+    format!("{tool_name}:{}", short_call_id(tool_call_id))
+}
+
+/// The tool named in a `source` label written by [`source_label`], or `None`
+/// when the label names no tool.
+///
+/// Splits at the FIRST `:`. The call-id half may itself contain one (Kimi-style
+/// ids read `functions.bash:0`), the tool half cannot: every dispatched tool
+/// name is in the provider function-name alphabet `[A-Za-z0-9_-]` (MCP names
+/// are mapped onto it by `tools::handlers::mcp::sanitize_tool_name`), plus the
+/// `.` alias `resolve()` accepts. `None` covers rows indexed before labels
+/// carried the tool (2026-07-16) — a bare call id with no `:` — and an empty
+/// tool half; callers must then say "unknown", not guess.
+#[must_use]
+pub fn tool_of_source_label(label: &str) -> Option<&str> {
+    label
+        .split_once(':')
+        .map(|(tool, _)| tool)
+        .filter(|tool| !tool.is_empty())
+}
+
 fn short_call_id(id: &str) -> &str {
     let skip = id.chars().count().saturating_sub(8);
     match id.char_indices().nth(skip) {
@@ -1982,6 +2007,25 @@ mod tests {
             before,
             "re-indexing the same call must replace, not append"
         );
+    }
+
+    /// `ctx_search` fences each returned section with the name of the tool
+    /// that produced it, read back from the label — so the inverse must return
+    /// exactly the tool the writer was given, including when the call id
+    /// itself carries a `:`, and nothing at all for a label with no tool.
+    #[test]
+    fn the_tool_read_back_from_a_source_label_is_the_one_written() {
+        for (tool, call_id) in [
+            ("web_fetch", "toolu_01ABCDEFGH"),
+            ("bash", "functions.bash:0"),
+            ("chrome_devtools__take_snapshot", "c:a:l:l"),
+        ] {
+            let label = source_label(tool, call_id);
+            assert_eq!(tool_of_source_label(&label), Some(tool), "{label}");
+        }
+        // Rows indexed before labels carried the tool: a bare call id.
+        assert_eq!(tool_of_source_label("toolu_01ABCDEFGH"), None);
+        assert_eq!(tool_of_source_label(":abc"), None);
     }
 
     // -------------------------------------------------------------------

@@ -2982,7 +2982,17 @@ mod tests {
     /// approval sentence named `aleph hooks test`, a command only the server
     /// binary has, and now names `aleph-server hooks test`. A correction to an
     /// existing runtime fact, not a new sentence.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_911;
+    ///
+    /// 2026-09-25 (context-slim round, B1): 115_911 -> 115_888 B (-23), all of
+    /// it `ctx_search`'s DESCRIPTION (352 -> 329 B — it now says each query
+    /// returns section text, several queries go in one call, and repeats are
+    /// marked; it dropped a restated chunk size the index owns). Lowered, not
+    /// left as headroom: slack above a measurement is allowance already issued
+    /// (判据 §13). Read off this test's panic with the ceiling floored to `1`
+    /// on macOS (aarch64-apple-darwin): 96_292 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge, `bash` at 4_740 (the Unix assembly), so
+    /// the +30 Windows gap recorded above is carried forward unchanged.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_888;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3404,7 +3414,14 @@ mod tests {
     /// per-tool ledger names `hooks_manage` (2_219 -> 2_226) as the only row
     /// that moved: the `command` field doc named `aleph hooks test`, a
     /// server-only command, and now names `aleph-server hooks test`.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_198;
+    ///
+    /// 2026-09-25 (context-slim round, B1): 105_198 -> 105_167 B (-31), all of
+    /// it `ctx_search` (579 -> 548): a `queries` array joined `query` and
+    /// `limit`, and the argument docs shrank because the sentences they carried
+    /// moved to the DESCRIPTION the tool owns. Read off this guard's own ledger
+    /// (the `ctx_search` row zeroed, the ceiling lowered by its old value);
+    /// `ctx_search` was the only row that moved.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_167;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3444,7 +3461,7 @@ mod tests {
         ("channel_pairing", 743),
         ("code_check", 837),
         ("code_exec", 2128),
-        ("ctx_search", 579),
+        ("ctx_search", 548),
         ("desktop", 20275),
         ("file_edit", 2480),
         ("file_ops", 2989),
@@ -4008,6 +4025,72 @@ mod tests {
         // Verify sessions tools are defined when gateway feature is enabled
         assert!(names.contains(&"session_list".to_string()));
         assert!(names.contains(&"session_send".to_string()));
+    }
+
+    /// T-G4: a tool's per-result budget has one source — its
+    /// `AlephTool::MAX_RESULT_TOKENS`, stamped on its registry entry — and the
+    /// move there changed no budget in effect. Over every tool this registry
+    /// builds:
+    ///
+    /// * **zero behaviour change** — what each tool now resolves to equals
+    ///   what the deleted name table resolved it to (the table is kept below,
+    ///   verbatim, as the "before"; production passed no declaration then);
+    /// * **the declaration reaches the entry** — for every tool the factory
+    ///   can construct, the entry carries exactly what the tool declares, so
+    ///   a registration path that forgets to stamp it fails here.
+    #[tokio::test]
+    async fn result_budgets_come_from_declarations_and_match_the_retired_name_table() {
+        fn retired_name_table(name: &str) -> Option<usize> {
+            match name {
+                "read_file" | "Read" | "file_read" => None,
+                "Grep" | "search_files" => Some(6_000),
+                "web_fetch" => Some(10_000),
+                _ => Some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS),
+            }
+        }
+        let map = unconditional_registry_map();
+        assert!(
+            map.len() > 20,
+            "the census must see the registry: {}",
+            map.len()
+        );
+        let mut constructed = 0usize;
+        for (name, entry) in &map {
+            assert_eq!(
+                crate::tools::result_processing::resolve_result_budget_under(
+                    name,
+                    entry.max_result_tokens,
+                    usize::MAX,
+                ),
+                retired_name_table(name),
+                "{name}: the budget in effect changed"
+            );
+            if let Some(tool) = create_tool_boxed(name, None) {
+                constructed += 1;
+                assert_eq!(
+                    entry.max_result_tokens,
+                    tool.max_result_tokens(),
+                    "{name}: the registry entry does not carry the tool's declaration"
+                );
+            }
+        }
+        assert!(
+            constructed > 10,
+            "the declaration half must actually run: {constructed}"
+        );
+        // The table's `Grep | search_files` row had no owner: no registered
+        // tool carries either name (builtins are lowercase `grep`; MCP names
+        // are qualified `server__tool`), so it is recorded dead, not migrated.
+        for dead in ["Grep", "search_files"] {
+            assert!(
+                !map.contains_key(dead),
+                "{dead} is registered now — the retired 6_000 row needs an owner"
+            );
+        }
+        // The declarations the table used to shadow are the ones now in effect.
+        assert_eq!(map["web_fetch"].max_result_tokens, Some(10_000));
+        assert_eq!(map["bash"].max_result_tokens, Some(8_000));
+        assert_eq!(map["search"].max_result_tokens, Some(8_000));
     }
 
     #[test]

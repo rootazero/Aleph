@@ -1725,10 +1725,14 @@ fn clean_error_body(body: &str) -> String {
     }
     if let Some(digest) = crate::tool_output::distill::distill_output(&stripped) {
         if digest.error_count > 0 {
+            // `scale_to_budget` takes a TOKEN budget; the limit here is in
+            // characters. Passing the character count read 4 000 chars as
+            // 4 000 tokens — a line cap sized for 10 000 characters, whose
+            // digest then overran the limit and fell back to the head/tail cut.
             let cap = crate::tool_output::scale_to_budget(
                 crate::tool_output::distill::MAX_SALIENT_LINES,
                 crate::tool_output::hygiene::MIN_SALIENT_LINES,
-                ERROR_BODY_MAX_CHARS,
+                crate::context::budget::pressure::result_tokens_for_chars(ERROR_BODY_MAX_CHARS),
             );
             let rendered = digest.render(cap);
             if rendered.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -1796,6 +1800,33 @@ fn looks_like_cancellation(cause: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-G9: the digest's line cap is sized for the error channel's CHARACTER
+    /// limit. A wall of distinct, ordinary-length error lines must come back
+    /// as a digest that fits — not overrun it and fall back to a head/tail cut
+    /// that drops the middle, which is where the failure is named.
+    #[test]
+    fn a_long_error_body_is_distilled_within_its_character_limit() {
+        let body: String = (0..300)
+            .map(|i| {
+                format!(
+                    "error[E{i:04}]: mismatched types in module_{i} while checking the \
+                     signature of handler_{i} against its declared contract; expected a \
+                     borrowed slice of records, found an owned vector instead\n"
+                )
+            })
+            .collect();
+        assert!(body.chars().count() > ERROR_BODY_MAX_CHARS);
+
+        let cleaned = clean_error_body(&body);
+
+        assert!(
+            cleaned.starts_with("[Output digest:"),
+            "a digest, not the head/tail cut: {}",
+            &cleaned[..cleaned.len().min(200)]
+        );
+        assert!(cleaned.chars().count() <= ERROR_BODY_MAX_CHARS);
+    }
 
     #[test]
     fn bound_error_body_passes_short_bodies_through_borrowed() {

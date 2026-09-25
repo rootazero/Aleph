@@ -380,11 +380,8 @@ impl AlephTool for BashExecTool {
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
 
-    /// Build/test/log output can run long; cap at 8k tokens (was the legacy
-    /// `resolve_result_budget` name-table value for `bash`).
-    fn max_result_tokens(&self) -> Option<usize> {
-        Some(8_000)
-    }
+    /// Build/test/log output can run long; cap at 8k tokens.
+    const MAX_RESULT_TOKENS: Option<usize> = Some(8_000);
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Background-process management never runs a command — handle first.
