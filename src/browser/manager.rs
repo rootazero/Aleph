@@ -129,6 +129,7 @@ pub struct ProfileManager {
     idle_reaper_started: AtomicBool,
     /// Per-tab lifecycle tracking for Managed/Cdp profiles (idle reclamation
     /// + cap) AND the tab-identity registry (targetId / last-url per tab).
+    ///
     /// An `Arc` because the cdp backend — constructed per call — records the
     /// identities it discovers straight into it.
     tab_registry: Arc<TabRegistry>,

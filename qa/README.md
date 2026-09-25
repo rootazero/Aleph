@@ -26,6 +26,10 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
+                                   # (round-1 B3 landed the tab-identity registry in
+                                   # core; the post-re-attach ACTIVE-TAB identity
+                                   # assertion in THIS fixture is still a registered
+                                   # gap, not done — see the Known-gap section below)
                                      # (unix only: pgrep)
 ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Aleph's own CDP client
                                      # runnable under cdp: open tools frames exec-offload
@@ -51,6 +55,10 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # and a prefix-neighbour that a RECORD points at
                                    # is not (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
+                                   # (round-1's two new rows — ref_precheck /
+                                   # effect_probe — are NOT probed here yet; registered
+                                   # gap. obscura's effect_probe is Unsupported today,
+                                   # so its probe asserts the refusal, never a success)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -875,7 +883,12 @@ rather than finishing. **`caps`** probes every row of the capability table by
 EFFECT against the obscura **Aleph launched** — reached through the engine
 sidecar, never one the script starts itself, because `file_upload` is
 `unsupported` precisely *because Aleph does not pass `--allow-file-access`*, so
-the row is a property of the argv as much as of the binary.
+the row is a property of the argv as much as of the binary. Round-1 (2026-09-24)
+added two rows this stage does NOT probe yet — `ref_precheck` and
+`effect_probe` (FL §3.12 第四轮 ②④): that is a registered gap, not coverage,
+and obscura's `effect_probe` row is `Unsupported` today (fail-closed on an
+unmeasured engine), so its probe — when written — asserts the REFUSAL reaches
+the model, never a fabricated verification.
 
 **`switch` is the only place spec §5.5's "the login survives" is a fact rather
 than an intention.** Its load-bearing claims are the two no RPC can see: the
@@ -1522,6 +1535,20 @@ form shown in `webhook/mod.rs`'s own module doc does not parse — the server
 refuses to boot with `invalid type: sequence, expected a map`.
 
 ## Known gap: tab identity does not survive a re-attach
+
+**Status update (2026-09-24, round-1 B3):** the registry this section said was
+needed now exists — `TabRegistry`'s identity half (`record_identity` /
+`resolve_identity`, targetId-first, structured `TabGone`), recorded at every
+discovery point on the cdp backend and by the manager's reap sweep for the old
+drivers (FL §3.12 第四轮 ③). What is still NOT done, and stays a registered
+gap rather than a claim: (a) the old drivers' sweep records carry
+`target_id: None`, so on the playwright-cli path this fixture exercises an
+identity can never be ruled `TabGone` — the registry narrows the guess, it
+does not close it there; (b) **no QA fixture asserts any of it** — the
+post-re-attach active-tab identity assertion for `browser_managed/attach`
+sketched in the round-1 spec (write it red first, then green) is unwritten.
+The original measurement below stays as the record of WHY row order cannot
+answer this question.
 
 `browser_managed/attach` drives Aleph through `close` (a DISCONNECT under
 `attach --cdp` — Chrome and its tabs survive) and back through a re-attach that
