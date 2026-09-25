@@ -1066,10 +1066,7 @@ impl AgentHarness {
         let Some(budget) = self.deps.turn_budget.as_ref() else {
             return;
         };
-        let text = match &output.value {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
+        let text = crate::providers::message::value_as_model_text(&output.value).into_owned();
         // Layer-2 (`apply_result_budget`) may prepend an inline error digest
         // above the `[Full output persisted: …]` marker, so it is not always at
         // byte 0 — scan every line (mirrors `result_store::extract_persisted_ref`).

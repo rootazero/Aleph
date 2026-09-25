@@ -135,3 +135,31 @@ async fn post_turn_compress_scopes_writes_by_the_explicit_project_root() {
         "no session write may leak to the base id while a project root is active"
     );
 }
+
+/// `prepare_history` sizes its fresh tail with `text_content()`, which counts
+/// reasoning. That is exact here because the tail is built from stored
+/// `SessionMessage`s, which hold plain text: the conversion never yields a
+/// reasoning block, so `text_content` and `transcript_text` agree. If that ever
+/// changes, this goes red before the estimate silently drifts.
+#[test]
+fn session_messages_convert_to_text_only_unified_messages() {
+    use crate::gateway::agent_instance::{MessageRole, SessionMessage};
+    for role in [
+        MessageRole::User,
+        MessageRole::Assistant,
+        MessageRole::System,
+        MessageRole::Tool,
+    ] {
+        let msg = session_message_to_unified(&SessionMessage {
+            role,
+            content: "body".into(),
+            timestamp: chrono::Utc::now(),
+            metadata: None,
+        });
+        assert!(!msg
+            .content_blocks()
+            .iter()
+            .any(|b| matches!(b, crate::providers::message::ContentBlock::Thinking { .. })));
+        assert_eq!(msg.text_content(), msg.transcript_text());
+    }
+}

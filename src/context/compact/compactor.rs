@@ -16,7 +16,7 @@ use super::summary_utils::{
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -893,7 +893,7 @@ impl ContextCompactor {
         let replaced = c.end - c.start;
         let window_text: String = messages[c.start..cut_end]
             .iter()
-            .map(transcript_text)
+            .map(UnifiedMessage::transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let tokens_before = estimate_tokens(&window_text);
@@ -931,7 +931,7 @@ impl ContextCompactor {
         let gap_msgs = cut_end_m - gap_start;
         let gap_text: String = messages[gap_start..cut_end_m]
             .iter()
-            .map(transcript_text)
+            .map(UnifiedMessage::transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let gap_tokens = estimate_tokens(&gap_text);
@@ -1274,7 +1274,7 @@ fn select_window_end(
     let mut acc = 0usize;
     let mut end = start;
     while end < hard_end && end < msg_ceiling {
-        let text = transcript_text(&messages[end]);
+        let text = messages[end].transcript_text();
         let capped = cap_transcript_text(&text);
         acc = acc.saturating_add(estimate_tokens(capped.as_ref()));
         end += 1;
@@ -1301,7 +1301,7 @@ fn hash_window(messages: &[UnifiedMessage]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for m in messages {
         std::mem::discriminant(m).hash(&mut h);
-        transcript_text(m).hash(&mut h);
+        m.transcript_text().hash(&mut h);
     }
     h.finish()
 }
@@ -1330,34 +1330,13 @@ fn strip_context_summary_prefix(text: &str) -> Option<&str> {
     Some(text[line_end..].trim_start_matches('\n'))
 }
 
-/// A message's text as the compactor sees it: every block except reasoning.
-///
-/// The summary records what was said and done. The message list now carries
-/// every persisted thinking block as facts (the wire decides per target what
-/// is sent), so reading `text_content()` here would feed the side-channel
-/// summarizer — and size its windows — with reasoning no target may ever see.
-fn transcript_text(msg: &UnifiedMessage) -> String {
-    let mut parts = Vec::new();
-    for block in msg.content_blocks() {
-        match block {
-            ContentBlock::Text { text, .. } => parts.push(text.clone()),
-            ContentBlock::Json { value } => parts.push(value.to_string()),
-            ContentBlock::ToolCall {
-                name, arguments, ..
-            } => parts.push(format!("{name} {arguments}")),
-            ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => {}
-        }
-    }
-    parts.join(" ")
-}
-
 /// Serialize a slice of messages into a human-readable transcript, capping each
 /// message body via [`cap_transcript_text`] so a few huge old tool results can
 /// never blow up the side-channel summarizer prompt.
 pub(crate) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
-        let text = transcript_text(msg);
+        let text = msg.transcript_text();
         let capped = cap_transcript_text(&text);
         let role = match msg {
             UnifiedMessage::User { .. } => "user",
@@ -1451,11 +1430,10 @@ fn accept_summary(
 pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
     /// First line, then capped — because the first line is not a bound.
     ///
-    /// "Keep one line" reduces nothing on the content type that dominates a
-    /// long agent context: [`UnifiedMessage::text_content`] renders a
+    /// "Keep one line" reduces nothing on a structured tool result:
+    /// [`UnifiedMessage::transcript_text`] renders an object
     /// `ContentBlock::Json` through serde_json's compact formatter, which
-    /// emits no newlines at all (interior ones are escaped), and every
-    /// `ToolResult` `build_prompt` constructs is exactly one such block. So
+    /// emits no newlines at all (interior ones are escaped). So
     /// `lines().next()` returned an 8 KB payload verbatim and uncapped, while
     /// deleting the assistant prose around it.
     ///
@@ -1498,12 +1476,12 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::User { .. } => "user",
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
-                let text = transcript_text(msg);
+                let text = msg.transcript_text();
                 lines.push(format!("tool_result({tool_name}): {}", head(&text)));
                 continue;
             }
         };
-        let text = transcript_text(msg);
+        let text = msg.transcript_text();
         lines.push(format!("{role}: {}", head(&text)));
     }
     lines.join("\n")
@@ -3367,5 +3345,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The summarizer transcript — shared by in-loop compaction, session split
+    /// and `/compact` — leaves reasoning out and reads a string tool result as
+    /// its text (real newlines, no added quotes).
+    #[test]
+    fn the_summarizer_transcript_has_no_reasoning_and_unencoded_tool_text() {
+        let msgs = vec![
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "secret plan".into(),
+                        signature: Some("sig".into()),
+                        earlier_turn: false,
+                    },
+                    ContentBlock::Text {
+                        text: "answer".into(),
+                        cache_control: None,
+                    },
+                ],
+            },
+            UnifiedMessage::tool_result_json("c", "read", serde_json::json!("line1\nline2"), false),
+        ];
+        let transcript = serialize_transcript(&msgs);
+        assert!(!transcript.contains("secret plan"), "{transcript}");
+        assert!(transcript.contains("line1\nline2"), "{transcript}");
     }
 }

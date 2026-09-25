@@ -289,13 +289,9 @@ impl AnthropicProtocol {
                             let mut parts = Vec::new();
                             for b in content {
                                 match b {
-                                    crate::providers::message::ContentBlock::Text {
-                                        text, ..
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    } => parts.push(text.clone()),
-                                    crate::providers::message::ContentBlock::Json { value } => {
-                                        parts
-                                            .push(serde_json::to_string(value).unwrap_or_default());
+                                    crate::providers::message::ContentBlock::Text { .. }
+                                    | crate::providers::message::ContentBlock::Json { .. } => {
+                                        parts.extend(b.as_model_text().map(|t| t.into_owned()));
                                     }
                                     crate::providers::message::ContentBlock::Image {
                                         data,

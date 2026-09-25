@@ -279,15 +279,7 @@ impl OllamaProvider {
                 } => {
                     let output = content
                         .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text, .. } => {
-                                Some(std::borrow::Cow::Borrowed(text.as_str()))
-                            }
-                            ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
-                                serde_json::to_string(value).unwrap_or_default(),
-                            )),
-                            _ => None,
-                        })
+                        .filter_map(ContentBlock::as_model_text)
                         .collect::<Vec<_>>()
                         .join("\n");
                     out.push(json!({
@@ -854,5 +846,24 @@ mod tests {
         let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
         let resp = provider.build_provider_response(chat);
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    /// The prompt builder hands a tool result over as one `Json` block holding
+    /// the tool's output value; a string must reach Ollama as the text itself.
+    #[test]
+    fn a_string_tool_result_reaches_ollama_as_text() {
+        let msgs = vec![
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: "c".into(),
+                    name: "read".into(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                }],
+            },
+            UnifiedMessage::tool_result_json("c", "read", json!("line1\nline2"), false),
+        ];
+        let out = OllamaProvider::convert_messages(&msgs, None);
+        assert_eq!(out[1]["content"], "line1\nline2");
     }
 }

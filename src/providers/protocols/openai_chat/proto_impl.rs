@@ -216,16 +216,7 @@ impl OpenAiProtocol {
                 } => {
                     let output = content
                         .iter()
-                        .filter_map(|b| match b {
-                            crate::providers::message::ContentBlock::Text { text, .. } => {
-                                // rust-doctor-disable-next-line excessive-clone
-                                Some(text.clone())
-                            }
-                            crate::providers::message::ContentBlock::Json { value } => {
-                                Some(serde_json::to_string(value).unwrap_or_default())
-                            }
-                            _ => None,
-                        })
+                        .filter_map(crate::providers::message::ContentBlock::as_model_text)
                         .collect::<Vec<_>>()
                         .join("\n");
                     // Each ToolResult as separate tool message with required tool_call_id

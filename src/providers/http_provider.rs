@@ -1327,3 +1327,6 @@ mod tests {
 
 #[cfg(test)]
 mod replay_tests;
+
+#[cfg(test)]
+mod tool_text_tests;

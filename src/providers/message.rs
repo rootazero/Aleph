@@ -221,33 +221,48 @@ impl UnifiedMessage {
         for msg in messages {
             for block in msg.content_blocks() {
                 match block {
-                    ContentBlock::Text { text, .. } => parts.push(text.as_str().into()),
-                    ContentBlock::Json { value } => parts.push(value.to_string().into()),
                     ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
-                    _ => {}
+                    other => parts.extend(other.as_model_text()),
                 }
             }
         }
         parts.join("\n")
     }
 
-    /// Extract all text content from a message as a single concatenated string.
+    /// Every text-bearing block joined with spaces — **reasoning included** —
+    /// with tool calls as `name arguments` and images omitted.
     ///
-    /// Covers Text blocks and Json (serialized). Used for token estimation.
+    /// For what a transcript or summary shows (no reasoning) use
+    /// [`Self::transcript_text`]; for one block's model-facing text use
+    /// [`ContentBlock::as_model_text`].
     #[must_use]
     pub fn text_content(&self) -> String {
-        let mut parts = Vec::new();
+        let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
         for block in self.content_blocks() {
             match block {
-                ContentBlock::Text { text, .. } => parts.push(text.as_str().to_owned()),
-                ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().to_owned()),
-                ContentBlock::Json { value } => parts.push(value.to_string()),
+                ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
                 ContentBlock::ToolCall {
                     name, arguments, ..
-                } => {
-                    parts.push(format!("{name} {arguments}"));
-                }
-                ContentBlock::Image { .. } => {}
+                } => parts.push(format!("{name} {arguments}").into()),
+                other => parts.extend(other.as_model_text()),
+            }
+        }
+        parts.join(" ")
+    }
+
+    /// The message as a transcript renders it: every block except reasoning
+    /// and images — text via [`ContentBlock::as_model_text`], tool calls as
+    /// `name arguments`. What summarizers read and what their input budgets
+    /// are sized on, so a summary never carries reasoning no target was sent.
+    #[must_use]
+    pub fn transcript_text(&self) -> String {
+        let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+        for block in self.content_blocks() {
+            match block {
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => parts.push(format!("{name} {arguments}").into()),
+                other => parts.extend(other.as_model_text()),
             }
         }
         parts.join(" ")
@@ -282,11 +297,7 @@ impl UnifiedMessage {
             } => {
                 let text = content
                     .iter()
-                    .map(|b| match b {
-                        ContentBlock::Text { text, .. } => text.as_str().to_owned(),
-                        ContentBlock::Json { value } => value.to_string(),
-                        _ => String::new(),
-                    })
+                    .map(|b| b.as_model_text().unwrap_or_default().into_owned())
                     .collect::<Vec<_>>()
                     .join(" ");
                 Some((tool_name.as_str(), text))
@@ -335,6 +346,34 @@ impl ContentBlock {
             Self::Text { text, .. } => Some(text),
             _ => None,
         }
+    }
+
+    /// The text a model is shown for this block: `Text` verbatim, `Json` via
+    /// [`value_as_model_text`]. `None` for reasoning, tool calls and images.
+    ///
+    /// The one answer to "is this tool result a string or a structure" — every
+    /// reader of tool-result text goes through it.
+    #[must_use]
+    pub fn as_model_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Self::Text { text, .. } => Some(std::borrow::Cow::Borrowed(text)),
+            Self::Json { value } => Some(value_as_model_text(value)),
+            _ => None,
+        }
+    }
+}
+
+/// A JSON value as model-facing text: a string is the text itself; anything
+/// else is its compact JSON encoding.
+///
+/// Tool output is stored as a `Value`, and most of it is a `Value::String`.
+/// Encoding that string again (`value.to_string()`) put a quoted, escaped copy
+/// on the wire — `"line1\nline2"` instead of two lines.
+#[must_use]
+pub fn value_as_model_text(value: &Value) -> std::borrow::Cow<'_, str> {
+    match value {
+        Value::String(text) => std::borrow::Cow::Borrowed(text),
+        other => std::borrow::Cow::Owned(other.to_string()),
     }
 }
 
@@ -774,5 +813,75 @@ mod tests {
                 ttl: Some(EphemeralTtl::OneHour),
             },
         );
+    }
+
+    #[test]
+    fn as_model_text_unwraps_strings_and_compacts_structures() {
+        let text = ContentBlock::Text {
+            text: "plain".into(),
+            cache_control: None,
+        };
+        assert_eq!(text.as_model_text().as_deref(), Some("plain"));
+        let string = ContentBlock::Json {
+            value: json!("line1\nline2"),
+        };
+        assert_eq!(string.as_model_text().as_deref(), Some("line1\nline2"));
+        let object = ContentBlock::Json {
+            value: json!({"a": 1}),
+        };
+        assert_eq!(object.as_model_text().as_deref(), Some("{\"a\":1}"));
+        for none in [
+            ContentBlock::Thinking {
+                thinking: "t".into(),
+                signature: None,
+                earlier_turn: false,
+            },
+            ContentBlock::ToolCall {
+                id: "c".into(),
+                name: "n".into(),
+                arguments: json!({}),
+                thought_signature: None,
+            },
+            ContentBlock::Image {
+                data: "d".into(),
+                mime_type: "image/png".into(),
+            },
+        ] {
+            assert!(none.as_model_text().is_none(), "{none:?}");
+        }
+    }
+
+    /// Every message-level reader of a tool result sees the tool's text, once.
+    #[test]
+    fn a_string_tool_result_is_read_as_its_text_everywhere() {
+        let msg = UnifiedMessage::tool_result_json("c", "read", json!("line1\nline2"), false);
+        assert_eq!(
+            msg.tool_result_info(),
+            Some(("read", "line1\nline2".to_string()))
+        );
+        assert_eq!(msg.text_content(), "line1\nline2");
+        assert_eq!(msg.transcript_text(), "line1\nline2");
+        assert_eq!(UnifiedMessage::extract_all_text(&[msg]), "line1\nline2");
+    }
+
+    /// `text_content` keeps reasoning (the leak scanner needs it);
+    /// `transcript_text` — what summaries read — does not.
+    #[test]
+    fn transcript_text_leaves_reasoning_out_while_text_content_keeps_it() {
+        let msg = UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "plan".into(),
+                    signature: None,
+                    earlier_turn: false,
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                    cache_control: None,
+                },
+            ],
+        };
+        assert_eq!(msg.text_content(), "plan answer");
+        assert_eq!(msg.transcript_text(), "answer");
     }
 }

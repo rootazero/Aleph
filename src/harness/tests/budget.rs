@@ -690,7 +690,10 @@ const BUDGETED: [&str; 12] = [
 ///     policy moved to `providers::reasoning_replay`, applied at the wire and
 ///     by the estimators. `agent.rs` (+1) shares one `latest_turn_id` between
 ///     `current_turn_id` and the prompt builder instead of a second scan.
-const CEILING: usize = 5246;
+/// −3 (5246 → 5243, 2026-09-25, context-slim A5): `act.rs`'s own
+///     "string or structure" unwrap of a tool result becomes the one shared
+///     `providers::message::value_as_model_text`.
+const CEILING: usize = 5243;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

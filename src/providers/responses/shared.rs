@@ -129,15 +129,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
             } => {
                 let output = content
                     .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text, .. } => {
-                            Some(std::borrow::Cow::Borrowed(text.as_str()))
-                        }
-                        ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
-                            serde_json::to_string(value).unwrap_or_default(),
-                        )),
-                        _ => None,
-                    })
+                    .filter_map(ContentBlock::as_model_text)
                     .collect::<Vec<_>>()
                     .join("\n");
                 items.push(InputItem::FunctionCallOutput {
