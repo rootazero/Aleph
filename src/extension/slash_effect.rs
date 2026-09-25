@@ -50,17 +50,31 @@ pub(crate) fn plugin_command_skill_infos(commands: &[SkillRegistration]) -> Vec<
 }
 
 /// Register the entries and return the disposer that removes exactly them.
+///
+/// `declared_mcp_servers` are the server ids this plugin declares
+/// (`mcp_config::plugin_server_id`). A command may name their tools although
+/// no catalog row exists yet: a server's tools reach the catalog only when it
+/// starts, and nothing orders that before this effect. Ownership is decided by
+/// the MCP handler's own key rule (`tools::handlers::mcp::is_tool_key_of_server`),
+/// so a server this plugin does not declare stays unknown.
+///
 /// A command the catalog refuses (an `allowed-tools:` name the registry does
 /// not know at registration time — e.g. a CC tool in neither of
 /// `extension::hooks`' alias tables, which is forwarded under its own name,
-/// or an MCP tool whose server has not registered yet, the known false
+/// or a tool of an MCP server this plugin does not declare, the known false
 /// negative of `resolve_skill_tool_scope`) is simply not in the id list the
 /// disposer removes, and `register_skills` has already warned by name.
 pub(crate) async fn register_slash_commands_effect(
     catalog: Arc<ToolCatalog>,
     infos: Vec<SkillInfo>,
+    declared_mcp_servers: Vec<String>,
 ) -> Disposer {
-    let rejected = catalog.register_skills(&infos).await;
+    let admit = move |name: &str| {
+        declared_mcp_servers
+            .iter()
+            .any(|server| crate::tools::handlers::mcp::is_tool_key_of_server(server, name))
+    };
+    let rejected = catalog.register_skills_admitting(&infos, &admit).await;
     let ids: Vec<String> = infos
         .into_iter()
         .map(|i| i.id)
@@ -153,7 +167,8 @@ mod tests {
             .map(|t| t.name)
             .collect();
         let infos = plugin_command_skill_infos(&[cmd("qa-plug", "hello"), cmd("qa-plug", "bye")]);
-        let disposer = register_slash_commands_effect(Arc::clone(&catalog), infos).await;
+        let disposer =
+            register_slash_commands_effect(Arc::clone(&catalog), infos, Vec::new()).await;
         let during: Vec<String> = catalog
             .list_all()
             .await

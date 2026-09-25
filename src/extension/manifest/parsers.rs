@@ -51,20 +51,28 @@ use crate::extension::types::McpServerConfig;
 ///    and *that* reading honours `allowed-tools`, including the comma-scalar
 ///    shape.
 ///
-/// # Every Claude Code key here is raw YAML
+/// # The Claude Code extension keys are raw YAML
 ///
 /// Before the cut `allowed-tools` was a strict `Option<Vec<String>>`, and that
 /// was actively harmful: an upstream skill writing `allowed-tools: Read, Grep,
 /// Bash(cargo *)` made the YAML parser reject the whole frontmatter, so the
 /// skill was dropped from the plugin over a key this path never read. A typed
-/// field fails the file, not the key. So each Claude Code key is taken as
-/// `crate::yaml::Value` and read leniently: `allowed-tools` by
+/// field fails the file, not the key. So the four Claude Code extension keys —
+/// `argument-hint`, `allowed-tools`, `model`, `disable-model-invocation` — are
+/// taken as `crate::yaml::Value` and read leniently: `allowed-tools` by
 /// `skill::frontmatter::read_allowed_tools` (the shape reader
 /// `skill::manifest` also builds on), the others by [`hint_text`],
 /// [`model_text`] and [`model_invocation_disabled`]. Upstream's own reference
 /// writes `argument-hint: [pr-number]` unquoted — a YAML flow sequence — which
-/// is exactly the shape a `String` field would reject. An unusable value warns
-/// and costs its key, never the file.
+/// is exactly the shape a `String` field would reject. An unusable value of
+/// one of these four warns and costs its key, not the file.
+///
+/// That holds only while the block is valid YAML. `name`, `description`,
+/// `triggers` and `category` are still typed (`description: [x]` costs the
+/// file), and a block the YAML parser cannot read is dropped with the file —
+/// with one exception: the multi-bracket `argument-hint: [a] [b]` Claude
+/// Code's authoring guidance teaches, which
+/// `skill::frontmatter::parse_frontmatter_yaml` retries once as literal text.
 ///
 /// [`SkillType::Command`]: crate::extension::types::SkillType::Command
 /// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
@@ -102,11 +110,16 @@ fn scalar_text(value: &crate::yaml::Value) -> Option<String> {
     }
 }
 
-/// `argument-hint:` as the text the author wrote. Claude Code documents the
-/// key as text and writes it unquoted — `argument-hint: [pr-number]` — which
-/// YAML reads as a flow sequence; a sequence of scalars is therefore
-/// re-rendered as that flow text (`[pr-number]`, `[a, b]`). Any other shape
-/// warns and gives no hint.
+/// `argument-hint:` in the form Claude Code documents: space-separated
+/// bracketed words, `[arg1] [arg2] [optional-arg]`. A scalar is that text as
+/// written (the multi-bracket form arrives here as one, through
+/// `skill::frontmatter::parse_frontmatter_yaml`). An unquoted single
+/// `argument-hint: [pr-number]` is YAML's flow sequence; a sequence of
+/// scalars is rendered item by item, each as `[item]` unless it is already a
+/// hint (starts with `[` or `<`), joined with one space — so `[pr-number]`
+/// stays `[pr-number]`, `[a, b]` becomes `[a] [b]`, and a one-item sequence
+/// holding a complete hint is that hint. Any other shape warns and gives no
+/// hint.
 fn hint_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String> {
     let value = raw.filter(|v| !v.is_null())?;
     if let Some(text) = scalar_text(value) {
@@ -118,7 +131,19 @@ fn hint_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String>
     if words.is_none() {
         warn!(path = %md_path.display(), value = ?value, "`argument-hint:` is neither text nor a list of words; ignored");
     }
-    words.map(|w| format!("[{}]", w.join(", ")))
+    words.map(|words| {
+        words
+            .iter()
+            .map(|word| {
+                if word.starts_with(['[', '<']) {
+                    word.clone()
+                } else {
+                    format!("[{word}]")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
 }
 
 /// `model:` as text; any non-scalar shape warns and names no model.
@@ -228,6 +253,7 @@ struct McpServerEntry {
 /// the skill with it.
 fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
+    origin: &Path,
 ) -> Result<(T, String)> {
     let content = content.trim();
     let Ok((fm_raw, body_raw)) = crate::skill::frontmatter::split(content) else {
@@ -241,7 +267,7 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
         return Ok((T::default(), body));
     }
 
-    let fm: T = crate::yaml::from_str(fm_str)
+    let fm: T = crate::skill::frontmatter::parse_frontmatter_yaml(fm_str, &origin.display())
         .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
     Ok((fm, body))
 }
@@ -415,7 +441,7 @@ fn parse_skill_registration(
 ) -> Result<CapabilityDeclaration> {
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
-    let (fm, body): (SkillFm, String) = parse_frontmatter(&content)?;
+    let (fm, body): (SkillFm, String) = parse_frontmatter(&content, md_path)?;
     let name = fm.name.unwrap_or_else(|| default_name.to_string());
     // Commands only; `SkillFm`'s doc says why a skill's copy is not carried.
     let allowed_tools = if skill_type == crate::extension::types::SkillType::Command {
@@ -458,8 +484,10 @@ fn parse_skill_registration(
 /// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
 ///   `register_skills` refuses the whole command over one unknown name, and
 ///   losing the slash command over `TodoWrite` is the worse answer.
+/// * A list item that is not a tool name at all (a number, a map, a blank)
+///   is dropped with a warn too.
 /// * Dropping only narrows: a declaration whose every entry drops is
-///   `Some(vec![])`, deny-all.
+///   `Some(vec![])`, deny-all, and says so.
 /// * So is a present value in a shape that names no tool (a number, a map, a
 ///   bool, `","`). It is still a declaration — the author tried to restrict the
 ///   command — and reading it as absent would hand back the full surface. (A
@@ -480,6 +508,17 @@ fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Opt
             return Some(Vec::new());
         }
     };
+    // Items of a YAML list that are not tool names (a number, a map, a blank)
+    // are dropped by the reader; say so, as every other drop does.
+    let unreadable = raw
+        .and_then(crate::yaml::Value::as_sequence)
+        .map_or(0, |items| items.len().saturating_sub(declared.len()));
+    if unreadable > 0 {
+        warn!(
+            command,
+            unreadable, "allowed-tools list items that are not tool names were dropped"
+        );
+    }
     let mapped: Vec<String> = declared
         .iter()
         .filter_map(|entry| {
@@ -502,7 +541,7 @@ fn command_allowed_tools(raw: Option<&crate::yaml::Value>, command: &str) -> Opt
             aleph
         })
         .collect();
-    if mapped.is_empty() && !declared.is_empty() {
+    if mapped.is_empty() && (!declared.is_empty() || unreadable > 0) {
         warn!(
             command,
             declared = ?declared,
@@ -592,7 +631,7 @@ fn parse_single_agent(
 ) -> Result<CapabilityDeclaration> {
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
-    let (fm, body): (AgentFm, String) = parse_frontmatter(&content)?;
+    let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
         name: fm.name.unwrap_or_else(|| default_name.to_string()),
@@ -1421,6 +1460,97 @@ mod tests {
         assert_eq!(reg.allowed_tools.as_deref(), Some(&[][..]));
     }
 
+    /// Runs `f` and returns what it logged at WARN or above, as text. The
+    /// warn is the only observable effect of a parse that keeps going.
+    fn warnings_during<T>(f: impl FnOnce() -> T) -> (T, String) {
+        #[derive(Clone, Default)]
+        struct Sink(crate::sync_primitives::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, f);
+        let text =
+            String::from_utf8_lossy(&sink.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
+        (out, text)
+    }
+
+    /// Claude Code's own authoring guidance gives `argument-hint: [arg1]
+    /// [arg2] [optional-arg]` as the format. That is a YAML syntax error, and
+    /// a YAML error used to drop the whole command.
+    #[test]
+    fn multi_bracket_argument_hints_keep_the_command() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        let hints = [
+            ("generic", "[arg1] [arg2] [optional-arg]"),
+            ("deploy", "[environment] [version]"),
+            ("lint", "[file-path] [options]"),
+        ];
+        for (name, hint) in hints {
+            fs::write(
+                cmds.join(format!("{name}.md")),
+                format!("---\ndescription: d\nargument-hint: {hint}\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        // Negative control: broken somewhere else, the file still drops.
+        fs::write(
+            cmds.join("broken.md"),
+            "---\nargument-hint: [a] [b]\ndescription: a: b\n---\nbody\n",
+        )
+        .unwrap();
+
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        for (name, hint) in hints {
+            assert_eq!(regs[name].argument_hint.as_deref(), Some(hint), "{name}");
+        }
+        assert!(
+            !regs.contains_key("broken"),
+            "a YAML error elsewhere still drops the file"
+        );
+        assert!(
+            warnings.contains("read as literal text"),
+            "the fallback says so: {warnings}"
+        );
+    }
+
+    /// A sequence none of whose items is a tool name is deny-all — and says
+    /// so, like every other path to deny-all.
+    #[test]
+    fn a_sequence_of_non_names_is_deny_all_and_says_so() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("n.md"),
+            "---\nallowed-tools: [42, {Bash: git}]\n---\nbody\n",
+        )
+        .unwrap();
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        assert_eq!(regs["n"].allowed_tools.as_deref(), Some(&[][..]));
+        assert!(
+            warnings.contains("can call no tools"),
+            "deny-all must be announced: {warnings}"
+        );
+    }
+
     /// Every command in `dir/commands`, by name.
     fn commands_by_name(dir: &Path) -> HashMap<String, SkillRegistration> {
         parse_commands_dir(dir, "commands", "plug")
@@ -1482,14 +1612,26 @@ mod tests {
             "---\nargument-hint: [pr-number, priority]\n---\nbody\n",
         )
         .unwrap();
+        fs::write(
+            cmds.join("angled.md"),
+            "---\nargument-hint: [<file>, extra]\n---\nbody\n",
+        )
+        .unwrap();
         let regs = commands_by_name(dir.path());
         assert_eq!(
             regs["new-sdk-app"].argument_hint.as_deref(),
             Some("[project-name]")
         );
+        // Each item becomes one bracketed word, space-joined — the form CC
+        // documents (`[arg1] [arg2]`), not YAML's `[a, b]`.
         assert_eq!(
             regs["two"].argument_hint.as_deref(),
-            Some("[pr-number, priority]")
+            Some("[pr-number] [priority]")
+        );
+        // An item that is already a hint (`<file>`, `[x]`) is kept as written.
+        assert_eq!(
+            regs["angled"].argument_hint.as_deref(),
+            Some("<file> [extra]")
         );
     }
 
@@ -1507,9 +1649,15 @@ mod tests {
         .unwrap();
         let skill = dir.path().join("skills").join("understand");
         fs::create_dir_all(&skill).unwrap();
+        // understand-anything 2.9.4's `skills/understand/SKILL.md`, verbatim:
+        // a one-item sequence whose item is already a complete hint.
+        let understand_hint = "[path] [--full|--auto-update|--no-auto-update|--review|--language \
+                               <lang>|--exclude <patterns>]";
         fs::write(
             skill.join("SKILL.md"),
-            "---\nname: understand\ndescription: d\nargument-hint: [\"[path] [--full]\"]\n---\nBody.",
+            format!(
+                "---\nname: understand\ndescription: d\nargument-hint: [\"{understand_hint}\"]\n---\nBody."
+            ),
         )
         .unwrap();
 
@@ -1521,10 +1669,7 @@ mod tests {
         let CapabilityDeclaration::Skill(understand) = &skills[0] else {
             panic!("the skill must survive its `argument-hint`")
         };
-        assert_eq!(
-            understand.argument_hint.as_deref(),
-            Some("[[path] [--full]]")
-        );
+        assert_eq!(understand.argument_hint.as_deref(), Some(understand_hint));
     }
 
     /// Claude Code's `Skill` is how a command uses a skill; Aleph's
@@ -1804,14 +1949,16 @@ mod tests {
 
     #[test]
     fn test_parse_frontmatter_no_delimiters() {
-        let (fm, body): (SkillFm, String) = parse_frontmatter("Just content").unwrap();
+        let (fm, body): (SkillFm, String) =
+            parse_frontmatter("Just content", Path::new("t")).unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Just content");
     }
 
     #[test]
     fn test_parse_frontmatter_empty_fm() {
-        let (fm, body): (SkillFm, String) = parse_frontmatter("---\n---\nBody").unwrap();
+        let (fm, body): (SkillFm, String) =
+            parse_frontmatter("---\n---\nBody", Path::new("t")).unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Body");
     }

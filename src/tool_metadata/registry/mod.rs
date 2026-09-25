@@ -144,9 +144,21 @@ impl ToolCatalog {
     /// declaration named tools that do not exist. A refused skill gets no
     /// slash command — see [`ToolRegistrar::register_skills`].
     pub async fn register_skills(&self, skills: &[SkillInfo]) -> Vec<String> {
+        self.register_skills_admitting(skills, &|_| false).await
+    }
+
+    /// [`Self::register_skills`], also admitting the names
+    /// `admit_unregistered` vouches for although they have no catalog row yet
+    /// (a plugin command's own declared MCP servers — see
+    /// [`ToolRegistrar::register_skills`]).
+    pub(crate) async fn register_skills_admitting(
+        &self,
+        skills: &[SkillInfo],
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
+    ) -> Vec<String> {
         let rejected = self
             .registrar
-            .register_skills(skills, &self.conflict_resolver)
+            .register_skills(skills, &self.conflict_resolver, admit_unregistered)
             .await;
         self.health.invalidate_all();
         rejected

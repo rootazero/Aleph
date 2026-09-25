@@ -226,10 +226,14 @@ impl ToolRegistrar {
     /// only logged so the boot path can say it out loud: a skill silently
     /// missing from the slash catalog reads exactly like a skill that was
     /// never installed.
+    ///
+    /// `admit_unregistered` is the caller's third source of known names — see
+    /// [`Self::resolve_skill_tool_scope`].
     pub async fn register_skills(
         &self,
         skills: &[SkillInfo],
         conflict_resolver: &ConflictResolver,
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> Vec<String> {
         let mut rejected: Vec<String> = Vec::new();
         for skill in skills {
@@ -245,6 +249,7 @@ impl ToolRegistrar {
             let routing_capabilities = match Self::resolve_skill_tool_scope(
                 skill.allowed_tools.as_deref(),
                 conflict_resolver,
+                admit_unregistered,
             )
             .await
             {
@@ -324,7 +329,7 @@ impl ToolRegistrar {
     /// empty `Some` is a legitimate, explicit deny-all). `Err(unknown)` — at
     /// least one name names nothing, and the caller must refuse the skill.
     ///
-    /// Two sources are unioned to answer "does this name exist":
+    /// Three sources are unioned to answer "does this name exist":
     /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
     ///   static list, and the same one the `ExecutionEngine` seeds its tool
     ///   list from. Consulting it means this answer does not depend on how
@@ -339,12 +344,21 @@ impl ToolRegistrar {
     ///   run loop, whose candidate list is built from the executor's tools —
     ///   a silent deny-all, which is the exact failure this change exists to
     ///   remove.
+    /// * `admit_unregistered` — names the caller vouches for although no
+    ///   catalog row exists *yet*. A plugin command passes the tool keys of
+    ///   the MCP servers its own plugin declares
+    ///   (`extension::slash_effect::register_slash_commands_effect`): those
+    ///   tools reach the catalog only when the server starts, which nothing
+    ///   orders before the command's registration, and the run loop narrows
+    ///   by name and joins MCP per request, so the admitted name is honoured
+    ///   once the server is up. Every other caller admits nothing here.
     ///
     /// Known boundary: plugin tools and MCP tools register into the catalog
     /// *after* skills do (MCP joins per request at run time), so a skill that
-    /// names one is refused even though the run loop could have honoured it.
-    /// That is a loud false negative — the author is named in a warn and in
-    /// the boot output — chosen over the silent false positive above. This
+    /// names one — or a command naming a server its plugin does not declare —
+    /// is refused even though the run loop could have honoured it. That is a
+    /// loud false negative — the author is named in a warn and in the boot
+    /// output — chosen over the silent false positive above. This
     /// function translates nothing: matching upstream's `Read`/`Bash`/`Grep`
     /// literally would retain zero tools while reporting success, so an
     /// upstream name is refused here by name. A plugin *command*'s
@@ -354,6 +368,7 @@ impl ToolRegistrar {
     async fn resolve_skill_tool_scope(
         declared: Option<&[String]>,
         conflict_resolver: &ConflictResolver,
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> Result<Option<Vec<String>>, Vec<String>> {
         let Some(names) = declared else {
             return Ok(None);
@@ -380,6 +395,9 @@ impl ToolRegistrar {
                     )
                 })
             {
+                continue;
+            }
+            if admit_unregistered(name) {
                 continue;
             }
             unknown.push(name.clone());

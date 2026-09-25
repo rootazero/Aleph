@@ -110,6 +110,17 @@ impl McpHandler {
     }
 }
 
+/// Whether `name` is a registry key [`McpHandler::qualified_name`] can
+/// produce for some tool of `server_id`: the same composition
+/// (`{server_id}__{tool}` through [`sanitize_tool_name`]) decides, so the two
+/// cannot drift. A glob, an over-long name or a bare `{server}__` is no key.
+/// A server id so long that its own `__` prefix fills the 64-character key
+/// leaves no room for a tool part, and owns nothing here.
+pub(crate) fn is_tool_key_of_server(server_id: &str, name: &str) -> bool {
+    let prefix = sanitize_tool_name(&format!("{server_id}__"));
+    name.len() > prefix.len() && name.starts_with(&prefix) && sanitize_tool_name(name) == name
+}
+
 /// Map a candidate registry name onto the provider-safe alphabet
 /// `[A-Za-z0-9_-]`, truncating to 64 characters. Strict-schema providers
 /// (`OpenAI` function calling) reject names outside this set with a request-
@@ -218,6 +229,33 @@ fn map_mcp_error(name: String, err: AlephError) -> ToolError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The ownership test is derived from the handler's own key: whatever
+    /// `qualified_name` produces for a server, that server owns — and nothing
+    /// that no handler of it can produce.
+    #[test]
+    fn a_tool_key_belongs_to_the_server_whose_handler_made_it() {
+        let server = crate::extension::mcp_config::plugin_server_id("my-plug", "my_srv");
+        let key = McpHandler::new(
+            Arc::new(McpClient::new()),
+            server.clone(),
+            "do_thing".into(),
+            String::new(),
+            json!({"type": "object"}),
+        )
+        .qualified_name();
+        assert!(is_tool_key_of_server(&server, &key), "{key}");
+        let other = crate::extension::mcp_config::plugin_server_id("my-plug", "other");
+        assert!(!is_tool_key_of_server(&other, &key), "another server");
+        assert!(
+            !is_tool_key_of_server(&server, "plugin_my-plug_my_srv__"),
+            "no tool part"
+        );
+        assert!(
+            !is_tool_key_of_server(&server, "plugin_my-plug_my_srv__*"),
+            "a glob is not a key any handler makes"
+        );
+    }
 
     #[test]
     fn qualified_name_uses_double_underscore() {

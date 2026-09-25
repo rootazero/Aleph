@@ -520,6 +520,9 @@ impl ExtensionManager {
         // parses as `Static` today (`cc_plugin_json.rs:217`); P4.15 fixes
         // that in the adapter, not here.
         let mut first_server: Option<String> = None;
+        // Every server this plugin declares, started or not: step 6 lets a
+        // command name their tools before they reach the catalog.
+        let mut declared_mcp_servers: Vec<String> = Vec::new();
         if kind == PluginKind::Mcp {
             let settings = self.plugin_settings_for_runtime(&id).await;
             let configs = match mcp_config::read_mcp_json(&root_dir, &id, &settings) {
@@ -531,6 +534,7 @@ impl ExtensionManager {
                 }
             };
             first_server = configs.keys().min().cloned();
+            declared_mcp_servers = configs.keys().cloned().collect();
             if configs.is_empty() {
                 tracing::warn!(plugin_id = %id, "MCP plugin has no servers defined in .mcp.json");
             } else {
@@ -608,7 +612,12 @@ impl ExtensionManager {
                 None => scope.skip("slash_command", "tool catalog not attached"),
                 Some(c) => scope.effect(
                     "slash_command",
-                    slash_effect::register_slash_commands_effect(c, command_infos).await,
+                    slash_effect::register_slash_commands_effect(
+                        c,
+                        command_infos,
+                        declared_mcp_servers,
+                    )
+                    .await,
                 ),
             }
         }
@@ -1130,6 +1139,52 @@ mod tests {
         assert!(hello.routing_capabilities.is_none());
         assert_eq!(hello.usage.as_deref(), Some("/alpha:hello [input]"));
         assert!(hello.param_hint.is_none());
+    }
+
+    /// A command may name a tool of an MCP server its own plugin declares,
+    /// even though that server's tools reach the catalog only after it starts
+    /// (here: never — no MCP handle is attached). A server the plugin does not
+    /// declare stays unknown, and the command naming it is refused.
+    #[tokio::test]
+    async fn a_command_may_name_its_own_plugins_declared_mcp_tool() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_mcp_project_plugin(tmp.path(), "mcp-cmd");
+        let cmds = tmp.path().join("plugins/mcp-cmd/commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+        std::fs::write(
+            cmds.join("own.md"),
+            "---\nallowed-tools: Read, mcp__plugin_mcp-cmd_srv__do_thing\n---\nx\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cmds.join("foreign.md"),
+            "---\nallowed-tools: Read, mcp__plugin_elsewhere_srv__do_thing\n---\nx\n",
+        )
+        .unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
+        manager.set_tool_catalog(catalog.clone());
+        manager.load_all().await.unwrap();
+
+        let rows = catalog.list_all().await;
+        let own = rows
+            .iter()
+            .find(|t| t.name == "mcp-cmd:own")
+            .expect("a declared server's tool is admitted before the server starts");
+        assert_eq!(
+            own.routing_capabilities.as_deref(),
+            Some(
+                &[
+                    "file_read".to_string(),
+                    "plugin_mcp-cmd_srv__do_thing".to_string()
+                ][..]
+            )
+        );
+        assert!(
+            !rows.iter().any(|t| t.name == "mcp-cmd:foreign"),
+            "a server the plugin does not declare stays refused"
+        );
     }
 
     #[tokio::test]

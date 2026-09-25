@@ -406,7 +406,7 @@ pub fn parse_skill_file(
     let content = String::from_utf8(content_bytes).map_err(|e| {
         SkillParseError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     })?;
-    parse_skill_content(&content, source)
+    parse_skill_content_from(&content, source, &path_ref.display())
 }
 
 /// Parse a SKILL.md content string.
@@ -414,8 +414,18 @@ pub fn parse_skill_content(
     content_str: &str,
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
+    parse_skill_content_from(content_str, source, &"<SKILL.md content>")
+}
+
+/// [`parse_skill_content`], naming where the content came from (`origin`) in
+/// what the frontmatter reader logs.
+fn parse_skill_content_from(
+    content_str: &str,
+    source: SkillSource,
+    origin: &dyn std::fmt::Display,
+) -> Result<SkillManifest, SkillParseError> {
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
-    let raw: RawFrontmatter = crate::yaml::from_str(&yaml_str)?;
+    let raw: RawFrontmatter = crate::skill::frontmatter::parse_frontmatter_yaml(&yaml_str, origin)?;
 
     // Build the id from the name with a strict charset transform: any
     // non-alphanumeric character collapses to a hyphen, runs collapse, and
@@ -699,6 +709,18 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
 mod tests {
     use super::*;
     use crate::domain::Entity;
+
+    /// The twin of `extension::manifest::parsers`' reader of the same
+    /// SKILL.md: Claude Code's documented `argument-hint: [a] [b]` is not
+    /// YAML, and without the shared retry this scan dropped the whole skill.
+    #[test]
+    fn a_multi_bracket_argument_hint_keeps_the_skill() {
+        let content =
+            "---\nname: Deploy\ndescription: d\nargument-hint: [environment] [version]\n---\nBody.";
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("the skill must survive its `argument-hint`");
+        assert_eq!(manifest.name(), "Deploy");
+    }
 
     #[test]
     fn parse_minimal_frontmatter() {

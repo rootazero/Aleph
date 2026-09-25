@@ -20,7 +20,12 @@
 //! * `skill::manifest` iterated *lines* and required the delimiter to be alone
 //!   on its line. That one is correct, so it is the one that survives here.
 //!
-//! [`split`] is that implementation, extracted so there is one answer.
+//! [`split`] is that implementation, extracted so there is one answer. The
+//! YAML call after it is shared the same way: [`parse_frontmatter_yaml`] is
+//! what `skill::manifest` and `extension::manifest::parsers` both parse the
+//! block with, so neither drops a file over YAML syntax the other retries.
+//! (Their field types still differ: a typed field one of them has can still
+//! cost that one the file.)
 //!
 //! # `allowed-tools:`
 //!
@@ -132,6 +137,74 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
     let body_normalized = body.replace("\r\n", "\n").replace('\r', "\n");
 
     Ok((yaml_normalized, body_normalized))
+}
+
+/// Deserialise a frontmatter block: the one YAML call of both readers of a
+/// SKILL.md / command file (`extension::manifest::parsers` and
+/// `skill::manifest`), so they cannot answer the same file two ways.
+///
+/// One narrow retry. Claude Code's own authoring guidance gives
+/// `argument-hint: [arg1] [arg2] [optional-arg]` as the format, which is not
+/// YAML (a flow sequence followed by more text), and a YAML error drops the
+/// whole file. So on an error — and only then — a bare bracketed
+/// `argument-hint:` line is quoted as the literal text it is
+/// ([`quote_bare_argument_hint`]) and the same parser runs once more; nothing
+/// else in the block is touched. `origin` names the file in the warn that
+/// says so. If the retry fails too, the error returned is the ORIGINAL one:
+/// it points at what the author wrote, not at the rewrite.
+pub(crate) fn parse_frontmatter_yaml<T: serde::de::DeserializeOwned>(
+    yaml: &str,
+    origin: &dyn std::fmt::Display,
+) -> Result<T, crate::yaml::Error> {
+    let original = match crate::yaml::from_str(yaml) {
+        Ok(parsed) => return Ok(parsed),
+        Err(e) => e,
+    };
+    let Some(quoted) = quote_bare_argument_hint(yaml) else {
+        return Err(original);
+    };
+    match crate::yaml::from_str(&quoted) {
+        Ok(parsed) => {
+            tracing::warn!(
+                origin = %origin,
+                "`argument-hint:` is not valid YAML; read as literal text"
+            );
+            Ok(parsed)
+        }
+        Err(_) => Err(original),
+    }
+}
+
+/// `yaml` with each bare bracketed `argument-hint:` line's value quoted as a
+/// YAML double-quoted string, or `None` if no line qualifies. A line
+/// qualifies only if it starts at column 0 with the key, its value is on that
+/// one line and starts with `[` (so never `"`, `'`, `|`, `>` or empty), and
+/// no indented line continues it. Everything after the key is taken as
+/// written, a trailing `# comment` included.
+fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
+    const KEY: &str = "argument-hint:";
+    let lines: Vec<&str> = yaml.split_inclusive('\n').collect();
+    let rewritten: String = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let Some(rest) = line.strip_prefix(KEY) else {
+                return (*line).to_string();
+            };
+            let value = rest.trim_end_matches(['\n', '\r']);
+            let eol = rest.get(value.len()..).unwrap_or_default();
+            let value = value.trim();
+            let continued = lines
+                .get(i + 1)
+                .is_some_and(|next| next.starts_with([' ', '\t']) && !next.trim().is_empty());
+            if !value.starts_with('[') || continued {
+                return (*line).to_string();
+            }
+            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("{KEY} \"{escaped}\"{eol}")
+        })
+        .collect();
+    (rewritten != yaml).then_some(rewritten)
 }
 
 /// Normalise the [`ALLOWED_TOOLS_KEY`] frontmatter block into a name list.
@@ -283,6 +356,66 @@ pub(crate) fn read_allowed_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Claude Code's authoring guidance gives `argument-hint: [arg1] [arg2]
+    /// [optional-arg]` as the format. That is not YAML; retried once with the
+    /// line quoted, it is the text the author wrote and the rest of the block
+    /// is untouched.
+    #[test]
+    fn a_multi_bracket_argument_hint_is_read_as_text() {
+        let yaml = "name: n\nargument-hint: [arg1] [arg2] [optional-arg]\ndescription: d\n";
+        assert!(
+            crate::yaml::from_str::<crate::yaml::Value>(yaml).is_err(),
+            "premise: this is not YAML"
+        );
+        let v: crate::yaml::Value = parse_frontmatter_yaml(yaml, &"t").unwrap();
+        assert_eq!(
+            v["argument-hint"].as_str(),
+            Some("[arg1] [arg2] [optional-arg]")
+        );
+        assert_eq!(v["description"].as_str(), Some("d"));
+    }
+
+    /// The retry is for that one line. A block broken elsewhere still fails,
+    /// and with the error the author's own text produced — not the rewrite's.
+    #[test]
+    fn an_unrelated_yaml_error_reports_the_original_error() {
+        let yaml = "argument-hint: [a] [b]\ndescription: a: b\n";
+        let original = crate::yaml::from_str::<crate::yaml::Value>(yaml)
+            .unwrap_err()
+            .to_string();
+        let rewritten = quote_bare_argument_hint(yaml).expect("premise: the hint line qualifies");
+        let retried = crate::yaml::from_str::<crate::yaml::Value>(&rewritten)
+            .unwrap_err()
+            .to_string();
+        assert_ne!(
+            retried, original,
+            "premise: the two errors are distinguishable"
+        );
+        let err = parse_frontmatter_yaml::<crate::yaml::Value>(yaml, &"t")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, original);
+    }
+
+    #[test]
+    fn only_a_bare_bracketed_hint_line_is_rewritten() {
+        for untouched in [
+            "argument-hint: \"[a] [b]\"\n",
+            "argument-hint: '[a] [b]'\n",
+            "argument-hint: pr-number\n",
+            "argument-hint:\n",
+            "description: [a] [b]\n",
+            "  argument-hint: [a] [b]\n",
+            "argument-hint: [a,\n  b]\n",
+        ] {
+            assert_eq!(quote_bare_argument_hint(untouched), None, "{untouched:?}");
+        }
+        assert_eq!(
+            quote_bare_argument_hint("argument-hint: [a] [\"b\\c\"]\nx: 1\n").as_deref(),
+            Some("argument-hint: \"[a] [\\\"b\\\\c\\\"]\"\nx: 1\n")
+        );
+    }
 
     #[test]
     fn splits_a_plain_document() {
@@ -604,7 +737,12 @@ mod tests {
                 continue;
             };
             let code = code_lines(&path, &content);
-            if !(code.contains("crate::yaml::from_str") || code.contains("crate::yaml::from_value"))
+            // Every way into the YAML parser — including this module's own
+            // frontmatter entry point, which is how the two SKILL.md readers
+            // reach it; a census blind to it would miss the next reader too.
+            if !(code.contains("crate::yaml::from_str")
+                || code.contains("crate::yaml::from_value")
+                || code.contains("parse_frontmatter_yaml"))
             {
                 continue;
             }
