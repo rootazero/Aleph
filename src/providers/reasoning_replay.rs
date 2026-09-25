@@ -80,9 +80,13 @@ impl Default for ReasoningReplay {
 impl ReasoningReplay {
     /// The one table: protocol × host × model → policy.
     ///
-    /// Hosts come from the protocols' own endpoint classifiers and model facts
-    /// from the model catalog. Anything not named here keeps its protocol's
-    /// pre-policy behaviour — never more reasoning, never less.
+    /// `protocol` is the adapter's wire family
+    /// ([`ProtocolAdapter::wire_family`](crate::providers::adapter::ProtocolAdapter::wire_family)),
+    /// never a user-chosen protocol name — a YAML protocol that extends
+    /// `anthropic` must resolve as `anthropic`. Hosts come from the protocols'
+    /// own endpoint classifiers and model facts from the model catalog.
+    /// Anything not named here keeps its protocol's pre-policy behaviour —
+    /// never more reasoning, never less.
     #[must_use]
     pub fn for_target(protocol: &str, base_url: Option<&str>, model: &str) -> Self {
         match protocol {

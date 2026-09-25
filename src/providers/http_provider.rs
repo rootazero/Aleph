@@ -890,8 +890,10 @@ impl AiProvider for HttpProvider {
         &self.config.color
     }
 
+    /// The wire family, not the configured protocol name: a YAML protocol
+    /// that `extends` a built-in resolves behaviour as that built-in.
     fn protocol(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.adapter.name())
+        Cow::Borrowed(self.adapter.wire_family())
     }
 
     fn model_behavior_override(&self) -> Option<Cow<'_, str>> {
@@ -933,7 +935,7 @@ impl AiProvider for HttpProvider {
         model: Option<&str>,
     ) -> crate::providers::reasoning_replay::ReasoningReplay {
         crate::providers::reasoning_replay::ReasoningReplay::for_target(
-            self.adapter.name(),
+            self.adapter.wire_family(),
             self.config.base_url.as_deref(),
             model.unwrap_or_else(|| self.config.default_model()),
         )

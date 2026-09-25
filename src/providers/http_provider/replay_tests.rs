@@ -287,3 +287,93 @@ fn pressure_counts_exactly_the_reasoning_the_wire_sends() {
         assert_eq!(estimated, wire, "{}", p.config.default_model());
     }
 }
+
+// ── a YAML protocol is policed as the wire it speaks ─────────────────────────
+
+fn configurable(extends: Option<&str>) -> Arc<dyn ProtocolAdapter> {
+    use crate::providers::protocols::definition::{
+        AuthConfig, CustomProtocol, EndpointConfig, ProtocolDefinition, ResponseMapping,
+    };
+    use crate::providers::protocols::{ConfigurableProtocol, ProtocolRegistry};
+    ProtocolRegistry::global().register_builtin();
+    let custom = extends.is_none().then(|| CustomProtocol {
+        auth: AuthConfig {
+            auth_type: "header".into(),
+            config: json!({"header": "Authorization", "prefix": "Bearer "}),
+        },
+        endpoints: EndpointConfig {
+            chat: "/v1/chat".into(),
+            stream: None,
+        },
+        request_template: json!(r#"{"model": "{{config.model}}"}"#),
+        response_mapping: ResponseMapping {
+            content: "$.choices[0].message.content".into(),
+            error: None,
+        },
+        stream_config: None,
+    });
+    let definition = ProtocolDefinition {
+        name: "my-proxy".into(),
+        extends: extends.map(str::to_string),
+        base_url: None,
+        differences: None,
+        custom,
+    };
+    Arc::new(ConfigurableProtocol::new(definition, reqwest::Client::new()).expect("protocol"))
+}
+
+/// `extends` decides the wire, so it decides the policy — the YAML name
+/// ("my-proxy") is not a protocol family and must not fall through to `Drop`.
+#[test]
+fn a_yaml_protocol_resolves_the_policy_of_the_protocol_it_extends() {
+    use crate::providers::reasoning_replay::ReasoningReplay;
+    let cases = [
+        (
+            Some("anthropic"),
+            None,
+            "claude-opus-4-7",
+            ReasoningReplay::AnthropicSigned {
+                strip_earlier_turns: false,
+            },
+        ),
+        (
+            Some("codex"),
+            None,
+            "gpt-5.6",
+            ReasoningReplay::ResponsesEncrypted,
+        ),
+        (
+            Some("openai"),
+            Some(DEEPSEEK),
+            "deepseek-v4-flash",
+            ReasoningReplay::ReasoningContent { fill_missing: true },
+        ),
+        (
+            Some("openai"),
+            Some("https://api.openai.com/v1"),
+            "gpt-5.5",
+            ReasoningReplay::Drop,
+        ),
+        (
+            None,
+            Some("https://api.example.com"),
+            "m",
+            ReasoningReplay::Drop,
+        ),
+    ];
+    for (extends, base_url, model, expected) in cases {
+        let p = provider(configurable(extends), base_url, model);
+        assert_eq!(p.reasoning_replay(None), expected, "extends {extends:?}");
+    }
+}
+
+/// The regression itself: under a YAML `extends: anthropic` protocol the signed
+/// thinking of a tool turn must still reach the wire (Anthropic 400s without it).
+#[test]
+fn a_yaml_anthropic_protocol_still_sends_signed_tool_turn_thinking() {
+    let p = provider(configurable(Some("anthropic")), None, "claude-opus-4-7");
+    assert_eq!(
+        anthropic_thinking(&wire_body(&p, &anthropic_history())),
+        vec!["old tool plan", "current tool plan"]
+    );
+}

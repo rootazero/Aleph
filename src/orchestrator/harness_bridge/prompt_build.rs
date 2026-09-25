@@ -27,7 +27,11 @@ impl AgentHarnessRunner {
     /// No reference agent (hermes / openclaw / Pi / opensquilla) coordinates the
     /// memory and history budgets — they inject memory at a fixed size
     /// regardless of conversation pressure.
-    pub(crate) async fn memory_injection_headroom(&self, session_id: &SessionId) -> Option<u32> {
+    pub(crate) async fn memory_injection_headroom(
+        &self,
+        session_id: &SessionId,
+        provider: &dyn AiProvider,
+    ) -> Option<u32> {
         let cfg = self.context_budget_config.as_ref()?;
         // Best-effort: a read failure must never block a turn — fall back to the
         // full configured budget (None) just like a missing context budget.
@@ -37,7 +41,8 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let replay = self.default_provider.current().reasoning_replay(None);
+        // The run's own provider — what this turn's wire will carry.
+        let replay = provider.reasoning_replay(None);
         let history_tokens: usize = replay
             .projected(&messages)
             .map(|m| {
@@ -69,7 +74,11 @@ impl AgentHarnessRunner {
     /// never re-keys the conversation prefix. Gated on `[context_budget]` exactly
     /// like [`memory_injection_headroom`]; the no-config path touches no session
     /// state. Fail-soft: a read error yields `None` and the turn proceeds.
-    async fn context_pressure_reminder(&self, session_id: &SessionId) -> Option<String> {
+    async fn context_pressure_reminder(
+        &self,
+        session_id: &SessionId,
+        provider: &dyn AiProvider,
+    ) -> Option<String> {
         let cfg = self.context_budget_config.as_ref()?;
         if cfg.token_budget == 0 {
             return None;
@@ -90,7 +99,8 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let replay = self.default_provider.current().reasoning_replay(None);
+        // The run's own provider — what this turn's wire will carry.
+        let replay = provider.reasoning_replay(None);
         let history_tokens: usize = replay
             .projected(&messages)
             .map(|m| {
@@ -375,7 +385,7 @@ impl AgentHarnessRunner {
                 // `[context_budget]` is configured → full configured budget.
                 // The session key excludes this session's own end-of-session
                 // resume snapshot from the "previous session" recall source.
-                let headroom = self.memory_injection_headroom(session_id).await;
+                let headroom = self.memory_injection_headroom(session_id, provider).await;
                 match mcp
                     .build_memory_user_message(
                         agent_id,
@@ -682,7 +692,7 @@ impl AgentHarnessRunner {
         // the same transient tail as the countdowns — a per-turn-varying figure
         // that must not enter the cached system prompt — so the model can wrap up
         // or checkpoint before the in-loop sensor compacts older turns away.
-        let pressure_text = self.context_pressure_reminder(session_id).await;
+        let pressure_text = self.context_pressure_reminder(session_id, provider).await;
         let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()

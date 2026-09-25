@@ -226,6 +226,15 @@ pub trait ProtocolAdapter: Send + Sync {
 
     /// Get the protocol name for logging
     fn name(&self) -> &'static str;
+
+    /// The wire family this adapter speaks — the key for per-family policy
+    /// (reasoning replay, model-behaviour fallback). Defaults to
+    /// [`name`](Self::name); an adapter that delegates its wire to another (a
+    /// YAML protocol that `extends` a built-in) reports that one's family, so
+    /// a user-chosen protocol name never reads as "unknown protocol".
+    fn wire_family(&self) -> &'static str {
+        self.name()
+    }
 }
 
 // =============================================================================
