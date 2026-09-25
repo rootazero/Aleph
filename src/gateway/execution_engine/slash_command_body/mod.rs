@@ -42,7 +42,8 @@
 //! `bash` ([`inline_shell_refusal`]).
 //!
 //! **`model:`** pins this turn's model when the request carries none
-//! ([`command_model_pin`]).
+//! ([`command_model_pin`]) — applied before the run is admitted
+//! ([`pin_model`]), so the busy lane sees the model the command runs on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,9 @@ pub(super) async fn admit_with(
     let Some(reg) =
         owned_command(&mode, &*manager.get_plugin_registry().await).map(|(reg, _)| reg.clone())
     else {
+        // No command to admit — so no pin [`pin_model`] may have made before
+        // admission is this turn's either.
+        request.model_override = strip(&mut request.metadata, request.model_override.take());
         return Ok(());
     };
     let qualified = reg.qualified_name();
@@ -116,12 +120,52 @@ pub(super) async fn admit_with(
         .map_err(|why| format!("/{qualified} was not run: {why}"))?;
     request.metadata.insert(ADMITTED_KEY.to_string(), qualified);
     if let Some(pin) = pin {
-        request
-            .metadata
-            .insert(MODEL_PIN_KEY.to_string(), pin.model().to_string());
-        request.model_override = Some(pin);
+        apply_pin(request, pin);
     }
     Ok(())
+}
+
+/// Pin this turn's model to its plugin command's `model:` BEFORE the run is
+/// admitted, so the run's registered copy — what the busy lane folds a
+/// follow-up message against while this run parks for a slot — names that
+/// model from the start. `execute()` calls this just before `admit_run`.
+///
+/// Changes nothing but the request, and only on a pin: the same
+/// [`owned_command`] and [`command_model_pin`] [`admit`] runs. A `model:`
+/// that must refuse the turn is left for [`admit`] to refuse, after the
+/// owner gate; a pin whose command is then not admitted is dropped there. A
+/// mode stamped after admission (the producers that never pass through a
+/// handler) is pinned by [`admit`] alone, and the run's copy is updated by
+/// `mark_fallen_through`.
+pub(super) async fn pin_model(request: &mut RunRequest) {
+    let Some(manager) = crate::extension::try_extension_manager() else {
+        return;
+    };
+    pin_model_with(request, manager).await;
+}
+
+/// [`pin_model`] with the extension manager handed in.
+pub(super) async fn pin_model_with(request: &mut RunRequest, manager: &ExtensionManager) {
+    let Some(mode) = slash_mode(&request.metadata) else {
+        return;
+    };
+    let Some(declared) = owned_command(&mode, &*manager.get_plugin_registry().await)
+        .map(|(reg, _)| reg.model.clone())
+    else {
+        return;
+    };
+    if let Ok(Some(pin)) = command_model_pin(request.model_override.as_ref(), declared.as_deref()) {
+        apply_pin(request, pin);
+    }
+}
+
+/// The command's `model:` as this turn's override, marked as the command's
+/// ([`MODEL_PIN_KEY`]) so [`strip`] can tell it from the request's own pick.
+fn apply_pin(request: &mut RunRequest, pin: ModelOverride) {
+    request
+        .metadata
+        .insert(MODEL_PIN_KEY.to_string(), pin.model().to_string());
+    request.model_override = Some(pin);
 }
 
 /// Render the command [`admit`] admitted for this turn: its `<command>`
@@ -402,11 +446,12 @@ pub(super) fn command_model_pin(
 }
 
 /// Drop a command turn's residue from metadata that is being re-driven as a
-/// plain loop continuation (the steering rescue): the admitted command — a
-/// second render would be a second instruction, and would run its inline
-/// commands again — and the model pin the command declared, which was for its
-/// own turn. Returns the model override the continuation keeps: the
-/// request's own pick, never the command's.
+/// plain loop continuation (the steering rescue), or whose command turned
+/// out not to be admissible after [`pin_model`] pinned it ([`admit`]): the
+/// admitted command — a second render would be a second instruction, and
+/// would run its inline commands again — and the model pin the command
+/// declared, which was for its own turn. Returns the model override the
+/// request keeps: its own pick, never the command's.
 pub(super) fn strip(
     metadata: &mut HashMap<String, String>,
     model_override: Option<ModelOverride>,

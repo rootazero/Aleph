@@ -344,8 +344,10 @@ where
     }
 
     /// The fast path handed this run to the agent loop: it is `Running`, on
-    /// the model its request now names. A `/command` may just have pinned one
-    /// (`slash_command_body::admit`), and the busy lane's steer-fold check
+    /// the model its request now names. A `/command` whose mode was stamped
+    /// after admission may just have pinned one (`slash_command_body::admit`;
+    /// a mode stamped before it was pinned before `admit_run`,
+    /// `slash_command_body::pin_model`), and the busy lane's steer-fold check
     /// (`steering::find_busy_sibling`) compares this stored copy — not the
     /// request the run was admitted with — against an incoming message.
     pub(super) async fn mark_fallen_through(&self, run_id: &str, request: &RunRequest) {
@@ -488,6 +490,12 @@ where
         // `execute()` on the SAME session (see the release sites for why
         // holding it until the literal end of this function would deadlock
         // that re-entry, and why the `Ok` arm holds it through the meta).
+        //
+        // A plugin command's `model:` is pinned first: `admit_run` registers
+        // this request as the run's copy — a steer target while it parks for
+        // a slot — and the busy lane folds a follow-up only into a run on the
+        // same model (`slash_command_body::pin_model`).
+        super::slash_command_body::pin_model(&mut request).await;
         let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
@@ -789,8 +797,10 @@ where
         // `skill_read` tool, which is the sole path that runs
         // `preprocess_skill_content` and records the use. A plugin COMMAND's
         // body is different — it is the user's instruction for this turn —
-        // and is rendered in the fast path's fallthrough arm below
-        // (`slash_command_body`), once its owner has been judged visible.
+        // and is admitted in the fast path's fallthrough arm below
+        // (`slash_command_body::admit`), once its owner has been judged
+        // visible, then rendered by the run loop after the turn-start hooks
+        // (`slash_command_body::render_admitted`).
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
             if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
                 if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {

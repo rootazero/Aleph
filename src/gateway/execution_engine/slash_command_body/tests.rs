@@ -1178,6 +1178,83 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
     );
 }
 
+/// N1. The command's `model:` is pinned before the run is admitted, so the
+/// run's registered copy — the busy lane's steer target while it parks for a
+/// slot — names it from the start, and admission keeps it as the command's
+/// pin. The user's own pick is never replaced; a retired `model:` pins
+/// nothing here and is refused at admission, after the owner gate.
+#[tokio::test]
+async fn a_commands_model_is_pinned_before_admission() {
+    let sonnet = Some(ModelOverride::Raw {
+        model: "claude-sonnet-5".into(),
+    });
+    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+    let mut request = f.request(f.work.clone()).await;
+    pin_model_with(&mut request, &f.manager).await;
+    assert_eq!(request.model_override, sonnet);
+    admit_with(&mut request, &f.manager).await.unwrap();
+    assert_eq!(request.model_override, sonnet, "admission keeps the pin");
+    assert_eq!(
+        strip(&mut request.metadata, request.model_override.clone()),
+        None,
+        "the pin is the command's, not the user's"
+    );
+
+    let mut request = f.request(f.work.clone()).await;
+    let user = ModelOverride::Raw {
+        model: "gpt-5".into(),
+    };
+    request.model_override = Some(user.clone());
+    pin_model_with(&mut request, &f.manager).await;
+    assert_eq!(request.model_override, Some(user), "the user's pick wins");
+
+    let retired = Fixture::new("Hi", Some("deepseek-reasoner")).await;
+    let mut request = retired.request(retired.work.clone()).await;
+    pin_model_with(&mut request, &retired.manager).await;
+    assert_eq!(request.model_override, None);
+    assert!(admit_with(&mut request, &retired.manager).await.is_err());
+}
+
+/// N1's other half: a pin made before admission whose command is then not
+/// admitted (its plugin disabled in between) goes with it — the turn does
+/// not run on a model nothing asked for.
+#[tokio::test]
+async fn a_pin_whose_command_is_not_admitted_is_dropped() {
+    let f = Fixture::new("Hi", Some("claude-sonnet-5")).await;
+    let mut request = f.request(f.work.clone()).await;
+    pin_model_with(&mut request, &f.manager).await;
+    assert!(request.model_override.is_some());
+    f.manager
+        .get_plugin_registry_mut()
+        .await
+        .disable_plugin(PLUGIN);
+    admit_with(&mut request, &f.manager).await.unwrap();
+    assert!(!request.metadata.contains_key(ADMITTED_KEY));
+    assert!(!request.metadata.contains_key(MODEL_PIN_KEY));
+    assert_eq!(request.model_override, None);
+}
+
+/// N1's fire site, which no behavioural test here reaches (`execute()` cannot
+/// be driven with a chosen extension manager): the command's model is pinned
+/// before `admit_run` registers the run's copy.
+#[test]
+fn the_command_model_is_pinned_before_the_run_is_admitted() {
+    use crate::utils::source_scan::{production_prefix, strip_comment_lines};
+    let execute = strip_comment_lines(&production_prefix(include_str!("../execute.rs")));
+    assert_eq!(
+        execute.matches("slash_command_body::pin_model(").count(),
+        1,
+        "`pin_model` must be called exactly once"
+    );
+    let pin = execute.find("slash_command_body::pin_model(&mut request)");
+    let admit = execute.find(".admit_run(");
+    assert!(
+        matches!((pin, admit), (Some(pin), Some(admit)) if pin < admit),
+        "execute.rs must pin the command's model before `admit_run` — positions: pin {pin:?}, \
+         admit {admit:?}"
+    );
+}
+
 /// S5. Inline shell runs only for an operator (the `/moa` precedent): a guest
 /// or member sender gets the body with every inline command withheld and
 /// named, whatever the turn's permissions; an operator, and a loopback caller
