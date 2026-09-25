@@ -259,27 +259,27 @@ mod tests {
         );
     }
 
-    /// The spawner builds a child's prompt with
-    /// `PromptBuilder::with_agent(def).build_system_prompt_parts(&[])`
-    /// (`subagent_spawner/mod.rs`). Driving that same call proves the body
-    /// reaches the prompt the child is given, not only this layer's buffer.
+    /// The body is byte-stable per agent, so it belongs in the cached stable
+    /// part of a split prompt, never the per-turn dynamic one. (Whether the
+    /// spawner hands its def to the builder at all is pinned by the spawner's
+    /// own `spawn_request_agent_body_reaches_inline_system_prompt`.)
     #[test]
-    fn the_spawners_prompt_build_carries_the_body() {
+    fn the_body_lands_in_the_stable_cached_part() {
         use crate::thinker::prompt_builder::PromptBuilder;
         let body = "You are an expert plugin validator. MARKER-7f3a";
         let agent = AgentDef::new("plugin-validator", AgentMode::SubAgent).with_system_prompt(body);
-        let prompt: String = PromptBuilder::new(PromptConfig::default())
+        let parts = PromptBuilder::new(PromptConfig::default())
             .with_agent(agent)
-            .build_system_prompt_parts(&[])
-            .iter()
-            .map(|p| p.content.as_str())
-            .collect();
-        let header = prompt.find("# Sub-Agent Role").expect("role header");
-        let at = prompt
-            .find(body)
-            .expect("the body reaches the child's prompt");
-        assert!(header < at);
-        assert_eq!(prompt.matches(body).count(), 1, "injected once");
+            .build_system_prompt_parts(&[]);
+        let stable = parts.first().expect("a stable part");
+        assert!(stable.cache, "the first part is the cached stable prefix");
+        assert_eq!(
+            stable.content.matches(body).count(),
+            1,
+            "{}",
+            stable.content
+        );
+        assert!(parts.iter().skip(1).all(|p| !p.content.contains(body)));
     }
 
     #[test]

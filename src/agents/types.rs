@@ -270,8 +270,10 @@ pub struct AgentDef {
     pub isolation: Option<IsolationMode>,
     /// The markdown body of the agent's definition file, injected verbatim
     /// after the sub-agent role header (`AgentRoleLayer`). `None` for builtins
-    /// and for files with an empty body. Set only through
-    /// `agents::system_prompt::body_to_system_prompt`.
+    /// and for files with an empty body. Both production writers (the disk
+    /// loader and `extension::plugin_agent_to_def`) take it from
+    /// `agents::system_prompt::body_to_system_prompt`; nothing enforces
+    /// that — the field and `with_system_prompt` are `pub`.
     ///
     /// `#[serde(skip)]`: the body has one persisted home, the `.md` file. No
     /// serde path carries it, so a def written anywhere cannot become a second

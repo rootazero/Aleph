@@ -489,25 +489,33 @@ fn parse_skill_registration(
     }))
 }
 
-/// Who declared a restrict list, for its log lines. The policy is one; only
-/// the words differ: a plugin command writes `allowed-tools:`, a plugin
-/// agent writes `tools:`.
+/// Who declared a restrict list, for its log lines. The policy is one — every
+/// face gets the same list back — and only what is said differs: a plugin
+/// command writes `allowed-tools:`, a plugin agent writes `tools:`.
 #[derive(Debug, Clone, Copy)]
 struct RestrictFace {
     /// `command` / `agent` — who is narrowed.
     kind: &'static str,
     /// The frontmatter key as the author spells it.
     key: &'static str,
+    /// Whether the parse warns about a forwarded name that is not spelled like
+    /// an Aleph tool. Only where nothing downstream speaks for it: a command's
+    /// `register_skills` refuses the whole `/cmd` over such a name and names
+    /// it, so a parse-time line too would be a second, weaker voice; an
+    /// agent's allowlist just never matches it, silently.
+    warns_unknown: bool,
 }
 
 const COMMAND_FACE: RestrictFace = RestrictFace {
     kind: "command",
     key: "allowed-tools",
+    warns_unknown: false,
 };
 
 const AGENT_FACE: RestrictFace = RestrictFace {
     kind: "agent",
     key: "tools",
+    warns_unknown: true,
 };
 
 /// A restrict list — a command's `allowed-tools:`, an agent's `tools:` — as
@@ -520,11 +528,13 @@ const AGENT_FACE: RestrictFace = RestrictFace {
 /// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
 ///   `register_skills` refuses the whole command over one unknown name, and
 ///   losing the slash command over `TodoWrite` is the worse answer.
-/// * An entry in neither alias table that is not spelled like an Aleph tool
-///   ([`aleph_tool_shaped`]) is forwarded as written, with a warn: it is most
-///   likely a Claude Code tool Aleph has no row for, and it names nothing
-///   unless a tool is registered under exactly that name — which cannot be
-///   known here, before plugin and MCP tools are registered.
+/// * An entry in neither alias table is forwarded as written. When it is not
+///   spelled like an Aleph tool ([`aleph_tool_shaped`]) it is most likely a
+///   Claude Code tool Aleph has no row for, and it names nothing unless a
+///   tool is registered under exactly that name — which cannot be known here,
+///   before plugin and MCP tools are registered. The agent face warns; the
+///   command face leaves it to `register_skills`
+///   ([`RestrictFace::warns_unknown`]).
 /// * A list item that is not a tool name at all (a number, a map, a blank)
 ///   is dropped with a warn too.
 /// * Dropping only narrows: a declaration whose every entry drops is
@@ -539,7 +549,11 @@ fn restrict_tool_list(
     face: RestrictFace,
     name: &str,
 ) -> Option<Vec<String>> {
-    let RestrictFace { kind, key } = face;
+    let RestrictFace {
+        kind,
+        key,
+        warns_unknown,
+    } = face;
     let declared = match crate::skill::frontmatter::read_allowed_tools(raw) {
         Ok(declared) => declared?,
         Err(why) => {
@@ -583,7 +597,11 @@ fn restrict_tool_list(
                          not enforced"
                     );
                 }
-                Some(tool) if tool.as_str() == entry.trim() && !aleph_tool_shaped(tool) => {
+                Some(tool)
+                    if warns_unknown
+                        && tool.as_str() == entry.trim()
+                        && !aleph_tool_shaped(tool) =>
+                {
                     warn!(
                         kind,
                         name,
@@ -613,6 +631,12 @@ fn restrict_tool_list(
 /// key (its tool half is the server's own spelling), or lowercase ASCII,
 /// digits, `_` and `-`. Claude Code tool names are `PascalCase`, so a
 /// forwarded entry that fails this is almost certainly one of them.
+///
+/// A shape test, not membership: which names are registered is not known at
+/// parse time (plugin and MCP tools register later, per session). So it has
+/// a blind side — a lowercase spelling that is no Aleph tool (`glob`,
+/// `read`, `read_file`, `webfetch`) passes and is forwarded silently, and
+/// for an agent it then matches nothing.
 fn aleph_tool_shaped(name: &str) -> bool {
     name == "*"
         || name.contains("__")
@@ -639,19 +663,27 @@ fn log_unapplied_permission_mode(raw: Option<&crate::yaml::Value>, agent: &str) 
     let Some(value) = raw.filter(|v| !v.is_null()) else {
         return;
     };
-    let would_be = match scalar_text(value).as_deref() {
-        Some("plan") => "Plan",
-        Some("default") => "Ask",
-        Some("auto") => "Auto",
-        Some("bypassPermissions") => "Full",
-        _ => "no Aleph tier",
-    };
+    let would_be = scalar_text(value).as_deref().and_then(permission_mode_tier);
     debug!(
         agent,
         permission_mode = ?value,
-        would_be,
+        would_be = ?would_be,
         "agent permissionMode is not applied: a sub-agent runs on its parent's tier"
     );
+}
+
+/// The table [`log_unapplied_permission_mode`] reports: a Claude Code
+/// `permissionMode` → the tier it would map to 1:1, `None` when Aleph has no
+/// such tier. Case-sensitive, as Claude Code is.
+fn permission_mode_tier(mode: &str) -> Option<crate::config::types::policies::ExecTier> {
+    use crate::config::types::policies::ExecTier;
+    match mode {
+        "plan" => Some(ExecTier::Plan),
+        "default" => Some(ExecTier::Ask),
+        "auto" => Some(ExecTier::Auto),
+        "bypassPermissions" => Some(ExecTier::Full),
+        _ => None,
+    }
 }
 
 /// Parse a single skill markdown file (`skills/`) into a `Skill` capability.
@@ -1538,6 +1570,51 @@ mod tests {
                 !warnings.contains(&format!("entry={quiet}")),
                 "`{quiet}` must not warn: {warnings}"
             );
+        }
+    }
+
+    /// One voice: a command's unknown name is forwarded as written and left
+    /// to `register_skills`, which refuses the whole `/cmd` and names the
+    /// tool. A parse-time warning as well would be a second, weaker account
+    /// of the same outcome.
+    #[test]
+    fn a_commands_unknown_name_is_left_to_registration() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("c.md"),
+            "---\nallowed-tools: Read, NotebookRead\n---\nbody\n",
+        )
+        .unwrap();
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        assert_eq!(
+            regs["c"].allowed_tools.as_deref(),
+            Some(&["file_read".to_string(), "NotebookRead".to_string()][..]),
+            "forwarded as written, for registration to judge"
+        );
+        assert!(
+            !warnings.contains("NotebookRead"),
+            "registration speaks for a command, not the parser: {warnings}"
+        );
+    }
+
+    /// The table `log_unapplied_permission_mode` reports, as the real tier
+    /// type: Claude Code's `permissionMode` → the Aleph tier it would be.
+    #[test]
+    fn permission_mode_maps_to_the_tier_it_would_be() {
+        use crate::config::types::policies::ExecTier;
+        for (mode, tier) in [
+            ("plan", Some(ExecTier::Plan)),
+            ("default", Some(ExecTier::Ask)),
+            ("auto", Some(ExecTier::Auto)),
+            ("bypassPermissions", Some(ExecTier::Full)),
+            ("acceptEdits", None),
+            ("dontAsk", None),
+            ("Plan", None),
+            ("", None),
+        ] {
+            assert_eq!(permission_mode_tier(mode), tier, "{mode:?}");
         }
     }
 

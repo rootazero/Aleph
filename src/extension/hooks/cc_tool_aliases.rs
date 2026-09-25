@@ -37,10 +37,10 @@ pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
 /// which is the correct fail-closed answer; an `allowed-tools:` / `tools:`
 /// entry naming one is dropped by [`normalize_cc_tool_entry`], which for a
 /// command's or an agent's restrict list means it cannot use it. A CC tool in
-/// neither table is forwarded under its own name (the restrict-list reader
-/// warns when the name is not spelled like an Aleph tool): a command's
-/// registry refuses it by name (`register_skills`), an agent's allowlist
-/// matches no tool with it.
+/// neither table is forwarded under its own name: a command's registry
+/// refuses it by name (`register_skills`); an agent's allowlist matches no
+/// tool with it, and the agent's restrict-list reader warns when the name is
+/// not spelled like an Aleph tool.
 pub(crate) const CC_TOOLS_WITHOUT_COUNTERPART: &[&str] = &[
     "NotebookEdit",
     "LS",

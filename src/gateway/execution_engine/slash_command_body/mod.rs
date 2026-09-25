@@ -395,18 +395,15 @@ fn attribute(text: &str) -> String {
 ///
 /// - The request's own pick (the composer's) wins: the command's is not
 ///   applied.
-/// - `inherit` and a blank value pin nothing.
-/// - Claude Code's aliases `sonnet` / `opus` / `haiku` name a model family,
-///   not an id any provider routes, and Aleph has no alias table: not applied
-///   — the agent's model serves the turn — and logged.
-/// - An id the model catalog records as retired is refused, with its
-///   successor named: the provider would fail it. The same `lifecycle_for`
-///   table and rule as `select_model`, the other face that pins a model.
-/// - Any other id is pinned as written (`Raw`), as `select_model` accepts an
-///   id the catalog does not know. One no provider serves then fails at the
-///   provider, or the fallback walk serves the turn on another model and
-///   says so on every surface (`helpers::emit_route_correction`) — never
-///   silently.
+/// - Otherwise the declared `model:` goes through the one policy a plugin
+///   agent's `model:` goes through too
+///   ([`declared_model_pin`](crate::extension::declared_model::declared_model_pin)):
+///   `inherit`, a blank and the aliases `sonnet` / `opus` / `haiku` pin
+///   nothing (the agent's model serves the turn); a retired id refuses the
+///   turn, its successor named; any other id is pinned as written (`Raw`).
+///   One no provider serves then fails at the provider, or the fallback walk
+///   serves the turn on another model and says so on every surface
+///   (`helpers::emit_route_correction`) — never silently.
 pub(super) fn command_model_pin(
     requested: Option<&ModelOverride>,
     declared: Option<&str>,
@@ -414,35 +411,8 @@ pub(super) fn command_model_pin(
     if requested.is_some() {
         return Ok(None);
     }
-    let Some(model) = declared.map(str::trim).filter(|m| !m.is_empty()) else {
-        return Ok(None);
-    };
-    match model {
-        "inherit" => return Ok(None),
-        "sonnet" | "opus" | "haiku" => {
-            tracing::warn!(
-                model,
-                "command declares a Claude Code model alias; Aleph routes no aliases, so the \
-                 turn runs on the agent's model"
-            );
-            return Ok(None);
-        }
-        _ => {}
-    }
-    let life = crate::providers::model_catalog::lifecycle_for(None, model);
-    if life.is_deprecated() {
-        let mut why = format!("its `model: {model}` has been retired by its vendor");
-        if let Some(note) = life.note {
-            why.push_str(&format!(" ({note})"));
-        }
-        if let Some(successor) = life.successor {
-            why.push_str(&format!("; the plugin should declare `{successor}`"));
-        }
-        return Err(why);
-    }
-    Ok(Some(ModelOverride::Raw {
-        model: model.to_string(),
-    }))
+    let pin = crate::extension::declared_model::declared_model_pin("command", declared)?;
+    Ok(pin.map(|model| ModelOverride::Raw { model }))
 }
 
 /// Drop a command turn's residue from metadata that is being re-driven as a

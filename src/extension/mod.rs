@@ -33,6 +33,7 @@ pub mod validation;
 pub mod visibility;
 
 pub mod capability;
+pub(crate) mod declared_model;
 pub mod effects;
 pub mod registrar;
 
@@ -288,6 +289,11 @@ pub struct ExtensionManager {
 /// `content` is the sub-agent's system prompt, through the same mapping the
 /// disk loader uses (`agents::system_prompt`).
 ///
+/// The declared `model` becomes `model_hint` through the policy a plugin
+/// command's `model:` uses ([`declared_model::declared_model_pin`]):
+/// `inherit`, a blank and the aliases `sonnet` / `opus` / `haiku` set no
+/// hint; a retired id sets none either (warned), and the agent still loads.
+///
 /// The declared `tools` map (name → allowed) becomes allow / deny lists:
 /// * absent — the constructor default (`["*"]`) is kept, matching a disk agent
 ///   with no tool frontmatter and Claude Code's "omitted = inherit" (a
@@ -335,8 +341,16 @@ fn plugin_agent_to_def(
     if let Some(steps) = reg.steps {
         def = def.with_max_iterations(steps);
     }
-    if let Some(model) = &reg.model {
-        def = def.with_model_hint(model.clone());
+    // The one declared-model policy a plugin command's `model:` goes through
+    // too. What an unusable model costs an agent is its hint, never the agent.
+    match declared_model::declared_model_pin("agent", reg.model.as_deref()) {
+        Ok(Some(model)) => def = def.with_model_hint(model),
+        Ok(None) => {}
+        Err(why) => tracing::warn!(
+            agent = id,
+            why = %why,
+            "agent's declared model is not applied; it runs on the model it is spawned on"
+        ),
     }
     if let Some(prompt) = crate::agents::system_prompt::body_to_system_prompt(id, &reg.content) {
         def = def.with_system_prompt(prompt);
@@ -1223,28 +1237,36 @@ mod tests {
     #[test]
     fn disk_and_plugin_agents_share_one_body_mapping() {
         // The same body through both loaders lands as the same prompt —
-        // a second mapping is where the two would drift (判据 §16).
+        // a second mapping is where the two would drift (判据 §16). The
+        // empty and whitespace-only bodies are where a copy would drift
+        // first: `Some("")` would inject a bare separator.
         use crate::extension::types::AgentMode as ExtMode;
-        let body = "\n\nYou are X.\n\n";
-        let reg = crate::extension::AgentRegistration {
-            name: "x".into(),
-            content: body.into(),
-            mode: ExtMode::Subagent,
-            ..Default::default()
-        };
-        let via_plugin = plugin_agent_to_def(&reg).unwrap().system_prompt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.md");
-        std::fs::write(
-            &path,
-            format!("---\nid: x\ndescription: d\nwhen_to_use: w\n---{body}"),
-        )
-        .unwrap();
-        let via_disk = crate::agents::loader::parse_file(&path, crate::agents::AgentSource::User)
-            .unwrap()
-            .system_prompt;
-        assert_eq!(via_plugin, via_disk);
-        assert_eq!(via_disk.as_deref(), Some("You are X."));
+        for (body, expected) in [
+            ("\n\nYou are X.\n\n", Some("You are X.")),
+            ("", None),
+            ("  \n\t\n", None),
+        ] {
+            let reg = crate::extension::AgentRegistration {
+                name: "x".into(),
+                content: body.into(),
+                mode: ExtMode::Subagent,
+                ..Default::default()
+            };
+            let via_plugin = plugin_agent_to_def(&reg).unwrap().system_prompt;
+            std::fs::write(
+                &path,
+                format!("---\nid: x\ndescription: d\nwhen_to_use: w\n---{body}"),
+            )
+            .unwrap();
+            let via_disk =
+                crate::agents::loader::parse_file(&path, crate::agents::AgentSource::User)
+                    .unwrap()
+                    .system_prompt;
+            assert_eq!(via_plugin, via_disk, "{body:?}");
+            assert_eq!(via_disk.as_deref(), expected, "{body:?}");
+        }
     }
 
     /// Every plugin agent in `<dir>/agents`, parsed by the production scan and
@@ -1302,6 +1324,34 @@ mod tests {
         let absent = &defs["absent"];
         assert_eq!(absent.allowed_tools, vec!["*"]);
         assert!(absent.is_tool_allowed("file_read"));
+    }
+
+    /// A Claude Code agent's `model:` goes through the same pin policy a
+    /// plugin command's does. `inherit` and the family aliases pin nothing.
+    /// A retired id pins nothing either, and the agent still loads. Any
+    /// other id is the hint, as written. Handing `inherit` on as a hint made
+    /// the spawner ask the provider for a model called "inherit".
+    #[test]
+    fn a_cc_agent_model_goes_through_the_command_pin_policy() {
+        let def_with = |model: &str| {
+            plugin_agent_to_def(&crate::extension::AgentRegistration {
+                name: "m".into(),
+                mode: crate::extension::types::AgentMode::Subagent,
+                model: Some(model.into()),
+                ..Default::default()
+            })
+            .expect("the agent loads whatever its model says")
+        };
+        for pins_nothing in ["inherit", "sonnet", "opus", "haiku", "  "] {
+            assert_eq!(def_with(pins_nothing).model_hint, None, "{pins_nothing:?}");
+        }
+        // Retired by its vendor (the catalog's lifecycle table): the
+        // provider would fail it, so it is no hint — and the agent loads.
+        assert_eq!(def_with("deepseek-reasoner").model_hint, None);
+        assert_eq!(
+            def_with("claude-sonnet-5").model_hint.as_deref(),
+            Some("claude-sonnet-5")
+        );
     }
 
     /// A `tools` map of only `false` entries (a runtime registration's deny
