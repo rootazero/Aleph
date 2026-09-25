@@ -21,13 +21,15 @@ use std::collections::HashMap;
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::{Arc, Mutex};
 
-/// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
-/// converted to ~50 000 tokens at the standard ~4 chars/token ratio.
+/// Default per-turn budget: eight results at the per-result default
+/// (`result_processing::DEFAULT_RESULT_BUDGET_TOKENS`). Past it the newest
+/// result is spilled and indexed like an over-budget single result, so the
+/// model still reaches it through `ctx_search`.
 ///
 /// This is the **ceiling**, not the value: [`budget_for_window`] clamps down
 /// from it on small windows. See that function for why the bare constant is
 /// wrong on a 32k model.
-pub const DEFAULT_MAX_TURN_TOKENS: usize = 50_000;
+pub const DEFAULT_MAX_TURN_TOKENS: usize = 32_000;
 
 /// Fraction of the model's usable window one tool result may occupy (Layer 2).
 const RESULT_WINDOW_FRACTION: f64 = 0.15;
@@ -47,18 +49,18 @@ const MIN_TURN_TOKENS: usize = 4_000;
 /// whose usable context window is `token_budget` tokens.
 ///
 /// **This is a small-window clamp-down, not "bigger models get more."** Both
-/// values clamp *up* to today's constants ([`DEFAULT_MAX_TURN_TOKENS`] and
-/// `result_processing::DEFAULT_RESULT_BUDGET_TOKENS`), so every model with a
-/// window above ~53k / ~167k tokens gets byte-for-byte the same budgets it gets
-/// today. Nothing here loosens anything.
+/// values clamp *up* to the constants ([`DEFAULT_MAX_TURN_TOKENS`], and
+/// `result_processing::MAX_RESULT_BUDGET_TOKENS` — the per-result value is a
+/// ceiling over every per-result budget, the largest of which is the read
+/// window), so every model with a window above ~53k / ~107k tokens gets the
+/// unclamped budgets. Nothing here loosens anything.
 ///
 /// What it fixes is the other end. The two limits were fixed constants that
 /// never looked at the model, and hermes — whose `MAX_TURN_BUDGET_CHARS` the
-/// per-turn constant was copied from — has since made both window-relative. On
-/// a 32k local model the old numbers are absurd: one `bash` result at 8k tokens
-/// eats a quarter of the window and lands in the compaction-protected fresh
-/// tail, while the 50k per-turn cap is 156 % of the entire window and can
-/// therefore never fire. The combination overflows the context, and on the
+/// per-turn constant was first copied from — has since made both
+/// window-relative. On a 32k local model fixed numbers are absurd: one 8k-token
+/// read eats a quarter of the window and lands in the compaction-protected
+/// fresh tail, while a fixed per-turn cap above the window can never fire. The combination overflows the context, and on the
 /// OpenAI-compatible endpoints those small models live behind an overflow is
 /// fatal to the run rather than recoverable.
 ///
@@ -69,7 +71,7 @@ pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
     let window = token_budget as f64;
     let per_result = ((window * RESULT_WINDOW_FRACTION) as usize).clamp(
         MIN_RESULT_TOKENS,
-        crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+        crate::tools::result_processing::MAX_RESULT_BUDGET_TOKENS,
     );
     let per_turn =
         ((window * TURN_WINDOW_FRACTION) as usize).clamp(MIN_TURN_TOKENS, DEFAULT_MAX_TURN_TOKENS);
@@ -217,7 +219,11 @@ impl TurnResultBudget {
 
     /// Record a new result; when it takes the turn over budget, return the
     /// instruction to spill **it** — never an earlier one (see the module doc).
-    /// An already-persisted result (a Layer-2 marker) is not spilled again.
+    /// An already-persisted result (a Layer-2 marker) is not spilled again, and
+    /// a read-family result is never spilled: it is the window the model asked
+    /// for, and a spilled read hands back a marker to read again
+    /// (`result_processing::is_read_family`). Its tokens still count, so the
+    /// results after it spill sooner.
     ///
     /// At most one instruction; the `Vec` is the caller's existing shape.
     #[must_use]
@@ -225,7 +231,10 @@ impl TurnResultBudget {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
-        if state.cumulative <= self.max_turn_tokens || result.already_persisted {
+        if state.cumulative <= self.max_turn_tokens
+            || result.already_persisted
+            || crate::tools::result_processing::is_read_family(&result.tool_name)
+        {
             return Vec::new();
         }
         // Approximate: spilling the result is expected to reduce its
@@ -394,9 +403,38 @@ mod tests {
         assert_eq!(b.cumulative(&id), 0);
     }
 
+    /// B4: a read is the window the model asked for; spilling it hands back
+    /// a marker to read again. Over budget, it stays — and its tokens still
+    /// count, so the next non-read result spills.
+    ///
+    /// Mutation-checked: dropping the read-family clause in `record` turns
+    /// this red.
+    #[test]
+    fn a_read_over_the_turn_budget_is_never_spilled_but_still_counts() {
+        let budget = TurnResultBudget::new(1_000);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let result = |call: &str, tool: &str| TurnResult {
+            call_id: call.to_string(),
+            tool_name: tool.to_string(),
+            tokens_in_context: 800,
+            in_context_text: "x".repeat(10),
+            already_persisted: false,
+        };
+        assert!(budget.record(&id, result("r1", "file_read")).is_empty());
+        assert!(
+            budget.record(&id, result("r2", "file_read")).is_empty(),
+            "a read past the budget is not spilled"
+        );
+        assert_eq!(
+            budget.record(&id, result("b1", "bash")).len(),
+            1,
+            "the reads' tokens counted, so the next result spills"
+        );
+    }
+
     // ---- window-aware budgets (B14) ----
 
-    use crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS;
+    use crate::tools::result_processing::MAX_RESULT_BUDGET_TOKENS;
 
     #[test]
     fn large_window_is_byte_for_byte_todays_constants() {
@@ -404,12 +442,12 @@ mod tests {
         // it sees today, or this change is a behavior regression dressed up as a
         // fix.
         let (per_result, per_turn) = budget_for_window(200_000);
-        assert_eq!(per_result, DEFAULT_RESULT_BUDGET_TOKENS);
+        assert_eq!(per_result, MAX_RESULT_BUDGET_TOKENS);
         assert_eq!(per_turn, DEFAULT_MAX_TURN_TOKENS);
         // 1M window: still the same ceilings, not 150k/300k.
         assert_eq!(
             budget_for_window(1_000_000),
-            (DEFAULT_RESULT_BUDGET_TOKENS, DEFAULT_MAX_TURN_TOKENS)
+            (MAX_RESULT_BUDGET_TOKENS, DEFAULT_MAX_TURN_TOKENS)
         );
     }
 
@@ -424,8 +462,8 @@ mod tests {
             "per-turn cap {per_turn} must fit inside the {window}-token window"
         );
         assert!(
-            per_result < DEFAULT_RESULT_BUDGET_TOKENS,
-            "per-result must clamp below the 8k constant on a small window, got {per_result}"
+            per_result < MAX_RESULT_BUDGET_TOKENS,
+            "per-result must clamp below the read window on a small window, got {per_result}"
         );
         // 30 % / 15 % of 16k.
         assert_eq!((per_result, per_turn), (2_400, 4_800));

@@ -4,6 +4,7 @@
 
 mod cache;
 mod extract;
+mod intent;
 mod pdf;
 mod types;
 
@@ -54,6 +55,12 @@ impl WebFetchTool {
 
     /// Default maximum content length (used when no policy provided)
     const DEFAULT_MAX_CONTENT_LENGTH: usize = 10000;
+
+    /// How much of a page is extracted when the call carries a `prompt`: the
+    /// whole page is indexed for fetch-by-intent (see `intent`), so it is not
+    /// cut at `max_content_length` first. Bounds the extraction of a
+    /// pathological page; the response itself is already capped at 10 MB.
+    const INTENT_EXTRACT_MAX_CHARS: usize = 2_000_000;
 
     /// Default minimum content length (used when no policy provided)
     const DEFAULT_MIN_CONTENT_LENGTH: usize = 100;
@@ -136,7 +143,14 @@ impl WebFetchTool {
         // different prompts share the same cached page body, which is
         // the right cost/freshness tradeoff for LLM-driven re-fetches.
         let key = cache_key(&args.url, &args.extract_mode);
-        if let Some(cached) = cache_lookup(&key) {
+        // A call with a `prompt` needs the whole page (fetch by intent), and the
+        // cache holds the capped one — so it fetches.
+        let cached = if focus_of(args.prompt.as_deref()).is_some() {
+            None
+        } else {
+            cache_lookup(&key)
+        };
+        if let Some(cached) = cached {
             debug!("web_fetch cache hit: {}", args.url);
             let result = apply_focus_prompt(cached, args.prompt.as_deref());
             let summary = format!("已获取网页内容 ({} 字符, cached)", result.content.len());
@@ -259,8 +273,13 @@ impl WebFetchTool {
         debug!("Extracted title: {:?}", title);
 
         // Enhanced extraction: Readability + Markdown with selector fallback
+        let cap = if focus_of(args.prompt.as_deref()).is_some() {
+            Self::INTENT_EXTRACT_MAX_CHARS
+        } else {
+            self.max_content_length
+        };
         let (content, extractor) =
-            self.extract_content_enhanced(&html_content, &args.url, &args.extract_mode);
+            self.extract_content_enhanced(&html_content, &args.url, &args.extract_mode, cap);
         debug!(
             "Extracted {} chars via {:?} extractor",
             content.len(),
@@ -315,6 +334,23 @@ impl WebFetchTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        // Fetch by intent: a page too large to return whole comes back as the
+        // sections matching the prompt, plus the handle to the rest. Not cached
+        // — the cache holds whole-page results, and this one is per prompt.
+        if let Some(focus) = focus_of(prompt.as_deref()) {
+            if content.chars().count() > self.max_content_length {
+                if let Some(sections) = self.sections_for(&url, focus, content) {
+                    let result = WebFetchResult {
+                        url,
+                        title,
+                        content: sections,
+                        extractor,
+                    };
+                    return apply_focus_prompt(result, Some(focus));
+                }
+            }
+        }
+
         // Wrap with external content boundary markers. The content arrives
         // raw-capped from extraction; `truncate_fetched` re-caps the
         // SANITIZED image so placeholder growth (a 3-char `<s>` becomes a
@@ -334,6 +370,22 @@ impl WebFetchTool {
         };
         cache_store(key, bare_result.clone());
         apply_focus_prompt(bare_result, prompt.as_deref())
+    }
+
+    /// [`intent::sections_for_prompt`] against this session's result store —
+    /// the store `ctx_search` reads, scoped the way it scopes it — under this
+    /// call's id. `None` without a store.
+    fn sections_for(&self, url: &str, focus: &str, page: &str) -> Option<String> {
+        use crate::tools::result_store::{global_tool_result_store, ToolResultStore};
+        let store = global_tool_result_store().map(|store| {
+            match crate::tools::turn_context::current_session_key() {
+                Some(session) => ToolResultStore::for_session(&store, session),
+                None => store,
+            }
+        })?;
+        let call_id = crate::approval::current_tool_call_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        intent::sections_for_prompt(&store, &call_id, url, focus, page, self.max_content_length)
     }
 
     /// Extract the page title from <title> tag
@@ -377,6 +429,7 @@ impl WebFetchTool {
         raw_html: &str,
         url: &str,
         mode: &ExtractMode,
+        max_chars: usize,
     ) -> (String, Extractor) {
         extract::extract_content_enhanced(
             raw_html,
@@ -384,7 +437,7 @@ impl WebFetchTool {
             mode,
             self.enable_readability,
             self.min_content_length,
-            self.max_content_length,
+            max_chars,
         )
     }
 }
@@ -419,7 +472,7 @@ impl Clone for WebFetchTool {
 /// spaces — the marker is meant to be a one-liner steering hint, not a
 /// multi-paragraph spec.
 fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFetchResult {
-    let Some(p) = prompt.map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(p) = focus_of(prompt) else {
         return result;
     };
     let mut marker = String::with_capacity(p.len() + 32);
@@ -437,6 +490,11 @@ fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFe
     result
 }
 
+/// The prompt, when it says anything.
+fn focus_of(prompt: Option<&str>) -> Option<&str> {
+    prompt.map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Implementation of `AlephTool` trait for `WebFetchTool`
 #[async_trait]
 impl AlephTool for WebFetchTool {
@@ -445,10 +503,6 @@ impl AlephTool for WebFetchTool {
 
     type Args = WebFetchArgs;
     type Output = WebFetchResult;
-
-    /// A fetched page is reliably larger than the global default; cap at 10k
-    /// tokens.
-    const MAX_RESULT_TOKENS: Option<usize> = Some(10_000);
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
@@ -467,6 +521,54 @@ mod tests {
             content: content.to_string(),
             extractor: Extractor::Selector,
         }
+    }
+
+    /// B4 wiring: a `prompt` on a page larger than `max_content_length` takes
+    /// the fetch-by-intent path through the process store; without a prompt
+    /// the same page is truncated as before.
+    ///
+    /// Mutation-checked: never taking the intent branch in `finalize_success`
+    /// turns this red.
+    #[test]
+    fn a_prompted_fetch_of_a_large_page_returns_the_matching_sections() {
+        crate::tools::result_store::install_test_tool_result_store();
+        let tool = WebFetchTool::new();
+        let mut page = "Filler paragraph about nothing in particular.\n".repeat(600);
+        page.push_str("The flux capacitor requires 1.21 gigawatts to operate.\n");
+        page.push_str(&"More filler after the point.\n".repeat(200));
+        let url = "https://example.com/intent-wiring";
+        let fetch = |prompt: Option<&str>| {
+            tool.finalize_success(
+                WebFetchArgs {
+                    url: url.to_string(),
+                    extract_mode: ExtractMode::Markdown,
+                    prompt: prompt.map(str::to_string),
+                },
+                cache_key(url, &ExtractMode::Markdown),
+                None,
+                &page,
+                Extractor::Readability,
+            )
+        };
+        let focused = fetch(Some("flux capacitor gigawatts"));
+        assert!(
+            focused.content.contains("1.21 gigawatts"),
+            "{}",
+            focused.content
+        );
+        assert!(
+            focused.content.contains("matching the focus"),
+            "{}",
+            focused.content
+        );
+        assert!(focused.content.contains("[Full output persisted: "));
+
+        let plain = fetch(None);
+        assert!(!plain.content.contains("matching the focus"));
+        assert!(
+            !plain.content.contains("1.21 gigawatts"),
+            "the plain fetch is cut at the cap"
+        );
     }
 
     #[test]

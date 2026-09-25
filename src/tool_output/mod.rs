@@ -18,7 +18,13 @@
 //! [`distill`] can no longer see the line structure they route on.
 
 use crate::context::budget::pressure::chars_for_result_token_budget;
-use crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS;
+
+/// The per-result budget every knob default in this module tree was sized
+/// for: at this budget a knob equals its default. It is not the default
+/// budget — that came down to 4 000 tokens (`result_processing`) and the
+/// artifacts came down with it, which is the point: a digest sized for an
+/// 8 000-token result would fill most of a 4 000-token one.
+pub(crate) const KNOB_REFERENCE_BUDGET_TOKENS: usize = 8_000;
 
 pub(crate) mod compressor;
 pub mod distill;
@@ -38,15 +44,13 @@ mod walk;
 /// it, so a tool that declares a small budget gets a proportionately smaller
 /// artifact from whichever tier claims its output.
 ///
-/// The reference point is [`DEFAULT_RESULT_BUDGET_TOKENS`], the budget the
-/// overwhelming majority of tools actually declare, and the conversion is the
-/// project's own [`chars_for_result_token_budget`]. Two consequences worth
-/// stating: at the default budget every knob equals its default, so the common
-/// call is byte-for-byte unaffected; and a *larger* budget never raises a cap,
+/// The reference point is [`KNOB_REFERENCE_BUDGET_TOKENS`], the budget the
+/// defaults were sized for, and the conversion is the project's own
+/// [`chars_for_result_token_budget`]. A *larger* budget never raises a cap,
 /// because these defaults also encode "a digest orients, it does not reproduce
 /// the output".
 pub(crate) fn scale_to_budget(default: usize, floor: usize, budget_tokens: usize) -> usize {
-    let reference = chars_for_result_token_budget(DEFAULT_RESULT_BUDGET_TOKENS).max(1);
+    let reference = chars_for_result_token_budget(KNOB_REFERENCE_BUDGET_TOKENS).max(1);
     default
         .saturating_mul(chars_for_result_token_budget(budget_tokens))
         .saturating_div(reference)

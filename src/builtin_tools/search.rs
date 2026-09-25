@@ -492,12 +492,6 @@ impl AlephTool for SearchTool {
         // Delegate to the internal implementation, converting ToolError to AlephError
         self.call_impl(args).await.map_err(Into::into)
     }
-
-    /// Declared, not inherited from the global default, and set below
-    /// `web_fetch`'s page budget: with `full_content` set this call carries N
-    /// page bodies where a fetch carries one, so the ceiling is on the call,
-    /// not on the page.
-    const MAX_RESULT_TOKENS: Option<usize> = Some(8_000);
 }
 
 #[cfg(test)]

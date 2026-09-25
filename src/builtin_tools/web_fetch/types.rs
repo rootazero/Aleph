@@ -57,24 +57,13 @@ pub struct WebFetchArgs {
     /// Content extraction mode (default: markdown)
     #[serde(default)]
     pub extract_mode: ExtractMode,
-    /// Optional natural-language focus for the fetch.
-    ///
-    /// When set, the prompt is prepended to the returned content as a
-    /// `[fetch_focus: ...]` marker, telling the main agent loop what
-    /// to look for inside the page. This is intentionally NOT a
-    /// secondary-LLM extraction step (the claude-code approach):
-    ///
-    /// * The main agent loop will read this tool's output anyway —
-    ///   forcing a second LLM hop adds latency and cost on every
-    ///   fetch without adding reasoning the main model couldn't do.
-    /// * Aleph's R9 principle ("intelligence lives in the prompt")
-    ///   prefers steering the existing LLM via context over running
-    ///   an extra model. R10 ("thin harness") rules out the
-    ///   provider plumbing this would otherwise require.
-    ///
-    /// If a downstream consumer ever needs an actual condensed
-    /// summary, the right place to add it is at the agent layer, not
-    /// inside the fetch tool — keep tools dumb.
+    /// What you are looking for. On a page too large to return whole, only the
+    /// sections matching it come back, plus a handle to the rest.
+    //
+    // Retrieval, not a second LLM hop (the claude-code approach): the main
+    // loop reads this output anyway, and ranking sections by the model's own
+    // words (BM25, `intent.rs`) needs no extra model (R7/R10). A condensed
+    // summary, if ever needed, belongs at the agent layer — keep tools dumb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
 }
