@@ -422,7 +422,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         },
 
         // --- stream.* frames correlated only by run_id ---
-        "stream.reasoning"
+        aleph_protocol::STREAM_REASONING_TOPIC
         | "stream.tool_start"
         | "stream.tool_update"
         | "stream.tool_end"

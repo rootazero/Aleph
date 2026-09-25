@@ -64,6 +64,11 @@ pub async fn run(
         input: message.to_string(),
     };
 
+    // Read before dispatch: it decides whether this connection takes the
+    // reasoning frames at all, and they start with the run.
+    let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+    run_follow::skip_unrendered_reasoning(&client, verbose, json).await;
+
     let accepted: Value = client.call("agent.run", Some(params)).await?;
     // Pin the follow loop to the accepted run: the gateway broadcasts every
     // stream frame to every connection, so a concurrent cron/channel run
@@ -75,7 +80,6 @@ pub async fn run(
 
     // Render the run live (tool activity, streamed Markdown body, retry
     // notices, summary footer) via the shared follow loop.
-    let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
     let outcome = run_follow::follow_run(
         &mut events,
         &FollowOptions {

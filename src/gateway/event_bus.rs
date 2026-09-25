@@ -206,12 +206,21 @@ pub struct FieldPredicate {
 /// `data` field — useful for splitting a noisy fan-out topic like
 /// `tools.changed` into per-`scope` channels without server-side knowledge
 /// of subscriber intent.
+///
+/// `except` lists patterns this entry does NOT deliver even though `pattern`
+/// matches them — a client that never renders a topic (the phone does not
+/// render `stream.reasoning`) stops receiving it without narrowing anyone
+/// else. It narrows this entry only: another entry on the same connection
+/// that matches the topic still delivers it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TopicSubscription {
     /// Glob-style topic pattern (see [`topic_matches`]).
     pub pattern: String,
     #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
     pub where_clause: Vec<FieldPredicate>,
+    /// Glob-style patterns carved out of `pattern`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub except: Vec<String>,
 }
 
 impl TopicSubscription {
@@ -221,7 +230,25 @@ impl TopicSubscription {
         Self {
             pattern: pattern.into(),
             where_clause: Vec::new(),
+            except: Vec::new(),
         }
+    }
+
+    /// This entry, not delivering `except` (normalised: sorted, deduplicated,
+    /// so the same carve-out always names the same entry).
+    #[must_use]
+    pub fn excepting(mut self, mut except: Vec<String>) -> Self {
+        except.sort();
+        except.dedup();
+        self.except = except;
+        self
+    }
+
+    /// Whether this entry delivers `topic` with payload `data`.
+    fn admits(&self, topic: &str, data: Option<&Value>) -> bool {
+        topic_matches(topic, &self.pattern)
+            && !self.except.iter().any(|e| topic_matches(topic, e))
+            && where_clause_matches(&self.where_clause, data)
     }
 }
 
@@ -296,9 +323,7 @@ impl TopicFilter {
     /// against missing data).
     #[must_use]
     pub fn matches(&self, topic: &str, data: Option<&Value>) -> bool {
-        self.subscriptions.iter().any(|sub| {
-            topic_matches(topic, &sub.pattern) && where_clause_matches(&sub.where_clause, data)
-        })
+        self.subscriptions.iter().any(|sub| sub.admits(topic, data))
     }
 
     /// Add a pattern-only subscription (no field predicates) to the filter.
@@ -319,11 +344,21 @@ impl TopicFilter {
         self.subscriptions.push(subscription);
     }
 
-    /// Remove every subscription whose pattern equals `pattern`. Returns true
-    /// if at least one entry was removed.
-    pub fn remove_pattern(&mut self, pattern: &str) -> bool {
+    /// Remove every subscription whose pattern equals `pattern` and whose
+    /// carve-out is exactly `except` (whatever its `where` clause). Returns
+    /// true if at least one entry was removed.
+    ///
+    /// The carve-out is part of what names an entry: a connection can hold
+    /// `stream.*` and `stream.*` minus reasoning at once (the Panel swaps its
+    /// phone and wide chat over one socket on a resize), and each owner must
+    /// remove only its own — whichever order the swap sends them in.
+    pub fn remove(&mut self, pattern: &str, except: &[String]) -> bool {
+        let mut except = except.to_vec();
+        except.sort();
+        except.dedup();
         let initial_len = self.subscriptions.len();
-        self.subscriptions.retain(|s| s.pattern != pattern);
+        self.subscriptions
+            .retain(|s| s.pattern != pattern || s.except != except);
         self.subscriptions.len() < initial_len
     }
 
@@ -689,6 +724,7 @@ mod tests {
                 field: "scope".to_string(),
                 equals: Value::String("extension".to_string()),
             }],
+            except: Vec::new(),
         }]);
 
         let extension_data = serde_json::json!({"scope": "extension", "detail": {}});
@@ -710,6 +746,7 @@ mod tests {
                 field: "device.role".to_string(),
                 equals: Value::String("operator".to_string()),
             }],
+            except: Vec::new(),
         }]);
 
         let operator = serde_json::json!({"device": {"role": "operator"}});
@@ -783,6 +820,7 @@ mod tests {
                 field: "scope".into(),
                 equals: serde_json::json!("extension"),
             }],
+            except: Vec::new(),
         };
         let sub_b_same = sub_a.clone();
         let sub_c_diff_where = TopicSubscription {
@@ -791,6 +829,7 @@ mod tests {
                 field: "scope".into(),
                 equals: serde_json::json!("mcp"),
             }],
+            except: Vec::new(),
         };
         f.add_subscription(sub_a);
         f.add_subscription(sub_b_same); // dropped — exact dup

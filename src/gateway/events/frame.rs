@@ -798,7 +798,7 @@ impl GatewayEventFrame {
         match self {
             Self::RunAccepted { .. } => Some("stream.run_accepted"),
             Self::RunQueued { .. } => Some("stream.run_queued"),
-            Self::Reasoning { .. } => Some("stream.reasoning"),
+            Self::Reasoning { .. } => Some(aleph_protocol::STREAM_REASONING_TOPIC),
             Self::ToolStart { .. } => Some("stream.tool_start"),
             Self::ToolUpdate { .. } => Some("stream.tool_update"),
             Self::ToolEnd { .. } => Some("stream.tool_end"),

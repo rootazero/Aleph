@@ -17,6 +17,12 @@ pub struct StreamOrchestrator {
     tracker: Arc<Mutex<LaneDeliveryTracker>>,
     status_controller: StatusReactionController,
     event_rx: mpsc::Receiver<StreamEvent>,
+    /// `reasoning_lane_enabled`: the reasoning lane is fed from the
+    /// provider's native reasoning (`StreamEvent::Reasoning`) and from
+    /// `<think>` tags in the answer text (`reasoning_extractor`). Off by
+    /// default — reasoning reaches a Telegram chat only when its operator
+    /// opted in.
+    reasoning_lane: bool,
     reasoning_extractor: Option<ReasoningExtractor>,
     /// This run answers a `/btw` side question, so the answer lane's settled
     /// text carries the side-answer marker.
@@ -72,6 +78,7 @@ impl StreamOrchestrator {
                 tracker,
                 status_controller,
                 event_rx,
+                reasoning_lane: config.reasoning_lane_enabled,
                 reasoning_extractor,
                 side_answer,
             },
@@ -115,6 +122,12 @@ impl StreamOrchestrator {
                         }
                     } else if let Err(e) = answer_lane.write_chunk(delta).await {
                         tracing::warn!("Failed to write answer chunk: {}", e);
+                    }
+                }
+                StreamEvent::Reasoning { content, .. } if self.reasoning_lane => {
+                    let reasoning_lane = self.get_lane(LaneId::Reasoning);
+                    if let Err(e) = reasoning_lane.write_chunk(content).await {
+                        tracing::warn!("Failed to write reasoning chunk: {}", e);
                     }
                 }
                 StreamEvent::ToolStart { tool_name, .. } => {
@@ -364,5 +377,84 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    /// The reasoning lane takes the provider's native reasoning — the source
+    /// most models stream it on — when the operator enabled the lane, and
+    /// nothing when they did not. Before this arm only a variant with no
+    /// producer and `<think>` tags in the answer text fed the lane.
+    ///
+    /// Mutation-checked: dropping the arm, or its `reasoning_lane` guard,
+    /// turns this red.
+    #[tokio::test]
+    async fn native_reasoning_reaches_the_lane_only_when_enabled() {
+        async fn lane_text(enabled: bool) -> String {
+            let delivery = TelegramDelivery::new(
+                teloxide::Bot::new("test"),
+                ResolvedConfig {
+                    account_id: "test".to_string(),
+                    bot_token: "test".to_string(),
+                    bot_username: None,
+                    default_agent: None,
+                    dm_policy: Default::default(),
+                    group_policy: Default::default(),
+                    send_typing: false,
+                    allowed_users: vec![],
+                    allowed_groups: vec![],
+                    streaming: Default::default(),
+                    error_policy: Default::default(),
+                    max_retries: 0,
+                    html_fallback: true,
+                    link_preview:
+                        crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
+                },
+                Arc::new(ErrorCooldown::new()),
+                "123",
+            );
+            let config = StreamingOptions {
+                reasoning_lane_enabled: enabled,
+                ..Default::default()
+            };
+            let (orchestrator, tx) = StreamOrchestrator::new(delivery, config, false);
+            let tracker = orchestrator.tracker.clone();
+            let inbound = InboundMessage {
+                id: crate::gateway::channel::MessageId::new("1"),
+                conversation_id: crate::gateway::channel::ConversationId::new("123"),
+                channel_id: crate::gateway::channel::ChannelId::new("telegram"),
+                sender_id: crate::gateway::channel::UserId::new("user"),
+                sender_name: None,
+                text: "hello".to_string(),
+                timestamp: chrono::Utc::now(),
+                attachments: vec![],
+                metadata: Default::default(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+            };
+            let run = tokio::spawn(orchestrator.run(inbound));
+            // Under `min_initial_chars`, so the lane accumulates without a
+            // network send.
+            tx.send(StreamEvent::Reasoning {
+                run_id: "r1".to_string(),
+                seq: 1,
+                content: "weigh options".to_string(),
+                is_complete: false,
+            })
+            .await
+            .unwrap();
+            drop(tx);
+            let _ = run.await;
+            let lanes = tracker.lock().await;
+            lanes
+                .get(LaneId::Reasoning)
+                .map(|l| l.accumulated.clone())
+                .unwrap_or_default()
+        }
+        assert_eq!(lane_text(true).await, "weigh options");
+        assert_eq!(
+            lane_text(false).await,
+            "",
+            "an operator who did not opt in gets no reasoning"
+        );
     }
 }

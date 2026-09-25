@@ -50,6 +50,7 @@ pub mod session_thread;
 pub mod sessions;
 pub mod spend;
 pub mod subagent_tree;
+pub mod subscription;
 pub mod team_topic;
 pub mod terminate;
 pub mod tool_permissions;
@@ -90,6 +91,7 @@ pub use sessions::SessionListRow;
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };
+pub use subscription::{TopicCarveOut, TopicsRequest, STREAM_REASONING_TOPIC};
 pub use trace_presentation::{
     present_agent_trace_event, present_agent_trace_event_with_labels_and_preset,
     present_agent_trace_event_with_preset, summarize_tool_input, summarize_tool_output,

@@ -55,13 +55,19 @@ pub fn PhoneChat() -> impl IntoView {
         || t_string!(i18n, chat.new_chat).to_string(),
     );
 
-    // Ask the Gateway to forward stream.* once connected (poll up to ~5s).
+    // Ask the Gateway to forward stream.* once connected (poll up to ~5s),
+    // minus the reasoning frames: the phone never renders them, and each is a
+    // frame per model delta. The carve-out names this subscription only, so a
+    // wide chat mounted on the same socket after a resize still gets them.
     {
         let dash = dashboard;
         spawn_local(async move {
             // The socket wait lives in `DashboardState::rpc_call` now; the
             // 50×100 ms poll this used to open with is gone.
-            if let Err(e) = dash.subscribe_topic("stream.*").await {
+            if let Err(e) = dash
+                .subscribe_topic_except("stream.*", &[aleph_protocol::STREAM_REASONING_TOPIC])
+                .await
+            {
                 web_sys::console::error_1(&format!("phone chat stream sub failed: {e}").into());
             }
             // `stream.ask_user` is a one-shot push: seed from the registry so a
@@ -78,7 +84,9 @@ pub fn PhoneChat() -> impl IntoView {
     on_cleanup(move || {
         let dash = dashboard;
         spawn_local(async move {
-            let _ = dash.unsubscribe_topic("stream.*").await;
+            let _ = dash
+                .unsubscribe_topic_except("stream.*", &[aleph_protocol::STREAM_REASONING_TOPIC])
+                .await;
         });
     });
 

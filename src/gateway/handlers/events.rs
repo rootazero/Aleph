@@ -51,13 +51,19 @@ impl SubscriptionManager {
         }
     }
 
-    /// Remove patterns from a connection's filter
-    pub async fn remove_patterns(&self, conn_id: &str, patterns: &[String]) -> usize {
+    /// Remove the entries of `patterns` carrying exactly the carve-out
+    /// `except` from a connection's filter.
+    pub async fn remove_patterns(
+        &self,
+        conn_id: &str,
+        patterns: &[String],
+        except: &[String],
+    ) -> usize {
         let mut subs = self.subscriptions.write().await;
         if let Some(filter) = subs.get_mut(conn_id) {
             let mut removed = 0;
             for pattern in patterns {
-                if filter.remove_pattern(pattern) {
+                if filter.remove(pattern, except) {
                     removed += 1;
                 }
             }
@@ -135,6 +141,7 @@ impl TopicSelector {
             } => TopicSubscription {
                 pattern: topic,
                 where_clause,
+                except: Vec::new(),
             },
         }
     }
@@ -145,14 +152,16 @@ impl TopicSelector {
 pub struct SubscribeParams {
     /// Topic patterns or `{topic, where: …}` filter objects to subscribe to.
     pub topics: Vec<TopicSelector>,
+    /// Patterns carved out of every entry this call adds (the wire key lives
+    /// in `aleph_protocol::TopicCarveOut`).
+    #[serde(flatten)]
+    pub carve_out: aleph_protocol::TopicCarveOut,
 }
 
-/// Parameters for events.unsubscribe
-#[derive(Debug, Clone, Deserialize)]
-pub struct UnsubscribeParams {
-    /// Topic patterns to unsubscribe from
-    pub topics: Vec<String>,
-}
+/// Parameters for events.unsubscribe: remove the entries of these patterns
+/// that carry exactly this carve-out (none when `except` is absent). See
+/// [`TopicFilter::remove`](crate::gateway::event_bus::TopicFilter::remove).
+pub type UnsubscribeParams = aleph_protocol::TopicsRequest;
 
 /// Result of subscription operations
 #[derive(Debug, Clone, Serialize)]
@@ -184,10 +193,11 @@ pub async fn handle_subscribe(
     }
 
     let count = params.topics.len();
+    let except = params.carve_out.except;
     let subs: Vec<TopicSubscription> = params
         .topics
         .into_iter()
-        .map(TopicSelector::into_subscription)
+        .map(|t| t.into_subscription().excepting(except.clone()))
         .collect();
     manager.add_subscriptions(conn_id, subs).await;
     let subscribed = manager.get_patterns(conn_id).await;
@@ -220,7 +230,9 @@ pub async fn handle_unsubscribe(
         Err(e) => return e,
     };
 
-    let removed = manager.remove_patterns(conn_id, &params.topics).await;
+    let removed = manager
+        .remove_patterns(conn_id, &params.topics, &params.carve_out.except)
+        .await;
     let subscribed = manager.get_patterns(conn_id).await;
 
     debug!(
@@ -305,7 +317,7 @@ mod tests {
             .await;
 
         let removed = manager
-            .remove_patterns("conn1", &["agent.*".to_string()])
+            .remove_patterns("conn1", &["agent.*".to_string()], &[])
             .await;
         assert_eq!(removed, 1);
 
@@ -378,6 +390,143 @@ mod tests {
                 equals: json!("extension"),
             }
         );
+    }
+
+    fn topics(topics: &[&str], except: &[&str]) -> Value {
+        serde_json::to_value(aleph_protocol::TopicsRequest::new(
+            topics.iter().map(|t| (*t).to_string()).collect(),
+            except.iter().map(|e| (*e).to_string()).collect(),
+        ))
+        .expect("serialize")
+    }
+
+    async fn call(
+        method: &str,
+        params: Value,
+        conn: &str,
+        manager: &Arc<SubscriptionManager>,
+    ) -> JsonRpcResponse {
+        let request = JsonRpcRequest::new(method, Some(params), Some(json!(1)));
+        let response = match method {
+            "events.subscribe" => handle_subscribe(request, conn, manager.clone()).await,
+            _ => handle_unsubscribe(request, conn, manager.clone()).await,
+        };
+        assert!(response.is_success(), "{method}: {response:?}");
+        response
+    }
+
+    async fn gets_reasoning(manager: &SubscriptionManager, conn: &str) -> bool {
+        manager
+            .should_receive(conn, aleph_protocol::STREAM_REASONING_TOPIC, None)
+            .await
+    }
+
+    /// R-G14: a client that never renders reasoning (the phone) takes
+    /// `stream.*` minus `stream.reasoning`; the rest of the pattern still
+    /// arrives.
+    ///
+    /// Mutation-checked: ignoring the carve-out in `TopicSubscription::admits`
+    /// turns this red.
+    #[tokio::test]
+    async fn a_carve_out_withholds_only_the_named_topic() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let reasoning = aleph_protocol::STREAM_REASONING_TOPIC;
+        call(
+            "events.subscribe",
+            topics(&["stream.*"], &[reasoning]),
+            "c",
+            &manager,
+        )
+        .await;
+        assert!(
+            !gets_reasoning(&manager, "c").await,
+            "the carved-out topic is withheld"
+        );
+        assert!(
+            manager
+                .should_receive("c", "stream.response_chunk", None)
+                .await,
+            "the rest of the pattern still arrives"
+        );
+    }
+
+    /// §19: the Panel swaps its phone chat (`stream.*` minus reasoning) and
+    /// its wide chat (plain `stream.*`) over ONE socket on a resize, and the
+    /// subscribe of one and the unsubscribe of the other may reach the server
+    /// in either order. The two are distinct entries — the carve-out is part
+    /// of the key — so in both orders the wide chat ends up with reasoning and
+    /// the phone without, and each unsubscribe removes only its own entry.
+    ///
+    /// Mutation-checked: letting one entry's carve-out narrow the whole
+    /// connection, or ignoring `except` when removing, turns this red.
+    #[tokio::test]
+    async fn phone_and_wide_entries_coexist_and_leave_independently() {
+        let reasoning = aleph_protocol::STREAM_REASONING_TOPIC;
+        let phone = || topics(&["stream.*"], &[reasoning]);
+        let wide = || topics(&["stream.*"], &[]);
+
+        // Phone → wide: the wide subscribe lands before the phone's cleanup.
+        let m = Arc::new(SubscriptionManager::new());
+        call("events.subscribe", phone(), "c", &m).await;
+        call("events.subscribe", wide(), "c", &m).await;
+        assert!(
+            gets_reasoning(&m, "c").await,
+            "the wide entry is not narrowed by the phone's"
+        );
+        call("events.unsubscribe", phone(), "c", &m).await;
+        assert!(
+            gets_reasoning(&m, "c").await,
+            "the phone's cleanup leaves the wide entry"
+        );
+        assert!(m.should_receive("c", "stream.response_chunk", None).await);
+
+        // Wide → phone: the phone subscribe lands before the wide cleanup.
+        let m = Arc::new(SubscriptionManager::new());
+        call("events.subscribe", wide(), "c", &m).await;
+        call("events.subscribe", phone(), "c", &m).await;
+        call("events.unsubscribe", wide(), "c", &m).await;
+        assert!(
+            !gets_reasoning(&m, "c").await,
+            "the wide cleanup removes only the plain entry"
+        );
+        assert!(
+            m.should_receive("c", "stream.response_chunk", None).await,
+            "the phone's entry survives the wide cleanup"
+        );
+    }
+
+    /// Version skew: the Panel can reach an older LAN server. The params as
+    /// the new clients send them must parse under both older server shapes —
+    /// the pre-T3 `Vec<String>` topic list and the T3 selector list — and
+    /// there subscribe the plain topic, i.e. today's behaviour (reasoning
+    /// delivered), never a rejected call that leaves the client streamless.
+    #[test]
+    fn an_older_server_reads_the_carve_out_as_a_plain_subscription() {
+        #[derive(Deserialize)]
+        struct PreT3 {
+            topics: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum T3Selector {
+            Pattern(String),
+            Filtered {
+                topic: String,
+                #[serde(default, rename = "where")]
+                where_clause: Vec<Value>,
+            },
+        }
+        #[derive(Deserialize)]
+        struct T3 {
+            topics: Vec<T3Selector>,
+        }
+
+        let new = topics(&["stream.*"], &[aleph_protocol::STREAM_REASONING_TOPIC]);
+        let pre: PreT3 = serde_json::from_value(new.clone()).expect("pre-T3 server parses it");
+        assert_eq!(pre.topics, vec!["stream.*".to_string()]);
+        let t3: T3 = serde_json::from_value(new).expect("T3 server parses it");
+        assert!(matches!(t3.topics.as_slice(), [T3Selector::Pattern(p)] if p == "stream.*"));
     }
 
     #[tokio::test]
