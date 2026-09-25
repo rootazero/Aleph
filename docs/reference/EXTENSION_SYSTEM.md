@@ -612,101 +612,21 @@ To migrate from V1 manifest format:
 
 ---
 
-## Direct Commands (P0.5)
+## Direct Commands —— ❌ 已删除（2026-09-20）
 
-Direct commands bypass the LLM and execute plugin functions directly. They are useful for quick actions that don't require AI reasoning.
+这里曾有一节（~95 行）描述 `[[commands]] handler = "handlePing"` 式的 manifest、TypeScript
+`DirectCommandArgs` / `DirectCommandResult` 签名、以及 `plugins.executeCommand` RPC。
 
-### What Are Direct Commands?
+**三者都不再存在。** `CommandRegistration` 在 2026-07-17 折进 `SkillRegistration { skill_type: Command }`
+（插件 `commands/*.md` 的 markdown 正文就是那个"handler"），之后 `plugins.executeCommand` 把一段
+markdown 当 WASM 导出名去调，零客户端，2026-09-20 连同 `ExtensionManager::execute_plugin_command` 一起 CUT。
 
-Unlike tools (which are called by the LLM during conversation), direct commands are invoked explicitly by the user and execute immediately without LLM involvement. This makes them:
+插件命令今天的形状：`commands/<name>.md` → 注册为 slash 条目 → 用户 `/name args` 经 `chat.send` →
+正文经 `SkillTemplate` 展开（`$ARGUMENTS` / `$N` / `@file` / `` !`cmd` ``）后作为本轮用户内容注入模型
+（见 PLUGIN_SYSTEM.md「commands / agents 正文」）。**没有绕过模型的直接命令**——要确定性执行，写一个
+工具（WASM 导出或 MCP tool），不要写命令。
 
-- **Fast**: No LLM round-trip required
-- **Deterministic**: Same input always produces same output
-- **Explicit**: User must explicitly invoke the command
-
-### Manifest Format
-
-```toml
-[[commands]]
-name = "ping"
-description = "Check if the plugin is responsive"
-handler = "handlePing"
-
-[[commands]]
-name = "status"
-description = "Get current plugin status"
-handler = "handleStatus"
-
-[[commands]]
-name = "config"
-description = "Update plugin configuration"
-handler = "handleConfig"
-```
-
-### Handler Signature
-
-```typescript
-interface DirectCommandArgs {
-  command: string;      // Command name
-  args: string[];       // Positional arguments
-  flags: Record<string, string | boolean>;  // Named flags
-}
-
-interface DirectCommandResult {
-  success: boolean;
-  message?: string;
-  data?: unknown;
-}
-
-async function handlePing(args: DirectCommandArgs): Promise<DirectCommandResult> {
-  return {
-    success: true,
-    message: "pong",
-    data: { timestamp: Date.now() }
-  };
-}
-
-async function handleConfig(args: DirectCommandArgs): Promise<DirectCommandResult> {
-  const [key, value] = args.args;
-  if (!key) {
-    return { success: false, message: "Missing config key" };
-  }
-  // Update configuration...
-  return { success: true, message: `Set ${key} = ${value}` };
-}
-```
-
-### Gateway RPC
-
-Execute a direct command via the Gateway:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "plugins.executeCommand",
-  "params": {
-    "plugin": "my-plugin",
-    "command": "ping",
-    "args": [],
-    "flags": {}
-  },
-  "id": 1
-}
-```
-
-Response:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "success": true,
-    "message": "pong",
-    "data": { "timestamp": 1706000000000 }
-  },
-  "id": 1
-}
-```
+> 保留这一节的标题而不是删干净，理由同下方 Channel / Provider 那节。
 
 ---
 

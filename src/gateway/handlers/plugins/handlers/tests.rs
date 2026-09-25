@@ -1,7 +1,6 @@
 use crate::extension::ExtensionManager;
 use crate::gateway::handlers::plugins::handlers::{
-    handle_call_tool, handle_execute_command, init_extension_manager,
-    is_extension_manager_initialized,
+    handle_call_tool, init_extension_manager, is_extension_manager_initialized,
 };
 use crate::gateway::handlers::plugins::types::*;
 use crate::gateway::protocol::{JsonRpcRequest, INTERNAL_ERROR, INVALID_PARAMS};
@@ -123,89 +122,6 @@ async fn test_handle_call_tool_with_manager_plugin_not_found() {
     // Should return error because plugin doesn't exist
     assert!(response.is_error());
     assert_eq!(response.error.as_ref().unwrap().code, INTERNAL_ERROR);
-}
-
-#[test]
-fn test_execute_command_params() {
-    let json = json!({
-        "pluginId": "my-plugin",
-        "commandName": "status",
-        "args": {"verbose": true}
-    });
-    let params: ExecuteCommandParams = serde_json::from_value(json).unwrap();
-    assert_eq!(params.plugin_id, "my-plugin");
-    assert_eq!(params.command_name, "status");
-    assert_eq!(params.args["verbose"], true);
-}
-
-#[test]
-fn test_execute_command_params_default_args() {
-    let json = json!({
-        "pluginId": "test-plugin",
-        "commandName": "clear"
-    });
-    let params: ExecuteCommandParams = serde_json::from_value(json).unwrap();
-    assert_eq!(params.plugin_id, "test-plugin");
-    assert_eq!(params.command_name, "clear");
-    assert!(params.args.is_null());
-}
-
-#[tokio::test]
-async fn test_handle_execute_command_missing_params() {
-    let request = JsonRpcRequest::with_id("plugins.executeCommand", None, json!(1));
-    let response = handle_execute_command(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("Missing params"));
-}
-
-#[tokio::test]
-async fn test_handle_execute_command_invalid_params() {
-    let request = JsonRpcRequest::new(
-        "plugins.executeCommand",
-        Some(json!({"invalid": "params"})),
-        Some(json!(1)),
-    );
-    let response = handle_execute_command(request).await;
-
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, INVALID_PARAMS);
-}
-
-#[tokio::test]
-async fn test_handle_execute_command_not_found() {
-    // Initialize manager if not already done
-    if !is_extension_manager_initialized() {
-        let manager = ExtensionManager::with_defaults().await.unwrap();
-        let _ = init_extension_manager(Arc::new(manager));
-    }
-
-    let request = JsonRpcRequest::new(
-        "plugins.executeCommand",
-        Some(json!({
-            "pluginId": "test-plugin",
-            "commandName": "nonexistent-command",
-            "args": {}
-        })),
-        Some(json!(1)),
-    );
-    let response = handle_execute_command(request).await;
-
-    // Should return custom error -32001 because command doesn't exist
-    assert!(response.is_error());
-    assert_eq!(response.error.as_ref().unwrap().code, -32001);
-    assert!(response
-        .error
-        .as_ref()
-        .unwrap()
-        .message
-        .contains("not found"));
 }
 
 // ============================================================================

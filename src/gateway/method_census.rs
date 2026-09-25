@@ -328,7 +328,6 @@ mod tests {
         ("plugins.callTool", Class::Admin),
         ("plugins.disable", Class::Admin),
         ("plugins.enable", Class::Admin),
-        ("plugins.executeCommand", Class::Admin),
         ("plugins.install", Class::Admin),
         ("plugins.installFromZip", Class::Admin),
         ("plugins.list", Class::Admin),

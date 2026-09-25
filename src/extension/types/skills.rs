@@ -42,49 +42,6 @@ pub struct SkillMetadata {
     pub source: DiscoverySource,
 }
 
-/// Direct command execution result
-///
-/// Used by commands that execute immediately without LLM involvement
-/// (e.g., `/status`, `/clear`, `/version`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirectCommandResult {
-    /// Command output to display to user
-    pub content: String,
-    /// Optional structured data
-    pub data: Option<serde_json::Value>,
-    /// Whether command was successful
-    pub success: bool,
-}
-
-impl DirectCommandResult {
-    /// Create a successful result with content only
-    pub fn success(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            data: None,
-            success: true,
-        }
-    }
-
-    /// Create a successful result with content and structured data
-    pub fn with_data(content: impl Into<String>, data: serde_json::Value) -> Self {
-        Self {
-            content: content.into(),
-            data: Some(data),
-            success: true,
-        }
-    }
-
-    /// Create an error result
-    pub fn error(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            data: None,
-            success: false,
-        }
-    }
-}
-
 // =============================================================================
 // Skill Types
 // =============================================================================

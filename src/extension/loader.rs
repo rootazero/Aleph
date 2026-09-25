@@ -22,7 +22,7 @@ use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
 use crate::extension::runtime::WasmRuntime;
-use crate::extension::types::{DirectCommandResult, PluginKind};
+use crate::extension::types::PluginKind;
 use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry};
 
 /// Manages loading plugins into appropriate runtimes.
@@ -271,48 +271,6 @@ impl PluginLoader {
         }
     }
 
-    /// Execute a direct command handler on a loaded plugin.
-    pub fn execute_command(
-        &self,
-        plugin_id: &str,
-        handler: &str,
-        args: serde_json::Value,
-    ) -> ExtensionResult<DirectCommandResult> {
-        let kind = self
-            .loaded_plugins
-            .get(plugin_id)
-            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
-
-        match kind {
-            PluginKind::Wasm => {
-                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
-                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
-                })?;
-
-                let input = crate::extension::runtime::WasmToolInput {
-                    name: handler.to_string(),
-                    arguments: args,
-                };
-                let output = runtime.call_tool(plugin_id, handler, input)?;
-
-                if output.success {
-                    let result = output.result.unwrap_or(serde_json::Value::Null);
-                    Ok(serde_json::from_value(result)
-                        .unwrap_or_else(|_| DirectCommandResult::success("Command executed")))
-                } else {
-                    Ok(DirectCommandResult::error(
-                        output
-                            .error
-                            .unwrap_or_else(|| "Unknown WASM error".to_string()),
-                    ))
-                }
-            }
-            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
-                "Plugin kind {kind:?} does not support direct commands"
-            ))),
-        }
-    }
-
     /// Shutdown all runtimes and unload all plugins.
     pub fn shutdown(&mut self) {
         info!(
@@ -491,17 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_loader_execute_command_nonexistent() {
-        let loader = PluginLoader::new();
-        let result = loader.execute_command("nonexistent", "handler", serde_json::json!({}));
-        assert!(result.is_err());
-        match result {
-            Err(ExtensionError::PluginNotFound(id)) => assert_eq!(id, "nonexistent"),
-            _ => panic!("Expected PluginNotFound error"),
-        }
-    }
-
-    #[test]
     fn test_plugin_loader_shutdown_empty() {
         let mut loader = PluginLoader::new();
         loader.shutdown();
@@ -664,19 +611,6 @@ mod tests {
 
         let err = loader
             .execute_hook(&manifest.id, "hook", serde_json::json!({}))
-            .unwrap_err();
-        assert!(matches!(err, ExtensionError::PluginNotFound(_)), "{err}");
-    }
-
-    #[test]
-    fn test_plugin_loader_mcp_command_is_not_loaded_into_the_loader() {
-        let mut loader = PluginLoader::new();
-        let manifest = make_manifest_no_memory();
-        loader.load_plugin(&manifest).unwrap();
-        assert!(!loader.is_loaded(&manifest.id));
-
-        let err = loader
-            .execute_command(&manifest.id, "cmd", serde_json::json!({}))
             .unwrap_err();
         assert!(matches!(err, ExtensionError::PluginNotFound(_)), "{err}");
     }

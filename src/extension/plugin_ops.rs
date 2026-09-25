@@ -2,7 +2,7 @@
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::registry::PluginRegistry;
-use crate::extension::types::{DirectCommandResult, PluginInfo, PluginRecord};
+use crate::extension::types::{PluginInfo, PluginRecord};
 use crate::sync_primitives::Arc;
 
 use super::ExtensionManager;
@@ -73,23 +73,6 @@ impl ExtensionManager {
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
         tokio::task::spawn_blocking(move || loader.execute_hook(&plugin_id, &handler, event_data))
-            .await
-            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
-    }
-
-    /// Execute a direct command on a runtime plugin.
-    pub async fn execute_plugin_command(
-        &self,
-        plugin_id: &str,
-        handler: &str,
-        args: serde_json::Value,
-    ) -> ExtensionResult<DirectCommandResult> {
-        self.ensure_runtime_mounted(plugin_id).await?;
-
-        let loader = self.plugin_loader.clone().read_owned().await;
-        let plugin_id = plugin_id.to_string();
-        let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || loader.execute_command(&plugin_id, &handler, args))
             .await
             .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }

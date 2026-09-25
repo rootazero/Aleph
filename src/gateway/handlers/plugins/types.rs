@@ -150,23 +150,6 @@ pub use aleph_protocol::plugins::MarketplaceRemoveParams;
 pub use aleph_protocol::plugins::MarketplaceUpdateParams;
 pub use aleph_protocol::plugins::PluginUpdateParams as UpdatePluginParams;
 
-// ============================================================================
-// Execute Command Parameters
-// ============================================================================
-
-/// Parameters for plugins.executeCommand
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteCommandParams {
-    /// ID of the plugin providing the command
-    pub plugin_id: String,
-    /// Name of the command to execute
-    pub command_name: String,
-    /// Arguments to pass to the command handler
-    #[serde(default)]
-    pub args: serde_json::Value,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
