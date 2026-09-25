@@ -155,7 +155,7 @@ const SNIPPET_MAX_CHARS: usize = 600;
 /// `full_content` is the one parameter that can make a single `search` carry
 /// more than a `web_fetch`, because it returns N bodies rather than one. The
 /// per-body bound keeps the comparison to "a few pages", and the overall
-/// budget is capped again by [`SearchTool::max_result_tokens`].
+/// budget is capped again by `SearchTool`'s `AlephTool::MAX_RESULT_TOKENS`.
 const FULL_CONTENT_MAX_CHARS: usize = 20_000;
 
 /// A single search result
@@ -497,9 +497,7 @@ impl AlephTool for SearchTool {
     /// `web_fetch`'s page budget: with `full_content` set this call carries N
     /// page bodies where a fetch carries one, so the ceiling is on the call,
     /// not on the page.
-    fn max_result_tokens(&self) -> Option<usize> {
-        Some(8_000)
-    }
+    const MAX_RESULT_TOKENS: Option<usize> = Some(8_000);
 }
 
 #[cfg(test)]

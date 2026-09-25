@@ -447,11 +447,8 @@ impl AlephTool for WebFetchTool {
     type Output = WebFetchResult;
 
     /// A fetched page is reliably larger than the global default; cap at 10k
-    /// tokens (was the legacy `resolve_result_budget` name-table value for
-    /// `web_fetch`).
-    fn max_result_tokens(&self) -> Option<usize> {
-        Some(10_000)
-    }
+    /// tokens.
+    const MAX_RESULT_TOKENS: Option<usize> = Some(10_000);
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)

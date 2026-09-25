@@ -29,9 +29,9 @@ use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
-/// Global default budget for tools that neither declare an explicit
-/// `max_result_tokens` nor appear in the legacy name table. It descends from
-/// the historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
+/// Global default budget for tools that declare no
+/// [`crate::tools::AlephTool::MAX_RESULT_TOKENS`]. It descends from the
+/// historical `MAX_TOOL_RESULT_TOKENS` constant, which lived in the
 /// since-deleted `pipeline` module this one replaced.
 pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 
@@ -142,12 +142,15 @@ pub(crate) fn read_backstop_tokens() -> usize {
 ///    invariant — a `read_file` result is the only way the model can pull
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
-/// 2. `explicit` (typically the tool's own `max_result_tokens()` value)
-///    wins for every other name. Builtins declare their budget there now
-///    (`bash`, `web_fetch`), so they never reach the table below.
-/// 3. Otherwise a single remaining legacy entry (`search_files`/`Grep`,
-///    which has no in-crate tool to carry the trait method).
-/// 4. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
+/// 2. `explicit` — the tool's declared
+///    [`crate::tools::AlephTool::MAX_RESULT_TOKENS`], carried to the
+///    dispatcher by `RegistryToolAdapter` — wins for every other name.
+/// 3. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
+///
+/// There is no name table: the declaration is the only per-tool source, so a
+/// budget is changed where the tool lives. (A table keyed on tool names used to
+/// sit here as a second answer, and was the one actually in effect — the
+/// declarations never reached this function.)
 ///
 /// Whatever that yields is then capped by the boot-installed window ceiling
 /// (see [`set_global_result_budget_ceiling`]). The cap applies to *every*
@@ -164,7 +167,7 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
 
 /// Pure core of [`resolve_result_budget`] with the ceiling passed in, so the
 /// cap semantics are unit-testable without touching the process-wide slot.
-fn resolve_result_budget_under(
+pub(crate) fn resolve_result_budget_under(
     name: &str,
     explicit: Option<usize>,
     ceiling: usize,
@@ -173,17 +176,11 @@ fn resolve_result_budget_under(
         "read_file" | "Read" | "file_read" => return None,
         _ => {}
     }
-    // Tools whose `AlephTool::max_result_tokens()` never reaches this function
-    // because they are registered through the executor `ToolRegistry` →
-    // `RegistryToolAdapter` (which does not carry the trait value). Their budget
-    // stays here until that adapter forwards declared budgets. `bash` (8k) ==
-    // the default, so only the non-default ones need arms.
-    let declared = explicit.or(match name {
-        "Grep" | "search_files" => Some(6_000),
-        "web_fetch" => Some(10_000),
-        _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
-    });
-    declared.map(|n| n.min(ceiling))
+    Some(
+        explicit
+            .unwrap_or(DEFAULT_RESULT_BUDGET_TOKENS)
+            .min(ceiling),
+    )
 }
 
 /// Which retrieval tools the model can call, this turn, to get an offloaded
@@ -1162,27 +1159,23 @@ mod tests {
     }
 
     #[test]
-    fn explicit_wins_over_fallback_table() {
+    fn explicit_wins_over_the_default() {
         assert_eq!(resolve_result_budget("bash", Some(123)), Some(123));
         assert_eq!(resolve_result_budget("custom_thing", Some(50)), Some(50));
     }
 
+    /// The name table is gone: a name carries no budget of its own, so a tool
+    /// that declares nothing gets the default whatever it is called — the
+    /// declaration is the only per-tool source.
     #[test]
-    fn explicit_budget_overrides_name_table() {
-        // Explicit budget always wins over the name table.
-        assert_eq!(
-            resolve_result_budget("web_fetch", Some(10_000)),
-            Some(10_000)
-        );
-        assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
-    }
-
-    #[test]
-    fn fallback_table_keeps_grep() {
-        // `search_files`/`Grep` has no in-crate tool to declare the trait
-        // method, so it stays in the name table (alongside `web_fetch`).
-        assert_eq!(resolve_result_budget("Grep", None), Some(6_000));
-        assert_eq!(resolve_result_budget("search_files", None), Some(6_000));
+    fn a_tool_name_alone_carries_no_budget() {
+        for name in ["web_fetch", "Grep", "search_files", "bash"] {
+            assert_eq!(
+                resolve_result_budget_under(name, None, usize::MAX),
+                Some(DEFAULT_RESULT_BUDGET_TOKENS),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -1193,19 +1186,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn web_fetch_budget_is_10k_via_name_table() {
-        // Production path: web_fetch is executor-registered, so its
-        // AlephTool-declared 10k never arrives as `explicit`. The name table
-        // must carry it (mirrors the search_files arm).
-        assert_eq!(resolve_result_budget("web_fetch", None), Some(10_000));
-    }
-
-    #[test]
-    fn explicit_budget_still_wins_over_name_table() {
-        assert_eq!(resolve_result_budget("web_fetch", Some(4_000)), Some(4_000));
-    }
-
     // ---------------------------------------------------------------
     // window ceiling (B14)
     // ---------------------------------------------------------------
@@ -1213,16 +1193,12 @@ mod tests {
     #[test]
     fn window_ceiling_caps_declared_budgets_not_just_the_default() {
         // A 16k-window model yields a 2_400 per-result ceiling. `web_fetch`'s
-        // declared 10k and `Grep`'s 6k are exactly the values that must come
-        // down — a ceiling applied only to the `None` fallback would leave the
-        // biggest offenders untouched.
+        // declared 10k is exactly the value that must come down — a ceiling
+        // applied only to the `None` fallback would leave the biggest offender
+        // untouched.
         let ceiling = 2_400;
         assert_eq!(
-            resolve_result_budget_under("web_fetch", None, ceiling),
-            Some(2_400)
-        );
-        assert_eq!(
-            resolve_result_budget_under("Grep", None, ceiling),
+            resolve_result_budget_under("web_fetch", Some(10_000), ceiling),
             Some(2_400)
         );
         assert_eq!(
@@ -1247,15 +1223,11 @@ mod tests {
 
     #[test]
     fn uncapped_ceiling_is_todays_behavior() {
-        // No ceiling installed (large window / no `[context_budget]`) → the
-        // table is byte-for-byte what it was.
+        // No ceiling installed (large window / no `[context_budget]`) → a
+        // declared budget and the default pass through unchanged.
         assert_eq!(
-            resolve_result_budget_under("web_fetch", None, usize::MAX),
+            resolve_result_budget_under("web_fetch", Some(10_000), usize::MAX),
             Some(10_000)
-        );
-        assert_eq!(
-            resolve_result_budget_under("Grep", None, usize::MAX),
-            Some(6_000)
         );
         assert_eq!(
             resolve_result_budget_under("bash", None, usize::MAX),
@@ -1271,7 +1243,7 @@ mod tests {
         set_global_result_budget_ceiling(DEFAULT_RESULT_BUDGET_TOKENS);
         set_global_result_budget_ceiling(50_000);
         assert_eq!(
-            resolve_result_budget("web_fetch", None),
+            resolve_result_budget("web_fetch", Some(10_000)),
             Some(10_000),
             "a refused ceiling must leave the process uncapped"
         );

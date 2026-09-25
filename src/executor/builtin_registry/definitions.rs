@@ -4027,6 +4027,72 @@ mod tests {
         assert!(names.contains(&"session_send".to_string()));
     }
 
+    /// T-G4: a tool's per-result budget has one source — its
+    /// `AlephTool::MAX_RESULT_TOKENS`, stamped on its registry entry — and the
+    /// move there changed no budget in effect. Over every tool this registry
+    /// builds:
+    ///
+    /// * **zero behaviour change** — what each tool now resolves to equals
+    ///   what the deleted name table resolved it to (the table is kept below,
+    ///   verbatim, as the "before"; production passed no declaration then);
+    /// * **the declaration reaches the entry** — for every tool the factory
+    ///   can construct, the entry carries exactly what the tool declares, so
+    ///   a registration path that forgets to stamp it fails here.
+    #[tokio::test]
+    async fn result_budgets_come_from_declarations_and_match_the_retired_name_table() {
+        fn retired_name_table(name: &str) -> Option<usize> {
+            match name {
+                "read_file" | "Read" | "file_read" => None,
+                "Grep" | "search_files" => Some(6_000),
+                "web_fetch" => Some(10_000),
+                _ => Some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS),
+            }
+        }
+        let map = unconditional_registry_map();
+        assert!(
+            map.len() > 20,
+            "the census must see the registry: {}",
+            map.len()
+        );
+        let mut constructed = 0usize;
+        for (name, entry) in &map {
+            assert_eq!(
+                crate::tools::result_processing::resolve_result_budget_under(
+                    name,
+                    entry.max_result_tokens,
+                    usize::MAX,
+                ),
+                retired_name_table(name),
+                "{name}: the budget in effect changed"
+            );
+            if let Some(tool) = create_tool_boxed(name, None) {
+                constructed += 1;
+                assert_eq!(
+                    entry.max_result_tokens,
+                    tool.max_result_tokens(),
+                    "{name}: the registry entry does not carry the tool's declaration"
+                );
+            }
+        }
+        assert!(
+            constructed > 10,
+            "the declaration half must actually run: {constructed}"
+        );
+        // The table's `Grep | search_files` row had no owner: no registered
+        // tool carries either name (builtins are lowercase `grep`; MCP names
+        // are qualified `server__tool`), so it is recorded dead, not migrated.
+        for dead in ["Grep", "search_files"] {
+            assert!(
+                !map.contains_key(dead),
+                "{dead} is registered now — the retired 6_000 row needs an owner"
+            );
+        }
+        // The declarations the table used to shadow are the ones now in effect.
+        assert_eq!(map["web_fetch"].max_result_tokens, Some(10_000));
+        assert_eq!(map["bash"].max_result_tokens, Some(8_000));
+        assert_eq!(map["search"].max_result_tokens, Some(8_000));
+    }
+
     #[test]
     fn test_sessions_tools_require_config() {
         // Sessions tools require gateway_context (dynamic creation)

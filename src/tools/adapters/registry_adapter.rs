@@ -31,6 +31,10 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     /// `&dyn LoopTool`. Builtins keep `None` and are never usage-recorded (see
     /// [`crate::tools::usage`]).
     plugin_id: Option<String>,
+    /// The per-result token budget the tool declares
+    /// (`AlephTool::MAX_RESULT_TOKENS`), snapshotted at construction for the
+    /// same reason as `plugin_id`: the dispatcher only ever sees `&dyn LoopTool`.
+    max_result_tokens: Option<usize>,
 }
 
 // There is deliberately no `working_dir` injection here any more.
@@ -393,6 +397,10 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
             .map(crate::tools::usage::UsageOrigin::Plugin)
     }
 
+    fn max_result_tokens(&self) -> Option<usize> {
+        self.max_result_tokens
+    }
+
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         // Safe default: only explicitly-known read-only tools are freely
         // concurrent. Path-scoped file writers are not "freely" concurrent
@@ -551,6 +559,16 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
             .clone()
             .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
 
+        // The declared budget is read off the executor registry's OWN entry for
+        // this name — the entry this adapter delegates execution to, stamped
+        // from the tool type at registration. Not off `tool`: the list handed
+        // in may be a copy built elsewhere (boot builds the model's tool list
+        // from `BUILTIN_TOOL_DEFINITIONS`), and such a copy carries no budget.
+        // Reading it there is how a declaration used to go nowhere.
+        let max_result_tokens = tool_registry
+            .get_tool(&tool.name)
+            .and_then(|registered| registered.max_result_tokens);
+
         adapters.push(Box::new(RegistryToolAdapter {
             name: tool.name.clone(),
             description: tool.description.clone(),
@@ -560,6 +578,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
                 UnifiedToolSource::Plugin { plugin_id } => Some(plugin_id.clone()),
                 _ => None,
             },
+            max_result_tokens,
         }));
     }
 
@@ -620,6 +639,41 @@ mod tests {
         let mut tool = UnifiedTool::new(format!("native:{}", name), name, desc, ToolSource::Native);
         tool.parameters_schema = Some(json!({"type": "object", "properties": {}}));
         tool
+    }
+
+    /// T-G4: a tool's declared result budget reaches the dispatcher's lookup
+    /// (`LoopToolRegistry::max_result_tokens_for`) — read off the executor
+    /// registry's own entry even when the list handed to the builder is a
+    /// copy without it, which is the production shape (boot's model-facing
+    /// list is rebuilt from `BUILTIN_TOOL_DEFINITIONS`).
+    #[test]
+    fn a_declared_budget_reaches_the_loop_registry_from_the_executor_entry() {
+        struct Declaring {
+            entry: UnifiedTool,
+        }
+        impl ToolRegistry for Declaring {
+            fn get_tool(&self, name: &str) -> Option<&UnifiedTool> {
+                (name == self.entry.name).then_some(&self.entry)
+            }
+            fn execute_tool(
+                &self,
+                _tool_name: &str,
+                _arguments: Value,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<Value>> + Send + '_>>
+            {
+                Box::pin(async { Ok(json!({})) })
+            }
+        }
+        let mut entry = make_unified_tool("fetchy", "fetch");
+        entry.max_result_tokens = Some(12_345);
+        let copy_without_budget = make_unified_tool("fetchy", "fetch");
+        let plain = make_unified_tool("plain", "no declaration");
+
+        let registry =
+            build_registry_from_tools(Arc::new(Declaring { entry }), &[copy_without_budget, plain]);
+
+        assert_eq!(registry.max_result_tokens_for("fetchy"), Some(12_345));
+        assert_eq!(registry.max_result_tokens_for("plain"), None);
     }
 
     #[tokio::test]

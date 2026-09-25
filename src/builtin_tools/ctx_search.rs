@@ -48,7 +48,7 @@ const MAX_QUERIES: usize = 5;
 /// ~3 000 tokens is a handful of typical log sections. It also sits under
 /// the 4 000-token per-result gate this round lowers the default to, so the
 /// result never trips its own offload.
-const MAX_RESULT_TOKENS: usize = 3_000;
+const RESULT_TOKENS_CAP: usize = 3_000;
 /// Halvings of the text allowance tried at each depth before dropping a hit
 /// per query (see [`fit_to_budget`]).
 const FIT_ATTEMPTS: usize = 4;
@@ -133,11 +133,11 @@ impl CtxSearchTool {
     /// The token budget this tool's own result must fit: the Layer-2 budget
     /// resolved for it (the same resolver dispatch uses, so a lower default or
     /// a small-window ceiling reaches here too), capped at
-    /// [`MAX_RESULT_TOKENS`].
-    fn result_budget_tokens(&self) -> usize {
-        resolve_result_budget(Self::NAME, self.max_result_tokens())
+    /// [`RESULT_TOKENS_CAP`].
+    fn result_budget_tokens() -> usize {
+        resolve_result_budget(Self::NAME, Self::MAX_RESULT_TOKENS)
             .unwrap_or(DEFAULT_RESULT_BUDGET_TOKENS)
-            .min(MAX_RESULT_TOKENS)
+            .min(RESULT_TOKENS_CAP)
     }
 }
 
@@ -181,7 +181,7 @@ impl AlephTool for CtxSearchTool {
         let output = fit_to_budget(
             indexed_sections,
             &prepare(found),
-            self.result_budget_tokens(),
+            Self::result_budget_tokens(),
         );
         let matched: usize = output.results.iter().map(|r| r.hits.len()).sum();
         notify_tool_result(
@@ -733,9 +733,8 @@ mod tests {
 
     #[test]
     fn this_tools_budget_never_exceeds_what_layer_two_resolves_for_it() {
-        let tool = CtxSearchTool::new();
         let enforced = resolve_result_budget(CtxSearchTool::NAME, None).unwrap();
-        assert!(tool.result_budget_tokens() <= enforced);
-        assert!(tool.result_budget_tokens() <= MAX_RESULT_TOKENS);
+        assert!(CtxSearchTool::result_budget_tokens() <= enforced);
+        assert!(CtxSearchTool::result_budget_tokens() <= RESULT_TOKENS_CAP);
     }
 }
