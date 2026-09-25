@@ -953,9 +953,10 @@ mod tests {
     /// defending against, run inline so the ordering is observable
     /// deterministically instead of raced against a second task. Every
     /// required method delegates to `inner`, so `handle_bind` still runs
-    /// against a real backend; the trait's defaulted methods (`history_page`,
-    /// `truncate_messages`, `load_window`, …) are not overridden and run the
-    /// trait default, not `inner`'s.
+    /// against a real backend. Of the trait's defaulted methods only
+    /// `rescope_attribution` (the seam) is overridden; the rest (`history_page`,
+    /// `truncate_messages`, `load_window`, …) run the trait default, not
+    /// `inner`'s.
     struct ReadDuringRescope {
         inner: Arc<dyn SessionStore>,
         index: Arc<EventVisibilityIndex>,

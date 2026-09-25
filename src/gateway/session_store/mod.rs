@@ -479,10 +479,13 @@ pub trait SessionStore: Send + Sync {
     /// `AssistantRunMeta` used to walk its numbers onto whatever row happened
     /// to be newest — a LATER run's row — and the session was billed twice for
     /// the first run while the second one's gauge read the first one's tokens.
-    /// `after_seq` is the fold's anchor — the last `RunStarted` before the
-    /// meta — or the projector's `run_start` when the fold is `Unfoldable`
-    /// (clamped to 0 when it lies above the meta, which only a stale value
-    /// can); `before_seq` is the meta's own seq.
+    /// From the projector's meta arm, `after_seq` is the fold's anchor — the
+    /// last `RunStarted` before the meta — or the projector's `run_start` when
+    /// the fold is `Unfoldable` (clamped to 0 when it lies above the meta,
+    /// which only a stale value can); `before_seq` is the meta's own seq. From
+    /// the heal's `synthesize_missing_stamps`, the range is the span's own
+    /// `(RunStarted, RunFinished]` — its fold anchor is the span's own opener
+    /// by construction.
     ///
     /// Rows with no source seq (legacy transcripts, boot-time orphan notices)
     /// are never in any range and are therefore never stamped.

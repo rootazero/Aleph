@@ -726,11 +726,14 @@ pub(crate) fn already_stamped_by(existing: Option<&str>, run_id: Option<&str>) -
 /// `false` — there is no id to find — and leaves the target-row check to
 /// decide.
 ///
-/// Sound because a range holds one bracket: no range contains a `RunStarted`
-/// (the meta arm's starts at the last opener before the meta, a synthesized
-/// span's at its own opener), so a same-id retry bracket — the F1 shape — has
-/// a range of its own, and a match here is this bracket's stamp, never a
-/// sibling's.
+/// Sound because a range holds one bracket: no range contains a live
+/// `RunStarted` (the meta arm's starts at the last opener before the meta, a
+/// synthesized span's at its own opener), so a same-id retry bracket — the F1
+/// shape — has a range of its own, and a match here is this bracket's stamp,
+/// never a sibling's. The one exception is the `Unfoldable` fallback range
+/// (`run_start`, not a fold anchor), which can reach back across a retired
+/// opener; it carries no bill, so a match there can only withhold a stamp,
+/// never add a charge.
 pub(crate) fn run_stamped_in_range<'a>(
     rows_in_range: impl IntoIterator<Item = Option<&'a str>>,
     run_id: Option<&str>,
