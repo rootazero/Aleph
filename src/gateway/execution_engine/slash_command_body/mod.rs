@@ -37,7 +37,9 @@
 //! **Inline commands** run through [`ConsentedShell`]: the consent registry a
 //! plugin's `hooks.json` command goes through, keyed by the command's own
 //! template text, then the production builder
-//! ([`inline_shell_command`](crate::extension::inline_shell_command)).
+//! ([`inline_shell_command`](crate::extension::inline_shell_command)) — and
+//! only for an operator whose channel does not deny `bash`
+//! ([`inline_shell_refusal`]).
 //!
 //! **`model:`** pins this turn's model when the request carries none
 //! ([`command_model_pin`]).
@@ -144,7 +146,8 @@ pub(super) async fn render_admitted(
         return Err(refused("the extension manager is gone"));
     };
     let cwd = Some(run_dir.to_path_buf()).filter(|d| d.is_dir());
-    let render = render_command(&mode, cwd, manager, consent);
+    let refusal = inline_shell_refusal(&request.metadata);
+    let render = render_command(&mode, cwd, refusal, manager, consent);
     let rendered = tokio::select! {
         biased;
         () = cancel.cancelled() => return Err(ExecutionError::Cancelled),
@@ -153,6 +156,38 @@ pub(super) async fn render_admitted(
     match rendered {
         Some((qualified, block)) if qualified == *admitted => Ok(Some(block)),
         _ => Err(refused("it is no longer registered")),
+    }
+}
+
+/// Why this turn may run none of its command's inline commands, or `None`.
+///
+/// An inline command is a shell run as the daemon's user, outside the
+/// sandbox and the `[sandbox.command_policy]` floor, with arguments the
+/// sender picks. So — as `/moa` arms only for an operator on its channel
+/// face — it runs only for an OPERATOR (`role_is_operator`: loopback and
+/// authorized clients; a channel's chat-tier sender is a guest), and only
+/// where the turn's channel does not deny the model its own shell (`bash`)
+/// in its tool-permission layer: an approved command would otherwise be the
+/// very shell that channel's operator switched off. A layer that cannot be
+/// read denies. The body still renders; each inline command is a placeholder
+/// naming the reason.
+fn inline_shell_refusal(metadata: &HashMap<String, String>) -> Option<&'static str> {
+    use crate::tools::AlephTool;
+    if !crate::tools::turn_context::role_is_operator(
+        metadata.get("caller_role").map(String::as_str),
+    ) {
+        return Some("inline commands run only for an operator");
+    }
+    let layer = metadata.get(super::CHANNEL_TOOL_PERMISSIONS_KEY)?;
+    match serde_json::from_str::<crate::config::types::policies::ToolPermissionsConfig>(layer) {
+        Ok(layer)
+            if layer.resolve(crate::builtin_tools::BashExecTool::NAME)
+                == crate::extension::PermissionAction::Deny =>
+        {
+            Some("this channel denies `bash`")
+        }
+        Ok(_) => None,
+        Err(_) => Some("this channel's tool permissions cannot be read"),
     }
 }
 
@@ -165,10 +200,13 @@ fn slash_mode(metadata: &HashMap<String, String>) -> Option<serde_json::Value> {
 
 /// Render the plugin command a slash mode names ([`owned_command`]): its
 /// qualified id and its `<command>` block, or `Ok(None)` when the mode names
-/// none. `Err` is the render's own failure (the file-reference cap).
+/// none. `refusal` withholds every inline command, naming the reason
+/// ([`inline_shell_refusal`]). `Err` is the render's own failure (the
+/// file-reference cap).
 pub(super) async fn render_command(
     mode: &serde_json::Value,
     cwd: Option<PathBuf>,
+    refusal: Option<&'static str>,
     manager: &ExtensionManager,
     consent: Arc<ShellHookConsent>,
 ) -> Result<Option<(String, String)>, String> {
@@ -193,8 +231,9 @@ pub(super) async fn render_command(
         (reg, plugin)
     };
     let qualified = reg.qualified_name();
-    let shell: Box<dyn InlineShell> = match plugin {
-        Some((plugin_root, scope)) => Box::new(ConsentedShell {
+    let shell: Box<dyn InlineShell> = match (refusal, plugin) {
+        (Some(reason), _) => Box::new(Withheld(reason)),
+        (None, Some((plugin_root, scope))) => Box::new(ConsentedShell {
             settings_env: manager
                 .plugin_settings_env(&reg.plugin_id, SettingsForm::WithoutSecrets)
                 .await,
@@ -206,7 +245,7 @@ pub(super) async fn render_command(
         }),
         // A registration whose plugin has no record cannot be tied to an
         // install root or a consent key.
-        None => Box::new(Withheld(
+        (None, None) => Box::new(Withheld(
             "the plugin that ships this command has no record here",
         )),
     };

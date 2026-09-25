@@ -124,6 +124,7 @@ impl Fixture {
         render_command(
             &mode,
             Some(self.work.clone()),
+            None,
             &self.manager,
             Arc::clone(&self.consent),
         )
@@ -250,7 +251,7 @@ async fn a_skill_mode_that_names_a_real_skill_is_not_a_command_turn() {
         serde_json::json!({"type": "skill", "skill_id": "not-registered", "args": ""}),
         serde_json::json!({"type": "direct_tool", "tool_id": "plug:greet", "args": ""}),
     ] {
-        let turn = render_command(&mode, None, &f.manager, Arc::clone(&f.consent))
+        let turn = render_command(&mode, None, None, &f.manager, Arc::clone(&f.consent))
             .await
             .unwrap();
         assert!(turn.is_none(), "{mode}");
@@ -301,6 +302,7 @@ async fn only_the_judged_owners_command_under_its_exact_key_renders() {
         let turn = render_command(
             &mode,
             Some(f.work.clone()),
+            None,
             &f.manager,
             Arc::clone(&f.consent),
         )
@@ -507,6 +509,7 @@ async fn a_command_without_a_plugin_record_withholds_its_inline_commands() {
     let (_, block) = render_command(
         &mode,
         Some(f.work.clone()),
+        None,
         &f.manager,
         Arc::clone(&f.consent),
     )
@@ -1035,4 +1038,68 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
             model: "claude-sonnet-5".into()
         })
     );
+}
+
+/// S5. Inline shell runs only for an operator, on a channel that does not
+/// deny the model its own shell (the `/moa` precedent). A guest or member
+/// sender, a channel layer that denies `bash`, and one that cannot be read
+/// all get the body with every inline command withheld and named; an
+/// operator whose channel denies something else — and a loopback caller with
+/// no channel at all — run it.
+#[tokio::test]
+#[cfg(unix)]
+async fn inline_commands_run_only_for_an_operator_on_a_channel_that_allows_bash() {
+    let deny_bash = r#"{"default":"allow","overrides":{"bash":"deny"}}"#;
+    let deny_other = r#"{"default":"allow","overrides":{"web_fetch":"deny"}}"#;
+    let operator_only = "inline commands run only for an operator";
+    for (role, layer, withheld) in [
+        (Some("guest"), None, Some(operator_only)),
+        (Some("member"), None, Some(operator_only)),
+        (Some("guest"), Some(deny_other), Some(operator_only)),
+        (
+            Some("operator"),
+            Some(deny_bash),
+            Some("this channel denies `bash`"),
+        ),
+        (
+            Some("operator"),
+            Some("not json"),
+            Some("this channel's tool permissions cannot be read"),
+        ),
+        (Some("operator"), Some(deny_other), None),
+        (None, None, None),
+    ] {
+        let f = Fixture::new("Hi [!`touch RAN`]", None).await;
+        f.approve("touch RAN");
+        let temp = TempDir::new().unwrap();
+        let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+        let mut request = f.request(f.work.clone()).await;
+        if let Some(role) = role {
+            request
+                .metadata
+                .insert("caller_role".to_string(), role.to_string());
+        }
+        if let Some(layer) = layer {
+            request.metadata.insert(
+                super::super::CHANNEL_TOOL_PERMISSIONS_KEY.to_string(),
+                layer.to_string(),
+            );
+        }
+        let block = f
+            .admit_and_render(&mut request, &agent)
+            .await
+            .unwrap()
+            .expect("the body still renders");
+        let ran = f.work.join("RAN").exists();
+        match withheld {
+            Some(reason) => {
+                assert!(!ran, "{role:?} / {layer:?}: the inline command ran");
+                assert!(
+                    block.contains(&format!("Hi [[!`touch RAN` not run: {reason}]]")),
+                    "{role:?} / {layer:?}: {block}"
+                );
+            }
+            None => assert!(ran, "{role:?} / {layer:?}: withheld: {block}"),
+        }
+    }
 }

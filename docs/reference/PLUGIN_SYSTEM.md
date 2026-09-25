@@ -377,7 +377,7 @@ aleph plugin list
 |---------|-----------|------|
 | `skills/*/SKILL.md` | ✅ 完全支持 | 通过 SkillSystem 加载 |
 | `agents/*.md` | ✅ 完全支持 | 自动发现 |
-| `commands/*.md` | ✅ 支持 | 注册为 `/插件:命令`（命名空间化）。`/cmd args` 时正文按 CC/pi 语法渲染（`$1…$N` / `${N:-默认}` / `$ARGUMENTS`、`@./文件`、`` !`cmd` ``），作为**本回合的 transient 用户内容**交给模型、**不落盘**——会话存的是原始 `/cmd args`（**与 CC 不同**：CC 把展开后的正文存成用户消息）。`` !`cmd` `` 与 `hooks.json` 命令走同一份同意清单（事件 `SlashCommand`，`aleph hooks list` / `test` 审批），在会话工作目录里跑，参数只作数据、不作源码，环境里没有任何 `{{secret:…}}` 设置。`model:` 只钉本回合（CC 别名 `sonnet`/`opus`/`haiku` 不生效；已退役的 id 直接拒绝本回合）|
+| `commands/*.md` | ✅ 支持 | 注册为 `/插件:命令`（命名空间化）。`/cmd args` 时正文按 CC/pi 语法渲染（`$1…$N` / `${N:-默认}` / `$ARGUMENTS`、`@./文件`、`` !`cmd` ``），作为**本回合的 transient 用户内容**交给模型、**不落盘**——会话存的是原始 `/cmd args`（**与 CC 不同**：CC 把展开后的正文存成用户消息）。只渲染 owner 闸判过的那条注册（`/插件:命令` 的精确键；同名的内置 / 用户 skill 永远不会渲染插件命令）；渲染发生在 `BeforeAgentStart` / `UserPromptSubmit` 之后——被 hook 拦下的回合一条 `` !`cmd` `` 都不跑。`` !`cmd` `` 与 `hooks.json` 命令走同一份同意清单（事件 `SlashCommand`，`aleph hooks list` / `test` 审批；以 hook 身份批过的同文本不算），**只对 operator、且所在 channel 的工具权限层未 deny `bash` 时才跑**（channel 的 guest 发送者一律只见占位符，正文照常渲染）；在会话工作目录里、以守护进程用户身份跑，**不在沙箱内，也不受 `[sandbox.command_policy]` 约束**；参数只作数据、不作源码；环境先清空，只继承 `PATH HOME USER LOGNAME SHELL LANG LC_* TERM TMPDIR TZ`，没有任何 `{{secret:…}}` 设置；**不许用相对路径指脚本**（同意会审插件目录里的那份、实际跑的却是会话目录里的——写 `${CLAUDE_PLUGIN_ROOT}/…`）。`model:` 只钉本回合（CC 别名 `sonnet`/`opus`/`haiku` 不生效、仅记日志；已退役的 id 直接拒绝本回合）|
 | `hooks/hooks.json` (command type) | ✅ 支持 | Shell 命令型 hook |
 | `.mcp.json` (MCP servers) | ✅ 支持 | 通过 MCP client 启动 |
 | `.claude-plugin/plugin.json` | ✅ 完全支持 | CC JSON parser |
