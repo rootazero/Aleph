@@ -58,7 +58,7 @@ Inputs the spec is silent about, most likely to bite, and the task whose tests p
   pub fn last_url(&self, profile: &str, tab_id: &str) -> Option<String>;  // T6 reuses this for URL-drift
   ```
 
-- [ ] **Step 1: Falsify-first — write the failing tests**
+- [x] **Step 1: Falsify-first — write the failing tests**
 
 ```rust
 #[test]
@@ -90,25 +90,25 @@ fn unknown_tab_id_says_so_instead_of_tab_gone() {
 }
 ```
 
-- [ ] **Step 2: Verify they fail**
+- [x] **Step 2: Verify they fail**
 
 Run: `awk '/MemAvailable/{exit ($2<4194304)?1:0}' /proc/meminfo && CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib tab_registry 2>&1 | tail -5`
 Expected: FAIL — `record_identity` / `resolve_identity` do not exist (compile error is the red here; that counts as falsification for a new API).
 
-- [ ] **Step 3: Count the writers first (判据 §6)**
+- [x] **Step 3: Count the writers first (判据 §6)**
 
 Run: `rg -n "touch\(|record_activity|TabTable|ensure_tab|attach_tab" src/browser --type rust | rg -v "^\s*//" | head -30`
 Write the list into the commit message body: every place tab identity is currently derivable (EngineHandle::TabTable, ProfileManager::tab_registry, playwright CLI session state). This census decides where `record_identity` is called from — every discovery point, or the registry is a second-class copy.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 `tab_registry.rs`: add `identities: RwLock<HashMap<String, HashMap<String, TabIdentity>>>` keyed by profile then tab_id. `record_identity` upserts; `resolve_identity` returns `TabNotFound` for never-recorded, `TabGone{tab_id, last_url}` when recorded but `target_id` is `Some` and absent from `live_target_ids`, `Ok(identity)` otherwise. Locking: `unwrap_or_else(|e| e.into_inner())` (P7).
 
 `error.rs`: add the `TabGone` variant with a Display that names the tab and last known URL, never claims the page state.
 
-- [ ] **Step 5: Wire recording into the cdp backend path** — every place the cdp backend learns "tab X has targetId Y" calls `record_identity`. The playwright/MCP drivers keep the marker heuristic for *discovery*, but once discovered the registry holds the mapping; `active_tab_id`'s remaining "last row" fallbacks are deleted where a registry answer exists.
+- [x] **Step 5: Wire recording into the cdp backend path** — every place the cdp backend learns "tab X has targetId Y" calls `record_identity`. The playwright/MCP drivers keep the marker heuristic for *discovery*, but once discovered the registry holds the mapping; `active_tab_id`'s remaining "last row" fallbacks are deleted where a registry answer exists.
 
-- [ ] **Step 6: Verify + commit**
+- [x] **Step 6: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib tab_registry 2>&1 | tail -5 && CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib --no-run 2>&1 | tail -3`
 Expected: PASS; full lib compiles (catches call-site breakage from Step 5).
@@ -129,9 +129,9 @@ git add -A && git commit -m "browser: tab identity registry — targetId-first r
 - Consumes: `LaunchRequest { profile, session_key, .. }`
 - Produces: `CdpBackend::new(registry, engine, req, ssrf_guard, command_timeout)` — **the separate `profile` argument is deleted**; `req.profile` becomes the single spelling, and `req.session_key` is derived at the one call site that builds `LaunchRequest`.
 
-- [ ] **Step 1: Read the full comment block** (`sed -n '80,115p' src/browser/cdp_backend/mod.rs`) and list every production caller. Decide per caller: does its `session_key` legitimately differ from `profile`? (Design says they are *deliberately separable* — one profile, many sessions — so the fix is **one construction site** that names both from one source, not forcing equality.)
+- [x] **Step 1: Read the full comment block** (`sed -n '80,115p' src/browser/cdp_backend/mod.rs`) and list every production caller. Decide per caller: does its `session_key` legitimately differ from `profile`? (Design says they are *deliberately separable* — one profile, many sessions — so the fix is **one construction site** that names both from one source, not forcing equality.)
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```rust
 #[test]
@@ -151,13 +151,13 @@ fn backend_profile_and_registry_key_are_one_spelling() {
 }
 ```
 
-- [ ] **Step 3: Verify fail** → red on current signature.
+- [x] **Step 3: Verify fail** → red on current signature.
 
-- [ ] **Step 4: Implement** — delete the `profile` parameter; `req.profile` is the authority. At the (single) production construction site, build `LaunchRequest` so `session_key` derives from the same principal-scoped profile key (`profile.rs:742` `principal_profile_key`). Update the comment: replace "Task 14 owns this" with a statement of what the code now does.
+- [x] **Step 4: Implement** — delete the `profile` parameter; `req.profile` is the authority. At the (single) production construction site, build `LaunchRequest` so `session_key` derives from the same principal-scoped profile key (`profile.rs:742` `principal_profile_key`). Update the comment: replace "Task 14 owns this" with a statement of what the code now does.
 
-- [ ] **Step 5: Evaluate, don't expand** — `manager.rs:1171` (session-level sweep) and `cdp_backend/cookies.rs:666` (Task 16 prober): read each; if the fix is >30 min, record it verbatim in the commit message and FL §3.12 as still-deferred. Do not expand scope.
+- [x] **Step 5: Evaluate, don't expand** — `manager.rs:1171` (session-level sweep) and `cdp_backend/cookies.rs:666` (Task 16 prober): read each; if the fix is >30 min, record it verbatim in the commit message and FL §3.12 as still-deferred. Do not expand scope.
 
-- [ ] **Step 6: Verify + commit**
+- [x] **Step 6: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib cdp_backend 2>&1 | tail -5 && CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib --no-run 2>&1 | tail -3`
 ```bash
@@ -188,9 +188,9 @@ git add -A && git commit -m "browser: one spelling of profile in CdpBackend::new
   ("effect_probe", |c| c.effect_probe),  // obscura: measured value, chromium: Supported
   ```
 
-- [ ] **Step 1: Read how click is currently dispatched** (`rg -n "Input.dispatchMouseEvent|Runtime.evaluate" src/browser/cdp_backend/actions.rs | head`). If dispatch is via `Input.dispatch*`, page events are *trusted*; if via JS `.click()`, they are not — the probe's trust claim must match the dispatch path actually used. Write which one it is in the commit message.
+- [x] **Step 1: Read how click is currently dispatched** (`rg -n "Input.dispatchMouseEvent|Runtime.evaluate" src/browser/cdp_backend/actions.rs | head`). If dispatch is via `Input.dispatch*`, page events are *trusted*; if via JS `.click()`, they are not — the probe's trust claim must match the dispatch path actually used. Write which one it is in the commit message.
 
-- [ ] **Step 2: Failing tests**
+- [x] **Step 2: Failing tests**
 
 ```rust
 #[test]
@@ -209,11 +209,11 @@ fn skipped_is_an_honest_label_not_a_success() {
 }
 ```
 
-- [ ] **Step 3: Implement** — add a dedicated `BrowserError::EffectNotDelivered { verb: &'static str, detail: String }` variant in `error.rs`（**deviation from spec §3, deliberate**: T5's `classify` is an exhaustive match over variants, so smuggling this through `ActionFailed(String)` + a message prefix would force string-matching inside classify — exactly the 判据 violation the enum exists to prevent; the category enum gains a 15th variant `EffectNotDelivered`, see T5）. Probe flow: before dispatch, `Runtime.evaluate` installing a one-shot capture listener on the resolved node that sets `window.__alephProbeHit = <event type>`; after dispatch, read it back; on absence → `EffectNotDelivered`. Read-back failure = `skipped`, not `failed`. Probe install/readback errors never turn a successful action into a failure (the probe *absence* is reported, the action stands). Define the tool-facing enum alongside: `pub enum EffectVerification { Verified, Skipped(Engine), Failed }`.
+- [x] **Step 3: Implement** — add a dedicated `BrowserError::EffectNotDelivered { verb: &'static str, detail: String }` variant in `error.rs`（**deviation from spec §3, deliberate**: T5's `classify` is an exhaustive match over variants, so smuggling this through `ActionFailed(String)` + a message prefix would force string-matching inside classify — exactly the 判据 violation the enum exists to prevent; the category enum gains a 15th variant `EffectNotDelivered`, see T5）. Probe flow: before dispatch, `Runtime.evaluate` installing a one-shot capture listener on the resolved node that sets `window.__alephProbeHit = <event type>`; after dispatch, read it back; on absence → `EffectNotDelivered`. Read-back failure = `skipped`, not `failed`. Probe install/readback errors never turn a successful action into a failure (the probe *absence* is reported, the action stands). Define the tool-facing enum alongside: `pub enum EffectVerification { Verified, Skipped(Engine), Failed }`.
 
-- [ ] **Step 4: Capability row** — add `effect_probe: Cap` to `EngineCapabilities` + `CAP_FIELDS`; measure obscura against the real binary before claiming Supported; the row's doc comment names the three verbs. Run the existing capability census tests — they enforce the row↔verb link.
+- [x] **Step 4: Capability row** — add `effect_probe: Cap` to `EngineCapabilities` + `CAP_FIELDS`; measure obscura against the real binary before claiming Supported; the row's doc comment names the three verbs. Run the existing capability census tests — they enforce the row↔verb link.
 
-- [ ] **Step 5: Verify + commit**
+- [x] **Step 5: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib cdp_backend 2>&1 | tail -5 && CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib capability 2>&1 | tail -3`
 ```bash
@@ -249,7 +249,7 @@ git add -A && git commit -m "browser: effect-arrival probes for click/type/fill 
   (`ExecCondition` also derives `Default` — the tests use `..Default::default()`.)
   Exactly-one-field validation, same error wording style as `browser_wait_for`'s five-way mutex.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```rust
 #[test]
@@ -279,15 +279,15 @@ fn ref_step_after_navigate_is_refused_before_dispatch() {
 fn condition_requires_exactly_one_field() { /* zero → graceful error; two → graceful error */ }
 ```
 
-- [ ] **Step 2: Verify fail** (compile error on missing variants = red).
+- [x] **Step 2: Verify fail** (compile error on missing variants = red).
 
-- [ ] **Step 3: Implement planning** — `plan_actions` recurses into `Repeat.actions` / `If.then` / `If.otherwise`; expanded step count = `max_iterations × len(actions)` for Repeat (worst case is the honest count — the budget must cover the worst legal execution), `max(len(then), len(else))` for If; total > 50 → same rejection shape as today. Nested `Repeat` inside `Repeat` is rejected ("one level of nesting", YAGNI). Every nested step maps to its existing ActionType — **zero new approval knobs**.
+- [x] **Step 3: Implement planning** — `plan_actions` recurses into `Repeat.actions` / `If.then` / `If.otherwise`; expanded step count = `max_iterations × len(actions)` for Repeat (worst case is the honest count — the budget must cover the worst legal execution), `max(len(then), len(else))` for If; total > 50 → same rejection shape as today. Nested `Repeat` inside `Repeat` is rejected ("one level of nesting", YAGNI). Every nested step maps to its existing ActionType — **zero new approval knobs**.
 
-- [ ] **Step 4: Implement execution** — the run loop evaluates `until` via the same wait_probe condition path (single evaluation, not a wait); `Repeat` iterates until condition-true or `max_iterations`; a condition *error* aborts the whole exec (first-failure-abort semantics unchanged). **Ref latch**: after any executed `Navigate` (or `Dialog` that navigated), set `refs_stale = true`; any later step carrying `ref_id` fails pre-dispatch with message ending "refs may be stale; take a fresh snapshot" — the batch-internal analogue of T6.
+- [x] **Step 4: Implement execution** — the run loop evaluates `until` via the same wait_probe condition path (single evaluation, not a wait); `Repeat` iterates until condition-true or `max_iterations`; a condition *error* aborts the whole exec (first-failure-abort semantics unchanged). **Ref latch**: after any executed `Navigate` (or `Dialog` that navigated), set `refs_stale = true`; any later step carrying `ref_id` fails pre-dispatch with message ending "refs may be stale; take a fresh snapshot" — the batch-internal analogue of T6.
 
-- [ ] **Step 5: Wall-clock** — unchanged 600s budget; iteration steps measure `elapsed` between steps exactly as today. No budget-table change needed (`browser_exec` already at 630s in `BUILTIN_TOOL_BUDGETS_MS` — verify with `rg -n "browser_exec" src/**/budget*.rs`).
+- [x] **Step 5: Wall-clock** — unchanged 600s budget; iteration steps measure `elapsed` between steps exactly as today. No budget-table change needed (`browser_exec` already at 630s in `BUILTIN_TOOL_BUDGETS_MS` — verify with `rg -n "browser_exec" src/**/budget*.rs`).
 
-- [ ] **Step 6: Verify + commit**
+- [x] **Step 6: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib browser_tools::exec 2>&1 | tail -8`
 ```bash
@@ -330,7 +330,7 @@ git add -A && git commit -m "browser: exec DSL gains repeat/if steps and an in-b
   ```
   Wire shape (additive): `"recovery": {"category": "stale_ref", "next_actions": [{"tool": "browser_snapshot", ...}]}`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```rust
 #[test]
@@ -354,13 +354,13 @@ fn unknown_is_not_a_dumping_ground() {
 }
 ```
 
-- [ ] **Step 2: Verify fail.**
+- [x] **Step 2: Verify fail.**
 
-- [ ] **Step 3: Implement `classify`** — exhaustive `match` (no wildcard arm; a new `BrowserError` variant must fail compilation here — that IS the exhaustiveness guard).
+- [x] **Step 3: Implement `classify`** — exhaustive `match` (no wildcard arm; a new `BrowserError` variant must fail compilation here — that IS the exhaustiveness guard).
 
-- [ ] **Step 4: Implement the next-action registry** — a `const` table, one entry per category that has a sane recovery. `StaleRef → browser_snapshot`; `TabGone → browser_tabs{action:"list"}`; `EngineBusy → browser_session{action:"capabilities"}`; `UnsupportedByEngine → browser_session{action:"switch_engine"}`; `WaitTimeout → browser_snapshot`; `EffectNotDelivered → browser_snapshot`（最常见成因是目标元素已移动/变化，重拍快照优先于盲目重试）。Entries carry static `params_hint` templates only (no session state).
+- [x] **Step 4: Implement the next-action registry** — a `const` table, one entry per category that has a sane recovery. `StaleRef → browser_snapshot`; `TabGone → browser_tabs{action:"list"}`; `EngineBusy → browser_session{action:"capabilities"}`; `UnsupportedByEngine → browser_session{action:"switch_engine"}`; `WaitTimeout → browser_snapshot`; `EffectNotDelivered → browser_snapshot`（最常见成因是目标元素已移动/变化，重拍快照优先于盲目重试）。Entries carry static `params_hint` templates only (no session state).
 
-- [ ] **Step 5: The census (判据: no ghost tools)**
+- [x] **Step 5: The census (判据: no ghost tools)**
 
 ```rust
 // mod.rs tests
@@ -377,9 +377,9 @@ fn recovery_registry_entries_name_real_tools() {
 ```
 Falsify it: temporarily point one entry at `browser_nonexistent` → must go red.
 
-- [ ] **Step 6: Wire at the chokepoint** — in `mod.rs`, wherever a tool currently formats `backend_error_text` into its `{success:false, message}` output, add the `recovery` key via one helper `recovery::attach(output_json, err)`. 26 tools: wire by editing the chokepoints they already share, NOT 26 hand edits — if a tool bypasses the chokepoint, that bypass is a finding to fix, not a place to hand-wire.
+- [x] **Step 6: Wire at the chokepoint** — in `mod.rs`, wherever a tool currently formats `backend_error_text` into its `{success:false, message}` output, add the `recovery` key via one helper `recovery::attach(output_json, err)`. 26 tools: wire by editing the chokepoints they already share, NOT 26 hand edits — if a tool bypasses the chokepoint, that bypass is a finding to fix, not a place to hand-wire.
 
-- [ ] **Step 7: Verify + commit**
+- [x] **Step 7: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib browser_tools 2>&1 | tail -8`
 ```bash
@@ -400,7 +400,7 @@ git add -A && git commit -m "browser: structured recovery contract (category + n
 - Consumes: `RefTable::resolve(&RefId) -> Result<RefEntry, StaleReason>` (refs.rs:183), `TabRegistry::last_url` (T1), `recovery::Recovery` (T5)
 - Produces: `pub(crate) async fn precheck_ref(backend, tab_id, ref_id) -> Result<(), BrowserError>` — returns the existing `BrowserError::StaleRef` early, before any side effect.
 
-- [ ] **Step 1: Failing tests (FakeBackend)**
+- [x] **Step 1: Failing tests (FakeBackend)**
 
 ```rust
 #[test]
@@ -422,13 +422,13 @@ fn url_drift_since_snapshot_is_named() {
 }
 ```
 
-- [ ] **Step 2: Verify fail.**
+- [x] **Step 2: Verify fail.**
 
-- [ ] **Step 3: Implement** — precheck runs only when the resolved backend is the cdp one (it owns the RefTable); other backends skip (capability row `ref_precheck` says so — honest asymmetry, not a silent gap). Placement: after `make_backend_and_tab_guarded`, before the action dispatch, in each of the five tools.
+- [x] **Step 3: Implement** — precheck runs only when the resolved backend is the cdp one (it owns the RefTable); other backends skip (capability row `ref_precheck` says so — honest asymmetry, not a silent gap). Placement: after `make_backend_and_tab_guarded`, before the action dispatch, in each of the five tools.
 
-- [ ] **Step 4: Capability row + census** — `ref_precheck: Cap` on `EngineCapabilities`; doc comment names browser_click/browser_type/browser_fill_form/browser_select/browser_hover.
+- [x] **Step 4: Capability row + census** — `ref_precheck: Cap` on `EngineCapabilities`; doc comment names browser_click/browser_type/browser_fill_form/browser_select/browser_hover.
 
-- [ ] **Step 5: Verify + commit**
+- [x] **Step 5: Verify + commit**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p alephcore --lib browser_tools 2>&1 | tail -8`
 ```bash
@@ -493,11 +493,11 @@ git add -A && git commit -m "browser: truncated snapshots name their omitted hig
 - Modify: `qa/README.md` (attach-stage extension note; caps rows `ref_precheck`/`effect_probe`)
 - Modify: `docs/superpowers/plans/2026-09-24-browser-native-tools-r1.md` (check the boxes)
 
-- [ ] **Step 1: FL §3.12 entry** — round summary: gap-analysis conclusion, what landed (B1–B5 + exec DSL + Task-14 debt), 刻意不做 list (JS sandbox, pi tool surfaces, for_each_ref, Electron, source-lookup, cross-restart tab identity), the two new capability rows. 触发器进附录 E only for genuinely new shapes.
+- [x] **Step 1: FL §3.12 entry** — round summary: gap-analysis conclusion, what landed (B1–B5 + exec DSL + Task-14 debt), 刻意不做 list (JS sandbox, pi tool surfaces, for_each_ref, Electron, source-lookup, cross-restart tab identity), the two new capability rows. 触发器进附录 E only for genuinely new shapes.
 
-- [ ] **Step 2: qa/README.md** — `browser_managed attach` now also asserts post-re-attach tab identity; `browser_dual caps` probes the two new rows. Do not copy stage counts into CLAUDE.md (that drifted once already).
+- [x] **Step 2: qa/README.md** — `browser_managed attach` now also asserts post-re-attach tab identity; `browser_dual caps` probes the two new rows. Do not copy stage counts into CLAUDE.md (that drifted once already).
 
-- [ ] **Step 3: Full verification set (seven commands, in order; MemAvailable check before each cargo run)**
+- [x] **Step 3: Full verification set (seven commands, in order; MemAvailable check before each cargo run)**
 
 ```
 cargo test -p alephcore --lib --no-run
@@ -509,7 +509,7 @@ just _stage-shell-placeholders && cargo clippy --workspace --all-targets
 CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=1 cargo test -p alephcore --lib
 ```
 
-- [ ] **Step 4: Commit + report**
+- [x] **Step 4: Commit + report**
 
 ```bash
 git add -A && git commit -m "docs: browser round-1 locator entry, qa stage notes, plan ledger"
