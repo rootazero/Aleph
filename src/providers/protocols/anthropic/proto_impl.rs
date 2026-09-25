@@ -532,11 +532,20 @@ impl AnthropicProtocol {
         Self::claude_version(model).is_some_and(|v| v >= (4, 7))
     }
 
-    /// True for generation-5 models (`claude-fable-5`, …) where an explicit
-    /// `thinking: {type: "disabled"}` block returns a 400. Thinking is always
-    /// on there — there is no off switch — so a requested `Off` **omits** the
-    /// `thinking` field and the API runs its default adaptive thinking.
-    /// 4.6–4.8 still accept (and need) the explicit disabled block to
+    /// True for generation-5 models (`claude-*-5*`): a requested `Off` **omits**
+    /// the `thinking` field instead of sending `{type: "disabled"}`. On every
+    /// one of them omission runs the default adaptive thinking; whether an
+    /// explicit disabled block would have turned it off is per model:
+    ///
+    /// - Fable 5 / 5.1, Mythos 5 / 5.1, Opus 5.5 — no off switch (`disabled`
+    ///   is a 400), so omission is the only valid request.
+    /// - Opus 5 — `disabled` is accepted at effort `high` or lower (400 at
+    ///   `xhigh` / `max`).
+    /// - Sonnet 5 — `disabled` is accepted.
+    ///
+    /// So on Opus 5 and Sonnet 5 a requested `Off` still thinks (known gap,
+    /// kept: the vendor's guidance there is a lower effort rather than
+    /// disabling). 4.6–4.8 accept (and need) the explicit disabled block to
     /// suppress their default thinking, so this gates only 5.x+.
     pub(super) fn omits_disabled_thinking(model: &str) -> bool {
         Self::claude_version(model).is_some_and(|v| v >= (5, 0))

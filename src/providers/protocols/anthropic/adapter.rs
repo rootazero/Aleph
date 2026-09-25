@@ -328,10 +328,9 @@ impl ProtocolAdapter for AnthropicProtocol {
                 // enabled — the caller's "off" would be silently ignored. Emit
                 // `{type:"disabled"}` to actually turn it off (pi parity:
                 // `thinkingEnabled === false → thinking:{type:"disabled"}`).
-                // Generation-5 models (fable-5) have no off switch: thinking
-                // is always on and an explicit disabled block is a 400, so
-                // `Off` sends no `thinking` field (the API's default adaptive
-                // thinking). Older/non-adaptive models
+                // Generation-5 models get no `thinking` field at all — what
+                // that does per model (on some it still thinks) is stated on
+                // `omits_disabled_thinking`. Older/non-adaptive models
                 // default to no-thinking, so the generic arms below disable
                 // them by omission as before.
                 Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => {
