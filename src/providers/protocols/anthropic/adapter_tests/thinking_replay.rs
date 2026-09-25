@@ -2,7 +2,8 @@
 //!
 //! - `tool_use.input.reasoning_content` copies — only for Anthropic-protocol
 //!   hosts whose rule was never verified (Kimi/Moonshot, MiniMax, unknown
-//!   proxies). Genuine-Claude hosts (1P / Bedrock / Vertex) never get them.
+//!   proxies). Genuine-Claude hosts (1P / Bedrock / Vertex / Foundry) never
+//!   get them.
 //! - `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` + the
 //!   `thinking-binding-controls-2026-08-01` beta — only for prefix-bound
 //!   models (catalog fact) on the 1P host (policy fact).
@@ -22,6 +23,7 @@ const BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 const BEDROCK: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 const VERTEX: &str = "https://us-east5-aiplatform.googleapis.com/v1";
+const FOUNDRY: &str = "https://my-resource.services.ai.azure.com/anthropic";
 const MOONSHOT: &str = "https://api.moonshot.cn/anthropic";
 const MINIMAX: &str = "https://api.minimax.io/anthropic";
 
@@ -101,7 +103,7 @@ fn thinking_of(
 fn genuine_claude_hosts_send_tool_inputs_exactly_as_the_model_wrote_them() {
     let msgs = signed_tool_round();
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
-    for base_url in [None, Some(BEDROCK), Some(VERTEX)] {
+    for base_url in [None, Some(BEDROCK), Some(VERTEX), Some(FOUNDRY)] {
         let body = build_body(&payload, &config_for("claude-opus-4-7", base_url));
         let inputs = tool_use_inputs(&body);
         assert_eq!(
@@ -180,6 +182,7 @@ fn binding_is_absent_off_first_party_and_on_unbound_models() {
     for (model, base_url) in [
         ("claude-opus-5-5", Some(BEDROCK)),
         ("claude-opus-5-5", Some(VERTEX)),
+        ("claude-opus-5-5", Some(FOUNDRY)),
         ("claude-opus-4-8", None),
         ("claude-opus-5", None),
         ("claude-fable-5", None),
@@ -210,7 +213,13 @@ fn block_binding_field_never_reaches_the_wire_without_its_beta() {
         "claude-opus-4-8",
         "claude-sonnet-4-6",
     ] {
-        for base_url in [None, Some(BEDROCK), Some(VERTEX), Some(MOONSHOT)] {
+        for base_url in [
+            None,
+            Some(BEDROCK),
+            Some(VERTEX),
+            Some(FOUNDRY),
+            Some(MOONSHOT),
+        ] {
             for level in [None, Some(ThinkLevel::Off), Some(ThinkLevel::High)] {
                 let has_field = thinking_of(model, base_url, level)
                     .get("block_binding")

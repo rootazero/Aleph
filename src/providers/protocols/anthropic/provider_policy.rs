@@ -213,7 +213,7 @@ pub struct AnthropicCapabilities {
     /// missing in assistant tool call message") is not an Anthropic error —
     /// the Messages API has no `reasoning_content` — and reads like the
     /// Moonshot/Kimi-compatible endpoints (source never verified). Hosts
-    /// serving genuine Claude (1P, Bedrock, Vertex) never need it: there it
+    /// serving genuine Claude (1P, Bedrock, Vertex, Foundry) never need it: there it
     /// re-sends the thinking once per tool call and rewrites the model's own
     /// tool arguments. Hosts whose rule was never verified keep it ON: an
     /// uncertain vendor stays on today's behaviour rather than being stripped.
@@ -309,9 +309,13 @@ pub fn resolve_anthropic_capabilities(
             // Claude models with Anthropic prompt caching — enable
             // cache_control so those deployments stop paying full input price
             // every turn (the conservative Custom default assumed rejection).
+            // Genuine Claude on Anthropic's own API shape, so no
+            // reasoning_content copy either; the thinking-binding controls
+            // are not offered on Foundry, so that bit stays off.
             if is_azure_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
                 caps.supports_cache_control = true;
+                caps.requires_reasoning_content_in_tool_input = false;
             }
 
             // AWS Bedrock: needs context-1m for 1M context. The Anthropic
@@ -732,6 +736,8 @@ mod tests {
             Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
             Some("https://us-east5-aiplatform.googleapis.com/v1"),
             Some("https://aiplatform.googleapis.com/v1"),
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+            Some("https://my-resource.services.ai.azure.com/anthropic"),
         ] {
             let caps = build_anthropic_policy(base_url).capabilities;
             assert!(
@@ -751,7 +757,6 @@ mod tests {
             "https://api.kimi.com/coding/v1",
             "https://api.minimax.io/anthropic",
             "https://api.minimaxi.com/anthropic",
-            "https://my-foundry.cognitiveservices.azure.com/anthropic",
             "https://llm-proxy.corp.example/v1",
         ] {
             let caps = build_anthropic_policy(Some(base_url)).capabilities;
@@ -781,6 +786,7 @@ mod tests {
             "https://bedrock-runtime.us-east-1.amazonaws.com",
             "https://us-east5-aiplatform.googleapis.com/v1",
             "https://my-foundry.cognitiveservices.azure.com/anthropic",
+            "https://my-resource.services.ai.azure.com/anthropic",
             "https://api.moonshot.cn/anthropic",
             "https://api.kimi.com/coding/v1",
             "https://api.minimax.io/anthropic",
