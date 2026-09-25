@@ -82,6 +82,7 @@ pub mod openai;
 pub mod presets;
 pub mod probe;
 pub mod protocols;
+pub mod reasoning_replay;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod recording_mock;
 pub mod registry;
@@ -310,6 +311,20 @@ pub trait AiProvider: Send + Sync {
     /// `HttpProvider` reports its configured key. Default `None` = "unknown".
     fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
         None
+    }
+
+    /// The reasoning this provider's next call would carry — for estimators
+    /// that must count what the wire sends (`HttpProvider::execute` applies the
+    /// same policy to the real call). `model` is a per-call override (the
+    /// payload's `model`); `None` = the provider's own serving model.
+    ///
+    /// The default resolves from [`AiProvider::protocol`] and the model hint,
+    /// with no host facts. `HttpProvider` resolves fully; wrappers delegate to
+    /// their live primary, like [`AiProvider::serving_model_hint`].
+    fn reasoning_replay(&self, model: Option<&str>) -> reasoning_replay::ReasoningReplay {
+        let hint = self.serving_model_hint();
+        let model = model.or(hint.as_deref()).unwrap_or("");
+        reasoning_replay::ReasoningReplay::for_target(&self.protocol(), None, model)
     }
 
     /// Downcast to `HttpProvider` for streaming access.

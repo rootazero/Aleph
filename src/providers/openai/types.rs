@@ -33,6 +33,11 @@ pub struct Message {
     /// Required so that subsequent tool result messages can reference them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAiToolCallOut>>,
+    /// Replayed reasoning on an assistant message, for hosts whose
+    /// `ReasoningReplay` asks for it (`DeepSeek`, Moonshot). Absent everywhere
+    /// else — its presence is decided by the projection, not here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(flatten)]
     pub content: MessageContent,
 }
@@ -61,6 +66,7 @@ impl Message {
             role: role.to_string(),
             tool_call_id: None,
             tool_calls: None,
+            reasoning_content: None,
             content: MessageContent::Text { content },
         }
     }
@@ -79,6 +85,7 @@ impl Message {
             } else {
                 Some(tool_calls)
             },
+            reasoning_content: None,
             content: MessageContent::Text {
                 content: text.unwrap_or_default(),
             },
@@ -92,6 +99,7 @@ impl Message {
             role: "tool".to_string(),
             tool_call_id: Some(tool_call_id),
             tool_calls: None,
+            reasoning_content: None,
             content: MessageContent::Text { content },
         }
     }

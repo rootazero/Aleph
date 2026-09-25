@@ -684,7 +684,16 @@ const BUDGETED: [&str; 12] = [
 ///     answered per the next failure message; nothing was deleted to
 ///     absorb the growth. Raise again only when a new reasoning concern
 ///     has no existing file to live in.
-const CEILING: usize = 5250;
+/// −4 (5250 → 5246, 2026-09-25, context-slim A2): `prompt.rs` stops
+///     deciding which reasoning is replayed (−5) — it emits every persisted
+///     thinking block as facts (signature, `earlier_turn`) and the per-target
+///     policy moved to `providers::reasoning_replay`, applied at the wire and
+///     by the estimators. `agent.rs` (+1) shares one `latest_turn_id` between
+///     `current_turn_id` and the prompt builder instead of a second scan.
+/// −3 (5246 → 5243, 2026-09-25, context-slim A5): `act.rs`'s own
+///     "string or structure" unwrap of a tool result becomes the one shared
+///     `providers::message::value_as_model_text`.
+const CEILING: usize = 5243;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

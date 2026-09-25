@@ -79,10 +79,12 @@ impl SessionSummarySource {
             return None;
         }
 
-        // Estimate the token cost of the window being replaced.
+        // Estimate the token cost of the window being replaced — on the
+        // transcript view the compactor sizes the same window with, so reasoning
+        // no target is sent does not inflate the reuse budget.
         let window_text: String = messages[window_start..cut_end]
             .iter()
-            .map(|m| m.text_content())
+            .map(UnifiedMessage::transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let tokens_before = estimate_tokens(&window_text);
@@ -239,5 +241,44 @@ mod tests {
             tokens >= 30,
             "CJK text must be charged at the dense ratio, got {tokens}"
         );
+    }
+
+    /// The replaced window is priced on its transcript view: a reasoning block
+    /// in it — the message list carries every persisted one as facts — must
+    /// not inflate `tokens_before` (and so the reuse budget).
+    #[tokio::test]
+    async fn try_reuse_prices_the_window_without_reasoning() {
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::providers::message::ContentBlock;
+        use crate::sync_primitives::Arc;
+
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new("summary".to_string(), RawMemorySource::SessionCompressed)
+            .with_agent("agent-x")
+            .with_session("sess-1")
+            .with_path("aleph://session/sess-1/d0/0");
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        let source = SessionSummarySource::new(backend, "sess-1", "agent-x");
+        let mut messages = vec![
+            UnifiedMessage::user("old one"),
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "r".repeat(4_000),
+                        signature: Some("sig".into()),
+                        earlier_turn: true,
+                    },
+                    ContentBlock::Text {
+                        text: "old two".into(),
+                        cache_control: None,
+                    },
+                ],
+            },
+            UnifiedMessage::user("fresh tail"),
+        ];
+        let result = source.try_reuse(&mut messages, 0, 2).await.expect("reuses");
+        assert_eq!(result.tokens_before, estimate_tokens("old one\nold two"));
     }
 }

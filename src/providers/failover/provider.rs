@@ -2016,6 +2016,15 @@ impl AiProvider for FailoverProvider {
             .serving_provider_hint()
             .map(|c| Cow::Owned(c.into_owned()))
     }
+
+    /// Estimators take the live primary's policy; a failover to another target
+    /// is re-projected for that target at its own wire.
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.primary.current().reasoning_replay(model)
+    }
 }
 
 #[cfg(test)]

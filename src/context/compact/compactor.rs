@@ -893,7 +893,7 @@ impl ContextCompactor {
         let replaced = c.end - c.start;
         let window_text: String = messages[c.start..cut_end]
             .iter()
-            .map(|m| m.text_content())
+            .map(UnifiedMessage::transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let tokens_before = estimate_tokens(&window_text);
@@ -931,7 +931,7 @@ impl ContextCompactor {
         let gap_msgs = cut_end_m - gap_start;
         let gap_text: String = messages[gap_start..cut_end_m]
             .iter()
-            .map(|m| m.text_content())
+            .map(UnifiedMessage::transcript_text)
             .collect::<Vec<_>>()
             .join("\n");
         let gap_tokens = estimate_tokens(&gap_text);
@@ -1274,7 +1274,7 @@ fn select_window_end(
     let mut acc = 0usize;
     let mut end = start;
     while end < hard_end && end < msg_ceiling {
-        let text = messages[end].text_content();
+        let text = messages[end].transcript_text();
         let capped = cap_transcript_text(&text);
         acc = acc.saturating_add(estimate_tokens(capped.as_ref()));
         end += 1;
@@ -1301,7 +1301,7 @@ fn hash_window(messages: &[UnifiedMessage]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for m in messages {
         std::mem::discriminant(m).hash(&mut h);
-        m.text_content().hash(&mut h);
+        m.transcript_text().hash(&mut h);
     }
     h.finish()
 }
@@ -1336,7 +1336,7 @@ fn strip_context_summary_prefix(text: &str) -> Option<&str> {
 pub(crate) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
-        let text = msg.text_content();
+        let text = msg.transcript_text();
         let capped = cap_transcript_text(&text);
         let role = match msg {
             UnifiedMessage::User { .. } => "user",
@@ -1430,11 +1430,10 @@ fn accept_summary(
 pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
     /// First line, then capped — because the first line is not a bound.
     ///
-    /// "Keep one line" reduces nothing on the content type that dominates a
-    /// long agent context: [`UnifiedMessage::text_content`] renders a
+    /// "Keep one line" reduces nothing on a structured tool result:
+    /// [`UnifiedMessage::transcript_text`] renders an object
     /// `ContentBlock::Json` through serde_json's compact formatter, which
-    /// emits no newlines at all (interior ones are escaped), and every
-    /// `ToolResult` `build_prompt` constructs is exactly one such block. So
+    /// emits no newlines at all (interior ones are escaped). So
     /// `lines().next()` returned an 8 KB payload verbatim and uncapped, while
     /// deleting the assistant prose around it.
     ///
@@ -1477,12 +1476,12 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::User { .. } => "user",
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
-                let text = msg.text_content();
+                let text = msg.transcript_text();
                 lines.push(format!("tool_result({tool_name}): {}", head(&text)));
                 continue;
             }
         };
-        let text = msg.text_content();
+        let text = msg.transcript_text();
         lines.push(format!("{role}: {}", head(&text)));
     }
     lines.join("\n")
@@ -3346,5 +3345,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The summarizer transcript — shared by in-loop compaction, session split
+    /// and `/compact` — leaves reasoning out and reads a string tool result as
+    /// its text (real newlines, no added quotes).
+    #[test]
+    fn the_summarizer_transcript_has_no_reasoning_and_unencoded_tool_text() {
+        let msgs = vec![
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "secret plan".into(),
+                        signature: Some("sig".into()),
+                        earlier_turn: false,
+                    },
+                    ContentBlock::Text {
+                        text: "answer".into(),
+                        cache_control: None,
+                    },
+                ],
+            },
+            UnifiedMessage::tool_result_json("c", "read", serde_json::json!("line1\nline2"), false),
+        ];
+        let transcript = serialize_transcript(&msgs);
+        assert!(!transcript.contains("secret plan"), "{transcript}");
+        assert!(transcript.contains("line1\nline2"), "{transcript}");
     }
 }

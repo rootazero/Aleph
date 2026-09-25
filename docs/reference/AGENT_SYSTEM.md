@@ -233,30 +233,7 @@ The Thinker is responsible for LLM interactions and decision making.
 
 ### Thinking Levels
 
-```rust
-pub enum ThinkingLevel {
-    Off,        // No extended thinking
-    Minimal,    // budget_tokens: 1024
-    Low,        // budget_tokens: 2048
-    Medium,     // budget_tokens: 4096 (default)
-    High,       // budget_tokens: 8192
-    XHigh,      // budget_tokens: 16384
-}
-```
-
-### Provider Fallback
-
-When a provider doesn't support extended thinking, Aleph falls back gracefully:
-
-```
-User requests: thinking = High
-    │
-    ├─▶ Claude Opus → ✓ Native extended thinking
-    │
-    ├─▶ GPT-4o → ✗ No support → Fallback to o1
-    │
-    └─▶ Gemini → ✗ No support → Use thinkingPreface prompt
-```
+The reasoning-depth knob is `ThinkLevel` (`src/agents/thinking.rs`, `off`…`xhigh`, declared by the user or by the model via `self_config`, never inferred); each protocol adapter owns its own wire mapping and clamp (the module header lists them), and there is no cross-model or prompt-preface fallback.
 
 ### Streaming Architecture
 
@@ -536,74 +513,9 @@ daemon's boot agent) — the same files `self_config` writes.
 
 ---
 
-## Chain-of-Thought Transparency
+## Reasoning Content
 
-**Location**: `src/thinker/thinking.rs`
-
-CoT Transparency parses LLM reasoning into structured, understandable steps.
-
-### StructuredThinking
-
-```rust
-pub struct StructuredThinking {
-    pub reasoning: String,          // Original raw reasoning
-    pub steps: Vec<ReasoningStep>,  // Parsed semantic steps
-    pub confidence: ConfidenceLevel,// Overall confidence
-    pub alternatives: Vec<String>,  // Considered alternatives
-    pub uncertainties: Vec<String>, // Expressed uncertainties
-}
-
-pub struct ReasoningStep {
-    pub content: String,
-    pub step_type: ReasoningStepType,
-    pub confidence: Option<ConfidenceLevel>,
-}
-```
-
-### Reasoning Step Types
-
-| Type | Description | Indicator |
-|------|-------------|-----------|
-| `Observation` | Observing current state | "Looking at", "I see", "Based on" |
-| `Analysis` | Analyzing options | "Considering", "Comparing", "Trade-off" |
-| `Planning` | Planning approach | "I'll start by", "First...then" |
-| `Decision` | Stating conclusion | "Therefore", "I will", "So I've decided" |
-| `Reflection` | Self-review | "Wait", "Let me reconsider" |
-| `RiskAssessment` | Identifying risks | "Risk", "Might fail", "Careful" |
-
-### Confidence Levels
-
-| Level | Indicators |
-|-------|------------|
-| `High` | "Confident", "Clearly", "Definitely" |
-| `Medium` | "I think", "Should work", "Likely" |
-| `Low` | "Not sure", "Might", "Possibly" |
-| `Exploratory` | "Let's try", "Experiment", "Worth testing" |
-
-### ThinkingParser
-
-The `ThinkingParser` automatically extracts structured thinking from LLM reasoning:
-
-```rust
-// Automatically called by DecisionParser
-let thinking = parser.parse(response)?;
-
-// Access structured reasoning
-if let Some(structured) = &thinking.structured {
-    for step in &structured.steps {
-        println!("{:?}: {}", step.step_type, step.content);
-    }
-}
-```
-
-### Stream Events
-
-For real-time CoT visibility, the Gateway emits:
-
-| Event | Description |
-|-------|-------------|
-| `ReasoningBlock` | Individual reasoning step |
-| `UncertaintySignal` | Detected uncertainty with suggested action |
+Aleph does not parse reasoning into structured steps (there is no `src/thinker/thinking.rs`): provider reasoning is kept as opaque text plus its signature on the assistant turn (`ProviderDelta::ThinkingDelta` → `SessionEvent::AssistantMessage`), replayed through `src/harness/agent/prompt.rs::reconstruct_assistant_blocks` and serialized per protocol under `src/providers/protocols/`; the `ReasoningBlock` / `UncertaintySignal` stream events in `shared/protocol/src/events.rs` have consumers but no production producer.
 
 ---
 

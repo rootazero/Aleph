@@ -1412,9 +1412,10 @@ fn build_context_triple(
     let Some(cfg) = cfg else {
         return (None, None, None);
     };
-    let budget = Arc::new(tokio::sync::Mutex::new(
-        crate::context::budget::ContextBudget::new(cfg),
-    ));
+    let mut budget = crate::context::budget::ContextBudget::new(cfg);
+    // Count reasoning as the child's provider will send it.
+    budget.set_reasoning_replay(llm.reasoning_replay(None));
+    let budget = Arc::new(tokio::sync::Mutex::new(budget));
     let compactor = Arc::new(
         ContextCompactor::new(
             llm.clone(),

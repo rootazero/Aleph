@@ -150,7 +150,9 @@ fn text_of(blocks: &[ContentBlock]) -> String {
                     parts.push(text.clone());
                 }
             }
-            ContentBlock::Json { value } => parts.push(value.to_string()),
+            ContentBlock::Json { .. } => {
+                parts.extend(block.as_model_text().map(|t| t.into_owned()))
+            }
             // Advisors can't see pixels, but they must know an image exists —
             // hermes drops multimodal content silently (its #51 gap); the
             // placeholder keeps them from being blindsided by "the screenshot
@@ -808,5 +810,20 @@ mod tests {
             view_budget_chars(&short, 64_000, None),
             view_budget_chars(&grown, 64_000, None)
         );
+    }
+
+    /// Advisors read the tool's output as text: a string result folded into the
+    /// view keeps its real newlines instead of a quoted, escaped copy.
+    #[test]
+    fn a_string_tool_result_is_folded_as_text_not_json() {
+        let msgs = vec![
+            UnifiedMessage::user("fix"),
+            assistant_with_tool_call(),
+            UnifiedMessage::tool_result_json("c1", "bash", json!("file1\nfile2"), false),
+        ];
+        let texts = view_texts(&build_advisory_view(&msgs));
+        let assistant = &texts[1].1;
+        assert!(assistant.contains("file1\nfile2"), "{assistant}");
+        assert!(!assistant.contains("\"file1"), "re-encoded: {assistant}");
     }
 }

@@ -66,6 +66,12 @@ fn is_bedrock_anthropic_endpoint(host: &str) -> bool {
     host.starts_with("bedrock-runtime.") && host.ends_with(".amazonaws.com")
 }
 
+/// Google Vertex AI endpoints (`{region}-aiplatform.googleapis.com`, or the
+/// global `aiplatform.googleapis.com`) serving Claude as a partner model.
+fn is_vertex_anthropic_endpoint(host: &str) -> bool {
+    host == "aiplatform.googleapis.com" || host.ends_with("-aiplatform.googleapis.com")
+}
+
 /// User-Agent the Kimi Coding endpoint expects on non-OAuth requests.
 /// Matches the openclaw Kimi Coding extension header.
 pub(crate) const KIMI_CODING_USER_AGENT: &str = "claude-code/0.1.0";
@@ -200,6 +206,24 @@ pub struct AnthropicCapabilities {
     /// beta 400 on harmless short calls. Auto-enabled for Azure/Bedrock,
     /// which need it to unlock 1M context on Claude 4.x.
     pub supports_context_1m: bool,
+    /// Copy the preceding signed thinking text into every following
+    /// `tool_use.input.reasoning_content` of the same assistant turn.
+    ///
+    /// The error this answers ("thinking is enabled but reasoning_content is
+    /// missing in assistant tool call message") is not an Anthropic error —
+    /// the Messages API has no `reasoning_content` — and reads like the
+    /// Moonshot/Kimi-compatible endpoints (source never verified). Hosts
+    /// serving genuine Claude (1P, Bedrock, Vertex, Foundry) never need it: there it
+    /// re-sends the thinking once per tool call and rewrites the model's own
+    /// tool arguments. Hosts whose rule was never verified keep it ON: an
+    /// uncertain vendor stays on today's behaviour rather than being stripped.
+    pub requires_reasoning_content_in_tool_input: bool,
+    /// `thinking.block_binding` + `anthropic-beta:
+    /// thinking-binding-controls-2026-08-01`. Claude API only: the controls
+    /// arrive per model on Bedrock/Vertex (header rejected until then) and are
+    /// not offered on Foundry or third-party proxies. Which *models* bind is a
+    /// catalog fact (`model_catalog::binds_thinking_to_prefix`), not this bit.
+    pub supports_thinking_block_binding: bool,
 }
 
 // =============================================================================
@@ -230,6 +254,8 @@ pub fn resolve_anthropic_capabilities(
             // Default OFF — native Anthropic 400s without long-context subscription.
             // Wire on per-account via a future config flag if needed.
             supports_context_1m: false,
+            requires_reasoning_content_in_tool_input: false,
+            supports_thinking_block_binding: true,
         },
         AnthropicEndpointClass::Custom => {
             // Decode host + path once for per-family overlays.
@@ -258,6 +284,10 @@ pub fn resolve_anthropic_capabilities(
                 supports_fine_grained_tool_streaming: true,
                 supports_interleaved_thinking: true,
                 supports_context_1m: false,
+                // Unverified proxies keep the copy; genuine-Claude families
+                // turn it off below.
+                requires_reasoning_content_in_tool_input: true,
+                supports_thinking_block_binding: false,
             };
 
             // MiniMax: drop fine-grained-tool-streaming + context-1m (see hermes
@@ -279,9 +309,13 @@ pub fn resolve_anthropic_capabilities(
             // Claude models with Anthropic prompt caching — enable
             // cache_control so those deployments stop paying full input price
             // every turn (the conservative Custom default assumed rejection).
+            // Genuine Claude on Anthropic's own API shape, so no
+            // reasoning_content copy either; the thinking-binding controls
+            // are not offered on Foundry, so that bit stays off.
             if is_azure_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
                 caps.supports_cache_control = true;
+                caps.requires_reasoning_content_in_tool_input = false;
             }
 
             // AWS Bedrock: needs context-1m for 1M context. The Anthropic
@@ -291,6 +325,13 @@ pub fn resolve_anthropic_capabilities(
             if is_bedrock_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
                 caps.supports_cache_control = true;
+                caps.requires_reasoning_content_in_tool_input = false;
+            }
+
+            // Google Vertex AI: genuine Claude, so no reasoning_content copy.
+            // Everything else stays on the conservative Custom defaults.
+            if is_vertex_anthropic_endpoint(&host) {
+                caps.requires_reasoning_content_in_tool_input = false;
             }
 
             caps
@@ -681,6 +722,83 @@ mod tests {
             caps.supports_context_1m,
             "Bedrock needs context-1m for 1M context"
         );
+    }
+
+    /// The `tool_use.input.reasoning_content` copy exists for Moonshot/Kimi-style
+    /// proxies. Hosts that serve genuine Claude never asked for it: there it
+    /// re-sends the thinking text once per tool call and rewrites the model's
+    /// own tool arguments.
+    #[test]
+    fn genuine_claude_hosts_never_require_reasoning_in_tool_input() {
+        for base_url in [
+            None,
+            Some("https://api.anthropic.com"),
+            Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
+            Some("https://us-east5-aiplatform.googleapis.com/v1"),
+            Some("https://aiplatform.googleapis.com/v1"),
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+            Some("https://my-resource.services.ai.azure.com/anthropic"),
+        ] {
+            let caps = build_anthropic_policy(base_url).capabilities;
+            assert!(
+                !caps.requires_reasoning_content_in_tool_input,
+                "{base_url:?} serves genuine Claude and must not get reasoning_content copies"
+            );
+        }
+    }
+
+    /// Hosts whose rule was never verified keep today's behaviour (U1: an
+    /// uncertain vendor stays on the status quo, never "strip").
+    #[test]
+    fn unverified_anthropic_protocol_hosts_keep_reasoning_in_tool_input() {
+        for base_url in [
+            "https://api.moonshot.cn/anthropic",
+            "https://api.moonshot.ai/anthropic",
+            "https://api.kimi.com/coding/v1",
+            "https://api.minimax.io/anthropic",
+            "https://api.minimaxi.com/anthropic",
+            "https://llm-proxy.corp.example/v1",
+        ] {
+            let caps = build_anthropic_policy(Some(base_url)).capabilities;
+            assert!(
+                caps.requires_reasoning_content_in_tool_input,
+                "{base_url} must keep the reasoning_content copy (status quo)"
+            );
+        }
+    }
+
+    /// `thinking.block_binding` + its beta header are rejected wherever the
+    /// controls have not shipped (Bedrock/Vertex until per-model launch,
+    /// Foundry never, every third-party proxy). Only the 1P host gets them.
+    #[test]
+    fn thinking_block_binding_is_first_party_only() {
+        assert!(
+            build_anthropic_policy(None)
+                .capabilities
+                .supports_thinking_block_binding
+        );
+        assert!(
+            build_anthropic_policy(Some("https://api.anthropic.com/v1"))
+                .capabilities
+                .supports_thinking_block_binding
+        );
+        for base_url in [
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://us-east5-aiplatform.googleapis.com/v1",
+            "https://my-foundry.cognitiveservices.azure.com/anthropic",
+            "https://my-resource.services.ai.azure.com/anthropic",
+            "https://api.moonshot.cn/anthropic",
+            "https://api.kimi.com/coding/v1",
+            "https://api.minimax.io/anthropic",
+            "https://proxy.corp.example/v1?upstream=api.anthropic.com",
+        ] {
+            assert!(
+                !build_anthropic_policy(Some(base_url))
+                    .capabilities
+                    .supports_thinking_block_binding,
+                "{base_url} must not be sent thinking.block_binding"
+            );
+        }
     }
 
     fn body_with_all_anthropic_fields() -> serde_json::Value {

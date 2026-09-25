@@ -987,14 +987,15 @@ pub(crate) fn canonical_json_string(value: &Value) -> String {
 
 /// Find the most recent `TurnStarted` id; generate a fresh one if none exists.
 pub(crate) fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
-    events
-        .iter()
-        .rev()
-        .find_map(|r| match &r.event {
-            SessionEvent::TurnStarted { turn_id, .. } => Some(*turn_id),
-            _ => None,
-        })
-        .unwrap_or_else(uuid::Uuid::new_v4)
+    latest_turn_id(events).unwrap_or_else(uuid::Uuid::new_v4)
+}
+
+/// The most recent `TurnStarted` id, if the log has one.
+pub(crate) fn latest_turn_id(events: &[SessionEventRecord]) -> Option<TurnId> {
+    events.iter().rev().find_map(|r| match &r.event {
+        SessionEvent::TurnStarted { turn_id, .. } => Some(*turn_id),
+        _ => None,
+    })
 }
 
 /// Sum the provider-reported token components for one LLM call.

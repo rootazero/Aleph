@@ -9,12 +9,18 @@ use crate::context::budget::pressure::estimate_message_tokens_aware;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::reasoning_replay::ReasoningReplay;
 
-/// Estimate the total token footprint of `messages`.
-fn estimate_total(messages: &[UnifiedMessage], prose_ratio: f64) -> usize {
-    messages
-        .iter()
-        .map(|m| estimate_message_tokens_aware(m, prose_ratio))
+/// Estimate the total token footprint of `messages` as `replay` sends them —
+/// the budget's own projection, so the floor and the gauge count alike.
+fn estimate_total(
+    messages: &[UnifiedMessage],
+    prose_ratio: f64,
+    replay: &ReasoningReplay,
+) -> usize {
+    replay
+        .projected(messages)
+        .map(|m| estimate_message_tokens_aware(&m, prose_ratio))
         .sum()
 }
 
@@ -46,10 +52,11 @@ pub(crate) fn truncate_to_fit(
     target_tokens: usize,
     protected_tail: usize,
     prose_ratio: f64,
+    replay: &ReasoningReplay,
 ) -> usize {
-    let before = estimate_total(messages, prose_ratio);
+    let before = estimate_total(messages, prose_ratio, replay);
     let tail = protected_tail.max(1);
-    while messages.len() > tail && estimate_total(messages, prose_ratio) > target_tokens {
+    while messages.len() > tail && estimate_total(messages, prose_ratio, replay) > target_tokens {
         evict_one(messages, tail);
     }
     // Snap forward past any leading orphaned tool_result whose paired tool_use
@@ -60,7 +67,7 @@ pub(crate) fn truncate_to_fit(
     while messages.len() > tail && messages.first().is_some_and(UnifiedMessage::is_tool_result) {
         messages.remove(0);
     }
-    before.saturating_sub(estimate_total(messages, prose_ratio))
+    before.saturating_sub(estimate_total(messages, prose_ratio, replay))
 }
 
 /// Evict exactly one eviction *unit* from the removable region
@@ -175,6 +182,7 @@ pub(crate) async fn compact_to_fit(
         target,
         budget.fresh_tail_count().saturating_add(transient_tail),
         ratio,
+        budget.reasoning_replay(),
     );
 }
 
@@ -201,7 +209,7 @@ mod tests {
             text_user(&"c".repeat(400)), // fresh tail
         ];
         let before = total(&msgs, 3.5);
-        let dropped = truncate_to_fit(&mut msgs, before / 3, 1, 3.5);
+        let dropped = truncate_to_fit(&mut msgs, before / 3, 1, 3.5, &ReasoningReplay::default());
         assert!(dropped > 0);
         assert!(total(&msgs, 3.5) <= before / 3, "must fit under target");
         // fresh tail (last message) preserved
@@ -217,7 +225,7 @@ mod tests {
     #[test]
     fn never_drops_below_protected_tail() {
         let mut msgs = vec![text_user(&"a".repeat(4000)), text_user("keep me")];
-        truncate_to_fit(&mut msgs, 1, 1, 3.5); // absurdly small target
+        truncate_to_fit(&mut msgs, 1, 1, 3.5, &ReasoningReplay::default()); // absurdly small target
         assert!(!msgs.is_empty(), "protected tail must survive");
         assert_eq!(msgs.len(), 1);
     }
@@ -234,7 +242,7 @@ mod tests {
             text_user("tail"),
         ];
         let before = total(&msgs, 3.5);
-        truncate_to_fit(&mut msgs, before / 4, 1, 3.5);
+        truncate_to_fit(&mut msgs, before / 4, 1, 3.5, &ReasoningReplay::default());
         assert!(
             total(&msgs, 3.5) <= before / 4,
             "fit post-condition still holds"
@@ -257,7 +265,7 @@ mod tests {
             text_user("tail"),
         ];
         let before = total(&msgs, 3.5);
-        truncate_to_fit(&mut msgs, before / 4, 1, 3.5);
+        truncate_to_fit(&mut msgs, before / 4, 1, 3.5, &ReasoningReplay::default());
         assert!(msgs
             .iter()
             .any(|m| m.text_content().starts_with("[Context Summary]")));
@@ -286,7 +294,7 @@ mod tests {
             UnifiedMessage::tool_result("pair", "search", "ok", false),
             text_user("tail"),
         ];
-        truncate_to_fit(&mut msgs, 100, 1, 3.5);
+        truncate_to_fit(&mut msgs, 100, 1, 3.5, &ReasoningReplay::default());
 
         let calls: Vec<String> = msgs
             .iter()
@@ -315,7 +323,7 @@ mod tests {
             UnifiedMessage::tool_result("call_1", "some_tool", "ok", false),
             UnifiedMessage::user("tail"),
         ];
-        truncate_to_fit(&mut msgs, 200, 1, 3.5);
+        truncate_to_fit(&mut msgs, 200, 1, 3.5, &ReasoningReplay::default());
         assert!(
             !msgs.first().unwrap().is_tool_result(),
             "surviving list must not begin with an orphaned tool_result"

@@ -5,9 +5,11 @@ use std::collections::HashMap;
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::providers::anthropic::{
-    ContentBlock, ImageSource, Message, MessageContent, SystemBlock, ThinkingBlock,
+    BlockBinding, ContentBlock, ImageSource, Message, MessageContent, PrefixMismatchBehavior,
+    SystemBlock, ThinkingBlock,
 };
 use crate::providers::message::UnifiedMessage;
+use crate::providers::model_catalog::binds_thinking_to_prefix;
 use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
@@ -21,6 +23,11 @@ use super::{sanitize_anthropic_tool_name, AnthropicProtocol, CLAUDE_CODE_IDENTIT
 /// least some room must remain for the visible answer. Mirrors openclaw
 /// `adjustMaxTokensForThinking` (`minOutputTokens = 1024`).
 const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
+
+/// Beta that unlocks `thinking.block_binding` and adds `input_transformations`
+/// to responses.
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     #[must_use]
@@ -62,9 +69,13 @@ impl AnthropicProtocol {
         format!("{base_url}/v1/messages")
     }
 
-    /// Convert `UnifiedMessages` to Anthropic Messages
+    /// Convert `UnifiedMessages` to Anthropic Messages under one endpoint's
+    /// capabilities (`caps` decides host-specific replay shapes).
     // rust-doctor-disable-next-line high-cyclomatic-complexity
-    pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
+    pub(super) fn convert_messages(
+        messages: &[UnifiedMessage],
+        caps: &AnthropicCapabilities,
+    ) -> Vec<Message> {
         let mut result = Vec::new();
         let mut i = 0;
         while i < messages.len() {
@@ -148,8 +159,8 @@ impl AnthropicProtocol {
                 UnifiedMessage::Assistant { content } => {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
-                    // Track the most recent signed thinking block so we can inject
-                    // reasoning_content into the next ToolUse when thinking is enabled.
+                    // Most recent signed thinking text, copied into the following
+                    // tool_use inputs on hosts that demand it (see the capability).
                     let mut pending_thinking: Option<String> = None;
                     for block in content {
                         match block {
@@ -170,6 +181,7 @@ impl AnthropicProtocol {
                             crate::providers::message::ContentBlock::Thinking {
                                 thinking,
                                 signature: Some(sig),
+                                ..
                             } => {
                                 // Replay the signed thinking block when we have its signature.
                                 // Anthropic requires a verbatim replay (thinking + signature)
@@ -184,9 +196,10 @@ impl AnthropicProtocol {
                                         // rust-doctor-disable-next-line excessive-clone
                                         signature: sig.clone(),
                                     });
-                                    // Remember this thinking for the next ToolCall
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    pending_thinking = Some(thinking.clone());
+                                    if caps.requires_reasoning_content_in_tool_input {
+                                        // rust-doctor-disable-next-line excessive-clone
+                                        pending_thinking = Some(thinking.clone());
+                                    }
                                 }
                             }
                             crate::providers::message::ContentBlock::ToolCall {
@@ -207,18 +220,18 @@ impl AnthropicProtocol {
                                     })
                                     .take(64)
                                     .collect();
-                                // Anthropic API requires input to be a dictionary, never a string.
-                                // When thinking is enabled and precedes a tool call, we must
-                                // include reasoning_content in the tool_use input or the API
-                                // rejects the request with:
-                                //   "thinking is enabled but reasoning_content is missing
-                                //    in assistant tool call message".
+                                // The Messages API requires input to be a dictionary,
+                                // never a string.
                                 let mut input = if arguments.is_object() {
                                     // rust-doctor-disable-next-line excessive-clone
                                     arguments.clone()
                                 } else {
                                     serde_json::json!({})
                                 };
+                                // Only set when the host demands the copy
+                                // (`requires_reasoning_content_in_tool_input`); it
+                                // stays set so EVERY tool_use after the signed
+                                // thinking block carries it, not just the first.
                                 if let Some(ref reasoning) = pending_thinking {
                                     if let Some(obj) = input.as_object_mut() {
                                         obj.insert(
@@ -227,10 +240,6 @@ impl AnthropicProtocol {
                                             serde_json::Value::String(reasoning.clone()),
                                         );
                                     }
-                                    // Keep pending_thinking set: Anthropic requires
-                                    // reasoning_content in EVERY tool_use block that
-                                    // follows a signed thinking block within the same
-                                    // assistant message, not just the first one.
                                 }
                                 blocks.push(ContentBlock::ToolUse {
                                     id: sanitized_id,
@@ -280,13 +289,9 @@ impl AnthropicProtocol {
                             let mut parts = Vec::new();
                             for b in content {
                                 match b {
-                                    crate::providers::message::ContentBlock::Text {
-                                        text, ..
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    } => parts.push(text.clone()),
-                                    crate::providers::message::ContentBlock::Json { value } => {
-                                        parts
-                                            .push(serde_json::to_string(value).unwrap_or_default());
+                                    crate::providers::message::ContentBlock::Text { .. }
+                                    | crate::providers::message::ContentBlock::Json { .. } => {
+                                        parts.extend(b.as_model_text().map(|t| t.into_owned()));
                                     }
                                     crate::providers::message::ContentBlock::Image {
                                         data,
@@ -353,6 +358,7 @@ impl AnthropicProtocol {
     /// - OAuth stack (`claude-code-20250219` + `oauth-2025-04-20` + `token-restricted`)
     ///   when the API key is an Anthropic OAuth token — see `is_oauth_token`
     /// - `extended-cache-ttl-2025-04-11` when `extended_cache_ttl` is true (Long retention)
+    /// - `thinking-binding-controls-2026-08-01` — [`Self::thinking_block_binding_applies`]
     pub(super) fn build_beta_headers(
         model: &str,
         api_key: Option<&str>,
@@ -385,7 +391,59 @@ impl AnthropicProtocol {
         if extended_cache_ttl {
             betas.push("extended-cache-ttl-2025-04-11");
         }
+        if Self::thinking_block_binding_applies(model, caps) {
+            betas.push(THINKING_BINDING_BETA);
+        }
         betas.join(",")
+    }
+
+    /// True when this request should carry `thinking.block_binding` and its
+    /// beta header: the model binds thinking to the conversation prefix (a
+    /// catalog fact) AND the host accepts the controls (a policy fact).
+    ///
+    /// The one derivation both halves read. The field without the header is a
+    /// 400 ("Extra inputs are not permitted"); the header without the field
+    /// selects the beta's own default, which is also `drop_block`.
+    pub(super) fn thinking_block_binding_applies(
+        model: &str,
+        caps: &AnthropicCapabilities,
+    ) -> bool {
+        caps.supports_thinking_block_binding && binds_thinking_to_prefix(model)
+    }
+
+    /// Attach `block_binding: drop_block` to the request's thinking config.
+    ///
+    /// This adapter cannot prove the history it is handed is append-only, and
+    /// on a prefix-bound model any edit before a thinking block invalidates it
+    /// and every later one; enforced accounts would 400 on the replay. With
+    /// `drop_block` the API drops those blocks for this request instead and
+    /// reports each drop in `input_transformations`.
+    ///
+    /// An omitted `thinking` becomes a bare `{type:"adaptive"}` only on models
+    /// that already think by default (generation 5+), where the two are the
+    /// same request — no `display`, no effort is added. Anywhere else an
+    /// omitted block stays omitted (adding one would switch thinking on), and a
+    /// `disabled` block is left alone (the field is not accepted beside it).
+    pub(super) fn with_drop_block_binding(
+        thinking: Option<ThinkingBlock>,
+        model: &str,
+    ) -> Option<ThinkingBlock> {
+        let binding = Some(BlockBinding {
+            prefix_mismatch_behavior: PrefixMismatchBehavior::DropBlock,
+        });
+        match thinking {
+            None if Self::omits_disabled_thinking(model) => Some(ThinkingBlock {
+                thinking_type: "adaptive".to_string(),
+                budget_tokens: None,
+                display: None,
+                block_binding: binding,
+            }),
+            Some(t) if t.thinking_type != "disabled" => Some(ThinkingBlock {
+                block_binding: binding,
+                ..t
+            }),
+            other => other,
+        }
     }
 
     /// True for Claude 4-family models (opus-4-*, sonnet-4-*, haiku-4-*).

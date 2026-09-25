@@ -339,3 +339,109 @@ fn perf_dispatch_overhead_documented() {
     let elapsed = start.elapsed();
     eprintln!("1000 × build_prompt(1000 events) = {elapsed:?}");
 }
+
+// ── reasoning is emitted as facts; the wire decides what is sent ────────────
+
+fn turn_started(turn_id: Uuid) -> SessionEventRecord {
+    record(SessionEvent::TurnStarted {
+        turn_id,
+        trigger: crate::session::events::TurnTrigger::UserMessage,
+        at: now_ms(),
+    })
+}
+
+fn assistant_turn(
+    turn_id: Uuid,
+    text: &str,
+    tool_id: Option<&str>,
+    thinking: &str,
+    signature: Option<&str>,
+) -> SessionEventRecord {
+    record(SessionEvent::AssistantMessage {
+        turn_id,
+        content: MessageContent {
+            text: text.to_string(),
+            blocks: tool_id
+                .map(|id| vec![json!({"type": "tool_use", "id": id, "name": "t", "input": {}})])
+                .unwrap_or_default(),
+            thinking: Some(thinking.to_string()),
+            thinking_signature: signature.map(str::to_string),
+        },
+        usage: None,
+        at: now_ms(),
+    })
+}
+
+fn result_in(turn_id: Uuid, call_id: &str) -> SessionEventRecord {
+    record(SessionEvent::ToolResult {
+        turn_id,
+        call_id: call_id.to_string(),
+        output: ToolOutput {
+            value: json!("ok"),
+            metadata: ToolOutputMetadata::default(),
+        },
+        at: now_ms(),
+    })
+}
+
+/// `(thinking, signature, earlier_turn)` of every thinking block, in order.
+fn thinking_facts(messages: &[UnifiedMessage]) -> Vec<(String, Option<String>, bool)> {
+    messages
+        .iter()
+        .flat_map(UnifiedMessage::content_blocks)
+        .filter_map(|b| match b {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+                earlier_turn,
+            } => Some((thinking.clone(), signature.clone(), *earlier_turn)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every persisted thinking block reaches the list — text-only turns and
+/// unsigned reasoning included — carrying its signature and whether it
+/// belongs to an earlier user turn. Nothing here decides what a target is
+/// sent; `ReasoningReplay` does that at the wire.
+#[test]
+fn every_persisted_thinking_is_emitted_with_its_turn_fact() {
+    let (earlier, current) = (Uuid::new_v4(), Uuid::new_v4());
+    let events = vec![
+        turn_started(earlier),
+        assistant_turn(earlier, "", Some("c1"), "old tool plan", Some("sig_old")),
+        result_in(earlier, "c1"),
+        assistant_turn(
+            earlier,
+            "old answer",
+            None,
+            "old answer plan",
+            Some("sig_ans"),
+        ),
+        turn_started(current),
+        assistant_turn(current, "", Some("c2"), "unsigned plan", None),
+        result_in(current, "c2"),
+    ];
+    let facts = thinking_facts(&build_prompt(&events, 0));
+    assert_eq!(
+        facts,
+        vec![
+            ("old tool plan".into(), Some("sig_old".into()), true),
+            ("old answer plan".into(), Some("sig_ans".into()), true),
+            ("unsigned plan".into(), None, false),
+        ]
+    );
+}
+
+/// A log with no `TurnStarted` (legacy / hand-built) cannot say which turn is
+/// current, so nothing is marked earlier — the pre-fact behaviour.
+#[test]
+fn without_a_turn_start_nothing_is_marked_earlier() {
+    let turn = Uuid::new_v4();
+    let events = vec![
+        assistant_turn(turn, "answer", None, "plan", Some("sig")),
+        user_msg("next"),
+    ];
+    let facts = thinking_facts(&build_prompt(&events, 0));
+    assert_eq!(facts, vec![("plan".into(), Some("sig".into()), false)]);
+}

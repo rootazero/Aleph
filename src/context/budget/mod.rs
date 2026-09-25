@@ -10,6 +10,7 @@ pub mod pressure;
 
 use crate::context::budget::pressure::{estimate_message_tokens_aware, estimate_tokens_aware};
 use crate::providers::message::UnifiedMessage;
+use crate::providers::reasoning_replay::ReasoningReplay;
 
 // =============================================================================
 // ContextPressure
@@ -278,6 +279,9 @@ pub struct ContextBudget {
     /// `None` until the first observation — the estimate then runs uncalibrated
     /// (factor 1.0), keeping behaviour byte-identical to the pre-calibration path.
     calibration: Option<f64>,
+    /// The primary target's reasoning policy: pressure counts the reasoning
+    /// the wire will carry, via the same projection `HttpProvider` applies.
+    reasoning_replay: ReasoningReplay,
 }
 
 impl ContextBudget {
@@ -317,7 +321,20 @@ impl ContextBudget {
             split_count: 0,
             max_splits: config.max_splits,
             calibration: None,
+            reasoning_replay: ReasoningReplay::default(),
         }
+    }
+
+    /// Count reasoning as `replay` sends it (the serving provider's
+    /// [`AiProvider::reasoning_replay`](crate::providers::AiProvider::reasoning_replay)).
+    pub fn set_reasoning_replay(&mut self, replay: ReasoningReplay) {
+        self.reasoning_replay = replay;
+    }
+
+    /// The reasoning policy pressure is counted under.
+    #[must_use]
+    pub const fn reasoning_replay(&self) -> &ReasoningReplay {
+        &self.reasoning_replay
     }
 
     /// Total token budget.
@@ -369,7 +386,7 @@ impl ContextBudget {
         tool_schema_tokens: usize,
     ) -> ContextPressure {
         ContextPressure::compute(
-            messages,
+            &self.reasoning_replay.project(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
@@ -389,7 +406,7 @@ impl ContextBudget {
         tool_schema_tokens: usize,
     ) -> LoopDirective {
         let pressure = ContextPressure::compute(
-            messages,
+            &self.reasoning_replay.project(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
@@ -489,7 +506,7 @@ impl ContextBudget {
             return;
         };
         let after = ContextPressure::compute(
-            messages,
+            &self.reasoning_replay.project(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,

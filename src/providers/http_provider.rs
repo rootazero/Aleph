@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::providers::adapter::{
     ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-use crate::providers::message::{normalize_tool_pairs, ContentBlock, UnifiedMessage};
+use crate::providers::message::{transform_messages, ContentBlock, UnifiedMessage};
 use crate::providers::{AiProvider, ProviderDelta};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use crate::sync_primitives::Arc;
@@ -110,10 +110,15 @@ fn strip_thinking_signatures(messages: &[UnifiedMessage]) -> Option<Vec<UnifiedM
                     content: content
                         .iter()
                         .map(|b| match b {
-                            ContentBlock::Thinking { thinking, .. } => ContentBlock::Thinking {
+                            ContentBlock::Thinking {
+                                thinking,
+                                earlier_turn,
+                                ..
+                            } => ContentBlock::Thinking {
                                 // rust-doctor-disable-next-line excessive-clone
                                 thinking: thinking.clone(),
                                 signature: None,
+                                earlier_turn: *earlier_turn,
                             },
                             // rust-doctor-disable-next-line excessive-clone
                             other => other.clone(),
@@ -307,6 +312,36 @@ impl HttpProvider {
         })
     }
 
+    /// The messages this target actually receives: the pre-send choke point
+    /// ([`transform_messages`] — reasoning policy + tool-pair repair) and then
+    /// the outbound scans, which therefore judge only what is sent.
+    pub(crate) fn outbound_messages(
+        &self,
+        payload: &RequestPayload<'_>,
+    ) -> Result<Vec<UnifiedMessage>> {
+        let platform = payload
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("platform"))
+            .map(String::as_str);
+        let outbound = transform_messages(
+            payload.messages,
+            &self.reasoning_replay(payload.model.as_deref()),
+        );
+        self.apply_outbound_safety(&outbound, platform)
+            .map_err(|reason| {
+                tracing::warn!(
+                    provider = %self.name,
+                    reason = %reason,
+                    "Blocked outbound request: secret leak detected"
+                );
+                crate::error::AlephError::PermissionDenied {
+                    message: format!("Secret leak blocked: {reason}"),
+                    suggestion: Some("Remove secret values from the input before sending.".into()),
+                }
+            })
+    }
+
     /// Apply outbound safety checks (PII filtering + secret leak detection).
     /// Returns filtered messages or a leak block reason.
     fn apply_outbound_safety(
@@ -387,32 +422,8 @@ impl HttpProvider {
         payload: RequestPayload<'_>,
         sink: Option<&dyn crate::providers::DeltaSink>,
     ) -> Result<ProviderResponse> {
-        let platform = payload
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("platform"))
-            .map(String::as_str);
-        let mut filtered_messages = match self.apply_outbound_safety(payload.messages, platform) {
-            Ok(msgs) => msgs,
-            Err(reason) => {
-                tracing::warn!(
-                    provider = %self.name,
-                    reason = %reason,
-                    "Blocked outbound request: secret leak detected"
-                );
-                return Err(crate::error::AlephError::PermissionDenied {
-                    message: format!("Secret leak blocked: {reason}"),
-                    suggestion: Some("Remove secret values from the input before sending.".into()),
-                });
-            }
-        };
-        // The wire-level pairing repair: compaction, truncation, session-splits,
-        // and interrupted turns can leave the history half-paired, and every
-        // provider API rejects that. `normalize_tool_pairs` is the documented
-        // single choke-point (`transform_messages`) — actually call it here, on
-        // the owned copy, before the request is built. Idempotent; the retry
-        // path below reuses the already-normalized list.
-        normalize_tool_pairs(&mut filtered_messages);
+        // The retry path below reuses this list.
+        let filtered_messages = self.outbound_messages(&payload)?;
 
         match self.execute_once(&filtered_messages, &payload, sink).await {
             Err(err) if is_stale_encrypted_reasoning_error(&err) => {
@@ -915,6 +926,19 @@ impl AiProvider for HttpProvider {
         }
     }
 
+    /// The full resolution: this provider's protocol, host and (per call)
+    /// model. `execute` applies the same value to the real request.
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        crate::providers::reasoning_replay::ReasoningReplay::for_target(
+            self.adapter.name(),
+            self.config.base_url.as_deref(),
+            model.unwrap_or_else(|| self.config.default_model()),
+        )
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }
@@ -1167,6 +1191,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "chain of thought".into(),
                         signature: Some("{\"id\":\"rs_1\",\"ec\":\"gAAA\"}\n".into()),
+                        earlier_turn: false,
                     },
                     ContentBlock::Text {
                         text: "answer".into(),
@@ -1184,6 +1209,7 @@ mod tests {
         let ContentBlock::Thinking {
             thinking,
             signature,
+            ..
         } = &content[0]
         else {
             panic!("thinking block expected");
@@ -1298,3 +1324,9 @@ mod tests {
         assert!(!map.contains_key("COST_USD"));
     }
 }
+
+#[cfg(test)]
+mod replay_tests;
+
+#[cfg(test)]
+mod tool_text_tests;

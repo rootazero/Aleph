@@ -1437,4 +1437,28 @@ mod tests {
             "no fresh-tail UserMessage should be copied when tail_start is clamped",
         );
     }
+
+    /// Both summarizer paths (split and `/compact`) build their input through
+    /// this one mapper, so reasoning must not survive it — pinned by a test,
+    /// not by reading the code.
+    #[test]
+    fn event_to_message_never_carries_reasoning() {
+        let event = SessionEvent::AssistantMessage {
+            turn_id: uuid::Uuid::nil(),
+            content: MessageContent {
+                text: "answer".into(),
+                blocks: vec![],
+                thinking: Some("secret plan".into()),
+                thinking_signature: Some("sig".into()),
+            },
+            usage: None,
+            at: now_ms(),
+        };
+        let msg = event_to_message(&event).expect("an assistant turn maps");
+        assert!(!msg
+            .content_blocks()
+            .iter()
+            .any(|b| matches!(b, crate::providers::message::ContentBlock::Thinking { .. })));
+        assert!(!msg.text_content().contains("secret plan"));
+    }
 }

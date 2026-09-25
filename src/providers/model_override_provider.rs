@@ -104,6 +104,16 @@ impl AiProvider for ModelOverrideProvider {
     fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
         self.inner.serving_provider_hint()
     }
+
+    /// The pinned model reaches the wire on every call, so it is the model the
+    /// policy resolves for — the caller's `model` is overridden just as the
+    /// request's is.
+    fn reasoning_replay(
+        &self,
+        _model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.inner.reasoning_replay(Some(&self.model))
+    }
 }
 
 #[cfg(test)]

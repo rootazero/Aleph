@@ -279,15 +279,7 @@ impl OllamaProvider {
                 } => {
                     let output = content
                         .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text, .. } => {
-                                Some(std::borrow::Cow::Borrowed(text.as_str()))
-                            }
-                            ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
-                                serde_json::to_string(value).unwrap_or_default(),
-                            )),
-                            _ => None,
-                        })
+                        .filter_map(ContentBlock::as_model_text)
                         .collect::<Vec<_>>()
                         .join("\n");
                     out.push(json!({
@@ -308,7 +300,10 @@ impl OllamaProvider {
     /// block without borrowing the (non-`'static`) payload.
     fn build_chat_body(&self, payload: &RequestPayload) -> Value {
         let model = payload.model.as_deref().unwrap_or(&self.model);
-        let messages = Self::convert_messages(payload.messages, payload.system_prompt);
+        // Same reasoning projection as `HttpProvider::execute` — this provider
+        // is the one wire that does not pass through it.
+        let outbound = self.reasoning_replay(Some(model)).project(payload.messages);
+        let messages = Self::convert_messages(&outbound, payload.system_prompt);
 
         let mut body = json!({
             "model": model,
@@ -851,5 +846,24 @@ mod tests {
         let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
         let resp = provider.build_provider_response(chat);
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    /// The prompt builder hands a tool result over as one `Json` block holding
+    /// the tool's output value; a string must reach Ollama as the text itself.
+    #[test]
+    fn a_string_tool_result_reaches_ollama_as_text() {
+        let msgs = vec![
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: "c".into(),
+                    name: "read".into(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                }],
+            },
+            UnifiedMessage::tool_result_json("c", "read", json!("line1\nline2"), false),
+        ];
+        let out = OllamaProvider::convert_messages(&msgs, None);
+        assert_eq!(out[1]["content"], "line1\nline2");
     }
 }
