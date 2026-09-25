@@ -18,6 +18,7 @@ use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnTrigger,
 };
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
+use crate::tools::result_processing::RecoveryTools;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
 // -- Mock SessionService -----------------------------------------------------
@@ -133,6 +134,8 @@ struct ScriptedTools {
     /// `act_parallel` test to opt into the fast path without changing
     /// global mocks.
     concurrent_safe: bool,
+    /// What `recovery_tools()` reports — `ALL` unless a test gates it.
+    recovery: RecoveryTools,
 }
 
 impl ScriptedTools {
@@ -142,6 +145,20 @@ impl ScriptedTools {
             outcomes: Mutex::new(outcomes),
             exec_delay: std::time::Duration::ZERO,
             concurrent_safe: false,
+            recovery: RecoveryTools::ALL,
+        })
+    }
+
+    fn with_recovery(
+        outcomes: Vec<Result<ToolOutput, ToolError>>,
+        recovery: RecoveryTools,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            log: Mutex::new(Vec::new()),
+            outcomes: Mutex::new(outcomes),
+            exec_delay: std::time::Duration::ZERO,
+            concurrent_safe: false,
+            recovery,
         })
     }
 
@@ -154,6 +171,7 @@ impl ScriptedTools {
             outcomes: Mutex::new(outcomes),
             exec_delay: delay,
             concurrent_safe: true,
+            recovery: RecoveryTools::ALL,
         })
     }
 
@@ -193,6 +211,10 @@ impl ToolService for ScriptedTools {
 
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
+    }
+
+    fn recovery_tools(&self) -> RecoveryTools {
+        self.recovery
     }
 
     async fn call_concurrency_claim(
@@ -1585,6 +1607,7 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
         ]),
         exec_delay: std::time::Duration::from_millis(200),
         concurrent_safe: false,
+        recovery: RecoveryTools::ALL,
     });
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
 
@@ -2683,5 +2706,191 @@ async fn queued_parallel_call_is_timed_from_its_own_start_not_admission() {
         "the queued call slept 60ms but waited ~200ms for a slot; its duration \
          must be its own work (got {}ms)",
         queued.1,
+    );
+}
+
+// -- Layer-3 turn-budget spill ------------------------------------------------
+
+/// Many short lines: indexes into several sections, stays far under the
+/// per-result (Layer-2) gate, and is far over the 10-token turn budget below —
+/// so it is Layer 3 that spills it.
+fn chatty_text() -> String {
+    (0..120)
+        .map(|i| format!("line {i}: the build step {i} finished without warnings\n"))
+        .collect()
+}
+
+/// A result store in its own scratch tree; the tree lives as long as the guard.
+fn scratch_store() -> (
+    tempfile::TempDir,
+    Arc<crate::tools::result_store::ToolResultStore>,
+) {
+    let (scratch, base) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&base).expect("scratch dir");
+    let store = crate::tools::result_store::ToolResultStore::with_dir_for_tests(base);
+    (scratch, Arc::new(store))
+}
+
+/// Run one turn whose single tool call is spilled by the Layer-3 turn budget,
+/// and return the text the persisted `ToolResult` carries for the model.
+async fn spilled_result_text(
+    tools: Arc<dyn ToolService>,
+    tool_name: &str,
+    store: Arc<crate::tools::result_store::ToolResultStore>,
+) -> String {
+    let call = NativeToolCall {
+        thought_signature: None,
+        id: "c1".into(),
+        name: tool_name.into(),
+        arguments: serde_json::json!({}),
+    };
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        llm: CapturingProvider::with_tool_calls("calling…", vec![call]),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: Some(Arc::new(crate::tools::turn_budget::TurnResultBudget::new(
+            10,
+        ))),
+        result_store: Some(store),
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let state = AgentHarness::new(deps)
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+    assert_eq!(state, TurnState::Continue);
+    let text = session
+        .snapshot()
+        .await
+        .iter()
+        .find_map(|r| match &r.event {
+            SessionEvent::ToolResult { output, .. } => {
+                Some(crate::providers::message::value_as_model_text(&output.value).into_owned())
+            }
+            _ => None,
+        })
+        .expect("one ToolResult");
+    assert!(
+        text.contains("[Full output persisted: "),
+        "precondition: the Layer-3 budget spilled this result:\n{text}"
+    );
+    text
+}
+
+/// The Layer-3 footer is an instruction to the model, so it may name only the
+/// retrieval tools the turn's tool service says it can call — the positive
+/// half included, so a footer that never names anything cannot pass.
+#[tokio::test]
+async fn layer3_spill_footer_names_only_what_the_tool_service_can_dispatch() {
+    let spill = |recovery, store| async move {
+        let tools = ScriptedTools::with_recovery(
+            vec![Ok(ok_output(serde_json::Value::String(chatty_text())))],
+            recovery,
+        );
+        spilled_result_text(tools, "read_file", store).await
+    };
+
+    let (_s1, store) = scratch_store();
+    let open = spill(RecoveryTools::ALL, store).await;
+    assert!(open.contains("ctx_search("), "both callable:\n{open}");
+
+    let (_s2, store) = scratch_store();
+    let gated = spill(
+        RecoveryTools {
+            ctx_search: false,
+            file_read: true,
+        },
+        store,
+    )
+    .await;
+    assert!(
+        !gated.contains("ctx_search"),
+        "ctx_search is not callable, yet the footer names it:\n{gated}"
+    );
+    assert!(
+        gated.contains("file_read"),
+        "the callable fallback:\n{gated}"
+    );
+}
+
+/// The same question asked of the production chokepoint: the answer comes
+/// from `ScopedToolService`'s own gates (here, its allow set), not from a
+/// second derivation in the harness.
+#[tokio::test]
+async fn layer3_spill_footer_follows_the_scoped_services_allow_set() {
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
+    use tokio_util::sync::CancellationToken;
+
+    struct Tool(&'static str);
+    #[async_trait]
+    impl LoopTool for Tool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "stub"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object" })
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _cancel: CancellationToken,
+        ) -> LoopToolResult {
+            LoopToolResult::Success {
+                output: serde_json::Value::String(chatty_text()),
+            }
+        }
+    }
+    let scoped = |allowed: &[&str]| -> Arc<dyn ToolService> {
+        let mut registry = LoopToolRegistry::new();
+        for name in ["chatty", "ctx_search", "file_read"] {
+            registry.register(Box::new(Tool(name)));
+        }
+        let allowed = allowed.iter().map(|n| (*n).to_string()).collect();
+        Arc::new(crate::tools::scoped::ScopedToolService::new(
+            Arc::new(registry),
+            allowed,
+        ))
+    };
+
+    let (_s1, store) = scratch_store();
+    let open = spilled_result_text(
+        scoped(&["chatty", "ctx_search", "file_read"]),
+        "chatty",
+        store,
+    )
+    .await;
+    assert!(open.contains("ctx_search("), "both callable:\n{open}");
+
+    let (_s2, store) = scratch_store();
+    let gated = spilled_result_text(scoped(&["chatty", "file_read"]), "chatty", store).await;
+    assert!(
+        !gated.contains("ctx_search"),
+        "ctx_search is outside the allow set, yet the footer names it:\n{gated}"
+    );
+    assert!(
+        gated.contains("file_read"),
+        "the callable fallback:\n{gated}"
     );
 }

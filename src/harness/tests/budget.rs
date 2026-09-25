@@ -693,7 +693,14 @@ const BUDGETED: [&str; 12] = [
 /// −3 (5246 → 5243, 2026-09-25, context-slim A5): `act.rs`'s own
 ///     "string or structure" unwrap of a tool result becomes the one shared
 ///     `providers::message::value_as_model_text`.
-const CEILING: usize = 5243;
+/// −5 (5243 → 5238, 2026-09-25, context-slim follow-up): `act.rs`'s Layer-3
+///     spill drops the "earlier-iteration spill" branch and its offload
+///     closure (−6) — `TurnResultBudget::record` only ever spills the result
+///     it was just handed, so that branch could not run. Its footer now names
+///     the retrieval tools the turn's tool service reports callable
+///     (`ToolService::recovery_tools`, +1 argument line) instead of assuming
+///     both.
+const CEILING: usize = 5238;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
