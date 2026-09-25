@@ -5,8 +5,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::thinking::{ConfidenceLevel, ReasoningStepType};
-
 /// Streaming event types for real-time agent feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -150,23 +148,6 @@ pub enum StreamEvent {
         /// here that can drift from the first.
         #[serde(default)]
         outcome: String,
-    },
-
-    /// Structured reasoning block with semantic type
-    ReasoningBlock {
-        run_id: String,
-        seq: u64,
-        /// Semantic step type (observation, analysis, planning, etc.)
-        step_type: ReasoningStepType,
-        /// Human-readable label for this block
-        label: String,
-        /// Content of this reasoning block
-        content: String,
-        /// Confidence level if determinable
-        #[serde(skip_serializing_if = "Option::is_none")]
-        confidence: Option<ConfidenceLevel>,
-        /// Is this the final block before action?
-        is_final: bool,
     },
 
     /// Uncertainty signal from the AI
@@ -647,47 +628,6 @@ impl AgentTraceEvent {
 }
 
 impl StreamEvent {
-    /// Create a new `ReasoningBlock` event
-    pub fn reasoning_block(
-        run_id: impl Into<String>,
-        seq: u64,
-        step_type: ReasoningStepType,
-        label: impl Into<String>,
-        content: impl Into<String>,
-        is_final: bool,
-    ) -> Self {
-        Self::ReasoningBlock {
-            run_id: run_id.into(),
-            seq,
-            step_type,
-            label: label.into(),
-            content: content.into(),
-            confidence: None,
-            is_final,
-        }
-    }
-
-    /// Create a new `ReasoningBlock` event with confidence
-    pub fn reasoning_block_with_confidence(
-        run_id: impl Into<String>,
-        seq: u64,
-        step_type: ReasoningStepType,
-        label: impl Into<String>,
-        content: impl Into<String>,
-        confidence: ConfidenceLevel,
-        is_final: bool,
-    ) -> Self {
-        Self::ReasoningBlock {
-            run_id: run_id.into(),
-            seq,
-            step_type,
-            label: label.into(),
-            content: content.into(),
-            confidence: Some(confidence),
-            is_final,
-        }
-    }
-
     /// Create a new `UncertaintySignal` event
     pub fn uncertainty_signal(
         run_id: impl Into<String>,
@@ -727,7 +667,6 @@ impl StreamEvent {
             | Self::RunComplete { run_id, .. }
             | Self::RunError { run_id, .. }
             | Self::AskUser { run_id, .. }
-            | Self::ReasoningBlock { run_id, .. }
             | Self::UncertaintySignal { run_id, .. }
             | Self::RunRetrying { run_id, .. }
             | Self::ModelResolved { run_id, .. }
@@ -1134,23 +1073,6 @@ mod tests {
             other => panic!("expected ContextGauge, got {other:?}"),
         }
         assert_eq!(event.run_id(), "run-7");
-    }
-
-    #[test]
-    fn test_reasoning_block_serialization() {
-        let event = StreamEvent::reasoning_block(
-            "run-123",
-            1,
-            ReasoningStepType::Analysis,
-            "Analyzing options",
-            "Comparing Redis vs in-memory cache",
-            false,
-        );
-
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("reasoning_block"));
-        assert!(json.contains("analysis"));
-        assert!(json.contains("Analyzing options"));
     }
 
     #[test]

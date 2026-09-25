@@ -201,8 +201,10 @@ pub struct RecoveryTools {
 
 impl RecoveryTools {
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes. Today that is every [`recovery_footer`] caller: the harness
-    /// Layer-3 spill and the browser offload.
+    /// assumes: [`recovery_footer`] (the browser offload), and
+    /// `ToolService::recovery_tools`'s default for a service that has no gates
+    /// to consult. The harness Layer-3 spill asks its `ToolService`, which
+    /// answers from the turn's gates when it is a `ScopedToolService`.
     pub const ALL: Self = Self {
         ctx_search: true,
         file_read: true,
@@ -364,16 +366,15 @@ pub fn apply_result_budget(
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
 ///
-/// `pub(crate)` for the harness Layer-3 turn spill (`harness/agent/act.rs`) and
-/// the browser offload (`browser_tools::offload_content_to`), which offload for
-/// the same reason and must hand the model the same recovery handle. The spill
-/// used to call `persist_if_large` directly and so emitted a marker with **no**
-/// `ctx_search` hint over a blob that was never indexed — the model was pointed
-/// at a file it could only re-read whole, defeating the offload.
-///
-/// Neither of those two callers can see the turn's tool gates, so this form
-/// assumes [`RecoveryTools::ALL`]; the dispatcher, which can, goes through
-/// [`recovery_footer_for`].
+/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`),
+/// which offloads for the same reason as Layer 2 and must hand the model the
+/// same recovery handle. It cannot see the turn's tool gates, so this form
+/// assumes [`RecoveryTools::ALL`]; a caller that can — the dispatcher's Layer 2,
+/// and the harness Layer-3 spill through `ToolService::recovery_tools` — goes
+/// through [`recovery_footer_for`]. (The spill once called `persist_if_large`
+/// directly and so emitted a marker with **no** `ctx_search` hint over a blob
+/// that was never indexed — the model was pointed at a file it could only
+/// re-read whole, defeating the offload.)
 pub(crate) fn recovery_footer(
     store: Option<&ToolResultStore>,
     tool_call_id: &str,

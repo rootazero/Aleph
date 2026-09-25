@@ -9,7 +9,6 @@
 //!
 //! - [`jsonrpc`] - JSON-RPC 2.0 protocol types
 //! - [`events`] - Streaming event types
-//! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
 //! - [`session_thread`] - Thread-continuity contract (`agent.run` request, attach snapshot)
 //! - [`btw`] - The one `/btw` side-question resolver, shared by core and thin clients
@@ -51,9 +50,9 @@ pub mod session_thread;
 pub mod sessions;
 pub mod spend;
 pub mod subagent_tree;
+pub mod subscription;
 pub mod team_topic;
 pub mod terminate;
-pub mod thinking;
 pub mod tool_permissions;
 pub mod trace_presentation;
 pub mod trace_replay;
@@ -92,7 +91,7 @@ pub use sessions::SessionListRow;
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };
-pub use thinking::{ConfidenceLevel, ReasoningStepType};
+pub use subscription::{TopicCarveOut, TopicsRequest, STREAM_REASONING_TOPIC};
 pub use trace_presentation::{
     present_agent_trace_event, present_agent_trace_event_with_labels_and_preset,
     present_agent_trace_event_with_preset, summarize_tool_input, summarize_tool_output,

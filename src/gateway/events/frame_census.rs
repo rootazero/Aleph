@@ -137,7 +137,51 @@ fn serde_snake_case(variant: &str) -> String {
 }
 
 fn frame_source() -> String {
-    production_prefix(include_str!("frame.rs"))
+    resolve_protocol_topics(
+        &production_prefix(include_str!("frame.rs")),
+        &production_prefix(include_str!("../../../shared/protocol/src/subscription.rs")),
+    )
+}
+
+/// Rewrite every `Some(aleph_protocol::NAME)` arm as the literal the
+/// constant holds, so [`stream_method_arms`] scrapes it like any other.
+///
+/// An arm may name its method through a protocol constant — the one spelling
+/// shared with the clients that carve that topic out of a subscription
+/// (`STREAM_REASONING_TOPIC`). Read as-is, such an arm is invisible to the
+/// literal scanner and its variant looks unpublished. A name that does not
+/// resolve to a `pub const NAME: &str` in `consts` panics rather than being
+/// skipped: skipping is the fail-open this census exists to prevent.
+fn resolve_protocol_topics(src: &str, consts: &str) -> String {
+    const NEEDLE: &str = "Some(aleph_protocol::";
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(at) = rest.find(NEEDLE) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + NEEDLE.len()..];
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let decl = format!("pub const {name}: &str = \"");
+        let value = consts
+            .find(&decl)
+            .and_then(|i| {
+                let tail = &consts[i + decl.len()..];
+                tail.find('"').map(|end| tail[..end].to_string())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "frame.rs publishes `aleph_protocol::{name}`, which is not a \
+                     `pub const {name}: &str` in shared/protocol/src/subscription.rs \
+                     — the census cannot tell which method that arm publishes"
+                )
+            });
+        out.push_str(&format!("Some(\"{value}\""));
+        rest = &after[name.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn protocol_stream_variants() -> Vec<String> {
@@ -264,6 +308,29 @@ fn the_arm_scanner_pairs_a_variant_with_its_literal() {
             ("AskUser".to_string(), "ask_user".to_string()),
         ]
     );
+}
+
+/// A constant-named arm scrapes as its value; without the resolution the
+/// reasoning frame read as unpublished (`every_protocol_stream_variant_has_a_
+/// gateway_producer` went red the moment frame.rs switched to the constant).
+#[test]
+fn a_protocol_constant_arm_scrapes_as_its_value() {
+    let consts = "pub const STREAM_X_TOPIC: &str = \"stream.x_y\";";
+    let src = "Self::XY { .. } => Some(aleph_protocol::STREAM_X_TOPIC),\n\
+               Self::AskUser { .. } => Some(\"stream.ask_user\"),";
+    assert_eq!(
+        stream_method_arms(&resolve_protocol_topics(src, consts)),
+        vec![
+            ("XY".to_string(), "x_y".to_string()),
+            ("AskUser".to_string(), "ask_user".to_string()),
+        ]
+    );
+}
+
+#[test]
+#[should_panic(expected = "cannot tell which method")]
+fn an_unresolvable_protocol_constant_fails_loudly() {
+    let _ = resolve_protocol_topics("Self::X { .. } => Some(aleph_protocol::MISSING),", "");
 }
 
 #[test]

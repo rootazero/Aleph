@@ -29,6 +29,8 @@ pub async fn run(
     json: bool,
 ) -> CliResult<()> {
     let (client, mut events) = AlephClient::connect(server_url, config).await?;
+    // The board never mirrors reasoning; `--json` passes every event through.
+    super::run_follow::skip_unrendered_reasoning(&client, false, json).await;
 
     if !json {
         // Banner on stderr: stdout stays pure feed data.

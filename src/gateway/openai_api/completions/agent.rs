@@ -171,7 +171,6 @@ impl EventEmitter for SseEventEmitter {
 
             // Suppress non-content events
             StreamEvent::Reasoning { .. } => None,
-            StreamEvent::ReasoningBlock { .. } => None,
             StreamEvent::ToolEnd { .. } => None,
             StreamEvent::ToolUpdate { .. } => None,
             StreamEvent::AgentTrace { .. } => None,

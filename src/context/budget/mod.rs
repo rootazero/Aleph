@@ -388,7 +388,7 @@ impl ContextBudget {
     pub fn publish_message_tokens_as(&mut self, session_key: impl Into<String>) {
         let session_key = session_key.into();
         self.breakdown_turn = crate::thinker::prompt_size_registry::global_prompt_size_registry()
-            .and_then(|reg| reg.current_turn(&session_key))
+            .and_then(|reg| reg.current_stamp(&session_key))
             .map(|turn| (session_key, turn));
     }
 
@@ -649,9 +649,19 @@ impl ContextBudget {
     /// Record that a session-split completed. Increments the per-run split
     /// counter; once it reaches `max_splits`, further breaker trips fall back
     /// to `CompactToFit`.
-    pub const fn record_split(&mut self) {
+    ///
+    /// The run now continues in a child session, so the prompts this budget
+    /// measures from here on are the child's: it stops recording them on the
+    /// session it was told, and clears what it recorded there, rather than
+    /// report the child's conversation as the parent's.
+    pub fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
         self.circuit_breaker.reset();
+        if let Some((key, stamp)) = self.breakdown_turn.take() {
+            if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+                reg.clear_messages(&key, stamp);
+            }
+        }
     }
 }
 
@@ -743,6 +753,38 @@ mod tests {
             "a target sent no reasoning shows none"
         );
         assert_eq!(dropped.tool_results, kept.tool_results);
+    }
+
+    /// F5: after a session split the run's prompts are the child's. The
+    /// parent's record must read as unknown, never as the child's
+    /// conversation — neither what was recorded before the split nor anything
+    /// measured after it.
+    ///
+    /// Mutation-checked: leaving the binding in place in `record_split` turns
+    /// this red.
+    #[test]
+    fn after_a_split_the_parent_record_holds_no_messages() {
+        let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
+        let key = format!("test:split:{}", uuid::Uuid::new_v4());
+        registry.record_turn(&key, None, vec![]);
+        let msgs = vec![UnifiedMessage::user("question")];
+        let mut budget = ContextBudget::new(&default_config());
+        budget.publish_message_tokens_as(key.clone());
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert!(registry.latest(&key).unwrap().messages.is_some());
+
+        budget.record_split();
+        assert_eq!(
+            registry.latest(&key).unwrap().messages,
+            None,
+            "cleared at the split"
+        );
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert_eq!(
+            registry.latest(&key).unwrap().messages,
+            None,
+            "the child's prompt is not written onto the parent"
+        );
     }
 
     #[test]

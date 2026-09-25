@@ -24,11 +24,41 @@
 
 use std::time::Duration;
 
-use aleph_protocol::{AgentTraceEvent, StreamEvent};
+use aleph_protocol::{AgentTraceEvent, StreamEvent, TopicsRequest, STREAM_REASONING_TOPIC};
 use tokio::sync::mpsc;
 
 use crate::output::{exec_echo, markdown, stream_md::MarkdownStream, Spinner};
-use aleph_client::CliResult;
+use aleph_client::{AlephClient, CliResult};
+
+/// The subscription of a command that does not render reasoning: every
+/// topic, minus the reasoning frames — one per model delta, each dropped on
+/// arrival. `None` when the command renders them (`--verbose`) or passes every
+/// event through (`--json`); both keep the unfiltered stream.
+#[must_use]
+pub fn reasoning_carve_out(renders_reasoning: bool, json: bool) -> Option<TopicsRequest> {
+    (!renders_reasoning && !json).then(|| {
+        TopicsRequest::new(
+            vec!["**".to_string()],
+            vec![STREAM_REASONING_TOPIC.to_string()],
+        )
+    })
+}
+
+/// Subscribe `client` to [`reasoning_carve_out`]. A failure is reported and
+/// otherwise harmless: the connection stays unfiltered, as it always was.
+pub async fn skip_unrendered_reasoning(client: &AlephClient, renders_reasoning: bool, json: bool) {
+    let Some(request) = reasoning_carve_out(renders_reasoning, json) else {
+        return;
+    };
+    if let Err(e) = client
+        .call::<_, serde_json::Value>("events.subscribe", Some(request))
+        .await
+    {
+        eprintln!(
+            "warning: could not narrow the event stream ({e}); reasoning frames will still arrive"
+        );
+    }
+}
 
 /// How long to wait for the `RunComplete` receipt after the final response
 /// chunk. The drain emits it immediately after the run settles, so this only
@@ -265,16 +295,7 @@ pub async fn follow_run(
                     }
                 }
             }
-            StreamEvent::Reasoning { content, .. } => {
-                if opts.verbose && !opts.json {
-                    if let Some(line) = exec_echo::render_reasoning(&content) {
-                        eprintln!("{line}");
-                    }
-                }
-            }
-            StreamEvent::ReasoningBlock { content, .. }
-                if opts.verbose && !agent_trace_seen && !opts.json =>
-            {
+            StreamEvent::Reasoning { content, .. } if opts.verbose && !opts.json => {
                 if let Some(line) = exec_echo::render_reasoning(&content) {
                     eprintln!("{line}");
                 }
@@ -335,5 +356,35 @@ fn flush_body(
         if !text.trim().is_empty() {
             emit_body_block(&markdown::render(text), printed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a command that drops reasoning carves it out; `--verbose` renders
+    /// it and `--json` passes every event through, so both keep everything.
+    /// The request is the protocol type the gateway's carve-out tests drive.
+    ///
+    /// Mutation-checked: returning the carve-out regardless of the flags turns
+    /// this red.
+    #[test]
+    fn only_a_command_that_drops_reasoning_carves_it_out() {
+        assert_eq!(
+            reasoning_carve_out(true, false),
+            None,
+            "--verbose renders it"
+        );
+        assert_eq!(
+            reasoning_carve_out(false, true),
+            None,
+            "--json passes it through"
+        );
+        assert_eq!(reasoning_carve_out(true, true), None);
+        assert_eq!(
+            serde_json::to_value(reasoning_carve_out(false, false).expect("carved out")).unwrap(),
+            serde_json::json!({ "topics": ["**"], "except": [STREAM_REASONING_TOPIC] })
+        );
     }
 }

@@ -34,7 +34,6 @@ fn classify_topic(topic: &str) -> Option<ActivitySeverity> {
     match topic {
         "agent.response.chunk"
         | "agent.reasoning"
-        | "agent.reasoning.block"
         | "agent.tool.start"
         | "agent.tool.update"
         // Live ASR deltas fire many times per second and would both spam the
