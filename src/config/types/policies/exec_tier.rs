@@ -522,8 +522,10 @@ impl ExecTier {
 /// circuits.
 ///
 /// The single composition point: `ScopedToolService::permission_for` (the loop's
-/// enforcement chokepoint) and the gateway slash-command fast path both call it,
-/// so neither surface can drift into its own precedence.
+/// enforcement chokepoint) calls it, and so does every gateway surface that asks
+/// the same question ahead of the loop — the slash-command fast path and a
+/// plugin command's inline shell (`TurnPermissions::builtin_permission`) — so
+/// none can drift into its own precedence.
 #[must_use]
 pub fn effective_permission(
     permissions: Option<&ToolPermissionsConfig>,

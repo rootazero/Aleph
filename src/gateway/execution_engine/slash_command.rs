@@ -282,10 +282,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // `<available_skills>` block
                 // (`thinker::layers::skill_instructions`); its *body* is
                 // reachable only through the always-resident `skill_read`
-                // tool, which the model calls itself. A plugin COMMAND's body
-                // is rendered by `execute.rs` on this `Fallthrough`
-                // (`slash_command_body`, after the owner gate above) and rides
-                // the run loop's transient blocks. What this arm contributes
+                // tool, which the model calls itself. A plugin COMMAND is
+                // admitted by `execute.rs` on this `Fallthrough`
+                // (`slash_command_body::admit`, after the owner gate above);
+                // its body is rendered by the run loop, after the turn-start
+                // hooks, into its transient blocks. What this arm contributes
                 // either way is the `allowed_tools` scope carried on the mode
                 // JSON, which `execute.rs` lifts into
                 // `slash_skill_allowed_tools` for the loop to intersect.
@@ -537,7 +538,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         agent: &AgentInstance,
     ) -> Result<crate::session::events::RunEnvelopeSnapshot, String> {
-        use crate::config::types::policies::{effective_permission, ToolFacts};
+        use crate::config::types::policies::effective_permission;
         use crate::extension::PermissionAction;
 
         // `plan_gate` and `side_question` are both deliberately dropped: the
@@ -575,17 +576,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
-        // The same facts `ScopedToolService` builds. `requires_approval` is read
-        // from the adapter's own declaration list rather than guessed: the fast
-        // path can only reach builtin and plugin tools (MCP and skill modes fall
-        // through above), and those are exactly the tools that list covers — so
-        // this is the tier's real input, not a fail-closed stand-in that would
-        // make every command fall through.
-        let facts = ToolFacts {
-            name,
-            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
-            requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
-        };
+        // The same facts `ScopedToolService` builds: the fast path can only
+        // reach builtin and plugin tools (MCP and skill modes fall through
+        // above), so the name-keyed facts are the tier's real input, not a
+        // fail-closed stand-in that would make every command fall through.
+        let facts = super::turn_permissions::builtin_tool_facts(name);
         let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
 
         if permission != PermissionAction::Allow {

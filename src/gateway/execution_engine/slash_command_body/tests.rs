@@ -4,9 +4,24 @@
 use super::*;
 use crate::discovery::DiscoveryConfig;
 use crate::extension::{ExtensionConfig, PluginKind, PluginOrigin, PluginRecord};
+use crate::gateway::agent_instance::AgentInstance;
 use tempfile::TempDir;
 
 const PLUGIN: &str = "plug";
+
+/// The unit-test engine (`execution_engine::tests::test_engine`).
+type TestEngine = super::super::engine::ExecutionEngine<
+    crate::thinker::SingleProviderRegistry,
+    super::super::tests::EmptyToolRegistry,
+>;
+
+/// This turn's permissions as a default engine resolves them for its tool
+/// gate (no configured policy).
+async fn turn_permissions(request: &RunRequest, agent: &AgentInstance) -> TurnPermissions {
+    super::super::tests::test_engine()
+        .resolve_turn_permissions(request, agent)
+        .await
+}
 
 fn command(body: &str) -> SkillRegistration {
     SkillRegistration {
@@ -136,17 +151,32 @@ impl Fixture {
 
     /// The two production steps for `request`: [`admit`] (the fast path's
     /// fallthrough arm), then [`render_admitted`] (the run loop, after its
-    /// turn-start seams) in the run's own directory.
+    /// turn-start seams) in the run's own directory, under the permissions a
+    /// default engine resolves for the turn.
     async fn admit_and_render(
         &self,
         request: &mut RunRequest,
-        agent: &crate::gateway::agent_instance::AgentInstance,
+        agent: &AgentInstance,
+    ) -> Result<Option<String>, String> {
+        self.admit_and_render_on(&super::super::tests::test_engine(), request, agent)
+            .await
+    }
+
+    /// [`Self::admit_and_render`] under the permissions `engine` resolves for
+    /// the turn — its configured policy, the request's tier and channel layer.
+    async fn admit_and_render_on(
+        &self,
+        engine: &TestEngine,
+        request: &mut RunRequest,
+        agent: &AgentInstance,
     ) -> Result<Option<String>, String> {
         admit_with(request, &self.manager).await?;
         let run_dir = super::super::run_loop::run_workspace(request, agent);
+        let permissions = engine.resolve_turn_permissions(request, agent).await;
         render_admitted(
             request,
             &run_dir,
+            &permissions,
             Some(&self.manager),
             Arc::clone(&self.consent),
             &CancellationToken::new(),
@@ -663,6 +693,7 @@ async fn an_admitted_command_renders_for_the_transient_blocks_and_leaves_the_inp
     let again = render_admitted(
         &request,
         &run_dir,
+        &turn_permissions(&request, &agent).await,
         Some(&f.manager),
         Arc::clone(&f.consent),
         &CancellationToken::new(),
@@ -736,6 +767,7 @@ async fn a_retired_model_stops_the_turn_before_any_inline_command_runs() {
     let rendered = render_admitted(
         &request,
         &run_dir,
+        &turn_permissions(&request, &agent).await,
         Some(&f.manager),
         Arc::clone(&f.consent),
         &CancellationToken::new(),
@@ -855,11 +887,14 @@ fn the_body_renders_after_the_owner_gate_and_is_pushed_first() {
         "inner.rs must render the command after its UserPromptSubmit seam and put it first — \
          positions: seam {prompt_seam}, render {render}, insert {first}, joined {joined}"
     );
+    let call = inner.get(render..first).unwrap_or_default();
     assert!(
-        inner
-            .get(render..first)
-            .is_some_and(|call| call.contains("&effective_workspace")),
+        call.contains("&effective_workspace"),
         "the render runs in the run's own directory (`run_workspace`)"
+    );
+    assert!(
+        call.contains("&turn_permissions"),
+        "the render judges the permissions this turn's tool gate is built from"
     );
 }
 
@@ -916,12 +951,12 @@ fn the_rescue_strips_the_command_and_the_run_directory_has_one_derivation() {
 
 /// Admit `/plug:greet` (body: an approved `touch RAN`) the way the fallthrough
 /// arm does, then drive the run loop that renders it — `run_agent_loop_inner`
-/// with an optional `UserPromptSubmit` interceptor running `hook`. Returns
-/// whether the inline command ran. The run runs in the agent's own workspace
-/// (no `workspace_override`: an override would be registered in the real
-/// project catalogue).
+/// with an optional `UserPromptSubmit` interceptor running `hook`, on a
+/// request carrying `metadata` too. Returns whether the inline command ran.
+/// The run runs in the agent's own workspace (no `workspace_override`: an
+/// override would be registered in the real project catalogue).
 #[cfg(unix)]
-async fn run_loop_with_prompt_hook(hook: Option<&str>) -> bool {
+async fn run_loop_with_prompt_hook(hook: Option<&str>, metadata: &[(&str, &str)]) -> bool {
     use crate::extension::hooks::HookExecutor;
     use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
     let f = Fixture::new("[!`touch RAN`]", None).await;
@@ -931,6 +966,9 @@ async fn run_loop_with_prompt_hook(hook: Option<&str>) -> bool {
     std::fs::create_dir_all(agent.workspace()).unwrap();
     let mut request = f.request(f.work.clone()).await;
     request.workspace_override = None;
+    for (key, value) in metadata {
+        request.metadata.insert(key.to_string(), value.to_string());
+    }
     admit_with(&mut request, &f.manager)
         .await
         .expect("admitted");
@@ -992,8 +1030,21 @@ async fn run_loop_with_prompt_hook(hook: Option<&str>) -> bool {
 #[tokio::test]
 async fn a_turn_start_deny_hook_stops_the_commands_inline_shell() {
     assert!(
-        !run_loop_with_prompt_hook(Some("echo 'deny: stopped by the test'")).await,
+        !run_loop_with_prompt_hook(Some("echo 'deny: stopped by the test'"), &[]).await,
         "an approved inline command ran for a turn its UserPromptSubmit hook denied"
+    );
+}
+
+/// N9 at the fire site: the run loop hands the render the permissions it
+/// resolved for its own tool gate, so on a `plan` turn — where the model may
+/// not run `bash` — an approved inline command does not run either.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_plan_turn_runs_no_inline_command_in_the_run_loop() {
+    use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+    assert!(
+        !run_loop_with_prompt_hook(None, &[(EXEC_TIER_SESSION_KEY, ExecTier::Plan.id())]).await,
+        "an approved inline command ran on a plan turn"
     );
 }
 
@@ -1003,7 +1054,7 @@ async fn a_turn_start_deny_hook_stops_the_commands_inline_shell() {
 #[tokio::test]
 async fn the_run_loop_renders_an_admitted_command_when_its_hooks_allow() {
     assert!(
-        run_loop_with_prompt_hook(None).await,
+        run_loop_with_prompt_hook(None, &[]).await,
         "the run loop never rendered the admitted command"
     );
 }
@@ -1015,6 +1066,8 @@ async fn the_run_loop_renders_an_admitted_command_when_its_hooks_allow() {
 async fn a_cancelled_turn_renders_nothing() {
     let f = Fixture::new("[!`touch RAN`]", None).await;
     f.approve("touch RAN");
+    let temp = TempDir::new().unwrap();
+    let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
     let mut request = f.request(f.work.clone()).await;
     admit_with(&mut request, &f.manager).await.unwrap();
     let cancel = CancellationToken::new();
@@ -1022,6 +1075,7 @@ async fn a_cancelled_turn_renders_nothing() {
     let rendered = render_admitted(
         &request,
         &f.work,
+        &turn_permissions(&request, &agent).await,
         Some(&f.manager),
         Arc::clone(&f.consent),
         &cancel,
@@ -1078,34 +1132,20 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
     );
 }
 
-/// S5. Inline shell runs only for an operator, on a channel that does not
-/// deny the model its own shell (the `/moa` precedent). A guest or member
-/// sender, a channel layer that denies `bash`, and one that cannot be read
-/// all get the body with every inline command withheld and named; an
-/// operator whose channel denies something else — and a loopback caller with
-/// no channel at all — run it.
+/// S5. Inline shell runs only for an operator (the `/moa` precedent): a guest
+/// or member sender gets the body with every inline command withheld and
+/// named, whatever the turn's permissions; an operator, and a loopback caller
+/// with no role at all, run it.
 #[tokio::test]
 #[cfg(unix)]
-async fn inline_commands_run_only_for_an_operator_on_a_channel_that_allows_bash() {
-    let deny_bash = r#"{"default":"allow","overrides":{"bash":"deny"}}"#;
+async fn inline_commands_run_only_for_an_operator() {
     let deny_other = r#"{"default":"allow","overrides":{"web_fetch":"deny"}}"#;
-    let operator_only = "inline commands run only for an operator";
     for (role, layer, withheld) in [
-        (Some("guest"), None, Some(operator_only)),
-        (Some("member"), None, Some(operator_only)),
-        (Some("guest"), Some(deny_other), Some(operator_only)),
-        (
-            Some("operator"),
-            Some(deny_bash),
-            Some("this channel denies `bash`"),
-        ),
-        (
-            Some("operator"),
-            Some("not json"),
-            Some("this channel's tool permissions cannot be read"),
-        ),
-        (Some("operator"), Some(deny_other), None),
-        (None, None, None),
+        (Some("guest"), None, true),
+        (Some("member"), None, true),
+        (Some("guest"), Some(deny_other), true),
+        (Some("operator"), None, false),
+        (None, None, false),
     ] {
         let f = Fixture::new("Hi [!`touch RAN`]", None).await;
         f.approve("touch RAN");
@@ -1129,15 +1169,104 @@ async fn inline_commands_run_only_for_an_operator_on_a_channel_that_allows_bash(
             .unwrap()
             .expect("the body still renders");
         let ran = f.work.join("RAN").exists();
-        match withheld {
-            Some(reason) => {
-                assert!(!ran, "{role:?} / {layer:?}: the inline command ran");
-                assert!(
-                    block.contains(&format!("Hi [[!`touch RAN` not run: {reason}]]")),
-                    "{role:?} / {layer:?}: {block}"
-                );
-            }
-            None => assert!(ran, "{role:?} / {layer:?}: withheld: {block}"),
+        if withheld {
+            assert!(!ran, "{role:?} / {layer:?}: the inline command ran");
+            assert!(
+                block.contains(
+                    "Hi [[!`touch RAN` not run: inline commands run only for an operator]]"
+                ),
+                "{role:?} / {layer:?}: {block}"
+            );
+        } else {
+            assert!(ran, "{role:?} / {layer:?}: withheld: {block}");
+        }
+    }
+}
+
+/// N9. For an operator, an inline command runs only where the turn's tool
+/// gate would let the model run `bash` — one derivation, the gate's own: the
+/// global, agent and channel policies merged, and the tier. A layer that
+/// denies `bash`, a `plan` turn and a `/btw` side question all withhold; a
+/// policy that denies another tool does not, and neither does a channel
+/// layer that cannot be read — the tool gate skips it with a warning, and
+/// the inline face follows the gate rather than keep a second parse of it.
+#[tokio::test]
+#[cfg(unix)]
+async fn a_turn_whose_tool_gate_denies_bash_runs_no_inline_command() {
+    use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+    let deny_bash = r#"{"default":"allow","overrides":{"bash":"deny"}}"#;
+    let deny_other = r#"{"default":"allow","overrides":{"web_fetch":"deny"}}"#;
+    let channel = super::super::CHANNEL_TOOL_PERMISSIONS_KEY;
+    let btw = crate::gateway::btw::BTW_METADATA_KEY;
+    let plan = ExecTier::Plan.id();
+    // (case, the install's `[policies.tool_permissions]`, request metadata, withheld)
+    let cases: [(&str, Option<&str>, &[(&str, &str)], bool); 8] = [
+        (
+            "a channel layer denies bash",
+            None,
+            &[(channel, deny_bash)],
+            true,
+        ),
+        ("the install denies bash", Some(deny_bash), &[], true),
+        ("a plan turn", None, &[(EXEC_TIER_SESSION_KEY, plan)], true),
+        (
+            "a /btw side question",
+            None,
+            &[(btw, "what is this?")],
+            true,
+        ),
+        (
+            "a channel layer denies another tool",
+            None,
+            &[(channel, deny_other)],
+            false,
+        ),
+        (
+            "the install denies another tool",
+            Some(deny_other),
+            &[],
+            false,
+        ),
+        (
+            "an unreadable channel layer",
+            None,
+            &[(channel, "not json")],
+            false,
+        ),
+        ("nothing configured", None, &[], false),
+    ];
+    for (case, install, metadata, withheld) in cases {
+        let f = Fixture::new("Hi [!`touch RAN`]", None).await;
+        f.approve("touch RAN");
+        let temp = TempDir::new().unwrap();
+        let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+        let mut request = f.request(f.work.clone()).await;
+        request
+            .metadata
+            .insert("caller_role".to_string(), "operator".to_string());
+        for (key, value) in metadata {
+            request.metadata.insert(key.to_string(), value.to_string());
+        }
+        let mut config = crate::Config::default();
+        if let Some(policy) = install {
+            config.policies.tool_permissions = serde_json::from_str(policy).unwrap();
+        }
+        let engine = super::super::tests::test_engine()
+            .with_app_config(Arc::new(tokio::sync::RwLock::new(config)));
+        let block = f
+            .admit_and_render_on(&engine, &mut request, &agent)
+            .await
+            .unwrap()
+            .expect("the body still renders");
+        let ran = f.work.join("RAN").exists();
+        if withheld {
+            assert!(!ran, "{case}: the inline command ran");
+            assert!(
+                block.contains("Hi [[!`touch RAN` not run: this turn's permissions deny `bash`]]"),
+                "{case}: {block}"
+            );
+        } else {
+            assert!(ran, "{case}: withheld: {block}");
         }
     }
 }

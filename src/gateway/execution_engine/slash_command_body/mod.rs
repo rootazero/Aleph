@@ -38,8 +38,8 @@
 //! plugin's `hooks.json` command goes through, keyed by the command's own
 //! template text, then the production builder
 //! ([`inline_shell_command`](crate::extension::inline_shell_command)) — and
-//! only for an operator whose channel does not deny `bash`
-//! ([`inline_shell_refusal`]).
+//! only for an operator on a turn whose tool gate would let the model run
+//! `bash` ([`inline_shell_refusal`]).
 //!
 //! **`model:`** pins this turn's model when the request carries none
 //! ([`command_model_pin`]).
@@ -64,6 +64,7 @@ use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::gateway::model_override::ModelOverride;
 use crate::sync_primitives::Arc;
 
+use super::turn_permissions::TurnPermissions;
 use super::{ExecutionError, RunRequest};
 
 /// Request-metadata key naming the plugin command [`admit`] admitted for this
@@ -126,13 +127,16 @@ pub(super) async fn admit_with(
 /// this after its turn-start seams let the turn go ahead.
 ///
 /// `run_dir` is the run's own directory (`run_loop::run_workspace`); inline
-/// commands run in it only if it is there. The render races `cancel`: a
-/// stopped turn stops waiting on its inline commands (whose children are
-/// killed on drop). An admitted command that can no longer be found under the
-/// same key, or whose body cannot be rendered, fails the turn visibly.
+/// commands run in it only if it is there. `permissions` are this turn's, as
+/// the run loop resolved them for its tool gate ([`inline_shell_refusal`]).
+/// The render races `cancel`: a stopped turn stops waiting on its inline
+/// commands (whose children are killed on drop). An admitted command that can
+/// no longer be found under the same key, or whose body cannot be rendered,
+/// fails the turn visibly.
 pub(super) async fn render_admitted(
     request: &RunRequest,
     run_dir: &Path,
+    permissions: &TurnPermissions,
     manager: Option<&ExtensionManager>,
     consent: Arc<ShellHookConsent>,
     cancel: &CancellationToken,
@@ -146,7 +150,7 @@ pub(super) async fn render_admitted(
         return Err(refused("the extension manager is gone"));
     };
     let cwd = Some(run_dir.to_path_buf()).filter(|d| d.is_dir());
-    let refusal = inline_shell_refusal(&request.metadata);
+    let refusal = inline_shell_refusal(&request.metadata, permissions);
     let render = render_command(&mode, cwd, refusal, manager, consent);
     let rendered = tokio::select! {
         biased;
@@ -166,29 +170,28 @@ pub(super) async fn render_admitted(
 /// sender picks. So — as `/moa` arms only for an operator on its channel
 /// face — it runs only for an OPERATOR (`role_is_operator`: loopback and
 /// authorized clients; a channel's chat-tier sender is a guest), and only
-/// where the turn's channel does not deny the model its own shell (`bash`)
-/// in its tool-permission layer: an approved command would otherwise be the
-/// very shell that channel's operator switched off. A layer that cannot be
-/// read denies. The body still renders; each inline command is a placeholder
+/// on a turn whose tool gate would not deny the model its own shell
+/// (`bash`): an approved command would otherwise be the very shell the
+/// operator switched off. That is the tool gate's own answer
+/// ([`TurnPermissions::builtin_permission`]) — the global, agent and channel
+/// policies merged, and the tier, so a `plan` turn and a `/btw` side question
+/// run none — not a second reading of any one layer. `Ask` on `bash` does not
+/// withhold: the command's consent entry is its own question, asked once per
+/// command text. The body still renders; each inline command is a placeholder
 /// naming the reason.
-fn inline_shell_refusal(metadata: &HashMap<String, String>) -> Option<&'static str> {
+fn inline_shell_refusal(
+    metadata: &HashMap<String, String>,
+    permissions: &TurnPermissions,
+) -> Option<&'static str> {
     use crate::tools::AlephTool;
     if !crate::tools::turn_context::role_is_operator(
         metadata.get("caller_role").map(String::as_str),
     ) {
         return Some("inline commands run only for an operator");
     }
-    let layer = metadata.get(super::CHANNEL_TOOL_PERMISSIONS_KEY)?;
-    match serde_json::from_str::<crate::config::types::policies::ToolPermissionsConfig>(layer) {
-        Ok(layer)
-            if layer.resolve(crate::builtin_tools::BashExecTool::NAME)
-                == crate::extension::PermissionAction::Deny =>
-        {
-            Some("this channel denies `bash`")
-        }
-        Ok(_) => None,
-        Err(_) => Some("this channel's tool permissions cannot be read"),
-    }
+    (permissions.builtin_permission(crate::builtin_tools::BashExecTool::NAME)
+        == crate::extension::PermissionAction::Deny)
+        .then_some("this turn's permissions deny `bash`")
 }
 
 /// The slash-mode JSON a request carries, if any.

@@ -103,6 +103,34 @@ impl TurnPermissions {
             side_question: self.side_question,
         }
     }
+
+    /// What the run's tool gate answers for the builtin `name` on this turn:
+    /// [`effective_permission`](crate::config::types::policies::effective_permission)
+    /// over this turn's merged policy (global, agent, channel) and its tier —
+    /// the derivation `ScopedToolService::permission_for` makes for every
+    /// call. A tier that refuses (`Plan`, and so every `/btw` side question)
+    /// denies whatever the policy says.
+    pub(super) fn builtin_permission(&self, name: &str) -> crate::extension::PermissionAction {
+        crate::config::types::policies::effective_permission(
+            self.explicit.as_ref(),
+            Some(self.tier),
+            builtin_tool_facts(name),
+        )
+    }
+}
+
+/// The facts the tier reads for a builtin or plugin tool known by name — the
+/// ones `ScopedToolService::tool_facts` answers for those tools, and what the
+/// name-keyed callers of `effective_permission` (the slash-command fast path,
+/// [`TurnPermissions::builtin_permission`]) share. `requires_approval` is the
+/// adapter's own declaration list, not a guess: builtin and plugin tools are
+/// exactly the tools that list covers.
+pub(super) fn builtin_tool_facts(name: &str) -> crate::config::types::policies::ToolFacts<'_> {
+    crate::config::types::policies::ToolFacts {
+        name,
+        idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+        requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
+    }
 }
 
 /// Resolve this turn's execution tier.

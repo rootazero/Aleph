@@ -488,10 +488,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // stops the turn stops its inline commands too — and goes FIRST: it is
         // this turn's instruction, every reminder annotates it. It rides the
         // transient channel, so the persisted user turn stays the raw
-        // `/command args` (`slash_command_body` module doc).
+        // `/command args` (`slash_command_body` module doc). Its inline
+        // commands answer to the permissions this turn's tool gate is built
+        // from.
         if let Some(block) = super::super::slash_command_body::render_admitted(
             request,
             &effective_workspace,
+            &turn_permissions,
             extension_manager.as_deref(),
             Arc::clone(&self.inline_consent),
             &cancel_token,
