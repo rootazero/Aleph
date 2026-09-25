@@ -319,7 +319,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
   `in_context_tokens`（`ProcessedResult::tokens_in_context`）/ `offloaded`（**只算 Layer 2**；Layer 3 按轮预算事后溢出的结果
   不在其中，它的 token 仍算在 `in_context_tokens` 里）。在 `scoped/dispatch.rs::apply_layer_two` 记账；
   被委派的角色（`identity::current_actor()` 有值）**不记**——它跑在父会话的 service 与 `TURN_CONTEXT` 下，
-  但它的结果进的是子会话的上下文。标签的「从何时起」**由 `since_unix_ms` 派生**（TUI：`tool output since HH:MM`），
+  但它的结果进的是子会话的上下文。标签的「从何时起」**由 `since_unix_ms` 派生**（TUI：`tool output at ingress since HH:MM`），
   什么会让它重新起算只写在 wire 类型的 doc 上一处。
 - 子代理会话**没有记录**：`subagent_spawner` 走 `build_system_prompt_parts` 的 Basic 路径，从不 `record_turn`，
   所以对子会话的 `context.breakdown` 仍是 `RESOURCE_NOT_FOUND`，它的 `ContextBudget` 也无处可写。

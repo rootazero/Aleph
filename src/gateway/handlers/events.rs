@@ -495,6 +495,60 @@ mod tests {
         );
     }
 
+    /// The CLI twin's `**` minus reasoning must deliver exactly what the CLI
+    /// got unsubscribed (`should_receive` = `None => true`) for everything but
+    /// reasoning — a missing `RunComplete` would hang `ask`. Checked over every
+    /// topic string `frame.rs` publishes, plus the empty topic
+    /// `extract_topic_and_data` falls back to for an unrecognised shape. And an
+    /// older server, which reads the request as plain `**`, delivers every one
+    /// of them, reasoning included: `topic_matches` returns early for `**`.
+    ///
+    /// Nothing else reaching the socket goes through this filter at all: RPC
+    /// responses, reverse-RPC frames and the overflow diagnostic are written
+    /// straight to the socket (`server/handler.rs`), and the event forwarder is
+    /// the one caller of `should_receive`.
+    #[tokio::test]
+    async fn the_cli_carve_out_delivers_everything_an_unsubscribed_socket_did_but_reasoning() {
+        let frame_src = include_str!("../events/frame.rs");
+        let mut names: Vec<String> = frame_src
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|s| {
+                s.contains('.')
+                    && s.chars()
+                        .all(|c| c.is_ascii_lowercase() || c == '_' || c == '.')
+            })
+            .map(str::to_string)
+            .collect();
+        names.sort();
+        names.dedup();
+        assert!(
+            names.iter().any(|t| t == "stream.run_complete")
+                && names.iter().any(|t| t == "stream.ask_user")
+                && names.len() >= 30,
+            "the topic scrape stopped matching frame.rs: {names:?}"
+        );
+        names.push(String::new());
+        names.push(aleph_protocol::STREAM_REASONING_TOPIC.to_string());
+
+        let m = Arc::new(SubscriptionManager::new());
+        let cli = topics(&["**"], &[aleph_protocol::STREAM_REASONING_TOPIC]);
+        call("events.subscribe", cli, "cli", &m).await;
+        let old = Arc::new(SubscriptionManager::new());
+        call("events.subscribe", topics(&["**"], &[]), "cli", &old).await;
+        for t in &names {
+            let unsubscribed = m.should_receive("never-subscribed", t, None).await;
+            assert!(unsubscribed);
+            let expected = t != aleph_protocol::STREAM_REASONING_TOPIC;
+            assert_eq!(m.should_receive("cli", t, None).await, expected, "{t:?}");
+            assert!(
+                old.should_receive("cli", t, None).await,
+                "old server, {t:?}"
+            );
+        }
+    }
+
     /// Version skew: the Panel can reach an older LAN server. The params as
     /// the new clients send them must parse under both older server shapes —
     /// the pre-T3 `Vec<String>` topic list and the T3 selector list — and

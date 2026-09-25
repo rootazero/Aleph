@@ -139,10 +139,12 @@ fn footer(view: &ContextView) -> Vec<String> {
     // keeps the tally in memory, so a restart or a dropped record starts it
     // over. Two lines, because one would clip on a narrow overlay.
     if let Some(t) = view.tool_output {
+        // "at ingress": the tally is the per-result (Layer 2) pass only; a
+        // per-turn spill later is not in it (`ToolOutputIngress` docs).
         out.push(match t.since_unix_ms.and_then(since_label) {
-            Some(since) => format!("tool output since {since}:"),
+            Some(since) => format!("tool output at ingress since {since}:"),
             // A server that predates the field: the start is not known.
-            None => "tool output, this session (start unknown):".to_string(),
+            None => "tool output at ingress (start unknown):".to_string(),
         });
         out.push(format!(
             "  {} produced \u{2192} {} kept \u{00b7} {} offloaded \u{00b7} {} call{}",
@@ -389,7 +391,7 @@ mod tests {
             assert!(screen.contains(label), "missing {label}:\n{screen}");
         }
         assert!(
-            screen.contains("tool output since 09:05:")
+            screen.contains("tool output at ingress since 09:05:")
                 && screen.contains("2 offloaded \u{00b7} 7 calls"),
             "the tally must be painted with what it measures and from when:\n{screen}"
         );
