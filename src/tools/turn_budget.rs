@@ -558,18 +558,19 @@ mod tests {
             let id = TurnId::new(uuid::Uuid::new_v4());
             let text = text_of(target);
             let tokens = estimate(&text);
-            let spilled = !budget
-                .record(
-                    &id,
-                    TurnResult {
-                        call_id: "cf".to_string(),
-                        tool_name: "bash".to_string(),
-                        tokens_in_context: tokens,
-                        in_context_text: text.clone(),
-                        already_persisted: false,
-                    },
-                )
-                .is_empty();
+            let result = TurnResult {
+                call_id: "cf".to_string(),
+                tool_name: "bash".to_string(),
+                tokens_in_context: tokens,
+                in_context_text: text.clone(),
+                already_persisted: false,
+            };
+            assert_eq!(
+                budget.floor_tokens(&result),
+                floor(tokens),
+                "the budget's floor is the offload's, on the same scoped store"
+            );
+            let spilled = !budget.record(&id, result).is_empty();
             assert_eq!(
                 spilled,
                 tokens > floor(tokens),
