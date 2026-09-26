@@ -826,6 +826,43 @@ impl HarnessRunner for AgentHarnessRunner {
             let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
             Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
         });
+        // The store is process-wide; the *handle* carries the session scope
+        // (see `tools::result_store` module docs). Scoping it here is what
+        // keeps this run's Layer-3 spills out of every other live session's
+        // `ctx_search` — and out of the blast radius of their denial
+        // circuit-breaker. The key must be the wire session key, because
+        // `ctx_search` resolves its own scope from
+        // `turn_context::current_session_key()`.
+        let result_store = self
+            .result_store
+            // rust-doctor-disable-next-line excessive-clone
+            .clone()
+            .or_else(crate::tools::result_store::global_tool_result_store)
+            .map(|store| {
+                crate::tools::result_store::ToolResultStore::for_session(
+                    &store,
+                    session_id.to_key_string(),
+                )
+            });
+        // Layer 3 turn budget + Layer 2 shared store. Prefer the
+        // bridge's explicit field (set via direct injection / tests);
+        // then this run's window-sized budget; then the process-wide
+        // singleton installed at boot. `None` (nothing anywhere) keeps the
+        // legacy behavior — Layer 2 / Layer 3 are inert.
+        //
+        // This run's handle measures its spill floor on the SAME scoped store
+        // `Arc` the Layer-3 spill writes through (a clone of the budget shares
+        // its per-turn state; only the store handle is this run's).
+        let turn_budget = self
+            .turn_budget
+            // rust-doctor-disable-next-line excessive-clone
+            .clone()
+            .or(windowed_turn_budget)
+            .or_else(crate::tools::turn_budget::global_turn_result_budget)
+            .map(|budget| match &result_store {
+                Some(store) => Arc::new((*budget).clone().with_result_store(Arc::clone(store))),
+                None => budget,
+            });
         let deps = HarnessDeps {
             // rust-doctor-disable-next-line excessive-clone
             session: self.session_service.clone(),
@@ -870,35 +907,8 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
-            // Layer 3 turn budget + Layer 2 shared store. Prefer the
-            // bridge's explicit field (set via direct injection / tests);
-            // then this run's window-sized budget; then the process-wide
-            // singleton installed at boot. `None` (nothing anywhere) keeps the
-            // legacy behavior — Layer 2 / Layer 3 are inert.
-            turn_budget: self
-                .turn_budget
-                // rust-doctor-disable-next-line excessive-clone
-                .clone()
-                .or(windowed_turn_budget)
-                .or_else(crate::tools::turn_budget::global_turn_result_budget),
-            // The store is process-wide; the *handle* carries the session scope
-            // (see `tools::result_store` module docs). Scoping it here is what
-            // keeps this run's Layer-3 spills out of every other live session's
-            // `ctx_search` — and out of the blast radius of their denial
-            // circuit-breaker. The key must be the wire session key, because
-            // `ctx_search` resolves its own scope from
-            // `turn_context::current_session_key()`.
-            result_store: self
-                .result_store
-                // rust-doctor-disable-next-line excessive-clone
-                .clone()
-                .or_else(crate::tools::result_store::global_tool_result_store)
-                .map(|store| {
-                    crate::tools::result_store::ToolResultStore::for_session(
-                        &store,
-                        session_id.to_key_string(),
-                    )
-                }),
+            turn_budget,
+            result_store,
             // rust-doctor-disable-next-line excessive-clone
             session_epoch_registrar: self.session_epoch_registrar.clone(),
             // Spec 3 — per-tool-invocation signal capture. When a
