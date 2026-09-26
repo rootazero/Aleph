@@ -27,9 +27,11 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
                                    # (round-1 B3 landed the tab-identity registry in
-                                   # core; the post-re-attach ACTIVE-TAB identity
-                                   # assertion in THIS fixture is still a registered
-                                   # gap, not done — see the Known-gap section below)
+                                   # core; 2026-09-26 this fixture asserts the identity
+                                   # half — same tab id, same url across the re-attach.
+                                   # The ACTIVE-verdict half is measured NOT preserved
+                                   # on this driver and stays booked — see the Known-gap
+                                   # section below)
                                      # (unix only: pgrep)
 ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Aleph's own CDP client
                                      # runnable under cdp: open tools frames exec-offload
@@ -55,10 +57,12 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # and a prefix-neighbour that a RECORD points at
                                    # is not (needs ALEPH_QA_CHROME)
 ./qa/browser_dual/run.sh caps      # the capability table, probed against the real binary
-                                   # (round-1's two new rows — ref_precheck /
-                                   # effect_probe — are NOT probed here yet; registered
-                                   # gap. obscura's effect_probe is Unsupported today,
-                                   # so its probe asserts the refusal, never a success)
+                                   # (round-1's two rows — ref_precheck / effect_probe —
+                                   # probed since 2026-09-26: ref_precheck at the gateway
+                                   # layer (stale-ref refusal + recovery trailer),
+                                   # effect_probe by three raw-CDP premises; obscura's
+                                   # effect_probe measured Unsupported on v0.2.2 — the
+                                   # read-back cannot survive a self-navigating click)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome
@@ -887,11 +891,20 @@ EFFECT against the obscura **Aleph launched** — reached through the engine
 sidecar, never one the script starts itself, because `file_upload` is
 `unsupported` precisely *because Aleph does not pass `--allow-file-access`*, so
 the row is a property of the argv as much as of the binary. Round-1 (2026-09-24)
-added two rows this stage does NOT probe yet — `ref_precheck` and
-`effect_probe` (FL §3.12 第四轮 ②④): that is a registered gap, not coverage,
-and obscura's `effect_probe` row is `Unsupported` today (fail-closed on an
-unmeasured engine), so its probe — when written — asserts the REFUSAL reaches
-the model, never a fabricated verification.
+added two rows — `ref_precheck` and `effect_probe` (FL §3.12 第四轮 ②④) — that
+this stage did not probe until 2026-09-26 closed the gap: `ref_precheck` is
+probed at the GATEWAY layer (the check lives in the tool layer, not the engine:
+snapshot mints a ref, a navigation ends its generation, and the click must come
+back refused with the stale-ref prose and the `recovery: {"category":"stale_ref"…}`
+trailer); `effect_probe` is probed by three raw-CDP premises — window-global
+persistence (holds), node-level delivery of synthetic `Input.dispatchMouseEvent`
+(holds; window-level capture listeners see NOTHING on this engine, which is why
+the production probe installs on the node), and the read-back after a
+self-navigating click (FAILS: the click navigates, the window flag dies with the
+document, and the read-back answers a clean null on the new document —
+indistinguishable from "never landed"). So obscura's row stays `Unsupported`,
+now as a measured verdict on v0.2.2 rather than a fail-closed unknown, and its
+probe asserts the refusal reaches the model, never a fabricated verification.
 
 **`switch` is the only place spec §5.5's "the login survives" is a fact rather
 than an intention.** Its load-bearing claims are the two no RPC can see: the
@@ -1539,6 +1552,25 @@ refuses to boot with `invalid type: sequence, expected a map`.
 
 ## Known gap: tab identity does not survive a re-attach
 
+**Status update (2026-09-26, gap partially CLOSED):** the fixture now ASSERTS
+the identity half (the second half of this section's (b) below): step 6a of
+`browser_managed/attach` records the active tab's (id, url) before the CLI's
+out-of-band `close`, and step 7 requires the re-attached session to still list
+a tab answering the SAME url — identity **by address**, because the listing's
+ids are positional and the swap the original measurement below records was
+reproduced twice on 2026-09-26 (the marker page came back as id "1" in one
+run and id "0" in the next, so "same id still listed" would assert nothing).
+Falsified: comparing against a tampered url goes red. What is measured and
+STILL open: the **active VERDICT does not survive a playwright-cli re-attach**
+— measured 2026-09-26 on this fixture (Chrome 151, playwright-cli 0.1.21):
+before `close` the opened page's tab is active; after the re-attach the
+listing marks the launch-argv `about:blank` tab active and the post-re-attach
+snapshot lands on `about:blank`. That half is the plan-2 fix named below (the
+manager's persistent registry consulted at re-attach time, one layer above
+`playwright_cli.rs`), and `drive_attach.py` logs it as `[KNOWN]` rather than
+asserting it — asserting it today would be a standing red, which trains
+readers to scroll past red.
+
 **Status update (2026-09-24, round-1 B3):** the registry this section said was
 needed now exists — `TabRegistry`'s identity half (`record_identity` /
 `resolve_identity`, targetId-first, structured `TabGone`), recorded at every
@@ -1547,9 +1579,8 @@ drivers (FL §3.12 第四轮 ③). What is still NOT done, and stays a registere
 gap rather than a claim: (a) the old drivers' sweep records carry
 `target_id: None`, so on the playwright-cli path this fixture exercises an
 identity can never be ruled `TabGone` — the registry narrows the guess, it
-does not close it there; (b) **no QA fixture asserts any of it** — the
-post-re-attach active-tab identity assertion for `browser_managed/attach`
-sketched in the round-1 spec (write it red first, then green) is unwritten.
+does not close it there; ~~(b) **no QA fixture asserts any of it**~~ — closed
+2026-09-26, see the status update above.
 The original measurement below stays as the record of WHY row order cannot
 answer this question.
 

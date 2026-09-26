@@ -210,20 +210,31 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     pdf: Cap::Supported,
     // Landed in obscura ce9714f, 2026-09-04 (`domains/input.rs:329`).
     insert_text: Cap::Supported,
-    // **Unsupported as the fail-closed answer to an unknown, not as a
-    // measurement.** No obscura binary exists on the machine this row was
-    // implemented on, so the plan's "measure against the real binary first"
-    // could not be honoured — the deviation is recorded in the implementing
-    // commit. What is known structurally (measured 2026-09-19, recorded at
-    // `cdp_backend::actions::NODE_LIVENESS_JS`): obscura mints a FRESH JS
-    // wrapper for every `DOM.resolveNode`, and page-side expandos on the
-    // node do not persist — so the probe's state must live on `window`, and
-    // whether THIS engine's `Runtime.evaluate` calls share a persistent
-    // window global, and whether a listener installed through
-    // `Runtime.callFunctionOn` observes synthetic `Input.dispatch*` events,
-    // are both unmeasured. An unknown may not be spent as a permission
-    // (判据 §8); `qa/browser_dual`'s `caps` stage is the expiry check that
-    // re-asks the question against a real binary.
+    // **Unsupported as a MEASURED verdict, 2026-09-26, obscura v0.2.2
+    // (x86_64-linux) — `qa/browser_dual`'s `caps` stage, three premises.**
+    // Written `Unsupported` at implementation time as the fail-closed answer
+    // to an unknown (no binary on that machine); the caps probe then measured
+    // the two premises the row stated and added the third the first two
+    // could not see:
+    //   1. window-global persistence across `Runtime.evaluate` calls — TRUE;
+    //   2. node-level listeners observe synthetic `Input.dispatchMouseEvent`
+    //      — TRUE (window-level capture listeners observe NOTHING; the
+    //      production probe's `this.addEventListener` is node-level, which is
+    //      the only reason the probe shape works at all);
+    //   3. the read-back after a SELF-NAVIGATING click — FALSE: the click's
+    //      default action fires (the page navigates), `window.__alephProbeHit`
+    //      dies with the document, and the read-back evaluates cleanly on the
+    //      NEW document answering null — where chromium's read-back either
+    //      wins the race into the old context or errors out
+    //      (`ProbeReadback::Unknown`, action stands). A clean null is
+    //      indistinguishable from "never landed", so arming the probe here
+    //      turns every navigating click into a false `EffectNotDelivered` —
+    //      measured end-to-end by `qa/browser_dual`'s `click` stage, which
+    //      went red on exactly that message the one run the row was flipped
+    //      to `Supported`.
+    // The gate stays closed; what would open it is a read-back that survives
+    // (or detects) the navigation the dispatch caused, not a new obscura build
+    // alone.
     effect_probe: Cap::Unsupported,
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
@@ -408,14 +419,12 @@ mod tests {
     /// second copy over there would be the two-authors shape this file spends
     /// most of its guards on (判据 §1).
     /// The rows in [`NOT_PROBED`] are the ones whose evidence lives
-    /// outside this file. `effect_probe` joined it unmeasured: no obscura
-    /// binary exists on the machine this row was implemented on, and the two
-    /// facts the probe needs — page-global JS state persisting across two
-    /// `Runtime.evaluate` calls, and a listener installed via
-    /// `Runtime.callFunctionOn` observing synthetic `Input.dispatch*` events
-    /// — are both unmeasured on that engine. An unknown may not be spent as
-    /// a permission (判据 §8), so obscura's row is `Unsupported` until a real
-    /// binary answers them.
+    /// outside the T0 matrix. `effect_probe`'s entry changed KIND on
+    /// 2026-09-26: still not settled by T0's wire probe (it has no label
+    /// there), but no longer UNMEASURED — `qa/browser_dual`'s `caps` stage
+    /// ran the three premises against the real pinned-tag binary and the
+    /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
+    /// evidence and what would open the gate).
     const NOT_PROBED: [(&str, &str); 3] = [
         (
             "drag",
@@ -425,9 +434,12 @@ mod tests {
         ),
         (
             "effect_probe",
-            "no obscura binary on the implementing machine; window-global persistence \
-             across Runtime.evaluate calls and listener delivery of synthetic Input \
-             events are both unmeasured on that engine (判据 §8: fail-closed)",
+            "T0's wire matrix has no label for the probe; settled instead by \
+             qa/browser_dual's caps stage against the real pinned-tag binary on \
+             2026-09-26: premises 1-2 (window-global persistence, node-level \
+             delivery) hold, premise 3 (read-back after a self-navigating click) \
+             fails — a clean null on the new document is indistinguishable from \
+             'never landed', so the probe would lie on every link click",
         ),
         (
             "ref_precheck",
@@ -460,8 +472,9 @@ mod tests {
         // Both engines upload, so this one's hint is the engine you are already
         // on — which is why `upload`'s refusal is unreachable on both today.
         assert_eq!(supported_by(|c| c.file_upload), Some(Engine::Chromium));
-        // The probe row: obscura is fail-closed unmeasured, so the door the
-        // hint names must be chromium.
+        // The probe row: obscura is Unsupported on a MEASUREMENT (caps stage,
+        // 2026-09-26 — the read-back cannot survive a self-navigating click),
+        // so the door the hint names must be chromium.
         assert_eq!(supported_by(|c| c.effect_probe), Some(Engine::Chromium));
     }
 
@@ -700,15 +713,16 @@ mod tests {
              reading that does, beside BOTH values, and check it here"
         );
 
-        // effect_probe's disagreement rests on an explicit fail-closed ruling:
-        // obscura is unmeasured (no binary on the implementing machine), and
+        // effect_probe's disagreement rests on a MEASURED ruling since
+        // 2026-09-26 (caps stage: premise 3 fails — the read-back answers a
+        // clean null on the new document after a self-navigating click), and
         // BOTH values must say what the row needs to flip — checked in the
         // source rather than trusted, because a published route resting on an
         // argument nobody can read is the shape this test exists for.
         let src = include_str!("capability.rs");
         assert!(
-            src.contains("fail-closed answer to an unknown") && src.contains("window global"),
-            "obscura's effect_probe row no longer states what is unmeasured"
+            src.contains("qa/browser_dual") && src.contains("clean null"),
+            "obscura's effect_probe row no longer states the measurement it rests on"
         );
 
         // The citation, checked rather than trusted. `driver` drives the verb
