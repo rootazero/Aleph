@@ -681,12 +681,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Whether this run is unattended (autonomous continuation / headless
         // producer). One read, three consumers: the turn context below (so
         // delegation tools can propagate it), `ScopedToolService`'s fail-closed
-        // confirm gate, and the redacting trace sink.
-        let unattended = request
-            .metadata
-            .get(crate::gateway::execution_engine::UNATTENDED_KEY)
-            .map(String::as_str)
-            == Some("true");
+        // confirm gate, and the redacting trace sink. The same predicate
+        // (`is_unattended`) withholds a `/<skill>`'s pre-grant.
+        let unattended = crate::gateway::execution_engine::is_unattended(&request.metadata);
 
         // Unattended security tax, emitter leg. `UnattendedRedactingSink` below
         // covers the TraceSink leg only — persistence, the scratchpad channel

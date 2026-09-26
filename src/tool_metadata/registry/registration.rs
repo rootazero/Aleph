@@ -334,7 +334,8 @@ impl ToolRegistrar {
     /// legitimate, explicit deny-all; `None` keeps the full surface); a
     /// SKILL's bounds what a typed `/<skill>` may pre-grant
     /// (`gateway::execution_engine::slash_skill_pregrant`: only these names,
-    /// never the file's later additions).
+    /// never what the file added since — until the next boot, when skill rows
+    /// are registered again from the file as it then stands).
     ///
     /// Three sources are unioned to answer "does this name exist":
     /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own

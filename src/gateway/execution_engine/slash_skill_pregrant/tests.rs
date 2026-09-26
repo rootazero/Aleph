@@ -432,18 +432,32 @@ async fn a_user_level_skill_pregrants_its_own_list_for_an_operator() {
     }
 }
 
-/// A global plugin's skill pre-grants; the same skill under a
-/// project-scoped plugin does not.
+/// A global plugin's skill pre-grants from either `Global` plugin parent —
+/// Aleph's `<config>/plugins` or Claude Code's `~/.claude/plugins` cache.
+/// The same skill does not under a project-scoped plugin, nor under a
+/// `Global` key whose dir lies outside both parents: a directory the model's
+/// file tools can write never pre-grants (fix round 2, N1).
 #[tokio::test]
 async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
-    for global in [true, false] {
+    for case in ["aleph", "claude cache", "global outside", "project"] {
         let w = World::new().await;
-        let plugin_skills = w.tmp.path().join("plug").join("skills");
+        let plugin_skills = match case {
+            "aleph" => w.tmp.path().join("aleph/plugins").join(PLUGIN),
+            "claude cache" => w
+                .tmp
+                .path()
+                .join("home/.claude/plugins/cache/p411-mkt")
+                .join(PLUGIN)
+                .join("1.0.0"),
+            "global outside" => w.tmp.path().join("plug"),
+            _ => w.project.join(".aleph/plugins").join(PLUGIN),
+        }
+        .join("skills");
         write_skill(&plugin_skills, SKILL, "[bash]");
-        let scope_key = if global {
-            ScopeKey::Global
-        } else {
+        let scope_key = if case == "project" {
             ScopeKey::project(&w.project)
+        } else {
+            ScopeKey::Global
         };
         publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
             dir: plugin_skills.clone(),
@@ -460,13 +474,20 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
         let bash_runs = t.runs("bash").await;
         publish_plugin_skill_dirs(Vec::new());
 
-        assert_eq!(source, Some(SkillSource::Plugin(PluginId::new(PLUGIN))));
-        if global {
-            assert_eq!(t.pregrant(), names(&["bash"]));
-            assert!(bash_runs, "a global plugin's skill did not pre-grant");
+        assert_eq!(
+            source,
+            Some(SkillSource::Plugin(PluginId::new(PLUGIN))),
+            "{case}"
+        );
+        if matches!(case, "aleph" | "claude cache") {
+            assert_eq!(t.pregrant(), names(&["bash"]), "{case}");
+            assert!(
+                bash_runs,
+                "{case}: a global plugin's skill did not pre-grant"
+            );
         } else {
-            assert!(t.pregrant().is_empty(), "{:?}", t.pregrant());
-            assert!(!bash_runs, "a project-scoped plugin's skill pre-granted");
+            assert!(t.pregrant().is_empty(), "{case}: {:?}", t.pregrant());
+            assert!(!bash_runs, "{case}: the skill pre-granted");
         }
     }
 }
@@ -862,6 +883,132 @@ async fn a_model_initiated_skill_load_grants_nothing() {
     assert_eq!((t.restriction(), t.pregrant()), before);
     assert_eq!(before.0, Some(BTreeSet::from(["skill_read".to_string()])));
     assert!(before.1.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 2, N1 — a directory that may pre-grant is not the model's to write.
+// ---------------------------------------------------------------------------
+
+/// The model's file tools refuse every file a pre-grant is read from — the
+/// user roots and a `Global` plugin's skills, new or existing — so a model
+/// cannot add a name that registration then validates at the next boot.
+/// Control: the same tools write in the project.
+#[tokio::test]
+async fn the_file_tools_never_write_where_a_skill_pregrants_from() {
+    use crate::builtin_tools::file_ops::{FileEditTool, FileWriteTool};
+    use crate::tools::AlephTool;
+
+    let w = World::new().await;
+    let cache_skills = w
+        .tmp
+        .path()
+        .join("home/.claude/plugins/cache/p411-mkt")
+        .join(PLUGIN)
+        .join("1.0.0/skills");
+    let aleph_plugin_skills = w
+        .tmp
+        .path()
+        .join("aleph/plugins")
+        .join(PLUGIN)
+        .join("skills");
+    let roots = [
+        w.user.clone(),
+        w.claude_user.clone(),
+        cache_skills,
+        aleph_plugin_skills,
+    ];
+    let write = FileWriteTool::new();
+    let edit = FileEditTool::new();
+    let widened = skill_md(SKILL, "[grep, bash]");
+    for root in &roots {
+        write_skill(root, SKILL, "[grep]");
+        let existing = root.join(SKILL).join("SKILL.md");
+        let fresh = root.join("p411-fresh").join("SKILL.md");
+        for file in [&existing, &fresh] {
+            let wrote = write
+                .call_json(json!({ "file_path": file, "content": widened }))
+                .await;
+            assert!(
+                wrote.is_err(),
+                "file_write wrote {}: {wrote:?}",
+                file.display()
+            );
+        }
+        let edited = edit
+            .call_json(json!({
+                "file_path": existing,
+                "old_string": "[grep]",
+                "new_string": "[grep, bash]",
+            }))
+            .await;
+        assert!(
+            edited.is_err(),
+            "file_edit edited {}: {edited:?}",
+            existing.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&existing).unwrap(),
+            skill_md(SKILL, "[grep]"),
+            "{}",
+            existing.display()
+        );
+        assert!(!fresh.exists(), "{}", fresh.display());
+    }
+
+    let control = w.project.join("notes.md");
+    write
+        .call_json(json!({ "file_path": control, "content": "ok" }))
+        .await
+        .expect("control: file_write works in the project");
+}
+
+/// Every directory a `/<skill>` may pre-grant from is in the file tools'
+/// denylist — the four this world has, named by hand, so the list cannot
+/// shrink unnoticed.
+#[tokio::test]
+async fn every_pregrant_root_is_denied_to_the_file_tools() {
+    use crate::builtin_tools::file_ops::{get_denied_paths, path_is_denied};
+
+    let w = World::new().await;
+    let roots = crate::utils::paths::pregrant_roots();
+    let expected = [
+        w.user.clone(),
+        w.claude_user.clone(),
+        w.tmp.path().join("aleph").join("plugins"),
+        w.tmp.path().join("home").join(".claude").join("plugins"),
+    ];
+    for root in &expected {
+        assert!(
+            roots.iter().any(|r| r == root),
+            "{} is not a pre-grant root: {roots:?}",
+            root.display()
+        );
+    }
+    let denied = get_denied_paths();
+    for root in &roots {
+        let inside = root.join("p411-x");
+        std::fs::create_dir_all(&inside).unwrap();
+        let canonical = inside.canonicalize().unwrap();
+        assert!(
+            path_is_denied(&canonical, &denied),
+            "{} may pre-grant but the file tools may write it",
+            root.display()
+        );
+    }
+}
+
+/// The denylist binds the model's file tools, not skill loading: `skill_read`
+/// still loads a skill from `~/.claude/skills`.
+#[tokio::test]
+async fn skill_read_still_loads_from_the_claude_user_root() {
+    let w = World::new().await;
+    write_skill(&w.claude_user, SKILL, "[grep]");
+    let body =
+        crate::builtin_tools::skill_reader::ReadSkillTool::with_auto_discover(Some(&w.project))
+            .call_json(json!({ "skill_id": SKILL }))
+            .await
+            .expect("skill_read loads a ~/.claude/skills skill");
+    assert!(body.to_string().contains("Do the thing."), "{body}");
 }
 
 // ---------------------------------------------------------------------------

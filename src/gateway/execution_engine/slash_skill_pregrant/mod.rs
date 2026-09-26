@@ -38,7 +38,10 @@
 //!    `skill_read`'s own, for this run's project and agent
 //!    (`ReadSkillTool::load_candidates`). Each must sit in a user-level root
 //!    (`utils::paths::user_skills_roots`) or an active plugin's published
-//!    skills dir whose key is `ScopeKey::Global`. A project's
+//!    skills dir whose key is `ScopeKey::Global` — and must be denied to the model's file tools
+//!    (`file_ops::get_denied_paths`, which denies every
+//!    `utils::paths::pregrant_roots` entry), or the model could add a name
+//!    to the file that registration validates at the next boot. A project's
 //!    `.aleph/skills` / `.claude/skills`, a project-scoped plugin and an
 //!    agent-level dir do not pre-grant: Aleph has no workspace-trust dialog,
 //!    and a cloned repository must not lift approval for `bash` on the first
@@ -46,10 +49,13 @@
 //!    `foo` shadows a user-level `foo` for `skill_read` while the registry
 //!    can still answer with the user's.
 //! 4. **The list is the loaded file's own declaration** — the body the model
-//!    will follow — **bounded by the list registration validated**, which the
-//!    mode carries (known tool names only, no globs, nothing added to the file
-//!    since). Never a key the request arrived with: `execute()` removes that
-//!    first (`slash_skill_scope::forget_at_ingress`).
+//!    will follow — **bounded by the list registration validated at the last
+//!    boot**, which the mode carries (known tool names only, no globs, nothing
+//!    added to the file since that boot — skill rows register only at
+//!    startup, so an addition that survives a restart IS the registered list;
+//!    3's denylist is what keeps the model from making one). Never a key the
+//!    request arrived with: `execute()` removes that first
+//!    (`slash_skill_scope::forget_at_ingress`).
 //!
 //! The pre-grant is folded into the turn's policy by
 //! `turn_permissions::apply_pregrant`. It lifts the tier's NAME-level `Ask`
@@ -102,7 +108,8 @@ pub(super) async fn split_with(request: &mut RunRequest, agent_id: &str, skills:
 }
 
 /// The `allowed-tools` list registration validated for the mode's row — the
-/// catalog's `routing_capabilities`, carried as `mode["allowed_tools"]`.
+/// catalog's `routing_capabilities` as of the last boot, carried as
+/// `mode["allowed_tools"]`.
 /// Absent (the skill declared nothing when it registered) ⇒ empty ⇒ nothing
 /// can be pre-granted.
 fn registered_list(mode: &Value) -> Vec<String> {
@@ -150,12 +157,7 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
         );
         return None;
     }
-    let unattended = request
-        .metadata
-        .get(super::UNATTENDED_KEY)
-        .map(String::as_str)
-        == Some("true");
-    if unattended {
+    if super::is_unattended(&request.metadata) {
         info!(
             skill = %skill_id,
             "`/{skill_id}` pre-grants nothing: the run is unattended"
@@ -199,10 +201,32 @@ async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Optio
     manifest.allowed_tools().map(<[String]>::to_vec)
 }
 
-/// `Ok` when the skill directory `skill_dir` sits in an operator-owned root:
-/// a user-level skills root, or the published skills dir of an active plugin
-/// whose key is `Global`. `Err` names the origin that is not.
+/// `Ok` when the skill directory `skill_dir` sits in an operator-owned root
+/// ([`operator_root`]) AND the model's file tools may not write it. `Err`
+/// names the origin that is not.
+///
+/// The second half re-reads, for the directory itself, the answer
+/// `file_ops::get_denied_paths` gives for every `pregrant_roots()` entry, so
+/// a directory that resolves outside the denied roots — a symlinked
+/// `<marketplace>/<name>` under the Claude Code cache, a `Global` plugin
+/// living elsewhere, a root nobody added to the list — never pre-grants.
 fn operator_owned(skill_dir: &std::path::Path) -> Result<(), &'static str> {
+    operator_root(skill_dir)?;
+    let canonical = skill_dir
+        .canonicalize()
+        .map_err(|_| "unplaceable (no canonical path)")?;
+    if !crate::builtin_tools::file_ops::path_is_denied(
+        &canonical,
+        &crate::builtin_tools::file_ops::get_denied_paths(),
+    ) {
+        return Err("model-writable");
+    }
+    Ok(())
+}
+
+/// `Ok` when `skill_dir` sits in a user-level skills root, or is the
+/// published skills dir of an active plugin whose key is `Global`.
+fn operator_root(skill_dir: &std::path::Path) -> Result<(), &'static str> {
     use crate::utils::paths::equivalent;
     let root = skill_dir.parent().ok_or("root-level")?;
     let (aleph, claude) =

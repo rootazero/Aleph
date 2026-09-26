@@ -33,7 +33,7 @@ pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
     crate::utils::paths::get_config_dir().map_err(DiscoveryError::HomeDir)
 }
 
-/// Get the Claude Code home directory (~/.claude/) — scanner-internal.
+/// Get the Claude Code home directory (~/.claude/).
 pub(crate) fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
 }
@@ -46,6 +46,13 @@ pub fn aleph_agents_dir() -> DiscoveryResult<PathBuf> {
 /// Get the Aleph plugins directory (~/.aleph/plugins/)
 pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(PLUGINS_DIR))
+}
+
+/// Get the Claude Code plugins directory (~/.claude/plugins/): the parent of
+/// every ClaudeCache install (`claude_cache::discover_claude_cache` reads
+/// `<claude_home>/plugins/…`, handed [`claude_home_dir`] in production).
+pub(crate) fn claude_plugins_dir() -> DiscoveryResult<PathBuf> {
+    Ok(claude_home_dir()?.join(PLUGINS_DIR))
 }
 
 /// Find the git root directory from a starting path.

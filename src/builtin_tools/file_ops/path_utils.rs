@@ -85,6 +85,18 @@ pub fn get_denied_paths() -> Vec<String> {
         // Note: output directory is intentionally NOT denied
     }
 
+    // Every directory a typed `/<skill>` may pre-grant its `allowed-tools:`
+    // from — `<config>/skills` and `<config>/plugins` above, plus
+    // `~/.claude/skills` and `~/.claude/plugins`. A model that could write
+    // one could add a name to a skill's list that registration validates at
+    // the next boot. One list (`utils::paths::pregrant_roots`), shared with
+    // the pre-grant's own origin check.
+    for root in crate::utils::paths::pregrant_roots() {
+        if !denied_paths.iter().any(|d| Path::new(d) == root) {
+            denied_paths.push(root.display().to_string());
+        }
+    }
+
     // Add Unix-specific paths. Beyond the classic credential files, deny the
     // privilege-escalation / persistence surfaces an agent's file tools must
     // never read or clobber — writing any of these is a host-takeover vector

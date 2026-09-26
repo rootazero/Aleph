@@ -1058,7 +1058,8 @@ mod tests {
         }
     }
 
-    /// The two per-run FACTS (skill scope, `/btw` stamp) are additive on the
+    /// The two per-run FACTS (a plugin command's tool restriction, `/btw`
+    /// stamp) are additive on the
     /// wire: a marker written before they existed decodes to `None` for both,
     /// `None` is never serialised, and an EMPTY scope is still a declaration
     /// (`[]` on the wire, `is_empty() == false`) — the `slash_skill_scope`

@@ -668,7 +668,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // `allowed_tools` stays `None` and that is the truth: the `skill`
             // arm of the dispatcher above always falls through to the full
             // loop, and a `direct_tool` mode JSON carries no `allowed_tools`,
-            // so no fast-path run ever executes under a skill scope. `model`
+            // so no fast-path run ever executes under a command's tool
+            // restriction. `model`
             // / `model_provider` stay `None` too: no LLM call on this path,
             // so the run served on no model — the reading `plan_resume`'s
             // "recorded no model" sentence names.

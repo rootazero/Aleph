@@ -147,7 +147,8 @@ pub(crate) fn strip(metadata: &mut HashMap<String, String>) {
 
 /// Write a skill's pre-grant from its `allowed-tools:` names as the author
 /// wrote them, bounded by `registered` — the list registration validated for
-/// this skill (known tool names only), which the slash mode carries.
+/// this skill at the last boot (known tool names only), which the slash mode
+/// carries.
 ///
 /// Claude Code names map to Aleph names
 /// (`extension::hooks::normalize_cc_tool_entry`). Dropped:
@@ -158,7 +159,9 @@ pub(crate) fn strip(metadata: &mut HashMap<String, String>) {
 ///   accepts (`*`, `?*`, `file_*`, `mcp__s__*` → `s__*`): the fold writes
 ///   exact entries, and the policy reads such a key back as a glob;
 /// - anything `registered` does not name: the file is re-read at turn start
-///   and may have been edited since registration validated it.
+///   and may have been edited since registration validated it at the last
+///   boot (skill rows register only at startup, so the bound lasts until the
+///   next one).
 ///
 /// Nothing left ⇒ nothing is written: an empty pre-grant is no grant, not
 /// deny-all.

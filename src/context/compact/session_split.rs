@@ -954,7 +954,8 @@ mod tests {
     /// A crash after a split is resumed against the CHILD, and a resume
     /// replays whatever the child's opener froze. An opener written with
     /// `envelope: None` resumes unsnapshotted — every knob replaced by
-    /// today's value, the skill scope gone — so the child's `RunStarted`
+    /// today's value, a plugin command's tool restriction gone — so the
+    /// child's `RunStarted`
     /// must carry the parent's open run's envelope and project root, read
     /// through the service the batch was handed to.
     #[tokio::test]

@@ -891,6 +891,28 @@ pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>)> {
     Ok((get_skills_dir()?, global_claude))
 }
 
+/// Every directory a typed `/<skill>` may pre-grant its `allowed-tools:`
+/// from (`gateway::execution_engine::slash_skill_pregrant`): the two
+/// [`user_skills_roots`], and the parents of every `Global` plugin — Aleph's
+/// own `<config>/plugins` and Claude Code's `~/.claude/plugins` (the only two
+/// plugin parents discovery stamps `Global`).
+///
+/// One list, two readers: the pre-grant (a skill dir outside the file tools'
+/// denylist never pre-grants) and `file_ops::get_denied_paths`, which denies
+/// each of these to the model's file tools — a model that could write one
+/// could add a name to a skill's `allowed-tools:` that registration then
+/// validates at the next boot.
+pub(crate) fn pregrant_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok((aleph, claude)) = user_skills_roots() {
+        roots.push(aleph);
+        roots.extend(claude);
+    }
+    roots.extend(crate::discovery::aleph_plugins_dir().ok());
+    roots.extend(crate::discovery::claude_plugins_dir().ok());
+    roots
+}
+
 /// Append global user-level skills directories to `dirs`.
 fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
     let (global_aleph, global_claude) = user_skills_roots()?;
