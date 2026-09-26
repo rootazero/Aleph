@@ -762,6 +762,15 @@ mod tests {
     async fn every_credential_denylist_entry_is_refused_by_the_rpc_face() {
         use crate::builtin_tools::file_ops::get_denied_paths;
 
+        // `get_denied_paths()` resolves `<config_dir>` from `$ALEPH_HOME` — here,
+        // and again inside the handler. A test that repoints it in between (and
+        // drops its tempdir) turns an entry listed here into one the handler
+        // does not deny, so the assertion reads a race as a leak. Held for the
+        // whole body.
+        let _aleph_home = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         let mut checked = 0usize;
         for entry in get_denied_paths() {
             // Pattern entries (`[sandbox] deny_read_globs`) name no single
