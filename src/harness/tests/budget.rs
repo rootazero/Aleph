@@ -331,7 +331,8 @@ const BUDGETED: [&str; 12] = [
 ///
 /// 5066 → 5062 (−4): paid down by the tool-output hygiene round. The Layer-3
 /// turn spill stopped calling `ToolResultStore::persist_if_large` directly and
-/// now reuses `result_processing::recovery_footer`, which offloads *and* indexes
+/// now reuses `result_processing::recovery_footer_for` (then `recovery_footer`),
+/// which offloads *and* indexes
 /// *and* appends the `ctx_search` hint — the same recovery handle Layer 2 emits.
 /// The spill previously handed the model a marker over an unindexed blob, so the
 /// only way back to the output was re-reading the whole file. Folding the two

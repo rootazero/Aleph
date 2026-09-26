@@ -1693,4 +1693,35 @@ widened a narrowly-scoped change into that question. Tracked in
   CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
   这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
   只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
-  不在根 `CLAUDE.md` 的路由表里。
+  不在根 `CLAUDE.md` 的路由表里。- **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
+  出站、`result_processing` 的 offload 与 footer、`ctx_search`、`context.breakdown` 或 `events.subscribe`
+  的 `except` 前跑 `{replay,carve,ingress,breakdown,firstparty}`。
+  - **它怎么让一个本地 mock 站在第一方主机名后面**：Aleph 按**主机名**分类（`api.deepseek.com` =
+    DeepSeek 原生、`api.anthropic.com` = 第一方、`127.0.0.1` 两者都不是），所以 `replay` `carve` 与
+    `firstparty` 的 1P 臂把 `base_url` 写成 `http://api.<vendor>.com`，并以 `HTTP_PROXY` 指向 mock 启动
+    server——reqwest 把 absolute-form 请求发给代理，mock 作答，**没有任何流量离开本机**。
+  - `replay` — mock 执行 DeepSeek 文档里的规则：带 `tools` 的请求里任一早先的 assistant 消息缺
+    `reasoning_content` 就 400。两轮对话各带一次工具调用；断言两个 run 都 **completed**（`run_finished`
+    的存在不算——errored 的 run 也写它）、零次拒绝、第二轮的请求里每条 assistant 消息都带
+    `reasoning_content`、且推理标记**只**出现在那个字段里。**破坏开关**：`REQUIRE_FIELD=reasoning_details`
+    让 400 规则去查一个代码从不发送的字段，本阶段必须 FAIL（已实测）。
+  - `carve` — 两个连接各跑一轮：对照连接订阅 `stream.*` **必须**收到 `stream.reasoning`（锚点——没有它，
+    「被切掉的连接没收到」什么也证明不了），切出连接订阅 `stream.*` 减 `stream.reasoning`，其它
+    `stream.*` 照常到达而推理帧一个不到。
+  - `ingress` — 一个单进程的大输出命令（`awk` 打 9 万行，中间埋一行 needle）：模型收到的 tool_result
+    是 persist 标记 + footer、正文留在盘上、footer 点名的工具都在该请求的工具表里、之后的请求都不带正文、
+    `ctx_search` 从 persist 的原文里返回**段落正文**（needle 在内）。⚠️ 必须是**单进程**：macOS seatbelt
+    profile 禁 fork，复合命令（`a; b`）在打印前就 exit 71；且 server 的 PATH 要**系统目录在前**——
+    Homebrew 在前时 `bash` 解析到 `/opt/homebrew/bin/bash`，seatbelt 不许 exec 它（同样 exit 71）。
+  - `breakdown` — 同一轮之后 `context.breakdown` 回 `messages.tool_results > 0`、`tool_output` 带
+    `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
+    run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是
+    一条产品事实：默认安装上 `context.breakdown` 没有 `messages`。
+  - `firstparty` — 两次 boot。1P 臂（代理）：签名 thinking 被回放（锚点）、`tool_use.input` 里**没有**
+    `reasoning_content` 副本、`server_context_editing = true`（裸 bool 写法，顺带证明它能解析）让
+    `context_management.edits` 与 beta 头都在 wire 上、文件日志里**没有**「不生效」告警。custom 臂
+    （`127.0.0.1`）：副本保留（U1 现状）、没有 `context_management` 也没有 beta、文件日志
+    （`$ALEPH_HOME/logs/`，不是 stdout——stdout 只有 banner）里**有**那条告警——这条 `tracing::warn!`
+    单测够不着（并行测试下的 WARN 捕获会漏），这里是它唯一的证据。
+  - **它不覆盖**：真实厂商。mock 执行的是 DeepSeek 写在文档里的规则、按 Aleph 适配器读法编码的
+    Anthropic wire，证不出厂商真的接受 Aleph 发的东西（U1：不做线上探测）。

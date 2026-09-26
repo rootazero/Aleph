@@ -816,12 +816,12 @@ impl HarnessRunner for AgentHarnessRunner {
             (other, _) => other,
         };
         // B14: the Layer-3 per-turn tool-output cap tracks the model's real
-        // window instead of hermes' since-fixed 50k constant. `token_budget` is
-        // the same provider/capability-derived figure the compactor sizes itself
-        // from (`deps_builder::context_budget`), so on a 32k local model the 50k
-        // cap — 156 % of the window, and therefore unreachable — becomes one that
-        // can actually fire. Large-window models clamp back up to the old
-        // constant and are byte-for-byte unchanged. No config → no override.
+        // window instead of one fixed constant. `token_budget` is the same
+        // provider/capability-derived figure the compactor sizes itself from
+        // (`deps_builder::context_budget`), so on a small local model a fixed
+        // cap above the window — unreachable — becomes one that can actually
+        // fire. Large-window models clamp to `turn_budget::DEFAULT_MAX_TURN_TOKENS`
+        // (see `budget_for_window`). No config → no override.
         let windowed_turn_budget = self.context_budget_config.as_ref().map(|cfg| {
             let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
             Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
