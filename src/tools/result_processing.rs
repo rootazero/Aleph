@@ -261,6 +261,14 @@ pub struct RecoveryTools {
 }
 
 impl RecoveryTools {
+    /// Neither retrieval tool is callable: an offloaded original would be a
+    /// path the model has no tool to open. The one predicate every offload
+    /// writer consults (through [`offload`]) before it writes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        !self.ctx_search && !self.file_read
+    }
+
     /// Callable in both.
     #[must_use]
     pub const fn intersect(self, other: Self) -> Self {
@@ -350,18 +358,16 @@ pub fn apply_result_budget(
     // indexed its output under this same call id, e.g. `web_fetch`'s fetch by
     // intent) is never persisted again: the blob is named by the call id, so a
     // second write would replace the original with this result. Recognised by
-    // the marker naming THIS call's blob — a marker the payload merely quotes
-    // names some other path — as written, or as it reads inside the flattened
-    // JSON of a typed result (a Windows path's `\` arrives escaped). Kept as
-    // is when it fits; over budget, the text before the marker is cut and the
-    // marker onward (the handle) is kept whole.
-    if let Some(at) = store.and_then(|s| own_marker_at(s, tool_call_id, tool_name, text)) {
+    // the marker naming THIS call's blob file (see [`own_marker_at`]). Kept as
+    // is when it fits; over budget, the footer (marker line and its hint) is
+    // kept whole and everything else around it is cut into what is left —
+    // text after the footer included, which is where a procedure's later
+    // steps land.
+    if let Some(at) = own_marker_at(tool_call_id, tool_name, text) {
         let kept = if tokens <= budget {
             text.to_string()
         } else {
-            let (body, footer) = text.split_at(at);
-            let room = budget.saturating_sub(estimate_tokens_smart(footer));
-            format!("{}{footer}", truncate_with_budget(body, room))
+            bounded_around_footer(text, own_footer_span(text, at), budget)
         };
         return ProcessedResult {
             tokens_in_context: estimate_tokens_smart(&kept),
@@ -392,6 +398,22 @@ pub fn apply_result_budget(
                     persisted_path: path,
                 }
             }
+            // Detail was dropped and nothing the model can call would read
+            // an offload back: say the reduction is final.
+            None if recovery.is_empty() => {
+                let room = budget.saturating_sub(estimate_tokens_smart(NOT_SAVED_NOTE) + 1);
+                let kept = if tokens <= room {
+                    text.to_string()
+                } else {
+                    distill_or_truncate(text, room)
+                };
+                let body = format!("{kept}\n{NOT_SAVED_NOTE}");
+                ProcessedResult {
+                    tokens_in_context: estimate_tokens_smart(&body),
+                    text: body,
+                    persisted_path: None,
+                }
+            }
             None => ProcessedResult {
                 text: text.to_string(),
                 tokens_in_context: tokens,
@@ -404,7 +426,7 @@ pub fn apply_result_budget(
     // pass) and compose the inline body above the recovery footer.
     let persist_source = original.unwrap_or(text);
     let rendered = crate::tool_output::render::line_preserving(persist_source);
-    if let Some((footer, path)) = offload(
+    if let Some(Offloaded { footer, path, .. }) = offload(
         store,
         tool_call_id,
         tool_name,
@@ -443,8 +465,15 @@ pub fn apply_result_budget(
         };
     }
 
-    // No store, or the persist failed (the store logs internally) — truncate.
-    let truncated = distill_or_truncate(text, budget);
+    // No store, the persist failed (the store logs internally), or nothing the
+    // model can call would read an offload back — truncate. The last is said:
+    // the cut is final, and the model should not look for the rest.
+    let truncated = if recovery.is_empty() {
+        let room = budget.saturating_sub(estimate_tokens_smart(NOT_SAVED_NOTE) + 1);
+        format!("{}\n{NOT_SAVED_NOTE}", distill_or_truncate(text, room))
+    } else {
+        distill_or_truncate(text, budget)
+    };
     let tokens_after = estimate_tokens_smart(&truncated);
     ProcessedResult {
         text: truncated,
@@ -453,25 +482,101 @@ pub fn apply_result_budget(
     }
 }
 
-/// Byte offset in `text` of the last marker naming this call's own blob — as
-/// written, or JSON-escaped — or `None` when `text` carries no such marker.
-fn own_marker_at(
-    store: &ToolResultStore,
+/// Said where an over-budget result is cut and nothing was saved, because no
+/// retrieval tool is callable to read an offload back.
+const NOT_SAVED_NOTE: &str = "[Output cut to fit: no retrieval tool (ctx_search / file_read) is \
+                              callable here, so the full output was not saved and the cut \
+                              part cannot be read back.]";
+
+/// Whether `text` carries the persist marker of this call's own blob — the
+/// file a persist under (`tool_call_id`, `tool_name`) would write, so a second
+/// persist would replace it. The one derivation of "already persisted" for
+/// both Layer 2 and the Layer-3 turn budget: a marker line that merely appears
+/// in the payload (a `file_read` of a file that quotes one) names some other
+/// blob and does not count.
+#[must_use]
+pub(crate) fn carries_own_persisted_marker(
+    text: &str,
     tool_call_id: &str,
     tool_name: &str,
-    text: &str,
-) -> Option<usize> {
-    let own = format!(
-        "{}{}",
-        crate::tools::result_store::PERSISTED_REF_PREFIX,
-        store.blob_path(tool_call_id, tool_name).display()
-    );
-    let quoted = serde_json::to_string(&own).unwrap_or_default();
-    let escaped = quoted
-        .get(1..quoted.len().saturating_sub(1))
-        .filter(|e| !e.is_empty() && *e != own);
-    text.rfind(&own)
-        .or_else(|| escaped.and_then(|e| text.rfind(e)))
+) -> bool {
+    own_marker_at(tool_call_id, tool_name, text).is_some()
+}
+
+/// Byte offset in `text` of the last marker naming this call's own blob file,
+/// or `None`. Matched on the file name (`blob_file_name`), not the whole path:
+/// the directory differs between a store's scoped and unscoped handles, the
+/// name does not. The name is `[A-Za-z0-9_.-]` only, so it reads the same
+/// inside the flattened JSON of a typed result; the separator before it may
+/// arrive escaped (`\\`), which still ends in a separator.
+fn own_marker_at(tool_call_id: &str, tool_name: &str, text: &str) -> Option<usize> {
+    use crate::tools::result_store::{blob_file_name, PERSISTED_REF_PREFIX};
+    let name = blob_file_name(tool_call_id, tool_name);
+    let named = |sep: char| format!("{sep}{name} (");
+    let (slash, backslash) = (named('/'), named('\\'));
+    text.match_indices(PERSISTED_REF_PREFIX)
+        .filter(|(at, _)| {
+            let rest = &text[at + PERSISTED_REF_PREFIX.len()..];
+            let marker = &rest[..rest.find(")]").unwrap_or(rest.len())];
+            marker.contains(&slash) || marker.contains(&backslash)
+        })
+        .map(|(at, _)| at)
+        .last()
+}
+
+/// The byte range of the footer starting at `at`: the marker through its
+/// closing `)]`, plus the hint line right under it when there is one (the
+/// break may be a real newline or, inside flattened JSON, an escaped one).
+fn own_footer_span(text: &str, at: usize) -> std::ops::Range<usize> {
+    let rest = &text[at..];
+    let Some(close) = rest.find(")]") else {
+        return at..text.len();
+    };
+    let marker_end = close + ")]".len();
+    let after = &rest[marker_end..];
+    let sep = if after.starts_with('\n') {
+        1
+    } else if after.starts_with("\\n") {
+        2
+    } else {
+        0
+    };
+    let hint = &after[sep..];
+    let is_hint = sep > 0 && (hint.starts_with("[Indexed ") || hint.starts_with(FILE_READ_HINT));
+    if !is_hint {
+        return at..at + marker_end;
+    }
+    let hint_end = [hint.find('\n'), hint.find("\\n")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(hint.len());
+    at..at + marker_end + sep + hint_end
+}
+
+/// `text` bounded by `budget` with the footer at `span` kept whole: the text
+/// around it (before and after) is joined and head/tail cut into the room the
+/// footer leaves, halving that room until the total fits.
+fn bounded_around_footer(text: &str, span: std::ops::Range<usize>, budget: usize) -> String {
+    let footer = &text[span.clone()];
+    let rest = format!("{}{}", &text[..span.start], &text[span.end..]);
+    let mut room = budget.saturating_sub(estimate_tokens_smart(footer) + 1);
+    loop {
+        let body = if room == 0 {
+            String::new()
+        } else {
+            truncate_with_budget(&rest, room)
+        };
+        let kept = if body.trim().is_empty() {
+            footer.to_string()
+        } else {
+            format!("{body}\n{footer}")
+        };
+        if room == 0 || estimate_tokens_smart(&kept) <= budget {
+            return kept;
+        }
+        room /= 2;
+    }
 }
 
 /// Offload `full` to the result store and build the recovery footer the model
@@ -508,6 +613,22 @@ pub(crate) fn recovery_footer_for(
     threshold: usize,
     recovery: RecoveryTools,
 ) -> Option<(String, Option<PathBuf>)> {
+    offload_indexed(store, tool_call_id, tool_name, full, threshold, recovery)
+        .map(|o| (o.footer, o.path))
+}
+
+/// [`recovery_footer_for`], also saying how many sections the blob indexed
+/// into (`None`: the index could not take it) — for a writer that searches
+/// its own blob next (`web_fetch`'s fetch by intent) and must not read "not
+/// indexed" as "nothing matched".
+pub(crate) fn offload_indexed(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    full: &str,
+    threshold: usize,
+    recovery: RecoveryTools,
+) -> Option<Offloaded> {
     let rendered = crate::tool_output::render::line_preserving(full);
     offload(
         store,
@@ -518,6 +639,81 @@ pub(crate) fn recovery_footer_for(
         threshold,
         recovery,
     )
+}
+
+/// What an offload left: the footer the model reads, the blob path, and the
+/// number of sections the blob indexed into (`None` when indexing failed).
+pub(crate) struct Offloaded {
+    pub(crate) footer: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) sections: Option<usize>,
+}
+
+/// The fewest tokens a result must exceed before an offload may replace it:
+/// the marker this store writes for the call, plus the longest hint line the
+/// footer can carry under it. One measurement for both the offload and the
+/// Layer-3 turn budget's decision to spill, so the budget never credits a
+/// spill the offload then refuses. (A preview whose scrub grows it — a
+/// chat-template token becomes a longer placeholder — can still exceed the
+/// bound on the hint.)
+#[must_use]
+pub(crate) fn offload_floor_tokens(
+    store: &ToolResultStore,
+    tool_call_id: &str,
+    tool_name: &str,
+    tokens: usize,
+) -> usize {
+    let marker = store.marker_for(tool_call_id, tool_name, tokens);
+    estimate_tokens_smart(&marker) + 1 + longest_hint_tokens()
+}
+
+/// Tokens of the longest hint [`footer_hint`] can write: the search hint with
+/// every preview at its longest, or the `file_read` hint.
+fn longest_hint_tokens() -> usize {
+    use crate::context::retrieval::{MAX_TITLE_CHARS, PREVIEW_COUNT};
+    let longest = IndexOutcome {
+        sections: usize::MAX,
+        previews: vec!["x".repeat(MAX_TITLE_CHARS + 1); PREVIEW_COUNT],
+    };
+    estimate_tokens_smart(&search_hint(&longest, true)).max(estimate_tokens_smart(FILE_READ_HINT))
+}
+
+/// What a Layer-3 spill leaves in context in place of `text`: the offload
+/// footer; `text` itself when it is no larger than a footer would be (a spill
+/// would grow it); otherwise — no store, no retrieval tool callable, a failed
+/// write — a head/tail cut to the residue the turn budget credits, with a note
+/// that the rest was not saved. Every branch leaves at most what the turn
+/// budget booked, so the per-turn bound holds whether or not the write did.
+#[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the harness Layer-3 spill (harness/agent/act.rs) switches to this; drop this \
+                  attribute in that change"
+    )
+)]
+pub(crate) fn spill_replacement(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    text: &str,
+    recovery: RecoveryTools,
+) -> String {
+    let tokens = estimate_tokens_smart(text);
+    if let Some(store) = store {
+        if tokens <= offload_floor_tokens(store, tool_call_id, tool_name, tokens) {
+            return text.to_string();
+        }
+    }
+    if let Some((footer, _)) =
+        recovery_footer_for(store, tool_call_id, tool_name, text, 0, recovery)
+    {
+        return footer;
+    }
+    let residue = crate::tools::turn_budget::spill_residue_tokens(tokens);
+    let room = residue.saturating_sub(estimate_tokens_smart(NOT_SAVED_NOTE) + 1);
+    format!("{}\n{NOT_SAVED_NOTE}", truncate_with_budget(text, room))
 }
 
 /// The shared body of [`recovery_footer_for`], for a caller that already holds
@@ -531,14 +727,18 @@ fn offload(
     rendered: &Rendered<'_>,
     threshold: usize,
     recovery: RecoveryTools,
-) -> Option<(String, Option<PathBuf>)> {
+) -> Option<Offloaded> {
     let store = store?;
+    // A blob nothing can read back is a fail-dead handle: the caller cuts
+    // instead, and says so.
+    if recovery.is_empty() {
+        return None;
+    }
     let gate_tokens = estimate_tokens_smart(gate);
-    // Never replace a result with a marker at least as large as the result:
-    // measured on the marker this store would write for this call, not a guess.
+    // Never replace a result with a footer at least as large as the result —
+    // measured by the one floor the turn budget also uses.
     if gate_tokens <= threshold
-        || gate_tokens
-            <= estimate_tokens_smart(&store.marker_for(tool_call_id, tool_name, gate_tokens))
+        || gate_tokens <= offload_floor_tokens(store, tool_call_id, tool_name, gate_tokens)
     {
         return None;
     }
@@ -550,11 +750,17 @@ fn offload(
     // turn: the blob outlives the turn, and the gates are per turn. Best-effort:
     // on failure the marker's path is still readable.
     let indexed = store.index_output(tool_call_id, tool_name, &rendered.text);
-    let footer = match footer_hint(indexed.as_ref(), recovery, rendered.fenced) {
-        Some(hint) => format!("{marker}\n{hint}"),
-        None => marker,
-    };
-    Some((footer, path))
+    let sections = indexed.as_ref().map(|o| o.sections);
+    // No hint means no callable tool reads this blob (only `ctx_search` is
+    // callable and the index did not take it): the same fail-dead handle as an
+    // empty recovery set, found after the write. The blob is left to the
+    // store's sweep; the caller cuts instead.
+    let hint = footer_hint(indexed.as_ref(), recovery, rendered.fenced)?;
+    Some(Offloaded {
+        footer: format!("{marker}\n{hint}"),
+        path,
+        sections,
+    })
 }
 
 /// The line under a persist marker telling the model how to read the blob
@@ -1040,6 +1246,136 @@ mod tests {
         assert!(
             tight_n >= 2,
             "the floor keeps the preview useful, got {tight_n}"
+        );
+    }
+
+    /// A result carrying its own offload marker with a large tail AFTER the
+    /// footer — `browser_exec`'s shape: a cut snapshot at step 1, then later
+    /// steps' reads — is bounded by the budget as a whole, the footer kept
+    /// whole. Keeping "everything from the marker on" left the tail unbounded.
+    ///
+    /// Mutation-checked: keeping the text from the marker onward whole again
+    /// turns this red.
+    #[test]
+    fn an_own_marker_result_with_a_large_tail_is_bounded_as_a_whole() {
+        let (_scratch, store, _base) = test_store("own_marker_tail");
+        let (footer, _) = recovery_footer_for(
+            Some(&store),
+            "call_exec",
+            "browser_exec",
+            &"- generic \"row\" [ref=e1]\n".repeat(4_000),
+            0,
+            RecoveryTools::ALL,
+        )
+        .expect("the snapshot is offloaded");
+        let text = format!(
+            "step 1 snapshot (cut)\n{footer}\nstep 2 read:\n{}\nstep 3 read:\n{}",
+            "a".repeat(20_000),
+            "b".repeat(20_000)
+        );
+        let out = apply_result_budget(
+            "call_exec",
+            "browser_exec",
+            &text,
+            Some(&store),
+            Some(4_000),
+            None,
+            RecoveryTools::ALL,
+        );
+        assert!(
+            out.persisted_path.is_none(),
+            "never persisted over its own blob"
+        );
+        assert!(out.tokens_in_context <= 4_000, "{}", out.tokens_in_context);
+        assert!(out.text.contains(&footer), "the footer is kept whole");
+    }
+
+    /// With no retrieval tool callable, nothing is offloaded — a blob the model
+    /// has no tool to open is a dead handle — and the cut says the rest is gone.
+    /// Layer 2 here; Layer 3's spill through `spill_replacement`, with and
+    /// without a store, stays within the residue the turn budget credits.
+    ///
+    /// Mutation-checked: dropping the empty-set check in `offload` turns this
+    /// red.
+    #[test]
+    fn an_empty_recovery_set_cuts_and_says_so_instead_of_offloading() {
+        let (_scratch, store, _base) = test_store("empty_recovery");
+        let none = RecoveryTools {
+            ctx_search: false,
+            file_read: false,
+        };
+        let big = "line of plain build output\n".repeat(4_000);
+        let out = apply_result_budget(
+            "call_none",
+            "bash",
+            &big,
+            Some(&store),
+            Some(500),
+            None,
+            none,
+        );
+        assert!(out.persisted_path.is_none(), "{}", out.text);
+        assert!(
+            !store.blob_path("call_none", "bash").exists(),
+            "no blob is written for a handle nothing can open"
+        );
+        assert!(
+            !out.text.contains("[Full output persisted: "),
+            "{}",
+            out.text
+        );
+        assert!(out.text.contains(NOT_SAVED_NOTE), "{}", out.text);
+        assert!(
+            out.tokens_in_context <= 500 + 16,
+            "{}",
+            out.tokens_in_context
+        );
+
+        let tokens = estimate_tokens_smart(&big);
+        for store in [Some(&store), None] {
+            let spilled = spill_replacement(store, "call_none", "bash", &big, none);
+            assert!(spilled.contains(NOT_SAVED_NOTE), "{spilled}");
+            assert!(!spilled.contains("[Full output persisted: "), "{spilled}");
+            assert!(
+                estimate_tokens_smart(&spilled)
+                    <= crate::tools::turn_budget::spill_residue_tokens(tokens) + 16,
+                "within the credited residue"
+            );
+        }
+    }
+
+    /// Only `ctx_search` callable and the index cannot take the blob: the
+    /// footer would name no tool that reads it, so the offload is declined
+    /// after the write and the result is cut instead — the same dead handle as
+    /// an empty recovery set, found late.
+    ///
+    /// Mutation-checked: footing with the bare marker when no hint applies
+    /// turns this red.
+    #[test]
+    fn a_blob_no_callable_tool_can_read_is_not_handed_over() {
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        // A directory where the index database should be: it cannot open.
+        std::fs::create_dir_all(base.join("index.db")).unwrap();
+        let store = ToolResultStore::with_dir_for_tests(base);
+        let search_only = RecoveryTools {
+            ctx_search: true,
+            file_read: false,
+        };
+        let big = "line of plain build output\n".repeat(4_000);
+        let out = apply_result_budget(
+            "call_unindexed",
+            "bash",
+            &big,
+            Some(&store),
+            Some(500),
+            None,
+            search_only,
+        );
+        assert!(out.persisted_path.is_none(), "{}", out.text);
+        assert!(
+            !out.text.contains("[Full output persisted: "),
+            "{}",
+            out.text
         );
     }
 

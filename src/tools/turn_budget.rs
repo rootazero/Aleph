@@ -78,20 +78,16 @@ pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
     (per_result, per_turn)
 }
 
-/// Tokens of the marker a spill of `result` would leave in context, measured on
-/// the process store's own marker for this call (`ToolResultStore::marker_for`).
-/// The session-scoped handle the spill writes through adds its session
-/// directory to the path, so this is a floor; the exact refusal happens where
-/// the blob is written (`result_processing`'s offload). `0` without a store —
-/// then nothing can be spilled anyway.
-fn marker_tokens(result: &TurnResult) -> usize {
-    crate::tools::result_store::global_tool_result_store().map_or(0, |store| {
-        crate::context::budget::pressure::estimate_tokens_smart(&store.marker_for(
-            &result.call_id,
-            &result.tool_name,
-            result.tokens_in_context,
-        ))
-    })
+/// What a spilled result is expected to leave in context, at most, besides its
+/// footer: a tenth. The truncation a spill falls back to when it cannot write
+/// (`result_processing::spill_replacement`) cuts to this, so the credit
+/// [`TurnResultBudget::record`] books is a saving the spill makes either way.
+const SPILL_RESIDUE_DIVISOR: usize = 10;
+
+/// The residue a spill of a `tokens`-token result leaves when it truncates.
+#[must_use]
+pub(crate) const fn spill_residue_tokens(tokens: usize) -> usize {
+    tokens / SPILL_RESIDUE_DIVISOR
 }
 
 // =============================================================================
@@ -181,9 +177,11 @@ pub struct TurnResult {
     pub tool_name: String,
     pub tokens_in_context: usize,
     pub in_context_text: String,
-    /// `true` if the result already arrived as a `[Full output persisted:
-    /// ...]` marker (Layer 2 already handled it). Such entries are not
-    /// spilled again by Layer 3.
+    /// NOT READ. [`TurnResultBudget::record`] derives "already persisted"
+    /// itself, from `in_context_text`, as Layer 2 does: this call's own marker
+    /// only (`result_processing::carries_own_persisted_marker`). The harness
+    /// still sets it from "any marker line", which also matched a `file_read`
+    /// of a file quoting one; the field goes when that line does.
     pub already_persisted: bool,
 }
 
@@ -205,10 +203,23 @@ struct TurnState {
 }
 
 /// Per-turn budget tracker. Cheap to `Clone` — wraps an `Arc<Mutex<_>>`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TurnResultBudget {
     inner: Arc<Mutex<HashMap<TurnId, TurnState>>>,
     max_turn_tokens: usize,
+    /// The store the spill writes through (session-scoped), so the floor below
+    /// is measured on the marker that spill would actually write. `None`: the
+    /// process store's unscoped handle.
+    store: Option<std::sync::Arc<crate::tools::result_store::ToolResultStore>>,
+}
+
+impl std::fmt::Debug for TurnResultBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnResultBudget")
+            .field("max_turn_tokens", &self.max_turn_tokens)
+            .field("scoped_store", &self.store.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl TurnResultBudget {
@@ -217,7 +228,39 @@ impl TurnResultBudget {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             max_turn_tokens,
+            store: None,
         }
+    }
+
+    /// Measure the spill floor on `store` — the handle the spill writes
+    /// through — instead of the process store's unscoped one, whose marker is
+    /// shorter by the session directory.
+    #[must_use]
+    pub fn with_result_store(
+        mut self,
+        store: std::sync::Arc<crate::tools::result_store::ToolResultStore>,
+    ) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// The fewest tokens a result must exceed to be spilled: the floor the
+    /// offload itself applies (`result_processing::offload_floor_tokens`), on
+    /// the same store. `0` without any store — nothing can be written then,
+    /// and the spill cuts instead (`result_processing::spill_replacement`).
+    fn floor_tokens(&self, result: &TurnResult) -> usize {
+        let store = self
+            .store
+            .clone()
+            .or_else(crate::tools::result_store::global_tool_result_store);
+        store.map_or(0, |store| {
+            crate::tools::result_processing::offload_floor_tokens(
+                &store,
+                &result.call_id,
+                &result.tool_name,
+                result.tokens_in_context,
+            )
+        })
     }
 
     #[must_use]
@@ -235,9 +278,11 @@ impl TurnResultBudget {
 
     /// Record a new result; when it takes the turn over budget, return the
     /// instruction to spill **it** — never an earlier one (see the module doc).
-    /// An already-persisted result (a Layer-2 marker) is not spilled again, and
-    /// neither is a result no larger than the marker that would replace it
-    /// (measured on the marker the process store would write for this call).
+    /// A result carrying this call's own persist marker is not spilled again (a
+    /// second write would replace the blob it names); a marker line that is
+    /// merely part of the payload does not count. Neither is a result no larger
+    /// than the footer that would replace it — the offload's own floor, so the
+    /// two cannot disagree.
     ///
     /// Reads are NOT exempt. This is the only per-turn bound on the context a
     /// turn adds, and on a small window a few read windows exceed it — a fatal
@@ -250,17 +295,23 @@ impl TurnResultBudget {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
-        if state.cumulative <= self.max_turn_tokens
-            || result.already_persisted
-            || result.tokens_in_context <= marker_tokens(&result)
-        {
+        if state.cumulative <= self.max_turn_tokens {
             return Vec::new();
         }
-        // Approximate: spilling the result is expected to reduce its
-        // in-context footprint to ~10 % of the original (the marker length).
-        // Credit 90 % back — a saving this spill actually makes, because the
-        // caller rewrites this result before it is emitted.
-        let credit = result.tokens_in_context.saturating_mul(9) / 10;
+        let own_marker = crate::tools::result_processing::carries_own_persisted_marker(
+            &result.in_context_text,
+            &result.call_id,
+            &result.tool_name,
+        );
+        let floor = self.floor_tokens(&result);
+        if own_marker || result.tokens_in_context <= floor {
+            return Vec::new();
+        }
+        // What the spill leaves is at most the footer (under `floor`) or the
+        // truncated residue — credit the rest, a saving the spill makes either
+        // way, because the caller rewrites this result before it is emitted.
+        let left = floor.max(spill_residue_tokens(result.tokens_in_context));
+        let credit = result.tokens_in_context.saturating_sub(left);
         state.cumulative = state.cumulative.saturating_sub(credit);
         vec![SpillInstruction {
             call_id: result.call_id,
@@ -312,6 +363,22 @@ mod tests {
         let mut buf = [0u8; 16];
         buf[..8].copy_from_slice(&bytes);
         TurnId::new(uuid::Uuid::from_bytes(buf))
+    }
+
+    /// `result` as a Layer-2 marker of its own call: what `record` treats as
+    /// already persisted. (Not the `already_persisted` flag, which it does not
+    /// read.)
+    fn own_marker(result: TurnResult) -> TurnResult {
+        let name = crate::tools::result_store::blob_file_name(&result.call_id, &result.tool_name);
+        TurnResult {
+            in_context_text: format!(
+                "{}/tmp/results/{name} ({} tokens, {})]",
+                crate::tools::result_store::PERSISTED_REF_PREFIX,
+                result.tokens_in_context,
+                result.tool_name
+            ),
+            ..result
+        }
     }
 
     fn result(id: &str, tokens: usize) -> TurnResult {
@@ -370,8 +437,7 @@ mod tests {
         let b = TurnResultBudget::new(5_000);
         let id = tid(1);
         b.begin_turn(id);
-        let mut already = result("c1", 10_000);
-        already.already_persisted = true;
+        let already = own_marker(result("c1", 10_000));
         let instr = b.record(&id, already);
         // Only entry is already persisted → no spill candidate.
         assert!(instr.is_empty());
@@ -403,8 +469,7 @@ mod tests {
         let id = tid(1);
         b.begin_turn(id);
         assert!(b.record(&id, result("c1", 9_000)).is_empty());
-        let mut marker = result("c2", 4_000);
-        marker.already_persisted = true;
+        let marker = own_marker(result("c2", 4_000));
 
         let instr = b.record(&id, marker);
 
@@ -454,6 +519,115 @@ mod tests {
             })
             .collect();
         assert_eq!(spilled, vec![false, false, true, true, true], "{per_turn}");
+    }
+
+    /// The turn budget's floor and the offload's are one measurement, on the
+    /// store the spill writes through: a result just under the scoped footer
+    /// floor is neither spilled nor credited, one just over it is spilled and
+    /// the offload takes it. Measured on the unscoped handle the floor was
+    /// shorter by the session directory, so a result between the two was
+    /// credited and never spilled.
+    ///
+    /// Mutation-checked: measuring the floor without the budget's store again
+    /// turns this red.
+    #[test]
+    fn the_spill_floor_is_the_offload_floor_on_the_same_store() {
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&base).unwrap();
+        let root = std::sync::Arc::new(
+            crate::tools::result_store::ToolResultStore::with_dir_for_tests(base),
+        );
+        let scoped = crate::tools::result_store::ToolResultStore::for_session(
+            &root,
+            format!("agent:main:{}", "long-session-key-".repeat(8)),
+        );
+        let floor = |tokens| {
+            crate::tools::result_processing::offload_floor_tokens(&scoped, "cf", "bash", tokens)
+        };
+        let recovery = crate::tools::result_processing::RecoveryTools::ALL;
+        let estimate = crate::context::budget::pressure::estimate_tokens_smart;
+        let text_of = |target: usize| {
+            let mut text = String::new();
+            while estimate(&text) < target {
+                text.push_str("word ");
+            }
+            text
+        };
+        for (target, spills) in [(floor(0) - 5, false), (floor(0) + 40, true)] {
+            let budget = TurnResultBudget::new(1).with_result_store(scoped.clone());
+            let id = TurnId::new(uuid::Uuid::new_v4());
+            let text = text_of(target);
+            let tokens = estimate(&text);
+            let spilled = !budget
+                .record(
+                    &id,
+                    TurnResult {
+                        call_id: "cf".to_string(),
+                        tool_name: "bash".to_string(),
+                        tokens_in_context: tokens,
+                        in_context_text: text.clone(),
+                        already_persisted: false,
+                    },
+                )
+                .is_empty();
+            assert_eq!(
+                spilled,
+                tokens > floor(tokens),
+                "{tokens} vs {}",
+                floor(tokens)
+            );
+            assert_eq!(spilled, spills, "{tokens}");
+            let left = crate::tools::result_processing::spill_replacement(
+                Some(&scoped),
+                "cf",
+                "bash",
+                &text,
+                recovery,
+            );
+            assert_eq!(
+                left.contains("[Full output persisted: "),
+                spilled,
+                "the offload takes exactly what the budget spills"
+            );
+        }
+    }
+
+    /// "Already persisted" is this call's own marker only. A `file_read` of a
+    /// file that quotes a marker line — another call's, or one naming a blob
+    /// this call would never write — is ordinary content, and spills like any
+    /// other; this call's own marker, even as a later line, is not re-spilled
+    /// (a second write would replace the blob it names).
+    ///
+    /// Mutation-checked: deciding on "any marker line"
+    /// (`extract_persisted_ref`) again turns the first half red.
+    #[test]
+    fn only_this_calls_own_marker_counts_as_already_persisted() {
+        let budget = TurnResultBudget::new(1_000);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let quoted = format!(
+            "{}/tmp/results/{} (900 tokens, bash)]\n{}",
+            crate::tools::result_store::PERSISTED_REF_PREFIX,
+            crate::tools::result_store::blob_file_name("some_other_call", "bash"),
+            "fn main() {}\n".repeat(2_000),
+        );
+        let read = TurnResult {
+            call_id: "r1".to_string(),
+            tool_name: "file_read".to_string(),
+            tokens_in_context: 5_000,
+            in_context_text: quoted,
+            already_persisted: true,
+        };
+        assert_eq!(
+            budget.record(&id, read).len(),
+            1,
+            "a quoted marker is content"
+        );
+
+        let own = own_marker(result("c9", 5_000));
+        assert!(
+            budget.record(&id, own).is_empty(),
+            "own marker is not re-spilled"
+        );
     }
 
     /// A result no larger than its marker is never spilled: the marker would

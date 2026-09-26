@@ -59,7 +59,7 @@ use rusqlite::{params, Connection};
 const DEFAULT_CHUNK_LINES: usize = 20;
 
 /// Max characters retained for a chunk title (UTF-8-safe truncation).
-const MAX_TITLE_CHARS: usize = 100;
+pub(crate) const MAX_TITLE_CHARS: usize = 100;
 
 /// Errors surfaced by the content index. Kept local (not `AlephError`) so the
 /// module stays decoupled — callers translate or log-and-fall-back as needed.
@@ -467,7 +467,7 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
 }
 
 /// Number of section titles surfaced in the offload marker preview.
-const PREVIEW_COUNT: usize = 5;
+pub(crate) const PREVIEW_COUNT: usize = 5;
 
 /// Reciprocal Rank Fusion constant (Cormack et al. 2009). 60 is the
 /// widely-cited default: it damps deep ranks so the head of each list

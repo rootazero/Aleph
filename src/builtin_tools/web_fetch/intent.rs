@@ -20,27 +20,36 @@ const CANDIDATE_SECTIONS: usize = 40;
 /// continuous.
 const GAP: &str = "\n[…]\n";
 
-/// Persist and index `page` — the whole extracted page, raw — under this call,
-/// returning the offload footer (the persisted path, and how to search the
-/// rest). Done once per call: the blob is named by the call id, so the page is
-/// written exactly once however many times [`sections_for_prompt`] is asked to
-/// fit a smaller cap.
+/// A page persisted (and, when the index took it, indexed) by [`index_page`].
+pub(super) struct IndexedPage {
+    /// The offload footer: the persisted path, and how to read the rest back.
+    pub(super) footer: String,
+    /// Whether the page's sections are in the index. `false`: a search over
+    /// them has nothing to find, which is not the same as nothing matching.
+    pub(super) indexed: bool,
+}
+
+/// Persist and index `page` — the whole extracted page, raw — under this call.
+/// Done once per call: the blob is named by the call id, so the page is written
+/// exactly once however many times [`sections_for_prompt`] is asked to fit a
+/// smaller cap.
 ///
-/// `None` when the store cannot take the page (a write failure); the caller
-/// then truncates the page as it did before.
+/// `None` when the store cannot take the page (a write failure, or no retrieval
+/// tool callable to read it back); the caller then truncates the page as it
+/// did before.
 pub(super) fn index_page(
     store: &ToolResultStore,
     call_id: &str,
     url: &str,
     page: &str,
-) -> Option<String> {
+) -> Option<IndexedPage> {
     // Stored fenced, like any offloaded web page: the footer then carries no
     // preview of the untrusted text outside a fence.
     // The footer names only the retrieval tools the dispatch can call; outside
     // a dispatch nothing is known about the gates, and both are assumed.
     let recovery = crate::tools::result_processing::dispatch_recovery_tools()
         .unwrap_or(crate::tools::result_processing::RecoveryTools::ALL);
-    let (footer, _) = crate::tools::result_processing::recovery_footer_for(
+    let offloaded = crate::tools::result_processing::offload_indexed(
         Some(store),
         call_id,
         super::WebFetchTool::NAME,
@@ -48,26 +57,38 @@ pub(super) fn index_page(
         0,
         recovery,
     )?;
-    Some(footer)
+    Some(IndexedPage {
+        footer: offloaded.footer,
+        indexed: offloaded.sections.is_some_and(|n| n > 0),
+    })
 }
 
-/// The sections of `page` (indexed by [`index_page`] under `call_id`) that
+/// The sections of `page` (persisted by [`index_page`] under `call_id`) that
 /// match `prompt`, in page order, at most `cap_chars` of them, fenced as
-/// external content and followed by `footer`. With no section matching, the
-/// head of the page stands in, so the model still sees what the page is.
+/// external content and followed by the footer. With no section matching, the
+/// head of the page stands in, so the model still sees what the page is — and
+/// the note says which of two things happened: nothing matched, or the page
+/// could not be searched at all.
 pub(super) fn sections_for_prompt(
     store: &ToolResultStore,
     call_id: &str,
     url: &str,
     prompt: &str,
     page: &str,
-    footer: &str,
+    indexed: &IndexedPage,
     cap_chars: usize,
 ) -> String {
     let label = source_label(super::WebFetchTool::NAME, call_id);
+    // `None`: the page is not in the index, or the index could not answer.
+    let hits = if indexed.indexed {
+        store.search_source(&label, prompt, CANDIDATE_SECTIONS)
+    } else {
+        None
+    };
+    let searchable = hits.is_some();
     let mut picked: Vec<(i64, String)> = Vec::new();
     let mut used = 0usize;
-    for hit in store.search_source(&label, prompt, CANDIDATE_SECTIONS) {
+    for hit in hits.unwrap_or_default() {
         let text = sanitize_external_text(&hit.body);
         let len = text.chars().count() + GAP.len();
         if used + len > cap_chars {
@@ -88,22 +109,28 @@ pub(super) fn sections_for_prompt(
             .collect::<Vec<_>>()
             .join(GAP)
     };
-    let note = if matched == 0 {
+    let chars = page.chars().count();
+    let note = if !searchable {
         format!(
-            "[Page too large to return whole ({} chars) and no section matched the focus; \
-             showing its beginning.]",
-            page.chars().count()
+            "[Page too large to return whole ({chars} chars), and it could not be searched \
+             here (the index did not take it); showing its beginning. The whole page is \
+             saved at the path below.]"
+        )
+    } else if matched == 0 {
+        format!(
+            "[Page too large to return whole ({chars} chars) and no section matched the focus; \
+             showing its beginning.]"
         )
     } else {
         format!(
-            "[Page too large to return whole ({} chars): showing the {matched} section(s) \
-             matching the focus, in page order.]",
-            page.chars().count()
+            "[Page too large to return whole ({chars} chars): showing the {matched} section(s) \
+             matching the focus, in page order.]"
         )
     };
     format!(
-        "{note}\n{}\n{footer}",
-        wrap_external_content(&body, source_of(url))
+        "{note}\n{}\n{}",
+        wrap_external_content(&body, source_of(url)),
+        indexed.footer
     )
 }
 
@@ -136,9 +163,9 @@ mod tests {
         cap_chars: usize,
     ) -> Option<String> {
         let url = "https://example.com/p";
-        let footer = index_page(store, call_id, url, page)?;
+        let indexed = index_page(store, call_id, url, page)?;
         Some(sections_for_prompt(
-            store, call_id, url, prompt, page, &footer, cap_chars,
+            store, call_id, url, prompt, page, &indexed, cap_chars,
         ))
     }
 
@@ -212,6 +239,32 @@ mod tests {
         )
         .expect("the store takes the page");
         assert!(out.contains("1.21 gigawatts"), "{out}");
+    }
+
+    /// The index cannot take the page (its database cannot open): the page is
+    /// still persisted, and the note says it could not be searched — not that
+    /// nothing matched, which only a working index can say.
+    ///
+    /// Mutation-checked: reading an unavailable index as an empty result
+    /// ("no section matched") turns this red.
+    #[test]
+    fn an_unavailable_index_is_not_reported_as_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("results");
+        // A directory where the index database file should be: it cannot open.
+        std::fs::create_dir_all(root.join("index.db")).unwrap();
+        let store = std::sync::Arc::new(ToolResultStore::with_dir_for_tests(root));
+        let out = by_intent(
+            &store,
+            "call_intent_5",
+            "flux capacitor",
+            &long_page(),
+            2_000,
+        )
+        .expect("the page is still persisted");
+        assert!(out.contains("could not be searched"), "{out}");
+        assert!(!out.contains("no section matched"), "{out}");
+        assert!(out.contains("[Full output persisted: "), "{out}");
     }
 
     /// Nothing matches: the head stands in, and says so.
