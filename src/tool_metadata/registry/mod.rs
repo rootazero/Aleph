@@ -25,7 +25,7 @@ use conflict::ConflictResolver;
 #[allow(unused_imports)]
 pub use health::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 use query::ToolQuery;
-use registration::ToolRegistrar;
+use registration::{AllowedToolsMeaning, ToolRegistrar};
 use state::ToolState;
 pub use types::ResolvedCommand;
 use types::ToolStorage;
@@ -138,27 +138,45 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Register skills from `SkillInfo` list (Flat Namespace Mode)
-    ///
-    /// Returns the ids of skills refused because their `allowed-tools:`
-    /// declaration named tools that do not exist. A refused skill gets no
-    /// slash command — see [`ToolRegistrar::register_skills`].
-    pub async fn register_skills(&self, skills: &[SkillInfo]) -> Vec<String> {
-        self.register_skills_admitting(skills, &|_| false).await
+    /// Register SKILL rows (Flat Namespace Mode): each skill's `allowed-tools:`
+    /// pre-grants ([`AllowedToolsMeaning::PreGrants`]) — Claude Code names are
+    /// mapped, entries that grant nothing are dropped with a warn, and every
+    /// skill registers. See [`ToolRegistrar::register_skills`].
+    pub async fn register_skills(&self, skills: &[SkillInfo]) {
+        let refused = self
+            .registrar
+            .register_skills(
+                skills,
+                &self.conflict_resolver,
+                &|_| false,
+                AllowedToolsMeaning::PreGrants,
+            )
+            .await;
+        debug_assert!(refused.is_empty(), "a skill is never refused: {refused:?}");
+        self.health.invalidate_all();
     }
 
-    /// [`Self::register_skills`], also admitting the names
-    /// `admit_unregistered` vouches for although they have no catalog row yet
-    /// (a plugin command's own declared MCP servers — see
-    /// [`ToolRegistrar::register_skills`]).
-    pub(crate) async fn register_skills_admitting(
+    /// Register plugin COMMAND rows: each command's `allowed-tools:` restricts
+    /// its turn ([`AllowedToolsMeaning::Restricts`]), and a command naming a
+    /// tool that does not exist is refused. `admit_unregistered` vouches for
+    /// names that have no catalog row yet (the command's own plugin's declared
+    /// MCP servers — see [`ToolRegistrar::register_skills`]).
+    ///
+    /// Returns the ids of the refused commands; a refused command gets no
+    /// slash command.
+    pub(crate) async fn register_plugin_commands(
         &self,
-        skills: &[SkillInfo],
+        commands: &[SkillInfo],
         admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> Vec<String> {
         let rejected = self
             .registrar
-            .register_skills(skills, &self.conflict_resolver, admit_unregistered)
+            .register_skills(
+                commands,
+                &self.conflict_resolver,
+                admit_unregistered,
+                AllowedToolsMeaning::Restricts,
+            )
             .await;
         self.health.invalidate_all();
         rejected

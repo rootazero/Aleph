@@ -125,8 +125,15 @@ struct RawFrontmatter {
     homepage: Option<String>,
     #[serde(default)]
     emoji: Option<String>,
+    /// Aleph spells it `when-to-use` (the container's kebab-case) …
     #[serde(default)]
     when_to_use: Option<String>,
+    /// … and Claude Code `when_to_use`. Both are read; Aleph's wins when a
+    /// file has both. A second field rather than a serde `alias`: an alias
+    /// makes a file with both spellings a `duplicate field` error, which
+    /// fails the whole frontmatter and drops the skill.
+    #[serde(default, rename = "when_to_use")]
+    when_to_use_snake: Option<String>,
     #[serde(default)]
     version: Option<String>,
     /// Frontmatter `allowed-tools:` — the tool names this skill declares, which
@@ -594,7 +601,11 @@ fn apply_metadata(manifest: &mut SkillManifest, raw: &RawFrontmatter) {
     if let Some(emoji) = raw.emoji.clone() {
         manifest.set_emoji(emoji);
     }
-    if let Some(when) = raw.when_to_use.clone() {
+    if let Some(when) = raw
+        .when_to_use
+        .clone()
+        .or_else(|| raw.when_to_use_snake.clone())
+    {
         manifest.set_when_to_use(when);
     }
     if let Some(version) = raw.version.clone() {
@@ -1054,6 +1065,51 @@ Review instructions."#;
         );
     }
 
+    /// A Claude Code SKILL.md parses with every key only Claude Code reads,
+    /// and its snake-case `when_to_use` is read as Aleph's `when-to-use`.
+    #[test]
+    fn claude_code_only_frontmatter_parses_and_when_to_use_is_read_under_both_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("cc-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: cc-skill\ndescription: Does things\nwhen_to_use: when asked\n\
+             argument-hint: \"[thing]\"\narguments: [thing]\ndisable-model-invocation: false\n\
+             user-invocable: true\nallowed-tools: Read, Grep\ndisallowed-tools: [Write]\nmodel: sonnet\n\
+             effort: high\ncontext: fork\nagent: general-purpose\nbackground: false\n\
+             hooks:\n  PreToolUse:\n    - matcher: Write\n      hooks: [{type: command, command: echo}]\n\
+             paths: [\"src/**\"]\nshell: bash\nmetadata: {author: x}\nlicense: MIT\ncompatibility: \">=1\"\n---\n\
+             Body.\n",
+        )
+        .unwrap();
+        let manifest = parse_skill_file(skill.join("SKILL.md"), SkillSource::Global)
+            .expect("every CC-only key is tolerated");
+        assert_eq!(manifest.name(), "cc-skill");
+        assert_eq!(
+            manifest.when_to_use(),
+            Some("when asked"),
+            "snake_case `when_to_use` is Claude Code's spelling"
+        );
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(&["Read".to_string(), "Grep".to_string()][..])
+        );
+    }
+
+    /// Both spellings in one file are two keys, not a duplicate of one: a
+    /// serde `alias` would make this a `duplicate field` error, and a failed
+    /// frontmatter is a SKILL.md the directory scan drops. Aleph's own
+    /// spelling wins.
+    #[test]
+    fn a_file_spelling_when_to_use_both_ways_still_parses() {
+        let content = "---\nname: n\ndescription: d\nwhen_to_use: cc says\n\
+                       when-to-use: aleph says\n---\nBody.";
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("both spellings must not fail the record");
+        assert_eq!(manifest.when_to_use(), Some("aleph says"));
+    }
+
     /// `allowed-tools:` reaches the manifest at all. Before this it was
     /// dropped by serde: `RawFrontmatter` is `rename_all = "kebab-case"` with
     /// no such field and no `deny_unknown_fields`, so an author's declaration
@@ -1461,10 +1517,11 @@ Content."#;
         //
         // * 1.2 resolution (today): `String("no")` takes the comma-scalar arm
         //   and yields `Some(["no"])` — a declaration naming one tool called
-        //   `no`. `register_skills` cannot resolve that name, so the skill
-        //   loses its slash command; it stays visible and `skill_read`-able.
+        //   `no`. Registration names no tool `no`, drops the entry with a
+        //   warn and registers the skill with `Some([])`: nothing to
+        //   pre-grant.
         // * 1.1 resolution: `Bool(false)` takes the `other` arm, warns, and
-        //   yields `None` — no declaration, full tool surface.
+        //   yields `None` — no declaration, nothing to pre-grant.
         //
         // Different, and deliberately not equalised: `allowed-tools: no` is a
         // nonsense declaration under either reading, both degradations are

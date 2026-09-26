@@ -150,12 +150,13 @@ pub(crate) fn strip(metadata: &mut HashMap<String, String>) {
 /// this skill at the last boot (known tool names only), which the slash mode
 /// carries.
 ///
-/// Claude Code names map to Aleph names
-/// (`extension::hooks::normalize_cc_tool_entry`). Dropped:
-/// - a scoped `Bash(git *)`, rather than folded into `bash` — pre-granting
-///   the whole tool for a grant scoped to one command widens an approval
-///   skip;
-/// - anything [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
+/// Each name is mapped by [`crate::skill::frontmatter::pregrant_tool_name`] —
+/// the one mapping registration validated `registered` with, so the file's
+/// `Read` meets the registration's `file_read`. Dropped:
+/// - what that mapping drops: a scoped `Bash(git *)` (rather than folded into
+///   `bash` — pre-granting the whole tool for a grant scoped to one command
+///   widens an approval skip), and anything
+///   [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
 ///   accepts (`*`, `?*`, `file_*`, `mcp__s__*` → `s__*`): the fold writes
 ///   exact entries, and the policy reads such a key back as a glob;
 /// - anything `registered` does not name: the file is re-read at turn start
@@ -172,13 +173,10 @@ pub(crate) fn stamp_pregrant_from_names(
 ) {
     let mut tools: Vec<String> = Vec::new();
     for name in names {
-        let Some(tool) = crate::extension::hooks::normalize_cc_tool_entry(name, false) else {
+        let Some(tool) = crate::skill::frontmatter::pregrant_tool_name(name) else {
             continue;
         };
-        if !crate::config::types::policies::is_glob_pattern(&tool)
-            && registered.contains(&tool)
-            && !tools.contains(&tool)
-        {
+        if registered.contains(&tool) && !tools.contains(&tool) {
             tools.push(tool);
         }
     }
@@ -556,16 +554,19 @@ mod wire_tests {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
         let rejected = catalog
-            .register_skills(&[SkillInfo {
-                id: COMMAND.to_string(),
-                name: "scoped".to_string(),
-                description: "narrows its own toolbelt".to_string(),
-                scope: crate::domain::skill::PromptScope::System,
-                version: None,
-                allowed_tools: declared,
-                argument_hint: None,
-                plugin_id: Some("plug".to_string()),
-            }])
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: COMMAND.to_string(),
+                    name: "scoped".to_string(),
+                    description: "narrows its own toolbelt".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: declared,
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
             .await;
         if !rejected.is_empty() {
             return Err(rejected);
@@ -680,10 +681,12 @@ mod wire_tests {
     /// tools. A command's parse translates them (`manifest/parsers.rs`); a
     /// declaration that still names one here would, matched literally, retain
     /// zero tools while reporting success — a report-success no-op strictly
-    /// worse than the silent drop this replaces — so the row is refused
-    /// outright and the author is named.
+    /// worse than the silent drop this replaces — so the command is refused
+    /// outright and the author is named. (A SKILL's list only pre-grants, so
+    /// a skill maps the name instead and never loses its row:
+    /// `a_claude_code_skill_registers_with_its_names_mapped`.)
     #[tokio::test]
-    async fn an_unknown_tool_name_refuses_the_skill_outright() {
+    async fn an_unknown_tool_name_refuses_the_command_outright() {
         let rejected = surface_for(Some(vec!["grep".to_string(), "Read".to_string()]))
             .await
             .expect_err("a declaration naming a nonexistent tool must be refused");
@@ -691,37 +694,131 @@ mod wire_tests {
     }
 
     /// The refusal has to be visible in the *catalog*, not only in the return
-    /// value: a skill that registers with its declaration quietly dropped is
-    /// exactly the failure mode being fixed, and it would still satisfy an
+    /// value: a command that registers with its declaration quietly dropped
+    /// is exactly the failure mode being fixed, and it would still satisfy an
     /// assertion about the returned list.
     #[tokio::test]
-    async fn a_refused_skill_gets_no_slash_command_at_all() {
+    async fn a_refused_command_gets_no_slash_command_at_all() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
         let rejected = catalog
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: "plug:bad".to_string(),
+                    name: "bad".to_string(),
+                    description: "names a tool that does not exist".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: Some(vec!["Bash".to_string()]),
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
+            .await;
+
+        assert_eq!(rejected, vec!["plug:bad".to_string()]);
+        assert!(
+            catalog.check_conflict("plug:bad").await.is_none(),
+            "a refused command must not be registered as a slash command"
+        );
+        assert!(
+            CommandParser::new(catalog)
+                .parse_async("/plug:bad")
+                .await
+                .is_none(),
+            "and it must not resolve"
+        );
+    }
+
+    /// The validated list a catalog row carries — what the slash envelope
+    /// hands the turn as `mode["allowed_tools"]`.
+    async fn row_list(catalog: &ToolCatalog, name: &str) -> Option<Vec<String>> {
+        catalog
+            .list_all()
+            .await
+            .into_iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("/{name} is not in the catalog"))
+            .routing_capabilities
+    }
+
+    /// A Claude Code skill's `allowed-tools` names Claude Code tools. A
+    /// skill's list only pre-grants, so the skill registers with each name
+    /// mapped (`Read` → `file_read`) and what can grant nothing dropped: a
+    /// scoped `Bash(...)` (a pre-grant never widens a scoped grant to the
+    /// whole tool), a CC tool with no Aleph counterpart, an unknown name, a
+    /// glob. The same list on a plugin COMMAND still refuses the command —
+    /// registration translates nothing for a command, whose parse already
+    /// did.
+    #[tokio::test]
+    async fn a_claude_code_skill_registers_with_its_names_mapped() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        let declared = vec![
+            "Read".to_string(),
+            "Grep".to_string(),
+            "Bash(git status:*)".to_string(),
+            "NotebookEdit".to_string(),
+            "Frobnicate".to_string(),
+            "file_*".to_string(),
+            "file_read".to_string(),
+        ];
+        let info = |id: &str, plugin: Option<&str>| SkillInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "declares Claude Code tool names".to_string(),
+            scope: crate::domain::skill::PromptScope::System,
+            version: None,
+            allowed_tools: Some(declared.clone()),
+            argument_hint: None,
+            plugin_id: plugin.map(str::to_string),
+        };
+        catalog.register_skills(&[info("cc-skill", None)]).await;
+        assert_eq!(
+            row_list(&catalog, "cc-skill").await,
+            Some(vec!["file_read".to_string(), "grep".to_string()]),
+            "the skill registers, with exactly the grantable Aleph names"
+        );
+        assert!(
+            CommandParser::new(Arc::clone(&catalog))
+                .parse_async("/cc-skill go")
+                .await
+                .is_some(),
+            "and it resolves as a slash command"
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(&[info("plug:cc", Some("plug"))], &|_| false)
+            .await;
+        assert_eq!(
+            rejected,
+            vec!["plug:cc".to_string()],
+            "a command's list is not mapped here: its unknown names refuse it"
+        );
+    }
+
+    /// Nothing survives ⇒ the skill still registers, with an empty validated
+    /// list — nothing to pre-grant, not a lost skill.
+    #[tokio::test]
+    async fn a_skill_whose_every_entry_is_dropped_still_registers() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        catalog
             .register_skills(&[SkillInfo {
-                id: "bad-skill".to_string(),
-                name: "Bad Skill".to_string(),
-                description: "names a tool that does not exist".to_string(),
+                id: "nothing-grantable".to_string(),
+                name: "Nothing Grantable".to_string(),
+                description: "names only what Aleph cannot grant".to_string(),
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
-                allowed_tools: Some(vec!["Bash".to_string()]),
+                allowed_tools: Some(vec!["NotebookEdit".to_string(), "Bash(ls)".to_string()]),
                 argument_hint: None,
                 plugin_id: None,
             }])
             .await;
-
-        assert_eq!(rejected, vec!["bad-skill".to_string()]);
-        assert!(
-            catalog.check_conflict("bad-skill").await.is_none(),
-            "a refused skill must not be registered as a slash command"
-        );
-        assert!(
-            CommandParser::new(catalog)
-                .parse_async("/bad-skill")
-                .await
-                .is_none(),
-            "and it must not resolve"
+        assert_eq!(
+            row_list(&catalog, "nothing-grantable").await,
+            Some(Vec::new())
         );
     }
 
@@ -799,16 +896,18 @@ mod wire_tests {
         );
     }
 
-    /// A skill may not borrow another *slash command's* name. The catalog is
-    /// a slash-command index; `Skill` and `Custom` entries live only there and
-    /// are never in the run loop's candidate tool list. Admitting one would
-    /// pass validation and then match nothing — a silent deny-all, which is
-    /// the failure this whole change removes.
+    /// No row may borrow another *slash command's* name as a tool. The
+    /// catalog is a slash-command index; `Skill` and `Custom` entries live
+    /// only there and are never in the run loop's candidate tool list.
+    /// Admitting one would pass validation and then match nothing — for a
+    /// command a silent deny-all (so the command is refused), for a skill a
+    /// grant of nothing reported as a grant (so the entry is dropped and the
+    /// skill registers without it).
     #[tokio::test]
     async fn a_sibling_skills_slash_name_is_not_a_tool_name() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
-        let rejected = catalog
+        catalog
             .register_skills(&[
                 SkillInfo {
                     id: "sibling".to_string(),
@@ -833,20 +932,42 @@ mod wire_tests {
             ])
             .await;
 
-        assert_eq!(rejected, vec!["borrower".to_string()]);
         assert!(
             catalog.check_conflict("sibling").await.is_some(),
             "the sibling itself must still register"
         );
+        assert_eq!(
+            row_list(&catalog, "borrower").await,
+            Some(Vec::new()),
+            "a skill's list never names a slash command"
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: "plug:borrower".to_string(),
+                    name: "borrower".to_string(),
+                    description: "names a sibling skill".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: Some(vec!["sibling".to_string()]),
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
+            .await;
+        assert_eq!(rejected, vec!["plug:borrower".to_string()]);
     }
 
-    /// A skill naming only real tools still registers — the guard has to be
-    /// able to say yes, or it is a guard that rejects everything.
+    /// A skill naming only real tools registers with its whole list — the
+    /// validation has to be able to say yes, or it is a guard that drops
+    /// everything.
     #[tokio::test]
     async fn a_skill_naming_real_tools_still_registers() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
-        let rejected = catalog
+        catalog
             .register_skills(&[SkillInfo {
                 id: "good-skill".to_string(),
                 name: "Good Skill".to_string(),
@@ -858,7 +979,9 @@ mod wire_tests {
                 plugin_id: None,
             }])
             .await;
-        assert!(rejected.is_empty(), "unexpectedly refused: {rejected:?}");
-        assert!(catalog.check_conflict("good-skill").await.is_some());
+        assert_eq!(
+            row_list(&catalog, "good-skill").await,
+            Some(vec!["grep".to_string(), "bash".to_string()])
+        );
     }
 }

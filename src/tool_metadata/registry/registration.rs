@@ -11,6 +11,21 @@ use super::super::types::{ToolSource, UnifiedTool};
 use super::conflict::ConflictResolver;
 use super::helpers::{extract_command_name, truncate_description};
 
+/// What a slash row's `allowed-tools:` does to a `/name` turn. One
+/// frontmatter key carries two meanings (Claude Code's reading), so the
+/// registering caller names which one its rows have; registration never
+/// infers it from the row's shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllowedToolsMeaning {
+    /// A plugin COMMAND's list narrows the run's tool surface: an unknown
+    /// name refuses the row (a restriction naming nothing is a silent
+    /// deny-all).
+    Restricts,
+    /// A SKILL's list pre-grants: Claude Code names are mapped, what cannot be
+    /// granted is dropped with a warn, and the skill always registers.
+    PreGrants,
+}
+
 /// Registration functionality for `ToolCatalog`
 #[derive(Default)]
 pub struct ToolRegistrar;
@@ -201,16 +216,21 @@ impl ToolRegistrar {
         info!("Registered builtin tools (skill_* [alias: skills] + groupchat + session_new [aliases: new, clear] + cron_manage + voice + goal + help)");
     }
 
-    /// Register skills from `SkillInfo` list (Flat Namespace Mode)
+    /// Register skills and plugin commands from `SkillInfo` rows (Flat
+    /// Namespace Mode)
     ///
-    /// In flat namespace mode, skills are registered as root-level commands
+    /// In flat namespace mode, rows are registered as root-level commands
     /// with automatic conflict resolution. Users can invoke them directly
     /// via `/{skill_id}` without the `/skill` prefix.
     ///
     /// # Arguments
     ///
-    /// * `skills` - List of installed skill info
+    /// * `skills` - the rows, all of one kind
     /// * `conflict_resolver` - Conflict resolver for handling name conflicts
+    /// * `admit_unregistered` - the caller's third source of known names — see
+    ///   [`Self::is_known_tool_name`]
+    /// * `meaning` - what the rows' `allowed-tools:` does to a `/name` turn,
+    ///   which decides how it is validated here ([`AllowedToolsMeaning`])
     ///
     /// # Conflict Resolution
     ///
@@ -221,54 +241,63 @@ impl ToolRegistrar {
     ///
     /// # Returns
     ///
-    /// The ids of skills that were **not** registered because their declared
-    /// `allowed-tools:` named tools that do not exist. Returned rather than
-    /// only logged so the boot path can say it out loud: a skill silently
-    /// missing from the slash catalog reads exactly like a skill that was
-    /// never installed.
-    ///
-    /// `admit_unregistered` is the caller's third source of known names — see
-    /// [`Self::resolve_skill_tool_scope`].
+    /// The ids of rows that were **not** registered because their declared
+    /// `allowed-tools:` named tools that do not exist — plugin commands only
+    /// ([`AllowedToolsMeaning::Restricts`]); a skill is never refused.
+    /// Returned rather than only logged so the caller can say it out loud: a
+    /// command silently missing from the slash catalog reads exactly like a
+    /// command that was never installed.
     pub async fn register_skills(
         &self,
         skills: &[SkillInfo],
         conflict_resolver: &ConflictResolver,
         admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
+        meaning: AllowedToolsMeaning,
     ) -> Vec<String> {
         let mut rejected: Vec<String> = Vec::new();
         for skill in skills {
             let id = format!("skill:{}", skill.id);
 
-            // Resolve the declared tool scope BEFORE building the tool: an
-            // unresolvable declaration means this row does not get a slash
-            // command at all. That matches what the skill system already does
-            // with a skill it cannot parse (`skill::scan_directory` skips it
-            // with a warn); the alternative — register it with the declaration
-            // dropped — hands the model a plugin `/command` that runs with the
-            // full toolbelt the author explicitly tried to shrink. A SKILL's
-            // declaration pre-grants rather than restricts
-            // (`gateway::execution_engine::slash_skill_pregrant`), so for a
-            // skill the refusal is stricter than its reason: kept, fail-closed.
-            let routing_capabilities = match Self::resolve_skill_tool_scope(
-                skill.allowed_tools.as_deref(),
-                conflict_resolver,
-                admit_unregistered,
-            )
-            .await
-            {
-                Ok(caps) => caps,
-                Err(unknown) => {
-                    warn!(
-                        skill = %skill.id,
-                        unknown_tools = ?unknown,
-                        "skill declares `allowed-tools:` naming tools that do not exist; \
-                         its slash command is NOT registered. Use Aleph tool names \
-                         (`file_read`, `bash`, `grep`), not upstream Claude Code names \
-                         (`Read`, `Bash`, `Grep`)"
-                    );
-                    rejected.push(skill.id.clone());
-                    continue;
+            // Resolve the declared tool scope BEFORE building the tool. For a
+            // plugin command an unresolvable declaration means this row does
+            // not get a slash command at all. That matches what the skill
+            // system already does with a file it cannot parse
+            // (`skill::scan_directory` skips it with a warn); the alternative —
+            // register it with the declaration dropped — hands the model a
+            // plugin `/command` that runs with the full toolbelt the author
+            // explicitly tried to shrink. A SKILL's declaration pre-grants
+            // rather than restricts
+            // (`gateway::execution_engine::slash_skill_pregrant`), so what
+            // cannot be granted is dropped and the skill still registers.
+            let routing_capabilities = match meaning {
+                AllowedToolsMeaning::PreGrants => {
+                    Self::resolve_skill_pregrant_scope(
+                        &skill.id,
+                        skill.allowed_tools.as_deref(),
+                        conflict_resolver,
+                        admit_unregistered,
+                    )
+                    .await
                 }
+                AllowedToolsMeaning::Restricts => match Self::resolve_command_tool_scope(
+                    skill.allowed_tools.as_deref(),
+                    conflict_resolver,
+                    admit_unregistered,
+                )
+                .await
+                {
+                    Ok(caps) => caps,
+                    Err(unknown) => {
+                        warn!(
+                            command = %skill.id,
+                            unknown_tools = ?unknown,
+                            "plugin command declares `allowed-tools:` naming tools that do not \
+                             exist; its slash command is NOT registered"
+                        );
+                        rejected.push(skill.id.clone());
+                        continue;
+                    }
+                },
             };
 
             let tool = UnifiedTool::new(
@@ -324,56 +353,27 @@ impl ToolRegistrar {
         rejected
     }
 
-    /// Validate a row's declared `allowed-tools:` against the tool names
-    /// that actually exist.
+    /// A plugin COMMAND's declared `allowed-tools:`, validated against the
+    /// tool names that actually exist.
     ///
     /// `Ok(None)` — declared nothing. `Ok(Some(names))` — every declared name
-    /// resolves. `Err(unknown)` — at least one name names nothing, and the
-    /// caller must refuse the row. What the validated list then does depends
-    /// on the row: a plugin COMMAND's restricts the run (an empty `Some` is a
-    /// legitimate, explicit deny-all; `None` keeps the full surface); a
-    /// SKILL's bounds what a typed `/<skill>` may pre-grant
-    /// (`gateway::execution_engine::slash_skill_pregrant`: only these names,
-    /// never what the file added since — until the next boot, when skill rows
-    /// are registered again from the file as it then stands).
-    ///
-    /// Three sources are unioned to answer "does this name exist":
-    /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
-    ///   static list, and the same one the `ExecutionEngine` seeds its tool
-    ///   list from. Consulting it means this answer does not depend on how
-    ///   much of the catalog happens to be populated when skills register. A
-    ///   guard whose known-set is "whatever registered first" starts rejecting
-    ///   valid skills the day boot order changes, and a guard that rejects
-    ///   everything looks exactly like a guard that works.
-    /// * the catalog as it stands, **restricted to sources that are also LLM
-    ///   tool names**. This is not fussiness: the catalog is a *slash-command*
-    ///   index, and `Skill` / `Custom` entries live only there. Admitting them
-    ///   would let a declaration pass validation and then match nothing in the
-    ///   run loop, whose candidate list is built from the executor's tools —
-    ///   a silent deny-all, which is the exact failure this change exists to
-    ///   remove.
-    /// * `admit_unregistered` — names the caller vouches for although no
-    ///   catalog row exists *yet*. A plugin command passes the tool keys of
-    ///   the MCP servers its own plugin declares
-    ///   (`extension::slash_effect::register_slash_commands_effect`): those
-    ///   tools reach the catalog only when the server starts, which nothing
-    ///   orders before the command's registration, and the run loop narrows
-    ///   by name and joins MCP per request, so the admitted name is honoured
-    ///   once the server is up. Every other caller admits nothing here.
+    /// resolves ([`Self::is_known_tool_name`]). `Err(unknown)` — at least one
+    /// name names nothing, and the caller must refuse the row. The validated
+    /// list restricts the run: an empty `Some` is a legitimate, explicit
+    /// deny-all; `None` keeps the full surface.
     ///
     /// Known boundary: plugin tools and MCP tools register into the catalog
-    /// *after* skills do (MCP joins per request at run time), so a skill that
-    /// names one — or a command naming a server its plugin does not declare —
-    /// is refused even though the run loop could have honoured it. That is a
-    /// loud false negative — the author is named in a warn and in the boot
-    /// output — chosen over the silent false positive above. This
-    /// function translates nothing: matching upstream's `Read`/`Bash`/`Grep`
-    /// literally would retain zero tools while reporting success, so an
-    /// upstream name is refused here by name. A plugin *command*'s
-    /// declaration arrives already translated (`manifest/parsers.rs` maps it
-    /// through `extension::hooks::normalize_cc_tool_entry` at parse time); a
-    /// skill's does not.
-    async fn resolve_skill_tool_scope(
+    /// *after* the boot pass does (MCP joins per request at run time), so a
+    /// command naming a server its plugin does not declare is refused even
+    /// though the run loop could have honoured it. That is a loud false
+    /// negative — the command is named in a warn — chosen over the silent
+    /// false positive [`Self::is_known_tool_name`] describes. This function
+    /// translates nothing: matching upstream's `Read`/`Bash`/`Grep` literally
+    /// would retain zero tools while reporting success, so an upstream name is
+    /// refused here by name. A plugin command's declaration arrives already
+    /// translated (`manifest/parsers.rs` maps it through
+    /// `extension::hooks::normalize_cc_tool_entry` at parse time).
+    async fn resolve_command_tool_scope(
         declared: Option<&[String]>,
         conflict_resolver: &ConflictResolver,
         admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
@@ -384,31 +384,9 @@ impl ToolRegistrar {
 
         let mut unknown: Vec<String> = Vec::new();
         for name in names {
-            if crate::executor::BUILTIN_TOOL_DEFINITIONS
-                .iter()
-                .any(|def| def.name == name.as_str())
-            {
-                continue;
+            if !Self::is_known_tool_name(name, conflict_resolver, admit_unregistered).await {
+                unknown.push(name.clone());
             }
-            if conflict_resolver
-                .check_conflict(name)
-                .await
-                .is_some_and(|c| {
-                    matches!(
-                        c.existing_source,
-                        ToolSource::Builtin
-                            | ToolSource::Native
-                            | ToolSource::Mcp { .. }
-                            | ToolSource::Plugin { .. }
-                    )
-                })
-            {
-                continue;
-            }
-            if admit_unregistered(name) {
-                continue;
-            }
-            unknown.push(name.clone());
         }
 
         if unknown.is_empty() {
@@ -416,6 +394,118 @@ impl ToolRegistrar {
         } else {
             Err(unknown)
         }
+    }
+
+    /// A SKILL's declared `allowed-tools:`, as the Aleph tools a typed
+    /// `/<skill>` may pre-grant
+    /// (`gateway::execution_engine::slash_skill_pregrant`: only these names,
+    /// never what the file added since — until the next boot, when skill rows
+    /// are registered again from the file as it then stands).
+    ///
+    /// Claude Code skills write Claude Code names (`Read, Grep, Bash(git *)`),
+    /// so each entry is mapped by
+    /// [`crate::skill::frontmatter::pregrant_tool_name`] — the same mapping
+    /// the turn applies to the loaded file before intersecting it with this
+    /// list. An entry that maps to nothing (a CC tool with no counterpart, a
+    /// scoped `Bash(...)`, a glob, a bare `mcp__<server>`) or to a name
+    /// [`Self::is_known_tool_name`] does not know is dropped, with one warn
+    /// naming the skill and the entry. The skill still registers: a skill's
+    /// list only grants, so a dropped entry costs the author that grant and
+    /// nothing else. `None` — declared nothing; `Some(vec![])` — declared, and
+    /// nothing survived: nothing is pre-granted (never a deny-all — only a
+    /// plugin command's list narrows the surface).
+    async fn resolve_skill_pregrant_scope(
+        skill_id: &str,
+        declared: Option<&[String]>,
+        conflict_resolver: &ConflictResolver,
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
+    ) -> Option<Vec<String>> {
+        let declared = declared?;
+        let mut granted: Vec<String> = Vec::new();
+        for entry in declared {
+            let Some(tool) = crate::skill::frontmatter::pregrant_tool_name(entry) else {
+                warn!(
+                    skill = %skill_id,
+                    entry = %entry,
+                    "skill `allowed-tools:` entry can pre-grant no Aleph tool (a Claude Code \
+                     tool with no Aleph counterpart, a scoped `Bash(...)`, a glob or a bare \
+                     `mcp__<server>`); dropped — the skill still registers"
+                );
+                continue;
+            };
+            if !Self::is_known_tool_name(&tool, conflict_resolver, admit_unregistered).await {
+                warn!(
+                    skill = %skill_id,
+                    entry = %entry,
+                    tool = %tool,
+                    "skill `allowed-tools:` entry names no Aleph tool; dropped — the skill \
+                     still registers"
+                );
+                continue;
+            }
+            if !granted.contains(&tool) {
+                granted.push(tool);
+            }
+        }
+        Some(granted)
+    }
+
+    /// Whether `name` is a tool the run loop can offer.
+    ///
+    /// Three sources are unioned:
+    /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
+    ///   static list, and the same one the `ExecutionEngine` seeds its tool
+    ///   list from. Consulting it means this answer does not depend on how
+    ///   much of the catalog happens to be populated when rows register. A
+    ///   guard whose known-set is "whatever registered first" starts rejecting
+    ///   valid rows the day boot order changes, and a guard that rejects
+    ///   everything looks exactly like a guard that works.
+    /// * the catalog as it stands, **restricted to sources that are also LLM
+    ///   tool names**. This is not fussiness: the catalog is a *slash-command*
+    ///   index, and `Skill` / `Custom` entries live only there. Admitting them
+    ///   would let a declaration pass validation and then match nothing in the
+    ///   run loop, whose candidate list is built from the executor's tools —
+    ///   for a command a silent deny-all, for a skill a grant of nothing
+    ///   reported as a grant.
+    /// * `admit_unregistered` — names the caller vouches for although no
+    ///   catalog row exists *yet*. A plugin command passes the tool keys of
+    ///   the MCP servers its own plugin declares
+    ///   (`extension::slash_effect::register_slash_commands_effect`): those
+    ///   tools reach the catalog only when the server starts, which nothing
+    ///   orders before the command's registration, and the run loop narrows
+    ///   by name and joins MCP per request, so the admitted name is honoured
+    ///   once the server is up. Every other caller admits nothing here.
+    ///
+    /// Known boundary: plugin tools and MCP tools register into the catalog
+    /// *after* skills do, so a skill naming one has that entry dropped (and
+    /// warned) although the run loop could have honoured it.
+    async fn is_known_tool_name(
+        name: &str,
+        conflict_resolver: &ConflictResolver,
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
+    ) -> bool {
+        if crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .any(|def| def.name == name)
+        {
+            return true;
+        }
+        if conflict_resolver
+            .check_conflict(name)
+            .await
+            .is_some_and(|c| {
+                matches!(
+                    c.existing_source,
+                    ToolSource::Builtin
+                        | ToolSource::Native
+                        | ToolSource::Mcp { .. }
+                        | ToolSource::Plugin { .. }
+                )
+            })
+        {
+            return true;
+        }
+        admit_unregistered(name)
     }
 
     /// Register plugin tools from plugin manifests (Flat Namespace Mode)

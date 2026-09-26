@@ -27,8 +27,9 @@ pub struct SkillInfo {
     /// (which are registered through this same shape but carry no manifest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The declared `allowed-tools:` list. `register_skills` validates the
-    /// names against the tool registry and carries the result onto
+    /// The declared `allowed-tools:` list. Registration
+    /// (`ToolCatalog::register_skills` / `register_plugin_commands`) validates
+    /// the names against the tool registry and carries the result onto
     /// `UnifiedTool.routing_capabilities`, which is what the slash-command
     /// envelope carries.
     ///
@@ -37,9 +38,11 @@ pub struct SkillInfo {
     /// `allowed-tools:`, already mapped to Aleph names at parse time
     /// (`slash_effect::plugin_command_skill_info`), and it RESTRICTS the turn:
     /// `None` = no declaration (allow-all); `Some(vec![])` = explicit deny-all.
-    /// A skill's, projected verbatim from its manifest, PRE-GRANTS instead and
-    /// is read from the skill file itself
-    /// (`gateway::execution_engine::slash_skill_pregrant`), not from here.
+    /// A skill's, projected verbatim from its manifest (Claude Code names and
+    /// all), PRE-GRANTS instead: registration maps each entry to an Aleph name
+    /// and keeps the ones that exist, dropping the rest with a warn — a skill
+    /// is never refused — and a typed `/<skill>` grants the loaded file's list
+    /// ∩ that validated list (`gateway::execution_engine::slash_skill_pregrant`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
     /// Claude Code `argument-hint:` (`"[pr-number]"`): the slash entry's

@@ -219,9 +219,11 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// the field is taken as raw YAML — the same leniency `automation:` uses, and
 /// for the same reason.
 ///
-/// The *shape* is lenient; the *names* are strict. An unusable name is caught
-/// at registration, where a real tool registry can say so, and costs the
-/// author their slash command rather than their whole skill.
+/// The *shape* is lenient, and so, for a skill, are the *names*: registration,
+/// where a real tool registry can say which names exist, maps each entry
+/// through [`pregrant_tool_name`] and drops, with a warn, what grants nothing
+/// (`tool_metadata::registry::registration`). The skill keeps its slash
+/// command; only a plugin command's list is refused over an unknown name.
 ///
 /// Returns `None` when the key is absent or null (no declaration → allow-all),
 /// and `Some(names)` otherwise, possibly empty (explicit deny-all).
@@ -244,9 +246,9 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// `allowed-tools: ""` / `allowed-tools: "   "` warn and resolve to `None`,
 /// the same fail-open as the unusable shape above and for the same reasons,
 /// one of which is specific to this arm: the harshest outcome on the whole
-/// chain would arrive **silently**, because `register_skills` rejects a skill
-/// whose declaration names *unresolvable tools* and an empty set has no names
-/// to fail on. Dropping a trailing comma (the leniency below) and then letting
+/// chain would arrive **silently**, because registration warns per entry it
+/// drops and an empty set has no entries to warn about. Dropping a trailing
+/// comma (the leniency below) and then letting
 /// a comma with nothing on either side of it cost the author every tool would
 /// be the same typo answered two opposite ways.
 ///
@@ -295,6 +297,29 @@ pub fn normalize_allowed_tools(
             None
         }
     }
+}
+
+/// The Aleph tool one entry of a SKILL's `allowed-tools` may pre-grant, or
+/// `None` when the entry can grant nothing whatever tools exist.
+///
+/// Claude Code names map to Aleph names
+/// (`extension::hooks::normalize_cc_tool_entry`: `Read` → `file_read`,
+/// `mcp__s__t` → `s__t`); `None` for a CC tool with no counterpart, a bare
+/// `mcp__<server>`, a scoped `Bash(git *)` (pre-granting all of `bash` for a
+/// grant scoped to one command widens an approval skip), and anything
+/// [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
+/// accepts — a pre-grant folds exact entries, and the policy reads such a key
+/// back as a glob. An unknown name passes through; whether it exists is the
+/// caller's question.
+///
+/// The ONE mapping of a skill's list: registration validates its result
+/// against the tools that exist, and the turn's pre-grant
+/// (`slash_skill_scope::stamp_pregrant_from_names`) maps the loaded file with
+/// it before intersecting with that validated list — two spellings of one
+/// name must meet in the intersection.
+pub(crate) fn pregrant_tool_name(entry: &str) -> Option<String> {
+    crate::extension::hooks::normalize_cc_tool_entry(entry, false)
+        .filter(|tool| !crate::config::types::policies::is_glob_pattern(tool))
 }
 
 /// Why a present [`ALLOWED_TOOLS_KEY`] value gives no list to use.
@@ -531,8 +556,8 @@ mod tests {
     /// and resolving it to `Some(empty)` would hand the author the *harshest*
     /// outcome on the whole chain (`slash_skill_scope`'s explicit deny-all, so
     /// the slash command can call zero tools) for a pure-punctuation slip,
-    /// silently: `register_skills` rejects unresolvable *names*, and an empty
-    /// set has no names to fail on.
+    /// silently: registration warns about each entry it drops, and an empty
+    /// set has no entries to warn about.
     ///
     /// So it reads as no declaration. The contrast case is asserted in the
     /// same test so the two can never be conflated: an empty **sequence** is
@@ -708,7 +733,7 @@ mod tests {
     ///   delegates the shape to [`read_allowed_tools`] and maps the names
     ///   through the CC alias table. It reaches an enforcement point for
     ///   commands only (`slash_effect::plugin_command_skill_info` →
-    ///   `register_skills` → `slash_skill_scope`; the file → catalog-row half
+    ///   `register_plugin_commands` → `slash_skill_scope`; the file → catalog-row half
     ///   is pinned by
     ///   `lifecycle::tests::a_mounted_commands_frontmatter_reaches_its_catalog_row`,
     ///   the row → run-loop half by `slash_skill_scope`'s wire tests), and

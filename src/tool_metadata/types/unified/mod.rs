@@ -155,13 +155,17 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_system_prompt: Option<String>,
 
-    /// Tool names this command narrows the run's tool surface to.
+    /// The row's validated `allowed-tools:`, as Aleph tool names.
     ///
-    /// Only `register_skills` populates this today: a skill's SKILL.md
-    /// `allowed-tools:`, or a plugin command's `commands/*.md` one (already
-    /// mapped to Aleph names at parse time). `None` = the command declares
-    /// nothing, so the run keeps the agent's full tool surface;
-    /// `Some(vec![])` = an explicit deny-all. The `Option` is not decoration:
+    /// Only `ToolRegistrar::register_skills` populates this today, for skill
+    /// and plugin-command rows (`registration::AllowedToolsMeaning`). For a
+    /// plugin command
+    /// (`commands/*.md`, already mapped to Aleph names at parse time) it is
+    /// what the run's tool surface is narrowed to: `None` = the command
+    /// declares nothing, so the run keeps the agent's full tool surface;
+    /// `Some(vec![])` = an explicit deny-all. For a skill it is what a typed
+    /// `/<skill>` may pre-grant — Claude Code names mapped, what grants
+    /// nothing dropped — and never narrows anything. The `Option` is not decoration:
     /// it is the only thing that keeps "deny everything" distinguishable from
     /// "said nothing" by the time the value reaches `ScopedToolService`, which
     /// reads an empty allow-set as allow-all.

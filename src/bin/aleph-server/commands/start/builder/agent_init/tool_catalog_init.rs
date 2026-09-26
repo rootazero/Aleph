@@ -173,24 +173,16 @@ pub(super) async fn init_tool_catalog(
                     .filter(|s| s.is_user_invocable())
                     .map(alephcore::skill::SkillInfo::from)
                     .collect();
-                let rejected = tool_catalog.register_skills(&skill_infos).await;
+                // Every skill registers: an `allowed-tools:` entry that can
+                // pre-grant nothing (an unknown name, a Claude Code tool with
+                // no Aleph counterpart, a scoped `Bash(...)`) is dropped with
+                // a warn naming the skill and the entry.
+                tool_catalog.register_skills(&skill_infos).await;
                 if !daemon {
                     println!(
                         "  Dispatch registry: {} skills registered",
-                        skill_infos.len() - rejected.len()
+                        skill_infos.len()
                     );
-                    // A skill refused for an unresolvable `allowed-tools:` is
-                    // simply absent from the catalog afterwards, which reads
-                    // identically to "never installed". Name it here so the
-                    // author sees the boundary they crossed.
-                    if !rejected.is_empty() {
-                        println!(
-                            "  Dispatch registry: {} skill(s) NOT registered — unknown \
-                             `allowed-tools:` names: {}",
-                            rejected.len(),
-                            rejected.join(", ")
-                        );
-                    }
                 }
             }
 

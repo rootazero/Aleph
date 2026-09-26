@@ -518,9 +518,11 @@ pub struct SkillManifest {
     /// same frontmatter key on a plugin *command* is a restriction, where an
     /// empty list is deny-all and must not flatten into "said nothing".
     ///
-    /// Names are Aleph-native tool names (`file_read`, `bash`, `grep`), not
-    /// upstream Claude Code names (`Read`, `Bash`, `Grep`); unknown names are
-    /// rejected at registration rather than silently dropped.
+    /// Names are kept as written — Aleph names (`file_read`, `bash`) or Claude
+    /// Code names (`Read`, `Bash(git *)`). Registration maps each one
+    /// (`skill::frontmatter::pregrant_tool_name`) and drops, with a warn, what
+    /// can grant nothing (an unknown name, a CC tool with no Aleph
+    /// counterpart, a scoped `Bash(...)`, a glob); the skill still registers.
     allowed_tools: Option<Vec<String>>,
 }
 
@@ -646,9 +648,9 @@ impl SkillManifest {
         self.automation.as_ref()
     }
 
-    /// The declared `allowed-tools:` list, if the author wrote the key.
-    ///
-    /// `None` = no declaration (allow-all); `Some(&[])` = explicit deny-all.
+    /// The declared `allowed-tools:` list as written, if the author wrote the
+    /// key: the names a typed `/<skill>` may pre-grant, before registration
+    /// maps them. `None` and `Some(&[])` both pre-grant nothing.
     #[must_use]
     pub fn allowed_tools(&self) -> Option<&[String]> {
         self.allowed_tools.as_deref()

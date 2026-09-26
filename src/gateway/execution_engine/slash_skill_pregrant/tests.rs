@@ -187,24 +187,26 @@ impl World {
             .iter()
             .map(SkillInfo::from)
             .collect();
-        let rejected = self.catalog.register_skills(&infos).await;
-        assert!(rejected.is_empty(), "{rejected:?}");
+        self.catalog.register_skills(&infos).await;
     }
 
     /// A plugin command's slash row.
     async fn register_command(&self, name: &str, allowed: &[&str]) {
         let rejected = self
             .catalog
-            .register_skills(&[SkillInfo {
-                id: format!("{PLUGIN}:{name}"),
-                name: name.into(),
-                description: "a plugin command".into(),
-                scope: crate::domain::skill::PromptScope::System,
-                version: None,
-                allowed_tools: Some(names(allowed)),
-                argument_hint: None,
-                plugin_id: Some(PLUGIN.into()),
-            }])
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: format!("{PLUGIN}:{name}"),
+                    name: name.into(),
+                    description: "a plugin command".into(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: Some(names(allowed)),
+                    argument_hint: None,
+                    plugin_id: Some(PLUGIN.into()),
+                }],
+                &|_| false,
+            )
             .await;
         assert!(rejected.is_empty(), "{rejected:?}");
     }
@@ -430,6 +432,42 @@ async fn a_user_level_skill_pregrants_its_own_list_for_an_operator() {
         whole.sort();
         assert_eq!(t.surface().await, whole, "{case}");
     }
+}
+
+/// A Claude Code skill (P4.12): its `allowed-tools` names Claude Code tools.
+/// It registers — its catalog row carries the names registration could
+/// validate, in Aleph spelling — and an operator's typed `/skill` pre-grants
+/// exactly those: the file's `Read` meets the registration's `file_read`
+/// because both sides are mapped by one function; the scoped `Bash(...)` and
+/// the tool with no Aleph counterpart grant nothing.
+#[tokio::test]
+async fn a_claude_code_skill_pregrants_its_mapped_names() {
+    let w = World::new().await;
+    write_skill(
+        &w.claude_user,
+        SKILL,
+        "Read, Grep, Bash(git status:*), NotebookEdit",
+    );
+    w.scan(std::slice::from_ref(&w.claude_user)).await;
+    let row = w
+        .catalog
+        .list_all()
+        .await
+        .into_iter()
+        .find(|t| t.name == SKILL)
+        .expect("a Claude Code skill registers");
+    assert_eq!(
+        row.routing_capabilities,
+        Some(names(&["file_read", "grep"]))
+    );
+
+    let t = w.turn(&engine(None), w.skill_request(None).await).await;
+    assert_eq!(t.pregrant(), names(&["file_read", "grep"]));
+    assert!(t.restriction().is_none(), "a skill narrowed");
+    assert!(
+        !t.runs("bash").await,
+        "the scoped Bash(...) granted all of bash"
+    );
 }
 
 /// A global plugin's skill pre-grants from either `Global` plugin parent —

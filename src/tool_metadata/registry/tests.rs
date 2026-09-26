@@ -137,7 +137,7 @@ async fn register_skills_carries_the_owning_plugin_onto_the_row() {
         name: "plain".to_string(),
         ..owned.clone()
     };
-    assert!(registry.register_skills(&[owned, unowned]).await.is_empty());
+    registry.register_skills(&[owned, unowned]).await;
 
     let row = fetch_by_id(&registry, "skill:proj:cmd").await.unwrap();
     assert_eq!(
@@ -1106,7 +1106,10 @@ async fn unregister_skills_removes_exactly_the_named_skill_entries() {
         plugin_id: None,
     };
     let rejected = catalog
-        .register_skills(&[mk("qa-plug:hello"), mk("qa-plug:bye"), mk("other:keep")])
+        .register_plugin_commands(
+            &[mk("qa-plug:hello"), mk("qa-plug:bye"), mk("other:keep")],
+            &|_| false,
+        )
         .await;
     assert!(rejected.is_empty());
     let names =

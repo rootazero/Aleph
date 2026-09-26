@@ -219,8 +219,7 @@ async fn envelope_request(
     workspace: PathBuf,
 ) -> RunRequest {
     let catalog = crate::sync_primitives::Arc::new(crate::tool_metadata::ToolCatalog::new());
-    let rejected = catalog.register_skills(&[entry]).await;
-    assert!(rejected.is_empty(), "{rejected:?}");
+    catalog.register_skills(&[entry]).await;
     let parsed = crate::command::CommandParser::new(catalog)
         .parse_async(input)
         .await

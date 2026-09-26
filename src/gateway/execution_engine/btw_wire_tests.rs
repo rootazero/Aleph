@@ -2280,7 +2280,7 @@ fn bundled_skill_command_words() -> BundledWalk {
 ///   exposing a tool named `btw` would take every side question on Panel and TUI
 ///   straight past the thing this whole feature exists to deliver. **This is the
 ///   only bundled-plugin route that can shadow `/btw`.**
-/// * **`commands/`** → `register_skills` → `ToolSource::Skill`, whose fast path
+/// * **`commands/`** → `register_plugin_commands` → `ToolSource::Skill`, whose fast path
 ///   returns `Fallthrough`, so the ceiling survives and only the command's
 ///   prompt is overlaid. Its catalog word is
 ///   `SkillRegistration::qualified_name()` = `namespaced_component_key(plugin_id, name)`

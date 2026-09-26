@@ -28,7 +28,7 @@ use crate::extension::types::McpServerConfig;
 /// For a [`SkillType::Command`] the key is mapped to Aleph names here
 /// ([`restrict_tool_list`]) and carried on the registration;
 /// `slash_effect::plugin_command_skill_info` projects it onto the command's
-/// `SkillInfo`, `register_skills` validates it into
+/// `SkillInfo`, `register_plugin_commands` validates it into
 /// `UnifiedTool::routing_capabilities`, and `slash_skill_scope` narrows the
 /// run with it. That chain is the only enforcement a plugin command has.
 ///
@@ -503,7 +503,7 @@ struct RestrictFace {
     key: &'static str,
     /// Whether the parse warns about a forwarded name that is not spelled like
     /// an Aleph tool. Only where nothing downstream speaks for it: a command's
-    /// `register_skills` refuses the whole `/cmd` over such a name and names
+    /// `register_plugin_commands` refuses the whole `/cmd` over such a name and names
     /// it, so a parse-time line too would be a second, weaker voice; an
     /// agent's allowlist just never matches it, silently.
     warns_unknown: bool,
@@ -529,14 +529,14 @@ const AGENT_FACE: RestrictFace = RestrictFace {
 ///   argument scope is not enforced (the tier gate still governs every call).
 ///   Logged at `info`.
 /// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
-///   `register_skills` refuses the whole command over one unknown name, and
+///   `register_plugin_commands` refuses the whole command over one unknown name, and
 ///   losing the slash command over `TodoWrite` is the worse answer.
 /// * An entry in neither alias table is forwarded as written. When it is not
 ///   spelled like an Aleph tool ([`aleph_tool_shaped`]) it is most likely a
 ///   Claude Code tool Aleph has no row for, and it names nothing unless a
 ///   tool is registered under exactly that name — which cannot be known here,
 ///   before plugin and MCP tools are registered. The agent face warns; the
-///   command face leaves it to `register_skills`
+///   command face leaves it to `register_plugin_commands`
 ///   ([`RestrictFace::warns_unknown`]).
 /// * A list item that is not a tool name at all (a number, a map, a blank)
 ///   is dropped with a warn too.
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     /// One voice: a command's unknown name is forwarded as written and left
-    /// to `register_skills`, which refuses the whole `/cmd` and names the
+    /// to `register_plugin_commands`, which refuses the whole `/cmd` and names the
     /// tool. A parse-time warning as well would be a second, weaker account
     /// of the same outcome.
     #[test]

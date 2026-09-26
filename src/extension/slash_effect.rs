@@ -62,8 +62,9 @@ pub(crate) fn plugin_command_skill_infos(commands: &[SkillRegistration]) -> Vec<
 /// not know at registration time — e.g. a CC tool in neither of
 /// `extension::hooks`' alias tables, which is forwarded under its own name,
 /// or a tool of an MCP server this plugin does not declare, the known false
-/// negative of `resolve_skill_tool_scope`) is simply not in the id list the
-/// disposer removes, and `register_skills` has already warned by name.
+/// negative of `resolve_command_tool_scope`) is simply not in the id list the
+/// disposer removes, and `register_plugin_commands` has already warned by
+/// name.
 pub(crate) async fn register_slash_commands_effect(
     catalog: Arc<ToolCatalog>,
     infos: Vec<SkillInfo>,
@@ -74,7 +75,7 @@ pub(crate) async fn register_slash_commands_effect(
             .iter()
             .any(|server| crate::tools::handlers::mcp::is_tool_key_of_server(server, name))
     };
-    let rejected = catalog.register_skills_admitting(&infos, &admit).await;
+    let rejected = catalog.register_plugin_commands(&infos, &admit).await;
     let ids: Vec<String> = infos
         .into_iter()
         .map(|i| i.id)
@@ -155,6 +156,83 @@ mod tests {
         // …and neither is a command with no owning plugin.
         let orphan = cmd("", "loose");
         assert!(plugin_command_skill_infos(&[orphan]).is_empty());
+    }
+
+    /// One Claude Code `allowed-tools` list, two meanings. As a plugin
+    /// COMMAND's (parsed from `commands/*.md`, projected, mounted) it
+    /// restricts exactly as before: the parse folds the scoped `Bash(...)`
+    /// into `bash` and drops the no-counterpart tool; a list whose every entry
+    /// drops is a deny-all; an unknown name refuses the command. As a SKILL's
+    /// (boot's `register_skills`) it pre-grants: the scoped entry is dropped
+    /// rather than folded, and the skill always registers.
+    #[tokio::test]
+    async fn one_claude_code_list_restricts_a_command_and_pregrants_a_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let commands = tmp.path().join("commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        for (name, allowed) in [
+            ("same", "Read, Grep, Bash(git status:*), NotebookEdit"),
+            ("nothing", "NotebookEdit"),
+            ("unknown", "Read, Frobnicate"),
+        ] {
+            std::fs::write(
+                commands.join(format!("{name}.md")),
+                format!("---\ndescription: d\nallowed-tools: {allowed}\n---\nDo it.\n"),
+            )
+            .unwrap();
+        }
+        let regs: Vec<SkillRegistration> =
+            crate::extension::manifest::parsers::parse_commands_dir(tmp.path(), "commands", "plug")
+                .unwrap()
+                .into_iter()
+                .filter_map(|cap| match cap {
+                    crate::extension::CapabilityDeclaration::Skill(reg) => Some(reg),
+                    _ => None,
+                })
+                .collect();
+        let infos = plugin_command_skill_infos(&regs);
+        assert_eq!(infos.len(), 3, "precondition: {infos:?}");
+
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        let _disposer =
+            register_slash_commands_effect(Arc::clone(&catalog), infos, Vec::new()).await;
+        catalog
+            .register_skills(&[SkillInfo {
+                id: "same-skill".to_string(),
+                name: "same-skill".to_string(),
+                description: "d".to_string(),
+                scope: crate::domain::skill::PromptScope::System,
+                version: None,
+                allowed_tools: Some(
+                    ["Read", "Grep", "Bash(git status:*)", "NotebookEdit"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                argument_hint: None,
+                plugin_id: None,
+            }])
+            .await;
+
+        let rows = catalog.list_all().await;
+        let row = |name: &str| {
+            rows.iter()
+                .find(|t| t.name == name)
+                .map(|t| t.routing_capabilities.clone())
+        };
+        let names = |list: &[&str]| Some(Some(list.iter().map(|s| (*s).to_string()).collect()));
+        assert_eq!(
+            row("plug:same"),
+            names(&["file_read", "grep", "bash"]),
+            "a command restricts to its folded list"
+        );
+        assert_eq!(row("plug:nothing"), names(&[]), "deny-all");
+        assert_eq!(row("plug:unknown"), None, "an unknown name refuses it");
+        assert_eq!(
+            row("same-skill"),
+            names(&["file_read", "grep"]),
+            "a skill pre-grants the mapped names, never the scoped bash"
+        );
     }
 
     #[tokio::test]

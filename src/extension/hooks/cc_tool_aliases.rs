@@ -38,7 +38,8 @@ pub(crate) const CC_TOOL_ALIASES: &[(&str, &str)] = &[
 /// entry naming one is dropped by [`normalize_cc_tool_entry`], which for a
 /// command's or an agent's restrict list means it cannot use it. A CC tool in
 /// neither table is forwarded under its own name: a command's registry
-/// refuses it by name (`register_skills`); an agent's allowlist matches no
+/// refuses it by name (`register_plugin_commands`), a skill's registration
+/// drops it with a warn; an agent's allowlist matches no
 /// tool with it, and the agent's restrict-list reader warns when the name is
 /// not spelled like an Aleph tool.
 pub(crate) const CC_TOOLS_WITHOUT_COUNTERPART: &[&str] = &[
@@ -229,8 +230,8 @@ mod tests {
 
     #[test]
     fn a_cc_tool_with_no_counterpart_is_dropped_never_forwarded() {
-        // Forwarded, `TodoWrite` would reach `register_skills` as an unknown
-        // name and cost the command its slash entry.
+        // Forwarded, `TodoWrite` would reach `register_plugin_commands` as an
+        // unknown name and cost the command its slash entry.
         for cc in CC_TOOLS_WITHOUT_COUNTERPART {
             assert_eq!(aleph_name(cc), None, "{cc} is in both tables");
             assert_eq!(normalize_cc_tool_entry(cc, true), None, "{cc}");
