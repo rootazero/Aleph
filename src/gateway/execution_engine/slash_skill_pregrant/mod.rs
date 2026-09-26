@@ -17,10 +17,20 @@
 //!    command that fails admission keeps its RESTRICTION and never turns it
 //!    into a pre-grant. Anything unresolvable restricts, as every
 //!    `type: "skill"` mode did before.
-//! 2. **The caller is an operator** (`role_is_operator`, the predicate a
-//!    plugin command's inline shell is gated on). A guest's or member's
-//!    `/skill` still runs, on the whole surface — its `Ask` is the operator's
-//!    approval, and a skill's text does not get to remove it.
+//! 2. **A person typed it, as an operator, with somebody there.**
+//!    - The slash mode carries the typed marker
+//!      (`slash_skill_scope::is_typed`): a human-facing surface — the
+//!      `chat.send` / `agent.run` handlers or the inbound router — stamped
+//!      it. A `/skill` whose text came from `sessions_send`, a team task,
+//!      cron, heartbeat, A2A or the OpenAI shim is stamped by `execute()`'s
+//!      safety net, without the marker: no pre-grant. The same holds for the
+//!      model reading a skill itself (`skill_read`), which has no mode at
+//!      all.
+//!    - The run is not unattended (`UNATTENDED_KEY`).
+//!    - The caller is an operator (`role_is_operator`, the predicate a plugin
+//!      command's inline shell is gated on). A guest's or member's `/skill`
+//!      still runs, on the whole surface — its `Ask` is the operator's
+//!      approval, and a skill's text does not get to remove it.
 //! 3. **Everything the model can load under this id is operator-owned.** The
 //!    body reaches the model only through `skill_read`, which resolves the id
 //!    by its own precedence (agent > project > user > plugin), not the
@@ -36,8 +46,10 @@
 //!    `foo` shadows a user-level `foo` for `skill_read` while the registry
 //!    can still answer with the user's.
 //! 4. **The list is the loaded file's own declaration** — the body the model
-//!    will follow — never the mode JSON's and never a key the request arrived
-//!    with (the first thing [`split`] does is remove one).
+//!    will follow — **bounded by the list registration validated**, which the
+//!    mode carries (known tool names only, no globs, nothing added to the file
+//!    since). Never a key the request arrived with: `execute()` removes that
+//!    first (`slash_skill_scope::forget_at_ingress`).
 //!
 //! The pre-grant is folded into the turn's policy by
 //! `turn_permissions::apply_pregrant`. It lifts the tier's NAME-level `Ask`
@@ -69,8 +81,10 @@ pub(super) async fn split(request: &mut RunRequest, agent_id: &str) {
 
 /// [`split`] against `skills` — the process-wide `SkillSystem` in
 /// production, the one the `ExtensionManager` scans into.
+///
+/// The request has already been through `slash_skill_scope::forget_at_ingress`
+/// (`execute()`'s first statement), so it carries no pre-grant of its own.
 pub(super) async fn split_with(request: &mut RunRequest, agent_id: &str, skills: &SkillSystem) {
-    slash_skill_scope::forget_pregrant(&mut request.metadata);
     let Some(mode) = skill_mode(&request.metadata) else {
         return;
     };
@@ -79,8 +93,28 @@ pub(super) async fn split_with(request: &mut RunRequest, agent_id: &str, skills:
         return;
     };
     if let Some(names) = pregrant(&skill_id, request, agent_id).await {
-        slash_skill_scope::stamp_pregrant_from_names(&mut request.metadata, &names);
+        slash_skill_scope::stamp_pregrant_from_names(
+            &mut request.metadata,
+            &names,
+            &registered_list(&mode),
+        );
     }
+}
+
+/// The `allowed-tools` list registration validated for the mode's row — the
+/// catalog's `routing_capabilities`, carried as `mode["allowed_tools"]`.
+/// Absent (the skill declared nothing when it registered) ⇒ empty ⇒ nothing
+/// can be pre-granted.
+fn registered_list(mode: &Value) -> Vec<String> {
+    mode.get("allowed_tools")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(|name| name.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The request's slash mode when it is `type: "skill"` — a plugin command's
@@ -105,9 +139,29 @@ async fn registered_skill(mode: &Value, skills: &SkillSystem) -> Option<String> 
     same_owner.then(|| skill_id.to_string())
 }
 
-/// The names `/skill_id` pre-grants on this turn, or `None` when it may not
-/// pre-grant (see the module doc, 2–4).
+/// The names `/skill_id`'s file declares, when this turn may pre-grant them
+/// (see the module doc, 2–4); `None` otherwise.
 async fn pregrant(skill_id: &str, request: &RunRequest, agent_id: &str) -> Option<Vec<String>> {
+    if !slash_skill_scope::is_typed(&request.metadata) {
+        info!(
+            skill = %skill_id,
+            "`/{skill_id}` pre-grants nothing: no person typed it (its slash mode was stamped \
+             by execute()'s safety net)"
+        );
+        return None;
+    }
+    let unattended = request
+        .metadata
+        .get(super::UNATTENDED_KEY)
+        .map(String::as_str)
+        == Some("true");
+    if unattended {
+        info!(
+            skill = %skill_id,
+            "`/{skill_id}` pre-grants nothing: the run is unattended"
+        );
+        return None;
+    }
     let role = request.metadata.get("caller_role").map(String::as_str);
     if !crate::tools::turn_context::role_is_operator(role) {
         info!(

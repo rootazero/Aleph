@@ -368,6 +368,10 @@ impl InboundMessageRouter {
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
             metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
+            // A person typed this `/foo` into the channel: the one mark a
+            // `/skill`'s pre-grant requires (the engine's own safety net never
+            // writes it).
+            crate::gateway::execution_engine::slash_skill_scope::mark_typed(&mut metadata);
         }
         if ctx.message.is_group {
             metadata.insert("is_group".to_string(), "true".to_string());

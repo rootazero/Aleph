@@ -239,11 +239,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
-        // When a Skill slash command kicks off this run, restrict the tool
-        // surface to the skill's declared `allowed-tools` (written by
-        // `execute.rs` from the parsed `CommandContext::Skill`). Without this
-        // the LLM sees the agent's full toolset and the skill's intent to
-        // scope tool use is silently ignored.
+        // When a plugin COMMAND kicks off this run, restrict the tool surface
+        // to its declared `allowed-tools` (written by `execute.rs`'s
+        // `slash_skill_pregrant::split` from the slash mode). Without this the
+        // LLM sees the agent's full toolset and the command's intent to scope
+        // tool use is silently ignored. A SKILL's `allowed-tools` never
+        // narrows — it pre-grants (`turn_permissions::apply_pregrant`).
         //
         // Derived ONCE, here, and shared by every tool source joined below —
         // the builtin/plugin retain immediately after this, the MCP join, and
@@ -983,7 +984,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let loop_registry = Arc::new(loop_registry_inner);
 
-            // Build parent view ToolService WITHOUT the subagent tool
+            // Build parent view ToolService WITHOUT the subagent tool — and
+            // without a `/<skill>`'s pre-grant: a person typed that for this
+            // turn, and a child's task is model-written
+            // (`TurnToolPolicy::for_children`).
             let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =
                 super::super::build_request_tool_service(
                     loop_registry.clone(),
@@ -992,7 +996,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
-                    turn_permissions.explicit.clone(),
+                    turn_permissions
+                        .explicit
+                        .as_ref()
+                        .and_then(|explicit| explicit.for_children()),
                     exec_tier,
                     unattended,
                     &mode_core_tools,

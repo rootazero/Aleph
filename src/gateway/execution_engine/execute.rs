@@ -376,6 +376,13 @@ where
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
+        // First, before ANYTHING reads the metadata — `admit_run`'s steer-fold
+        // resolves this turn's permissions below: no request keeps a
+        // `/<skill>` pre-grant it arrived with, nor a typed marker without the
+        // slash mode it vouches for (`slash_skill_scope::forget_at_ingress`).
+        // `slash_skill_pregrant::split`, further down, derives the turn's own.
+        super::slash_skill_scope::forget_at_ingress(&mut request.metadata);
+
         // Recognise a `/btw` side question unconditionally, before anything
         // else in this function reads `request.metadata` — most importantly
         // `admit_run` below, whose busy-lane fold decision
@@ -691,11 +698,13 @@ where
             }
 
             // Safety net for producers that never pass through a handler —
-            // cron jobs, heartbeat, team dispatch, goal/loop continuations —
-            // and so cannot stamp before the busy lane. `chat.send` and
-            // `agent.run` stamp earlier (they must: see `stamp_slash_mode`),
-            // and this call is a no-op for them.
-            self.stamp_slash_mode(&request.input, &mut request.metadata)
+            // cron jobs, heartbeat, team dispatch, `sessions_send`, A2A,
+            // goal/loop continuations — and so cannot stamp before the busy
+            // lane. `chat.send` and `agent.run` stamp earlier (they must: see
+            // `stamp_slash_mode`), and this call is a no-op for them. Unattested:
+            // none of this text is a person typing `/foo`, so a `/skill` it
+            // resolves never pre-grants (`slash_skill_pregrant`).
+            self.stamp_slash_mode_unattested(&request.input, &mut request.metadata)
                 .await;
         }
 
@@ -791,9 +800,9 @@ where
         // (run_loop/inner.rs) builds, a SKILL's list PRE-GRANTS the named
         // tools for this turn's tool gate (`resolve_turn_permissions`). Lifted
         // into metadata once, so neither is re-parsed on every Think→Act
-        // iteration. Run for EVERY request, slash or not: the split first
-        // removes any pre-grant the request arrived with, and it is the only
-        // writer of either key.
+        // iteration. Run for EVERY request, slash or not; it is the only
+        // writer of either key (any pre-grant the request arrived with was
+        // removed as this function's first statement).
         //
         // Nothing here injects skill text into the prompt: a SKILL's
         // *description* reaches the model through the `<available_skills>`

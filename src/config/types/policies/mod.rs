@@ -44,6 +44,7 @@ pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use spend::{SpendPeriod, SpendPolicy};
 pub use terminal::TerminalConfig;
+pub(crate) use tool_permissions::is_glob_pattern;
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 

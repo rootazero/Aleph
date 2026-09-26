@@ -1,10 +1,17 @@
-//! `/name` through the production steps a turn takes, in their order: the
-//! split `execute.rs` runs before the fast path ([`split_with`]), the turn's
+//! `/name` through the production steps a turn takes, in their order: a
+//! human-facing surface's stamp (`ExecutionEngine::stamp_slash_mode`, as the
+//! `chat.send` / `agent.run` handlers call it) or none, then what `execute()`
+//! does — the ingress strip (`slash_skill_scope::forget_at_ingress`), the
+//! safety net's unattested stamp, the split ([`split_with`]) — the turn's
 //! permission resolution (`resolve_turn_permissions`), and the tool gate the
 //! run loop builds from that resolution (`build_request_tool_service`, with
 //! the run loop's own narrowing). The gate has no approval channel, so a call
-//! the tier would card is refused and a lifted one reaches its stub. The fire
-//! sites no behavioural test can reach are pinned by source at the end.
+//! the tier would card is refused and a lifted one reaches its stub.
+//!
+//! Hermetic: `$ALEPH_HOME` and `$HOME` point into a temp dir for the whole
+//! test (`HomeEnvGuards`), so no user-level root read here is the real one.
+//! The fire sites no behavioural test can reach are pinned by source at the
+//! end.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -14,19 +21,21 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::super::slash_skill_scope;
-use super::super::turn_permissions::TurnPermissions;
+use super::super::turn_permissions::{TurnPermissions, TurnToolPolicy};
 use super::super::RunRequest;
 use super::split_with;
 use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
 use crate::domain::skill::{PluginId, SkillSource};
 use crate::extension::visibility::ScopeKey;
 use crate::gateway::agent_instance::AgentInstance;
-use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
+use crate::runtimes::post_install::HomeEnvGuards;
 use crate::skill::{SkillInfo, SkillSystem};
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolCatalog;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 use crate::tools::service::ToolService;
-use crate::utils::paths::{publish_plugin_skill_dirs, IsolatedAlephHome, PublishedPluginSkillDir};
+use crate::tools::AlephTool;
+use crate::utils::paths::{publish_plugin_skill_dirs, PublishedPluginSkillDir};
 
 /// The unit-test engine (`execution_engine::tests::test_engine`).
 type TestEngine = super::super::engine::ExecutionEngine<
@@ -61,46 +70,102 @@ impl LoopTool for Stub {
     }
 }
 
+/// The real `skill_manage` behind the gate.
+struct RealSkillManage(crate::builtin_tools::skill_manage::SkillManageTool);
+
+#[async_trait::async_trait]
+impl LoopTool for RealSkillManage {
+    fn name(&self) -> &str {
+        "skill_manage"
+    }
+    fn description(&self) -> &str {
+        "the real skill_manage"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
+        match self.0.call_json(input).await {
+            Ok(output) => ToolResult::Success { output },
+            Err(e) => ToolResult::Error {
+                error: e.to_string(),
+                retryable: false,
+            },
+        }
+    }
+}
+
+fn skill_md(name: &str, allowed: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: a pre-grant probe\nallowed-tools: {allowed}\n---\n\
+         Do the thing.\n"
+    )
+}
+
 fn write_skill(root: &Path, name: &str, allowed: &str) {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("SKILL.md"),
-        format!(
-            "---\nname: {name}\ndescription: a pre-grant probe\nallowed-tools: {allowed}\n---\n\
-             Do the thing.\n"
-        ),
-    )
-    .unwrap();
+    std::fs::write(dir.join("SKILL.md"), skill_md(name, allowed)).unwrap();
 }
 
-/// An isolated Aleph home with its user-level skills root, a git project the
-/// run works in, a fresh `SkillSystem`, and the agent.
+/// Where a request's slash mode comes from.
+#[derive(Clone, Copy)]
+enum Stamp {
+    /// The `chat.send` / `agent.run` handlers' `stamp_slash_mode`: typed.
+    Handler,
+    /// Nobody before `execute()`: its safety net stamps it, unattested — the
+    /// shape of `sessions_send`, a team task, cron, heartbeat, A2A.
+    SafetyNet,
+}
+
+/// Temp `$ALEPH_HOME` + `$HOME` (so both user-level roots are temp dirs), a
+/// git project the run works in, a fresh `SkillSystem`, the slash catalog and
+/// a command parser over it, and the agent.
 struct World {
-    _home: IsolatedAlephHome,
+    // Declaration order is drop order: restore the env, then delete the dirs.
+    _env: HomeEnvGuards,
     tmp: TempDir,
+    /// `~/.aleph/skills`.
     user: PathBuf,
+    /// `~/.claude/skills`.
+    claude_user: PathBuf,
     project: PathBuf,
     skills: SkillSystem,
+    catalog: Arc<ToolCatalog>,
+    /// Holds the command parser: the stamps run on it.
+    stamper: TestEngine,
     agent: Arc<AgentInstance>,
 }
 
 impl World {
     async fn new() -> Self {
-        let home = IsolatedAlephHome::new();
         let tmp = TempDir::new().unwrap();
+        let aleph_home = tmp.path().join("aleph");
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&aleph_home).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let env = HomeEnvGuards::acquire_and_set(&aleph_home, &home);
         let project = tmp.path().join("repo");
         std::fs::create_dir_all(project.join(".git")).unwrap();
         let project = project.canonicalize().unwrap();
         let user = crate::utils::paths::get_skills_dir().unwrap();
         std::fs::create_dir_all(&user).unwrap();
+        let claude_user = home.join(".claude").join("skills");
+        std::fs::create_dir_all(&claude_user).unwrap();
         let agent = super::super::tests::gate_test_agent(&tmp, AGENT).await;
+        let catalog = Arc::new(ToolCatalog::new());
+        let parser = Arc::new(crate::command::CommandParser::new(Arc::clone(&catalog)));
+        let stamper = super::super::tests::test_engine()
+            .with_command_parser_cell(Arc::new(tokio::sync::RwLock::new(Some(parser))));
         Self {
-            _home: home,
+            _env: env,
             tmp,
             user,
+            claude_user,
             project,
             skills: SkillSystem::new(),
+            catalog,
+            stamper,
             agent,
         }
     }
@@ -110,56 +175,147 @@ impl World {
         self.project.join(flavour).join("skills")
     }
 
-    /// The base dirs scanned the way boot scans them (`SkillSystem::init`,
-    /// plus whatever plugin dirs are published).
+    /// What boot does: scan the base dirs (plus whatever plugin dirs are
+    /// published) and register every scanned skill as a slash row
+    /// (`SkillInfo::from(&manifest)`, validated by `register_skills`).
     async fn scan(&self, dirs: &[PathBuf]) {
         self.skills.init(dirs.to_vec()).await;
-    }
-
-    /// `/p411-probe go`, its slash mode built from the scanned manifest the
-    /// way boot builds the catalog row (`SkillInfo::from(&manifest)`).
-    async fn skill_request(&self, role: Option<&str>) -> RunRequest {
-        let manifest = self
+        let infos: Vec<SkillInfo> = self
             .skills
-            .get_skill(&SKILL.into())
+            .list_skills()
             .await
-            .expect("the probe skill was scanned");
-        let mode = envelope(SkillInfo::from(&manifest), &format!("/{SKILL} go")).await;
-        request(Some(mode), role, &self.project)
+            .iter()
+            .map(SkillInfo::from)
+            .collect();
+        let rejected = self.catalog.register_skills(&infos).await;
+        assert!(rejected.is_empty(), "{rejected:?}");
     }
 
-    /// Split, resolve, build the gate.
-    async fn turn(&self, engine: &TestEngine, mut request: RunRequest) -> Turn {
-        split_with(&mut request, AGENT, &self.skills).await;
-        let permissions = engine.resolve_turn_permissions(&request, &self.agent).await;
-        // The run loop's narrowing: a restricted-away tool is not in the
-        // request's registry at all.
-        let scope = slash_skill_scope::from_metadata(&request.metadata);
-        let mut registry = LoopToolRegistry::new();
-        for name in TOOLS {
-            if slash_skill_scope::admits(scope.as_ref(), name) {
-                registry.register(Box::new(Stub(name)));
-            }
+    /// A plugin command's slash row.
+    async fn register_command(&self, name: &str, allowed: &[&str]) {
+        let rejected = self
+            .catalog
+            .register_skills(&[SkillInfo {
+                id: format!("{PLUGIN}:{name}"),
+                name: name.into(),
+                description: "a plugin command".into(),
+                scope: crate::domain::skill::PromptScope::System,
+                version: None,
+                allowed_tools: Some(names(allowed)),
+                argument_hint: None,
+                plugin_id: Some(PLUGIN.into()),
+            }])
+            .await;
+        assert!(rejected.is_empty(), "{rejected:?}");
+    }
+
+    /// `input` from `role`, stamped by `stamp`, with `extra` metadata.
+    async fn request(
+        &self,
+        input: &str,
+        role: Option<&str>,
+        stamp: Stamp,
+        extra: &[(&str, &str)],
+    ) -> RunRequest {
+        let mut request = request(input, role, &self.project);
+        for (key, value) in extra {
+            request.metadata.insert(key.to_string(), value.to_string());
         }
-        let gate = super::super::build_request_tool_service(
+        if let Stamp::Handler = stamp {
+            self.stamper
+                .stamp_slash_mode(&request.input, &mut request.metadata)
+                .await;
+        }
+        request
+    }
+
+    /// `/p411-probe go`, typed by `role` into a handler.
+    async fn skill_request(&self, role: Option<&str>) -> RunRequest {
+        self.request(&format!("/{SKILL} go"), role, Stamp::Handler, &[])
+            .await
+    }
+
+    /// The tool gate an operator's plain turn at `tier` builds, holding the
+    /// real `skill_manage` over this world's skills.
+    async fn skill_manage_gate(&self, tier: ExecTier) -> Arc<dyn ToolService> {
+        let plain = self.request("hello", None, Stamp::Handler, &[]).await;
+        let t = self.turn(&engine(None), at(tier, plain)).await;
+        assert_eq!(t.permissions.tier, tier, "precondition");
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(RealSkillManage(
+            crate::builtin_tools::skill_manage::SkillManageTool::new(self.skills.clone())
+                .with_authoring_root(self.user.clone()),
+        )));
+        super::super::build_request_tool_service(
             Arc::new(registry),
             BTreeSet::new(),
             None,
-            Some(permissions.turn_context(&request, "p411-run", false)),
+            Some(t.permissions.turn_context(&t.request, "p411-run", false)),
             None,
             "p411",
-            permissions.explicit.clone(),
-            permissions.tier,
+            t.permissions.explicit.clone(),
+            t.permissions.tier,
             false,
             &[],
             false,
             crate::tools::scoped::DeferredTools::empty(),
             None,
-        );
+        )
+    }
+
+    /// What `execute()` does in order — ingress strip, the safety net's
+    /// stamp (a no-op for a handler-stamped or non-slash request), the split
+    /// — then the resolution and the tool gate.
+    async fn turn(&self, engine: &TestEngine, mut request: RunRequest) -> Turn {
+        slash_skill_scope::forget_at_ingress(&mut request.metadata);
+        self.stamper
+            .stamp_slash_mode_unattested(&request.input, &mut request.metadata)
+            .await;
+        split_with(&mut request, AGENT, &self.skills).await;
+        let permissions = engine.resolve_turn_permissions(&request, &self.agent).await;
+        let gate = gate(&request, &permissions, permissions.explicit.clone(), stubs);
         Turn {
             request,
             permissions,
             gate,
+        }
+    }
+}
+
+/// The run loop's narrowing, then the tool gate over `tools`: a
+/// restricted-away tool is not in the request's registry at all.
+fn gate(
+    request: &RunRequest,
+    permissions: &TurnPermissions,
+    explicit: Option<TurnToolPolicy>,
+    tools: fn(&mut LoopToolRegistry, &dyn Fn(&str) -> bool),
+) -> Arc<dyn ToolService> {
+    let scope = slash_skill_scope::from_metadata(&request.metadata);
+    let mut registry = LoopToolRegistry::new();
+    tools(&mut registry, &|name| {
+        slash_skill_scope::admits(scope.as_ref(), name)
+    });
+    super::super::build_request_tool_service(
+        Arc::new(registry),
+        BTreeSet::new(),
+        None,
+        Some(permissions.turn_context(request, "p411-run", false)),
+        None,
+        "p411",
+        explicit,
+        permissions.tier,
+        false,
+        &[],
+        false,
+        crate::tools::scoped::DeferredTools::empty(),
+        None,
+    )
+}
+
+fn stubs(registry: &mut LoopToolRegistry, admits: &dyn Fn(&str) -> bool) {
+    for name in TOOLS {
+        if admits(name) {
+            registry.register(Box::new(Stub(name)));
         }
     }
 }
@@ -179,9 +335,8 @@ impl Turn {
         slash_skill_scope::from_metadata(&self.request.metadata).map(|s| s.into_iter().collect())
     }
 
-    /// Whether the gate lets `tool` run with `input`.
     async fn runs_with(&self, tool: &str, input: Value) -> bool {
-        self.gate.execute(tool, input).await.is_ok()
+        runs_with(&self.gate, tool, input).await
     }
 
     async fn runs(&self, tool: &str) -> bool {
@@ -195,30 +350,16 @@ impl Turn {
     }
 }
 
-/// The slash mode both slash faces stamp for `input`: `entry` registered in
-/// a catalog, the command parser, the serializer.
-async fn envelope(entry: SkillInfo, input: &str) -> String {
-    let catalog = Arc::new(crate::tool_metadata::ToolCatalog::new());
-    let rejected = catalog.register_skills(&[entry]).await;
-    assert!(rejected.is_empty(), "{rejected:?}");
-    let parsed = crate::command::CommandParser::new(catalog)
-        .parse_async(input)
-        .await
-        .expect("the entry resolves as a slash command");
-    crate::gateway::inbound_router::serialize_parsed_command(&parsed).expect("it serializes")
+/// Whether `gate` lets `tool` run with `input`.
+async fn runs_with(gate: &Arc<dyn ToolService>, tool: &str, input: Value) -> bool {
+    gate.execute(tool, input).await.is_ok()
 }
 
-/// A request carrying `mode` (or none), as `role`, at the `ask` tier, run in
-/// `project`.
-fn request(mode: Option<String>, role: Option<&str>, project: &Path) -> RunRequest {
+/// A request for `input`, as `role`, at the `ask` tier, run in `project`.
+fn request(input: &str, role: Option<&str>, project: &Path) -> RunRequest {
     let session = crate::gateway::router::SessionKey::main("p411");
     let mut request = super::super::tests::gate_test_request(&session, "p411-run");
-    request.input = format!("/{SKILL} go");
-    if let Some(mode) = mode {
-        request
-            .metadata
-            .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
-    }
+    request.input = input.to_string();
     if let Some(role) = role {
         request
             .metadata
@@ -229,6 +370,13 @@ fn request(mode: Option<String>, role: Option<&str>, project: &Path) -> RunReque
         ExecTier::Ask.id().to_string(),
     );
     request.workspace_override = Some(project.to_path_buf());
+    request
+}
+
+fn at(tier: ExecTier, mut request: RunRequest) -> RunRequest {
+    request
+        .metadata
+        .insert(EXEC_TIER_SESSION_KEY.to_string(), tier.id().to_string());
     request
 }
 
@@ -249,31 +397,38 @@ fn names(list: &[&str]) -> Vec<String> {
 // Rulings 3 and 4, the arm that grants.
 // ---------------------------------------------------------------------------
 
-/// An operator's `/skill` from a user-level root pre-grants exactly its own
-/// list: the listed tools run without a card, an unlisted mutating tool
+/// An operator's `/skill` from either user-level root pre-grants exactly its
+/// own list: the listed tools run without a card, an unlisted mutating tool
 /// still cards, and the surface stays whole — a skill never narrows.
 #[tokio::test]
 async fn a_user_level_skill_pregrants_its_own_list_for_an_operator() {
-    for role in [None, Some("operator")] {
+    for (root, role) in [
+        ("aleph", None),
+        ("aleph", Some("operator")),
+        ("claude", None),
+    ] {
         let w = World::new().await;
-        write_skill(&w.user, SKILL, "[bash, file_write]");
-        w.scan(std::slice::from_ref(&w.user)).await;
+        let dir = if root == "aleph" {
+            w.user.clone()
+        } else {
+            w.claude_user.clone()
+        };
+        write_skill(&dir, SKILL, "[bash, file_write]");
+        w.scan(&[w.user.clone(), w.claude_user.clone()]).await;
         let t = w.turn(&engine(None), w.skill_request(role).await).await;
 
-        assert_eq!(t.pregrant(), names(&["bash", "file_write"]), "{role:?}");
-        assert!(t.restriction().is_none(), "{role:?}: a skill narrowed");
-        assert!(t.runs("bash").await, "{role:?}: bash still asks");
-        assert!(
-            t.runs("file_write").await,
-            "{role:?}: file_write still asks"
-        );
+        let case = format!("{root} / {role:?}");
+        assert_eq!(t.pregrant(), names(&["bash", "file_write"]), "{case}");
+        assert!(t.restriction().is_none(), "{case}: a skill narrowed");
+        assert!(t.runs("bash").await, "{case}: bash still asks");
+        assert!(t.runs("file_write").await, "{case}: file_write still asks");
         assert!(
             !t.runs("file_edit").await,
-            "{role:?}: an unlisted mutating tool ran without a card"
+            "{case}: an unlisted mutating tool ran without a card"
         );
         let mut whole = names(&TOOLS);
         whole.sort();
-        assert_eq!(t.surface().await, whole, "{role:?}");
+        assert_eq!(t.surface().await, whole, "{case}");
     }
 }
 
@@ -326,26 +481,21 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
 /// shape a disabled, hidden or orphaned plugin's command takes at the split,
 /// which reads no admission state), and a user-level SKILL with the
 /// command's bare name exists. The command keeps its RESTRICTION and is
-/// never pre-granted.
+/// never pre-granted — typed by an operator into a handler, as here.
 #[tokio::test]
 async fn a_plugin_command_restricts_and_never_pregrants_whatever_its_admission() {
     let w = World::new().await;
     write_skill(&w.user, "greet", "[bash]");
     w.scan(std::slice::from_ref(&w.user)).await;
-    let command = SkillInfo {
-        id: format!("{PLUGIN}:greet"),
-        name: "greet".into(),
-        description: "a plugin command".into(),
-        scope: crate::domain::skill::PromptScope::System,
-        version: None,
-        allowed_tools: Some(names(&["bash"])),
-        argument_hint: None,
-        plugin_id: Some(PLUGIN.into()),
-    };
-    let mode = envelope(command, &format!("/{PLUGIN}:greet hi")).await;
-    let t = w
-        .turn(&engine(None), request(Some(mode), None, &w.project))
+    w.register_command("greet", &["bash"]).await;
+    let request = w
+        .request(&format!("/{PLUGIN}:greet hi"), None, Stamp::Handler, &[])
         .await;
+    assert!(
+        slash_skill_scope::is_typed(&request.metadata),
+        "precondition"
+    );
+    let t = w.turn(&engine(None), request).await;
 
     assert!(
         t.pregrant().is_empty(),
@@ -369,26 +519,23 @@ async fn a_plugin_command_restricts_and_never_pregrants_whatever_its_admission()
 // Ruling 2 — the key is unforgeable.
 // ---------------------------------------------------------------------------
 
-/// Whatever pre-grant a request arrives with is gone after the split: a
-/// plain turn and a guest's `/skill` keep none, and an operator's `/skill`
-/// keeps only the skill's own list, not the wider one it arrived with.
+/// Whatever pre-grant a request arrives with is gone at ingress: a plain
+/// turn and a guest's `/skill` keep none, and an operator's `/skill` keeps
+/// only the skill's own list, not the wider one it arrived with.
 #[tokio::test]
-async fn a_pregrant_the_request_arrives_with_never_survives_the_split() {
+async fn a_pregrant_the_request_arrives_with_never_survives_ingress() {
     let w = World::new().await;
     write_skill(&w.user, SKILL, "[file_write]");
     w.scan(std::slice::from_ref(&w.user)).await;
     let forged = || {
         let mut m = HashMap::new();
-        slash_skill_scope::stamp_pregrant_from_names(
-            &mut m,
-            &names(&["bash", "file_write", "file_edit"]),
-        );
+        let wide = names(&["bash", "file_write", "file_edit"]);
+        slash_skill_scope::stamp_pregrant_from_names(&mut m, &wide, &wide);
         assert!(!m.is_empty(), "the forged key was written");
         m
     };
 
-    let mut plain = request(None, None, &w.project);
-    plain.input = "hello".into();
+    let mut plain = w.request("hello", None, Stamp::Handler, &[]).await;
     plain.metadata.extend(forged());
     let t = w.turn(&engine(None), plain).await;
     assert!(
@@ -428,8 +575,7 @@ async fn a_non_operator_skill_runs_on_the_whole_surface_with_nothing_pregranted(
         let t = w
             .turn(&engine(None), w.skill_request(Some(role)).await)
             .await;
-        let mut plain = request(None, Some(role), &w.project);
-        plain.input = "hello".into();
+        let plain = w.request("hello", Some(role), Stamp::Handler, &[]).await;
         let control = w.turn(&engine(None), plain).await;
 
         assert!(t.pregrant().is_empty(), "{role}: {:?}", t.pregrant());
@@ -438,6 +584,92 @@ async fn a_non_operator_skill_runs_on_the_whole_surface_with_nothing_pregranted(
         assert!(t.surface().await.contains(&"bash".to_string()), "{role}");
         assert!(!t.runs("bash").await, "{role}: bash ran without a card");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fix round F2 — only a `/skill` a person typed pre-grants.
+// ---------------------------------------------------------------------------
+
+/// `/p411-probe` put in a request by something other than a person: the
+/// shapes `sessions_send` (the model's text, the origin's operator role
+/// propagated), a team task (fresh metadata, no role) and A2A (a remote
+/// peer's text, unattended, no role) take. None of them passes a handler,
+/// so `execute()`'s safety net stamps the mode — unattested. Nothing is
+/// pre-granted. The control is the same `/p411-probe` typed into a handler
+/// by an operator, which does pre-grant.
+#[tokio::test]
+async fn a_slash_no_person_typed_pregrants_nothing() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[bash]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let input = format!("/{SKILL} go");
+    let unattended = super::super::UNATTENDED_KEY;
+    let shapes: [(&str, Option<&str>, &[(&str, &str)]); 3] = [
+        ("sessions_send", Some("operator"), &[]),
+        ("team task", None, &[]),
+        ("A2A", None, &[(unattended, "true")]),
+    ];
+    for (shape, role, extra) in shapes {
+        let request = w.request(&input, role, Stamp::SafetyNet, extra).await;
+        let t = w.turn(&engine(None), request).await;
+        assert!(
+            t.request
+                .metadata
+                .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY),
+            "{shape}: precondition — the safety net stamped the skill's mode"
+        );
+        assert!(t.pregrant().is_empty(), "{shape}: {:?}", t.pregrant());
+        assert!(!t.runs("bash").await, "{shape}: bash ran without a card");
+    }
+
+    let t = w.turn(&engine(None), w.skill_request(None).await).await;
+    assert_eq!(
+        t.pregrant(),
+        names(&["bash"]),
+        "control: a handler's /skill"
+    );
+    assert!(t.runs("bash").await, "control: a handler's /skill");
+}
+
+/// A typed `/skill` on a run with nobody there pre-grants nothing either.
+#[tokio::test]
+async fn a_typed_slash_on_an_unattended_run_pregrants_nothing() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[bash]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let request = w
+        .request(
+            &format!("/{SKILL} go"),
+            None,
+            Stamp::Handler,
+            &[(super::super::UNATTENDED_KEY, "true")],
+        )
+        .await;
+    assert!(
+        slash_skill_scope::is_typed(&request.metadata),
+        "precondition"
+    );
+    let t = w.turn(&engine(None), request).await;
+    assert!(t.pregrant().is_empty(), "{:?}", t.pregrant());
+    assert!(!t.runs("bash").await);
+}
+
+/// A producer that sets the typed marker itself, on text the safety net will
+/// stamp, gets nothing: the marker vouches for a mode, and there is none at
+/// ingress.
+#[tokio::test]
+async fn a_forged_typed_marker_never_survives_ingress() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[bash]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let mut request = w
+        .request(&format!("/{SKILL} go"), None, Stamp::SafetyNet, &[])
+        .await;
+    slash_skill_scope::mark_typed(&mut request.metadata);
+    let t = w.turn(&engine(None), request).await;
+    assert!(!slash_skill_scope::is_typed(&t.request.metadata));
+    assert!(t.pregrant().is_empty(), "{:?}", t.pregrant());
+    assert!(!t.runs("bash").await);
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +741,92 @@ async fn an_agent_level_skill_pregrants_nothing() {
 }
 
 // ---------------------------------------------------------------------------
+// Fix round F1 + F3 — what may be pre-granted.
+// ---------------------------------------------------------------------------
+
+/// The file is re-read at turn start; registration validated an earlier
+/// version of it (`[file_write]`). An edit since — a new tool, a glob that
+/// the policy would read back as "every tool" — grants nothing it added.
+#[tokio::test]
+async fn a_file_widened_after_registration_pregrants_only_the_registered_names() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[file_write]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let request = w.skill_request(None).await;
+    write_skill(&w.user, SKILL, r#"[file_write, bash, "?*", "file_*"]"#);
+    let t = w.turn(&engine(None), request).await;
+
+    assert_eq!(t.pregrant(), names(&["file_write"]));
+    assert!(t.runs("file_write").await, "the registered name is granted");
+    assert!(!t.runs("bash").await, "a name added after registration ran");
+    assert!(
+        !t.runs("file_edit").await,
+        "a glob added after registration ran"
+    );
+    let gate_write = json!({ "action": "update_config", "config_path": "policies.exec_tier" });
+    assert!(!t.runs_with("self_config", gate_write).await);
+}
+
+/// `skill_manage` — the model's authoring tool, writing into the
+/// operator-owned `~/.aleph/skills` the pre-grant trusts — may keep or narrow
+/// a skill's `allowed-tools`, never add to it: `edit` and `patch` that widen
+/// are refused under every tier (here `full`, which cards nothing), and under
+/// `plan` the tool does not run at all. Through the real tool gate and the
+/// real tool.
+#[tokio::test]
+async fn skill_manage_never_adds_to_a_skills_grant() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[file_write]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let svc = w.skill_manage_gate(ExecTier::Full).await;
+    let file = w.user.join(SKILL).join("SKILL.md");
+
+    let widen_edit = json!({
+        "action": "edit", "skill_id": SKILL, "content": skill_md(SKILL, "[file_write, bash]")
+    });
+    assert!(
+        !runs_with(&svc, "skill_manage", widen_edit).await,
+        "an edit added bash to the grant"
+    );
+    let widen_patch = json!({
+        "action": "patch", "skill_id": SKILL,
+        "find": "allowed-tools: [file_write]", "replace": "allowed-tools: [file_write, bash]"
+    });
+    assert!(
+        !runs_with(&svc, "skill_manage", widen_patch).await,
+        "a patch added bash to the grant"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        skill_md(SKILL, "[file_write]"),
+        "a refused write touched the file"
+    );
+    let keep = json!({
+        "action": "patch", "skill_id": SKILL, "find": "Do the thing.", "replace": "Do it well."
+    });
+    assert!(
+        runs_with(&svc, "skill_manage", keep).await,
+        "a body edit that keeps the grant was refused"
+    );
+    let narrow = json!({
+        "action": "edit", "skill_id": SKILL, "content": skill_md(SKILL, "[]")
+    });
+    assert!(
+        runs_with(&svc, "skill_manage", narrow).await,
+        "a narrowing edit was refused"
+    );
+
+    let svc = w.skill_manage_gate(ExecTier::Plan).await;
+    let keep = json!({
+        "action": "patch", "skill_id": SKILL, "find": "Do it well.", "replace": "Do it."
+    });
+    assert!(
+        !runs_with(&svc, "skill_manage", keep).await,
+        "skill_manage wrote under plan"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Ruling 5 — a model-initiated load never pre-grants.
 // ---------------------------------------------------------------------------
 
@@ -518,31 +836,22 @@ async fn an_agent_level_skill_pregrants_nothing() {
 /// restricted to `skill_read` stays restricted to it.
 #[tokio::test]
 async fn a_model_initiated_skill_load_grants_nothing() {
-    use crate::tools::AlephTool;
     let w = World::new().await;
     write_skill(&w.user, SKILL, "[bash]");
     w.scan(std::slice::from_ref(&w.user)).await;
 
-    let mut plain = request(None, None, &w.project);
-    plain.input = format!("use the {SKILL} skill");
+    let plain = w
+        .request(&format!("use the {SKILL} skill"), None, Stamp::Handler, &[])
+        .await;
     let t = w.turn(&engine(None), plain).await;
     assert!(t.pregrant().is_empty(), "{:?}", t.pregrant());
     assert!(!t.runs("bash").await);
 
-    let command = SkillInfo {
-        id: format!("{PLUGIN}:reader"),
-        name: "reader".into(),
-        description: "a plugin command".into(),
-        scope: crate::domain::skill::PromptScope::System,
-        version: None,
-        allowed_tools: Some(names(&["skill_read"])),
-        argument_hint: None,
-        plugin_id: Some(PLUGIN.into()),
-    };
-    let mode = envelope(command, &format!("/{PLUGIN}:reader")).await;
-    let t = w
-        .turn(&engine(None), request(Some(mode), None, &w.project))
+    w.register_command("reader", &["skill_read"]).await;
+    let request = w
+        .request(&format!("/{PLUGIN}:reader"), None, Stamp::Handler, &[])
         .await;
+    let t = w.turn(&engine(None), request).await;
     let before = (t.restriction(), t.pregrant());
     let body =
         crate::builtin_tools::skill_reader::ReadSkillTool::with_auto_discover(Some(&w.project))
@@ -553,6 +862,39 @@ async fn a_model_initiated_skill_load_grants_nothing() {
     assert_eq!((t.restriction(), t.pregrant()), before);
     assert_eq!(before.0, Some(BTreeSet::from(["skill_read".to_string()])));
     assert!(before.1.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Fix round F4 — children.
+// ---------------------------------------------------------------------------
+
+/// A subagent this turn spawns runs under `for_children()` — the policy
+/// without the pre-grant — so it is carded for the tool its parent turn ran
+/// uncarded.
+#[tokio::test]
+async fn a_child_is_carded_for_what_its_parent_turn_pregranted() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[bash]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let t = w.turn(&engine(None), w.skill_request(None).await).await;
+    assert!(
+        t.runs("bash").await,
+        "precondition: the parent turn pre-granted bash"
+    );
+
+    let child = gate(
+        &t.request,
+        &t.permissions,
+        t.permissions
+            .explicit
+            .as_ref()
+            .and_then(TurnToolPolicy::for_children),
+        stubs,
+    );
+    assert!(
+        !runs_with(&child, "bash", json!({})).await,
+        "a child ran its parent's pre-granted bash without a card"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -618,12 +960,12 @@ async fn the_floors_hold_under_a_pregrant() {
         "the gate-removal floor stood down for a skill's list"
     );
 
-    let mut plan = w.skill_request(None).await;
-    plan.metadata.insert(
-        EXEC_TIER_SESSION_KEY.to_string(),
-        ExecTier::Plan.id().to_string(),
-    );
-    let t = w.turn(&engine(None), plan).await;
+    let t = w
+        .turn(
+            &engine(None),
+            at(ExecTier::Plan, w.skill_request(None).await),
+        )
+        .await;
     assert_eq!(t.permissions.tier, ExecTier::Plan);
     assert!(
         !t.runs("file_write").await,
@@ -645,12 +987,6 @@ async fn a_pregranted_tool_keeps_its_argument_cards() {
     w.scan(std::slice::from_ref(&w.user)).await;
     let list = json!({ "operation": "list", "path": "." });
     let delete = json!({ "operation": "delete", "path": "gone.txt" });
-    let at = |tier: ExecTier, mut request: RunRequest| {
-        request
-            .metadata
-            .insert(EXEC_TIER_SESSION_KEY.to_string(), tier.id().to_string());
-        request
-    };
 
     for tier in [ExecTier::Auto, ExecTier::Ask] {
         let t = w
@@ -716,16 +1052,21 @@ async fn the_inline_face_and_the_tool_gate_read_one_pregrant() {
 // Fire sites.
 // ---------------------------------------------------------------------------
 
-/// Only the split writes or clears the pre-grant, and only the turn's
-/// permission resolution reads it — across every production file under
-/// `src/`. So neither `skill_read`, a resume, a queue replay nor any other
-/// producer can put one on a turn.
+/// Who may spell each key and call each function of the wire, across every
+/// production file under `src/`: the pre-grant is written only by the split
+/// and read only by the resolution; the typed marker is written only by the
+/// two human-facing stamps; the ingress strip runs only in `execute()`. So
+/// neither `skill_read`, a resume, a queue replay nor any other producer can
+/// put either on a turn.
 #[test]
-fn only_the_split_writes_the_pregrant_and_only_the_resolution_reads_it() {
+fn the_wire_has_one_writer_and_one_reader_per_fact() {
     use crate::utils::source_scan::{code_keeping_literals, production_text, rust_sources_under};
     const WIRE: &str = "src/gateway/execution_engine/slash_skill_scope.rs";
     const SPLIT: &str = "src/gateway/execution_engine/slash_skill_pregrant/mod.rs";
     const RESOLVE: &str = "src/gateway/execution_engine/turn_permissions.rs";
+    const EXECUTE: &str = "src/gateway/execution_engine/execute.rs";
+    const STAMP: &str = "src/gateway/execution_engine/slash_command.rs";
+    const ROUTER: &str = "src/gateway/inbound_router/executor.rs";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let sources = rust_sources_under(&root);
     assert!(
@@ -733,15 +1074,20 @@ fn only_the_split_writes_the_pregrant_and_only_the_resolution_reads_it() {
         "the walk found only {} files",
         sources.len()
     );
-    let key = format!("\"{}\"", slash_skill_scope::SLASH_SKILL_PREGRANT_TOOLS_KEY);
-    let owners: [(&str, &[&str]); 4] = [
-        (key.as_str(), &[WIRE]),
+    let pregrant_key = format!("\"{}\"", slash_skill_scope::SLASH_SKILL_PREGRANT_TOOLS_KEY);
+    let typed_key = format!("\"{}\"", slash_skill_scope::SLASH_MODE_TYPED_KEY);
+    let owners: [(&str, &[&str]); 8] = [
+        (pregrant_key.as_str(), &[WIRE]),
+        (typed_key.as_str(), &[WIRE]),
         ("stamp_pregrant_from_names(", &[WIRE, SPLIT]),
-        ("forget_pregrant(", &[WIRE, SPLIT]),
+        ("forget_pregrant(", &[WIRE]),
         ("pregrant_from_metadata(", &[WIRE, RESOLVE]),
+        ("mark_typed(", &[WIRE, STAMP, ROUTER]),
+        ("is_typed(", &[WIRE, SPLIT]),
+        ("forget_at_ingress(", &[WIRE, EXECUTE]),
     ];
     let mut offenders = Vec::new();
-    let mut seen = [false; 4];
+    let mut seen = [false; 8];
     for (rel, text) in &sources {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
         let code = code_keeping_literals(&production_text(&path, text));
@@ -753,19 +1099,26 @@ fn only_the_split_writes_the_pregrant_and_only_the_resolution_reads_it() {
         }
     }
     // Self-defence: a needle nobody spells would pass for the wrong reason.
-    assert_eq!(seen, [true; 4], "a needle matched nothing: {owners:?}");
+    assert_eq!(seen, [true; 8], "a needle matched nothing: {owners:?}");
     assert!(offenders.is_empty(), "{offenders:?}");
 }
 
-/// `execute.rs` runs the split exactly once, at the top level of
-/// `execute()`'s body — for every request, not only for one that carries a
-/// slash mode, or a pre-grant the request arrived with would survive on a
-/// plain turn — and before the fast path. The restriction is no longer
-/// stamped there by any other route. The resolution folds the pre-grant
-/// into the one merge, after the channel layer and before the all-default
-/// check; the steering rescue strips it from the metadata it re-drives.
+/// `execute.rs`:
+/// - strips at ingress as its very first metadata operation, before
+///   `stamp_btw` and before `admit_run` (whose steer-fold resolves this
+///   turn's permissions);
+/// - stamps its safety net unattested, never with the human-facing stamp;
+/// - runs the split exactly once, at `execute()`'s top level — for every
+///   request, not only for one that carries a slash mode — and before the
+///   fast path; the restriction is stamped by no other route.
+///
+/// The router marks the mode it inserts for a channel message, in the same
+/// block. The resolution folds the pre-grant into the one merge, after the
+/// channel layer and before the all-default check. The run loop builds the
+/// children's view from `for_children()` and its own from the whole policy.
+/// The steering rescue strips the skill facts from the metadata it re-drives.
 #[test]
-fn the_split_runs_for_every_request_and_folds_into_the_one_merge() {
+fn the_fire_sites_are_where_the_design_puts_them() {
     use crate::utils::source_scan::{production_prefix, strip_comment_lines};
     let code = |src: &str| strip_comment_lines(&production_prefix(src));
     let once = |code: &str, needle: &str| -> usize {
@@ -778,6 +1131,18 @@ fn the_split_runs_for_every_request_and_folds_into_the_one_merge() {
     };
 
     let execute = code(include_str!("../execute.rs"));
+    let ingress = once(&execute, "slash_skill_scope::forget_at_ingress(");
+    let btw = once(&execute, "stamp_btw(&request.input");
+    let admit = once(&execute, ".admit_run(");
+    assert!(
+        ingress < btw && btw < admit,
+        "the ingress strip must be execute()'s first metadata step, before admit_run"
+    );
+    once(&execute, ".stamp_slash_mode_unattested(");
+    assert!(
+        !execute.contains(".stamp_slash_mode("),
+        "execute()'s safety net must not use the human-facing stamp"
+    );
     let split = once(&execute, "slash_skill_pregrant::split(");
     let fast_path = once(&execute, ".execute_slash_command_fast_path(");
     assert!(split < fast_path, "the split must run before the fast path");
@@ -794,6 +1159,22 @@ fn the_split_runs_for_every_request_and_folds_into_the_one_merge() {
         "the split must sit at `execute()`'s top level, not inside a branch: {line:?}"
     );
 
+    let router = code(include_str!("../../inbound_router/executor.rs"));
+    let inserted = once(
+        &router,
+        "metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);",
+    );
+    let marked = once(&router, "slash_skill_scope::mark_typed(&mut metadata)");
+    let block_end = router
+        .get(inserted..)
+        .and_then(|rest| rest.find('}'))
+        .map(|at| at + inserted)
+        .expect("the insert's block closes");
+    assert!(
+        inserted < marked && marked < block_end,
+        "the router must mark exactly the mode it inserts, in the same block"
+    );
+
     let resolve = code(include_str!("../turn_permissions.rs"));
     let channel = once(
         &resolve,
@@ -804,6 +1185,23 @@ fn the_split_runs_for_every_request_and_folds_into_the_one_merge() {
     assert!(
         channel < fold && fold < all_default,
         "the pre-grant folds after the channel layer and before the all-default check"
+    );
+
+    let inner = code(include_str!("../run_loop/inner.rs"));
+    let children = once(&inner, "let parent_view_for_children");
+    let child_policy = once(&inner, "explicit.for_children()");
+    let own = once(
+        &inner,
+        "let tool_service = super::super::build_request_tool_service(",
+    );
+    assert!(
+        children < child_policy && child_policy < own,
+        "the children's view must be built from `for_children()`"
+    );
+    assert_eq!(
+        inner.matches("turn_permissions.explicit.clone()").count(),
+        1,
+        "the run's own service takes the whole policy, once"
     );
 
     let steering = code(include_str!("../steering.rs"));

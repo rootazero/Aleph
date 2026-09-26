@@ -554,8 +554,9 @@ pub(super) async fn build_steering_rescue_request(
         next_depth.to_string(),
     );
     // Strip slash-command residue: the rescue is a plain loop continuation and
-    // must never re-enter the fast path, re-apply a skill's tool scope, or
-    // deliver a command's body (and model pin) a second time.
+    // must never re-enter the fast path, re-apply a command's tool
+    // restriction or a skill's pre-grant (and its typed marker), or deliver a
+    // command's body (and model pin) a second time.
     metadata.remove(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY);
     super::slash_skill_scope::strip(&mut metadata);
     let model_override =

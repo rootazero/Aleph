@@ -95,19 +95,47 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// every slash command silently swallowed whenever a run is already in
     /// flight: the text lands in the transcript, the loop reads it as an
     /// interjection, and the client gets no events and no error.
+    ///
+    /// **This is the human-facing stamp** — the `chat.send` / `agent.run`
+    /// handlers' — so a mode it stamps is marked as typed by a person
+    /// (`slash_skill_scope::mark_typed`), which a `/skill`'s pre-grant
+    /// requires. `execute()`'s safety net, which stamps text other producers
+    /// put in a request, calls [`Self::stamp_slash_mode_unattested`] instead.
     pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
+        if self.stamp_mode(input, metadata).await {
+            super::slash_skill_scope::mark_typed(metadata);
+        }
+    }
+
+    /// [`Self::stamp_slash_mode`] without the typed marker: `execute()`'s
+    /// safety net, for producers that never pass through a handler — cron,
+    /// heartbeat, team dispatch, `sessions_send`, A2A, the OpenAI shim,
+    /// goal/loop continuations. None of their text is a person typing `/foo`.
+    pub(super) async fn stamp_slash_mode_unattested(
+        &self,
+        input: &str,
+        metadata: &mut HashMap<String, String>,
+    ) {
+        self.stamp_mode(input, metadata).await;
+    }
+
+    /// Stamp `/btw` and the slash mode; `true` when this call stamped the
+    /// mode (an already-stamped request is left alone).
+    async fn stamp_mode(&self, input: &str, metadata: &mut HashMap<String, String>) -> bool {
         // Side questions first: they are resolved without the command parser,
         // and they must be stamped even when the parser cell is empty.
         stamp_btw(input, metadata);
         if metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
-            return;
+            return false;
         }
-        if let Some(mode_json) = self.try_resolve_slash_command(input).await {
-            metadata.insert(
-                crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
-                mode_json,
-            );
-        }
+        let Some(mode_json) = self.try_resolve_slash_command(input).await else {
+            return false;
+        };
+        metadata.insert(
+            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+            mode_json,
+        );
+        true
     }
 
     /// Resolve a `/command args` input to the slash-command mode JSON.
@@ -286,10 +314,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // admitted by `execute.rs` on this `Fallthrough`
                 // (`slash_command_body::admit`, after the owner gate above);
                 // its body is rendered by the run loop, after the turn-start
-                // hooks, into its transient blocks. What this arm contributes
-                // either way is the `allowed_tools` scope carried on the mode
-                // JSON, which `execute.rs` lifts into
-                // `slash_skill_allowed_tools` for the loop to intersect.
+                // hooks, into its transient blocks. The mode JSON's
+                // `allowed_tools` was already lifted by `execute.rs`
+                // (`slash_skill_pregrant::split`): a command's into the
+                // restriction the loop intersects, a skill's into this
+                // turn's pre-grant.
                 Err(ExecutionError::Fallthrough {
                     reason: format!("skill '{skill_name}'"),
                 })

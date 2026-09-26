@@ -139,6 +139,28 @@ pub(crate) struct TurnToolPolicy {
     pub(crate) pregranted: std::collections::BTreeSet<String>,
 }
 
+impl TurnToolPolicy {
+    /// The policy a subagent this turn spawns runs under: this one without the
+    /// pre-granted entries. A person typed `/<skill>` for THIS turn; a child's
+    /// task is model-written, so it gets the tier's cards back for those
+    /// tools. The entries were folded only where nothing bound the name
+    /// ([`apply_pregrant`]), so removing them restores the policy the layers
+    /// wrote. `None` when that policy is all-default — the same "no policy"
+    /// the resolution hands over.
+    pub(crate) fn for_children(&self) -> Option<Self> {
+        let mut policy = self.policy.clone();
+        for name in &self.pregranted {
+            policy.overrides.remove(name);
+        }
+        let all_default = policy.default == crate::extension::PermissionAction::Allow
+            && policy.overrides.is_empty();
+        (!all_default).then(|| Self {
+            policy,
+            pregranted: std::collections::BTreeSet::new(),
+        })
+    }
+}
+
 /// The facts the tier reads for a builtin or plugin tool known by name — the
 /// ones `ScopedToolService::tool_facts` answers for those tools, and what the
 /// name-keyed callers of `effective_permission` (the slash-command fast path,

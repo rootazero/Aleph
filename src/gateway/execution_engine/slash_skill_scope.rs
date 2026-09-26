@@ -21,8 +21,18 @@
 //! **The pre-grant** ([`SLASH_SKILL_PREGRANT_TOOLS_KEY`]) is per turn: never
 //! replayed on resume (`resume_coordinator` replays only the restriction),
 //! stripped by the steering rescue ([`strip`]), and removed from every
-//! incoming request before `split` derives it ([`forget_pregrant`]).
-//! `turn_permissions::apply_pregrant` is its one reader.
+//! incoming request as `execute()`'s first statement ([`forget_at_ingress`])
+//! before `split` derives it. `turn_permissions::apply_pregrant` is its one
+//! reader.
+//!
+//! **The typed marker** ([`SLASH_MODE_TYPED_KEY`]) says the request's slash
+//! mode was stamped by a surface a person types into — the `chat.send` /
+//! `agent.run` handlers (`ExecutionEngine::stamp_slash_mode`) or the inbound
+//! router for a channel message — and not by `execute()`'s safety net, which
+//! stamps the text `sessions_send`, a team task, cron, heartbeat, A2A or the
+//! OpenAI shim put there. Only a typed `/skill` pre-grants. Written only by
+//! [`mark_typed`]; [`forget_at_ingress`] removes it from any request that
+//! arrives without a mode for it to vouch for.
 //!
 //! This module owns all three halves of that wire — the keys' spelling, the
 //! encoding, and the decoding — because they were previously spread across
@@ -64,6 +74,11 @@ pub(crate) const SLASH_SKILL_ALLOWED_TOOLS_KEY: &str = "slash_skill_allowed_tool
 /// [`pregrant_from_metadata`], removed by [`forget_pregrant`] and [`strip`].
 /// Nothing outside this module should spell it.
 pub(crate) const SLASH_SKILL_PREGRANT_TOOLS_KEY: &str = "slash_skill_pregrant_tools";
+
+/// Request-metadata key present when a human-facing surface stamped the
+/// request's slash mode ([`mark_typed`]). See the module doc. Nothing outside
+/// this module should spell it.
+pub(crate) const SLASH_MODE_TYPED_KEY: &str = "slash_mode_typed";
 
 /// Lift a plugin command's restriction out of a parsed slash-command envelope
 /// into request metadata (`slash_skill_pregrant::split` decides it is one).
@@ -126,23 +141,41 @@ pub(crate) fn from_metadata(metadata: &HashMap<String, String>) -> Option<HashSe
 /// the turn it was granted for.
 pub(crate) fn strip(metadata: &mut HashMap<String, String>) {
     metadata.remove(SLASH_SKILL_ALLOWED_TOOLS_KEY);
+    metadata.remove(SLASH_MODE_TYPED_KEY);
     forget_pregrant(metadata);
 }
 
 /// Write a skill's pre-grant from its `allowed-tools:` names as the author
-/// wrote them. Claude Code names map to Aleph names
-/// (`extension::hooks::normalize_cc_tool_entry`); a scoped `Bash(git *)` is
-/// DROPPED rather than folded into `bash` — pre-granting the whole tool for
-/// a grant scoped to one command widens an approval skip — and so is `*`,
-/// which would pre-grant every tool. Nothing left ⇒ nothing is written: an
-/// empty pre-grant is no grant, not deny-all.
-pub(crate) fn stamp_pregrant_from_names(metadata: &mut HashMap<String, String>, names: &[String]) {
+/// wrote them, bounded by `registered` — the list registration validated for
+/// this skill (known tool names only), which the slash mode carries.
+///
+/// Claude Code names map to Aleph names
+/// (`extension::hooks::normalize_cc_tool_entry`). Dropped:
+/// - a scoped `Bash(git *)`, rather than folded into `bash` — pre-granting
+///   the whole tool for a grant scoped to one command widens an approval
+///   skip;
+/// - anything [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
+///   accepts (`*`, `?*`, `file_*`, `mcp__s__*` → `s__*`): the fold writes
+///   exact entries, and the policy reads such a key back as a glob;
+/// - anything `registered` does not name: the file is re-read at turn start
+///   and may have been edited since registration validated it.
+///
+/// Nothing left ⇒ nothing is written: an empty pre-grant is no grant, not
+/// deny-all.
+pub(crate) fn stamp_pregrant_from_names(
+    metadata: &mut HashMap<String, String>,
+    names: &[String],
+    registered: &[String],
+) {
     let mut tools: Vec<String> = Vec::new();
     for name in names {
         let Some(tool) = crate::extension::hooks::normalize_cc_tool_entry(name, false) else {
             continue;
         };
-        if tool != "*" && !tools.contains(&tool) {
+        if !crate::config::types::policies::is_glob_pattern(&tool)
+            && registered.contains(&tool)
+            && !tools.contains(&tool)
+        {
             tools.push(tool);
         }
     }
@@ -172,12 +205,39 @@ pub(crate) fn pregrant_from_metadata(metadata: &HashMap<String, String>) -> Vec<
     })
 }
 
-/// Remove a pre-grant the request arrived with. `slash_skill_pregrant::split`
-/// calls this for every request before it derives the turn's own, so no
-/// producer — a client, a channel, a queue replay, a continuation — can hand
-/// a run a pre-grant it did not earn by invoking a skill.
+/// Remove a pre-grant from a metadata map ([`forget_at_ingress`], [`strip`]).
 pub(crate) fn forget_pregrant(metadata: &mut HashMap<String, String>) {
     metadata.remove(SLASH_SKILL_PREGRANT_TOOLS_KEY);
+}
+
+/// What `execute()` does to every request before anything reads it — its
+/// first statement, ahead of the busy lane's steer-fold resolution:
+/// - removes any pre-grant, so no producer (a client, a channel, a queue
+///   replay, a continuation) hands a run one it did not earn by a person
+///   invoking a skill — `slash_skill_pregrant::split` derives the turn's own;
+/// - removes the typed marker when the request carries no slash mode: the
+///   marker vouches for a mode, and the only modes stamped before
+///   `execute()` are the human-facing surfaces' (they write both at once).
+///   Every mode `execute()`'s safety net stamps is stamped after this, with
+///   no marker.
+pub(crate) fn forget_at_ingress(metadata: &mut HashMap<String, String>) {
+    forget_pregrant(metadata);
+    if !metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
+        metadata.remove(SLASH_MODE_TYPED_KEY);
+    }
+}
+
+/// Mark the slash mode a human-facing surface just stamped as typed by a
+/// person. Called by `ExecutionEngine::stamp_slash_mode` (the `chat.send` /
+/// `agent.run` handlers) and by the inbound router for a channel message —
+/// never by `execute()`'s safety net.
+pub(crate) fn mark_typed(metadata: &mut HashMap<String, String>) {
+    metadata.insert(SLASH_MODE_TYPED_KEY.to_string(), "true".to_string());
+}
+
+/// Whether the request's slash mode was stamped by a human-facing surface.
+pub(crate) fn is_typed(metadata: &HashMap<String, String>) -> bool {
+    metadata.contains_key(SLASH_MODE_TYPED_KEY)
 }
 
 /// Narrow a candidate tool list to `scope`, returning how many were dropped.
@@ -283,19 +343,29 @@ mod tests {
     fn strip_removes_the_declaration() {
         let mut meta = HashMap::new();
         stamp_from_mode(&mut meta, &mode(serde_json::json!(["grep"])));
-        stamp_pregrant_from_names(&mut meta, &["bash".to_string()]);
+        stamp_pregrant_from_names(&mut meta, &names(&["bash"]), &names(&["bash"]));
+        mark_typed(&mut meta);
         strip(&mut meta);
         assert!(from_metadata(&meta).is_none());
         assert!(
             pregrant_from_metadata(&meta).is_empty(),
             "the steering rescue's strip must drop the pre-grant too"
         );
+        assert!(!is_typed(&meta), "and the typed marker");
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
     }
 
     #[test]
     fn pregrant_is_a_separate_key_from_the_restrict_scope() {
         let mut md = HashMap::new();
-        stamp_pregrant_from_names(&mut md, &["grep".to_string(), "bash".to_string()]);
+        stamp_pregrant_from_names(
+            &mut md,
+            &names(&["grep", "bash"]),
+            &names(&["bash", "grep"]),
+        );
         assert!(md.contains_key(SLASH_SKILL_PREGRANT_TOOLS_KEY));
         assert!(
             !md.contains_key(SLASH_SKILL_ALLOWED_TOOLS_KEY),
@@ -313,7 +383,7 @@ mod tests {
         // no-op, not deny-all), and nothing is written for an empty list.
         assert!(pregrant_from_metadata(&HashMap::new()).is_empty());
         let mut empty = HashMap::new();
-        stamp_pregrant_from_names(&mut empty, &[]);
+        stamp_pregrant_from_names(&mut empty, &[], &names(&["bash"]));
         assert!(empty.is_empty());
         forget_pregrant(&mut md);
         assert!(pregrant_from_metadata(&md).is_empty());
@@ -321,30 +391,72 @@ mod tests {
 
     #[test]
     fn pregrant_entries_are_filtered_to_bare_aleph_names() {
-        // `Bash(gh:*)` would pre-grant ALL of bash for a scoped grant, and `*`
-        // every tool: both dropped. CC names map to Aleph names.
+        // `Bash(gh:*)` would pre-grant ALL of bash for a scoped grant, and any
+        // glob — `*`, `?*` (= every tool), `file_*`, `mcp__s__*` (→ `s__*`) —
+        // would be read back by the policy as a pattern: all dropped. CC names
+        // map to Aleph names. `registered` names every one of them, so only
+        // the glob filter stands between them and the fold.
+        let written = names(&[
+            "Bash(gh pr view:*)",
+            "Read",
+            "*",
+            "?*",
+            "file_*",
+            "mcp__s__*",
+            "grep",
+            "file_read",
+        ]);
+        let registered = names(&["*", "?*", "file_*", "s__*", "grep", "file_read"]);
         let mut md = HashMap::new();
-        stamp_pregrant_from_names(
-            &mut md,
-            &[
-                "Bash(gh pr view:*)".to_string(),
-                "Read".to_string(),
-                "*".to_string(),
-                "grep".to_string(),
-                "file_read".to_string(),
-            ],
-        );
-        assert_eq!(
-            pregrant_from_metadata(&md),
-            vec!["file_read".to_string(), "grep".to_string()]
-        );
+        stamp_pregrant_from_names(&mut md, &written, &registered);
+        assert_eq!(pregrant_from_metadata(&md), names(&["file_read", "grep"]));
         // Nothing grantable left ⇒ nothing written.
         let mut only_wide = HashMap::new();
         stamp_pregrant_from_names(
             &mut only_wide,
-            &["*".to_string(), "Bash(git *)".to_string()],
+            &names(&["*", "?*", "file_*", "mcp__s__*", "Bash(git *)"]),
+            &registered,
         );
         assert!(only_wide.is_empty(), "{only_wide:?}");
+    }
+
+    /// The file is re-read at turn start; registration validated an earlier
+    /// version of it. Only what both name is granted.
+    #[test]
+    fn pregrant_is_the_intersection_with_the_registered_list() {
+        let mut md = HashMap::new();
+        stamp_pregrant_from_names(
+            &mut md,
+            &names(&["file_write", "bash", "self_config"]),
+            &names(&["file_write", "grep"]),
+        );
+        assert_eq!(pregrant_from_metadata(&md), names(&["file_write"]));
+        let mut none_registered = HashMap::new();
+        stamp_pregrant_from_names(&mut none_registered, &names(&["bash"]), &[]);
+        assert!(none_registered.is_empty(), "{none_registered:?}");
+    }
+
+    /// A marker vouches for a mode: without one it is dropped at ingress,
+    /// with one it stays; the pre-grant never survives ingress.
+    #[test]
+    fn ingress_keeps_a_typed_marker_only_beside_a_mode() {
+        let mut orphan = HashMap::new();
+        mark_typed(&mut orphan);
+        stamp_pregrant_from_names(&mut orphan, &names(&["bash"]), &names(&["bash"]));
+        forget_at_ingress(&mut orphan);
+        assert!(!is_typed(&orphan), "a marker with no mode survived ingress");
+        assert!(pregrant_from_metadata(&orphan).is_empty());
+
+        let mut typed = HashMap::new();
+        typed.insert(
+            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+            "{}".to_string(),
+        );
+        mark_typed(&mut typed);
+        stamp_pregrant_from_names(&mut typed, &names(&["bash"]), &names(&["bash"]));
+        forget_at_ingress(&mut typed);
+        assert!(is_typed(&typed), "a human surface's marker was dropped");
+        assert!(pregrant_from_metadata(&typed).is_empty());
     }
 
     #[test]

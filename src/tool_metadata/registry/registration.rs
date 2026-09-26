@@ -324,13 +324,17 @@ impl ToolRegistrar {
         rejected
     }
 
-    /// Validate a skill's declared `allowed-tools:` against the tool names
+    /// Validate a row's declared `allowed-tools:` against the tool names
     /// that actually exist.
     ///
-    /// `Ok(None)` — the skill declared nothing; the run keeps the agent's full
-    /// tool surface. `Ok(Some(names))` — every declared name resolves (an
-    /// empty `Some` is a legitimate, explicit deny-all). `Err(unknown)` — at
-    /// least one name names nothing, and the caller must refuse the skill.
+    /// `Ok(None)` — declared nothing. `Ok(Some(names))` — every declared name
+    /// resolves. `Err(unknown)` — at least one name names nothing, and the
+    /// caller must refuse the row. What the validated list then does depends
+    /// on the row: a plugin COMMAND's restricts the run (an empty `Some` is a
+    /// legitimate, explicit deny-all; `None` keeps the full surface); a
+    /// SKILL's bounds what a typed `/<skill>` may pre-grant
+    /// (`gateway::execution_engine::slash_skill_pregrant`: only these names,
+    /// never the file's later additions).
     ///
     /// Three sources are unioned to answer "does this name exist":
     /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
