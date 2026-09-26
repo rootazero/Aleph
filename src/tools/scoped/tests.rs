@@ -2887,6 +2887,11 @@ async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_hea
     let (_scratch, hygiene) = hygiene_store("failing_test_run");
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(FailingTestRunner));
+    // A retrieval tool to read the offload back: without one nothing is
+    // offloaded (see `an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload`).
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
         .with_result_store(hygiene);
 
@@ -3043,15 +3048,20 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
     );
     assert!(denied.contains("file_read"), "fallback:\n{denied}");
 
-    // Neither callable ⇒ the bare marker (its path) is the whole handle.
+    // Neither callable ⇒ nothing is offloaded: a bare path the model has no
+    // tool to open is a dead handle. The cut says so instead.
     let (_s4, store) = hygiene_store("footer_neither");
-    let neither =
-        footer_of(ScopedToolService::new(registry(), allow(&["bash"])).with_result_store(store))
-            .await;
+    let neither = ScopedToolService::new(registry(), allow(&["bash"]))
+        .with_result_store(store)
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let neither = neither.value.as_str().expect("flattened").to_string();
     assert!(
-        !neither.contains("ctx_search") && !neither.contains("file_read"),
-        "no retrieval tool is callable, so none may be named:\n{neither}"
+        !neither.contains("[Full output persisted: "),
+        "no retrieval tool is callable, so nothing may be offloaded:\n{neither}"
     );
+    assert!(neither.contains("no retrieval tool"), "{neither}");
 }
 
 // -------------------------------------------------------------------------
@@ -4463,4 +4473,44 @@ async fn an_allowlist_narrows_the_retrieval_set_under_it() {
         "the agent may not call ctx_search, yet Layer 2's footer names it:\n{footer}"
     );
     assert!(footer.contains("file_read"), "{footer}");
+}
+
+/// An agent that may call neither retrieval tool gets no offload — a path it
+/// has no tool to open is a dead handle — but a cut that says the rest is
+/// gone. Through the real chain: the inner dispatcher can call both, the
+/// allowlist removes both.
+///
+/// Mutation-checked: dropping the empty-set check in `offload` turns this red.
+#[tokio::test]
+async fn an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(FailingTestRunner));
+    registry.register(Box::new(StubTool {
+        tool_name: "ctx_search",
+    }));
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
+    let (_scratch, store) = hygiene_store("no_retrieval_chain");
+    let parent: StdArc<dyn ToolService> = StdArc::new(
+        ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
+    );
+    let mut def = crate::agents::AgentDef::new("sealed", crate::agents::AgentMode::SubAgent);
+    def.allowed_tools = vec!["bash".to_string()];
+    let child =
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(parent, StdArc::new(def));
+
+    let out = child
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let text = out.value.as_str().expect("flattened").to_string();
+    assert!(
+        !text.contains("[Full output persisted: "),
+        "an offload this agent cannot read back:\n{text}"
+    );
+    assert!(
+        text.contains("no retrieval tool"),
+        "the cut says so:\n{text}"
+    );
 }

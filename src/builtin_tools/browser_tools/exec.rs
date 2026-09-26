@@ -653,13 +653,18 @@ async fn read_guard(
 /// navigations, so by the time the model could act on "take a standalone
 /// browser_snapshot" that advice names a page which no longer exists. The
 /// dropped tail was unrecoverable, and the note said otherwise.
-fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> String {
+///
+/// Each step's offload has its own key ([`step_offload_key`]): a procedure can
+/// cut more than one snapshot, and under one `(call id, tool)` key the second
+/// write would replace the first blob and re-indexing would replace its
+/// sections — step 1's footer would then open step N's tree.
+fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize, step: usize) -> String {
     let (text, truncated) = super::bound_content(raw, max_chars);
     let wrapped = super::redact_wrap(manager, &text);
     if !truncated {
         return wrapped;
     }
-    match super::offload_full_content(manager, BrowserExecTool::NAME, raw) {
+    match super::offload_full_content(manager, &step_offload_key(step), raw) {
         Some(footer) => format!("{wrapped}\n{footer}"),
         // No store or no call id (direct `tools.invoke`, tests): say the tail is
         // gone rather than name a lever that cannot bring it back.
@@ -669,6 +674,14 @@ fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> Str
              this step's max_chars, or add an `evaluate` step with a targeted DOM query]"
         ),
     }
+}
+
+/// The tool-name half of step `step`'s offload key: `browser_exec-step-{step}`.
+/// It names the blob file (`{call id}_{key}.txt`, still under the call's own
+/// `{call id}_` prefix) and the index source, so two steps of one procedure
+/// write two blobs.
+fn step_offload_key(step: usize) -> String {
+    format!("{}-step-{step}", BrowserExecTool::NAME)
 }
 
 /// What one executed step produced: a status word, an optional text payload
@@ -748,7 +761,7 @@ async fn execute_actions(
             }
         }
         let label = action_label(action);
-        match run_one(manager, backend, tab_id, action).await {
+        match run_one(manager, backend, tab_id, action, ordinal).await {
             Ok(outcome) => {
                 let has_image = outcome.image_base64.is_some();
                 results.push(StepResult {
@@ -767,12 +780,14 @@ async fn execute_actions(
 }
 
 /// Execute a single planned action, returning its status word and — for a
-/// read — its already-bounded/redacted/fenced payload.
+/// read — its already-bounded/redacted/fenced payload. `step` is the action's
+/// 1-based ordinal in the procedure; an offload it makes is keyed by it.
 async fn run_one(
     manager: &ProfileManager,
     backend: &dyn BrowserBackend,
     tab_id: &str,
     action: &PlannedAction,
+    step: usize,
 ) -> std::result::Result<StepOutcome, String> {
     // Every backend error leaves through the same egress chokepoint the read
     // steps and every standalone tool use: `BrowserError` carries raw
@@ -840,6 +855,7 @@ async fn run_one(
                 manager,
                 &snap.snapshot_text,
                 *max_chars,
+                step,
             )))
         }
         PlannedAction::Evaluate(js) => {
@@ -1017,6 +1033,58 @@ impl AlephTool for BrowserExecTool {
 
 #[cfg(test)]
 mod tests {
+    /// Two snapshot steps of one procedure, both cut: each is offloaded to its
+    /// own blob and indexed under its own source, so each step's footer reads
+    /// back that step's tree — not whichever step wrote last.
+    ///
+    /// Mutation-checked: keying every step's offload by the bare tool name
+    /// again turns this red.
+    #[tokio::test]
+    async fn two_cut_snapshots_in_one_exec_keep_two_blobs() {
+        use crate::browser::profile::BrowserSystemConfig;
+
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let tree = |tag: &str| -> String {
+            (0..4_000)
+                .map(|i| format!("- generic \"{tag} filler {i}\" [ref=e{i}]\n"))
+                .collect()
+        };
+        let (first, second) = (tree("alphastep"), tree("betastep"));
+        let identity = crate::approval::CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: "exec-two-steps".to_string(),
+        };
+        let (out1, out2) = crate::approval::with_call_identity(Some(identity), async {
+            (
+                snapshot_output(&manager, &first, 2_000, 1),
+                snapshot_output(&manager, &second, 2_000, 2),
+            )
+        })
+        .await;
+        for (out, own, other) in [
+            (&out1, "alphastep", "betastep"),
+            (&out2, "betastep", "alphastep"),
+        ] {
+            let path = crate::tools::result_store::extract_persisted_path(out)
+                .unwrap_or_else(|| panic!("the cut step is offloaded: {out}"));
+            let blob = std::fs::read_to_string(path).expect("the blob is on disk");
+            assert!(blob.contains(own), "its own tree");
+            assert!(!blob.contains(other), "not the other step's tree");
+        }
+        for (step, own) in [(1, "alphastep"), (2, "betastep")] {
+            let label =
+                crate::tools::result_store::source_label(&step_offload_key(step), "exec-two-steps");
+            let hits = store
+                .search_source(&label, own, 3)
+                .expect("the test store's index is available");
+            assert!(
+                !hits.is_empty(),
+                "step {step} is indexed under its own source"
+            );
+        }
+    }
+
     /// The offload half of [`snapshot_output`], which the real-machine fixture
     /// structurally cannot reach: `tools.invoke` establishes no call identity,
     /// so the live run only ever exercises the "no store" branch.

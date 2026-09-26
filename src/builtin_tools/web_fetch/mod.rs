@@ -347,13 +347,13 @@ impl WebFetchTool {
                 if let Some((store, call_id)) = Self::intent_store() {
                     // Indexed once; only the selection is refit below, so the
                     // page's blob is written exactly once.
-                    if let Some(footer) = intent::index_page(&store, &call_id, &url, content) {
+                    if let Some(indexed) = intent::index_page(&store, &call_id, &url, content) {
                         let result =
                             fit_to_budget(budget, cap, Some(focus), |cap| WebFetchResult {
                                 url: url.clone(),
                                 title: title.clone(),
                                 content: intent::sections_for_prompt(
-                                    &store, &call_id, &url, focus, content, &footer, cap,
+                                    &store, &call_id, &url, focus, content, &indexed, cap,
                                 ),
                                 extractor: extractor.clone(),
                             });
@@ -658,8 +658,12 @@ mod tests {
             WebFetchTool::NAME,
             <WebFetchTool as AlephTool>::MAX_RESULT_TOKENS,
         );
-        let outcome =
-            crate::tool_output::ingress::clean_for_ingress(WebFetchTool::NAME, &mut value, budget);
+        let outcome = crate::tool_output::ingress::clean_for_ingress_of(
+            WebFetchTool::NAME,
+            &mut value,
+            budget,
+            Some(call_id),
+        );
         crate::tools::result_processing::apply_result_budget(
             call_id,
             WebFetchTool::NAME,
@@ -761,6 +765,52 @@ mod tests {
         assert!(
             !blob.contains("matching the focus"),
             "the blob is the page, not the sections result"
+        );
+    }
+
+    /// A result that carries its own offload and is still over budget — the
+    /// fit ran out of attempts — keeps its marker through the ingress rewrite:
+    /// a field cut that dropped the marker line would hide the offload from
+    /// Layer 2, which would then persist this result over the page's blob.
+    ///
+    /// Mutation-checked: letting ingress rewrite an own-offload result (no call
+    /// id) turns this red.
+    #[test]
+    fn an_over_budget_own_offload_keeps_its_marker_through_ingress() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let call_id = "call_fit_exhausted";
+        let page = "The original page line, kept only in the blob.\n".repeat(3_000);
+        let indexed = intent::index_page(&store, call_id, "https://example.com/x", &page)
+            .expect("the page is persisted");
+        // A test log around the marker: the ingress rewrite routes it to the
+        // log reducer, which keeps failures and the verdict and drops the
+        // passing lines — and the marker line between them.
+        let filler = |tag: &str| -> String {
+            (0..1_500)
+                .map(|i| format!("test suite::{tag}_section_{i} ... ok\n"))
+                .collect()
+        };
+        let result = WebFetchResult {
+            url: "https://example.com/x".to_string(),
+            title: None,
+            content: format!(
+                "running 3000 tests\n{}{}\n{}test result: ok. 3000 passed; 0 failed\n",
+                filler("head"),
+                indexed.footer,
+                filler("tail")
+            ),
+            extractor: Extractor::Readability,
+        };
+        let processed = through_layer_two(&result, call_id, &store);
+        assert!(processed.persisted_path.is_none(), "persisted again");
+        let blob = std::fs::read_to_string(store.blob_path(call_id, WebFetchTool::NAME))
+            .expect("the page's blob");
+        assert!(blob.contains("The original page line"), "blob replaced");
+        assert!(!blob.contains("head_section_"), "blob replaced");
+        assert!(
+            processed.text.contains("[Full output persisted: "),
+            "{}",
+            processed.text
         );
     }
 

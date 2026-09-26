@@ -79,12 +79,37 @@ pub(crate) struct IngressOutcome {
 /// result wholesale, so the value's post-rejection state is never observed.
 /// Not cloning the value first is deliberate — an over-budget result is by
 /// definition large, and deep-cloning it on the hot path was pure waste.
+#[cfg(test)]
 pub(crate) fn clean_for_ingress(
     tool_name: &str,
     value: &mut Value,
     budget: Option<usize>,
 ) -> IngressOutcome {
+    clean_for_ingress_of(tool_name, value, budget, None)
+}
+
+/// [`clean_for_ingress`] for the result of call `call_id`: a result that
+/// carries its own call's persist marker (a tool that offloaded its output
+/// itself) passes through untouched — a field rewrite could drop the marker
+/// line, and Layer 2 would then persist the result over the blob it names.
+/// Layer 2 bounds such a result itself, keeping the marker whole.
+pub(crate) fn clean_for_ingress_of(
+    tool_name: &str,
+    value: &mut Value,
+    budget: Option<usize>,
+    call_id: Option<&str>,
+) -> IngressOutcome {
     let raw = flatten(value);
+    if call_id.is_some_and(|id| {
+        crate::tools::result_processing::carries_own_persisted_marker(&raw, id, tool_name)
+    }) {
+        return IngressOutcome {
+            model_facing: raw,
+            reduced_from: None,
+            reductions: Vec::new(),
+            compressed: false,
+        };
+    }
 
     // Compression first: it is per-tool and unconditional (cheap for anything
     // but the DevTools family), and a field rewrite is lossy by definition —

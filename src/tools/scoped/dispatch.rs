@@ -1515,32 +1515,6 @@ impl ScopedToolService {
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
-        // Ingress clean — per-tool compression, then (only when over budget)
-        // field-level hygiene. Both stages run on `out.value` while its text
-        // fields still carry real newlines: flattening first escapes every
-        // newline and collapses the result onto one line, which blinds both
-        // content-aware cleaners (`structured::classify` needs lines;
-        // `distill_output` iterates `text.lines()`). See `tool_output::ingress`.
-        //
-        // `reduced_from` hands Layer 2 the untouched original so the offloaded
-        // blob — the model's way back to the dropped detail — is the full
-        // output, not the reduction.
-        let outcome = self.run_ingress(name, &mut out.value, budget).await;
-
-        if outcome.compressed {
-            tracing::debug!(tool = name, "ingress compressed a tool-result field");
-        }
-        for r in &outcome.reductions {
-            tracing::debug!(
-                tool = name,
-                field = %r.field,
-                method = ?r.method,
-                tokens_before = r.tokens_before,
-                tokens_after = r.tokens_after,
-                "ingress hygiene reduced a tool-result field"
-            );
-        }
-
         // Per-call file name suffix, so concurrent calls to the same tool do
         // not collide on disk.
         //
@@ -1556,6 +1530,35 @@ impl ScopedToolService {
         // identity (direct `tools.invoke` RPC, cluster node calls, tests).
         let call_id = crate::approval::current_tool_call_id()
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+
+        // Ingress clean — per-tool compression, then (only when over budget)
+        // field-level hygiene. Both stages run on `out.value` while its text
+        // fields still carry real newlines: flattening first escapes every
+        // newline and collapses the result onto one line, which blinds both
+        // content-aware cleaners (`structured::classify` needs lines;
+        // `distill_output` iterates `text.lines()`). See `tool_output::ingress`.
+        //
+        // `reduced_from` hands Layer 2 the untouched original so the offloaded
+        // blob — the model's way back to the dropped detail — is the full
+        // output, not the reduction.
+        // A result carrying its own call's offload marker skips the rewrite: a
+        // cut that dropped the marker line would hide the offload from Layer 2,
+        // which would then persist this result over the blob the marker names.
+        let outcome = self.run_ingress(name, &mut out.value, budget, &call_id).await;
+
+        if outcome.compressed {
+            tracing::debug!(tool = name, "ingress compressed a tool-result field");
+        }
+        for r in &outcome.reductions {
+            tracing::debug!(
+                tool = name,
+                field = %r.field,
+                method = ?r.method,
+                tokens_before = r.tokens_before,
+                tokens_after = r.tokens_after,
+                "ingress hygiene reduced a tool-result field"
+            );
+        }
 
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,
@@ -1643,15 +1646,18 @@ impl ScopedToolService {
         name: &str,
         value: &mut Value,
         budget: Option<usize>,
+        call_id: &str,
     ) -> crate::tool_output::ingress::IngressOutcome {
+        use crate::tool_output::ingress::clean_for_ingress_of;
         if crate::tool_output::ingress::size_hint(value) < INGRESS_BLOCKING_THRESHOLD {
-            return crate::tool_output::ingress::clean_for_ingress(name, value, budget);
+            return clean_for_ingress_of(name, value, budget, Some(call_id));
         }
         let tool_name = name.to_owned();
+        let call_id = call_id.to_owned();
         let mut owned = std::mem::take(value);
         let joined = tokio::task::spawn_blocking(move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::tool_output::ingress::clean_for_ingress(&tool_name, &mut owned, budget)
+                clean_for_ingress_of(&tool_name, &mut owned, budget, Some(&call_id))
             }))
         })
         .await;

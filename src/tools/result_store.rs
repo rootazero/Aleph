@@ -380,11 +380,8 @@ impl ToolResultStore {
     /// call id, one file — a second persist for the same call replaces it.
     #[must_use]
     pub fn blob_path(&self, tool_call_id: &str, tool_name: &str) -> PathBuf {
-        self.blob_dir().join(format!(
-            "{}_{}.txt",
-            sanitize_for_filename(tool_call_id),
-            sanitize_for_filename(tool_name)
-        ))
+        self.blob_dir()
+            .join(blob_file_name(tool_call_id, tool_name))
     }
 
     /// The marker [`Self::persist`] would return for this call and a blob of
@@ -623,14 +620,22 @@ impl ToolResultStore {
 
     /// [`Self::search`] over the sections of one indexed output — the one
     /// indexed under `source` (a [`source_label`]) — ranked among themselves.
-    pub fn search_source(&self, source: &str, query: &str, limit: usize) -> Vec<SearchHit> {
-        let Some(idx) = self.index() else {
-            return Vec::new();
-        };
+    ///
+    /// `None` when the index is unavailable or the query failed: "no section
+    /// matched" is an answer only a working index can give, so a failure is
+    /// not flattened into an empty list here (unlike [`Self::search`], whose
+    /// callers render no hits and a dead index the same way).
+    pub fn search_source(&self, source: &str, query: &str, limit: usize) -> Option<Vec<SearchHit>> {
+        let idx = self.index()?;
         let keys = self.read_scope_keys();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        idx.search_source(&key_refs, source, query, limit)
-            .unwrap_or_default()
+        match idx.search_source(&key_refs, source, query, limit) {
+            Ok(hits) => Some(hits),
+            Err(e) => {
+                tracing::warn!(source, error = %e, "source-scoped search failed");
+                None
+            }
+        }
     }
 
     /// Number of indexed sections readable by this handle — its own session
@@ -1212,6 +1217,18 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
         opts.mode(0o600);
     }
     opts.open(path)?.write_all(content.as_bytes())
+}
+
+/// The file name a persist under (`tool_call_id`, `tool_name`) writes, in
+/// whatever directory the store scopes it to. What names a blob as a call's
+/// own — the directory differs between the scoped and unscoped handle of one
+/// store, the file name does not.
+pub(crate) fn blob_file_name(tool_call_id: &str, tool_name: &str) -> String {
+    format!(
+        "{}_{}.txt",
+        sanitize_for_filename(tool_call_id),
+        sanitize_for_filename(tool_name)
+    )
 }
 
 /// Last 8 chars of a tool call id (char-safe). Call-id *prefixes* are constant
