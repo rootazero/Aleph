@@ -100,16 +100,25 @@ pub(crate) struct AlephHomeEnvGuard {
 
 #[cfg(test)]
 impl AlephHomeEnvGuard {
-    pub(crate) fn acquire_and_set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+    /// Lock and snapshot `$ALEPH_HOME` without changing it — for a test that
+    /// only reads paths derived from it and must not race a test that changes
+    /// it. The snapshot is taken under the lock, so it is never another test's
+    /// temporary value.
+    pub(crate) fn acquire() -> Self {
         let lock = ALEPH_HOME_TEST_GUARD
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var_os("ALEPH_HOME");
-        std::env::set_var("ALEPH_HOME", value);
         Self {
             _lock: lock,
             previous,
         }
+    }
+
+    pub(crate) fn acquire_and_set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let guard = Self::acquire();
+        std::env::set_var("ALEPH_HOME", value);
+        guard
     }
 
     /// Lock and REMOVE `$ALEPH_HOME` for the guard's lifetime, restoring
