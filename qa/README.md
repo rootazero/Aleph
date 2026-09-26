@@ -1693,7 +1693,8 @@ widened a narrowly-scoped change into that question. Tracked in
   CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
   这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
   只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
-  不在根 `CLAUDE.md` 的路由表里。- **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
+  不在根 `CLAUDE.md` 的路由表里。
+- **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
   出站、`result_processing` 的 offload 与 footer、`ctx_search`、`context.breakdown` 或 `events.subscribe`
   的 `except` 前跑 `{replay,carve,ingress,breakdown,firstparty}`。
   - **它怎么让一个本地 mock 站在第一方主机名后面**：Aleph 按**主机名**分类（`api.deepseek.com` =
@@ -1713,6 +1714,7 @@ widened a narrowly-scoped change into that question. Tracked in
     `ctx_search` 从 persist 的原文里返回**段落正文**（needle 在内）。⚠️ 必须是**单进程**：macOS seatbelt
     profile 禁 fork，复合命令（`a; b`）在打印前就 exit 71；且 server 的 PATH 要**系统目录在前**——
     Homebrew 在前时 `bash` 解析到 `/opt/homebrew/bin/bash`，seatbelt 不许 exec 它（同样 exit 71）。
+    ⚠️ 后者是**既有缺陷，不是有意行为**：装置绕开它，不等于它是对的（已单独报给用户）。
   - `breakdown` — 同一轮之后 `context.breakdown` 回 `messages.tool_results > 0`、`tool_output` 带
     `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
     run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是

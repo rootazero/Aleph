@@ -661,7 +661,11 @@ FEATURE_LOCATOR §3.14「已定位·未做」）。
 
 Neither layer swaps a result for a marker at least as large as the result — measured on that call's own marker (`ToolResultStore::marker_for`). 两层都不把结果换成不比它小的 marker。
 
-Small-window models: boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
+Only these ingress gates run on a default install: the generated default config has no `[context_budget]`, so no
+`ContextBudget` is built (no preflight pruning, calibration or `context.breakdown` `messages`) and no window
+ceiling is installed. 默认安装只有入口两道闸。
+
+Small-window models (with `[context_budget] enabled = true`): boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
 `MAX_RESULT_BUDGET_TOKENS` / `DEFAULT_MAX_TURN_TOKENS`); the per-result ceiling caps **every** per-result budget,
 the read window included. `tool_output::scale_to_budget` sizes digests/profiles against
 `tool_output::KNOB_REFERENCE_BUDGET_TOKENS` (the budget the knob defaults were sized for), so a smaller budget gets a

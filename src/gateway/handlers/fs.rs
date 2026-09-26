@@ -675,6 +675,9 @@ mod tests {
 
     #[tokio::test]
     async fn home_dir_returns_existing_path() {
+        // `$HOME` is what the handler answers with; a test that points it at a
+        // path that does not exist (`/tmp/fake-home`) must not overlap this.
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire_and_keep();
         let r = req("fs.home_dir", json!({}));
         let resp = handle_home_dir(r).await;
         let path = resp.result.unwrap()["path"].as_str().unwrap().to_string();
@@ -762,14 +765,12 @@ mod tests {
     async fn every_credential_denylist_entry_is_refused_by_the_rpc_face() {
         use crate::builtin_tools::file_ops::get_denied_paths;
 
-        // `get_denied_paths()` resolves `<config_dir>` from `$ALEPH_HOME` — here,
-        // and again inside the handler. A test that repoints it in between (and
-        // drops its tempdir) turns an entry listed here into one the handler
-        // does not deny, so the assertion reads a race as a leak. Held for the
-        // whole body.
-        let _aleph_home = crate::utils::paths::ALEPH_HOME_TEST_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // `get_denied_paths()` resolves `<config_dir>` from `$ALEPH_HOME` and
+        // `~/…` from `$HOME` — here, and again inside the handler. A test that
+        // repoints either in between turns an entry listed here into one the
+        // handler does not deny, so the assertion reads a race as a leak. Both
+        // are held, unchanged, for the whole body.
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire_and_keep();
 
         let mut checked = 0usize;
         for entry in get_denied_paths() {
