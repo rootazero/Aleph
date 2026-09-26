@@ -39,6 +39,7 @@ pub fn plugin_row(info: PluginInfo) -> PluginRow {
         enabled: info.enabled,
         path: info.path,
         kind: info.kind,
+        origin: info.origin,
         status: parse_status(&info.status),
         status_detail: info.error,
         skills_count: info.skills_count as u32,
@@ -173,5 +174,31 @@ mod tests {
         }
         assert_eq!(parse_status("overridden"), PluginRuntimeStatus::Error);
         assert_eq!(parse_status("garbage"), PluginRuntimeStatus::Error);
+    }
+
+    /// The row is the only place a `PluginInfo` becomes wire; the origin
+    /// label must cross it, or every client reads `""` for a Claude Code
+    /// install and cannot say why the row is off.
+    #[test]
+    fn the_row_carries_the_origin_label() {
+        let info = PluginInfo {
+            name: "cc".into(),
+            version: None,
+            description: None,
+            enabled: false,
+            path: "/x".into(),
+            skills_count: 0,
+            commands_count: 0,
+            agents_count: 0,
+            hooks_count: 0,
+            mcp_servers_count: 0,
+            tools_count: 0,
+            kind: "static".into(),
+            origin: crate::extension::PluginOrigin::ClaudeCache.label().into(),
+            status: "disabled".into(),
+            error: None,
+        };
+        let wire = serde_json::to_value(plugin_row(info)).unwrap();
+        assert_eq!(wire["origin"], "claude_cache");
     }
 }

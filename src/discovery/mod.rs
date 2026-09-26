@@ -3,6 +3,7 @@
 //! Unified discovery for configuration files, skills, commands, agents, and
 //! plugins across multiple directories.
 
+mod claude_cache;
 mod paths;
 mod scanner;
 mod types;
@@ -41,6 +42,17 @@ pub struct DiscoveryConfig {
 
     /// Maximum depth for upward directory traversal
     pub max_upward_depth: usize,
+
+    /// Replaces `~/.claude` — the whole Claude root: its `skills` /
+    /// `commands` / `agents` and Claude Code's plugin cache — **test-only**.
+    ///
+    /// `$HOME` is process-global, so without this a test that needs a Claude
+    /// root of its own either fights every sibling for the environment or
+    /// reads the real one. Gated on `cfg(test)` like
+    /// `ExtensionConfig::extra_plugin_parents`: production has one Claude
+    /// root, and a knob no production code sets is not a feature (R10).
+    #[cfg(test)]
+    pub claude_home_override: Option<PathBuf>,
 }
 
 impl Default for DiscoveryConfig {
@@ -50,6 +62,8 @@ impl Default for DiscoveryConfig {
             scan_claude_dirs: true,
             scan_project_dirs: true,
             max_upward_depth: 10,
+            #[cfg(test)]
+            claude_home_override: None,
         }
     }
 }

@@ -201,10 +201,7 @@ impl ExtensionManager {
             let output = match self.adapter_registry.parse_dir(dir_path) {
                 Ok(output) => output,
                 Err(e) => {
-                    let fallback_id = dir_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| dir_path.display().to_string());
+                    let fallback_id = Self::unparsed_plugin_id(dir_path, found.origin);
                     tracing::warn!(
                         plugin_dir = %dir_path.display(), error = %e,
                         "plugin manifest could not be parsed; listing it as errored"
@@ -212,12 +209,13 @@ impl ExtensionManager {
                     summary
                         .errors
                         .push(format!("{}: {}", dir_path.display(), e));
-                    if failed_plugin_ids.insert(fallback_id) {
+                    if failed_plugin_ids.insert(fallback_id.clone()) {
                         self.plugin_registry
                             .write()
                             .await
                             .register_plugin(Self::unparsed_record(
                                 dir_path,
+                                fallback_id,
                                 &e.to_string(),
                                 found.origin,
                                 found.scope_key.clone(),
@@ -250,8 +248,12 @@ impl ExtensionManager {
             }
             winners.insert(plugin_id.clone(), dir_path.clone());
 
-            self.migrate_legacy_disabled_marker(dir_path, &plugin_id)
-                .await;
+            // A foreign tree (Claude Code's cache) is never written: no
+            // marker migration there, whatever it contains.
+            if found.origin != PluginOrigin::ClaudeCache {
+                self.migrate_legacy_disabled_marker(dir_path, &plugin_id)
+                    .await;
+            }
 
             let record = Self::build_record(
                 &output,
@@ -354,25 +356,43 @@ impl ExtensionManager {
         record
     }
 
+    /// The id of a directory whose manifest does not parse: the directory's
+    /// name — except in Claude Code's cache, whose layout is
+    /// `cache/<marketplace>/<name>/<version>`. There the leaf is a VERSION
+    /// many plugins share, so two broken plugins at `1.0.0` would be one row
+    /// called `1.0.0` (and the second would vanish); the version dir's parent
+    /// names the plugin.
+    fn unparsed_plugin_id(dir_path: &std::path::Path, origin: PluginOrigin) -> String {
+        // Named per origin, no wildcard: a new root decides its own layout.
+        let named = match origin {
+            PluginOrigin::ClaudeCache => dir_path.parent().unwrap_or(dir_path),
+            PluginOrigin::Config
+            | PluginOrigin::Workspace
+            | PluginOrigin::Global
+            | PluginOrigin::Bundled => dir_path,
+        };
+        named
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| dir_path.display().to_string())
+    }
+
     /// The `Error` row for a directory whose manifest does not parse. It used
     /// to vanish at `debug!` level — on every surface identical to "never
-    /// installed" — so it gets a row, an id derived from the directory, the
-    /// parse error, and where it was found. Origin and key are both facts of
-    /// that discovery hit (`PluginOrigin::classify` derives the one,
-    /// `ScopeKey::from_discovery` the other), applied here for the row that
-    /// has no parsed manifest — a hardcoded origin would let the two disagree
-    /// on one row.
+    /// installed" — so it gets a row, an id derived from the directory
+    /// ([`Self::unparsed_plugin_id`]), the parse error, and where it was
+    /// found. Origin and key are both facts of that discovery hit
+    /// (`PluginOrigin::classify` derives the one, `ScopeKey::from_discovery`
+    /// the other), applied here for the row that has no parsed manifest — a
+    /// hardcoded origin would let the two disagree on one row.
     fn unparsed_record(
         dir_path: &std::path::Path,
+        id: String,
         error: &str,
         origin: PluginOrigin,
         scope_key: ScopeKey,
     ) -> PluginRecord {
-        let leaf = dir_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| dir_path.display().to_string());
-        let mut record = PluginRecord::new(leaf.clone(), leaf, PluginKind::Static, origin)
+        let mut record = PluginRecord::new(id.clone(), id, PluginKind::Static, origin)
             .with_root_dir(dir_path.to_path_buf())
             .with_error(error.to_string());
         record.scope_key = scope_key;
@@ -380,8 +400,9 @@ impl ExtensionManager {
     }
 
     /// The two admission gates, pure: owner trust, then the operator's
-    /// durable preference (`plugins.toml`, `is_enabled`). Callers write the
-    /// refusal onto the row. P4.10 origin-gates the second check.
+    /// durable preference (`plugins.toml`, `is_enabled_for`) — origin-aware,
+    /// so a Claude Code install with no preference stays off. Callers write
+    /// the refusal onto the row.
     async fn admit(&self, id: &str, origin: PluginOrigin) -> Result<(), MountError> {
         let trust_allows = self
             .owner_trust_policy
@@ -394,7 +415,7 @@ impl ExtensionManager {
                 origin: format!("{origin:?}"),
             });
         }
-        if !self.plugins_config.read().await.is_enabled(id) {
+        if !self.plugins_config.read().await.is_enabled_for(id, origin) {
             return Err(MountError::Disabled(id.to_string()));
         }
         Ok(())
@@ -1006,6 +1027,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: false,
                 max_upward_depth: 0,
+                claude_home_override: None,
             },
             plugins_config_path: Some(cfg_path.clone()),
             extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {

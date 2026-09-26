@@ -34,7 +34,8 @@ pub fn canonical_root(p: &Path) -> PathBuf {
 /// `Project(root)` is produced only for `<project>/.claude/…` and
 /// `<project>/.aleph/plugins{,.local}/…` (see [`ScopeKey::from_discovery`]);
 /// every other origin — `~/.aleph`, `~/.claude`, bundled, marketplace cache,
-/// the future `ClaudeCache` — is `Global`.
+/// Claude Code's plugin cache (`ClaudeCache`, `user`-scope installs only) —
+/// is `Global`.
 ///
 /// Persisted keys are canonical by construction (every producer goes through
 /// [`ScopeKey::project`]); nothing deserialises a `ScopeKey` — or a
@@ -67,7 +68,11 @@ impl ScopeKey {
         use crate::discovery::{DiscoveryScope, GlobalRoot};
         match &d.scope {
             DiscoveryScope::Project { root } => Self::project(root),
-            DiscoveryScope::Global(GlobalRoot::Aleph | GlobalRoot::Claude) => Self::Global,
+            // Claude Code's cache is a per-user tree with no project; joined
+            // here by name, not by `_`.
+            DiscoveryScope::Global(
+                GlobalRoot::Aleph | GlobalRoot::Claude | GlobalRoot::ClaudeCache,
+            ) => Self::Global,
         }
     }
 }
@@ -496,7 +501,11 @@ mod tests {
             ScopeKey::project(root.path())
         );
 
-        for global in [GlobalRoot::Aleph, GlobalRoot::Claude] {
+        for global in [
+            GlobalRoot::Aleph,
+            GlobalRoot::Claude,
+            GlobalRoot::ClaudeCache,
+        ] {
             let d = DiscoveredPath::global(plugin_dir.clone(), global, 10);
             assert_ne!(d.source(), DiscoverySource::Project);
             assert_eq!(ScopeKey::from_discovery(&d), ScopeKey::Global, "{global:?}");

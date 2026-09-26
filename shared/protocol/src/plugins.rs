@@ -98,6 +98,13 @@ pub struct PluginRow {
     #[serde(default)]
     pub kind: String,
 
+    /// Where the plugin was found: the server's `PluginOrigin::label`
+    /// (`global`, `workspace`, `claude_cache`, …). A `claude_cache` row is
+    /// Claude Code's install — read-only here, off until enabled, removed in
+    /// Claude Code. Empty from a server that predates the field.
+    #[serde(default)]
+    pub origin: String,
+
     /// Why this plugin is or is not active — see [`PluginRuntimeStatus`].
     #[serde(default)]
     pub status: PluginRuntimeStatus,

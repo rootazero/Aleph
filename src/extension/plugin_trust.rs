@@ -42,20 +42,21 @@ use crate::extension::types::PluginOrigin;
 ///   are always trusted.
 /// - `Config` plugins (operator added to `aleph.jsonc`) are always
 ///   trusted.
-/// - `Workspace` / `Global` plugins (anything in
-///   `<project>/.aleph/plugins` or `~/.aleph/plugins/installed/`) require
-///   an explicit allowlist entry. This prevents a stray `~/.aleph/extensions/foo`
-///   directory from silently activating for any random command.
+/// - `Workspace` / `Global` / `ClaudeCache` plugins (anything in
+///   `<project>/.aleph/plugins`, `~/.aleph/plugins/installed/`, or Claude
+///   Code's `~/.claude/plugins/cache/`) require an explicit allowlist entry.
+///   This prevents a stray `~/.aleph/extensions/foo` directory from silently
+///   activating for any random command.
 #[derive(Debug, Clone)]
 pub struct OwnerTrustPolicy {
     /// Explicit allowlist of plugin ids that may load from non-trusted
     /// origins. Built by operators via `plugin trust <id>` or
     /// `~/.aleph/trusted-plugins.toml`. Empty allowlist + `restrictive()`
-    /// = nothing from `Workspace`/`Global` may load.
+    /// = nothing from `Workspace`/`Global`/`ClaudeCache` may load.
     allowlist: HashSet<String>,
-    /// When `true`, [`Self::allows`] enforces the allowlist for `Workspace`
-    /// and `Global` origins. When `false`, every plugin passes (the legacy
-    /// "load everything" default).
+    /// When `true`, [`Self::allows`] enforces the allowlist for `Workspace`,
+    /// `Global` and `ClaudeCache` origins. When `false`, every plugin passes
+    /// (the legacy "load everything" default).
     enforce: bool,
 }
 
@@ -110,7 +111,9 @@ impl OwnerTrustPolicy {
             // Bundled (built-in plugins) and Config (operator-explicit) are
             // always trusted — the operator put them there on purpose.
             PluginOrigin::Bundled | PluginOrigin::Config => true,
-            PluginOrigin::Workspace | PluginOrigin::Global => self.allowlist.contains(plugin_id),
+            PluginOrigin::Workspace | PluginOrigin::Global | PluginOrigin::ClaudeCache => {
+                self.allowlist.contains(plugin_id)
+            }
         }
     }
 }
@@ -175,6 +178,17 @@ mod tests {
         let policy = OwnerTrustPolicy::restrictive(Vec::<String>::new());
         assert!(policy.allows("builtin", PluginOrigin::Bundled));
         assert!(policy.allows("operator-added", PluginOrigin::Config));
+    }
+
+    #[test]
+    fn claude_cache_is_an_untrusted_origin_under_enforcement() {
+        let policy = OwnerTrustPolicy::restrictive(["vouched".to_string()]);
+        assert!(policy.allows("vouched", PluginOrigin::ClaudeCache));
+        assert!(
+            !policy.allows("unknown", PluginOrigin::ClaudeCache),
+            "code installed by another tool is not exempt"
+        );
+        assert!(OwnerTrustPolicy::permissive().allows("unknown", PluginOrigin::ClaudeCache));
     }
 
     #[test]

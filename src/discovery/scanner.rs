@@ -36,9 +36,17 @@ impl DirectoryScanner {
     pub fn new(config: &DiscoveryConfig) -> DiscoveryResult<Self> {
         let aleph_home = aleph_home_dir()?;
 
-        // Claude home is optional (only scan if it exists)
+        // Claude home is optional (only scan if it exists). Tests may replace
+        // the whole root; production has exactly one.
+        #[cfg(test)]
+        let resolved = config
+            .claude_home_override
+            .clone()
+            .map_or_else(claude_home_dir, Ok);
+        #[cfg(not(test))]
+        let resolved = claude_home_dir();
         let claude_home = if config.scan_claude_dirs {
-            match claude_home_dir() {
+            match resolved {
                 Ok(p) if p.exists() => Some(p),
                 Ok(_) => None,
                 Err(e) => {
@@ -221,6 +229,10 @@ impl DirectoryScanner {
     ///
     /// Also scans one level deeper for monorepo layouts where each subdirectory
     /// of a cloned repo is an individual plugin.
+    ///
+    /// With the Claude root on, Claude Code's own installs are added too
+    /// (`claude_cache::discover_claude_cache`, read-only): an index resolved
+    /// to plugin dirs, not a parent to enumerate.
     pub fn discover_plugins_with_extra(
         &self,
         extra_parents: &[ProjectPluginParent],
@@ -242,12 +254,18 @@ impl DirectoryScanner {
                 20,
             );
         }
-        // Ascending-priority sort: `collect_plugin_dirs` — the only consumer
-        // — dedups by canonical path with first-wins (`seen.insert(canonical)`),
-        // so the LOWER-priority entry (global, priority 10) survives a
-        // project/global collision over project (priority 20). This already
-        // matches raw read_dir order (global scanned before project, above),
-        // but the sort is what makes that a guarantee rather than an
+        // Claude Code's own installs, read-only. Gated by the same knob as
+        // `~/.claude/{skills,commands,agents}` (`scan_claude_dirs` is what
+        // leaves `claude_home` unset).
+        if let Some(claude_home) = self.claude_home.as_deref() {
+            discovered.extend(super::claude_cache::discover_claude_cache(claude_home));
+        }
+        // Ascending-priority sort (Claude Code cache 5 < global 10 < project
+        // 20): `collect_plugin_dirs` — the only consumer — dedups by
+        // canonical path with first-wins (`seen.insert(canonical)`), so the
+        // LOWER-priority entry survives a same-path collision. The same-ID
+        // contest is decided later, by `discover_and_mount` walking this list
+        // in reverse. The sort is what makes both a guarantee rather than an
         // accident of scan order.
         discovered.sort_by_key(|d| d.priority);
         trace!(
@@ -419,7 +437,7 @@ fn classify_entry(
 /// the link's own file type. This stops a symlink inside `~/.aleph/{skills,
 /// commands, plugins}` pointing outside the expected tree from being
 /// enumerated as a discovered component.
-fn is_existing_dir_no_follow(path: &Path) -> bool {
+pub(crate) fn is_existing_dir_no_follow(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_dir())
         .unwrap_or(false)
@@ -530,6 +548,7 @@ mod tests {
                 scan_claude_dirs: true,
                 scan_project_dirs: false,
                 max_upward_depth: 10,
+                claude_home_override: None,
             })
             .unwrap()
         };
@@ -548,6 +567,7 @@ mod tests {
             scan_claude_dirs: true,
             scan_project_dirs: true,
             max_upward_depth: 10,
+            claude_home_override: None,
         };
 
         // Override aleph home for testing
@@ -578,6 +598,7 @@ mod tests {
             scan_claude_dirs: true,
             scan_project_dirs: true,
             max_upward_depth: 10,
+            claude_home_override: None,
         };
 
         let scanner = DirectoryScanner {
@@ -621,6 +642,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: true,
                 max_upward_depth: 10,
+                claude_home_override: None,
             },
         };
 
@@ -661,6 +683,7 @@ mod tests {
                 scan_claude_dirs: true,
                 scan_project_dirs: true,
                 max_upward_depth: 10,
+                claude_home_override: None,
             },
         };
 
@@ -699,6 +722,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: false,
                 max_upward_depth: 10,
+                claude_home_override: None,
             },
         };
 
@@ -872,6 +896,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: false,
                 max_upward_depth: 0,
+                claude_home_override: None,
             },
         };
         let found = scanner
@@ -891,5 +916,86 @@ mod tests {
             }
         );
         assert_eq!(hit.source(), DiscoverySource::Project);
+    }
+
+    /// A Claude home with one Claude Code install (`qa@m` 1.0.0).
+    fn claude_home_with_one_install(home: &Path) -> PathBuf {
+        let plugins = home.join("plugins");
+        let dir = plugins.join("cache/m/qa/1.0.0");
+        std::fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+        std::fs::write(dir.join(".claude-plugin/plugin.json"), r#"{"name":"qa"}"#).unwrap();
+        std::fs::write(
+            plugins.join("installed_plugins.json"),
+            r#"{"version":2,"plugins":{"qa@m":[{"scope":"user","version":"1.0.0"}]}}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    /// The production path: no override, the scanner resolves `$HOME/.claude`
+    /// at construction and plugin discovery reads Claude Code's cache from
+    /// it — below `~/.aleph` in the ascending sort, so on an id contest the
+    /// Aleph copy is walked first by `discover_and_mount`.
+    #[test]
+    fn plugin_discovery_reads_the_claude_cache_of_the_resolved_claude_home() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let aleph_home = temp.path().join("aleph-home");
+        let cached = claude_home_with_one_install(&home.join(".claude"));
+        let own = aleph_home.join("plugins/own");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("aleph.plugin.toml"), "[plugin]\nid = \"own\"").unwrap();
+
+        let scanner = {
+            let _env =
+                crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, &home);
+            DirectoryScanner::new(&DiscoveryConfig {
+                working_dir: temp.path().to_path_buf(),
+                scan_claude_dirs: true,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            })
+            .unwrap()
+        };
+
+        let found = scanner.discover_plugins_with_extra(&[]).unwrap();
+        let paths: Vec<&Path> = found.iter().map(|d| d.path.as_path()).collect();
+        assert_eq!(paths, vec![cached.as_path(), own.as_path()], "{found:?}");
+        assert_eq!(found[0].source(), DiscoverySource::ClaudeCache);
+        assert_eq!(found[1].source(), DiscoverySource::AlephGlobal);
+    }
+
+    /// The override replaces `~/.claude` for the whole Claude root, and the
+    /// one knob that turns the Claude root off turns the cache off with it.
+    #[test]
+    fn the_claude_cache_follows_the_claude_root_override_and_its_switch() {
+        // `DirectoryScanner::new` resolves `~/.aleph` from the environment.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let temp = TempDir::new().unwrap();
+        let claude = temp.path().join("claude");
+        let cached = claude_home_with_one_install(&claude);
+        let config = |scan_claude_dirs| DiscoveryConfig {
+            working_dir: temp.path().to_path_buf(),
+            scan_claude_dirs,
+            scan_project_dirs: false,
+            max_upward_depth: 0,
+            claude_home_override: Some(claude.clone()),
+        };
+
+        let on = DirectoryScanner::new(&config(true)).unwrap();
+        assert_eq!(on.claude_home.as_deref(), Some(claude.as_path()));
+        let found = on.discover_plugins_with_extra(&[]).unwrap();
+        assert!(found.iter().any(|d| d.path == cached), "{found:?}");
+
+        let off = DirectoryScanner::new(&config(false)).unwrap();
+        assert!(off.claude_home.is_none());
+        let found = off.discover_plugins_with_extra(&[]).unwrap();
+        assert!(
+            !found
+                .iter()
+                .any(|d| d.source() == DiscoverySource::ClaudeCache),
+            "{found:?}"
+        );
     }
 }

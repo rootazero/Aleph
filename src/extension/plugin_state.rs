@@ -46,9 +46,12 @@ pub const PLUGINS_CONFIG_FILE: &str = "plugins.toml";
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginEntryConfig {
     /// `None` means "the operator never expressed a preference" — which is not
-    /// the same as `Some(true)`. Only an explicit `Some(false)` suppresses a
-    /// plugin, so a config file that predates a newly installed plugin cannot
-    /// accidentally disable it.
+    /// the same as `Some(true)`. For a plugin Aleph installed only an explicit
+    /// `Some(false)` suppresses it, so a config file that predates a newly
+    /// installed plugin cannot accidentally disable it. A Claude Code install
+    /// (`PluginOrigin::ClaudeCache`) is the other way round: `None` is off,
+    /// and only an explicit `Some(true)` loads it
+    /// ([`PluginsConfig::is_enabled_for`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 
@@ -76,7 +79,8 @@ pub struct PluginEntryConfig {
     pub settings: BTreeMap<String, toml::Value>,
 
     /// Whether the operator vouches for this plugin loading from an untrusted
-    /// origin (`Workspace` / `Global`), when `[trust] enforce` is on.
+    /// origin (`Workspace` / `Global` / `ClaudeCache`), when `[trust] enforce`
+    /// is on.
     ///
     /// `None` — the usual state — means "never vouched for", which under
     /// enforcement is a refusal. Separate from `enabled` on purpose: disabling
@@ -97,8 +101,8 @@ pub struct PluginEntryConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginTrustConfig {
     /// `false` (the default) loads every plugin, which is what every install
-    /// before this field did. `true` refuses `Workspace` / `Global` plugins
-    /// that no entry marks `trusted`.
+    /// before this field did. `true` refuses `Workspace` / `Global` /
+    /// `ClaudeCache` plugins that no entry marks `trusted`.
     ///
     /// Defaulting to off is not a judgement that enforcement is unimportant —
     /// it is that flipping it on by upgrade would silently stop loading
@@ -137,8 +141,9 @@ impl PluginsConfig {
     /// Read the config, degrading to defaults on any read/parse failure.
     ///
     /// A corrupt file must not make every plugin vanish, so the failure
-    /// direction is "no preferences recorded" (everything stays enabled), and
-    /// it is `warn!`-loud rather than silent — an unreadable config that
+    /// direction is "no preferences recorded" (every plugin falls back to its
+    /// origin's default: Aleph installs load, Claude Code installs stay off),
+    /// and it is `warn!`-loud rather than silent — an unreadable config that
     /// silently re-enables what the operator disabled is exactly the kind of
     /// thing that must not happen quietly.
     #[must_use]
@@ -149,7 +154,7 @@ impl PluginsConfig {
                 Err(e) => {
                     tracing::warn!(
                         error = %e, path = %path.display(),
-                        "plugins config parse failed; treating every plugin as enabled"
+                        "plugins config parse failed; every plugin falls back to its origin default"
                     );
                     Self::default()
                 }
@@ -158,7 +163,7 @@ impl PluginsConfig {
             Err(e) => {
                 tracing::warn!(
                     error = %e, path = %path.display(),
-                    "plugins config read failed; treating every plugin as enabled"
+                    "plugins config read failed; every plugin falls back to its origin default"
                 );
                 Self::default()
             }
@@ -169,7 +174,8 @@ impl PluginsConfig {
     ///
     /// `utils::atomic_write::atomic_write_file` (same-dir temp + fsync +
     /// rename) rather than a hand-rolled `fs::write`: a torn `plugins.toml`
-    /// parses as "no preferences", i.e. it silently re-enables everything.
+    /// parses as "no preferences", i.e. it silently re-enables everything the
+    /// operator disabled.
     pub async fn save(&self, path: &Path) -> crate::error::Result<()> {
         let content = toml::to_string_pretty(self).map_err(|e| {
             crate::error::AlephError::config(format!("serialize plugins.toml: {e}"))
@@ -177,14 +183,22 @@ impl PluginsConfig {
         crate::utils::atomic_write::atomic_write_file(path, &content).await
     }
 
-    /// Whether `plugin_id` should load. Unknown ids and ids with no recorded
-    /// preference are enabled — see [`PluginEntryConfig::enabled`].
+    /// Whether `plugin_id`, found at `origin`, should load. An id with no
+    /// recorded preference falls back to its ORIGIN's default
+    /// ([`PluginOrigin::enabled_by_default`]): everything Aleph installed
+    /// loads; a Claude Code install stays off until one explicit enable. An
+    /// explicit `true` / `false` wins everywhere.
+    ///
+    /// The one predicate — there is no origin-blind twin: a caller without
+    /// an origin would answer "enabled" for a plugin that is off.
+    ///
+    /// [`PluginOrigin::enabled_by_default`]: crate::extension::PluginOrigin::enabled_by_default
     #[must_use]
-    pub fn is_enabled(&self, plugin_id: &str) -> bool {
+    pub fn is_enabled_for(&self, plugin_id: &str, origin: crate::extension::PluginOrigin) -> bool {
         self.entries
             .get(plugin_id)
             .and_then(|e| e.enabled)
-            .unwrap_or(true)
+            .unwrap_or(origin.enabled_by_default())
     }
 
     /// Materialise the runtime owner-trust policy from this document.
@@ -342,15 +356,38 @@ pub async fn forget_plugin_sidecars(plugin_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::types::PluginOrigin;
 
     #[test]
     fn absent_preference_means_enabled() {
         let cfg = PluginsConfig::default();
-        assert!(cfg.is_enabled("never-heard-of-it"));
+        assert!(cfg.is_enabled_for("never-heard-of-it", PluginOrigin::Global));
     }
 
     #[test]
-    fn an_explicit_false_is_the_only_thing_that_disables() {
+    fn absent_means_disabled_only_for_the_claude_cache_origin() {
+        let cfg = PluginsConfig::default();
+        assert!(cfg.is_enabled_for("x", PluginOrigin::Global));
+        assert!(cfg.is_enabled_for("x", PluginOrigin::Workspace));
+        assert!(
+            !cfg.is_enabled_for("x", PluginOrigin::ClaudeCache),
+            "a Claude Code install is not an Aleph opt-in"
+        );
+        let mut cfg = PluginsConfig::default();
+        assert!(cfg.set_enabled("x", true));
+        assert!(
+            cfg.is_enabled_for("x", PluginOrigin::ClaudeCache),
+            "one explicit verb turns it on"
+        );
+        assert!(cfg.set_enabled("x", false));
+        assert!(
+            !cfg.is_enabled_for("x", PluginOrigin::Global),
+            "explicit false still wins everywhere"
+        );
+    }
+
+    #[test]
+    fn for_an_aleph_origin_an_explicit_false_is_the_only_thing_that_disables() {
         let mut cfg = PluginsConfig::default();
         // A row that exists but records no preference must not disable.
         cfg.entries.insert(
@@ -360,12 +397,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(cfg.is_enabled("noisy"));
+        assert!(cfg.is_enabled_for("noisy", PluginOrigin::Global));
 
         cfg.set_enabled("noisy", false);
-        assert!(!cfg.is_enabled("noisy"));
+        assert!(!cfg.is_enabled_for("noisy", PluginOrigin::Global));
         cfg.set_enabled("noisy", true);
-        assert!(cfg.is_enabled("noisy"));
+        assert!(cfg.is_enabled_for("noisy", PluginOrigin::Global));
     }
 
     #[test]
@@ -383,7 +420,7 @@ mod tests {
         assert!(cfg.forget("gone"));
         assert!(!cfg.forget("gone"), "second forget is a no-op");
         assert!(
-            cfg.is_enabled("gone"),
+            cfg.is_enabled_for("gone", PluginOrigin::Global),
             "a same-id reinstall must not inherit the old disable"
         );
     }
@@ -400,20 +437,24 @@ mod tests {
 
         let loaded = PluginsConfig::load(&path);
         assert_eq!(loaded, cfg);
-        assert!(!loaded.is_enabled("alpha"));
-        assert!(loaded.is_enabled("beta"));
+        assert!(!loaded.is_enabled_for("alpha", PluginOrigin::Global));
+        assert!(loaded.is_enabled_for("beta", PluginOrigin::Global));
     }
 
     #[test]
-    fn a_corrupt_file_degrades_to_everything_enabled() {
+    fn a_corrupt_file_degrades_to_the_origin_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(PLUGINS_CONFIG_FILE);
         std::fs::write(&path, "this is not toml {{{").unwrap();
 
         let loaded = PluginsConfig::load(&path);
         assert!(
-            loaded.is_enabled("anything"),
-            "an unreadable config must not disable plugins"
+            loaded.is_enabled_for("anything", PluginOrigin::Global),
+            "an unreadable config must not disable plugins Aleph installed"
+        );
+        assert!(
+            !loaded.is_enabled_for("anything", PluginOrigin::ClaudeCache),
+            "nor enable one Claude Code installed: no preference is not an opt-in"
         );
     }
 
@@ -425,8 +466,6 @@ mod tests {
     }
 
     // ---- owner trust ----
-
-    use crate::extension::types::PluginOrigin;
 
     /// The default posture must be exactly what every install had before the
     /// field existed. A security control whose first act is to stop loading
@@ -480,7 +519,7 @@ mod tests {
 
         cfg.set_trusted("p", false);
         assert!(
-            !cfg.is_enabled("p"),
+            !cfg.is_enabled_for("p", PluginOrigin::Global),
             "untrusting must not change the enable preference"
         );
     }

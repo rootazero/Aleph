@@ -33,6 +33,8 @@ pub mod validation;
 pub mod visibility;
 
 pub mod capability;
+#[cfg(test)]
+mod claude_cache_tests;
 pub(crate) mod declared_model;
 pub mod effects;
 pub mod registrar;
@@ -1397,6 +1399,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: false,
                 max_upward_depth: 0,
+                claude_home_override: None,
             },
             plugins_config_path: Some(cfg_path.clone()),
             extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
@@ -1440,6 +1443,7 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: true,
                 max_upward_depth: 1,
+                claude_home_override: None,
             },
             plugins_config_path: Some(dir.path().join("plugins.toml")),
             extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
@@ -1471,7 +1475,7 @@ mod tests {
     /// `aleph plugin disable X` used to write a `<plugin>/.disabled` marker
     /// that **nothing ever read** (four writers, zero readers), so the disable
     /// lasted exactly as long as the process. This asserts the load path
-    /// consults the durable document: delete the `is_enabled` check in
+    /// consults the durable document: delete the `is_enabled_for` check in
     /// `load_all` and this fails by name.
     #[tokio::test]
     async fn a_disabled_plugin_stays_inactive_across_a_fresh_load() {
@@ -1497,7 +1501,7 @@ mod tests {
         assert!(manager.set_plugin_enabled("quiet-plugin", false).await);
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
-                .is_enabled("quiet-plugin"),
+                .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
             "the preference must reach disk, not just the in-memory registry"
         );
 
@@ -1594,7 +1598,8 @@ mod tests {
             "the legacy marker's intent must be honoured on the migrating load"
         );
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).is_enabled("old-timer"),
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .is_enabled_for("old-timer", PluginOrigin::Workspace),
             "and be written into the durable document"
         );
         assert!(

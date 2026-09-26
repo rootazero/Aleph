@@ -1,4 +1,4 @@
-use crate::extension::ExtensionManager;
+use crate::extension::manager_global::test_manager_without_claude_root;
 use crate::gateway::handlers::plugins::handlers::{
     handle_call_tool, init_extension_manager, is_extension_manager_initialized,
 };
@@ -104,7 +104,7 @@ async fn test_handle_call_tool_without_manager() {
 async fn test_handle_call_tool_with_manager_plugin_not_found() {
     // Initialize manager if not already done
     if !is_extension_manager_initialized() {
-        let manager = ExtensionManager::with_defaults().await.unwrap();
+        let manager = test_manager_without_claude_root().await;
         let _ = init_extension_manager(Arc::new(manager));
     }
 

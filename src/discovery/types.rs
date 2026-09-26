@@ -13,18 +13,25 @@ pub enum DiscoverySource {
     ClaudeGlobal,
     /// Project-level (./.claude/ in project directory)
     Project,
+    /// Claude Code's installed-plugin cache — the derived label for
+    /// `GlobalRoot::ClaudeCache`; consumed by `PluginOrigin::classify`.
+    ClaudeCache,
 }
 
 /// Which global root a global discovery came from. Every variant maps to
 /// `ScopeKey::Global`; the enum exists so that mapping is written per name
-/// (no wildcard) — a new root (P4.10's `ClaudeCache`) must be placed by a
-/// human, and the compiler refuses to build until it is.
+/// (no wildcard) — a new root must be placed by a human, and the compiler
+/// refuses to build until it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalRoot {
     /// `~/.aleph` (`DiscoverySource::AlephGlobal`).
     Aleph,
     /// `~/.claude` (`DiscoverySource::ClaudeGlobal`).
     Claude,
+    /// `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>` — Claude
+    /// Code's own installed-plugin cache, read-only, discovered from
+    /// `installed_plugins.json` (`DiscoverySource::ClaudeCache`).
+    ClaudeCache,
 }
 
 /// Where a scan started, as the visibility key needs it. A project scope
@@ -43,6 +50,7 @@ impl DiscoveryScope {
         match self {
             Self::Global(GlobalRoot::Aleph) => DiscoverySource::AlephGlobal,
             Self::Global(GlobalRoot::Claude) => DiscoverySource::ClaudeGlobal,
+            Self::Global(GlobalRoot::ClaudeCache) => DiscoverySource::ClaudeCache,
             Self::Project { .. } => DiscoverySource::Project,
         }
     }
@@ -104,7 +112,8 @@ pub struct DiscoveredPath {
 }
 
 impl DiscoveredPath {
-    /// A global discovery (`~/.aleph` or `~/.claude`).
+    /// A global discovery (`~/.aleph`, `~/.claude`, or Claude Code's
+    /// plugin cache).
     #[must_use]
     pub fn global(path: PathBuf, root: GlobalRoot, priority: u32) -> Self {
         Self {

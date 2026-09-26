@@ -151,7 +151,7 @@ sensitive = true
 | status | 含义 | 补救 |
 |--------|------|------|
 | `loaded` | 活跃，capability 对模型可见 | — |
-| `disabled` | operator 关掉了（`plugins.toml`）| `aleph plugin enable <name>` |
+| `disabled` | operator 关掉了（`plugins.toml`）；或 `origin: claude_cache`（Claude Code 装的，`plugins.toml` 里没有显式 enable 就是关）| `aleph plugin enable <name>` |
 | `error` | manifest 解析失败 / mount 的某一步失败（`<step>: <reason>`，已整体回滚）/ 声明的 MCP server 启动失败（`mcp:<server_id>: <reason>`，插件仍在 mount 状态）| `status_detail` 给出原因 |
 | `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |
 | `pending` | 已 mount，但某个声明的依赖尚未到达终态（MCP manager 未接上 / server 未完成 `initialize` / 运行时未 provision）| `status_detail` 列出 `waiting on …`；`aleph doctor` 的 `extension/plugins-activated` 逐个点名 |
@@ -244,6 +244,8 @@ aleph plugin enable/disable <name>                 # 启用/禁用（耐久，�
 >
 > **旧标记会被一次性迁移**：开机 `load_all` 见到 `.disabled` 就把 `enabled = false`
 > 写进 `plugins.toml` 并删除标记（保住用户此前的意图，同时收敛到单一源）。
+> Claude Code 缓存（`~/.claude/plugins/cache/…`，`PluginOrigin::ClaudeCache`）里的目录**除外**：
+> 那棵树只读，从不迁移、从不写。
 >
 > 被禁用的插件**仍然注册进 registry 作为一行 `disabled` 记录（带 manifest 计数，但没有 capability 行）**——
 > 只有被 `mount` 过的插件才有 capability 行（`lifecycle.rs`，effect `registry_row`）；
@@ -726,7 +728,7 @@ activation planner 删除后按内容更名）。
 
 Aleph 暴露 `OwnerTrustPolicy::permissive()` (默认) 和
 `OwnerTrustPolicy::restrictive(allowlist)`。restrictive 模式下，`Bundled` 和
-`Config` origin 的插件始终可加载；`Workspace` 和 `Global` origin 的插件必须在
+`Config` origin 的插件始终可加载；`Workspace`、`Global` 和 `ClaudeCache` origin 的插件必须在
 allowlist 中。`LoadSummary.skipped_by_trust` 记录被策略跳过的 plugin 数，让
 operator 看到"装了但没启用"的 plugin。
 

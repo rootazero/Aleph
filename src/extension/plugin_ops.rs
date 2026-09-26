@@ -132,6 +132,7 @@ impl ExtensionManager {
                 mcp_servers_count: record.mcp_server_count,
                 tools_count: record.tool_names.len(),
                 kind: record.kind.as_str().to_string(),
+                origin: record.origin.label().to_string(),
                 status: record.status.label().to_string(),
                 error: record.error.clone(),
             })

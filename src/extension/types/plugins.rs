@@ -32,6 +32,11 @@ pub struct PluginInfo {
     /// rendered a dash on every row.
     #[serde(default)]
     pub kind: String,
+    /// Where the plugin was found — [`PluginOrigin::label`]. A
+    /// `claude_cache` row is Claude Code's install: read-only here and off
+    /// until enabled.
+    #[serde(default)]
+    pub origin: String,
     /// Runtime status label — see
     /// [`aleph_protocol::plugins::PluginRuntimeStatus`], which is the wire
     /// vocabulary this string must stay inside.
@@ -57,6 +62,13 @@ pub enum PluginOrigin {
     Global,
     /// Bundled with core (lowest priority)
     Bundled,
+    /// Installed by Claude Code under `~/.claude/plugins/cache/…`
+    /// (`GlobalRoot::ClaudeCache`): read-only, and off until `plugins.toml`
+    /// says otherwise ([`Self::enabled_by_default`]). Renamed so serde says
+    /// what [`Self::label`] says — `rename_all = "lowercase"` alone would
+    /// write `claudecache`.
+    #[serde(rename = "claude_cache")]
+    ClaudeCache,
 }
 
 impl PluginOrigin {
@@ -67,8 +79,28 @@ impl PluginOrigin {
             Self::Config => 4,
             Self::Workspace => 3,
             Self::Global => 2,
-            Self::Bundled => 1,
+            Self::Bundled | Self::ClaudeCache => 1,
         }
+    }
+
+    /// Stable lowercase wire label (`PluginRow.origin`); equal to the serde
+    /// spelling.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Workspace => "workspace",
+            Self::Global => "global",
+            Self::Bundled => "bundled",
+            Self::ClaudeCache => "claude_cache",
+        }
+    }
+
+    /// Whether a plugin with NO `plugins.toml` preference loads. Everything
+    /// Aleph installed is an opt-in already; a Claude Code install is not.
+    #[must_use]
+    pub const fn enabled_by_default(self) -> bool {
+        !matches!(self, Self::ClaudeCache)
     }
 
     /// Classify a plugin by where it was found on disk.
@@ -115,6 +147,9 @@ impl PluginOrigin {
             crate::discovery::DiscoverySource::Project => Self::Workspace,
             crate::discovery::DiscoverySource::AlephGlobal
             | crate::discovery::DiscoverySource::ClaudeGlobal => Self::Global,
+            // Claude Code's cache: not exempt from the trust policy either —
+            // another tool installed it, and the operator never chose it here.
+            crate::discovery::DiscoverySource::ClaudeCache => Self::ClaudeCache,
         }
     }
 }
@@ -646,6 +681,36 @@ mod runtime_vocabulary_tests {
             assert_eq!(json, format!("\"{}\"", kind.as_str()));
             let back: PluginKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, kind);
+        }
+    }
+
+    /// One spelling per origin. `PluginRow.origin` carries `label()`; the
+    /// enum's own serde derive (`PluginRecord`, `CapabilitySource`) must say
+    /// the same word, or `ClaudeCache` reaches one reader as `claude_cache`
+    /// and another as `claudecache` (`rename_all = "lowercase"`).
+    #[test]
+    fn every_origin_serialises_as_its_wire_label() {
+        use super::PluginOrigin;
+        let every = [
+            PluginOrigin::Config,
+            PluginOrigin::Workspace,
+            PluginOrigin::Global,
+            PluginOrigin::Bundled,
+            PluginOrigin::ClaudeCache,
+        ];
+        for origin in every {
+            // The census: a new variant does not compile until it is listed.
+            match origin {
+                PluginOrigin::Config
+                | PluginOrigin::Workspace
+                | PluginOrigin::Global
+                | PluginOrigin::Bundled
+                | PluginOrigin::ClaudeCache => {}
+            }
+            let json = serde_json::to_value(origin).unwrap();
+            assert_eq!(json, serde_json::json!(origin.label()), "{origin:?}");
+            let back: PluginOrigin = serde_json::from_value(json).unwrap();
+            assert_eq!(back, origin);
         }
     }
 }

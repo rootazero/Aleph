@@ -69,6 +69,7 @@ impl Fixture {
                     scan_claude_dirs: false,
                     scan_project_dirs: false,
                     max_upward_depth: 0,
+                    claude_home_override: None,
                 },
                 plugins_config_path: Some(tmp.path().join("plugins.toml")),
                 ..Default::default()
