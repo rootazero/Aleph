@@ -118,6 +118,14 @@ pub(crate) const fn result_budget_ceiling_slot() -> &'static dyn SlotStatus {
     &RESULT_BUDGET_CEILING
 }
 
+/// The ceiling actually installed, `None` when none is (declined for a large
+/// window, or never set). What a report of the ceiling in effect reads — the
+/// value boot derived is not it when the setter declined.
+#[must_use]
+pub fn installed_result_budget_ceiling() -> Option<usize> {
+    RESULT_BUDGET_CEILING.get().copied()
+}
+
 /// The installed ceiling, or `usize::MAX` (= uncapped) when boot installed none.
 ///
 /// ⚠️ That `usize::MAX` is a legal value, not a signal: it is what a
@@ -146,8 +154,8 @@ pub(crate) fn read_backstop_tokens() -> usize {
 /// Resolve a tool's per-result token budget.
 ///
 /// Lookup order:
-/// 1. `read_file` / `Read` / `file_read` always return `None` (system
-///    invariant — a `read_file` result is the only way the model can pull
+/// 1. The read family ([`is_read_family`]) always returns `None` (system
+///    invariant — a `file_read` result is the only way the model can pull
 ///    a persisted marker file back into context, so persisting one would
 ///    create a loop).
 /// 2. `explicit` — the tool's declared
@@ -167,7 +175,7 @@ pub(crate) fn read_backstop_tokens() -> usize {
 /// rather than a maximum would let the worst offenders through untouched.
 ///
 /// `None` from this function means "do not persist this tool's output;
-/// just truncate when it exceeds the global default".
+/// just truncate when it exceeds [`read_backstop_tokens`]".
 #[must_use]
 pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usize> {
     resolve_result_budget_under(name, explicit, result_budget_ceiling())
@@ -190,33 +198,47 @@ pub(crate) fn resolve_result_budget_under(
     )
 }
 
-/// The read family: tools whose result is exactly the window the model asked
-/// for. Never offloaded — not by Layer 2 ([`resolve_result_budget`]) and not
-/// by the per-turn spill (`turn_budget::TurnResultBudget::record`) — because
-/// the only way back from an offloaded read is another read.
+/// The read family: the tool whose result is exactly the window the model
+/// asked for (`offset` / `limit`). Layer 2 gives it no budget of its own — it
+/// is never offloaded there, because the only way back from an offloaded read
+/// is another read — and bounds it by [`read_backstop_tokens`] instead. The
+/// per-turn spill does NOT exempt it: a turn's reads still have to fit the
+/// window, and a spilled read is persisted and indexed, so it is a re-read,
+/// not a loss.
+///
+/// One name: the builtin `file_read`. Nothing registers or aliases a tool as
+/// `read_file` / `Read` (MCP tools arrive qualified `server__tool`), so those
+/// spellings, which this list used to carry, matched no call.
 #[must_use]
 pub(crate) fn is_read_family(tool_name: &str) -> bool {
-    matches!(tool_name, "read_file" | "Read" | "file_read")
+    use crate::tools::AlephTool;
+    tool_name == <crate::builtin_tools::FileReadTool as AlephTool>::NAME
 }
 
 tokio::task_local! {
     /// The retrieval tools callable in the dispatch this future runs under,
-    /// scoped by the dispatcher around the tool's own execution. A tool that
-    /// offloads its own output (`web_fetch`'s fetch by intent) names only
-    /// these in its footer, as Layer 2 does.
+    /// scoped around the tool's own execution by every layer that knows a
+    /// gate: the scoped dispatcher, and a narrowing wrapper around it
+    /// (`AllowlistToolService`). A tool that offloads its own output
+    /// (`web_fetch`'s fetch by intent, the browser offload) names only these
+    /// in its footer, as Layer 2 does.
     static DISPATCH_RECOVERY_TOOLS: RecoveryTools;
 }
 
-/// Run `fut` with `tools` as its [`dispatch_recovery_tools`].
+/// Run `fut` with `tools` in scope. A scope already set by an outer layer is
+/// narrowed, never widened: the effective set is the intersection, so an
+/// inner dispatcher that knows only its own gates cannot undo the narrowing
+/// of a wrapper around it.
 pub(crate) async fn with_recovery_tools<F: std::future::Future>(
     tools: RecoveryTools,
     fut: F,
 ) -> F::Output {
-    DISPATCH_RECOVERY_TOOLS.scope(tools, fut).await
+    let effective = dispatch_recovery_tools().map_or(tools, |outer| outer.intersect(tools));
+    DISPATCH_RECOVERY_TOOLS.scope(effective, fut).await
 }
 
-/// The dispatcher's callable retrieval tools, or `None` outside a dispatch
-/// (a direct call, a test): the caller then cannot see the gates.
+/// The retrieval tools callable in this dispatch, or `None` outside one (a
+/// direct call, a test): the caller then cannot see the gates.
 #[must_use]
 pub(crate) fn dispatch_recovery_tools() -> Option<RecoveryTools> {
     DISPATCH_RECOVERY_TOOLS.try_with(|t| *t).ok()
@@ -239,8 +261,17 @@ pub struct RecoveryTools {
 }
 
 impl RecoveryTools {
+    /// Callable in both.
+    #[must_use]
+    pub const fn intersect(self, other: Self) -> Self {
+        Self {
+            ctx_search: self.ctx_search && other.ctx_search,
+            file_read: self.file_read && other.file_read,
+        }
+    }
+
     /// Both callable — what a caller that cannot see the turn's tool gates
-    /// assumes: [`recovery_footer`] (the browser offload), and
+    /// assumes: [`dispatch_recovery_tools`]'s fallback outside a dispatch, and
     /// `ToolService::recovery_tools`'s default for a service that has no gates
     /// to consult. The harness Layer-3 spill asks its `ToolService`, which
     /// answers from the turn's gates when it is a `ScopedToolService`.
@@ -314,6 +345,30 @@ pub fn apply_result_budget(
             persisted_path: None,
         };
     };
+
+    // A result that already carries its own offload (a tool that persisted and
+    // indexed its output under this same call id, e.g. `web_fetch`'s fetch by
+    // intent) is never persisted again: the blob is named by the call id, so a
+    // second write would replace the original with this result. Recognised by
+    // the marker naming THIS call's blob — a marker the payload merely quotes
+    // names some other path — as written, or as it reads inside the flattened
+    // JSON of a typed result (a Windows path's `\` arrives escaped). Kept as
+    // is when it fits; over budget, the text before the marker is cut and the
+    // marker onward (the handle) is kept whole.
+    if let Some(at) = store.and_then(|s| own_marker_at(s, tool_call_id, tool_name, text)) {
+        let kept = if tokens <= budget {
+            text.to_string()
+        } else {
+            let (body, footer) = text.split_at(at);
+            let room = budget.saturating_sub(estimate_tokens_smart(footer));
+            format!("{}{footer}", truncate_with_budget(body, room))
+        };
+        return ProcessedResult {
+            tokens_in_context: estimate_tokens_smart(&kept),
+            text: kept,
+            persisted_path: None,
+        };
+    }
 
     // Only meaningful when hygiene actually changed something.
     let original = reduced_from.filter(|orig| *orig != text);
@@ -398,40 +453,41 @@ pub fn apply_result_budget(
     }
 }
 
+/// Byte offset in `text` of the last marker naming this call's own blob — as
+/// written, or JSON-escaped — or `None` when `text` carries no such marker.
+fn own_marker_at(
+    store: &ToolResultStore,
+    tool_call_id: &str,
+    tool_name: &str,
+    text: &str,
+) -> Option<usize> {
+    let own = format!(
+        "{}{}",
+        crate::tools::result_store::PERSISTED_REF_PREFIX,
+        store.blob_path(tool_call_id, tool_name).display()
+    );
+    let quoted = serde_json::to_string(&own).unwrap_or_default();
+    let escaped = quoted
+        .get(1..quoted.len().saturating_sub(1))
+        .filter(|e| !e.is_empty() && *e != own);
+    text.rfind(&own)
+        .or_else(|| escaped.and_then(|e| text.rfind(e)))
+}
+
 /// Offload `full` to the result store and build the recovery footer the model
 /// uses to get the dropped detail back: the persist marker plus a hint naming
-/// how to read it back.
+/// how to read it back — naming only the retrieval tools in `recovery`, the
+/// ones the model can call. A writer derives that set from where it runs: the
+/// dispatcher from its gates, the harness Layer-3 spill from
+/// `ToolService::recovery_tools`, a tool offloading its own output from
+/// [`dispatch_recovery_tools`] (falling back to [`RecoveryTools::ALL`] only
+/// outside a dispatch, where nothing about the gates is known).
 ///
 /// `None` when there is no store or the persist did not happen (content under
 /// `threshold`, or a write failure) — the caller then falls back to truncation.
-///
-/// `pub(crate)` for the browser offload (`browser_tools::offload_content_to`),
-/// which offloads for the same reason as Layer 2 and must hand the model the
-/// same recovery handle. It cannot see the turn's tool gates, so this form
-/// assumes [`RecoveryTools::ALL`]; a caller that can — the dispatcher's Layer 2,
-/// and the harness Layer-3 spill through `ToolService::recovery_tools` — goes
-/// through [`recovery_footer_for`]. (The spill once called `persist_if_large`
-/// directly and so emitted a marker with **no** `ctx_search` hint over a blob
-/// that was never indexed — the model was pointed at a file it could only
-/// re-read whole, defeating the offload.)
-pub(crate) fn recovery_footer(
-    store: Option<&ToolResultStore>,
-    tool_call_id: &str,
-    tool_name: &str,
-    full: &str,
-    threshold: usize,
-) -> Option<(String, Option<PathBuf>)> {
-    recovery_footer_for(
-        store,
-        tool_call_id,
-        tool_name,
-        full,
-        threshold,
-        RecoveryTools::ALL,
-    )
-}
-
-/// [`recovery_footer`] with the retrieval tools the footer may name.
+/// (The spill once called `persist_if_large` directly and so emitted a marker
+/// with **no** `ctx_search` hint over a blob that was never indexed — the model
+/// was pointed at a file it could only re-read whole, defeating the offload.)
 ///
 /// Every writer of an offloaded original goes through here, which is why the
 /// line-preserving rendering happens here and not at ingress: a flattened typed
@@ -477,7 +533,13 @@ fn offload(
     recovery: RecoveryTools,
 ) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
-    if estimate_tokens_smart(gate) <= threshold {
+    let gate_tokens = estimate_tokens_smart(gate);
+    // Never replace a result with a marker at least as large as the result:
+    // measured on the marker this store would write for this call, not a guess.
+    if gate_tokens <= threshold
+        || gate_tokens
+            <= estimate_tokens_smart(&store.marker_for(tool_call_id, tool_name, gate_tokens))
+    {
         return None;
     }
     let marker = store.persist(tool_call_id, tool_name, &rendered.text)?;
@@ -981,6 +1043,77 @@ mod tests {
         );
     }
 
+    /// A result over its budget but no larger than the marker that would
+    /// replace it is never offloaded: the swap would grow the context.
+    ///
+    /// Mutation-checked: dropping the marker floor in `offload` turns this red.
+    #[test]
+    fn a_result_no_larger_than_its_marker_is_not_offloaded() {
+        let (_scratch, store, _base) = test_store("marker_floor");
+        let out = apply_result_budget(
+            "call_floor",
+            "bash",
+            "short result text",
+            Some(&store),
+            Some(1),
+            None,
+            RecoveryTools::ALL,
+        );
+        assert!(out.persisted_path.is_none(), "{}", out.text);
+        assert!(
+            !out.text.contains("[Full output persisted: "),
+            "{}",
+            out.text
+        );
+    }
+
+    /// A result carrying the marker of its own call's blob (a tool that
+    /// offloaded its output itself, like `web_fetch`'s fetch by intent) is
+    /// never persisted again, even over budget: the blob is named by the call
+    /// id, and a second write would replace the original with this result.
+    /// Recognised as written and as it reads inside flattened JSON.
+    ///
+    /// Mutation-checked: dropping the own-marker check turns this red.
+    #[test]
+    fn a_result_carrying_its_own_offload_marker_is_not_persisted_over_it() {
+        let (_scratch, store, _base) = test_store("own_marker");
+        let original = "original page line\n".repeat(3_000);
+        let (footer, _) = recovery_footer_for(
+            Some(&store),
+            "call_own",
+            "web_fetch",
+            &original,
+            0,
+            RecoveryTools::ALL,
+        )
+        .expect("the store takes the original");
+        let sections = format!("{}\n{footer}", "selected section text ".repeat(2_000));
+        let flattened = serde_json::json!({ "content": sections }).to_string();
+        for text in [&sections, &flattened] {
+            let out = apply_result_budget(
+                "call_own",
+                "web_fetch",
+                text,
+                Some(&store),
+                Some(100),
+                None,
+                RecoveryTools::ALL,
+            );
+            assert!(out.persisted_path.is_none(), "persisted again");
+            let blob = std::fs::read_to_string(store.blob_path("call_own", "web_fetch"))
+                .expect("the blob is still there");
+            assert!(blob.contains("original page line"), "blob replaced");
+            assert!(!blob.contains("selected section text"), "blob replaced");
+            assert!(out.text.len() < text.len(), "over budget, still cut");
+            let own = format!(
+                "{}{}",
+                crate::tools::result_store::PERSISTED_REF_PREFIX,
+                store.blob_path("call_own", "web_fetch").display()
+            );
+            assert!(out.text.contains(&own), "the handle is kept whole");
+        }
+    }
+
     fn test_store(_name: &str) -> (tempfile::TempDir, ToolResultStore, PathBuf) {
         let (scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
@@ -1201,12 +1334,20 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn read_file_family_always_returns_none() {
-        assert_eq!(resolve_result_budget("read_file", None), None);
-        assert_eq!(resolve_result_budget("Read", None), None);
+    fn the_read_family_always_returns_none() {
         assert_eq!(resolve_result_budget("file_read", None), None);
         // Even an explicit setting cannot override the read-recursion guard.
-        assert_eq!(resolve_result_budget("read_file", Some(99_999)), None);
+        assert_eq!(resolve_result_budget("file_read", Some(99_999)), None);
+        // The spellings the family used to list name no tool anything
+        // registers, so they get the default like any other name.
+        assert_eq!(
+            resolve_result_budget_under("read_file", None, usize::MAX),
+            Some(DEFAULT_RESULT_BUDGET_TOKENS)
+        );
+        assert_eq!(
+            resolve_result_budget_under("Read", None, usize::MAX),
+            Some(DEFAULT_RESULT_BUDGET_TOKENS)
+        );
     }
 
     #[test]
@@ -1267,7 +1408,7 @@ mod tests {
         );
         // The read-recursion guard still wins over everything.
         assert_eq!(
-            resolve_result_budget_under("read_file", None, ceiling),
+            resolve_result_budget_under("file_read", None, ceiling),
             None
         );
     }
@@ -1328,7 +1469,7 @@ mod tests {
         let big = "x".repeat(60_000);
         let out = apply_result_budget(
             "c2",
-            "read_file",
+            "file_read",
             &big,
             Some(&store),
             None,
@@ -1559,8 +1700,8 @@ mod tests {
 
     /// The parse itself now lives beside the writer
     /// (`result_store::extract_persisted_path`); this keeps the assertion that
-    /// THIS module's `recovery_footer` still gets a path back out of the marker
-    /// it just produced, which is the part `recovery_footer`'s callers rely on.
+    /// THIS module's `recovery_footer_for` still gets a path back out of the marker
+    /// it just produced, which is the part `recovery_footer_for`'s callers rely on.
     #[test]
     fn parse_marker_path_roundtrip() {
         let marker = "[Full output persisted: /tmp/aleph/x.txt (1234 tokens, bash)]";
@@ -1596,7 +1737,7 @@ mod tests {
 
         let out = apply_result_budget(
             "c-distill",
-            "read_file",
+            "file_read",
             &big,
             Some(&store),
             None,

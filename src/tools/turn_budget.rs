@@ -78,6 +78,22 @@ pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
     (per_result, per_turn)
 }
 
+/// Tokens of the marker a spill of `result` would leave in context, measured on
+/// the process store's own marker for this call (`ToolResultStore::marker_for`).
+/// The session-scoped handle the spill writes through adds its session
+/// directory to the path, so this is a floor; the exact refusal happens where
+/// the blob is written (`result_processing`'s offload). `0` without a store —
+/// then nothing can be spilled anyway.
+fn marker_tokens(result: &TurnResult) -> usize {
+    crate::tools::result_store::global_tool_result_store().map_or(0, |store| {
+        crate::context::budget::pressure::estimate_tokens_smart(&store.marker_for(
+            &result.call_id,
+            &result.tool_name,
+            result.tokens_in_context,
+        ))
+    })
+}
+
 // =============================================================================
 // Process-wide installer
 // =============================================================================
@@ -220,10 +236,13 @@ impl TurnResultBudget {
     /// Record a new result; when it takes the turn over budget, return the
     /// instruction to spill **it** — never an earlier one (see the module doc).
     /// An already-persisted result (a Layer-2 marker) is not spilled again, and
-    /// a read-family result is never spilled: it is the window the model asked
-    /// for, and a spilled read hands back a marker to read again
-    /// (`result_processing::is_read_family`). Its tokens still count, so the
-    /// results after it spill sooner.
+    /// neither is a result no larger than the marker that would replace it
+    /// (measured on the marker the process store would write for this call).
+    ///
+    /// Reads are NOT exempt. This is the only per-turn bound on the context a
+    /// turn adds, and on a small window a few read windows exceed it — a fatal
+    /// overflow — while a spilled read is persisted and indexed: a re-read,
+    /// not a loss.
     ///
     /// At most one instruction; the `Vec` is the caller's existing shape.
     #[must_use]
@@ -233,7 +252,7 @@ impl TurnResultBudget {
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
         if state.cumulative <= self.max_turn_tokens
             || result.already_persisted
-            || crate::tools::result_processing::is_read_family(&result.tool_name)
+            || result.tokens_in_context <= marker_tokens(&result)
         {
             return Vec::new();
         }
@@ -305,66 +324,71 @@ mod tests {
         }
     }
 
+    // Token figures in these tests sit far above any marker's size: a result
+    // no larger than its marker is never spilled (see
+    // `a_result_smaller_than_its_marker_is_never_spilled`), and whether the
+    // process store — which sizes that marker — is installed depends on
+    // which tests ran first.
     #[test]
     fn begin_end_lifecycle_clears_state() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let spilled = b.record(&id, result("c1", 30));
+        let spilled = b.record(&id, result("c1", 3_000));
         assert!(spilled.is_empty());
-        assert_eq!(b.cumulative(&id), 30);
+        assert_eq!(b.cumulative(&id), 3_000);
         b.end_turn(&id);
         assert_eq!(b.cumulative(&id), 0);
     }
 
     #[test]
     fn under_budget_no_spill() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let s = b.record(&id, result("c1", 50));
+        let s = b.record(&id, result("c1", 5_000));
         assert!(s.is_empty());
-        assert_eq!(b.cumulative(&id), 50);
+        assert_eq!(b.cumulative(&id), 5_000);
     }
 
     #[test]
     fn over_budget_spills_newest_first() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let _ = b.record(&id, result("c1", 40));
-        let _ = b.record(&id, result("c2", 40));
-        let instr = b.record(&id, result("c3", 40));
-        // Cumulative reaches 120; spilling newest (c3) credits 36
-        // tokens back, reducing to 84 — under budget. Exactly one spill.
+        let _ = b.record(&id, result("c1", 4_000));
+        let _ = b.record(&id, result("c2", 4_000));
+        let instr = b.record(&id, result("c3", 4_000));
+        // Cumulative reaches 12_000; spilling newest (c3) credits 3_600
+        // tokens back, reducing to 8_400 — under budget. Exactly one spill.
         assert_eq!(instr.len(), 1, "expected 1 spill, got: {:?}", instr);
         assert_eq!(instr[0].call_id, "c3");
     }
 
     #[test]
     fn already_persisted_entries_are_not_respilled() {
-        let b = TurnResultBudget::new(50);
+        let b = TurnResultBudget::new(5_000);
         let id = tid(1);
         b.begin_turn(id);
-        let mut already = result("c1", 100);
+        let mut already = result("c1", 10_000);
         already.already_persisted = true;
         let instr = b.record(&id, already);
         // Only entry is already persisted → no spill candidate.
         assert!(instr.is_empty());
         // Cumulative still tracks the entry's tokens.
-        assert_eq!(b.cumulative(&id), 100);
+        assert_eq!(b.cumulative(&id), 10_000);
     }
 
     #[test]
     fn multiple_spills_until_under_budget() {
-        let b = TurnResultBudget::new(40);
+        let b = TurnResultBudget::new(4_000);
         let id = tid(1);
         b.begin_turn(id);
-        let _ = b.record(&id, result("c1", 30));
-        let _ = b.record(&id, result("c2", 30));
-        // After c2: cumulative = 60 > 40 → spill c2 (credit 27) → 33 → under.
-        // After c3: cumulative = 33 + 30 = 63 > 40 → spill c3 (credit 27) → 36 → under.
-        let instr_c3 = b.record(&id, result("c3", 30));
+        let _ = b.record(&id, result("c1", 3_000));
+        let _ = b.record(&id, result("c2", 3_000));
+        // After c2: cumulative = 6_000 > 4_000 → spill c2 (credit 2_700) → 3_300 → under.
+        // After c3: cumulative = 3_300 + 3_000 = 6_300 > 4_000 → spill c3 (credit 2_700) → 3_600 → under.
+        let instr_c3 = b.record(&id, result("c3", 3_000));
         assert_eq!(instr_c3.len(), 1);
         assert_eq!(instr_c3[0].call_id, "c3");
     }
@@ -375,11 +399,11 @@ mod tests {
     /// spilled and no credit is booked — the turn honestly stays over.
     #[test]
     fn only_the_just_recorded_result_is_ever_spilled() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        assert!(b.record(&id, result("c1", 90)).is_empty());
-        let mut marker = result("c2", 40);
+        assert!(b.record(&id, result("c1", 9_000)).is_empty());
+        let mut marker = result("c2", 4_000);
         marker.already_persisted = true;
 
         let instr = b.record(&id, marker);
@@ -390,7 +414,7 @@ mod tests {
         );
         assert_eq!(
             b.cumulative(&id),
-            130,
+            13_000,
             "no credit may be booked for a spill that did not happen"
         );
     }
@@ -403,32 +427,55 @@ mod tests {
         assert_eq!(b.cumulative(&id), 0);
     }
 
-    /// B4: a read is the window the model asked for; spilling it hands back
-    /// a marker to read again. Over budget, it stays — and its tokens still
-    /// count, so the next non-read result spills.
+    /// B4-fix H2: on a small window a few read windows exceed the turn; the
+    /// turn budget is the only per-turn bound, so reads spill like any other
+    /// result once it is crossed (a spilled read is persisted and indexed).
     ///
-    /// Mutation-checked: dropping the read-family clause in `record` turns
-    /// this red.
+    /// Mutation-checked: exempting the read family again turns this red.
     #[test]
-    fn a_read_over_the_turn_budget_is_never_spilled_but_still_counts() {
-        let budget = TurnResultBudget::new(1_000);
+    fn a_small_windows_reads_stay_bounded_by_the_turn() {
+        let (_, per_turn) = budget_for_window(16_000);
+        let budget = TurnResultBudget::new(per_turn);
         let id = TurnId::new(uuid::Uuid::new_v4());
-        let result = |call: &str, tool: &str| TurnResult {
+        let spilled: Vec<bool> = (0..5)
+            .map(|i| {
+                !budget
+                    .record(
+                        &id,
+                        TurnResult {
+                            call_id: format!("r{i}"),
+                            tool_name: "file_read".to_string(),
+                            tokens_in_context: 2_000,
+                            in_context_text: "x".repeat(10),
+                            already_persisted: false,
+                        },
+                    )
+                    .is_empty()
+            })
+            .collect();
+        assert_eq!(spilled, vec![false, false, true, true, true], "{per_turn}");
+    }
+
+    /// A result no larger than its marker is never spilled: the marker would
+    /// cost at least as much and lose the text.
+    ///
+    /// Mutation-checked: dropping the marker floor turns this red.
+    #[test]
+    fn a_result_smaller_than_its_marker_is_never_spilled() {
+        crate::tools::result_store::install_test_tool_result_store();
+        let budget = TurnResultBudget::new(100);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let result = |call: &str, tokens: usize| TurnResult {
             call_id: call.to_string(),
-            tool_name: tool.to_string(),
-            tokens_in_context: 800,
-            in_context_text: "x".repeat(10),
+            tool_name: "file_edit".to_string(),
+            tokens_in_context: tokens,
+            in_context_text: "ok".to_string(),
             already_persisted: false,
         };
-        assert!(budget.record(&id, result("r1", "file_read")).is_empty());
+        assert!(budget.record(&id, result("big", 99)).is_empty());
         assert!(
-            budget.record(&id, result("r2", "file_read")).is_empty(),
-            "a read past the budget is not spilled"
-        );
-        assert_eq!(
-            budget.record(&id, result("b1", "bash")).len(),
-            1,
-            "the reads' tokens counted, so the next result spills"
+            budget.record(&id, result("tiny", 5)).is_empty(),
+            "a 5-token result over the budget stays: its marker is larger"
         );
     }
 

@@ -168,8 +168,8 @@ Three things about this pair are load-bearing:
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `web_fetch` | Fetch URL content | `url`, `method?`, `headers?` |
-| `web_search` | Search the web | `query`, `engine?` |
+| `web_fetch` | Fetch a page and extract its text; with `prompt`, a page too large to return whole comes back as the sections matching it plus a handle to the rest (fetch by intent, see *Result budgets & recovery* below) | `url`, `extract_mode?`, `prompt?` |
+| `search` | Search the web | `query` / `queries`, `limit?`, `recency?`, `domains?`, `exclude_domains?`, `full_content?`, `providers?` |
 
 ### Browser — 26 tools, two engines, one driver
 
@@ -645,6 +645,50 @@ mock LLM，实测确认 MCP 截图作为可解码 PNG 到达模型、三个工�
 FEATURE_LOCATOR §3.14「已定位·未做」）。
 
 详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
+
+### Result budgets & recovery · 预算与找回
+
+> Numbers live in the constants named here; this section does not restate them (§1).
+> 数值只住在下面点名的常量里，本节不抄数字。
+
+**Three budgets, one source each · 三个预算，各有唯一来源**
+
+| Budget | Owner | What it bounds |
+|---|---|---|
+| Per result (Layer 2) | `tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS`, or a tool's `AlephTool::MAX_RESULT_TOKENS` | One result. Over it, the original is offloaded (persisted + indexed) and the model gets the recovery footer. **No builtin declares `MAX_RESULT_TOKENS`** — a larger budget belongs only on output that *is* the window the model chose; a merely large result (a build log, a page) is better offloaded and searched. The registry census `result_budgets_come_from_declarations_and_default_everywhere` pins it. |
+| Per turn (Layer 3) | `tools::turn_budget::DEFAULT_MAX_TURN_TOKENS` | All results of one Think→Act turn. Past it, `TurnResultBudget::record` spills **the result it was just handed** (the only one still rewritable). |
+| Read window | `result_processing::read_backstop_tokens()` (= `MAX_RESULT_BUDGET_TOKENS` clamped by the window ceiling) | The read family (`result_processing::is_read_family`: `read_file` / `Read` / `file_read`). **Never offloaded, at either layer**: Layer 2 resolves no budget for it, Layer 3 counts its tokens but never spills it — an offloaded read hands back a marker to read again. |
+
+Small-window models: boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
+`MAX_RESULT_BUDGET_TOKENS` / `DEFAULT_MAX_TURN_TOKENS`); the per-result ceiling caps **every** per-result budget,
+the read window included. `tool_output::scale_to_budget` sizes digests/profiles against
+`tool_output::KNOB_REFERENCE_BUDGET_TOKENS` (the budget the knob defaults were sized for), so a smaller budget gets a
+proportionately smaller artifact.
+
+**The recovery footer · 找回句柄** — every writer of an offloaded original goes through
+`result_processing::recovery_footer_for(store, call_id, tool, full, threshold, RecoveryTools)`: it stores
+`tool_output::render::line_preserving(full)` (a one-line JSON envelope becomes real lines, so the index gets real
+sections and `file_read` real lines), indexes it for `ctx_search`, and names **only the retrieval tools the model can
+call**. Who knows that set:
+
+| Writer | Where the `RecoveryTools` come from |
+|---|---|
+| Dispatcher, Layer 2 (`scoped/dispatch.rs::apply_layer_two`) | `ScopedToolService::recovery_tools()` — registered + allowed + not hidden |
+| Harness Layer-3 spill | `ToolService::recovery_tools()` — decorators forward it; `AllowlistToolService` narrows it to the agent's allow set |
+| A tool offloading its own output (browser offload, `web_fetch` fetch by intent) | `result_processing::dispatch_recovery_tools()` — a task-local the dispatcher scopes around the tool's execution (`with_recovery_tools`); `RecoveryTools::ALL` only outside a dispatch, where nothing about the gates is known |
+
+A fenced source (external content) gets no "First sections:" preview in its footer — the preview would be untrusted
+text outside the fence. `ctx_search` returns whole sections, each scrubbed and fenced on its own
+(`ContentSource::OffloadedToolOutput { tool }`), fitted to its budget by measurement.
+
+**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs::sections_for_prompt`) — `web_fetch` with a
+`prompt` on a page longer than the tool's `max_content_length`: the page is extracted whole (bounded by
+`WebFetchTool::INTENT_EXTRACT_MAX_CHARS`), offloaded and indexed through `recovery_footer_for` into the same store
+`ctx_search` reads, BM25-searched with the prompt, filtered to this page's own sections, and returned in page order
+within `max_content_length`, fenced, followed by the footer. No match → the page head, and the note says so. Pure
+retrieval (R7), no second index; prompted fetches bypass the URL cache (it holds capped pages).
+
+Why and how this round changed them → [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md).
 
 ---
 

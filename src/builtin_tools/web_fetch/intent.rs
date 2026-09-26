@@ -12,33 +12,28 @@ use crate::security::content_sanitizer::{
 };
 use crate::tools::result_store::{source_label, ToolResultStore};
 
-/// Hits fetched before keeping only this page's own: the search spans every
-/// output the session has indexed.
-const OVERFETCH_HITS: usize = 40;
+/// Sections of the page ranked against the prompt: the candidates the cap
+/// then picks from. The search is over this page's own sections only.
+const CANDIDATE_SECTIONS: usize = 40;
 
 /// Between two non-adjacent sections, so a reader does not take the text as
 /// continuous.
 const GAP: &str = "\n[…]\n";
 
-/// `page` — the whole extracted page, raw — as the sections matching `prompt`
-/// in page order, at most `cap_chars` of them, fenced as external content and
-/// followed by the offload footer (the persisted path, and how to search the
-/// rest). With no section matching, the head of the page stands in, so the
-/// model still sees what the page is.
+/// Persist and index `page` — the whole extracted page, raw — under this call,
+/// returning the offload footer (the persisted path, and how to search the
+/// rest). Done once per call: the blob is named by the call id, so the page is
+/// written exactly once however many times [`sections_for_prompt`] is asked to
+/// fit a smaller cap.
 ///
-/// `None` when the store cannot take the page (no store, a write failure); the
-/// caller then truncates the page as it did before.
-pub(super) fn sections_for_prompt(
+/// `None` when the store cannot take the page (a write failure); the caller
+/// then truncates the page as it did before.
+pub(super) fn index_page(
     store: &ToolResultStore,
     call_id: &str,
     url: &str,
-    prompt: &str,
     page: &str,
-    cap_chars: usize,
 ) -> Option<String> {
-    let source = || ContentSource::WebFetch {
-        url: url.to_string(),
-    };
     // Stored fenced, like any offloaded web page: the footer then carries no
     // preview of the untrusted text outside a fence.
     // The footer names only the retrieval tools the dispatch can call; outside
@@ -49,17 +44,30 @@ pub(super) fn sections_for_prompt(
         Some(store),
         call_id,
         super::WebFetchTool::NAME,
-        &wrap_external_content(page, source()),
+        &wrap_external_content(page, source_of(url)),
         0,
         recovery,
     )?;
+    Some(footer)
+}
+
+/// The sections of `page` (indexed by [`index_page`] under `call_id`) that
+/// match `prompt`, in page order, at most `cap_chars` of them, fenced as
+/// external content and followed by `footer`. With no section matching, the
+/// head of the page stands in, so the model still sees what the page is.
+pub(super) fn sections_for_prompt(
+    store: &ToolResultStore,
+    call_id: &str,
+    url: &str,
+    prompt: &str,
+    page: &str,
+    footer: &str,
+    cap_chars: usize,
+) -> String {
     let label = source_label(super::WebFetchTool::NAME, call_id);
     let mut picked: Vec<(i64, String)> = Vec::new();
     let mut used = 0usize;
-    for hit in store.search(prompt, OVERFETCH_HITS) {
-        if hit.source != label {
-            continue;
-        }
+    for hit in store.search_source(&label, prompt, CANDIDATE_SECTIONS) {
         let text = sanitize_external_text(&hit.body);
         let len = text.chars().count() + GAP.len();
         if used + len > cap_chars {
@@ -93,10 +101,16 @@ pub(super) fn sections_for_prompt(
             page.chars().count()
         )
     };
-    Some(format!(
+    format!(
         "{note}\n{}\n{footer}",
-        wrap_external_content(&body, source())
-    ))
+        wrap_external_content(&body, source_of(url))
+    )
+}
+
+fn source_of(url: &str) -> ContentSource {
+    ContentSource::WebFetch {
+        url: url.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -105,9 +119,27 @@ mod tests {
 
     fn store() -> (tempfile::TempDir, std::sync::Arc<ToolResultStore>) {
         let dir = tempfile::tempdir().unwrap();
+        // Created up front: the index opens once, on first use, and a missing
+        // root disables it for the store's lifetime.
+        std::fs::create_dir_all(dir.path().join("results")).unwrap();
         let store = ToolResultStore::with_dir_for_tests(dir.path().join("results"));
         let store = ToolResultStore::for_session(&std::sync::Arc::new(store), "test:intent");
         (dir, store)
+    }
+
+    /// Index the page under `call_id`, then pick its sections for `prompt`.
+    fn by_intent(
+        store: &ToolResultStore,
+        call_id: &str,
+        prompt: &str,
+        page: &str,
+        cap_chars: usize,
+    ) -> Option<String> {
+        let url = "https://example.com/p";
+        let footer = index_page(store, call_id, url, page)?;
+        Some(sections_for_prompt(
+            store, call_id, url, prompt, page, &footer, cap_chars,
+        ))
     }
 
     fn long_page() -> String {
@@ -131,10 +163,9 @@ mod tests {
     fn the_section_matching_the_focus_comes_back_with_a_handle() {
         let (_dir, store) = store();
         let page = long_page();
-        let out = sections_for_prompt(
+        let out = by_intent(
             &store,
             "call_intent_1",
-            "https://example.com/p",
             "flux capacitor gigawatts",
             &page,
             4_000,
@@ -158,19 +189,37 @@ mod tests {
         );
     }
 
+    /// The page's own sections are ranked among themselves: a session whose
+    /// other outputs match the prompt better still gets the page's match.
+    ///
+    /// Mutation-checked: searching the pooled session index and keeping the
+    /// page's hits afterwards (the old shape) turns this red.
+    #[test]
+    fn the_pages_own_match_survives_better_matches_elsewhere_in_the_session() {
+        let (_dir, store) = store();
+        let noisy: String = (0..2_000)
+            .map(|i| format!("flux capacitor flux capacitor {i}\n"))
+            .collect();
+        store
+            .index_output("call_other_output", "bash", &noisy)
+            .expect("the other output is indexed");
+        let out = by_intent(
+            &store,
+            "call_intent_4",
+            "flux capacitor",
+            &long_page(),
+            4_000,
+        )
+        .expect("the store takes the page");
+        assert!(out.contains("1.21 gigawatts"), "{out}");
+    }
+
     /// Nothing matches: the head stands in, and says so.
     #[test]
     fn no_match_shows_the_beginning_and_says_so() {
         let (_dir, store) = store();
-        let out = sections_for_prompt(
-            &store,
-            "call_intent_2",
-            "https://example.com/p",
-            "zyxwvut",
-            &long_page(),
-            2_000,
-        )
-        .expect("the store takes the page");
+        let out = by_intent(&store, "call_intent_2", "zyxwvut", &long_page(), 2_000)
+            .expect("the store takes the page");
         assert!(out.contains("no section matched"), "{out}");
         assert!(out.contains("Paragraph 0 is"), "{out}");
     }
@@ -189,10 +238,9 @@ mod tests {
             file_read: true,
         };
         let out = crate::tools::result_processing::with_recovery_tools(only_read, async {
-            sections_for_prompt(
+            by_intent(
                 &store,
                 "call_intent_3",
-                "https://example.com/p",
                 "flux capacitor",
                 &long_page(),
                 2_000,

@@ -46,6 +46,46 @@ impl TopicsRequest {
     }
 }
 
+/// A single equality predicate against a field inside an event's `data`
+/// payload. `field` is a dot-separated path resolved one segment at a time,
+/// so `"scope"`, `"device.role"`, or `"meta.tags.0"` all work.
+///
+/// `equals` is matched with `==` against the resolved [`serde_json::Value`].
+/// Strings, numbers, booleans, and JSON null all work; nested objects compare
+/// structurally (rarely useful — prefer narrowing the path).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FieldPredicate {
+    /// Dot-separated path inside the event's `data` object.
+    pub field: String,
+    /// Required value at that path for the event to be delivered.
+    pub equals: serde_json::Value,
+}
+
+/// One entry of a connection's subscription as the server reports it, in the
+/// `entries` of the `events.subscribe` / `events.unsubscribe` / `events.list`
+/// result: the pattern with its field predicates and its carve-out. The flat
+/// `subscribed` pattern list beside it keeps only the pattern, so an entry
+/// carving `stream.reasoning` out of `stream.*` reads there as the whole of
+/// `stream.*`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionEntry {
+    pub topic: String,
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub where_clause: Vec<FieldPredicate>,
+    #[serde(flatten)]
+    pub carve_out: TopicCarveOut,
+}
+
+/// A connection's subscription as the three `events.*` calls report it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionList {
+    /// The patterns, one per entry.
+    pub subscribed: Vec<String>,
+    /// The entries whole.
+    #[serde(default)]
+    pub entries: Vec<SubscriptionEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

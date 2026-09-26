@@ -1564,7 +1564,10 @@ impl ScopedToolService {
             self.result_store.as_deref(),
             budget,
             outcome.reduced_from.as_deref(),
-            self.recovery_tools(),
+            // Narrowed by any wrapper around this dispatch (a subagent's
+            // allowlist scopes its set around the delegation).
+            crate::tools::result_processing::dispatch_recovery_tools()
+                .map_or(self.recovery_tools(), |outer| outer.intersect(self.recovery_tools())),
         );
 
         // What this result cost on its way in: the tokens the tool produced

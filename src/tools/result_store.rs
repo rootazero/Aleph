@@ -40,7 +40,7 @@ use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::retrieval::{ContentIndex, IndexOutcome, SearchHit};
 
 /// Prefix used to identify persisted-result reference lines.
-const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
+pub(crate) const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
 
 /// Default retention window for the periodic sweeper. Mirrors opencode's
 /// `Truncate.cleanup` cutoff (7 days). Persisted tool-result files older
@@ -344,19 +344,13 @@ impl ToolResultStore {
     ///
     /// The ungated half of [`Self::persist_if_large`], for a caller that decides
     /// "is this large" on one string and stores another:
-    /// `result_processing::recovery_footer` gates on the flattened text the
+    /// `result_processing::recovery_footer_for` gates on the flattened text the
     /// model would otherwise receive and stores its line-preserving rendering,
     /// whose token estimate is a different number (see `tool_output::render`).
     /// The marker's token count describes what is on disk.
     pub fn persist(&self, tool_call_id: &str, tool_name: &str, content: &str) -> Option<String> {
         let tokens = estimate_tokens_smart(content);
 
-        // Use a sanitized filename: {tool_call_id}_{tool_name}.txt
-        let safe_name = format!(
-            "{}_{}.txt",
-            sanitize_for_filename(tool_call_id),
-            sanitize_for_filename(tool_name)
-        );
         let dir = self.blob_dir();
         if let Err(e) = create_private_dir(&dir) {
             tracing::warn!(
@@ -366,7 +360,7 @@ impl ToolResultStore {
             );
             return None;
         }
-        let path = dir.join(&safe_name);
+        let path = self.blob_path(tool_call_id, tool_name);
 
         if let Err(e) = write_private_file(&path, content) {
             tracing::warn!(
@@ -378,14 +372,37 @@ impl ToolResultStore {
             return None;
         }
 
-        let marker = format!(
+        Some(Self::marker(&path, tokens, tool_name))
+    }
+
+    /// The file [`Self::persist`] writes for this call: a sanitized
+    /// `{tool_call_id}_{tool_name}.txt` in this handle's blob directory. One
+    /// call id, one file — a second persist for the same call replaces it.
+    #[must_use]
+    pub fn blob_path(&self, tool_call_id: &str, tool_name: &str) -> PathBuf {
+        self.blob_dir().join(format!(
+            "{}_{}.txt",
+            sanitize_for_filename(tool_call_id),
+            sanitize_for_filename(tool_name)
+        ))
+    }
+
+    /// The marker [`Self::persist`] would return for this call and a blob of
+    /// `tokens` tokens — the exact string, without writing anything. What a
+    /// caller measures to know a spill would not be smaller than its marker.
+    #[must_use]
+    pub fn marker_for(&self, tool_call_id: &str, tool_name: &str, tokens: usize) -> String {
+        Self::marker(&self.blob_path(tool_call_id, tool_name), tokens, tool_name)
+    }
+
+    fn marker(path: &Path, tokens: usize, tool_name: &str) -> String {
+        format!(
             "{}{} ({} tokens, {})]",
             PERSISTED_REF_PREFIX,
             path.display(),
             tokens,
             tool_name,
-        );
-        Some(marker)
+        )
     }
 
     /// Read back the blob this store wrote **for `tool_call_id`**.
@@ -601,6 +618,18 @@ impl ToolResultStore {
         let keys = self.read_scope_keys();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
         idx.search_sessions(&key_refs, query, limit)
+            .unwrap_or_default()
+    }
+
+    /// [`Self::search`] over the sections of one indexed output — the one
+    /// indexed under `source` (a [`source_label`]) — ranked among themselves.
+    pub fn search_source(&self, source: &str, query: &str, limit: usize) -> Vec<SearchHit> {
+        let Some(idx) = self.index() else {
+            return Vec::new();
+        };
+        let keys = self.read_scope_keys();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        idx.search_source(&key_refs, source, query, limit)
             .unwrap_or_default()
     }
 

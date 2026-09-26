@@ -44,10 +44,10 @@ const MAX_QUERIES: usize = 5;
 /// Ceiling on one result, in tokens, below whatever Layer 2 would allow.
 ///
 /// A retrieval result stays in the history and is re-sent every later turn, so
-/// "as much as the budget allows" (8 000 tokens today) is the wrong target;
-/// ~3 000 tokens is a handful of typical log sections. It also sits under
-/// the 4 000-token per-result gate this round lowers the default to, so the
-/// result never trips its own offload.
+/// "as much as the budget allows" is the wrong target; ~3 000 tokens is a
+/// handful of typical log sections. The effective cap is also held under this
+/// tool's resolved per-result budget, so the result never trips its own
+/// offload.
 const RESULT_TOKENS_CAP: usize = 3_000;
 /// Halvings of the text allowance tried at each depth before dropping a hit
 /// per query (see [`fit_to_budget`]).

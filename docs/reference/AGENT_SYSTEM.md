@@ -515,7 +515,8 @@ daemon's boot agent) — the same files `self_config` writes.
 
 ## Reasoning Content
 
-Aleph does not parse reasoning into structured steps (there is no `src/thinker/thinking.rs`): provider reasoning is kept as opaque text plus its signature on the assistant turn (`ProviderDelta::ThinkingDelta` → `SessionEvent::AssistantMessage`), replayed through `src/harness/agent/prompt.rs::reconstruct_assistant_blocks` and serialized per protocol under `src/providers/protocols/`; the `ReasoningBlock` / `UncertaintySignal` stream events in `shared/protocol/src/events.rs` have consumers but no production producer.
+Aleph does not parse reasoning into structured steps (there is no `src/thinker/thinking.rs`): provider reasoning is kept as opaque text plus its signature on the assistant turn (`ProviderDelta::ThinkingDelta` → `SessionEvent::AssistantMessage`). `src/harness/agent/prompt.rs::reconstruct_assistant_blocks` rebuilds every persisted thinking block as facts (text, signature, `earlier_turn`); **which target receives which reasoning is decided at the wire**, after failover picks the target, by `src/providers/reasoning_replay.rs::ReasoningReplay` through `message::transform_messages` — see [MODEL_CATALOG.md §11](MODEL_CATALOG.md). Summaries read `UnifiedMessage::transcript_text`, which carries no reasoning. Live reasoning reaches clients as `StreamEvent::Reasoning` on the `stream.reasoning` topic (`aleph_protocol::STREAM_REASONING_TOPIC`); a client that does not render it subscribes with the `except` carve-out. The structured `ReasoningBlock` event was cut (it had no production producer); `UncertaintySignal` in `shared/protocol/src/events.rs` still has consumers but no production producer.
+Aleph 不把推理解析成结构化步骤：推理作为不透明文本 + 签名存在 assistant 轮上；harness 只重建事实，**给哪个目标回放哪段推理在线上决定**（`ReasoningReplay`，见 MODEL_CATALOG §11）；不渲染推理的客户端用 `except` 把 `stream.reasoning` 排除在订阅之外。
 
 ---
 

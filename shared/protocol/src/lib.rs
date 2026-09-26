@@ -91,7 +91,10 @@ pub use sessions::SessionListRow;
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };
-pub use subscription::{TopicCarveOut, TopicsRequest, STREAM_REASONING_TOPIC};
+pub use subscription::{
+    FieldPredicate, SubscriptionEntry, SubscriptionList, TopicCarveOut, TopicsRequest,
+    STREAM_REASONING_TOPIC,
+};
 pub use trace_presentation::{
     present_agent_trace_event, present_agent_trace_event_with_labels_and_preset,
     present_agent_trace_event_with_preset, summarize_tool_input, summarize_tool_output,

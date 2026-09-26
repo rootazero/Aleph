@@ -185,19 +185,9 @@ pub fn topic_matches(topic: &str, pattern: &str) -> bool {
 }
 
 /// A single equality predicate against a field inside the event's `data`
-/// payload. `field` is a dot-separated path resolved one segment at a time,
-/// so `"scope"`, `"device.role"`, or `"meta.tags.0"` all work.
-///
-/// `equals` is matched with `==` against the resolved [`serde_json::Value`].
-/// Strings, numbers, booleans, and JSON null all work; nested objects compare
-/// structurally (rarely useful — prefer narrowing the path).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FieldPredicate {
-    /// Dot-separated path inside the event's `data` object.
-    pub field: String,
-    /// Required value at that path for the event to be delivered.
-    pub equals: Value,
-}
+/// payload. Its shape is the wire's (it is listed back in
+/// [`aleph_protocol::SubscriptionEntry`]), so it lives there.
+pub use aleph_protocol::FieldPredicate;
 
 /// A subscription entry: a topic pattern plus an optional list of
 /// field-equality predicates. When `where_clause` is empty the subscription
@@ -242,6 +232,18 @@ impl TopicSubscription {
         except.dedup();
         self.except = except;
         self
+    }
+
+    /// This entry as the `events.*` calls report it.
+    #[must_use]
+    pub fn entry(&self) -> aleph_protocol::SubscriptionEntry {
+        aleph_protocol::SubscriptionEntry {
+            topic: self.pattern.clone(),
+            where_clause: self.where_clause.clone(),
+            carve_out: aleph_protocol::TopicCarveOut {
+                except: self.except.clone(),
+            },
+        }
     }
 
     /// Whether this entry delivers `topic` with payload `data`.

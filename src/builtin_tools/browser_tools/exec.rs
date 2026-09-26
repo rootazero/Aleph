@@ -643,7 +643,7 @@ async fn read_guard(
 ///
 /// This used to decline the offload, reasoning that the spill path "is the
 /// snapshot tool's own, keyed to its call id, and a second writer of it would be
-/// a second source". That reads the mechanism backwards: `recovery_footer` is
+/// a second source". That reads the mechanism backwards: `recovery_footer_for` is
 /// the harness's generic spill, keyed by `(tool_call_id, tool_name)` and already
 /// shared with `harness::agent::act`'s turn spill — `browser_exec` has its own
 /// call id, so it is the first writer of its own entry.

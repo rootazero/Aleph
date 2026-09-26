@@ -136,7 +136,11 @@ fn serde_snake_case(variant: &str) -> String {
     out
 }
 
-fn frame_source() -> String {
+/// `frame.rs`'s production source with every `Some(aleph_protocol::NAME)`
+/// arm rewritten as the literal it publishes (see
+/// [`resolve_protocol_topics`]). Read by the CLI carve-out equivalence test,
+/// so the two scan one source.
+pub(crate) fn frame_source() -> String {
     resolve_protocol_topics(
         &production_prefix(include_str!("frame.rs")),
         &production_prefix(include_str!("../../../shared/protocol/src/subscription.rs")),

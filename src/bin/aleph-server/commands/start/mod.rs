@@ -3567,10 +3567,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // `set_global_tool_result_store` (auto-spawns the periodic
             // sweeper since main's c1756ce80).
             if !args.daemon {
+                // The ceiling in effect, not the one derived: the setter declines
+                // one that would clamp nothing.
+                let ceiling =
+                    alephcore::tools::result_processing::installed_result_budget_ceiling()
+                        .map_or_else(|| "none".to_string(), |c| c.to_string());
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
                      (<config_dir>/data/tool_results/global/, session-scoped handles, \
-                     result_ceiling={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
+                     result_ceiling={ceiling}, max_turn_tokens={max_turn_tokens})"
                 );
             }
         }

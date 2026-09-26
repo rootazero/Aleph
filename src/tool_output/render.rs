@@ -14,7 +14,7 @@
 //!   ONE section and `ctx_search` can only ever return that same section.
 //!
 //! [`line_preserving`] is applied where an original is written to the result
-//! store (`result_processing::recovery_footer`), so every writer — Layer 2, the
+//! store (`result_processing::recovery_footer_for`), so every writer — Layer 2, the
 //! harness Layer-3 spill, the browser offload — stores the same shape.
 //!
 //! This is a *rendering*, not a serialization: it is for reading and searching,

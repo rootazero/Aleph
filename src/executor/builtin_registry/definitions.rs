@@ -4046,11 +4046,11 @@ mod tests {
     ///   a registration path that forgets to stamp it fails here.
     #[tokio::test]
     async fn result_budgets_come_from_declarations_and_default_everywhere() {
+        // The read family is the one owner's answer (`is_read_family`), not a
+        // second list of names here.
         fn expected(name: &str) -> Option<usize> {
-            match name {
-                "read_file" | "Read" | "file_read" => None,
-                _ => Some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS),
-            }
+            (!crate::tools::result_processing::is_read_family(name))
+                .then_some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS)
         }
         let map = unconditional_registry_map();
         assert!(
@@ -4091,6 +4091,12 @@ mod tests {
                 "{dead} is registered now — the retired 6_000 row needs an owner"
             );
         }
+        // The read family is a registered tool, so the `None` half above ran.
+        assert!(
+            map.keys()
+                .any(|name| crate::tools::result_processing::is_read_family(name)),
+            "no registered tool is in the read family"
+        );
         // The three that declared a larger budget until B4 no longer do.
         for name in ["web_fetch", "bash", "search"] {
             assert_eq!(map[name].max_result_tokens, None, "{name}");
