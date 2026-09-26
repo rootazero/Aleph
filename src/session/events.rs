@@ -301,8 +301,10 @@ pub struct RunEnvelopeSnapshot {
     /// pin (the resolver picks the provider by model-name heuristic).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
-    /// `/<skill>` `allowed-tools` this run executed under. `Some(vec![])` is
-    /// deny-all, `None` "declared nothing" (the `slash_skill_scope` tri-state).
+    /// The `allowed-tools` restriction (a plugin `/<command>`'s) this run
+    /// executed under. `Some(vec![])` is deny-all, `None` "declared nothing"
+    /// (the `slash_skill_scope` tri-state). A skill's pre-grant is per turn
+    /// and is deliberately not frozen here: a resume only ever tightens.
     /// A per-run FACT, not a knob: on resume it has one rung — this snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,

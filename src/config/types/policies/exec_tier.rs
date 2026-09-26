@@ -393,10 +393,25 @@ impl ExecTier {
     /// An explicit `[policies.tool_permissions]` entry still stands it down
     /// (`ScopedToolServiceBuilder::explicitly_named`) — that entry is a
     /// decision a person wrote, and the first write that creates one cards
-    /// through this very rule.
+    /// through this very rule. An entry nobody wrote must therefore never
+    /// name a tool this floor covers ([`Self::has_argument_floor`]).
     #[must_use]
     pub fn floor_asks_for_arguments(name: &str, input: &Value) -> bool {
-        name == "self_config" && self_config_touches_the_gate(input)
+        Self::has_argument_floor(name) && self_config_touches_the_gate(input)
+    }
+
+    /// Whether [`Self::floor_asks_for_arguments`] can fire for `name` at all:
+    /// the floor's own name conjunct, so a caller that must never make it
+    /// stand down asks the floor rather than keeping a copy of its tool list.
+    ///
+    /// The caller today is a skill's `allowed-tools:` pre-grant
+    /// (`gateway::execution_engine::turn_permissions::apply_pregrant`): it
+    /// folds exact `allow` entries into a turn's policy, and an exact entry is
+    /// what stands this floor down — but a skill author's list is not a
+    /// decision the operator wrote about this tool.
+    #[must_use]
+    pub fn has_argument_floor(name: &str) -> bool {
+        name == "self_config"
     }
 
     /// One model-facing line describing this tier's approval regime, for the

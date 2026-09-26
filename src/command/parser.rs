@@ -67,10 +67,12 @@ pub enum CommandContext {
         skill_id: String,
         /// Skill name for display
         display_name: String,
-        /// The skill's declared tool scope, validated at registration.
-        /// `None` = the skill declared nothing (allow-all, the behaviour every
-        /// skill shipped with); `Some(vec![])` = explicit deny-all. Do not
-        /// flatten: an empty allow-set means allow-all downstream.
+        /// The row's declared `allowed-tools:`, validated at registration. A
+        /// plugin command's is its tool RESTRICTION: `None` = declared nothing
+        /// (allow-all); `Some(vec![])` = explicit deny-all. Do not flatten: an
+        /// empty allow-set means allow-all downstream. A skill's pre-grants
+        /// rather than restricts, and is read from the skill file
+        /// (`gateway::execution_engine::slash_skill_pregrant`).
         allowed_tools: Option<Vec<String>>,
     },
     /// Custom command context

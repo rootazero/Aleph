@@ -38,11 +38,14 @@ use crate::extension::types::McpServerConfig;
 /// `allowed-tools` field at all from 2026-09-05 until commands needed one
 /// are still the whole story for skills:
 ///
-/// 1. **It could not be enforced from here.** A plugin skill parsed on this
+/// 1. **It could not be honoured from here.** A plugin skill parsed on this
 ///    path becomes a `SkillRegistration`. A skill's `allowed-tools` is
-///    enforced at `tool_metadata::registry::registration::register_skills`,
+///    validated at `tool_metadata::registry::registration::register_skills`,
 ///    which is fed from `SkillInfo` — i.e. from `SkillManifest`, i.e. from
-///    `skill::manifest`. Nothing on this path reaches that gate for a skill.
+///    `skill::manifest` — and PRE-GRANTS (never restricts) through
+///    `gateway::execution_engine::slash_skill_pregrant`, which parses the
+///    skill file with `skill::manifest` too. Nothing on this path reaches
+///    either for a skill.
 /// 2. **The same file is already parsed by the path that can enforce it.**
 ///    `projection.rs::republish_plugin_projections` publishes every active
 ///    plugin's `<root>/skills`, which the `SkillSystem` scan reads

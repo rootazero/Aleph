@@ -129,10 +129,10 @@ struct RawFrontmatter {
     when_to_use: Option<String>,
     #[serde(default)]
     version: Option<String>,
-    /// Frontmatter `allowed-tools:` — the tool names this skill declares it
-    /// needs. `None` (key absent) means no declaration; an empty list means
-    /// the author wants nothing. Both reach the run loop distinctly — see
-    /// `SkillManifest::allowed_tools`. Taken as raw YAML and normalised by
+    /// Frontmatter `allowed-tools:` — the tool names this skill declares, which
+    /// a `/<skill>` turn pre-grants (see `SkillManifest::allowed_tools`).
+    /// `None` (key absent) means no declaration; an empty list is kept
+    /// distinct for the registration validator. Taken as raw YAML and normalised by
     /// [`crate::skill::frontmatter::normalize_allowed_tools`] — a strict
     /// `Vec<String>` here would make serde reject the whole frontmatter for
     /// the comma-scalar form upstream skills actually ship, and a rejected

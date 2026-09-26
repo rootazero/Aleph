@@ -506,20 +506,17 @@ pub struct SkillManifest {
     version: Option<String>,
     /// Declared scheduled automation (frontmatter `automation:` block).
     automation: Option<AutomationSpec>,
-    /// Tool names this skill declares it needs (frontmatter `allowed-tools:`).
+    /// Tool names this skill declares (frontmatter `allowed-tools:`).
     ///
-    /// The `Option` is load-bearing and must survive every hop down to the
-    /// run loop:
-    /// * `None` — the key is absent. No declaration, so the run keeps the
-    ///   agent's full tool surface. This is what every skill shipped with.
-    /// * `Some(vec![])` — the author wrote `allowed-tools: []`, i.e. deny
-    ///   everything.
-    ///
-    /// Flattening the two into a bare `Vec` is a fail-open: `ScopedToolService`
-    /// reads an empty allow-set as allow-all, so "deny everything" and "said
-    /// nothing" would arrive at the enforcement point as the same value. Same
-    /// distinction, same reason, as `AgentDef.allowed_tools` +
-    /// `allowed_tools_explicit` (`src/agents/loader.rs`).
+    /// Claude Code's reading, which Aleph follows: a skill's list does NOT
+    /// narrow the tool surface — it PRE-GRANTS the listed tools for a turn the
+    /// user starts with `/<skill>` (no tier confirmation for them), and only
+    /// for an operator and an operator-owned skill
+    /// (`gateway::execution_engine::slash_skill_pregrant`). `None` and
+    /// `Some(vec![])` therefore pre-grant the same nothing; the `Option` is
+    /// kept because the registration validator reads it, and because the
+    /// same frontmatter key on a plugin *command* is a restriction, where an
+    /// empty list is deny-all and must not flatten into "said nothing".
     ///
     /// Names are Aleph-native tool names (`file_read`, `bash`, `grep`), not
     /// upstream Claude Code names (`Read`, `Bash`, `Grep`); unknown names are

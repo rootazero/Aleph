@@ -130,11 +130,14 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
 /// was dead code: every slash command was misclassified as `direct_tool`.
 ///
-/// `Skill.allowed_tools` is an `Option` and serialises as `null` (the skill
-/// declared nothing → the run keeps the full tool surface) or as an array,
-/// possibly empty (`allowed-tools: []` → deny-all). The two are read back
-/// apart in `execution_engine::slash_skill_scope`, so this must stay a JSON
-/// value rather than being flattened to a list on the way out.
+/// `Skill.allowed_tools` is an `Option` and serialises as `null` (declared
+/// nothing → the run keeps the full tool surface) or as an array, possibly
+/// empty (`allowed-tools: []` → deny-all). For a plugin command — the
+/// registration `execution_engine::slash_skill_pregrant::split` finds behind
+/// this mode — the two are read back apart in
+/// `execution_engine::slash_skill_scope`, so this must stay a JSON value
+/// rather than being flattened to a list on the way out. (A skill's list
+/// pre-grants instead, and is read from the skill file, not from here.)
 ///
 /// `owning_plugin` (any kind) is written only when the resolved entry is
 /// plugin-owned; the key is absent otherwise. The fast path's visibility

@@ -239,13 +239,16 @@ impl ToolRegistrar {
         for skill in skills {
             let id = format!("skill:{}", skill.id);
 
-            // Resolve the skill's declared tool scope BEFORE building the
-            // tool: an unresolvable declaration means this skill does not get
-            // a slash command at all. That matches what the skill system
-            // already does with a skill it cannot parse (`skill::scan_directory`
-            // skips it with a warn); the alternative — register it with the
-            // declaration dropped — hands the model a `/skill` that runs with
-            // the full toolbelt the author explicitly tried to shrink.
+            // Resolve the declared tool scope BEFORE building the tool: an
+            // unresolvable declaration means this row does not get a slash
+            // command at all. That matches what the skill system already does
+            // with a skill it cannot parse (`skill::scan_directory` skips it
+            // with a warn); the alternative — register it with the declaration
+            // dropped — hands the model a plugin `/command` that runs with the
+            // full toolbelt the author explicitly tried to shrink. A SKILL's
+            // declaration pre-grants rather than restricts
+            // (`gateway::execution_engine::slash_skill_pregrant`), so for a
+            // skill the refusal is stricter than its reason: kept, fail-closed.
             let routing_capabilities = match Self::resolve_skill_tool_scope(
                 skill.allowed_tools.as_deref(),
                 conflict_resolver,

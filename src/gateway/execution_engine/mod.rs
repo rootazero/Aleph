@@ -33,6 +33,7 @@ mod settle;
 mod simple;
 mod slash_command;
 mod slash_command_body;
+mod slash_skill_pregrant;
 pub(crate) mod slash_skill_scope;
 mod steering;
 mod tool_refresh;

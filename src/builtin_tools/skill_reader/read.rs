@@ -140,6 +140,16 @@ impl ReadSkillTool {
         self
     }
 
+    /// Where `skill_read` would load `skill_id` from, in a run whose project
+    /// is `project_dir` (and whose agent id task-local is in scope): every
+    /// candidate directory, the one it reads first. Named so the `/<skill>`
+    /// pre-grant (`gateway::execution_engine::slash_skill_pregrant`) judges
+    /// the body the model will actually follow, by this resolution rather
+    /// than a second one.
+    pub(crate) fn load_candidates(project_dir: Option<&Path>, skill_id: &str) -> Vec<PathBuf> {
+        Self::with_auto_discover(project_dir).find_skill_dirs(skill_id)
+    }
+
     /// Collect every *distinct* directory that contains skill `skill_id`
     /// (a `SKILL.md`), in precedence order (agent > project > global, per
     /// [`crate::utils::paths::get_all_skills_dirs`]).

@@ -875,17 +875,32 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
     }
 }
 
+/// The user-level skills roots, whether or not they exist: `~/.aleph/skills`
+/// and — when a home directory is known — `~/.claude/skills`.
+///
+/// One derivation for two questions: where [`get_all_skills_dirs`] looks at
+/// user level ([`user_skills_dirs`]), and whether a directory `skill_read`
+/// loads from IS user level — the origin a `/<skill>`'s `allowed-tools:`
+/// pre-grant requires (`gateway::execution_engine::slash_skill_pregrant`).
+/// A project's upward walk can reach these same directories when no git root
+/// bounds it, so "which tier found it" cannot answer the second question.
+pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>)> {
+    let global_claude = get_home_dir()
+        .ok()
+        .map(|home| home.join(".claude").join("skills"));
+    Ok((get_skills_dir()?, global_claude))
+}
+
 /// Append global user-level skills directories to `dirs`.
 fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
-    let global_aleph = get_skills_dir()?;
+    let (global_aleph, global_claude) = user_skills_roots()?;
     if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
         info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
         dirs.push(global_aleph);
     }
 
-    if let Ok(home) = get_home_dir() {
-        info!(home = %home.display(), "Checking global directories");
-        let global_claude = home.join(".claude").join("skills");
+    if let Some(global_claude) = global_claude {
+        info!(path = %global_claude.display(), "Checking global directories");
         if global_claude.is_dir() && !dirs.contains(&global_claude) {
             info!(path = %global_claude.display(), "Found global ~/.claude/skills");
             dirs.push(global_claude);

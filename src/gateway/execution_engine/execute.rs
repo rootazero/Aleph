@@ -785,10 +785,15 @@ where
             }
         }
 
-        // Pre-extract the skill's declared tool scope from the slash mode JSON
-        // so the agent loop (run_loop/inner.rs) can apply the intersection
-        // without re-parsing the envelope on every Think→Act iteration. One
-        // key is emitted: `slash_skill_allowed_tools`.
+        // This turn's `allowed-tools:` facts, from the slash mode and the
+        // registration it names (`slash_skill_pregrant::split`): a plugin
+        // COMMAND's list RESTRICTS the surface the agent loop
+        // (run_loop/inner.rs) builds, a SKILL's list PRE-GRANTS the named
+        // tools for this turn's tool gate (`resolve_turn_permissions`). Lifted
+        // into metadata once, so neither is re-parsed on every Think→Act
+        // iteration. Run for EVERY request, slash or not: the split first
+        // removes any pre-grant the request arrived with, and it is the only
+        // writer of either key.
         //
         // Nothing here injects skill text into the prompt: a SKILL's
         // *description* reaches the model through the `<available_skills>`
@@ -801,13 +806,7 @@ where
         // (`slash_command_body::admit`), once its owner has been judged
         // visible, then rendered by the run loop after the turn-start hooks
         // (`slash_command_body::render_admitted`).
-        if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
-            if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
-                if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {
-                    super::slash_skill_scope::stamp_from_mode(&mut request.metadata, &mode);
-                }
-            }
-        }
+        super::slash_skill_pregrant::split(&mut request, agent.id()).await;
 
         // Slash command fast path (L0): bypass full agent loop
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {

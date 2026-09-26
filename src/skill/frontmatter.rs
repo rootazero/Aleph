@@ -271,17 +271,16 @@ pub fn normalize_allowed_tools(
 ) -> Option<Vec<String>> {
     match read_allowed_tools(raw) {
         Ok(names) => names,
-        // Same typo as a trailing comma, one step further — and
-        // `Some(vec![])` here would be deny-all, arriving silently. Deny-all
-        // is spelled `[]`.
+        // Same typo as a trailing comma, one step further. A skill's list
+        // pre-grants (it never narrows the surface), so `None` and
+        // `Some(vec![])` grant the same nothing; the warn names the typo.
         Err(UnusableAllowedTools::NamesNothing) => {
             tracing::warn!(
                 skill = %skill_name,
                 value = ?raw,
                 key = ALLOWED_TOOLS_KEY,
                 "skill declares `allowed-tools:` as a scalar that names no tool — read as \
-                 no declaration, the skill keeps the full tool surface. Write \
-                 `allowed-tools: []` if you meant to allow nothing"
+                 no declaration: `/<skill>` pre-grants nothing"
             );
             None
         }
@@ -291,7 +290,7 @@ pub fn normalize_allowed_tools(
                 shape = ?raw,
                 key = ALLOWED_TOOLS_KEY,
                 "skill declares `allowed-tools:` in a shape that is neither a list nor a \
-                 comma-separated string — ignored, the skill keeps the full tool surface"
+                 comma-separated string — ignored: `/<skill>` pre-grants nothing"
             );
             None
         }
