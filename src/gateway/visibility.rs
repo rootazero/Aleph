@@ -126,25 +126,65 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
+/// The PRINCIPAL the current execution context acts for — a user id, never an
+/// agent id — or `None` for an unrestricted internal caller. The ONE "who is
+/// the person" derivation (plan amendment AM-1): the spend floor
+/// (`providers::metering`), the task-author stamp
+/// (`agents::swarm::tasks::stamp_task_author`) and, through
+/// [`ambient_actor`], every "who is asking" predicate read it.
+///
+/// Order:
+/// 1. [`crate::scope::current_room_author`] — this turn's live SPEAKER, the
+///    seeded `AUTHOR_USER_KEY`, whatever the scope. **Not**
+///    [`crate::scope::ambient_room_author`]: that filters through
+///    `room_author`, the transcript byline, which answers `None` for any
+///    non-`Project` scope and, in a room with no seeded speaker, names the
+///    room's CREATOR. A fire-time grant with a named author but no scope
+///    (a NULL-owner team) would then have no person at all, so the
+///    `allowed_users` fence admitted it while spend charged the author.
+/// 2. [`crate::scope::ambient_owner`] — the gateway caller when one is live,
+///    else the run's scope owner (in a room with no seeded speaker, its
+///    creator — the only person left to name).
+///
+/// It is [`ambient_actor`] minus that function's last arm, which falls back
+/// to the turn's AGENT id (`main`): tolerable for predicates that compare it
+/// with an owner column or a partition suffix — an agent id is not a user id
+/// unless an operator names an agent `u-…`, and nothing reserves that prefix,
+/// so such an agent compares equal to that user — and wrong for a caller that
+/// COMPOSES with the answer — a browser profile keyed
+/// `default__main`, a spend row charged to an agent, or a task author the
+/// users table has never heard of.
+#[must_use]
+pub fn ambient_principal() -> Option<String> {
+    crate::scope::current_room_author().or_else(crate::scope::ambient_owner)
+}
+
 /// The user a visibility check made from INSIDE an agent run acts for — the
 /// run-side twin of [`visible_owner_filter`].
 ///
 /// `CALLER_USER` is dead past the `tokio::spawn` every run crosses, so a
 /// predicate built on [`visible_owner_filter`] alone is fail-OPEN for every
 /// tool call. The resolution order is the one the rest of the crate already
-/// established:
+/// established, and it is [`ambient_principal`]'s:
 ///
-/// 1. [`crate::scope::ambient_room_author`] — this turn's SPEAKER, when the run
-///    is a project room. In a room the ambient scope's `owner_user_id` names the
-///    room's CREATOR, identically for every member (that is what shares the
-///    memory partition), so asking the roster about it answers "does this room
-///    still exist" rather than "may this person read". The speaker is the actor.
+/// 1. [`crate::scope::current_room_author`] — this turn's seeded SPEAKER. In a
+///    room the ambient scope's `owner_user_id` names the room's CREATOR,
+///    identically for every member (that is what shares the memory
+///    partition), so asking the roster about it answers "does this room still
+///    exist" rather than "may this person read". The speaker is the actor.
 /// 2. [`crate::scope::ambient_owner`] — the gateway caller when one is live,
-///    else the run's ambient owner. `None` outside a room, so this is the
-///    ordinary answer for a personal / org run.
+///    else the run's ambient owner: the ordinary answer for a personal / org
+///    run with no seeded speaker.
+/// 3. The turn's agent id (below) — the arm [`ambient_principal`] leaves out.
 ///
-/// `None` means "no ambient actor" and is deliberately unrestricted (cron,
-/// background sweeps, in-process tests), matching every other predicate here.
+/// `None` means "no ambient actor" and is deliberately unrestricted, matching
+/// every other predicate here: code that runs with no person, no scope and no
+/// turn identity (a background sweep outside any turn, an in-process test).
+/// A scheduled fire is not that case any more: since round 11 a cron or
+/// heartbeat run that resolves `Granted` carries its owner's scope pair and
+/// author, so its actor is that person; only a `Legacy` fire (nobody to
+/// check) reaches its tools with no person, and even then a tool call the
+/// dispatcher wraps in a turn context answers with the turn's agent id.
 #[must_use]
 pub fn ambient_actor() -> Option<String> {
     // PR-4 / BT-D-R4-06 + BT-D-R4-07: when the dispatcher wraps a tool
@@ -155,11 +195,107 @@ pub fn ambient_actor() -> Option<String> {
     // `scope::*` still wins when set; the TURN_CONTEXT fallback only
     // kicks in when neither is in play, so older call sites are
     // unchanged. Returning `None` here remains the explicit way to
-    // opt into the unrestricted arm — tests, cron, and A2A paths that
-    // do not yet plumb an actor continue to fall through.
-    crate::scope::ambient_room_author()
-        .or_else(crate::scope::ambient_owner)
+    // opt into the unrestricted arm — for code that plumbs neither a
+    // person nor a turn identity (in-process tests, a sweep outside any
+    // turn). A round-11 cron fire carries its owner's grant, so it is
+    // not one of them.
+    ambient_principal()
         .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
+}
+
+/// Who this run acts for, as far as a PER-PERSON resource may rely on it —
+/// the one verdict the browser face (a managed profile is per person), room
+/// creation in `project_manage` (a room's owner column names a person) and
+/// the `memory_timeline` arm (legacy history is the owner's) share, so "nobody
+/// is attached" means one thing everywhere. All three reach it through
+/// [`run_principal`] / [`run_principal_in`], which is where the room rule
+/// below lives — no face re-derives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunPrincipal {
+    /// [`ambient_principal`] named a person.
+    Person(String),
+    /// Nobody is attached on a single-user server (no person but the machine
+    /// owner in the users table, or no table at all), where "nobody" has
+    /// always meant the owner.
+    Legacy,
+    /// Nobody is attached on a multi-user server: "I do not know who this
+    /// is", which is never permission (判据 §8). A per-person resource
+    /// refuses, and says why.
+    Unattached,
+}
+
+/// [`RunPrincipal`] for the current execution context:
+/// [`run_principal_in`] under the one "multi-user mode" derivation
+/// (`security::store::slot::multi_user`, read from the users table).
+#[must_use]
+pub fn run_principal() -> RunPrincipal {
+    run_principal_in(crate::gateway::security::store::slot::multi_user())
+}
+
+/// [`run_principal`] with the server's mode explicit — lib tests never
+/// install the users store, so this is where both modes meet the ambient
+/// scope.
+///
+/// The person is [`ambient_principal`], except in a project ROOM with no
+/// seeded speaker: there `ambient_principal` falls back to the room's
+/// CREATOR, and that is work rebuilt from a session row (boot resume,
+/// announce delivery) whose initiator is unknown. Handing a member's work the
+/// creator's browser, or writing the creator down as the owner of a room that
+/// work creates, would name a person nobody asked for — so nobody is attached
+/// instead, and the mode decides (re-review N1).
+#[must_use]
+pub fn run_principal_in(multi_user: bool) -> RunPrincipal {
+    let speakerless_room = crate::scope::current_scope()
+        .is_some_and(|attr| matches!(attr.scope, crate::scope::ScopeId::Project(_)))
+        && crate::scope::current_room_author().is_none();
+    let person = if speakerless_room {
+        None
+    } else {
+        ambient_principal()
+    };
+    run_principal_with(person, multi_user)
+}
+
+/// [`run_principal`] with both inputs explicit: the verdict alone, for tests
+/// that need no ambient scope.
+#[must_use]
+pub fn run_principal_with(principal: Option<String>, multi_user: bool) -> RunPrincipal {
+    match principal {
+        Some(person) => RunPrincipal::Person(person),
+        None if multi_user => RunPrincipal::Unattached,
+        None => RunPrincipal::Legacy,
+    }
+}
+
+/// Whether a per-caller read may see `memory_events` rows that carry no
+/// partition, for a caller acting as `principal` over `read_partitions` (its
+/// `session_read_ids`).
+///
+/// Such a row predates the column (or defeated the backfill). Adoption by
+/// absence — the rule [`owner_or_legacy`] encodes once — makes it the legacy
+/// owner's, so:
+/// - in a project room (a read set naming a `p-*` partition) nobody sees it,
+///   the owner included: the tool output reaches every member of the room;
+/// - otherwise the owner sees it, and so does a [`RunPrincipal::Legacy`] run
+///   (single-user, where nobody attached IS the owner);
+/// - every other person, and an [`RunPrincipal::Unattached`] run, does not.
+#[must_use]
+pub fn unattributed_memory_events_for(
+    principal: &RunPrincipal,
+    read_partitions: &[String],
+) -> crate::memory::events::UnpartitionedRows {
+    use crate::memory::events::UnpartitionedRows;
+    if read_partitions
+        .iter()
+        .any(|p| crate::memory::project_scope::partition_is_shared_room(p))
+    {
+        return UnpartitionedRows::Refuse;
+    }
+    match principal {
+        RunPrincipal::Legacy => UnpartitionedRows::Admit,
+        RunPrincipal::Person(p) if p == owner_or_legacy(None) => UnpartitionedRows::Admit,
+        RunPrincipal::Person(_) | RunPrincipal::Unattached => UnpartitionedRows::Refuse,
+    }
 }
 
 /// Whether the current gateway caller may see records scoped to `project_id`
@@ -469,6 +605,28 @@ mod tests {
     use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use tempfile::TempDir;
+
+    /// `ambient_actor` falls back to the turn's AGENT id when no principal is
+    /// in scope; `ambient_principal` must not — a caller that composes with
+    /// the answer would otherwise mint `default__main`.
+    #[test]
+    fn ambient_principal_never_answers_with_an_agent_id() {
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("main"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        let (actor, principal) = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn, || (ambient_actor(), ambient_principal()));
+        assert_eq!(actor.as_deref(), Some("main"));
+        assert_eq!(principal, None);
+    }
 
     #[test]
     fn stamped_row_reads_its_own_owner() {
@@ -834,8 +992,8 @@ mod tests {
 
     /// In a room the ambient scope's owner is the room's CREATOR, identically
     /// for every member, so the roster question has to be asked about the
-    /// SPEAKER. `ambient_actor` prefers `scope::ambient_room_author` for
-    /// exactly this reason.
+    /// SPEAKER. `ambient_actor` (through `ambient_principal`) prefers the
+    /// seeded speaker, `scope::current_room_author`, for exactly this reason.
     #[tokio::test]
     async fn the_run_side_resolver_prefers_the_rooms_speaker_over_its_creator() {
         let in_room = crate::scope::ScopeAttribution {
@@ -1168,9 +1326,13 @@ mod tests {
         }
     }
 
-    /// The behavioural half of the fix: outside a room the two resolvers are
-    /// the same answer, so switching a predicate from one to the other is a
-    /// no-op for every personal / org / cron caller.
+    /// The behavioural half of the fix: outside a room, and with no seeded
+    /// speaker, the two resolvers are the same answer — so switching a
+    /// predicate from one to the other is a no-op for a personal / org run
+    /// that carries no author. They are NOT the same once a speaker is
+    /// seeded: `current_room_author` wins whatever the scope, so a scopeless
+    /// fire-time grant that names its author has no ambient owner but does
+    /// have an actor (T08 re-review N3). Both halves are asserted.
     #[tokio::test]
     async fn ambient_actor_equals_ambient_owner_outside_a_room() {
         let personal = crate::scope::ScopeAttribution::personal("u-alice");
@@ -1184,6 +1346,14 @@ mod tests {
         // And with no scope at all, both are the unrestricted `None`.
         assert_eq!(crate::scope::ambient_owner(), None);
         assert_eq!(ambient_actor(), None);
+
+        // A seeded speaker with no scope: the owner is unknown, the actor is not.
+        let authored = crate::scope::with_room_author(Some("u-bob".to_string()), async {
+            (crate::scope::ambient_owner(), ambient_actor())
+        })
+        .await;
+        assert_eq!(authored.0, None);
+        assert_eq!(authored.1.as_deref(), Some("u-bob"));
     }
 
     // ── whiteboard canvas ───────────────────────────────────────────────
@@ -1300,6 +1470,207 @@ mod tests {
                 ambient_canvas_visible(Some("u-alice"), None)
             })
             .await
+        );
+    }
+
+    #[test]
+    fn unattributed_memory_events_are_the_legacy_owners() {
+        use crate::memory::events::UnpartitionedRows;
+        let personal = |who: &str| vec!["main".to_string(), format!("main__{who}")];
+        assert_eq!(
+            unattributed_memory_events_for(&RunPrincipal::Legacy, &["main".to_string()]),
+            UnpartitionedRows::Admit
+        );
+        assert_eq!(
+            unattributed_memory_events_for(
+                &RunPrincipal::Person(OWNER_USER_ID.to_string()),
+                &personal(OWNER_USER_ID)
+            ),
+            UnpartitionedRows::Admit
+        );
+        assert_eq!(
+            unattributed_memory_events_for(
+                &RunPrincipal::Person("u-alice".to_string()),
+                &personal("u-alice")
+            ),
+            UnpartitionedRows::Refuse
+        );
+    }
+
+    /// The None-principal ruling (r11): on a single-user server an actor-less
+    /// run is the owner and keeps today's behaviour; on a multi-user server
+    /// "nobody attached" is unknown and is refused (判据 §8).
+    #[test]
+    fn legacy_memory_rows_need_a_person_on_a_server_with_users() {
+        use crate::memory::events::UnpartitionedRows;
+        assert_eq!(run_principal_with(None, false), RunPrincipal::Legacy);
+        assert_eq!(run_principal_with(None, true), RunPrincipal::Unattached);
+        assert_eq!(
+            run_principal_with(Some("u-alice".to_string()), true),
+            RunPrincipal::Person("u-alice".to_string())
+        );
+        assert_eq!(
+            unattributed_memory_events_for(&run_principal_with(None, true), &["main".to_string()]),
+            UnpartitionedRows::Refuse
+        );
+        assert_eq!(
+            unattributed_memory_events_for(&run_principal_with(None, false), &["main".to_string()]),
+            UnpartitionedRows::Admit
+        );
+    }
+
+    /// Landmine H's roster (`src/gateway/CLAUDE.md`) as a pin rather than a
+    /// counted prose list: every production file that references
+    /// `ambient_actor` — a call, or the function item handed on as a pointer
+    /// (`.or_else(visibility::ambient_actor)`, `[ambient_actor, …]`), which
+    /// composes just the same once called (re-review N5) — how many times,
+    /// and how many of those references COMPOSE — record or build a
+    /// person from the answer (an owner column, an audit / ledger principal, a
+    /// key), which falls back to the turn's AGENT id when nobody is ambient.
+    /// The composing calls are parked violations; new code composes from
+    /// `ambient_principal()`. The rest COMPARE (with an owner column, a
+    /// partition suffix, `allowed_users`). The compose column is a recorded
+    /// classification, not something a scan can check; the file set and the
+    /// call counts are checked. A new file, or a new reference in a listed
+    /// one, turns this red: classify it here — and if it composes, do not.
+    /// Not counted: the `fn ambient_actor` definition, a `use` import of it,
+    /// and a longer identifier that merely contains the name. A reference
+    /// built by a macro from a string, or reached through a re-exported
+    /// alias under another name, is invisible to this scan.
+    #[test]
+    fn every_production_caller_of_ambient_actor_is_classified() {
+        /// (file, production references, of which COMPOSE)
+        const CALLERS: &[(&str, usize, usize)] = &[
+            // COMPOSE: identity rotate / revoke ledger principal.
+            ("src/identity/ledger.rs", 2, 2),
+            // COMPOSE: exec-approval ledger principal.
+            ("src/sandbox/exec_approval/gate.rs", 1, 1),
+            // COMPOSE: `ledger_principal` and the ToolDenied record.
+            ("src/tools/scoped/ledger.rs", 2, 2),
+            // COMPOSE: `Grant::by` and the approval record principal.
+            ("src/tools/scoped/dispatch.rs", 2, 2),
+            // COMPOSE: the signed record principal.
+            ("src/builtin_tools/agent_identity.rs", 1, 1),
+            // COMPOSE: the team canvas message author.
+            ("src/gateway/handlers/teams/canvas.rs", 1, 1),
+            // COMPOSE: three `apply_from` op authors; COMPARE: one visibility check.
+            ("src/builtin_tools/canvas.rs", 4, 3),
+            // COMPOSE: two `authority_change` audit actors; COMPARE: `Self::actor()`
+            // (list / room / require_owner). Room creation composes from
+            // `run_principal()` since the r11 fix wave.
+            ("src/builtin_tools/project_manage.rs", 3, 2),
+            // COMPOSE: the `authority_change` audit actor.
+            ("src/builtin_tools/agent_manage/update.rs", 1, 1),
+            // COMPOSE: spawn's `created_by`; COMPARE: two ownership checks.
+            ("src/gateway/handlers/pty.rs", 3, 1),
+            // COMPOSE: `namespace_explicit_project_id` builds a project id.
+            ("src/builtin_tools/scratchpad.rs", 1, 1),
+            // COMPARE only from here on.
+            ("src/teams/dispatcher/runner.rs", 2, 0),
+            ("src/teams/scoped.rs", 1, 0),
+            ("src/teams/broadcast/mod.rs", 1, 0),
+            ("src/gateway/visibility.rs", 3, 0),
+            ("src/gateway/handlers/runtime.rs", 1, 0),
+            ("src/builtin_tools/note_manage/helpers.rs", 1, 0),
+            ("src/builtin_tools/memory_search.rs", 1, 0),
+            ("src/builtin_tools/sessions/send_tool.rs", 2, 0),
+            ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
+            ("src/builtin_tools/terminal.rs", 1, 0),
+        ];
+        fn references_to_ambient_actor(code: &str) -> usize {
+            const NAME: &str = "ambient_actor";
+            let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+            let mut inside_use = false;
+            code.lines()
+                .map(|line| {
+                    let head = crate::utils::source_scan::strip_visibility(line.trim_start());
+                    if inside_use || head.starts_with("use ") {
+                        inside_use = !line.contains(';');
+                        return 0;
+                    }
+                    line.match_indices(NAME)
+                        .filter(|(at, _)| {
+                            let before = line.get(..*at).unwrap_or_default();
+                            let after = line.get(*at + NAME.len()..).unwrap_or_default();
+                            !before.chars().next_back().is_some_and(is_ident)
+                                && !after.chars().next().is_some_and(is_ident)
+                                && !before.trim_end().ends_with("fn")
+                        })
+                        .count()
+                })
+                .sum()
+        }
+        // The scan must see a call and a pointer, and must not see the
+        // definition, an import or a longer name (判据 §3).
+        assert_eq!(
+            references_to_ambient_actor(
+                "pub fn ambient_actor() {}\nlet a = visibility::ambient_actor();\n\
+                 let b = my_ambient_actor();\n\
+                 let c = x.or_else(crate::gateway::visibility::ambient_actor);\n\
+                 let d = [ambient_actor, other];\n\
+                 use crate::gateway::visibility::ambient_actor;\n\
+                 use crate::gateway::visibility::{\n    ambient_actor,\n};\n\
+                 let e = ambient_actor_like();"
+            ),
+            3
+        );
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found: std::collections::BTreeMap<String, usize> =
+            crate::utils::source_scan::rust_sources_under(&root)
+                .into_iter()
+                .filter_map(|(rel, text)| {
+                    let code = crate::utils::source_scan::code_text(
+                        &crate::utils::source_scan::production_text(
+                            std::path::Path::new(&rel),
+                            &text,
+                        ),
+                    );
+                    let calls = references_to_ambient_actor(&code);
+                    (calls > 0).then_some((rel, calls))
+                })
+                .collect();
+        let expected: std::collections::BTreeMap<String, usize> = CALLERS
+            .iter()
+            .map(|(file, calls, _)| ((*file).to_string(), *calls))
+            .collect();
+        assert_eq!(
+            found, expected,
+            "a production `ambient_actor` reference (a call or a function pointer) appeared, \
+             moved or went away. Classify it in CALLERS; if it records or builds a person, \
+             compose from `ambient_principal()` instead"
+        );
+        for (file, calls, compose) in CALLERS {
+            assert!(
+                compose <= calls,
+                "{file}: more composing references than references"
+            );
+        }
+    }
+
+    /// In a project room the timeline's output reaches every member, so the
+    /// owner's legacy history is shown to nobody there — not even the owner.
+    #[test]
+    fn legacy_memory_rows_are_refused_in_a_room() {
+        use crate::memory::events::UnpartitionedRows;
+        let room = vec!["main".to_string(), "main__p-room".to_string()];
+        for principal in [
+            RunPrincipal::Person(OWNER_USER_ID.to_string()),
+            RunPrincipal::Legacy,
+        ] {
+            assert_eq!(
+                unattributed_memory_events_for(&principal, &room),
+                UnpartitionedRows::Refuse,
+                "{principal:?} in a room"
+            );
+        }
+        // The legacy project-DIRECTORY family is one person, not a room.
+        assert_eq!(
+            unattributed_memory_events_for(
+                &RunPrincipal::Legacy,
+                &["main".to_string(), "main__proj-abc".to_string()]
+            ),
+            UnpartitionedRows::Admit
         );
     }
 }

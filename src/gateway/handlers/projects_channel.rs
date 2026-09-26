@@ -109,21 +109,18 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 ///
 /// The receipt is only as honest as `list_sessions` is complete, so the ways it
 /// can come back short are disclosed here rather than left to be rediscovered.
-/// None of these is fixed by this handler — two live in the backends and one is
+/// Neither is fixed by this handler — one lives in a backend and one is
 /// inherent — but a reader owes themselves the list before trusting a
 /// `NothingToMove`:
 ///
-/// - **SQLite backend (the shipped default, `[general] session_store =
-///   "sqlite"`).** `session_manager::ops::query::list_sessions` collects with
-///   `rows.filter_map(|r| r.ok())` — a row whose column mapping fails is
-///   dropped **in complete silence**. One damaged `sessions` row for the bound
-///   conversation therefore yields `NothingToMove`, which is Ruling AG's defect
-///   one layer down: an `Err` folded into an absence, and a receipt then
-///   asserting the absence. Not fixed here deliberately — that `filter_map` is
-///   pre-existing, has other callers, and re-classifying it is its own task.
-/// - **File backend.** Same class, but it is *loud*: an unparseable
+/// - **File backend (the shipped default, `[general] session_store_backend =
+///   "file"`).** An unparseable
 ///   `metadata.json` is skipped with a named `warn!`. An unreadable one (IO
 ///   error rather than parse error) is still silent.
+///   (the SQLite backend no longer belongs in this list:
+///   `session_manager::ops::query::collect_rows` fails the whole listing on an
+///   undecodable row, which reaches `classify_rescope` as `Err` ⇒ `Unknown`;
+///   pinned by `a_damaged_sqlite_row_reports_unknown_not_nothing_to_move`).
 /// - **The listing is a snapshot.** A turn whose routing resolved
 ///   `room_claiming` before `bind_conversation` committed, but whose session row
 ///   is created after this listing, is stamped `personal:<speaker>` and never
@@ -134,8 +131,9 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 ///   looks at the clock rather than at the matching logic.
 ///
 /// 这次扫描可能静默漏掉什么——写出来，因为 `NothingToMove` 的诚实程度取决于
-/// `list_sessions` 的完整程度：SQLite（出厂默认）静默丢坏行、file 后端对解析失败
-/// 出声但对读失败不出声、以及快照与并发回合的赛跑（重跑 bind 即可再扫一遍）。
+/// `list_sessions` 的完整程度：file 后端（出厂默认）对解析失败出声但对读失败不出声，
+/// 以及快照与并发回合的赛跑（重跑 bind 即可再扫一遍）。SQLite 后端遇坏行整体报错
+/// ⇒ `Unknown`，不再静默丢行。
 async fn rescope_existing_transcript(
     sessions: &dyn SessionStore,
     bound: &ChannelBinding,
@@ -2042,24 +2040,17 @@ mod tests {
         );
     }
 
-    /// MEDIUM-2: the SHIPPED DEFAULT backend, exercised at handler level.
+    /// MEDIUM-2: the SQLite backend, exercised at handler level.
     ///
-    /// `[general] session_store` defaults to `"sqlite"`
-    /// (`config/types/general.rs`), and every other `handle_bind` test in this
-    /// file builds a `FileSessionStore`. So until this test the scan had never
-    /// run against the store most installs actually use — and the two backends
-    /// are not interchangeable for this verb's purposes: they disagree about
-    /// what happens to a row they cannot decode (file warns by name, sqlite's
-    /// `filter_map(|r| r.ok())` drops it silently). See
-    /// `rescope_existing_transcript`'s doc for what that costs a
-    /// `NothingToMove`.
+    /// `[general] session_store_backend` defaults to `"file"`
+    /// (`config/types/general.rs::default_session_store_backend`) and SQLite is
+    /// opt-in; every other `handle_bind` test in this file builds a
+    /// `FileSessionStore`. This one makes sure the SQLite path is executed at
+    /// all — `list_sessions`, key parsing and `rescope_attribution` are separate
+    /// implementations there. Its undecodable-row arm is pinned separately by
+    /// `a_damaged_sqlite_row_reports_unknown_not_nothing_to_move`.
     ///
-    /// This does not fix that asymmetry — it is pre-existing and has other
-    /// callers. It makes sure the default path is executed at all, so a future
-    /// change that works on one backend and not the other cannot pass unseen.
-    ///
-    /// 出厂默认是 sqlite，而其余 14 条 handler 测试全跑 file 后端；这一条让默认路径
-    /// 至少被执行一次。
+    /// SQLite 是可选后端（出厂默认是 file）；这一条让 SQLite 路径至少被执行一次。
     #[tokio::test]
     async fn the_scan_works_on_the_shipped_default_sqlite_backend() {
         let (store, project, _guard) = room();
@@ -2180,6 +2171,64 @@ mod tests {
             "the binding committed before the scan ran and must survive its \
              failure — a transient IO error must not discard the operator's \
              decision"
+        );
+    }
+
+    /// D1 end to end: on the SQLite backend a damaged row for the bound
+    /// conversation used to be dropped by `list_sessions` in silence, so the
+    /// receipt said `NothingToMove` about a conversation with a transcript —
+    /// Ruling AG's defect one layer down. The listing now fails, and
+    /// `classify_rescope` reports what is true: the outcome was not observed.
+    #[tokio::test]
+    async fn a_damaged_sqlite_row_reports_unknown_not_nothing_to_move() {
+        let (store, project, _guard) = room();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("sessions.db");
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: db_path.clone(),
+                    ..Default::default()
+                },
+            )
+            .expect("sqlite session store"),
+        );
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+        // A second connection to the same file — the store's own connection is
+        // private, and this is the shape a damaged on-disk row really has.
+        Connection::open(&db_path)
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET message_count = 'not-a-number' WHERE key = ?1",
+                rusqlite::params![key.to_key_string()],
+            )
+            .unwrap();
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                    visibility(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("the bind itself still commits"))
+                .expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Unknown,
+            "a row the store could not decode is not an absent row"
         );
     }
 }

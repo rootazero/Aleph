@@ -12,7 +12,8 @@
 //! - [`block_goal_on_failure`] — route a failed continuation run to a `Blocked`
 //!   goal + an origin-channel notice.
 //! - [`rearm_goal_after_busy`] — a continuation that lost the session run-slot
-//!   retries the SAME claimed step instead of burning it.
+//!   or whose authority was unknown at fire time retries the SAME claimed step
+//!   instead of burning it.
 //!
 //! Crash recovery is deliberately NOT here: `ResumeCoordinator` already
 //! re-triggers a run interrupted mid-flight at boot, and that run's completion
@@ -149,6 +150,9 @@ pub(super) async fn notify_goal_stop(
 /// to the spawned continuation AND recorded on the goal row by the claim
 /// pipeline, so hook-less wakes (`GoalWakeService`) rebuild the run in the
 /// same project instead of silently falling back to the agent workspace.
+///
+/// The one key NOT taken from the completing run when the goal has its own
+/// answer is `AUTHOR_USER_KEY` — see [`goal_continuation_policy`].
 pub(super) async fn post_run(
     deps: &ContinuationDeps,
     session_manager: &SessionManager,
@@ -173,6 +177,7 @@ pub(super) async fn post_run(
             return;
         }
     };
+    let policy_meta = goal_continuation_policy(&peek, policy_meta);
     let gate_configured = deps.gate.is_some() || peek.gate_command.is_some();
     let tokens = live_tokens(session_manager, session_key, &peek).await;
     let now = now_ms();
@@ -282,12 +287,34 @@ pub(super) async fn post_run(
                 &goal,
                 tokens.unwrap_or(0),
                 now,
-                policy_meta,
+                &policy_meta,
                 workspace,
             )
             .await;
         }
     }
+}
+
+/// The policy map a HOOK-path goal continuation runs under: the completing
+/// run's carried keys, with `AUTHOR_USER_KEY` overwritten by the goal's stored
+/// [`crate::goal::Goal::author_user_id`] when it has one (round 11, R-b).
+///
+/// The goal pursues the objective of whoever SET it, not of whoever's turn
+/// happened to complete last — and the wake path (`goal_wait::rehydrate_owner_scope`)
+/// already answers from the stored author, so without this the two paths of
+/// ONE goal judged fire-time authority against two different people. A goal
+/// with no stored author (pre-round-11) keeps the completing turn's author.
+/// `caller_role` stays the completing turn's: fire-time resolution only ever
+/// lowers a role, so the lower of the two still wins.
+fn goal_continuation_policy(
+    goal: &crate::goal::Goal,
+    carried: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut policy_meta = carried.clone();
+    if let Some(author) = goal.author_user_id.as_deref() {
+        policy_meta.insert(super::AUTHOR_USER_KEY.to_string(), author.to_string());
+    }
+    policy_meta
 }
 
 /// Read the gate's aggregate as a completion verdict — FAIL CLOSED.
@@ -592,31 +619,34 @@ pub(super) async fn block_goal_on_failure(
 /// time, so re-arm the SAME continuation with a short retry delay instead of
 /// dropping it (which burned the iteration for zero work, and stalled the pursuit
 /// outright whenever the colliding run then failed — its own hook never runs).
+/// The second `cause` is a fire whose authority was unknown (round 11, R-a):
+/// equally not a pursuit failure, so it takes the same retry.
 pub(super) async fn rearm_goal_after_busy(
     session: &str,
     origin: Option<&OriginRoute>,
+    cause: &'static str,
 ) -> Option<(u64, u64)> {
     let store = crate::goal::global()?;
     match store.rearm_after_busy(session, now_ms()) {
         Ok(RearmDecision::Retry { delay_ms, wake_ms }) => {
-            info!(session = %session, delay_ms,
-                "goal pursuit: agent busy at continuation fire; re-armed with a retry delay");
+            info!(session = %session, delay_ms, cause,
+                "goal pursuit: continuation could not run at fire; re-armed with a retry delay");
             Some((delay_ms, wake_ms))
         }
         Ok(RearmDecision::Exhausted { note }) => {
             clear_goal_welded_strategy(session);
             notify_origin(origin, format!("⏹ {note}")).await;
-            info!(session = %session, note = %note,
-                "goal pursuit: cap tripped during a busy collision; goal blocked");
+            info!(session = %session, note = %note, cause,
+                "goal pursuit: cap tripped while re-arming; goal blocked");
             None
         }
         Ok(RearmDecision::Drop) => {
-            info!(session = %session,
-                "goal pursuit: agent busy at continuation fire; goal no longer active or re-claimed — dropped");
+            info!(session = %session, cause,
+                "goal pursuit: continuation could not run at fire; goal no longer active or re-claimed — dropped");
             None
         }
         Err(e) => {
-            warn!(error = %e, session = %session, "goal pursuit: re-arm after busy failed");
+            warn!(error = %e, session = %session, cause, "goal pursuit: re-arm failed");
             None
         }
     }

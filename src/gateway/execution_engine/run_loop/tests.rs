@@ -306,6 +306,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "the Panel/RPC path; resolve_attribution + caller_role, the shape every other producer mirrors",
         ingress: Ingress::Human { stamp_in:"src/gateway/handlers/agent.rs" },
         ingress_why: "`build_run_request` is the one funnel behind every Panel / TUI / CLI run entrance, and it stamps BEFORE the agent-authorization gate — a refused attempt is still a person at the keyboard. An external script driving `chat.send` stamps too; that approximation is accepted, because the alternative (asking the wire who is typing) is a claim the caller controls",
+        authority: Authority::LiveCaller { seam: "current_caller_role" },
+        authority_why: "an RPC from a live connection; its identity is checked at connect against the device binding, and deactivation revokes that user's devices, so no connection outlives the status",
     },
     RunProducer {
         file: "src/gateway/inbound_router/executor.rs",
@@ -313,6 +315,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "channel inbound; principal from pairing_store::sender_user",
         ingress: Ingress::Human { stamp_in: "src/gateway/inbound_router/mod.rs" },
         ingress_why: "a channel message, stamped UPSTREAM of this file: `handle_message`'s permission-granted arm, not the builder here. A stranger refused by policy is not 'the user', and stamping at the builder would let anyone who can reach the bot hold the sensor open",
+        authority: Authority::LiveCaller { seam: "sender_user" },
+        authority_why: "a channel message from a paired sender, resolved at arrival; deactivation withdraws the sender's channel approvals",
     },
     RunProducer {
         file: "src/gateway/resume_coordinator.rs",
@@ -320,6 +324,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the persisted session row's columns; caller_role added 2026-08-09",
         ingress: Ingress::Machine,
         ingress_why: "boot-time continuation of a run a restart interrupted; the human message that started it stamped when it arrived. Re-stamping here would let a crash-restart loop hold the sensor open with nobody present",
+        authority: Authority::Resolves,
+        authority_why: "boot/on-demand resume of a crashed run; retrigger resolves the session owner's authority (round 11, N8)",
     },
     RunProducer {
         file: "src/teams/broadcast/mod.rs",
@@ -327,6 +333,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the ambient scope carried across two spawns; both keys added 2026-08-09",
         ingress: Ingress::Machine,
         ingress_why: "team fan-out: one human message spawns N of these, and they land whenever the fan-out reaches them — the keystroke they descend from already stamped",
+        authority: Authority::LiveCaller { seam: "CarriedAttribution::capture" },
+        authority_why: "teams.chat.send fan-out captured from the live gateway dispatch and re-established per member",
     },
     RunProducer {
         file: "src/builtin_tools/sessions/send_tool.rs",
@@ -334,6 +342,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "agent-to-agent dispatch; carries the initiating run's pair",
         ingress: Ingress::Machine,
         ingress_why: "model-driven delegation. The model is not the user, and a self-delegating loop stamping here would starve dreaming for as long as it ran",
+        authority: Authority::InheritsRun { seam: "build_sub_metadata(" },
+        authority_why: "no person is live here: the model inside the ENCLOSING run (the one whose tool loop called sessions_send) dispatched it, and build_sub_metadata carries that run's already-resolved scope pair, author and role — for a cron-started run, the cron resolver's answer",
     },
     RunProducer {
         file: "src/tasks/cron/executor.rs",
@@ -341,6 +351,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "rehydrated from CronJob.scope_id; unattended, so no caller_role by design",
         ingress: Ingress::Machine,
         ingress_why: "scheduled work, and the textbook case this axis exists for: a job that ticks more often than the idle threshold would push the dream window past every night, forever, with no error anywhere",
+        authority: Authority::Resolves,
+        authority_why: "execute_cron_job resolves the job owner at fire time (round 11, T05)",
     },
     RunProducer {
         file: "src/gateway/execution_engine/execute.rs",
@@ -348,6 +360,8 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "continuation runs carry the source run's metadata forward",
         ingress: Ingress::Machine,
         ingress_why: "a continuation of a run whoever started it already stamped",
+        authority: Authority::Resolves,
+        authority_why: "spawn_continuation_run resolves the carried author/owner after confirm_fire (round 11, T07)",
     },
     RunProducer {
         file: "src/gateway/execution_engine/steering.rs",
@@ -355,34 +369,46 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "orphan-burst rescue clones the interrupted request's metadata",
         ingress: Ingress::Machine,
         ingress_why: "rescue of an already-admitted request. A real steering message is a different path — it reached `build_run_request` on its way in and stamped there",
+        authority: Authority::InheritsRun {
+            seam: "let mut metadata = request.metadata.clone();",
+        },
+        authority_why: "no person is live here: rescue of the ENCLOSING run's orphaned steering burst — the request this process admitted moments earlier — whose already-resolved metadata it clones",
     },
     RunProducer {
         file: "src/gateway/busy_queue/durable.rs",
-        attribution: "inherits",
-        attribution_why: "boot reinjection rebuilds the request from the journaled payload, whose metadata round-trips the original arrival's scope/caller stamps verbatim",
+        attribution: "stamps",
+        attribution_why: "boot reinjection rebuilds the request from the journaled payload (the original arrival's scope/author/caller stamps), then rebuilds it under the fire-time grant via admit_reinjection → fire_gate::admit_session_metadata (round 11, N10; final review I4)",
         ingress: Ingress::Machine,
         ingress_why: "boot-time re-delivery of a message the human sent before the crash — the keystroke stamped at the original arrival (mirrors resume_coordinator: re-stamping here would let a crash-restart loop hold the sensor open with nobody present)",
+        authority: Authority::Resolves,
+        authority_why: "boot reinjection resolves the session owner plus the payload's author/role (round 11, N10)",
     },
     RunProducer {
         file: "src/teams/dispatcher/runner.rs",
         attribution: "stamps",
-        attribution_why: "from the ambient scope/turn-context when a live caller exists (team_delegate reaches task_run_metadata before the spawn); the autonomous dispatcher reads None and stamps nothing — MU4-03 adjudicated 2026-08-18",
+        attribution_why: "from the ambient scope/turn-context: team_delegate reaches task_run_metadata with the leader run's task-locals live; the autonomous dispatcher re-establishes the task's resolved authority around the spawn (schedule/mod.rs, round 11 N1) — only a Legacy task stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "dispatched work, autonomous in the case that matters; the delegating turn stamped if a human drove it",
+        authority: Authority::ResolvedUpstream { resolver: "src/teams/dispatcher/schedule/mod.rs" },
+        authority_why: "the autonomous dispatcher resolves before the claim and re-establishes (round 11, N1); team_delegate reaches it with live task-locals",
     },
     RunProducer {
         file: "src/tasks/heartbeat/executor.rs",
-        attribution: "unattributed",
-        attribution_why: "admin-gated org-level engine; carries no owner_user_id at all",
+        attribution: "stamps",
+        attribution_why: "heartbeat_run_metadata stamps the grant the timer resolved for the task owner (Granted::stamp, round 11 T06); a legacy task's grant is empty and stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "a periodic engine — same starvation shape as cron, and on a shorter period",
+        authority: Authority::ResolvedUpstream { resolver: "src/tasks/heartbeat/service/timer.rs" },
+        authority_why: "the timer resolves the task owner before the L1 probe (round 11, T06, N3)",
     },
     RunProducer {
         file: "src/gateway/announce_delivery.rs",
-        attribution: "unattributed",
-        attribution_why: "the shared announce ladder (background sub-agents and background bash jobs); an announcement run is derived from a completed unit, not from a caller — the classification `subagent_announce.rs` carried before the ladder was extracted",
+        attribution: "stamps",
+        attribution_why: "from the parent session row via scope::authority::resolve → Granted::stamp (round 11, N9)",
         ingress: Ingress::Machine,
         ingress_why: "derived from a completed unit of work, not from anyone's keystroke — and it fires precisely when the person has walked away",
+        authority: Authority::Resolves,
+        authority_why: "re-asks the parent session owner on every retry attempt (round 11, N9)",
     },
     RunProducer {
         file: "src/gateway/openai_api/completions/agent.rs",
@@ -390,6 +416,11 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "the /v1 compat surface authenticates a bearer operator, not an Aleph principal",
         ingress: Ingress::Machine,
         ingress_why: "a bearer-token API client is as likely to be an unattended script as a person, and the two are indistinguishable on this wire. Classified by the asymmetry, not by a guess: reading it as human costs permanent silent starvation whenever something polls it, reading it as machine costs at most one dream cycle that fails to yield to somebody typing into a third-party client",
+        authority: Authority::NoPrincipal {
+            gate_in: "src/gateway/openai_api/completions/mod.rs",
+            seam: "secret_equal(",
+        },
+        authority_why: "a live HTTP call that the /v1 route admits only after comparing its bearer to the configured API token; that bearer is an operator credential, not an Aleph principal, so there is no person whose status could be asked",
     },
     RunProducer {
         file: "src/a2a/adapter/server/bridge.rs",
@@ -397,6 +428,11 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "an A2A peer is a remote agent, not a user in this install's users table",
         ingress: Ingress::Machine,
         ingress_why: "the peer is a remote agent; if a human is behind it, they are behind it on their own install, where their own chokepoint stamped",
+        authority: Authority::NoPrincipal {
+            gate_in: "src/a2a/adapter/server/routes.rs",
+            seam: "authenticator.authenticate(",
+        },
+        authority_why: "a live A2A peer request, admitted only after the route authenticates the peer; the peer is a remote agent, not a principal in this users table",
     },
 ];
 
@@ -417,7 +453,110 @@ struct RunProducer {
     attribution_why: &'static str,
     ingress: Ingress,
     ingress_why: &'static str,
+    authority: Authority,
+    authority_why: &'static str,
 }
+
+/// Round 11's third axis — see
+/// `every_run_producer_answers_the_fire_time_authority_question`.
+#[derive(Clone, Copy)]
+enum Authority {
+    /// This file's production code resolves fire-time authority itself.
+    Resolves,
+    /// Every background caller of this producer resolved it first, in `resolver`.
+    ResolvedUpstream { resolver: &'static str },
+    /// A person is live on this path when the request is built; `seam` is the
+    /// token proving the file still reads that live identity.
+    LiveCaller { seam: &'static str },
+    /// No person is live: the request is built INSIDE an enclosing run whose
+    /// own authority was already resolved at its entry, and carries that
+    /// run's metadata forward. `seam` is the token proving the file still
+    /// copies the enclosing run's metadata rather than composing its own.
+    InheritsRun { seam: &'static str },
+    /// The caller is authenticated, but it is not an Aleph principal (a /v1
+    /// bearer, an A2A peer), so there is no person whose status could be
+    /// asked. `seam` is the authentication call, in `gate_in` — the file that
+    /// admits the request before this producer builds it.
+    NoPrincipal {
+        gate_in: &'static str,
+        seam: &'static str,
+    },
+}
+
+/// Whether `seam` is USED on some line of `code`: a line that is neither the
+/// seam's own `fn` definition nor a `use` import.
+///
+/// Without this a seam could be satisfied by the very thing it names — the
+/// producer's own function name matched its own definition, an error-type
+/// import matched an auth module path — and the `LiveCaller` / `InheritsRun`
+/// / `NoPrincipal` rows were green for as long as the names existed, whether
+/// or not anything still read a live identity (T09 review, I3).
+fn seam_used(code: &str, seam: &str) -> bool {
+    seam_uses(code, seam) > 0
+}
+
+/// How many times `seam` is USED in `code` — [`seam_used`]'s rule, counted:
+/// every occurrence on a line that is neither the seam's own `fn` definition
+/// nor a `use` import. One derivation, so "is it used" and "how often" cannot
+/// disagree about what a use is.
+fn seam_uses(code: &str, seam: &str) -> usize {
+    let definition = format!("fn {}", seam.trim_end_matches('('));
+    code.lines()
+        .filter(|line| {
+            let head = crate::utils::source_scan::strip_visibility(line.trim_start());
+            !head.starts_with("use ") && !line.contains(&definition)
+        })
+        .map(|line| line.matches(seam).count())
+        .sum()
+}
+
+/// The call a `Resolves` / `ResolvedUpstream` answer must still contain.
+/// Path-qualified on purpose: `resolve_with` (test injection) must not count.
+const AUTHORITY_RESOLVE: &str = "authority::resolve(";
+
+/// `seam_used`'s two exclusions, pinned: an import and the seam's own
+/// definition must NOT count as a use, or the old always-green shapes (an
+/// error-type import under an auth module path, a producer's own function
+/// name) come straight back (T09 re-review, N2).
+#[test]
+fn seam_used_does_not_count_a_use_import() {
+    let import = "use crate::gateway::caller_identity::current_caller_role;\n\
+                  pub(crate) use crate::gateway::caller_identity::current_caller_role;\n";
+    assert!(
+        !seam_used(import, "current_caller_role"),
+        "an import proves the name exists, not that anything reads the live caller"
+    );
+    let call = format!("{import}    let role = current_caller_role();\n");
+    assert!(seam_used(&call, "current_caller_role"), "a call is a use");
+}
+
+#[test]
+fn seam_used_does_not_count_the_seams_own_definition() {
+    let definition =
+        "fn build_sub_metadata(parent: Option<&str>) -> Meta {\n    Meta::default()\n}\n\
+                      pub(crate) fn build_sub_metadata(parent: Option<&str>) -> Meta {\n}\n";
+    assert!(
+        !seam_used(definition, "build_sub_metadata("),
+        "a producer's own definition proves nothing about what it carries"
+    );
+    let call = format!("{definition}    let sub = build_sub_metadata(None);\n");
+    assert!(seam_used(&call, "build_sub_metadata("), "a call is a use");
+}
+
+/// Evidence that a producer APPLIES the grant it resolved, rather than only
+/// asking for it: the seam that resolves-and-stamps, its by-value form that
+/// hands back the admitted metadata (`admit_session_metadata`, which the
+/// busy-queue and announce `admit_*` builders call), the verdict mapping that
+/// stamps, or a direct `Granted::stamp`. Resolving and then dropping the
+/// verdict is exactly what none of these can be (T09 review, M2). Which grant
+/// reaches the EXECUTED request is pinned behaviourally per site, not here
+/// (final review I4: each `admit_*` has a `resolve_with` test).
+const GRANT_APPLIED: [&str; 4] = [
+    "authorize_session_run(",
+    "admit_session_metadata(",
+    "fire_gate::apply(",
+    ".stamp(",
+];
 
 /// The call every `stamps` producer must contain.
 const SCOPE_STAMP: &str = "scope::stamp_metadata(";
@@ -454,24 +593,11 @@ enum Ingress {
     Machine,
 }
 
-/// Every `.rs` file under `src/`, paired with its **production half** — the
-/// text before its own `#[cfg(test)] mod tests`.
+/// Every `.rs` file under `src/`, paired with its **production half**.
 ///
 /// Shared by the two censuses below so the scanning rules cannot acquire two
-/// authors. Three of them are load-bearing:
-///
-/// * Split on the module opener, not on a bare `#[cfg(test)]`: that attribute
-///   also sits on test-only helpers in the middle of a production file
-///   (`steering.rs`'s `find_steering_target`), and truncating there hides real
-///   production code below it.
-/// * Line endings are normalised FIRST. This checkout is CRLF, so a separator
-///   anchoring a bare `\n` matched nothing at all: `head` silently became the
-///   WHOLE file and `execution_adapter.rs` was reported as a producer on the
-///   strength of a construction inside its own test module. Red on Windows,
-///   green in CI, and pointing at a file the comment beside it exonerated. Same
-///   defect `subagent_tool/loop_tool.rs` carried and CLAUDE.md §10 records.
-/// * `*/tests.rs` files are dropped whole: they have no `mod tests` marker to
-///   truncate at, so the rule above cannot see them for what they are.
+/// authors, and cut by [`production_half`] — the repo's one derivation of
+/// "the production half of a file" — so they cannot acquire a third either.
 fn production_sources() -> Vec<(String, String)> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -499,39 +625,72 @@ fn production_sources() -> Vec<(String, String)> {
             .unwrap_or(&file)
             .to_string_lossy()
             .replace('\\', "/");
-        // Test-only files build requests freely; they are not producers.
-        //
-        // ⚠️ This is a name-shaped rule and it is demonstrably incomplete:
-        // `find src -name '*_tests.rs'` returns eight files today (plus
-        // everything under `src/**/tests/`), none of which this matches.
-        // `src/gateway/execution_engine/btw_wire_tests.rs` is the living
-        // counter-example — as test-gated as any `tests.rs` (`#[cfg(test)] mod
-        // btw_wire_tests;` in `execution_engine/mod.rs`), and invisible to this
-        // skip. It does not currently trip the scan, but the day one of those
-        // files writes a legitimate `RunRequest { … }` literal the failure
-        // message will invite its author to register a non-producer in a census
-        // whose only value is that its entries are true.
-        // The precise repair is to derive test-only-ness from the parent
-        // module's `#[cfg(test)] mod <name>;` declaration rather than from the
-        // filename; it is not done here because widening the name list would
-        // trade a false positive for a blind spot, which is the worse direction.
-        // (The struct-definition skip for `execution_engine/mod.rs` lives in
-        // the census loop below, next to the construction scan it protects.)
-        if rel.ends_with("/tests.rs") {
-            continue;
-        }
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        let normalised = text.replace("\r\n", "\n");
-        let head = normalised
-            .split("#[cfg(test)]\nmod tests")
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        out.push((rel, head));
+        out.push((rel, production_half(&file, &text)));
     }
     out
+}
+
+/// One file's production half: [`crate::utils::source_scan::production_text`]
+/// over CRLF-normalised text.
+///
+/// This used to be a local cut — everything before the first
+/// `"#[cfg(test)]\nmod tests"` — and that substring ALSO matches the external
+/// declaration `#[cfg(test)]\nmod tests;`, which sits near the top of many
+/// `mod.rs` files. Everything below it was hidden from the construction scan:
+/// 45 files hid more than 50 production lines each (`run_loop/mod.rs` 1327 of
+/// them), so a new producer written into any of those files could not be
+/// found by a census whose doc said it could not escape (T09 review, I2).
+/// `production_text` drops each `#[cfg(test)]` ITEM (an inline module, a
+/// test-only helper, a `mod tests;` declaration) and keeps what follows it,
+/// and it asks the PARENT module whether a whole file is tests — which also
+/// retires the old `*/tests.rs` name rule, blind to `btw_wire_tests.rs` and
+/// every other test module not named `tests.rs`.
+fn production_half(path: &std::path::Path, text: &str) -> String {
+    crate::utils::source_scan::production_text(path, &text.replace("\r\n", "\n"))
+}
+
+/// Whether a production half BUILDS a [`RunRequest`] — a construction, not a
+/// return type.
+///
+/// `fn f(..) -> RunRequest {` ends in the same three characters this scans
+/// for, so a file that merely hands one back was reported as producing one —
+/// and the only honest response to that prompt is to write a non-producer
+/// into a census whose whole value is that its entries are true. The arrow is
+/// looked for **before the match site**, not anywhere on the line:
+/// `fn r() -> RunRequest { RunRequest { … } }` and a short closure with an
+/// explicit return type both construct AND carry an arrow, and a whole-line
+/// test would skip them silently.
+fn constructs_run_request(production: &str) -> bool {
+    code_only(production).lines().any(|l| {
+        l.match_indices("RunRequest {")
+            .any(|(at, _)| !l[..at].contains("->"))
+    })
+}
+
+/// The cut above, pinned on the shape that used to hide producers: an
+/// external `#[cfg(test)] mod tests;` declaration ABOVE a production
+/// construction. The inline `#[cfg(test)] mod tests { … }` shape must stay
+/// cut, or the census would register test fixtures as producers.
+#[test]
+fn the_producer_scan_sees_past_an_external_test_module_declaration() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/zz_census_fixture/probe.rs");
+    let external = "use crate::x;\n\n#[cfg(test)]\nmod tests;\n\n\
+                    pub fn produce() {\n    let _ = RunRequest {\n        run_id: String::new(),\n    };\n}\n";
+    assert!(
+        constructs_run_request(&production_half(&path, external)),
+        "a construction BELOW an external `#[cfg(test)] mod tests;` declaration is production \
+         code, and the producer census must see it"
+    );
+    let inline = "pub fn produce() {}\n\n#[cfg(test)]\nmod tests {\n    \
+                  fn fixture() {\n        let _ = RunRequest {\n            run_id: String::new(),\n        };\n    }\n}\n";
+    assert!(
+        !constructs_run_request(&production_half(&path, inline)),
+        "a construction inside an inline `#[cfg(test)] mod tests {{ … }}` is a fixture, not a producer"
+    );
 }
 
 /// Drop whole-line comments. A doc sentence naming the thing a census hunts
@@ -558,27 +717,9 @@ fn scope_stamping_producers_are_all_accounted_for() {
         if rel.ends_with("src/gateway/execution_engine/mod.rs") {
             continue;
         }
-        // Count a file as a producer only when the construction appears before
-        // its own test module — `execution_adapter.rs` builds one only inside
-        // its tests.
-        //
-        // A *construction*, not a return type. `fn f(..) -> RunRequest {` ends
-        // in the same three characters this scans for, so a file that merely
-        // hands one back was reported as producing one — and the only honest
-        // response to that prompt is to write a non-producer into a census
-        // whose whole value is that its entries are true. Every census entry
-        // is still matched by a real construction with this in place, so it
-        // narrows nothing that was ever a producer.
-        //
-        // The arrow is looked for **before the match site**, not anywhere on the
-        // line: `fn r() -> RunRequest { RunRequest { … } }` and a short closure
-        // with an explicit return type both construct AND carry an arrow, and a
-        // whole-line test would skip them silently. Unlike the `stale` half,
-        // nothing else catches a producer that goes missing.
-        let constructs = code_only(head).lines().any(|l| {
-            l.match_indices("RunRequest {")
-                .any(|(at, _)| !l[..at].contains("->"))
-        });
+        // A construction in the file's production half (`production_half`),
+        // not a return type (`constructs_run_request`).
+        let constructs = constructs_run_request(head);
         if constructs {
             found.push(rel.clone());
         }
@@ -622,10 +763,23 @@ fn scope_stamping_producers_are_all_accounted_for() {
         if producer.attribution != "stamps" {
             continue;
         }
-        let stamps = sources
+        // A producer that resolves fire-time authority (itself, or upstream)
+        // stamps through `Granted::stamp` (which calls `scope::stamp_metadata`
+        // inside `scope/authority.rs`), so its own file need not spell that
+        // call — but it must still APPLY the grant (`GRANT_APPLIED`). The
+        // classification alone is not evidence: a producer that resolves and
+        // then drops the verdict stamps nothing (T09 review, M2).
+        let code = sources
             .iter()
             .find(|(rel, _)| rel == producer.file)
-            .is_some_and(|(_, head)| code_only(head).contains(SCOPE_STAMP));
+            .map(|(_, head)| code_only(head))
+            .unwrap_or_default();
+        let resolves = matches!(
+            producer.authority,
+            Authority::Resolves | Authority::ResolvedUpstream { .. }
+        );
+        let stamps = code.contains(SCOPE_STAMP)
+            || (resolves && GRANT_APPLIED.iter().any(|token| code.contains(token)));
         assert!(
             stamps,
             "{} is classified `stamps` but does not call {SCOPE_STAMP} — either it stopped \
@@ -634,6 +788,262 @@ fn scope_stamping_producers_are_all_accounted_for() {
             producer.file, producer.attribution_why
         );
     }
+}
+
+/// Round 11: every production `RunRequest` producer answers "whose authority
+/// does this run execute under, decided WHEN?". Nine background executors
+/// each used to answer it at creation time or never (spec §3.2), and N8–N10
+/// were found by reading code — this is the pin that would have caught them.
+/// A new producer cannot compile into `RUN_REQUEST_PRODUCERS` without an
+/// `authority` answer, and cannot stay out of it: the membership census
+/// (`scope_stamping_producers_are_all_accounted_for`) reads every file's
+/// production half through [`production_half`], which since the T09 fix round
+/// no longer stops at a `#[cfg(test)] mod tests;` declaration
+/// (`the_producer_scan_sees_past_an_external_test_module_declaration`).
+///
+/// Every answer is self-checking:
+/// - `Resolves` — the producer's own production code calls
+///   `scope::authority::resolve(`.
+/// - `ResolvedUpstream` — the named resolver file does, and every
+///   background caller of this producer goes through it.
+/// - `LiveCaller` / `InheritsRun` — the producer's own production code USES
+///   the `seam` ([`seam_used`]: not merely its definition or an import), and
+///   does NOT resolve itself (it would then be misclassified).
+/// - `NoPrincipal` — the gate file still USES its authentication `seam`, and
+///   the producer does not resolve itself.
+#[test]
+fn every_run_producer_answers_the_fire_time_authority_question() {
+    use crate::utils::source_scan::code_text;
+
+    let code_of = |rel: &str| -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        code_text(&production_half(&path, &text))
+    };
+    // Every wrong answer is collected before asserting, so one red names ALL
+    // the producers that went back to creation-time authority, not the first.
+    let mut wrong: Vec<String> = Vec::new();
+    let mut resolved = 0usize;
+    for p in RUN_REQUEST_PRODUCERS {
+        match p.authority {
+            Authority::Resolves => {
+                let code = code_of(p.file);
+                if !code.contains(AUTHORITY_RESOLVE) {
+                    wrong.push(format!(
+                        "{} is classified `Resolves` but its production code no longer calls \
+                         {AUTHORITY_RESOLVE} — every run it starts executes under whatever \
+                         authority was frozen at creation. Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                } else if !GRANT_APPLIED.iter().any(|token| code.contains(token)) {
+                    // Resolving is half the answer: a producer that asks and
+                    // then drops the grant runs under the frozen authority all
+                    // the same. `resume_coordinator.rs`'s only spellings of
+                    // the two halves are `retrigger`'s resolve and
+                    // `admit_resume`'s apply (its pre-check resolves through
+                    // `fire_gate::session_may_act`), so deleting the call that
+                    // applies the grant turns this red (T09 re-review, N1).
+                    // Deleting the CALL to `admit_resume` leaves its body — and
+                    // this check — intact; that face is pinned by
+                    // `the_resumed_request_carries_the_resolved_grant` plus
+                    // the dead-code lint, not by this token scan.
+                    wrong.push(format!(
+                        "{} resolves fire-time authority but its production code applies no grant \
+                         (none of {GRANT_APPLIED:?}) — the verdict is asked for and dropped. \
+                         Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                } else {
+                    resolved += 1;
+                }
+            }
+            Authority::ResolvedUpstream { resolver } => {
+                if code_of(resolver).contains(AUTHORITY_RESOLVE) {
+                    resolved += 1;
+                } else {
+                    wrong.push(format!(
+                        "{} relies on {resolver} to resolve fire-time authority, and {resolver} \
+                         no longer calls {AUTHORITY_RESOLVE}. Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+            }
+            Authority::LiveCaller { seam } | Authority::InheritsRun { seam } => {
+                let code = code_of(p.file);
+                if !seam_used(&code, seam) {
+                    wrong.push(format!(
+                        "{} names `{seam}` as its proof of a live caller / of inheriting the \
+                         enclosing run's metadata, and its production code no longer USES it \
+                         (a definition or an import does not count) — the identity it relied \
+                         on may be gone. Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+                if code.contains(AUTHORITY_RESOLVE) {
+                    wrong.push(format!(
+                        "{} now resolves fire-time authority itself — reclassify it `Resolves`",
+                        p.file
+                    ));
+                }
+            }
+            Authority::NoPrincipal { gate_in, seam } => {
+                if !seam_used(&code_of(gate_in), seam) {
+                    wrong.push(format!(
+                        "{} is classified `NoPrincipal`, admitted by `{seam}` in {gate_in}, which \
+                         no longer USES it — the request may now be admitted unauthenticated. \
+                         Recorded reason: {}",
+                        p.file, p.authority_why
+                    ));
+                }
+                if code_of(p.file).contains(AUTHORITY_RESOLVE) {
+                    wrong.push(format!(
+                        "{} now resolves fire-time authority itself — reclassify it `Resolves`",
+                        p.file
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    // Measured at the round-11 landing: 5 `Resolves` (resume, cron,
+    // continuations, busy-queue, announce) + 2 `ResolvedUpstream` (team
+    // dispatcher, heartbeat). A shrink means an executor went back to
+    // creation-time authority.
+    assert!(
+        resolved >= 7,
+        "only {resolved} producers resolve fire-time authority; 7 were measured at round 11"
+    );
+}
+
+/// The three session-row executors and the `admit_*` each builds its executed
+/// request in (final review I4).
+const SESSION_ROW_ADMITS: [(&str, &str); 3] = [
+    ("src/gateway/busy_queue/durable.rs", "admit_reinjection("),
+    ("src/gateway/announce_delivery.rs", "admit_announce("),
+    ("src/gateway/resume_coordinator.rs", "admit_resume("),
+];
+
+/// Byte offsets of each [`RunRequest`] CONSTRUCTION in `code` —
+/// [`constructs_run_request`]'s rule (a `RunRequest {` not preceded on its
+/// line by `->`, so a return type is not one), located rather than answered
+/// yes/no. Struct-update syntax (`RunRequest { .., ..admitted }`) is a
+/// construction too, and is counted.
+fn run_request_constructions(code: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut line_start = 0usize;
+    for line in code.split_inclusive('\n') {
+        for (at, _) in line.match_indices("RunRequest {") {
+            if !line.get(..at).unwrap_or_default().contains("->") {
+                found.push(line_start + at);
+            }
+        }
+        line_start += line.len();
+    }
+    found
+}
+
+/// What is wrong with one session-row executor's production `code`, given
+/// the call `seam` (`admit_x(`) that must build its executed request: the
+/// file calls it exactly once (a use per [`seam_uses`] — not the definition,
+/// not an import), and its ONE `RunRequest {` construction lies inside
+/// `fn admit_x`, whose body runs to the next column-0 `}`.
+fn session_row_admit_findings(file: &str, code: &str, seam: &str) -> Vec<String> {
+    let mut wrong = Vec::new();
+    let calls = seam_uses(code, seam);
+    if calls != 1 {
+        wrong.push(format!(
+            "{file}: {calls} production calls of `{seam}`, expected exactly 1 — the executor \
+             must run the request its admit function built, once"
+        ));
+    }
+    let name = seam.trim_end_matches('(');
+    let body = code.find(&format!("fn {name}")).and_then(|start| {
+        code.get(start..)
+            .and_then(|rest| rest.find("\n}"))
+            .map(|len| start..start + len)
+    });
+    let built = run_request_constructions(code);
+    match body {
+        None => wrong.push(format!(
+            "{file}: no `fn {name}` whose body closes at column 0"
+        )),
+        Some(body) => {
+            if built.len() != 1 || !body.contains(&built[0]) {
+                wrong.push(format!(
+                    "{file}: {} production `RunRequest {{` construction(s); expected exactly one, \
+                     inside `fn {name}`. A second one — or struct-update syntax over the base \
+                     map — runs a request the fire-time grant never admitted",
+                    built.len()
+                ));
+            }
+        }
+    }
+    wrong
+}
+
+/// Final review I4's CALL-SITE face (fix-wave re-review c3). Each
+/// `*_carries_the_resolved_grant` test calls its `admit_*` directly, so it
+/// proves what the function returns, not that the executor runs it; and
+/// `GRANT_APPLIED` is satisfied by the `admit_*` body itself. Two shapes stay
+/// green under both: a site that stops calling its `admit_*`, and a site that
+/// calls it and then executes a request rebuilt from the unadmitted map
+/// (`let _ = admit_x(..)?; RunRequest { metadata: payload.metadata.clone(), .. }`).
+/// This pins both per file, over production code (tests and comments
+/// stripped): exactly one call, and exactly one construction, inside the
+/// admit function.
+///
+/// Blind spots, stated: a request built through a helper in ANOTHER file, or
+/// by a constructor function rather than a struct literal, is not a
+/// construction here; nor is a macro that expands to one.
+#[test]
+fn each_session_row_executor_runs_the_request_its_admit_built() {
+    use crate::utils::source_scan::code_text;
+    let mut wrong = Vec::new();
+    for (file, seam) in SESSION_ROW_ADMITS {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let code = code_text(&production_half(&path, &text));
+        wrong.extend(session_row_admit_findings(file, &code, seam));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The pin above, shown red on each shape it claims and green on the one it
+/// allows (判据 §3: a census never shown red is not a census).
+#[test]
+fn the_session_row_admit_pin_sees_the_bypass_shapes() {
+    use crate::utils::source_scan::code_text;
+    let admit = "pub(crate) fn admit_x<R>(resolve: R) -> Result<RunRequest, FireStop> {\n\
+                 \x20   let metadata = admit_session_metadata(resolve)?;\n\
+                 \x20   Ok(RunRequest {\n        metadata,\n    })\n}\n";
+    let site = |body: &str| code_text(&format!("{admit}\npub async fn site() {{\n{body}\n}}\n"));
+    let ok = site("    let request = admit_x(|s| resolve(&s))?;\n    run(request);");
+    assert!(session_row_admit_findings("ok.rs", &ok, "admit_x(").is_empty());
+
+    for (shape, body) in [
+        ("never called", "    run(rebuild());"),
+        (
+            "called twice",
+            "    let a = admit_x(|s| resolve(&s))?;\n    let b = admit_x(|s| resolve(&s))?;",
+        ),
+        (
+            "called, then bypassed",
+            "    let _ = admit_x(|s| resolve(&s))?;\n    \
+             let request = RunRequest {\n        metadata: payload.metadata.clone(),\n    };",
+        ),
+        (
+            "struct update over the admitted request",
+            "    let admitted = admit_x(|s| resolve(&s))?;\n    \
+             let request = RunRequest { input: String::new(), ..admitted };",
+        ),
+    ] {
+        assert!(
+            !session_row_admit_findings("probe.rs", &site(body), "admit_x(").is_empty(),
+            "the pin must go red when the admit function is {shape}"
+        );
+    }
+    // A return type is not a construction.
+    assert!(run_request_constructions("fn f() -> RunRequest {\n    g()\n}").is_empty());
 }
 
 /// Nothing under `execution_engine/` may read the raw scope stamp out of a
@@ -660,10 +1070,11 @@ fn scope_stamping_producers_are_all_accounted_for() {
 /// `FlowRequest` literal calls `request_scope_strings`": a fifth reader is the
 /// thing that has to be caught, and naming the fourth one catches only it.
 ///
-/// Uses [`crate::utils::source_scan`] rather than this module's local
-/// `production_sources`, whose cut is the literal `"#[cfg(test)]\nmod tests"`
-/// — `execute.rs` names its four test modules after what they test, so none of
-/// them is cut and every fixture in them would read as a production site.
+/// Uses [`crate::utils::source_scan::production_prefix`] directly — the same
+/// cut [`production_sources`] now makes through `production_text` (its old
+/// local cut, a split on `"#[cfg(test)]\nmod tests"`, left `execute.rs`'s four
+/// differently-named test modules in, so every fixture in them read as a
+/// production site).
 #[test]
 fn no_reader_under_execution_engine_takes_the_uncorrected_scope_stamp() {
     use crate::utils::source_scan::{code_text, production_prefix};
@@ -836,7 +1247,7 @@ fn every_run_producer_declares_whether_a_human_is_at_the_other_end() {
 }
 
 // ============================================================================
-// G13 — spend::ambient_principal / spend::principal_from_metadata agree
+// G13 — the spend floor arm (visibility::ambient_principal) / spend::principal_from_metadata agree
 // ============================================================================
 //
 // `crate::spend`'s two principal resolvers need this exact function's
@@ -859,7 +1270,10 @@ async fn spend_principal_resolvers_agree_when_metadata_carries_an_author() {
     let admission = crate::spend::principal_from_metadata(&request.metadata);
 
     // Floor arm: resolved from inside the nest `with_request_scope` seeds.
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(
         admission, floor,
@@ -884,7 +1298,10 @@ async fn spend_principal_resolvers_agree_falling_back_to_the_scope_owner() {
     let request = minimal_request(metadata);
 
     let admission = crate::spend::principal_from_metadata(&request.metadata);
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(admission, floor);
     assert_eq!(
@@ -913,7 +1330,10 @@ async fn spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key() {
     let request = minimal_request(metadata);
 
     let admission = crate::spend::principal_from_metadata(&request.metadata);
-    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+    let floor = with_request_scope(&request, async {
+        crate::spend::Principal::from_person(crate::gateway::visibility::ambient_principal())
+    })
+    .await;
 
     assert_eq!(
         admission, floor,

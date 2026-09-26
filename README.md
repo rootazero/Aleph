@@ -200,6 +200,14 @@ cd Aleph
 just shell-dev       # Run the desktop app in dev mode (rebuilds WASM)
 ```
 
+**Windows shell resolution.** On Windows, Aleph runs agent scripts under
+PowerShell 7 (`pwsh`) with fallback to Windows PowerShell 5.1 (`powershell`),
+then `cmd.exe`. All shell probing, argv construction, and encoding handling
+live in `src/utils/shell.rs` (a single source of truth). End-to-end hard
+tests on Windows (`-NoProfile` startup cost, `$LASTEXITCODE` propagation,
+32,767-character command-line ceiling, etc.) live in `qa/winshell/run.sh`
+and run by hand on a Windows host.
+
 | Command | Description |
 |---------|-------------|
 | `just shell-dev` | Run the desktop app in dev mode |

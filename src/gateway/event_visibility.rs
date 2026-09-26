@@ -1,7 +1,7 @@
 //! Owner-scoped WS event delivery (P1 data isolation, spec §5.4).
 //!
 //! Sibling of `visibility.rs` for the event-bus fan-out path rather than RPC
-//! responses: `EventScopeGuard` (filter #1 in `server::handler`'s
+//! responses: `EventScopeGuard` (filter #1 in `server::connection::handle_connection`'s
 //! `should_forward` chain) is role-based — it gates a handful of admin-only
 //! topic prefixes and is default-**allow** for everything else, including
 //! every ordinary session/chat/agent-run event. So today every connected
@@ -160,7 +160,7 @@ use crate::utils::fifo_cache::{forget, remember};
 use aleph_protocol::team_topic::team_topic_id;
 
 /// Which session (if any) a delivered event frame is attributable to, keyed
-/// off the SAME wire strings `server::handler`'s filter chain already
+/// off the SAME wire strings `server::connection::handle_connection`'s filter chain already
 /// extracts (`topic` for `TopicEvent`-form frames, `method` for `stream.*`
 /// JSON-RPC notification frames — see `event_bus.rs::publish_frame`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,35 +334,33 @@ fn subagent_tree_root_session(data: Option<&Value>) -> Option<String> {
 }
 
 /// Classify a delivered event frame's session identity from its wire
-/// `topic`/`method` string and payload.
+/// `topic`/`method` string and payload — `None` when NO arm names the topic.
 ///
 /// **This match must stay reviewed, not just exhaustive.** The runtime
 /// signature is string-based (it reads the wire form, not
 /// `GatewayEventFrame` directly) so it cannot itself force a compile error
 /// when a new frame variant is added — that guarantee lives in this module's
 /// `every_frame_variant_is_classified` test, which matches on the real enum
-/// with no wildcard arm. Whoever adds a variant there is the one who must
-/// decide its classification; a session-scoped variant that lands here as
-/// `Global` by omission is a data leak, not a missing feature.
+/// with no wildcard arm. Raw `TopicEvent::new` producers have no variant, so
+/// `every_raw_topic_producer_has_an_explicit_arm` walks `src/` and requires
+/// `Some` here for every topic they publish. Whoever adds a producer is the
+/// one who must decide its classification; a session-scoped topic that
+/// lands here as `Global` by omission is a data leak, not a missing feature.
 ///
-/// The catch-all default for an unrecognized topic string is `Global`
-/// (fail-open at classification) — matching `EventScopeGuard::can_receive`'s
-/// own "no rule matched → unguarded" default, so a topic not yet reviewed
-/// here keeps exactly its pre-Task-8 delivery behavior instead of a novel
-/// denial. The `team.` prefix is the one family that opts OUT of that default:
-/// it is checked structurally before the match, so an unreviewed team suffix
-/// is owner-scoped rather than broadcast (see the module doc).
+/// The `team.` prefix is checked structurally before the match, so an
+/// unreviewed team suffix is owner-scoped rather than broadcast (see the
+/// module doc).
 #[must_use]
-pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity {
+pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdentity> {
     // `team.<id>.*` first, and structurally: these topics are raw strings from
     // `publish_team_event` / `CoordTaskStore`, so no exhaustive match downstream
     // can catch a suffix added later. Everything under a non-empty team id is
     // that team's, whether or not this file has heard of the suffix. The global
     // `team.changed` has no id and falls through to the match below.
     if let Some(team_id) = team_topic_id(topic) {
-        return SessionIdentity::ByTeamId(team_id.to_string());
+        return Some(SessionIdentity::ByTeamId(team_id.to_string()));
     }
-    match topic {
+    Some(match topic {
         // The two clarification frames are plain `BySessionKey`: they must
         // admit exactly whom their two RPC faces admit, and those faces are
         // OWNER-keyed — `clarification.pending` filters every item through
@@ -454,7 +452,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // the double-nested `{"method":"event","params":{"topic":...}}`
         // envelope this producer uses read as topic `"event"` before the
         // `extract_topic_and_data` fix (fix round 1) — see that function's
-        // doc in `server::handler`.
+        // doc in `server::connection::forward`.
         aleph_protocol::subagent_tree::TOPIC => match subagent_tree_root_session(data) {
             Some(k) => SessionIdentity::BySessionKey(k),
             None => SessionIdentity::Global,
@@ -474,8 +472,8 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // other way and does not apply).
         //
         // ⚠️ Raw-string producer: `every_frame_variant_is_classified` is
-        // structurally blind to it, so this arm owes the SOURCE-level pin
-        // `the_voice_delta_topic_is_classified_at_its_producer`.
+        // structurally blind to it; `every_raw_topic_producer_has_an_explicit_arm`
+        // is the source-level pin that sees it.
         "voice.transcribe.delta" => match str_field(data, "owner_user_id") {
             Some(owner) if !owner.is_empty() => SessionIdentity::ByUserId(owner),
             _ => SessionIdentity::Unattributed,
@@ -491,11 +489,12 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // off the payload (`session_id` is the only field either frame
         // carries that names anything).
         //
-        // ⚠️ Raw-string producer, same as `voice.transcribe.delta` above:
-        // `every_frame_variant_is_classified` cannot see it, so this arm owes
-        // the SOURCE-level pin
-        // `every_pty_topic_the_center_publishes_is_owner_scoped`.
-        "pty.screen" | "pty.exit" => match str_field(data, "session_id") {
+        // ⚠️ Raw-string producer, same as `voice.transcribe.delta` above —
+        // pinned by `every_raw_topic_producer_has_an_explicit_arm`. Spelled
+        // through the protocol constants the producers use, so a renamed
+        // constant cannot leave this arm matching a string nobody sends.
+        aleph_protocol::pty::PTY_SCREEN_TOPIC
+        | aleph_protocol::pty::PTY_EXIT_TOPIC => match str_field(data, "session_id") {
             Some(id) => SessionIdentity::ByPtySession(id),
             // Malformed — neither frame is ever built without this field in
             // production. `OperatorOnly` rather than `Global`: there is no
@@ -626,6 +625,67 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         | "team.changed"
         | "surface.notify" => SessionIdentity::Global,
 
+        // A per-session artifact invalidation (`event_emitter::artifact_ping`):
+        // names the session whose artifact list changed, so it reaches exactly
+        // the callers who may read that session — the same answer
+        // `sessions.changed` gives. It sat on the default arm until r11 (N6),
+        // telling every connection every other user's session keys. A keyless
+        // ping names nobody: the operator's, never everyone's.
+        aleph_protocol::artifact::TOPIC => {
+            match str_field(data, aleph_protocol::artifact::TOPIC_SESSION_KEY)
+                .filter(|k| !k.is_empty())
+            {
+                Some(k) => SessionIdentity::BySessionKey(k),
+                None => SessionIdentity::OperatorOnly,
+            }
+        }
+
+        // Role-gated one filter up (`EventScopeGuard`'s `node.` and `runtime.`
+        // rules): cluster topology and the empty-payload agent-table nudge
+        // carry no per-session content to narrow, so the classification adds
+        // nothing — the same reasoning as `pairing.*` / `config.changed` in
+        // the module doc. Structural on `node.` for the reason the role rule
+        // is: a `node.evicted` added tomorrow is the same family.
+        t if t.starts_with("node.") => SessionIdentity::Global,
+        aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC => SessionIdentity::Global,
+
+        // ⚠️ SPELLED OUT, NOT RE-REVIEWED (r11 T02). Each of these reached
+        // every connection through the default arm before this arm existed;
+        // this arm keeps exactly that delivery so the census above can tell
+        // "somebody decided" from "fell through". Whether any should narrow
+        // (`config.error` carries a validation message, `extension.reloaded`
+        // changed file paths, `config.reloaded` agent ids, `memory.reembed.*`
+        // a background task's progress) is an open product question — moving
+        // one out of this group is the decision, not a tidy-up.
+        "system.tick"
+        | "presence.joined"
+        | "presence.left"
+        | "tools.changed"
+        | "config.reloaded"
+        | "config.error"
+        | "extension.reloaded"
+        | "memory.reembed.progress"
+        | "memory.reembed.completed"
+        | crate::gateway::event_bus::RUNTIME_INSTALL_PROGRESS_TOPIC
+        | "agent.lifecycle.registered"
+        | "agent.lifecycle.deleted"
+        | "agent.lifecycle.bound"
+        | "agent.lifecycle.unbound" => SessionIdentity::Global,
+
+        // Provider-registry config changes (`handlers::embedding_providers`,
+        // `handlers::generation_providers`): install-level configuration, so the
+        // audience `EventScopeGuard`'s `config.changed` rule gives that family —
+        // the operator's. That rule's prefix does not reach these two
+        // (`config.embedding.…` does not start with `config.changed`), and they
+        // were hand-built `json!({"topic": …})` envelopes the raw-producer census
+        // could not see, so until r11 they reached every member through the
+        // default arm. A provider belongs to no conversation: `OperatorOnly`,
+        // not a session key.
+        crate::gateway::handlers::embedding_providers::EMBEDDING_PROVIDERS_CHANGED_TOPIC
+        | crate::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC => {
+            SessionIdentity::OperatorOnly
+        }
+
         // The `workspace.` RPC family is admin-gated in `method_admin.rs` so a
         // member cannot enumerate workspaces; broadcasting the ids on the event
         // plane would hand back exactly what that gate withholds. `OperatorOnly`
@@ -633,9 +693,22 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // owner column by decision, so there is no ownership to resolve.
         "workspace.changed" => SessionIdentity::OperatorOnly,
 
-        // Unrecognized topic: fail open at classification (see doc above).
-        _ => SessionIdentity::Global,
-    }
+        // No arm names it. `session_identity_of` reads this as `Global`;
+        // the census reads it as "nobody decided".
+        _ => return None,
+    })
+}
+
+/// [`classify`] with the delivery default applied: an unrecognized topic is
+/// `Global` (fail-open at classification), matching
+/// `EventScopeGuard::can_receive`'s own "no rule matched → unguarded"
+/// default, so a topic not yet reviewed keeps its pre-Task-8 delivery
+/// instead of a novel denial. That default is what
+/// `every_raw_topic_producer_has_an_explicit_arm` keeps any published raw
+/// topic from relying on.
+#[must_use]
+pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity {
+    classify(topic, data).unwrap_or(SessionIdentity::Global)
 }
 
 /// Mirrors `streaming/relay.rs`'s `StreamRegistry` hygiene: a hard capacity
@@ -1927,6 +2000,152 @@ mod tests {
         }
     }
 
+    /// Every topic a raw `TopicEvent::new` publishes anywhere under `src/` is
+    /// named by an explicit arm of [`classify`]. "Reviewed: Global" and "fell
+    /// to the default arm" used to be the same `Global` — which is how
+    /// `voice.transcribe.delta`, `pty.*` and `session.artifact` each sat on
+    /// the broadcast path until someone looked (N6, r11). One walk, so a new
+    /// raw producer anywhere is red on the day it lands; it replaces the
+    /// per-producer scans the voice and pty pins used to carry.
+    ///
+    /// Not covered, stated so no one reads this as exhaustive: hand-built
+    /// `json!({"topic": …})` envelopes (`publish_team_event` — see
+    /// `no_published_team_topic_suffix_classifies_as_global` — and
+    /// `overflow_warning_frame`), and `GatewayEventFrame`s (that is
+    /// `every_frame_variant_is_classified`).
+    #[test]
+    fn every_raw_topic_producer_has_an_explicit_arm() {
+        let producers = source_census::all_topic_producers();
+        assert!(
+            producers.len() >= 20,
+            "only {} `TopicEvent::new` producers under src/ — the walk or the scraper \
+             broke and this pin is vacuous",
+            producers.len()
+        );
+        let mut unresolved: Vec<String> = Vec::new();
+        let mut unclassified = std::collections::BTreeSet::new();
+        for producer in &producers {
+            let topics = match (&producer.topic, source_census::composed_topic_for(producer)) {
+                (Some(topic), _) => vec![topic.clone()],
+                (None, Some(row)) => (row.topics)(),
+                (None, None) => {
+                    unresolved.push(format!(
+                        "{}: TopicEvent::new({}, …)",
+                        producer.file, producer.expr
+                    ));
+                    continue;
+                }
+            };
+            for topic in topics {
+                if classify(&topic, None).is_none() {
+                    unclassified.insert(format!("{}: {topic}", producer.file));
+                }
+            }
+        }
+        assert!(
+            unresolved.is_empty(),
+            "these producers' topics cannot be resolved to a string — spell the topic as \
+             a literal or a `&str` const, or register the producer in \
+             `source_census::COMPOSED_TOPICS` with the code that derives its topics:\n  {}",
+            unresolved.join("\n  ")
+        );
+        assert!(
+            unclassified.is_empty(),
+            "these published topics reach `session_identity_of` only through its default \
+             arm — give each an explicit arm in `classify` (a deliberate `Global` is an \
+             answer, falling through is not):\n  {}",
+            unclassified.into_iter().collect::<Vec<_>>().join("\n  ")
+        );
+    }
+
+    /// N6 (r11): `session.artifact` names the session whose artifact list
+    /// changed. It sat on `_ => Global`, so every connection was told every
+    /// other user's session keys as their runs produced artifacts.
+    #[tokio::test]
+    async fn a_session_artifact_ping_reaches_its_session_owner_only() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-artifact");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        // The real producer's frame, not a hand-built payload.
+        let ping =
+            crate::gateway::event_emitter::artifact_ping::artifact_ping_event(&key.to_key_string());
+        for (caller, admin, admitted) in [
+            (Some("alice"), false, true),
+            (Some("bob"), false, false),
+            // No operator carve-out: an operator who does not own the session
+            // is not told its key either (same answer as `sessions.changed`).
+            (Some("carol"), true, false),
+        ] {
+            assert_eq!(
+                index
+                    .event_admits(&ping.topic, Some(&ping.data), caller, admin, &store, None)
+                    .await,
+                admitted,
+                "session.artifact for alice's session, caller {caller:?} (admin={admin})"
+            );
+        }
+
+        // Malformed (no key): the operator's, never everyone's.
+        let blank = serde_json::json!({});
+        assert!(
+            !index
+                .event_admits(&ping.topic, Some(&blank), Some("bob"), false, &store, None)
+                .await,
+            "a keyless artifact ping must not reach a member"
+        );
+        assert!(
+            index
+                .event_admits(&ping.topic, Some(&blank), Some("carol"), true, &store, None)
+                .await,
+            "a keyless artifact ping stays with the operator"
+        );
+    }
+
+    /// r11 (C2): the provider-registry config topics are install-level
+    /// configuration — the operator's, as `config.changed` is. They used to be
+    /// hand-built envelopes outside the raw-producer census and fell to
+    /// `Global`, reaching every member. Driven through `event_admits` with the
+    /// payload shape the producers publish.
+    #[tokio::test]
+    async fn provider_config_changes_reach_operators_only() {
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        for (topic, data) in [
+            (
+                crate::gateway::handlers::embedding_providers::EMBEDDING_PROVIDERS_CHANGED_TOPIC,
+                serde_json::json!({ "action": "set_active", "provider_id": "p1" }),
+            ),
+            (
+                crate::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC,
+                serde_json::json!({ "action": "created", "provider": "p1" }),
+            ),
+        ] {
+            assert_eq!(
+                classify(topic, Some(&data)),
+                Some(SessionIdentity::OperatorOnly),
+                "`{topic}` is install-level config and must be named by an \
+                 operator-only arm, not fall to the default"
+            );
+            assert!(
+                !index
+                    .event_admits(topic, Some(&data), Some("bob"), false, &store, None)
+                    .await,
+                "`{topic}` must not reach a member"
+            );
+            assert!(
+                index
+                    .event_admits(topic, Some(&data), Some(OWNER_USER_ID), true, &store, None)
+                    .await,
+                "`{topic}` must still reach the operator"
+            );
+        }
+    }
+
     // ── the `team.<id>.*` plane ─────────────────────────────────────────
 
     async fn team_store() -> Arc<dyn TeamStore> {
@@ -2271,84 +2490,35 @@ mod tests {
     /// whole topic with `format!` and has no suffix argument to scrape, so it
     /// is asserted directly below — and covered anyway by the classifier being
     /// structural rather than a suffix list.
-    /// SOURCE-level pin for the voice relay, owed for the same reason the team
-    /// one is: `voice.transcribe.delta` is published as a raw
-    /// `TopicEvent::new("…")` string with no `GatewayEventFrame` variant, so
-    /// `every_frame_variant_is_classified` is structurally blind to it — which
-    /// is exactly how it sat on `_ => Global`, broadcasting the text of what
-    /// one user said to every connection, for as long as nobody looked.
-    ///
-    /// Reads the producer's own source so that renaming the topic on one side
-    /// fails here rather than silently re-broadcasting.
+    /// `voice.transcribe.delta` carries the TEXT OF WHAT THE SPEAKER SAID: it
+    /// reaches its speaker only, and an unstamped frame fails closed. Which
+    /// files publish it is `every_raw_topic_producer_has_an_explicit_arm`'s
+    /// question; this pins only what the arm answers.
     #[test]
-    fn the_voice_delta_topic_is_classified_at_its_producer() {
-        const RELAY: &str = include_str!("voice/streaming/relay.rs");
-        let production = source_census::production_prefix(RELAY);
-        let topics = source_census::topic_event_literals(&production);
-
-        assert!(
-            !topics.is_empty(),
-            "relay.rs publishes no TopicEvent — the scanner stopped matching \
-             the call shape, so this pin has quietly become vacuous"
+    fn the_voice_delta_topic_reaches_its_speaker_only() {
+        let topic = "voice.transcribe.delta";
+        let owned = serde_json::json!({ "owner_user_id": "u-alice" });
+        assert_eq!(
+            session_identity_of(topic, Some(&owned)),
+            SessionIdentity::ByUserId("u-alice".to_string()),
+            "`{topic}` carries live speech and must reach its speaker only"
         );
-        for topic in &topics {
-            let owned = serde_json::json!({ "owner_user_id": "u-alice" });
-            assert_eq!(
-                session_identity_of(topic, Some(&owned)),
-                SessionIdentity::ByUserId("u-alice".to_string()),
-                "`{topic}` carries live speech and must reach its speaker only"
-            );
-            // No stamp ⇒ denied to anyone scoped, NOT broadcast. `Global` here
-            // would be the original bug with an arm in front of it.
-            assert_eq!(
-                session_identity_of(topic, None),
-                SessionIdentity::Unattributed,
-                "`{topic}` without an owner stamp must fail closed"
-            );
-        }
+        // No stamp ⇒ denied to anyone scoped, NOT broadcast. `Global` here
+        // would be the original bug with an arm in front of it.
+        assert_eq!(
+            session_identity_of(topic, None),
+            SessionIdentity::Unattributed,
+            "`{topic}` without an owner stamp must fail closed"
+        );
     }
 
-    /// SOURCE-level pin, the constant-topic sibling of the voice test above:
-    /// `pty.screen` / `pty.exit` are published through
-    /// `aleph_protocol::pty::PTY_SCREEN_TOPIC` / `PTY_EXIT_TOPIC` rather than
-    /// string literals, so `topic_event_literals` — which deliberately skips
-    /// a composed first argument (see its own doc) — cannot scrape them.
-    /// This scans for the constant names directly, for the same reason the
-    /// voice pin reads the producer's own source: renaming or dropping the
-    /// classification arm must fail here, not silently re-broadcast a raw
-    /// shell to every connection.
-    ///
-    /// Deliberately NOT anchored to `TopicEvent::new(` on the same line —
-    /// `session.rs`'s call wraps the constant onto its own line once rustfmt
-    /// widens it, which is exactly the brittleness `source_census`'s module
-    /// doc records breaking the old literal-scraper. Each producer file is
-    /// asserted to contain BOTH the call shape and the constant name, which
-    /// is loose enough to survive reformatting and specific enough that
-    /// deleting the call (not just moving it) still fails the assertion.
+    /// `pty.screen` / `pty.exit` carry a live shell's screen/status: owner-scoped
+    /// through `PtyManager::owner_of`, and a malformed frame never falls to
+    /// `Global`. Which files publish them is
+    /// `every_raw_topic_producer_has_an_explicit_arm`'s question (it resolves
+    /// the producers' `aleph_protocol::pty` constants); this pins the answer.
     #[test]
-    fn every_pty_topic_the_center_publishes_is_owner_scoped() {
-        const MANAGER: &str = include_str!("pty/manager.rs");
-        const SESSION: &str = include_str!("pty/session.rs");
-
-        for (file, src, const_name) in [
-            ("pty/manager.rs", MANAGER, "PTY_SCREEN_TOPIC"),
-            ("pty/session.rs", SESSION, "PTY_EXIT_TOPIC"),
-        ] {
-            let production = source_census::production_prefix(src);
-            assert!(
-                production.contains("TopicEvent::new("),
-                "{file} no longer publishes any TopicEvent — this pin has \
-                 quietly become vacuous"
-            );
-            assert!(
-                production.contains(const_name),
-                "{file} no longer references aleph_protocol::pty::{const_name} \
-                 — either it stopped publishing that topic, or it started \
-                 publishing a bare string literal that this scan and \
-                 `session_identity_of`'s pty arm could silently disagree about"
-            );
-        }
-
+    fn every_pty_topic_is_owner_scoped() {
         for topic in [
             aleph_protocol::pty::PTY_SCREEN_TOPIC,
             aleph_protocol::pty::PTY_EXIT_TOPIC,
@@ -2749,7 +2919,6 @@ mod tests {
             "self-guard: expected at least the four historical approval topics,              scanned {topics:?} — a scan that finds nothing passes every              assertion below vacuously"
         );
 
-        let arm = crate::utils::source_scan::production_prefix(include_str!("event_visibility.rs"));
         for topic in &topics {
             // Classification, not just spelling: a real session key must reach
             // its owner, and a blank one must stay with the operator.
@@ -2767,8 +2936,9 @@ mod tests {
                 "{topic} with no owner must fail closed to the operator"
             );
             assert!(
-                arm.contains(&format!("\"{topic}\"")),
-                "{topic} is not named in session_identity_of's arm — it would                  fall to `_ => Global`"
+                classify(topic, None).is_some(),
+                "{topic} is named by no arm of `classify` — it would fall to the \
+                 default `Global`"
             );
         }
     }
@@ -3334,7 +3504,7 @@ mod tests {
     /// the run→session seed and the delivery loop then asked
     /// `event_admits_for` — which resolves those two topics THROUGH that seed.
     ///
-    /// The calls below are in the production order (`handler.rs`'s delivery
+    /// The calls below are in the production order (`server/connection/mod.rs`'s delivery
     /// loop: note, then filter). Re-adding the eviction arm turns this red.
     #[tokio::test]
     async fn terminal_frames_survive_their_own_note_frame() {
@@ -3458,7 +3628,7 @@ mod tests {
             serde_json::from_str(&rx.try_recv().expect("publish_frame delivers synchronously"))
                 .unwrap();
 
-        // Exactly the two strings `server::handler`'s delivery loop derives.
+        // Exactly the two strings `server::connection::handle_connection`'s delivery loop derives.
         let topic = wire["method"].as_str().expect("stream-form frame");
         let payload = wire.get("params");
         assert_eq!(
@@ -3657,7 +3827,7 @@ mod tests {
     /// STREAM wire form, because that is what makes the projection land on the
     /// bytes that go out.
     ///
-    /// `server::handler::event_wire_form` inserts the projected payload at
+    /// `server::connection::forward::event_wire_form` inserts the projected payload at
     /// `.params` unconditionally — correct for a stream-form frame, whose
     /// payload already lives there. Lose the `stream_method()` and
     /// `event_bus::publish_frame` emits the bare `{topic, data}` form instead:

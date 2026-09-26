@@ -557,8 +557,10 @@ pub async fn handle_update(
             // and `count_owned_background_work` their background work — but
             // it answers a deliberately different question: the preview
             // counts what is OWNED (every goal/loop/cron/heartbeat task,
-            // `enabled` or not), these counts are of what the sweep actually
-            // stopped (`enabled && owned`). Neither surface asserts they are
+            // `enabled` or not, and every non-terminal dispatcher-managed
+            // team task), these counts are of what the sweep actually
+            // stopped (`enabled && owned`; for team tasks, the still-claimable
+            // ones). Neither surface asserts they are
             // equal, and the preview cannot stand in for this receipt; the
             // filter split is stated on `count_owned_background_work`.
             // The other two legs still have no surface at all: a withdrawn
@@ -591,7 +593,7 @@ pub async fn handle_update(
                     aleph_protocol::users::ReactivationEffects {
                         devices: "remain revoked — issue a new bootstrap ticket (`pair --user`) per device".to_string(),
                         channel_senders: "remain withdrawn — re-approve via channel.pairing.approve".to_string(),
-                        background_work: "goals/loops/crons/heartbeat tasks remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle / heartbeat_toggle)".to_string(),
+                        background_work: "goals/loops/crons/heartbeat tasks/team tasks remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle / heartbeat_toggle / task_update status=pending)".to_string(),
                     }
                 }),
             };
@@ -661,12 +663,9 @@ async fn restamp_live_connections(
         return;
     }
 
-    // Wire word, not the enum's storage word: `admin` ⇒ `"operator"` is the
-    // same mapping `resolve_connection_identity` applies at connect time.
-    let wanted = match role {
-        UserRole::Admin => "operator",
-        UserRole::Member => "member",
-    };
+    // Wire word, not the enum's storage word — the one mapping
+    // `resolve_connection_identity` also applies at connect time.
+    let wanted = role.wire_role();
     let bound: std::collections::HashSet<&str> = device_ids.iter().map(String::as_str).collect();
 
     let mut restamped = 0usize;
@@ -908,22 +907,23 @@ async fn revoke_channel_bindings(
     }
 }
 
-/// The four background subsystems both the deactivation freeze and the
+/// The five background subsystems both the deactivation freeze and the
 /// `users.get` preview reach into.
 ///
-/// Taken as a parameter rather than read from the four process-globals at the
+/// Taken as a parameter rather than read from the five process-globals at the
 /// point of use, for the reason [`freeze_owned_heartbeats`] already documents
 /// for its own leg: a process-global is install-once, so a test that installs
 /// one can never afterwards observe the absent path in the same binary — and
 /// the interesting arms here are exactly the absent ones. It is also what
 /// lets one test assert the freeze's numbers and the preview's numbers over
-/// the SAME four stores.
+/// the SAME five stores.
 #[derive(Clone, Default)]
 pub(crate) struct BackgroundWorkHandles {
     pub goals: Option<Arc<crate::goal::GoalStore>>,
     pub loops: Option<Arc<crate::looping::LoopRegistry>>,
     pub crons: Option<crate::tasks::cron::SharedCronService>,
     pub heartbeats: Option<crate::tasks::heartbeat::SharedHeartbeatService>,
+    pub teams: Option<crate::teams::TeamTaskStores>,
 }
 
 impl BackgroundWorkHandles {
@@ -934,6 +934,7 @@ impl BackgroundWorkHandles {
             loops: crate::looping::global(),
             crons: crate::tasks::cron::global(),
             heartbeats: crate::tasks::heartbeat::global(),
+            teams: crate::teams::background_stores(),
         }
     }
 }
@@ -971,18 +972,43 @@ impl BackgroundWorkHandles {
 /// said the same thing in two places, which is why the miss survived: an
 /// inventory that names three of four reads as coverage.
 ///
-/// One-way freeze for all four: reactivating the user does NOT auto-resume
-/// its goals, loops, crons or heartbeat tasks (spec is silent on auto-resume)
-/// — each owner session resumes its own via
-/// `goal(action='update', status='active')` / `loop(action='resume')` /
-/// `cron_manage(action='toggle')` / `heartbeat_toggle`.
+/// Team tasks are the FIFTH leg (round 11, N2) and the first one a MEMBER can
+/// own: `teams.create_task` is member-open and stamps `managed_by:
+/// dispatcher`, so a deactivated member's own teams kept dispatching work.
+/// Scope of the leg: dispatcher-managed, still-claimable tasks on teams the
+/// principal OWNS, paused with a `result` naming the principal
+/// (`TeamTaskStores::pause_dispatcher_tasks_owned_by`, which owns this leg's
+/// mutation the way each other subsystem owns its own). Tasks they authored on
+/// other teams are refused by the dispatcher's fire-time authority check
+/// instead (see the backstop paragraph below).
 ///
-/// **Deliberately deferred, recorded rather than hidden:** cron's fire-time
-/// backstop (`CronService::disable_walled_owner_job`, driven by the
-/// executor's `walled_owner_reason` check) has NO heartbeat counterpart after
-/// this change. The twin is not closed — a heartbeat task re-enabled by a
-/// second admin after its owner was walled will still fire, exactly as a cron
-/// job would have before round-5 ④.
+/// One-way freeze for all five: reactivating the user does NOT auto-resume
+/// its goals, loops, crons, heartbeat tasks or team tasks (spec is silent on
+/// auto-resume) — each owner session resumes its own via
+/// `goal(action='update', status='active')` / `loop(action='resume')` /
+/// `cron_manage(action='toggle')` / `heartbeat_toggle` /
+/// `task_update(status='pending')`.
+///
+/// **Fire-time backstop, three schedulers (round 11).** The sweep is the
+/// primary; each trigger also re-asks the users table through the one
+/// resolver, `scope::authority::resolve` — cron in
+/// `executor::execute_cron_job` (disarms via
+/// `CronService::disable_walled_owner_job`), heartbeat in
+/// `service::timer::execute_heartbeat_tick` BEFORE the L1 probe (disarms via
+/// `ops::disable_walled_owner_task`), and the team dispatcher at claim time
+/// (`teams::dispatcher::schedule::authority::authorize_claim`, which pauses a
+/// refused task with the reason). A task re-enabled by a second admin after
+/// its owner was walled is disarmed on its next fire. A users-store READ
+/// error disarms nothing: that fire is skipped with "authority unknown" on
+/// record and the next fire asks again.
+///
+/// The dispatcher's check has a limit the other two do not: it asks about
+/// the task's AUTHOR first, and only an authorless task falls back to the
+/// team's owner. So it backstops tasks this principal authored (on any team)
+/// and authorless tasks on their teams — but a task authored by another,
+/// still-active member on a team this principal owns is GRANTED at claim
+/// time. The sweep is the only thing that freezes those, and a resume of such
+/// a task after the sweep is not undone by any backstop.
 ///
 /// # Why this reports the SAME struct `users.get` reports
 ///
@@ -1003,7 +1029,7 @@ async fn freeze_owned_background_work(
 }
 
 /// The injectable core [`freeze_owned_background_work`] delegates to — see
-/// [`BackgroundWorkHandles`] for why the four stores are parameters.
+/// [`BackgroundWorkHandles`] for why the five stores are parameters.
 async fn freeze_owned_background_work_with(
     handles: &BackgroundWorkHandles,
     user_id: &str,
@@ -1063,10 +1089,24 @@ async fn freeze_owned_background_work_with(
         }
     }
     report.heartbeats = freeze_owned_heartbeats(handles.heartbeats.clone(), user_id).await;
+    // The team leg's mutation is owned by `teams` (`TeamTaskStores`), like
+    // every other leg's by its own subsystem; only the absent arm is here.
+    report.team_tasks = match handles.teams.as_ref() {
+        Some(stores) => stores.pause_dispatcher_tasks_owned_by(user_id).await,
+        None => {
+            tracing::warn!(
+                user_id = %user_id,
+                "users.update: deactivation did NOT reach the team-task leg — the team \
+                 stores are not open in this process, so any team task this principal \
+                 owns can still be dispatched"
+            );
+            None
+        }
+    };
     report
 }
 
-/// What one principal OWNS across the same four background subsystems — the
+/// What one principal OWNS across the same five background subsystems — the
 /// read-only counterpart of [`freeze_owned_background_work`], and the
 /// `background_work` leg of `users.get`'s dossier.
 ///
@@ -1080,7 +1120,7 @@ async fn freeze_owned_background_work_with(
 /// # The deliberate difference from the freeze
 ///
 /// Same owner predicate ([`aleph_protocol::users::owned_by`], including its
-/// legacy-`None` handling, shared with all four sweeps), a deliberately
+/// legacy-`None` handling, shared with all five sweeps), a deliberately
 /// different activity filter. The freeze counts what it CHANGED
 /// (`enabled && owned`); this counts what is OWNED. A read that reused the
 /// freeze's `enabled` filter would silently under-report the preview — the
@@ -1133,6 +1173,16 @@ async fn count_owned_background_work_with(
                 user_id = %user_id,
                 "users.get: the heartbeat leg was NOT measured — no heartbeat \
                  service in this process"
+            );
+            None
+        }
+    };
+    report.team_tasks = match handles.teams.as_ref() {
+        Some(stores) => stores.count_dispatcher_tasks_owned_by(user_id).await,
+        None => {
+            tracing::warn!(
+                user_id = %user_id,
+                "users.get: the team-task leg was NOT measured — the team stores are not open"
             );
             None
         }
@@ -1273,7 +1323,7 @@ mod tests {
     /// connection into `.connections` to pin the demote half from this call
     /// site too. The physical socket-*close* reaction to the `DeviceRevoked`
     /// event (severing the WS) is separate — it lives in the WS dispatch
-    /// loop (`server/handler.rs::device_revoked_should_close`), already
+    /// loop (`server/connection/forward.rs::device_revoked_should_close`), already
     /// covered by that module's own tests, and isn't exercised here.
     fn test_kick_sink() -> UserDeactivationKick {
         kick_with_pairing(Arc::new(
@@ -2273,8 +2323,9 @@ mod tests {
 
         // Install the audit handle only for the SECOND write, so anything it
         // receives came from the retry.
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
@@ -2315,8 +2366,9 @@ mod tests {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
 
         let store = seeded_store();
@@ -2389,7 +2441,8 @@ mod tests {
     // users.get — the dossier read
     // ========================================================================
 
-    /// Four real stores, none of them process-global, so the freeze and the
+    /// Four real stores (the fifth, the team stores, is added per test), none
+    /// of them process-global, so the freeze and the
     /// preview can be asked the same question over the same data inside one
     /// test binary.
     fn background_fixture() -> (BackgroundWorkHandles, tempfile::TempDir) {
@@ -2415,9 +2468,59 @@ mod tests {
                 loops: Some(loops),
                 crons: Some(crons),
                 heartbeats: Some(heartbeats),
+                teams: None,
             },
             dir,
         )
+    }
+
+    use crate::teams::background::test_support::{
+        in_memory_stores as team_stores, seed_team_tasks,
+    };
+
+    /// N2: the fifth leg, reached through the freeze: the Pending
+    /// DISPATCHER-MANAGED tasks of teams the principal owns are paused, the
+    /// count is reported, and each frozen task says why and who (§14).
+    ///
+    /// The leg's filters each have their own test beside the leg itself
+    /// (`teams::background::tests`), so each production filter has a red of
+    /// its own; this one proves the handler reaches the leg.
+    #[tokio::test]
+    async fn deactivation_pauses_pending_dispatcher_tasks_of_owned_teams() {
+        use crate::agents::swarm::tasks::CoordTaskStatus;
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        let alice = seed_team_tasks(&stores, Some("u-alice"), &[true]).await;
+
+        let frozen = freeze_owned_background_work_with(&handles, "u-alice").await;
+        assert_eq!(frozen.team_tasks, Some(1));
+        let task = crate::teams::background::test_support::task(&stores, &alice[0]).await;
+        assert_eq!(task.status, CoordTaskStatus::Paused);
+        let reason = task.result.unwrap_or_default();
+        assert!(
+            reason.contains("'u-alice' was deactivated") && reason.contains("back to pending"),
+            "a frozen task must name the deactivated principal and the exit: {reason}"
+        );
+    }
+
+    /// Absent stores = NOT MEASURED (`None`), never `Some(0)` (criterion §8).
+    #[tokio::test]
+    async fn an_unreachable_team_store_reports_the_leg_unmeasured() {
+        let (handles, _dir) = background_fixture();
+        assert!(handles.teams.is_none());
+        assert_eq!(
+            freeze_owned_background_work_with(&handles, "u-alice")
+                .await
+                .team_tasks,
+            None
+        );
+        assert_eq!(
+            count_owned_background_work_with(&handles, "u-alice")
+                .await
+                .team_tasks,
+            None
+        );
     }
 
     fn seed_goal(handles: &BackgroundWorkHandles, session: &str, owner: Option<&str>) {
@@ -2466,13 +2569,16 @@ mod tests {
             .unwrap();
     }
 
-    /// The preview and the freeze answer over the SAME four stores, and when
+    /// The preview and the freeze answer over the SAME five stores, and when
     /// every owned row is active the two structs are equal — asserted as
     /// whole structs, so a fifth leg cannot land on one surface and not the
     /// other (criterion #1: one leg enumeration, two readers).
     #[tokio::test]
     async fn the_preview_and_the_freeze_report_the_same_struct_for_all_active_work() {
-        let (handles, _dir) = background_fixture();
+        let (mut handles, _dir) = background_fixture();
+        let stores = team_stores().await;
+        handles.teams = Some(stores.clone());
+        seed_team_tasks(&stores, Some("u-alice"), &[true]).await;
         seed_goal(&handles, "s-alice", Some("u-alice"));
         seed_loop(&handles, "l-alice", Some("u-alice"));
         seed_cron(&handles, "c-alice", Some("u-alice")).await;
@@ -2485,6 +2591,7 @@ mod tests {
                 loops: 1,
                 crons: 1,
                 heartbeats: Some(0),
+                team_tasks: Some(1),
             }
         );
 

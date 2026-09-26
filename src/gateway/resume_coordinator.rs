@@ -339,6 +339,27 @@ pub enum ResumeRefusal {
     /// pass-through string on the wire — no client switches on reason words —
     /// so it needs no renderer of its own.
     TailReadFailed(String),
+    /// Fire-time authority (round 11, N8): the person this session's run acts
+    /// for is deactivated or deleted. The detail names that person and which
+    /// of the two it is (`principal deactivated — session owner u-bob`).
+    ///
+    /// Settled for good, and without spending a crash-loop attempt: the
+    /// candidate is asked BEFORE the repair and the intent stamp
+    /// (`attempt_gate`), and a refusal closes the run once with
+    /// `RunFinished { Abandoned }`, so the next boot does not re-ask it. That
+    /// settle is also counted under `abandoned` and this detail adds the next
+    /// step (send the message again once the account may act); the
+    /// conversation itself reads a sentence that names nobody
+    /// (`record_refused_settle`). (The `retrigger` backstop can still report
+    /// this word for the one case the pre-check cannot see — the person
+    /// refused between the pre-check and the retrigger.)
+    AuthorityRefused(String),
+    /// Fire-time authority could not be established (the users store or the
+    /// session row could not be read, ruling R-a). Nothing is written: no
+    /// intent stamp, no closer, no abandon. The log is exactly as it was, the
+    /// crash-loop count is unchanged, and the next boot or `agent.resume`
+    /// asks again — however many times the store stays down.
+    AuthorityUnknown(String),
 }
 
 impl ResumeRefusal {
@@ -353,6 +374,8 @@ impl ResumeRefusal {
             Self::RetriggerFailed(_) => "retrigger_failed",
             Self::IntentStampFailed(_) => "intent_stamp_failed",
             Self::TailReadFailed(_) => "tail_read_failed",
+            Self::AuthorityRefused(_) => "authority_refused",
+            Self::AuthorityUnknown(_) => "authority_unknown",
         }
     }
 
@@ -365,7 +388,9 @@ impl ResumeRefusal {
             Self::BoundaryRepairFailed(e)
             | Self::RetriggerFailed(e)
             | Self::IntentStampFailed(e)
-            | Self::TailReadFailed(e) => e.clone(),
+            | Self::TailReadFailed(e)
+            | Self::AuthorityRefused(e)
+            | Self::AuthorityUnknown(e) => e.clone(),
         }
     }
 }
@@ -849,6 +874,8 @@ async fn retrigger_emitter(
 /// (pre-P1) session stamps nothing and resumes exactly as it did before — the
 /// same zero-change carve-out `goal_wait::rehydrate_owner_scope` and cron's
 /// executor take, from the same durable columns.
+/// The authority half (who, at what role, and whether at all) is decided
+/// afterwards in [`ResumeCoordinator::retrigger`].
 pub(crate) fn resume_metadata(
     workspace_override: Option<&std::path::Path>,
     session_meta: Option<&crate::gateway::session_store::types::SessionMetadata>,
@@ -880,11 +907,142 @@ pub(crate) fn resume_metadata(
     // CHANNEL-origin sessions; a Panel session takes its early-return branch.
     //
     // Boot resume and the `/v1/admin` route have no caller scope, so this
-    // writes nothing there and their behaviour is byte-identical.
+    // writes nothing there — but that is no longer the whole answer:
+    // `retrigger` then resolves the session owner's fire-time authority
+    // (`scope::authority::resolve`), which stamps `caller_role = "member"`
+    // over an absent role whenever that person is a member, and refuses the
+    // resume outright for a deactivated or deleted one (round 11, N8).
     if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
         metadata.insert("caller_role".to_string(), role);
     }
     metadata
+}
+
+/// Map a fire-time verdict onto a resume refusal. Pure, so the two refusal
+/// arms are testable without a coordinator.
+fn resume_authority(verdict: crate::gateway::fire_gate::FireVerdict) -> Result<(), ResumeRefusal> {
+    match verdict {
+        crate::gateway::fire_gate::FireVerdict::Proceed => Ok(()),
+        crate::gateway::fire_gate::FireVerdict::Refused(r) => {
+            Err(ResumeRefusal::AuthorityRefused(r))
+        }
+        crate::gateway::fire_gate::FireVerdict::Unknown(r) => {
+            Err(ResumeRefusal::AuthorityUnknown(r))
+        }
+    }
+}
+
+/// The resumed run's `RunRequest`, built FROM `metadata` as the fire-time
+/// grant for the session `row` admitted it (round 11, N8; ruling b):
+/// `retrigger` executes exactly the request returned here, so the grant can
+/// only land on what runs. `multi_user` is the room floor's mode
+/// (`fire_gate::authorize_session_run`).
+fn admit_resume<R>(
+    resolve: R,
+    multi_user: impl FnOnce() -> bool,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    mut metadata: HashMap<String, String>,
+    session_id: &SessionId,
+    workspace_override: Option<std::path::PathBuf>,
+    model_override: Option<crate::gateway::model_override::ModelOverride>,
+) -> Result<RunRequest, ResumeRefusal>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    resume_authority(crate::gateway::fire_gate::authorize_session_run(
+        resolve,
+        multi_user,
+        row,
+        &mut metadata,
+    ))?;
+    Ok(RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        // Empty input — `FlowInput::Resume` ignores it; the session log
+        // already holds the original UserMessage.
+        input: String::new(),
+        session_key: session_id.clone(),
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override,
+        max_iterations_override: None,
+        model_override,
+    })
+}
+
+/// What a resume candidate does once its age is known, decided in ONE order:
+/// fire-time authority first, the crash-loop cap second, the intent stamp
+/// last (ruling a, §15).
+///
+/// Authority is asked BEFORE the cap because neither of its non-proceed
+/// answers is a crash. `Unknown` is "I do not know whose run this is": it
+/// must spend no attempt and must never reach the "it kept crashing" abandon,
+/// however many boots the store stays down for. `Refused` is a settled fact
+/// about a person, not about the run, so it closes the run under its own
+/// sentence rather than under the crash-loop one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AttemptGate {
+    /// Authority unknown: leave the candidate exactly as found — no stamp, no
+    /// closer — and ask again next time.
+    HoldUnspent(String),
+    /// Authority refused: close the run once, with this reason, and spend no
+    /// attempt.
+    SettleRefused(String),
+    /// Authority granted, but the crash-loop cap is reached.
+    CrashLoopCap,
+    /// Stamp this attempt ordinal, then retrigger.
+    Stamp(u32),
+}
+
+/// See [`AttemptGate`]. Pure, so the order is testable without a
+/// coordinator.
+fn attempt_gate(
+    authority: crate::gateway::fire_gate::FireVerdict,
+    attempts: u32,
+    max_attempts: u32,
+) -> AttemptGate {
+    use crate::gateway::fire_gate::FireVerdict;
+    match authority {
+        FireVerdict::Unknown(reason) => AttemptGate::HoldUnspent(reason),
+        FireVerdict::Refused(reason) => AttemptGate::SettleRefused(reason),
+        FireVerdict::Proceed if attempts >= max_attempts => AttemptGate::CrashLoopCap,
+        FireVerdict::Proceed => AttemptGate::Stamp(attempts.saturating_add(1)),
+    }
+}
+
+/// What the conversation reads when a resume is settled for a refused
+/// authority: names nobody and discloses no account status. The notice goes
+/// in-band and to the origin channel, and in a room both are read by every
+/// participant — "`u-bob` was deactivated" is not theirs to learn (T09
+/// re-review, N5). The operator's copy, with the person and the reason, is in
+/// the report and the log.
+const REFUSED_SETTLE_NOTICE: &str = "the account it was running for can no longer run it";
+
+/// Record a refused-authority settle in `report` and return the sentence the
+/// conversation may read.
+///
+/// The run is CLOSED (`RunFinished { Abandoned }`), so it counts under
+/// `abandoned` — the `agent.resume` receipt then reads `abandoned`, not
+/// `not_resumed`, whose own wording says "retry" (T09 re-review, N4). The
+/// refusal entry keeps the full reason for the operator and says what the
+/// user can do next: nothing is left to resume, the message has to be sent
+/// again once the account may act.
+pub(crate) fn record_refused_settle(
+    session_id: &SessionId,
+    reason: &str,
+    report: &mut ResumeReport,
+) -> String {
+    report.abandoned += 1;
+    report.refused.push((
+        session_id.clone(),
+        ResumeRefusal::AuthorityRefused(format!(
+            "{reason}. The run was closed, not left pending: once the account is \
+             reactivated, send the message again."
+        )),
+    ));
+    REFUSED_SETTLE_NOTICE.to_string()
 }
 
 /// When this candidate was last *alive*, in recording time.
@@ -1472,9 +1630,9 @@ impl ResumeCoordinator {
     }
 
     /// Handle one interrupted candidate: **one** reduction over the log, then
-    /// the recency filter, the cap check, the crash-boundary repair, the
-    /// intent stamp and the re-trigger — every one of them reading that same
-    /// reduction.
+    /// the recency filter, fire-time authority and the cap check (in that
+    /// order — [`attempt_gate`]), the crash-boundary repair, the intent stamp
+    /// and the re-trigger — every one of them reading that same reduction.
     ///
     /// The repair used to re-read and re-reduce the log itself, so "what state
     /// is this candidate in" was answered twice per candidate, at two moments,
@@ -1582,26 +1740,40 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Cap check — abandon crash-looped runs. Counted off the intent
-        // stamps, so a resume that died before its run's own `RunStarted`
-        // still spent one of these.
-        if attempts >= self.config.max_attempts {
-            tracing::warn!(
-                session = ?session_id,
-                attempts,
-                max_attempts = self.config.max_attempts,
-                "resume: crash-loop cap reached; abandoning"
-            );
-            self.abandon(
-                session_id,
-                Abandoned::InterruptedRun,
-                reduction.open_run.as_ref().map(|o| o.run_id.as_str()),
-                "it kept crashing on every resume attempt",
-            )
-            .await;
-            report.abandoned += 1;
-            return;
-        }
+        // Authority, then the cap check (`attempt_gate`). The cap abandons
+        // crash-looped runs; it is counted off the intent stamps, so a resume
+        // that died before its run's own `RunStarted` still spent one of
+        // these. An authority that is unknown or refused spends none.
+        let authority = self.authority_preflight(session_id).await;
+        let attempt = match attempt_gate(authority, attempts, self.config.max_attempts) {
+            AttemptGate::HoldUnspent(reason) => {
+                self.hold_unspent(session_id, reason, report);
+                return;
+            }
+            AttemptGate::SettleRefused(reason) => {
+                self.settle_refused(session_id, Abandoned::InterruptedRun, reason, report)
+                    .await;
+                return;
+            }
+            AttemptGate::CrashLoopCap => {
+                tracing::warn!(
+                    session = ?session_id,
+                    attempts,
+                    max_attempts = self.config.max_attempts,
+                    "resume: crash-loop cap reached; abandoning"
+                );
+                self.abandon(
+                    session_id,
+                    Abandoned::InterruptedRun,
+                    None,
+                    "it kept crashing on every resume attempt",
+                )
+                .await;
+                report.abandoned += 1;
+                return;
+            }
+            AttemptGate::Stamp(attempt) => attempt,
+        };
 
         // ④ Everything the resume replays, derived from the SAME `open_run`
         // the repair is about to answer against: the project folder, the three
@@ -1660,10 +1832,10 @@ impl ResumeCoordinator {
         // run's own `RunStarted` (admit / hook / seed) still moves the
         // ratchet. A stamp that did not land is a refusal, not a warning: a
         // retrigger without its stamp is the unbounded loop this closes.
-        // `saturating_add`: the ordinal must not depend on the cap check
-        // above having run first.
+        // The ordinal comes from `attempt_gate`, the same answer the cap
+        // check read.
         if let Err(e) = self
-            .stamp_resume_attempt(session_id, run_started.seq, attempts.saturating_add(1))
+            .stamp_resume_attempt(session_id, run_started.seq, attempt)
             .await
         {
             tracing::warn!(
@@ -1841,25 +2013,38 @@ impl ResumeCoordinator {
             report.abandoned += 1;
             return;
         }
-        if attempts >= self.config.max_attempts {
-            tracing::warn!(
-                session = ?session_id,
-                attempts,
-                max_attempts = self.config.max_attempts,
-                "resume: unanswered message hit the crash-loop cap; abandoning"
-            );
-            self.abandon(
-                session_id,
-                Abandoned::UnansweredMessage,
-                None,
-                "it kept crashing before the run could start",
-            )
-            .await;
-            report.abandoned += 1;
-            return;
-        }
+        let authority = self.authority_preflight(session_id).await;
+        let attempt = match attempt_gate(authority, attempts, self.config.max_attempts) {
+            AttemptGate::HoldUnspent(reason) => {
+                self.hold_unspent(session_id, reason, report);
+                return;
+            }
+            AttemptGate::SettleRefused(reason) => {
+                self.settle_refused(session_id, Abandoned::UnansweredMessage, reason, report)
+                    .await;
+                return;
+            }
+            AttemptGate::CrashLoopCap => {
+                tracing::warn!(
+                    session = ?session_id,
+                    attempts,
+                    max_attempts = self.config.max_attempts,
+                    "resume: unanswered message hit the crash-loop cap; abandoning"
+                );
+                self.abandon(
+                    session_id,
+                    Abandoned::UnansweredMessage,
+                    None,
+                    "it kept crashing before the run could start",
+                )
+                .await;
+                report.abandoned += 1;
+                return;
+            }
+            AttemptGate::Stamp(attempt) => attempt,
+        };
         if let Err(e) = self
-            .stamp_resume_attempt(session_id, user_seq, attempts.saturating_add(1))
+            .stamp_resume_attempt(session_id, user_seq, attempt)
             .await
         {
             tracing::warn!(
@@ -1884,6 +2069,56 @@ impl ResumeCoordinator {
                 report.refused.push((session_id.clone(), refusal));
             }
         }
+    }
+
+    /// Fire-time authority for this session, asked before any attempt is
+    /// spent: the durable row's owner (no author rides a resume — see
+    /// `retrigger`). An unreadable row is `Unknown` (R-a), never "no owner".
+    async fn authority_preflight(
+        &self,
+        session_id: &SessionId,
+    ) -> crate::gateway::fire_gate::FireVerdict {
+        match self.session_store.get_metadata(session_id).await {
+            Err(e) => crate::gateway::fire_gate::FireVerdict::Unknown(format!(
+                "session row unreadable: {e}"
+            )),
+            // A verdict, not a grant: the grant is resolved and applied in
+            // `retrigger`, against the run's final metadata — see
+            // `fire_gate::session_may_act` for why it cannot be computed here.
+            Ok(row) => crate::gateway::fire_gate::session_may_act(row.as_ref()),
+        }
+    }
+
+    /// [`AttemptGate::HoldUnspent`]: report it, write nothing.
+    fn hold_unspent(&self, session_id: &SessionId, reason: String, report: &mut ResumeReport) {
+        tracing::warn!(
+            session = ?session_id,
+            reason = %reason,
+            "resume: fire-time authority unknown; leaving the candidate untouched (no attempt spent)"
+        );
+        report
+            .refused
+            .push((session_id.clone(), ResumeRefusal::AuthorityUnknown(reason)));
+    }
+
+    /// [`AttemptGate::SettleRefused`]: close the run once and record it (see
+    /// [`record_refused_settle`]). No intent stamp is written. The full reason
+    /// — the person, deactivated or gone — goes to the log and the report;
+    /// the conversation reads only the private sentence.
+    async fn settle_refused(
+        &self,
+        session_id: &SessionId,
+        what: Abandoned,
+        reason: String,
+        report: &mut ResumeReport,
+    ) {
+        tracing::warn!(
+            session = ?session_id,
+            reason = %reason,
+            "resume: fire-time authority refused; settling the candidate (no attempt spent)"
+        );
+        let notice = record_refused_settle(session_id, &reason, report);
+        self.abandon(session_id, what, None, &notice).await;
     }
 
     /// Terminate an abandoned candidate honestly: emit `RunFinished {
@@ -2210,10 +2445,18 @@ impl ResumeCoordinator {
             .await
             .ok_or(ResumeRefusal::AgentMissing)?;
 
-        let mut metadata = resume_metadata(
-            workspace_override.as_deref(),
-            self.persisted_session_meta(session_id).await.as_ref(),
-        );
+        // The durable row is both the scope source and the authority owner.
+        // Unreadable = "I do not know whose run this is" (R-a): refuse THIS
+        // attempt rather than resume it unscoped as operator. Both callers
+        // already asked authority before spending the attempt
+        // (`authority_preflight` → `attempt_gate`); this is the backstop for
+        // an answer that changed in between, and the one that stamps.
+        let row = self
+            .session_store
+            .get_metadata(session_id)
+            .await
+            .map_err(|e| ResumeRefusal::AuthorityUnknown(format!("session row unreadable: {e}")))?;
+        let mut metadata = resume_metadata(workspace_override.as_deref(), row.as_ref());
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
         // ④ The crashed run's knobs. `extend` after the identity stamp so a
@@ -2222,26 +2465,23 @@ impl ResumeCoordinator {
         // this ordering keeps that true by construction rather than by
         // inspection.
         metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
-        // A replayed `/btw` stamp makes this resume a side question. Read
-        // here, before `metadata` moves into the request, because the
-        // emitter choice below depends on it.
-        let is_side_question = metadata.contains_key(crate::gateway::btw::BTW_METADATA_KEY);
-
-        let request = RunRequest {
-            run_id: uuid::Uuid::new_v4().to_string(),
-            // Empty input — `FlowInput::Resume` ignores it; the session log
-            // already holds the original UserMessage.
-            input: String::new(),
-            session_key: session_id.clone(),
-            timeout_secs: None,
+        // Fire-time authority (round 11, N8), resolved LAST so its stamp is
+        // the final word on scope / author / role: the session owner's
+        // CURRENT status and role, not whatever was true when the run crashed.
+        let request = admit_resume(
+            |subject| crate::scope::authority::resolve(&subject),
+            crate::gateway::security::store::slot::multi_user,
+            row.as_ref(),
             metadata,
-            attachments: Vec::new(),
-            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
+            session_id,
             workspace_override,
-            max_iterations_override: None,
-            model_override: plan.model_override.clone(),
-        };
+            plan.model_override.clone(),
+        )?;
+        // A replayed `/btw` stamp makes this resume a side question; the
+        // emitter choice below depends on it.
+        let is_side_question = request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY);
 
         // Broadcast the recovered run live (Panel / CLI / `aleph watch`) on
         // the bus. Same two arms as `execute::spawn_continuation_run` and
@@ -2274,28 +2514,6 @@ impl ResumeCoordinator {
             .execute(request, agent, emitter)
             .await
             .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")))
-    }
-
-    /// The resumed session's durable row, or `None` when it cannot be read.
-    ///
-    /// A store error is logged and swallowed: an unscoped resume is the
-    /// pre-existing behaviour, and refusing to resume over it would turn a
-    /// crash recovery into a lost conversation.
-    async fn persisted_session_meta(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<crate::gateway::session_store::types::SessionMetadata> {
-        match self.session_store.get_metadata(session_id).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    error = %e,
-                    "resume: session metadata unreadable; resuming unscoped"
-                );
-                None
-            }
-        }
     }
 
     /// Re-derive the run identity the session's origin channel imposes.
@@ -2659,6 +2877,8 @@ mod tests {
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
             ResumeRefusal::IntentStampFailed("stamp append failed".into()),
             ResumeRefusal::TailReadFailed("range read failed".into()),
+            ResumeRefusal::AuthorityRefused("principal deactivated".into()),
+            ResumeRefusal::AuthorityUnknown("users store read failed".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");
@@ -3197,6 +3417,178 @@ mod tests {
         assert_eq!(scope.owner_user_id, "u-alice");
     }
 
+    /// N8: a member's session resumed at boot (no caller role in scope) used
+    /// to run as operator. The resolved authority stamps `member`.
+    #[test]
+    fn a_boot_resumed_member_session_runs_as_member() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::gateway::session_store::types::SessionMetadata;
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let mut meta = resume_metadata(None, Some(&row));
+        let authority = crate::scope::authority::resolve_with(
+            Some(&users),
+            &crate::gateway::fire_gate::subject_for_session_row(Some(&row), &meta),
+        );
+        resume_authority(crate::gateway::fire_gate::apply(authority, &mut meta))
+            .expect("an active member resumes");
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("member"));
+    }
+
+    /// Ruling (b) at the resume site: the request `admit_resume` hands back —
+    /// the one `retrigger` executes — carries the grant resolved for this row.
+    /// A member's PERSONAL session, so the member ceiling (not the room floor)
+    /// supplies `caller_role`.
+    #[test]
+    fn the_resumed_request_carries_the_resolved_grant() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::gateway::session_store::types::SessionMetadata;
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let session_id = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let request = admit_resume(
+            |s| crate::scope::authority::resolve_with(Some(&users), &s),
+            || true,
+            Some(&row),
+            resume_metadata(None, Some(&row)),
+            &session_id,
+            None,
+            None,
+        )
+        .expect("an active member resumes");
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("member")
+        );
+        assert_eq!(
+            request.metadata.get("resume").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn a_refused_or_unknown_authority_is_its_own_refusal() {
+        use crate::gateway::fire_gate::FireVerdict;
+        assert!(matches!(
+            resume_authority(FireVerdict::Refused("principal deactivated".into())),
+            Err(ResumeRefusal::AuthorityRefused(ref r)) if r.contains("deactivated")
+        ));
+        assert!(matches!(
+            resume_authority(FireVerdict::Unknown("disk I/O".into())),
+            Err(ResumeRefusal::AuthorityUnknown(_))
+        ));
+        assert!(resume_authority(FireVerdict::Proceed).is_ok());
+    }
+
+    /// Ruling (a) / §15 (T09 fix round 1, I1): "I do not know whose run this
+    /// is" spends no attempt and never reaches the crash-loop abandon —
+    /// asked more times than the cap allows, it is still held untouched, and
+    /// no attempt ordinal is ever produced for it.
+    #[test]
+    fn an_unknown_authority_never_spends_an_attempt_or_reaches_the_crash_loop_cap() {
+        use crate::gateway::fire_gate::FireVerdict;
+        let max_attempts = 3;
+        for attempts in 0..=max_attempts + 2 {
+            assert_eq!(
+                attempt_gate(
+                    FireVerdict::Unknown("authority unknown: disk I/O".into()),
+                    attempts,
+                    max_attempts
+                ),
+                AttemptGate::HoldUnspent("authority unknown: disk I/O".into()),
+                "attempts = {attempts}: an unknown authority must neither stamp nor abandon"
+            );
+        }
+    }
+
+    /// N4: a refused-authority settle is counted CLOSED (`abandoned`, which is
+    /// what the run is after its `RunFinished { Abandoned }`), and its refusal
+    /// entry keeps the full reason plus what the user can do next.
+    #[test]
+    fn a_refused_settle_is_counted_closed_and_says_what_to_do_next() {
+        let session = SessionId::main("main");
+        let mut report = ResumeReport::default();
+        let _ = record_refused_settle(
+            &session,
+            "principal deactivated — session owner `u-bob`",
+            &mut report,
+        );
+        assert_eq!(report.abandoned, 1, "a settled run is closed, not pending");
+        let [(_, ResumeRefusal::AuthorityRefused(detail))] = report.refused.as_slice() else {
+            panic!(
+                "one AuthorityRefused entry expected, got {:?}",
+                report.refused
+            );
+        };
+        assert!(
+            detail.contains("principal deactivated — session owner `u-bob`"),
+            "{detail}"
+        );
+        assert!(detail.contains("send the message again"), "{detail}");
+    }
+
+    /// N5: the sentence the conversation reads — in-band and on the origin
+    /// channel, i.e. by every room participant — names nobody and discloses
+    /// no account status; the operator's copy is the report entry above.
+    #[test]
+    fn the_refused_settle_notice_names_nobody() {
+        let mut report = ResumeReport::default();
+        let notice = record_refused_settle(
+            &SessionId::main("main"),
+            "principal deactivated — session owner `u-bob`",
+            &mut report,
+        );
+        for private in ["u-bob", "deactivated", "gone", "principal"] {
+            assert!(
+                !notice.contains(private),
+                "the public notice leaks {private:?}: {notice}"
+            );
+        }
+        let rendered = Abandoned::InterruptedRun.notice(&notice);
+        assert!(!rendered.contains("u-bob"), "{rendered}");
+    }
+
+    /// I1: a refused authority settles the candidate under its own reason —
+    /// never under the crash-loop sentence, and with no attempt stamped —
+    /// whatever the attempt count; a granted one still meets the cap.
+    #[test]
+    fn a_refused_authority_settles_once_without_spending_an_attempt() {
+        use crate::gateway::fire_gate::FireVerdict;
+        let max_attempts = 3;
+        let reason = "principal deactivated — session owner `u-bob`";
+        for attempts in [0, max_attempts, max_attempts + 1] {
+            assert_eq!(
+                attempt_gate(FireVerdict::Refused(reason.into()), attempts, max_attempts),
+                AttemptGate::SettleRefused(reason.into()),
+                "attempts = {attempts}"
+            );
+        }
+        assert_eq!(
+            attempt_gate(FireVerdict::Proceed, 1, max_attempts),
+            AttemptGate::Stamp(2),
+            "a granted resume stamps the next ordinal"
+        );
+        assert_eq!(
+            attempt_gate(FireVerdict::Proceed, max_attempts, max_attempts),
+            AttemptGate::CrashLoopCap,
+            "the crash-loop cap still applies to a granted resume"
+        );
+    }
+
     /// A legacy (pre-P1) row, or no row at all, stamps nothing — the resume
     /// behaves exactly as it did before, rather than guessing an attribution.
     #[test]
@@ -3348,3 +3740,4 @@ mod tests {
         }
     }
 }
+

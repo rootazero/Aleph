@@ -5,6 +5,101 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-09-25 — Workflow 对标 round-4 (Budget · Determinism · Fan-in/out · Structured Output)
+
+一句话: 把 workflow 编排从「声明式 + 复用 dispatcher」进一步演化为「可预算/可静态守护/可 fan-in-out/可强制 schema」的复合体; 不引入 vm/JS 运行时, 不改 harness 一行.
+
+### Added (4 primitives + 1 janitor + 1 enforcer)
+
+- **WorkflowRunBudget** (`src/workflow/budget.rs`, 419 行, 10 测试) —
+  `WorkflowRunBudget { total: Option<u64>, spent: AtomicU64 }` 提供
+  `remaining()` / `try_charged(cost)` / `snapshot()` 三件套; uncapped 走
+  `total=None` 旁路 (不要 `u64::MAX` 假上限), partial charge 在边界成功,
+  超额拒绝且不动 spent; 100 线程 × 100 次冲撞的并发守卫是唯一依据.
+  `materialize` 入口读 manifest 的 `WorkflowDef::budget`, 未设 = uncapped.
+  **本轮只挂"挂在哪里", 不挂"怎样扣费"** —— `cost=1`, token/字符的 cost
+  估算法不在本轮.
+- **Determinism audit** (`src/workflow/determinism.rs`, 460 行, 13 测试) —
+  `audit_step_prompt(prompt) -> Vec<DeterminismFinding>` 手写 char-by-char
+  scan, 识别 `{now}` / `{time}` / `{timestamp}` / `{uuid}` / `{guid}` /
+  `{random}` / `{random:N}` / `{rand}` 这一族运行时变量引用; UTF-8 安全,
+  `{` 后不合法字符不 panic. **双花括号具名参数 `{{name}}` 不在扫描范围**
+  —— 它们来自 `RunInputs::args`、是确定性字面替换. save/import 时作为
+  advisory **warn** 跑一遍 (非 fatal, R9 力度).
+- **Parallel Step Group** (`src/workflow/def.rs` + `compile.rs`, 无独立文件) —
+  `WorkflowStepDef.parallel_group: Option<String>` 字段
+  (`serde(skip_serializing_if = "Option::is_none")`, 非设不上 wire); 同 group
+  的 sibling step 在 materialize 时共享三件 metadata
+  `[workflow_parallel_group, workflow_parallel_index, workflow_parallel_size]`,
+  index 取**声明顺序** (不是拓扑层), helper `parallel_groups_for(manifest)`
+  给报告面分组. dispatcher **不**新增并行运行时 —— Aleph 本来就并行跑
+  无依赖的 step.
+- **Collect Step** (`src/workflow/collect.rs`, 139 行, 4 测试; 接入
+  `def.rs` / `compile.rs` / `interop/{export,manifest}.rs` /
+  `interop/import/mod.rs`) ——
+  `WorkflowStepKind::Collect` 单元变体 (保持 Copy),
+  `collect_from: Vec<String>` + `reduce: Option<CollectReduce>`;
+  `CollectReduce::{Concat | JsonArray | First}`, 未设 reduce 时 materialize
+  静默填 Concat; `CollectTaskMeta` + `COLLECT_OWNER` 在 dispatch 时识别
+  —— collect step **自己不发 agent run**, fan-in 由 dispatcher 自然达成.
+- **fail_unanswered_clarify janitor**
+  (`src/teams/dispatcher/schedule/reclaim.rs`, 190+ 行, 4 测试) ——
+  新增 `TeamDispatcher::fail_unanswered_clarify` (24h grace, **默认禁** =
+  `reclaim_loop` 的可选调用点, 未启用不挂任何状态), 纯函数谓词
+  `should_fail_unanswered_clarify` 守判定边界. **为什么默认禁**: grace 必须
+  远大于正常用户往返 (人不在工位过夜), 但用户没显式开启就不要替用户决定
+  "24h 内没人回就算失败". 启用路径留在 `reclaim_loop` 的注释里.
+- **SchemaOutput enforcer**
+  (`src/teams/dispatcher/output_contract.rs`, 344 行, 11 测试; 接入
+  `schedule/mod.rs`) ——
+  `SchemaOutcome::{Ok | ParseError | ValidationError}` + 纯函数
+  `validate_step_output(task, final_text)`; 用 task 的 `schema` metadata
+  (与 round-1 ② 落盘的 `WORKFLOW_SCHEMA_KEY` **同一个键**), 先剥
+  ` ```json ... ``` ` 代码栅, `serde_json::from_str` 拿 JSON,
+  `jsonschema::validator_for` (0.29) 验证, 失败 → `Failed` + 有界 error.
+  `schedule/mod.rs::finalize_step` 是**唯一入口** (cancel/pause/
+  rerun_failed 路径不挂 —— 与「schema 失败 → Failed」语义一致). **「asked」
+  翻成「执行」**, handoff 措辞不动; 自动 retry 绑 budget 不在本轮.
+
+### Hardened (3 dispatcher debts cleared)
+
+- **cancel/notified 防重章回归** (`src/teams/dispatcher/schedule/settle.rs`,
+  318+ 行, 10 测试) —— 抽出 `is_cancel_provenance(task)` 与
+  `should_rearm_on_reopen(notified_anchor, cancel_provenance, settled_at)`
+  两个 pure fn: 前者答"这一行是 cancel 派生的", 后者答"settle sweep 应否
+  清掉 `WORKFLOW_NOTIFIED_KEY` 重新触发终态通知" —— 三轴判定;
+  `is_cancel_provenance=true` 时**永不** re-arm (cancel 派生的 anchor
+  不算"没通知到"). cancel/rerun_failed/reopen 三路径由 10 个回归测试
+  守住.
+
+### Tests
+
+- **343 passed** (新增 ~56: `workflow::budget` 10 · `workflow::determinism`
+  13 · `workflow::collect` 4 · `workflow::compile` 4 · `workflow::def` +10
+  余下 · `dispatcher::output_contract` 11 · `dispatcher::schedule::settle`
+  10 · `dispatcher::schedule::reclaim` 4)
+- `cargo clippy --lib --no-deps` 干净
+- `cargo fmt` 干净
+- **`src/harness/` diff 为空** (R10)
+- **`Cargo.toml` diff 为空** (jsonschema 已是 workspace 依赖, **未新加
+  crate**, R3)
+
+### Out of scope (刻意不做)
+
+- vm/JS 运行时 (R3) 与 `pipeline()` 运行时原语 (import 记 `dropped` 是
+  诚实的有损投影) —— 既有裁决不动
+- `aleph workflow` CLI/RPC 面 (跨 crate wire 契约本仓翻车三次 + R8 工具即
+  接口) —— 既有裁决不动
+- per-phase model —— 既有裁决不动
+- 无损 body 骨架的 `dependsOn` wire 格式变更 (独立一轮)
+- **schema 失败时自动 retry 次数绑给 budget** —— 本轮只阻断不补救
+- **`budget.rs::try_charged` 的 cost 来源** (本轮只接 `cost=1`, token/字符
+  估算法不在本轮; 欠一次裁决 —— round-3 已把"run 级 token 预算的执行语义"
+  判给 delegation 那侧)
+- **`clarify janitor` 的 enable 路径** —— 默认禁 + 留 `reclaim_loop` 注释
+  入口, 未做 admin toggle / config flag (用户没显式开启就别替用户决定)
+- **partial fan-in 报告** (round-3 `export::partial_fan_in_notes` 边界不动)
+
 ## 2026-09-21 — Panel & TUI polish round 1 (L1, audit-first)
 
 A one-day polish pass against the Panel and TUI surfaces that followed the
@@ -148,6 +243,13 @@ call site — it is at the type that let the two answers look alike.
 - **`SESSION_KNOBS.md`,** and a `CLAUDE.md` that stops carrying detail no single
   reference document could say — the criteria index now holds shape names, with
   triggers and full text in the FEATURE_LOCATOR appendices.
+- **`shell`:** unify Windows shell resolution under `src/utils/shell.rs`
+  (pwsh → powershell → cmd ladder with absolute paths, `PS_PROLOGUE` /
+  `PS_EPILOGUE` for UTF-8 + POSIX exit codes, `STDIN_PIPE_THRESHOLD` /
+  `PWSH_STDIN_THRESHOLD` for the two different argv ceilings, Microsoft
+  Store alias filter); add `qa/winshell/run.sh` (resolve / encoding / exit /
+  comment / length / profile / env stages) as the re-derivation fixture
+  for the seven contracts.
 
 ### Fixed
 

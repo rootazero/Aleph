@@ -187,6 +187,7 @@ pub async fn on_timer_tick<C: Clock>(
                     delivery_status: None,
                     trigger_source,
                     retry_hint: None,
+                    unadmitted: false,
                 },
             };
 
@@ -291,6 +292,7 @@ mod tests {
             delivery_status: None,
             trigger_source: snapshot.trigger_source,
             retry_hint: None,
+            unadmitted: false,
         }
     }
 

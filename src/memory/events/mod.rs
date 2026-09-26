@@ -272,6 +272,12 @@ pub struct MemoryEventEnvelope {
     pub timestamp: i64,
     /// Optional correlation to a task or session.
     pub correlation_id: Option<String>,
+    /// The partition the fact lives under (`memory_dir/<partition>/`), as the
+    /// writer knew it — `None` on an envelope that has not been stamped, and
+    /// on a row read back from before the column existed. A writer that could
+    /// not decide stamps [`UNDECIDED_PARTITION`], never `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<String>,
 }
 
 impl MemoryEventEnvelope {
@@ -296,7 +302,16 @@ impl MemoryEventEnvelope {
             actor,
             timestamp: now,
             correlation_id,
+            partition: None,
         }
+    }
+
+    /// File this envelope under `partition` — the FACT's own partition, never
+    /// the ambient session's (see `MemoryCommandHandler::append`).
+    #[must_use]
+    pub fn in_partition(mut self, partition: Option<String>) -> Self {
+        self.partition = partition;
+        self
     }
 
     /// Convenience: return the event type tag.
@@ -310,6 +325,39 @@ impl MemoryEventEnvelope {
     pub fn is_skeleton(&self) -> bool {
         self.event.is_skeleton()
     }
+}
+
+/// The partition a NEW `memory_events` row is filed under when its writer
+/// could not decide one: a merge whose sources sit in two partitions, or a
+/// command on a fact whose own partition is unknown.
+///
+/// Why not NULL: on disk NULL means "written before the column existed", and
+/// the per-caller read admits NULL rows to the legacy owner
+/// ([`UnpartitionedRows`]) — an undecided row written as NULL would be read as
+/// the owner's (判据 §8: "I don't know" must not be spelled as a permission).
+///
+/// Why this value: `!` is outside the partition grammar (agent ids are
+/// `[A-Za-z0-9_-]`, composed ids add `__` and a `u-` / `p-` / `proj-` suffix),
+/// so no caller's read set can name it, and the scoped reader
+/// (`StateDatabase::get_memory_events_for_fact`) refuses it besides. Only the
+/// unscoped write-side / reconciler reads see such a row.
+pub const UNDECIDED_PARTITION: &str = "!undecided";
+
+/// Whether a per-caller read of `memory_events` may see rows that carry no
+/// partition — written before the column existed and not attributable by
+/// `backfill_memory_events_partition`.
+///
+/// Two named arms rather than a `bool`, because the decision has one owner:
+/// [`crate::gateway::visibility::unattributed_memory_events_for`] derives it
+/// from the `owner_or_legacy` rule (a legacy row is the legacy owner's), and a
+/// bare `true` at a call site would be a second derivation of that rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpartitionedRows {
+    /// The legacy owner outside a project room, or — on a single-user
+    /// install only — a run nobody is attached to.
+    Admit,
+    /// Every other principal — fail-closed.
+    Refuse,
 }
 
 // ============================================================================

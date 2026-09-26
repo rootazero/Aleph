@@ -32,6 +32,7 @@
 use aleph_protocol::scope as wire;
 use std::collections::HashMap;
 
+pub mod authority;
 pub mod carried;
 pub mod directory;
 
@@ -173,10 +174,19 @@ pub fn current_scope() -> Option<ScopeAttribution> {
 /// identity, checked at `connect` against the device binding, while the scope
 /// is whatever the run was seeded with.
 ///
-/// `None` means "no ambient owner" and is deliberately unrestricted — cron,
-/// background sweeps, A2A and in-process tests behave exactly as they did
-/// before P1 (zero-change guarantee), matching
-/// [`crate::gateway::visibility::visible_owner_filter`].
+/// `None` means "no ambient owner" and is deliberately unrestricted, matching
+/// [`crate::gateway::visibility::visible_owner_filter`]. Since round 11 it no
+/// longer describes the background executors: cron, heartbeat, goal/loop
+/// continuations, the team dispatcher, boot resume, announce delivery and
+/// busy-queue reinjection each resolve fire-time authority
+/// (`scope::authority::resolve`) and stamp or re-establish the result, so
+/// their runs read a live owner here. The person checked is the carried
+/// author when the work carries one, else the owner — and announce delivery
+/// carries none, so in a project room it checks the room's creator, not the
+/// member whose background work finished (see `gateway::announce_delivery`'s
+/// module doc). What still reads `None`: background
+/// sweeps that start no run, A2A peers and `/v1` bearer calls (no Aleph
+/// principal), Legacy rows with no owner, and in-process tests.
 #[must_use]
 pub fn ambient_owner() -> Option<String> {
     crate::gateway::caller_identity::current_caller_user()
@@ -200,8 +210,10 @@ pub fn ambient_owner() -> Option<String> {
 /// reading it labels every member's message with whoever created the session.
 ///
 /// `attr.owner_user_id` remains the fallback for a turn that carries no author
-/// at all: a legacy row, or a channel-driven run whose inbound router stamps
-/// the scope but not the speaker.
+/// at all: a legacy row, or a background run that carries none (announce
+/// delivery). The channel router is not one of them any more: it stamps the
+/// paired sender as both the scope owner and the author, together
+/// (`inbound_router::executor`).
 #[must_use]
 pub fn room_author(scope: Option<&ScopeAttribution>, author: Option<&str>) -> Option<String> {
     let attr = scope?;

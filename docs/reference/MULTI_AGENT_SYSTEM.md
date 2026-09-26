@@ -1140,17 +1140,18 @@ lives in [FEATURE_LOCATOR §5.22](FEATURE_LOCATOR.md) round-10 ⑬⑭⑮ and in
   stamped neither column and `HeartbeatTask` had neither column at all, and the
   consequence was never an error: four readers short-circuit on NULL (the
   deactivation freeze treats the job as owned by nobody, the fire-time
-  `walled_owner_reason` check reads it as legacy, the run executes with no
+  authority check (`scope::authority::resolve`) reads it as legacy, the run executes with no
   scope, and the spend lands on `@unattributed`). That census is a NAME census,
   not a dataflow proof — a body that stamps a different job than the one it
   constructs passes — and its own doc says so.
-- **Heartbeat is the freeze's fourth leg, and the twin is still open.** A
-  deactivated principal's monitors are disabled by
+- **Heartbeat is the freeze's fourth leg, and since round 11 the fire-time
+  twin is closed.** A deactivated principal's monitors are disabled by
   `tasks::heartbeat::service::ops::pause_all_owned_by`, alongside goals, loops
-  and crons. Cron additionally has a **fire-time** backstop
-  (`walled_owner_reason` → `disable_walled_owner_job`) that catches a job
-  re-enabled by a second admin after the sweep; **heartbeat has no counterpart**,
-  which is a recorded debt, not an oversight.
+  and crons. Both schedulers also re-check at **fire time** through one
+  resolver (`scope::authority::resolve`): cron → `disable_walled_owner_job`,
+  heartbeat → `ops::disable_walled_owner_task` (before the L1 probe). A
+  users-store read error skips that one fire and keeps the work armed; a
+  demoted owner's run is capped at `caller_role = "member"`.
 ### Outcomes that are not verdicts (2026-08-08)
 
 `MemberRunStatus` has three non-failure outcomes, and the distinction is a

@@ -5,11 +5,16 @@
 //! reasoning** — task decomposition and routing are the leader LLM's job
 //! (done via `task_create`); this only drives the DAG mechanically.
 
+mod authority;
 mod failure;
 mod reclaim;
 mod select;
 mod settle;
 
+// Production launches only through `authority::AuthorizedLaunch`; the carrier
+// primitive is re-exported for `runner.rs`'s N1 test.
+#[cfg(test)]
+pub(in crate::teams::dispatcher) use authority::spawn_under_authority;
 pub use select::{
     is_dispatcher_managed, is_zombie, orphan_reset_status, select_schedulable,
     MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
@@ -70,6 +75,14 @@ impl TeamDispatcher {
         //     (runs before step 3, so re-delivery can happen this very tick).
         self.redeliver_stalled_clarify().await;
 
+        // 2h. Fail clarify questions that were delivered but never answered
+        //     past the grace window — the no-answer twin of 2e. Without this
+        //     a user who walks away leaves a workflow run parked forever with
+        //     its dependents stuck in `Blocked`; runs after 2e so a row that
+        //     gets re-delivered (and therefore has its delivery stamp reset)
+        //     is not also failed in the same tick.
+        self.fail_unanswered_clarify().await;
+
         // 2f. Close `running` run rows whose worker is gone (keyed on the
         //     runs table, not task status — the only pass that can see
         //     cancel-then-crash orphans on already-terminal tasks).
@@ -123,6 +136,25 @@ impl TeamDispatcher {
 
         // 4. Claim + launch each selected task.
         for task in selected {
+            // Fire-time authority (round 11, N1). Resolved BEFORE the claim so
+            // a refused or unknown task never takes the lock or a run record,
+            // and before the clarify branch so a refused author's workflow
+            // does not keep sending questions under a revoked principal:
+            // Unknown leaves it Pending for the next tick (R-a), Refused parks
+            // it Paused with the reason and the person checked. The returned
+            // launch is the only way to start the member run below.
+            let Some(launch) = authority::authorize_claim(
+                |subject| crate::scope::authority::resolve(&subject),
+                self.team_store.as_ref(),
+                self.context.session_store().as_ref(),
+                self.coord_store.as_ref(),
+                &task,
+            )
+            .await
+            else {
+                continue;
+            };
+
             // Clarify steps are not agent runs: deliver the question to the
             // user's channel and park the task awaiting their reply. They take
             // no worker slot and skip owner resolution (the owner is a sentinel,
@@ -192,7 +224,10 @@ impl TeamDispatcher {
             // a phantom running-map entry that only clears at the zombie
             // sweep (TEAMS-003, high) — the user sees a task that "never
             // completed" but the dispatcher loop keeps running.
-            tokio::spawn(async move {
+            // Spawned under the task's resolved authority: a bare spawn loses
+            // every task-local, and the member run then executed as an
+            // unscoped operator (N1).
+            launch.spawn(async move {
                 if let Err(panic_payload) = AssertUnwindSafe(async {
                     dispatcher
                         .run_task(task, owner, dispatch_target, permit)
@@ -433,17 +468,47 @@ impl TeamDispatcher {
             _ if disposition != select::RunFinalize::Proceed => {}
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
+                // A workflow step that pinned a `schema` (under
+                // WORKFLOW_SCHEMA_KEY) is asked — via the `## Output Contract`
+                // section in the handoff prompt — to return a single JSON
+                // document matching that schema. The handoff only ASKS (no
+                // structured-output channel on RunRequest); the dispatcher's
+                // job is to catch a member that ignored the request and turn
+                // the failure into the same `Failed` + retry hint every other
+                // failure mode uses. Steps with no schema, or a schema that
+                // `materialize` could not compile, fall through to the
+                // legacy byte-identical Completed path.
+                let schema_outcome = super::output_contract::validate_step_output(&task, &reply);
                 // Review-gated tasks park in WaitingReview for the lead to
                 // resolve via workflow_step_review; dependents stay blocked
-                // until the verdict. Everything else completes directly.
-                let final_status = select::completion_status(&task);
+                // until the verdict. Schema failures skip that detour: the
+                // schema is the step's own definition of done, not a
+                // judgement the lead should be asked to make — the retry
+                // path is the right response.
+                let (final_status, final_result) = match schema_outcome {
+                    super::output_contract::SchemaOutcome::NoSchema
+                    | super::output_contract::SchemaOutcome::Pass
+                    | super::output_contract::SchemaOutcome::Valid { .. } => {
+                        (select::completion_status(&task), reply.clone())
+                    }
+                    super::output_contract::SchemaOutcome::InvalidJson { reason }
+                    | super::output_contract::SchemaOutcome::SchemaMismatch { reason } => {
+                        let hint = format!("output does not match schema: {reason}");
+                        tracing::warn!(
+                            task_id = %task_id,
+                            reason = %reason,
+                            "dispatcher: workflow step output violates pinned schema; failing step with retry hint",
+                        );
+                        (CoordTaskStatus::Failed, hint)
+                    }
+                };
                 if let Err(e) = self
                     .coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
                             status: Some(final_status),
-                            result: Some(reply.clone()),
+                            result: Some(final_result.clone()),
                             ..Default::default()
                         },
                     )
@@ -453,7 +518,10 @@ impl TeamDispatcher {
                 } else {
                     // The work product exists regardless of the verdict, so
                     // the artifact persists on both paths — reviewers read it.
-                    self.persist_artifact(&task_id, &owner, &task.subject, &reply)
+                    // Schema failures still get an artifact (the raw reply)
+                    // so the reviewer / retry context shows what the member
+                    // actually produced.
+                    self.persist_artifact(&task_id, &owner, &task.subject, &final_result)
                         .await;
                     // AlephEvent::TeamTaskCompleted (or TeamTaskUpdated with
                     // status "waiting_review") broadcast happens inside
@@ -462,6 +530,8 @@ impl TeamDispatcher {
                     // any caller-side fan-out.
                     if final_status == CoordTaskStatus::WaitingReview {
                         tracing::info!(task_id = %task_id, "dispatcher: task awaiting lead review");
+                    } else if final_status == CoordTaskStatus::Failed {
+                        tracing::warn!(task_id = %task_id, "dispatcher: workflow step failed (output contract violation); retry path will pick it up");
                     } else {
                         tracing::info!(task_id = %task_id, "dispatcher: task completed");
                     }

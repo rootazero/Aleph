@@ -630,23 +630,29 @@ impl HandlerRegistry {
             let default_store = crate::projects::ProjectStore::shared();
             let default_event_bus = Arc::new(GatewayEventBus::new());
             let s = default_store.clone();
+            let u = default_security_store.clone();
             registry.register("projects.list", move |req| {
                 let s = s.clone();
-                async move { projects::handle_list(req, s).await }
+                let u = u.clone();
+                async move { projects::handle_list(req, s, u).await }
             });
             let s = default_store.clone();
+            let u = default_security_store.clone();
             let b = default_event_bus.clone();
             registry.register("projects.add", move |req| {
                 let s = s.clone();
+                let u = u.clone();
                 let b = b.clone();
-                async move { projects::handle_add(req, s, b).await }
+                async move { projects::handle_add(req, s, u, b).await }
             });
             let s = default_store.clone();
+            let u = default_security_store.clone();
             let b = default_event_bus.clone();
             registry.register("projects.create_blank", move |req| {
                 let s = s.clone();
+                let u = u.clone();
                 let b = b.clone();
-                async move { projects::handle_create_blank(req, s, b).await }
+                async move { projects::handle_create_blank(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
@@ -663,16 +669,20 @@ impl HandlerRegistry {
                 async move { projects::handle_touch(req, s).await }
             });
             let s = default_store.clone();
+            let u = default_security_store.clone();
             registry.register("projects.get", move |req| {
                 let s = s.clone();
-                async move { projects::handle_get(req, s).await }
+                let u = u.clone();
+                async move { projects::handle_get(req, s, u).await }
             });
             let s = default_store.clone();
+            let u = default_security_store.clone();
             let b = default_event_bus.clone();
             registry.register("projects.create", move |req| {
                 let s = s.clone();
+                let u = u.clone();
                 let b = b.clone();
-                async move { projects::handle_create(req, s, b).await }
+                async move { projects::handle_create(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();

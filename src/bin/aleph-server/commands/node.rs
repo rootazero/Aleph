@@ -12,7 +12,7 @@
 //! environments.list / deregister).
 //!
 //! Why registration must not be a separate RPC: the hub enforces that a
-//! connection's FIRST frame must be `connect` (`gateway/server/handler.rs`),
+//! connection's FIRST frame must be `connect` (`gateway/server/connection/mod.rs`),
 //! and the login wall lets nothing through before `connect`. The old
 //! implementation opened a second WS and sent `cluster.enroll` as the first
 //! frame — it was always rejected and the connection killed — a fresh node

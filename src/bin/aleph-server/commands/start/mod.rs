@@ -518,6 +518,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.security_store.clone(),
     )));
 
+    // The users table the fire-time authority resolver
+    // (`scope::authority::resolve`) re-reads at every background trigger —
+    // the SAME `SecurityStore` Arc as above, so a deactivation or demotion
+    // written by `users.update` is what the next cron / heartbeat fire
+    // sees. Unconditional: `initialize_vault` always yields a store (on
+    // disk, else in memory), so this slot has no decline arm. Missing it is
+    // `FailsOpen` — every fire would resolve `Legacy`. The in-memory fallback
+    // is installed DEGRADED: it holds only the owner, so a member's missing
+    // row there must read as unknown, not gone (final review I3).
+    match auth_bundle.security_store_fallback.clone() {
+        None => alephcore::gateway::security::store::install_users_store(
+            auth_bundle.security_store.clone(),
+        ),
+        Some(reason) => alephcore::gateway::security::store::install_degraded_users_store(
+            auth_bundle.security_store.clone(),
+            reason,
+        ),
+    }
+
     // Bound the ledger's growth now that a real ledger exists to bound:
     // drop spend rows older than `spend::period::RETENTION_PERIODS` past
     // periods, computed by walking calendar boundaries backward rather than
@@ -2331,6 +2350,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.set_team_store(ts.clone());
     }
 
+    // The deactivation freeze's fifth leg (round 11, N2) reaches team tasks
+    // through this slot — the same two-store condition as the handlers below,
+    // but over the UNSCOPED team store: the freeze must see every team the
+    // deactivated principal owns, not the teams visible to the admin running
+    // it (`TeamStoreHandles::unscoped`, sealed into `TeamTaskStores`).
+    let background_team_stores = agent_result.background_team_stores.clone();
+    if let Some(stores) = background_team_stores {
+        alephcore::teams::install_background_stores(stores);
+    } else {
+        alephcore::teams::decline_background_stores(
+            "the team store or the coordination-task store did not open at boot (see the \
+             warning `register_agent_handlers` logged), so a deactivation cannot pause the \
+             principal's team tasks and `users.get` cannot count them",
+        );
+    }
+
     // Team management (team store created inside register_agent_handlers).
     // `register_teams_handlers` genuinely needs both stores, so it — unlike the
     // resolver above — stays under the two-store condition.
@@ -2752,6 +2787,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // the heartbeat side also removes a real divergence: when
             // `agent_result.channel_registry_cell` is `None`, two
             // `unwrap_or_else` calls minted two *different* empty cells.
+            // Fire-time owner authority is not threaded here: the executor
+            // asks `scope::authority::resolve`, which reads the users store
+            // boot installed right after `initialize_vault`.
             let executor_fn = build_cron_executor_fn(
                 Arc::clone(exec_adapter),
                 Arc::clone(registry),
@@ -2759,9 +2797,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // D2: thread the cron-default iteration cap so each job's
                 // RunRequest carries it as max_iterations_override.
                 cron_state.config.default_max_iterations,
-                // Fire-time owner liveness (round-5 ④): the executor re-asks
-                // the users table at trigger time.
-                Some(auth_bundle.security_store.clone()),
             );
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway) — the
@@ -3972,6 +4007,16 @@ mod tests {
     /// Nothing else can see this failure, so this is a source-level census:
     /// assert a production (comment-stripped) call to each name exists.
     ///
+    /// `install_users_store` joined the list in round 11 for the same reason:
+    /// its only consumer (`scope::authority::resolve`) degrades to `Legacy`
+    /// silently when it is missing. `install_degraded_users_store` joined it
+    /// in the round-11 final round (re-review N3): without it the in-memory
+    /// fallback store would be installed as a durable one, and every member
+    /// it has no row for would resolve `Gone` — not `Unknown` — and have its
+    /// background work disabled for good. Its presence alone is not enough:
+    /// the fallback (`Some(reason)`) arm must be the one that calls it, so
+    /// the arm pairing is pinned too.
+    ///
     /// CRLF-safe (`\r` stripped before any split — an anchored
     /// `"\n#[cfg(test)]"` needle matches nothing on this repo's Windows
     /// checkout, silently turning "production" into the whole file) and
@@ -3989,16 +4034,46 @@ mod tests {
              its own doc comment"
         );
         let production = alephcore::utils::source_scan::code_text(&production);
-        for call in ["install_policy(", "install_ledger("] {
+        for call in [
+            "install_policy(",
+            "install_ledger(",
+            "install_users_store(",
+            "install_degraded_users_store(",
+        ] {
             assert!(
                 production.contains(call),
-                "start/mod.rs must contain a production call to \
-                 spend::{call} — without it the round's config, ledger and \
-                 admission checks are all wired to a handle boot never \
-                 installs, and the server runs as if no ceiling were ever \
-                 configured"
+                "start/mod.rs must contain a production call to {call} — \
+                 without it the handle is wired to nothing boot installs: \
+                 for the spend pair the server runs as if no ceiling were \
+                 ever configured; for the users store every fire-time \
+                 authority check answers Legacy and a deactivated or \
+                 demoted principal's background work runs unchecked"
             );
         }
+        // Which arm calls which: whitespace-free, so formatting cannot move it.
+        let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
+        let store = "alephcore::gateway::security::store::";
+        assert!(
+            compact.contains(&format!("None=>{store}install_users_store(")),
+            "the durable-store (`None`) arm of `security_store_fallback` must install the \
+             users store as durable"
+        );
+        let degraded = format!("{store}install_degraded_users_store(");
+        let arm_head = compact
+            .find(&degraded)
+            .and_then(|at| compact.get(..at))
+            .and_then(|head| head.rsplit_once("Some("))
+            .map(|(_, binding)| binding);
+        assert!(
+            arm_head.is_some_and(
+                |b| b.strip_suffix(")=>").is_some_and(|name| !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            ),
+            "the fallback (`Some(reason)`) arm of `security_store_fallback` must call \
+             install_degraded_users_store — installed as durable, the fallback store answers \
+             `Gone` for every member it has no row for (final review I3); got arm head \
+             {arm_head:?}"
+        );
     }
 
     /// `users.*` has TWO registration faces — this file at boot, and
@@ -4052,6 +4127,26 @@ mod tests {
                 "{method} is registered in the default registry but boot never \
                  registers it — it would resolve in test harnesses and be \
                  METHOD_NOT_FOUND on a real server"
+            );
+        }
+    }
+
+    /// N2's fifth freeze leg reads the team stores through a boot-installed
+    /// slot; a boot that never installs it makes every deactivation report
+    /// the leg "not measured", forever, with nothing red.
+    #[test]
+    fn boot_installs_or_declines_the_team_background_stores() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing"
+        );
+        let production = alephcore::utils::source_scan::code_text(&production);
+        for call in ["install_background_stores(", "decline_background_stores("] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must call teams::{call}"
             );
         }
     }

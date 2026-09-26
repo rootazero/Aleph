@@ -176,6 +176,30 @@ pub fn toggle_task<C: Clock>(
     Ok(task.enabled)
 }
 
+/// The one definition of "disarmed": not enabled, and no due time left
+/// behind (what `toggle_task`'s disabling arm also does), so a frozen task,
+/// a fire-time-refused task and a task disabled by its owner look alike.
+fn disarm(task: &mut HeartbeatTask) {
+    task.enabled = false;
+    task.state.next_due_ms = None;
+}
+
+/// Disable ONE task whose owner the fire-time authority check
+/// (`scope::authority::resolve`, called by the timer before the L1 probe)
+/// CONFIRMED walled or gone — the single-task twin of
+/// [`pause_all_owned_by`] and the heartbeat counterpart of
+/// `CronService::disable_walled_owner_job`.
+///
+/// Set-not-toggle for the sweep's reason: toggling an already-disabled task
+/// would ENABLE it. Returns whether this call changed anything; a missing or
+/// already-disabled task is `false`, and the store is not marked dirty.
+pub fn disable_walled_owner_task(store: &mut HeartbeatStore, task_id: &str) -> bool {
+    if !store.get_task(task_id).is_some_and(|t| t.enabled) {
+        return false;
+    }
+    store.get_task_mut(task_id).map(disarm).is_some()
+}
+
 /// Disable every enabled task owned by `user_id`, returning the ids of the
 /// tasks this call actually changed.
 ///
@@ -219,8 +243,7 @@ pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<Stri
     // write for a call that changed nothing.
     for id in &owned {
         if let Some(task) = store.get_task_mut(id) {
-            task.enabled = false;
-            task.state.next_due_ms = None;
+            disarm(task);
         }
     }
     owned
@@ -420,6 +443,37 @@ mod tests {
         );
         assert!(!store.get_task("hb-mine").unwrap().enabled);
     }
+
+    /// The single-task twin of the sweep, driven by the fire-time authority
+    /// check: set-not-toggle, so a second call on an already-disabled task
+    /// changes nothing and — critically — never RE-ENABLES it.
+    #[test]
+    fn disable_walled_owner_task_disarms_one_task_and_is_idempotent() {
+        let mut store = make_store();
+        let mut target = make_test_task("hb-walled");
+        target.state.next_due_ms = Some(1);
+        store.add_task(target);
+        store.add_task(make_test_task("hb-other"));
+
+        assert!(disable_walled_owner_task(&mut store, "hb-walled"));
+        let t = store.get_task("hb-walled").unwrap();
+        assert!(!t.enabled);
+        assert!(t.state.next_due_ms.is_none());
+        assert!(
+            !disable_walled_owner_task(&mut store, "hb-walled"),
+            "second call changes nothing"
+        );
+        assert!(
+            !store.get_task("hb-walled").unwrap().enabled,
+            "never toggles back on"
+        );
+        assert!(
+            store.get_task("hb-other").unwrap().enabled,
+            "only the named task"
+        );
+        assert!(!disable_walled_owner_task(&mut store, "hb-missing"));
+    }
+
     fn make_test_task(id: &str) -> HeartbeatTask {
         let mut task = HeartbeatTask::new(
             id.to_string(),

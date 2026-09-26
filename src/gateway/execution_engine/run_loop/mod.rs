@@ -239,9 +239,12 @@ fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
 /// speaker as task-locals for `fut`'s duration, both derived from
 /// `request.metadata` — see [`crate::scope::stamp_metadata`] and
 /// [`super::AUTHOR_USER_KEY`]. `author_census::ORIGIN_SITES` (this module's
-/// `author_census` submodule) is the enumerated list of production writers of
-/// that key, kept there rather than repeated here so this doc cannot drift
-/// out of sync with the count the way it once did — a prior revision named
+/// `author_census` submodule) names the origin writers of that key the census
+/// pins by name. It is not every writer: later origins are pinned by unit
+/// tests at their own sites (the census's module doc says which), and the
+/// continuation paths forward or rehydrate the key rather than originate it.
+/// The list lives there rather than here so this doc cannot drift out of
+/// sync with it the way it once did — a prior revision named
 /// only two producers (`build_run_request`, the channel inbound router's
 /// `execute_for_context_inner`) while two more (the team broadcast and
 /// dispatcher child-run builders) had already existed for over a week.
@@ -272,7 +275,7 @@ where
 /// its principal ([`crate::spend::principal_from_metadata`], resolved off
 /// `request.metadata` the same way [`with_request_scope`] resolves scope —
 /// see that resolver's doc for why it is unconditionally equivalent to the
-/// floor arm's `ambient_principal`) is over its ceiling for the period.
+/// floor arm's `visibility::ambient_principal`) is over its ceiling for the period.
 ///
 /// Both engines call this — `ExecutionEngine::execute` (`execute.rs`, ahead
 /// of `admit_run`) and `SimpleExecutionEngine::execute` (`simple.rs`, which

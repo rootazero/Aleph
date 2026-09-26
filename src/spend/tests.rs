@@ -1,8 +1,9 @@
 //! Tests for `spend::mod` — the core types, the in-process ledger default,
 //! `principal_from_metadata`, and `check` (via its injectable core,
 //! `check_with` — see that function's doc for why its tests never call
-//! `install_ledger`/`install_policy`). `ambient_principal`'s equivalence
-//! with `principal_from_metadata` (G13) lives in
+//! `install_ledger`/`install_policy`). The floor arm's equivalence
+//! (`Principal::from_person(visibility::ambient_principal())`) with
+//! `principal_from_metadata` (G13) lives in
 //! `gateway::execution_engine::run_loop::tests`, next to
 //! `with_request_scope`, because it needs that function's `pub(super)`
 //! visibility — see this round's task-3 brief for why widening that
@@ -189,15 +190,19 @@ fn principal_from_metadata_is_unattributed_when_neither_key_is_present() {
 }
 
 // ============================================================================
-// ambient_principal
+// The floor arm: Principal::from_person(visibility::ambient_principal())
 // ============================================================================
+
+/// The floor arm exactly as `providers::metering` spells it.
+fn floor_principal() -> Principal {
+    Principal::from_person(crate::gateway::visibility::ambient_principal())
+}
 
 #[tokio::test]
 async fn ambient_principal_reads_the_seeded_room_author() {
-    let observed = crate::scope::with_room_author(Some("u-speaker".to_string()), async {
-        ambient_principal()
-    })
-    .await;
+    let observed =
+        crate::scope::with_room_author(Some("u-speaker".to_string()), async { floor_principal() })
+            .await;
     assert_eq!(observed, Principal::User("u-speaker".to_string()));
 }
 
@@ -205,7 +210,7 @@ async fn ambient_principal_reads_the_seeded_room_author() {
 async fn ambient_principal_falls_back_to_ambient_owner_when_no_room_author_is_seeded() {
     let observed = crate::scope::with_scope(
         Some(crate::scope::ScopeAttribution::personal("u-owner")),
-        async { ambient_principal() },
+        async { floor_principal() },
     )
     .await;
     assert_eq!(observed, Principal::User("u-owner".to_string()));
@@ -216,7 +221,7 @@ async fn ambient_principal_is_unattributed_with_nothing_ambient() {
     // No `with_room_author` / `with_scope` wrap at all: both task-locals are
     // unset, matching an unattended path (cron, A2A) that never seeded
     // either fact.
-    assert_eq!(ambient_principal(), Principal::Unattributed);
+    assert_eq!(floor_principal(), Principal::Unattributed);
 }
 
 // ============================================================================
@@ -1195,7 +1200,7 @@ fn g15_no_ambient_actor_or_current_agent_id_in_spend_source() {
     assert!(
         offenders.is_empty(),
         "src/spend/ must resolve who a run's spend is charged to using only \
-         ambient_principal/principal_from_metadata — never ambient_actor() or \
+         visibility::ambient_principal/principal_from_metadata — never ambient_actor() or \
          current_agent_id(), whose third fallback arm is an agent id, and an \
          agent is not a person and cannot hold a budget:\n  {}",
         offenders.join("\n  ")

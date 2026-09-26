@@ -20,8 +20,10 @@
 //!   `orchestrator::harness_bridge::runner_impl` ×3); threading a handle
 //!   through them would wire some and miss others, and the missed ones would
 //!   meter without a floor while every unit test stayed green;
-//! - the two principal resolvers ([`ambient_principal`] /
-//!   [`principal_from_metadata`]) that answer "who is this run's spend
+//! - the admission-arm principal resolver ([`principal_from_metadata`]) and
+//!   [`Principal::from_person`], which the floor arm applies to
+//!   `gateway::visibility::ambient_principal` (the one "who is the person"
+//!   derivation, AM-1) — together they answer "who is this run's spend
 //!   charged to" from the two places that question is askable;
 //! - [`check`], the single admission/floor predicate: is a principal still
 //!   inside its ceiling for the period containing "now". Both call sites
@@ -91,6 +93,16 @@ impl Principal {
         } else {
             Self::User(id)
         }
+    }
+
+    /// The principal to charge for "this person, if any" — the floor arm's
+    /// shape: `Principal::from_person(visibility::ambient_principal())`.
+    /// `None` (nobody ambient: cron, A2A, an unattributed legacy run) is
+    /// [`Self::Unattributed`]; a present id goes through [`Self::user`] and
+    /// its sentinel coercion.
+    #[must_use]
+    pub fn from_person(person: Option<String>) -> Self {
+        person.map_or(Self::Unattributed, Self::user)
     }
 
     /// The ledger's primary-key text. `"@unattributed"` cannot collide with a
@@ -687,30 +699,23 @@ pub(crate) const fn global_policy_slot() -> &'static dyn SlotStatus {
 // The two principal resolvers
 // ============================================================================
 
-/// Floor arm — called from inside the run's task-local nest (everything
-/// under `run_loop::with_request_scope`).
-///
-/// Reads [`crate::scope::current_room_author`] directly, **not**
-/// [`crate::scope::ambient_room_author`]: the latter filters through
-/// `room_author`, which returns `None` for any non-`ScopeId::Project` scope —
-/// that is the room transcript byline, not a general actor accessor, and
-/// using it here would charge nearly every install's spend to
-/// `@unattributed` with no test going red. See [`principal_from_metadata`]
-/// for why the two are unconditionally equivalent.
-#[must_use]
-pub fn ambient_principal() -> Principal {
-    crate::scope::current_room_author()
-        .or_else(crate::scope::ambient_owner)
-        .map(Principal::user)
-        .unwrap_or(Principal::Unattributed)
-}
+// The floor arm — called from inside the run's task-local nest (everything
+// under `run_loop::with_request_scope`) — has no resolver of its own here any
+// more: it is `Principal::from_person(visibility::ambient_principal())`
+// (`providers::metering`). Round 11 (AM-1) folded the copy that lived here
+// into `gateway::visibility::ambient_principal`, the one "who is the person"
+// derivation, with this copy's order: the seeded speaker
+// (`scope::current_room_author`, NOT `ambient_room_author`, which answers
+// `None` for any non-Project scope and would charge nearly every install's
+// spend to `@unattributed`), then `scope::ambient_owner`.
 
 /// Admission arm — called before the run's task-local nest exists, off the
 /// request's own metadata map.
 ///
-/// Reads the same two facts [`ambient_principal`] does, in the same order:
-/// `AUTHOR_USER_KEY` (this turn's speaker), then the scope owner — resolved
-/// through [`crate::scope::scope_from_metadata`], **not** a bare
+/// Reads the same two facts the floor arm
+/// ([`crate::gateway::visibility::ambient_principal`]) does, in the same
+/// order: `AUTHOR_USER_KEY` (this turn's speaker), then the scope owner —
+/// resolved through [`crate::scope::scope_from_metadata`], **not** a bare
 /// `meta.get(OWNER_META_KEY)`. That routing is what makes the two resolvers
 /// equivalent unconditionally rather than by convention: `ambient_principal`'s
 /// own fallback, [`crate::scope::ambient_owner`], derives the owner from

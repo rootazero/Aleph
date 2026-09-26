@@ -142,12 +142,28 @@ pub struct ProjectRow {
     pub created_at: i64,
     pub updated_at: i64,
     pub last_used_at: i64,
+    /// Whether the CALLER who received this row may reconfigure the room
+    /// (rename, archive, roster, bind). Derived per response by
+    /// `projects::authz::manageable` — the same function the server's
+    /// owner-level gates enforce — so a client reads it rather than
+    /// re-deriving ownership from `owner_user_id` (which cannot see org
+    /// admins or the legacy-owner rule). A snapshot: the server still
+    /// decides on every write.
+    pub manageable: bool,
 }
 
 /// `projects.list` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectListResult {
     pub projects: Vec<ProjectRow>,
+}
+
+/// Every single-project `projects.*` result (`get` / `create` / `add` /
+/// `create_blank` / `rename` / `bind_workspace`). The envelope key is part of
+/// the contract; the server builds this type rather than a `json!` literal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectResult {
+    pub project: ProjectRow,
 }
 
 /// `projects.channel.bind`
@@ -315,6 +331,30 @@ pub struct ChannelListResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The single-project envelope is a wire key too. Built from the type and
+    /// round-tripped, so the key set is the type's, not a literal's.
+    #[test]
+    fn a_project_result_round_trips_and_carries_manageable() {
+        let row = ProjectRow {
+            id: "p-1".into(),
+            name: "eng".into(),
+            owner_user_id: Some("u-owner".into()),
+            workspace_path: None,
+            status: "active".into(),
+            member_ids: vec!["u-owner".into()],
+            created_at: 1,
+            updated_at: 2,
+            last_used_at: 3,
+            manageable: true,
+        };
+        let v = serde_json::to_value(ProjectResult { project: row.clone() }).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["project"]);
+        assert_eq!(v["project"]["manageable"], serde_json::json!(true));
+        let back: ProjectResult = serde_json::from_value(v).unwrap();
+        assert_eq!(back.project, row);
+    }
 
     /// The envelope is a wire key too, and it is usually the last hand-copied
     /// part. Serialising the contract type is how a client learns the key

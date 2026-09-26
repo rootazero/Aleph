@@ -573,6 +573,26 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 ---
 
+## 9b. 目录维护轮 round-7 delta（2026-09-24，对标 pi.dev/models 数据面的最小打磨）
+
+> 本节是 §9「刻意不做清单」的姊妹条目——一个列**评估后不做**的事，本节列**评估后做了**的事。A 方案，零核心逻辑改动（`record.rs` / `pricing.rs` / `capabilities.rs` 一行未改），3 commit / +218 行（其中 +160 是测试、+34 是 `discovery.rs` 的 forward-compat 字段名 + 22 是 `alias.rs` 一个 `#[cfg(test)] pub(super)` helper），全部测试 + clippy `-D warnings` 净。
+
+| 改动 | 位置 | 何以是「维护」 |
+|------|------|---------------|
+| `alias_double_path_covers_same_vendor_set` | `drift_tests.rs` | 把「`MODEL_VENDOR_PREFIXES` 与 `canonical_provider_id` 双路径必须同步」这条原本靠人读两份表的契约，变成 build-time 信号。历史上漂过两次（`llama→meta` 漏；minimax / cohere / perplexity / stepfun 一齐缺），下次再漂会被测出来。 |
+| `capabilities_for_handles_empty_input` | `drift_tests.rs` | `""` / 纯空白 / 控制字符 / `"x".repeat(1_000_000)` 四子断言——`canonicalize_model_id` 内部 `.to_ascii_lowercase()` 在 1M 输入上分配 ~2MB（实测 < 100ms），记录在测试 doc；任何走更重路径的将来重构需要降规模才能在内存受限 CI 上跑。 |
+| `lookup_rates_vendor_inferred_resolves_aggregator_id` | `drift_tests.rs` | 扩展 `record.rs::aggregator_gets_vendor_inferred_cost_not_unknown` 模式到 Bedrock + Groq：openrouter+claude-sonnet-5 → `VendorInferred`；bedrock+anthropic.claude-sonnet-5 → `VendorInferred`；**groq+llama-3.3-70b-versatile 显式拒绝 `VendorInferred`**——Meta 不卖 Llama 推理，Groq 不该拿 Meta 价 sheet 当转售报价。 |
+| `parses_ollama_shape_with_details` | `discovery.rs` | `parse_listing` 的 `context_window` 字段名 lookup 数组追加 `"details.context_length"`。**今天 Ollama `/api/tags` 不发这个字段**——`details.{parameter_size,family}` 已走 `name` 路径解析出来（Ollama 用 `name` 而非 `id`，同 Gemini 同样以 `models[]` 为外层但子字段不同）。**刻意不发明 Ollama 没发的字段**——Ollama 真发的那天就是这条测试需要更新的那一刻。 |
+| `UNCATALOGUED_FAMILIES` 三桶分类注释 | `drift_tests.rs` | 10 行豁免按 reason 散在 inline 字符串里。const 上方加 doc 分三桶：`relay`（BYO）/ `uncatalogued-vendor`（厂商窗口未在英文文档发布）/ `self-hosted`（窗口取决于部署）。**不动表内容、不动行 reason**——分类写在注释里、理由仍在 inline 字符串里（两者分别承担文档与可执行解释两个角色）。 |
+
+**刻意不做（与 §9 同款判据延伸）**：① 没改 `record.rs::ModelRecord::resolve`（R7 单一 join 点，零消费方诉求就别动）。② 没补任何 const 表的新行——数据刷新是另一轮（§5.4 round-1/2 那种规模：数十条新行 + prefix-shadow 重排 + drift 守卫逐条红过）。③ 没把 Ollama shape 测试写成乐观断言（Ollama 现在不发，乐观断言只会制造"绿着过时"的恒绿脸，§2）。④ 没改 `discovery.rs::refresh_models` 解析流程——`details.context_length` 加在 lookup 数组里是 forward-compat slot，不是改解析流程。⑤ 没引入 models.dev codegen（与 §9 同款：R3，第三方服务不当核心 load-bearing 依赖）。⑥ **`Alias double-path sync` 守卫目前覆盖 `MODEL_VENDOR_PREFIXES` ⊆ canonical_provider_id 一向；反向**（canonical_provider_id 接受的拼写 ⊆ 前缀表）今天**还没钉**——`claude` / `vertex-anthropic` / `glm` 等拼写都不直接走模型名前缀表，但它们是 alias path 的合法输入而非真"vendor 名"。所以反向断言**做了反而错**：保留"前缀表 ⊆ 别名表"这一向作为同步契约。
+
+**与 pi.dev/models 的关系**：pi 的目录维护**靠生成期 hydrate**（`generate-models.ts` 2762 行每运行一次从 models.dev / OpenRouter / Vercel 拉三源，烧进 JSON shard 随包发布），无运行时不变量。**Aleph 取 pi 不取的部分**——编译期守卫把"内部一致性"做成 build-time 信号（§5.4 round-1 立下的方法学）；**Aleph 取 pi 不做的事**——不动生成期 codegen（§9 刻意不做清单已有同款判据）。本轮新增的 4 guard 是同款方法学的**最小成本延续**：一次遍历的成本是 +160 行测试，避免的是下一次出现"两路漂移"或"Ollama shape 静默漏接"那种需要整支审查才能找到的问题。
+
+**与 §8 对照表的增量**：对照表本身（§8.1-§8.5）覆盖了 openclaw / opencode / kimi-cli / pi / RouteLLM / vLLM-SR / Bifrost / grok-bot 的目录与运行时机制——本轮不触及其中任何一项的边界，只在 Aleph 自己这一侧的**维护深度**上加码。下一次若真要把 pi 的 `generate-models.ts` 模式或 openclaw 的 `modelCatalog.providers.<id>.models[]` 形态移植进 Aleph，本节就是那个 PR 的"我们试过轻量版，结论是 X"那一段。
+
+---
+
 ## 10. 常见修改的落点
 
 | 想做的事 | 改哪儿 |

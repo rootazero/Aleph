@@ -61,6 +61,38 @@ pub struct ToolFacts<'a> {
     pub requires_approval: bool,
 }
 
+/// What a tool's own registry declaration says, when the caller has one.
+/// `None` at [`ToolFacts::for_tool`] means "no registry at hand" (the slash
+/// fast path), not "declares nothing".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredFacts {
+    /// `LoopTool::is_idempotent`, via the registry.
+    pub idempotent: bool,
+    /// `LoopTool::requires_confirmation`, via the registry.
+    pub requires_confirmation: bool,
+}
+
+impl<'a> ToolFacts<'a> {
+    /// The ONE way to build the facts a tier rule reads — every face calls
+    /// this, so a face cannot quietly answer from a narrower source.
+    ///
+    /// The builtin allowlists answer for every builtin whether or not a
+    /// registry is at hand; a registry declaration adds what only it knows
+    /// (MCP `readOnlyHint` / `destructiveHint`, plugin tools). Both are ORed:
+    /// an unknown name is non-idempotent and ungated, which is the side the
+    /// `Ask` tier needs to be fail-closed on.
+    #[must_use]
+    pub fn for_tool(name: &'a str, declared: Option<DeclaredFacts>) -> Self {
+        Self {
+            name,
+            idempotent: declared.is_some_and(|d| d.idempotent)
+                || crate::tools::retry::is_idempotent_builtin_name(name),
+            requires_approval: declared.is_some_and(|d| d.requires_confirmation)
+                || crate::security::dangerous_tools::is_confirmation_gated(name),
+        }
+    }
+}
+
 /// `file_ops` operations that destroy or relocate data irreversibly.
 ///
 /// `file_ops` multiplexes `list` / `search` / `stats` *and* `delete` / `move`
@@ -968,6 +1000,56 @@ mod tests {
             idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
             requires_approval: false,
         }
+    }
+
+    /// The one constructor, and what each input contributes.
+    #[test]
+    fn for_tool_ors_the_declaration_with_the_builtin_lists() {
+        let read_only = crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS[0];
+        let gated = crate::tools::adapters::registry_adapter::CONFIRMATION_REQUIRED_TOOLS[0];
+
+        let unknown = ToolFacts::for_tool("never-heard-of-it", None);
+        assert!(!unknown.idempotent && !unknown.requires_approval, "unknown is fail-closed");
+
+        assert!(ToolFacts::for_tool(read_only, None).idempotent, "builtin read-only list");
+        assert!(ToolFacts::for_tool(gated, None).requires_approval, "builtin confirmation list");
+
+        let declared = ToolFacts::for_tool(
+            "mcp_tool",
+            Some(DeclaredFacts { idempotent: true, requires_confirmation: true }),
+        );
+        assert!(declared.idempotent && declared.requires_approval, "the registry's declaration");
+    }
+
+    /// D8 census: `ToolFacts` has ONE production constructor. The slash fast
+    /// path used to build a second, hand-written one whose inputs differed from
+    /// the scoped builder's (SECURITY P1 gap 4).
+    ///
+    /// Scans production code only (`source_scan::production_text`, comment
+    /// lines stripped, whitespace removed so `ToolFacts{` and `ToolFacts {`
+    /// match alike). It does not see a construction through a type alias.
+    #[test]
+    fn no_production_code_builds_tool_facts_by_hand() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let sources = crate::utils::source_scan::rust_sources_under(&root.join("src"));
+        assert!(sources.len() > 100, "the scan is not looking at src/");
+        let mut literals = Vec::new();
+        for (rel, text) in sources {
+            let production = crate::utils::source_scan::production_text(&root.join(&rel), &text);
+            let code: String = crate::utils::source_scan::strip_comment_lines(&production)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let n = code.matches("ToolFacts{").count();
+            if n > 0 {
+                literals.push(format!("{rel} ×{n}"));
+            }
+        }
+        assert!(
+            literals.is_empty(),
+            "production code builds `ToolFacts {{ .. }}` by hand — use \
+             `ToolFacts::for_tool`: {literals:?}"
+        );
     }
 
     #[test]

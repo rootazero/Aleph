@@ -358,8 +358,8 @@ pub(crate) struct FlushOutcome {
 /// deliberately empty (`json!({})`) — the event means "the table changed,
 /// re-fetch via `runtime.agents.list`", which is already filtered per
 /// caller (R6-3), so the event itself carries no session id or other
-/// content to leak (see `event_scope.rs`'s `runtime.` rule doc for why that
-/// needs no `session_identity_of` arm).
+/// content to leak (see `event_scope.rs`'s `runtime.` rule doc for why its
+/// `session_identity_of` arm is a plain `Global`).
 ///
 /// The `if` lives HERE, not at each call site: [`PtyManager::start_flush_loop`]
 /// folds every session's [`flush_session`] outcome plus

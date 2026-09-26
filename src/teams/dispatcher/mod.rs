@@ -13,6 +13,7 @@
 pub mod acp_bridge;
 pub mod clarify;
 pub mod handoff;
+pub mod output_contract;
 pub mod runner;
 pub mod schedule;
 

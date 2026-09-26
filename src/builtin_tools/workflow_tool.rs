@@ -1771,6 +1771,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowStepDef {
                     id: "write".into(),
@@ -1784,6 +1787,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         }
@@ -1805,6 +1811,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 
@@ -2679,6 +2688,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowStepDef {
                     id: "run".into(),
@@ -2692,6 +2704,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         };
@@ -4290,6 +4305,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         });
         let (run_id, ids) = materialize_run(&t, &def, "team-rerun").await;
         let set = |id: &str, status, result: &str| {

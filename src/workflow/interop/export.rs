@@ -283,7 +283,26 @@ fn render_step_call(step: &WorkflowManifestStep) -> String {
     match step.kind {
         WorkflowStepKind::Clarify => render_clarify_call(step),
         WorkflowStepKind::Agent => render_agent_call(step),
+        WorkflowStepKind::Collect => render_collect_call(step),
     }
+}
+
+/// Render a `collect(["upstream1", "upstream2"], { reduce })` call. Aleph's
+/// own primitive, parallel to `clarify(...)`: the `.workflow.js` interchange
+/// lane uses the same shape so the bare-scan path round-trips a collect step
+/// alongside clarify and agent. `reduce` is omitted on the wire when it is
+/// the default (`concat`); an explicit value rides in the opts block.
+fn render_collect_call(step: &WorkflowManifestStep) -> String {
+    let from: Vec<String> = step
+        .collect_from
+        .iter()
+        .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect();
+    let opts = match step.reduce {
+        None | Some(crate::workflow::def::CollectReduce::Concat) => String::new(),
+        Some(r) => format!(", {{ reduce: \"{r:?}\" }}"),
+    };
+    format!("collect([{}]{opts})", from.join(", "))
 }
 
 /// Render a `clarify("question", ["a", "b"])` call. Choices are omitted for a
@@ -469,6 +488,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
+        parallel_group: None,
+        collect_from: Vec::new(),
+        reduce: None,
         }
     }
 
@@ -497,6 +519,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
+        parallel_group: None,
+        collect_from: Vec::new(),
+        reduce: None,
         }
     }
 

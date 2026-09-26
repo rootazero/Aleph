@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 ///
 /// | reader | an uninstalled read becomes |
 /// |---|---|
-/// | `gateway/server/handler.rs` (connect) | the validator closure returns `false` — every remote token presentation rejected |
+/// | `gateway/server/connection/mod.rs` (connect) | the validator closure returns `false` — every remote token presentation rejected |
 /// | `extension/runtime/wasm/secret_resolver.rs` | a `DenyAllSecretResolver`, deliberately, per its own comment |
 /// | `gateway/handlers/gateway_token.rs::handle_token_current` | `{"token": null}` returned as **success** |
 /// | `gateway/handlers/gateway_token.rs::handle_token_rotate` | `INTERNAL_ERROR "shared token manager unavailable"` |
