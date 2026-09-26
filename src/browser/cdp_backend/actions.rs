@@ -3559,9 +3559,10 @@ mod tests {
                 "a table lookup must never fabricate a verification: {v:?}"
             );
         }
-        // obscura's row is fail-closed Unsupported today (no binary to
-        // measure on), so its verdict is the skipped label; the day it is
-        // measured Supported, `for_engine` returning `None` is the honest
+        // obscura's row is Unsupported on a measurement (caps stage,
+        // 2026-09-26: the probe's read-back cannot survive a self-navigating
+        // click on that engine), so its verdict is the skipped label; the day
+        // it is measured Supported, `for_engine` returning `None` is the honest
         // answer and this arm must be revisited rather than flipped.
         match EffectVerification::for_engine(Engine::Obscura) {
             Some(EffectVerification::Skipped(e)) => assert_eq!(e, Engine::Obscura),
@@ -3752,8 +3753,10 @@ mod tests {
     }
 
     /// The capability gate: obscura's `effect_probe` row is `Unsupported`
-    /// (unmeasured — fail-closed), so no install and no read-back reach the
-    /// wire, and the verdict is the honest `skipped(obscura)`.
+    /// (measured 2026-09-26 by qa/browser_dual's caps stage — the read-back
+    /// cannot survive a self-navigating click there), so no install and no
+    /// read-back reach the wire, and the verdict is the honest
+    /// `skipped(obscura)`.
     #[tokio::test]
     async fn an_engine_without_the_probe_capability_is_honestly_skipped() {
         let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(

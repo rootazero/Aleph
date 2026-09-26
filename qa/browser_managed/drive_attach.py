@@ -40,9 +40,15 @@ check = _led.check
 PORT_FILE = os.path.join(args.expect_user_data_dir, "DevToolsActivePort")
 # The registry, NOT a file inside the udd: a profile may point its
 # `user_data_dir` anywhere, so the record that lets a boot sweep find the
-# browser lives in one place derived from ALEPH_HOME.
+# browser lives in one place derived from ALEPH_HOME. The file NAME is
+# engine-prefixed — `chromium-default.json`, not `default.json` — because
+# `sidecar_file_name` (src/browser/engine/process.rs) keys records on
+# `<engine>-<key>` so `switch_engine`'s two engines cannot clobber each other.
+# This fixture once named the pre-rename `default.json`, which made every
+# sidecar claim below red on every platform while "…is gone with it" passed
+# vacuously on a file that never existed.
 SIDECAR = os.path.join(
-    os.environ["ALEPH_HOME"], "data", "browser", "chromium", "default.json"
+    os.environ["ALEPH_HOME"], "data", "browser", "chromium", "chromium-default.json"
 )
 
 
@@ -221,6 +227,31 @@ async def main():
             str(sidecar.get("user_data_dir")),
         )
 
+        # 6a. Remember WHICH tab is active before the disconnect. T1 (round-1
+        #     B3, `src/browser/tab_registry.rs`) made tab identity a first-class
+        #     record, and `browser_tabs list`'s per-row `active` verdict reads
+        #     it — so step 7 can now assert what this fixture used to book as
+        #     the M5 gap: the re-attached session still lists the SAME tab,
+        #     still answering the SAME url. The url half is anchored on
+        #     `args.page_url`, not on the marker — the marker lives in the
+        #     page CONTENT (run.sh sed's it into the served html), the url is
+        #     just the port root.
+        ok, body = await rpc.invoke(
+            "browser_tabs", {"profile": "default", "action": "list"},
+        )
+        tabs_before = (body or {}).get("tabs") or []
+        active_before = [t for t in tabs_before if t.get("active")]
+        check(
+            "browser_tabs list before close names exactly one active tab, the page we opened",
+            ok
+            and isinstance(body, dict)
+            and body.get("success")
+            and len(active_before) == 1
+            and active_before[0].get("url") == args.page_url,
+            json.dumps(tabs_before)[:300],
+        )
+        remembered = dict(active_before[0]) if len(active_before) == 1 else {"id": None, "url": ""}
+
         # 6. `close` is a DISCONNECT under attach --cdp.
         #    Driven OUT OF BAND, with the scenario's scratch HOME, because that
         #    is the same command `ProfileManager::reap_idle` runs — and because
@@ -246,18 +277,35 @@ async def main():
         # 7. And the CLI can find its way back, which is what makes a reaped or
         #    crashed CLI cost nothing.
         #
-        #    Split in two (M5, round 2), so this suite does not carry a
-        #    standing-red claim: the re-attach reaching the SAME browser
-        #    process — not a relaunch — is what Piece 4 (`59dc20cce`) actually
-        #    delivers, and that is what is asserted here. Which TAB that
-        #    re-attached session treats as "current" is a separate,
-        #    undelivered question — a real subprocess with a real marker page
-        #    proved the CLI's tab-listing order differs between the first
-        #    attach and this re-attach (neither "always first" nor "always
-        #    last") — so it is a named, booked gap (FEATURE_LOCATOR §3.12,
-        #    qa/README.md), not an assertion here. Asserting `args.marker in
-        #    body` would leave this claim permanently red, which trains
-        #    readers to scroll past red rather than fix it.
+        #    The re-attach reaching the SAME browser process — not a relaunch —
+        #    is what Piece 4 (`59dc20cce`) delivers, and the first check here
+        #    asserts exactly that. The TAB-IDENTITY half — does the re-attached
+        #    session still list the tab it had, on the same url — was the M5
+        #    booked gap of round 2 (a real subprocess proved the CLI's listing
+        #    order is not stable across a re-attach, so no positional rule
+        #    could answer "which tab is current"). On THIS driver the listing's
+        #    ids are POSITIONAL, and the swap is not hypothetical: measured
+        #    2026-09-26 on this fixture, two consecutive runs gave the marker
+        #    page id "1" and then id "0" across the re-attach — so "same id
+        #    still listed" asserts nothing here (two live tabs always produce
+        #    ids "0" and "1"). The identity this driver CAN assert is by
+        #    ADDRESS: a tab answering the recorded url must still be listed.
+        #    The check below is exactly that, and it is the gap-closure half
+        #    T1's registry makes meaningful: the registry's targetId identity
+        #    lives one layer down (cdp backend / manager sweep), and the CLI
+        #    listing never surfaces it — README's known-gap (a) says why.
+        #
+        #    What is STILL not asserted — now with a measurement instead of a
+        #    guess: the `active` VERDICT does not survive a playwright-cli
+        #    re-attach. Measured 2026-09-26 on this fixture (Chrome 151,
+        #    playwright-cli 0.1.21): before `close` the page's tab is the
+        #    active one; after the re-attach the listing marks the launch-argv
+        #    `about:blank` tab active (the post-re-attach snapshot above lands
+        #    on `about:blank`). That half needs the manager's persistent
+        #    registry consulted at re-attach time — one layer above
+        #    `playwright_cli.rs`, booked for the live-view round (plan 2) — so
+        #    it stays a named gap in qa/README.md rather than a standing-red
+        #    claim here.
         ok, body = await rpc.invoke("browser_snapshot", {"profile": "default", "max_chars": 2000})
         reattached_pids = chrome_pids(args.expect_user_data_dir)
         check(
@@ -267,6 +315,25 @@ async def main():
             and body.get("success")
             and str(sidecar.get("pid")) in reattached_pids,
             json.dumps(body)[:200],
+        )
+
+        ok, body = await rpc.invoke(
+            "browser_tabs", {"profile": "default", "action": "list"},
+        )
+        tabs_after = (body or {}).get("tabs") or []
+        remembered_url = remembered.get("url")
+        row_after = next((t for t in tabs_after if t.get("url") == remembered_url), None)
+        check(
+            "the re-attached session still lists a tab on the SAME url "
+            "(identity by address — positional ids are NOT stable across a re-attach)",
+            bool(remembered_url) and row_after is not None,
+            f"remembered={json.dumps(remembered)[:120]} listed={json.dumps(tabs_after)[:200]}",
+        )
+        Ledger.log(
+            "  [KNOWN] active-tab verdict across a playwright-cli re-attach: NOT "
+            "preserved (measured 2026-09-26 — the launch-argv about:blank tab takes "
+            "it). The fix is booked for plan 2 (manager registry consulted at "
+            "re-attach); this becomes an assertion the day it lands, not before."
         )
 
         log("\n  playwright-cli list (recorded, not asserted — the attach-session shape is a new reading):")
