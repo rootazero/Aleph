@@ -92,9 +92,10 @@ pub fn set_global_result_budget_ceiling(ceiling: usize) {
         // is byte-for-byte what a boot that never got here leaves behind.
         RESULT_BUDGET_CEILING.decline(
             "this model's context window needs no per-result clamp: the ceiling \
-             derived from `[context_budget] token_budget` is at or above the \
+             derived from the run's context budget (the model's window, or an \
+             explicit `[context_budget] token_budget`) is at or above the \
              largest per-result budget (the read window), and this knob only \
-             ever clamps DOWN. A smaller-window model (or a smaller \
+             ever clamps DOWN. A smaller-window model (or a smaller pinned \
              `token_budget`) installs one.",
         );
         return;

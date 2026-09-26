@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use super::cheap_poison;
 use super::preserve::{
     is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET, SUMMARY_MARKER,
 };
@@ -19,7 +20,6 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_util::sync::CancellationToken;
 
 /// Strategy used during compaction.
@@ -214,20 +214,6 @@ pub struct ContextCompactor {
     /// almost never required; routing it to a flash-tier provider yields a
     /// 10–20× per-token cost reduction without measurable quality regression.
     cheap_provider: Option<Arc<dyn AiProvider>>,
-    /// Per-run poison flag for the cheap tier (codex `compact_model_fallback`
-    /// parity). Set the first time the cheap summarizer fails with a
-    /// model-class error (`llm_retry::classify_exhausted` → `Fallback` minus
-    /// the two transient-derived reasons) — the canonical shape being a
-    /// third-party compatible proxy that does not serve the preset's
-    /// `default_aux_model`, so EVERY summarization 404s. Once poisoned,
-    /// `summarizer()` routes straight to the main provider for the rest of
-    /// this compactor's life, so a misconfigured deployment pays one failed
-    /// call + one fallback call per run boundary instead of two wasted calls
-    /// per compaction. Deliberately NOT persisted across runs (the compactor
-    /// is rebuilt per run): a transient outage must not mute the cheap tier
-    /// forever, and a config fix takes effect on the next run without a
-    /// restart.
-    cheap_poisoned: AtomicBool,
     /// Fingerprint cache of the last successful compaction (openteams
     /// compression-cache parity). The harness rebuilds the message list from
     /// the session log every turn, discarding the previous turn's in-place
@@ -269,7 +255,6 @@ impl ContextCompactor {
             config,
             summary_reuse: None,
             cheap_provider: None,
-            cheap_poisoned: AtomicBool::new(false),
             cache: Mutex::new(None),
             monitor_scope: None,
             carryover_key: None,
@@ -396,13 +381,23 @@ impl ContextCompactor {
     }
 
     /// Provider used for summarization — the cheap-tier override when set and
-    /// not poisoned (see [`Self::cheap_poisoned`]), otherwise the main
-    /// provider passed to `new()`. Internal accessor.
+    /// not poisoned, otherwise the main provider passed to `new()`.
+    ///
+    /// Poisoning is process-wide ([`super::cheap_poison`]): the first
+    /// model-class failure of a cheap `(provider, model)` — the canonical case
+    /// being a relay that does not serve the preset's `default_aux_model`, so
+    /// every summarization 404s — routes every later compactor straight to the
+    /// main provider for a bounded while, instead of each run paying one
+    /// failed call before its own fallback.
     fn summarizer(&self) -> &Arc<dyn AiProvider> {
-        if self.cheap_poisoned.load(Ordering::Relaxed) {
-            return &self.provider;
+        match self.cheap_provider.as_ref() {
+            Some(cheap)
+                if !cheap_poison::is_poisoned(&cheap_poison::PoisonKey::of(cheap.as_ref())) =>
+            {
+                cheap
+            }
+            _ => &self.provider,
         }
-        self.cheap_provider.as_ref().unwrap_or(&self.provider)
     }
 
     /// Name of the provider summarization would actually be billed to.
@@ -1097,16 +1092,16 @@ impl ContextCompactor {
     /// Cheap-tier fallback (codex `compact_model_fallback` parity): when the
     /// cheap provider fails with an error the shared classifier reads as
     /// "switch model" (`RetryVerdict::Fallback` — 404 model-not-found being
-    /// the canonical shape, see [`Self::cheap_poisoned`]) or "this input
+    /// the canonical shape, see [`Self::summarizer`]) or "this input
     /// overflowed the cheap model's own window" (`CompactAndRetry` — the
     /// summarizer input budget is sized from the summarizer model's window,
     /// but an operator-pinned `summary_model` can outrun the catalog), the
     /// call is retried once on the main provider. Only the final outcome
     /// reaches `accept_summary`, so the observability contract (one warn per
     /// failure class) is unchanged. Model-class Fallbacks additionally poison
-    /// the cheap tier for the rest of the run; the two transient-derived
-    /// Fallback reasons (overload / network) retry without poisoning, so one
-    /// blip does not mute the cheap tier for a long run.
+    /// the cheap `(provider, model)` process-wide (bounded by a TTL); the two
+    /// transient-derived Fallback reasons (overload / network) retry without
+    /// poisoning, so one blip does not mute the cheap tier.
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
         let system =
             "You are a precise conversation summarizer. Output the analysis block followed by the summary block. No other text.";
@@ -1114,8 +1109,10 @@ impl ContextCompactor {
         let msgs = [UnifiedMessage::user(prompt)];
         let build_payload = || RequestPayload::new(&msgs).with_system(Some(system));
         let first = self.summarizer().clone();
-        let tried_cheap =
-            self.cheap_provider.is_some() && !self.cheap_poisoned.load(Ordering::Relaxed);
+        let tried_cheap = self
+            .cheap_provider
+            .as_ref()
+            .is_some_and(|cheap| Arc::ptr_eq(cheap, &first));
         let response: ProviderResponse = match first.process(build_payload()).await {
             Ok(r) => r,
             Err(e) => {
@@ -1134,25 +1131,25 @@ impl ContextCompactor {
                 if let crate::providers::llm_retry::RetryVerdict::Fallback { ref reason } = verdict
                 {
                     // Poison on every model-class failure (404 / auth /
-                    // model-scoped quota): none of them heal within a run,
-                    // and the per-run scope bounds the mute. The two
+                    // model-scoped quota): none of them heal within a run, and
+                    // `cheap_poison`'s TTL bounds the mute. The two
                     // transient-derived reasons (`classify_exhausted` wraps an
                     // exhausted in-place retry budget — the compactor's budget
                     // is one call, so they surface here) are excluded: one
-                    // overload blip must not mute the cheap tier for a long run.
+                    // overload blip must not mute the cheap tier.
                     let is_transient_derived = reason.starts_with("provider overloaded")
                         || reason.starts_with("primary model unavailable");
-                    if !is_transient_derived {
-                        self.cheap_poisoned.store(true, Ordering::Relaxed);
-                    }
+                    let newly_poisoned = !is_transient_derived
+                        && cheap_poison::poison(cheap_poison::PoisonKey::of(first.as_ref()));
                     tracing::warn!(
                         target: "context_budget",
                         cheap_provider = %first.name(),
                         %reason,
-                        poisoned = self.cheap_poisoned.load(Ordering::Relaxed),
+                        newly_poisoned,
                         "cheap summarizer failed with a model-level error; retrying once on \
-                         the main provider (check [context_budget] summary_model / the preset's \
-                         aux model against what this provider actually serves)",
+                         the main provider, and skipping this cheap model process-wide for a \
+                         while (check [context_budget] summary_model / the preset's aux model \
+                         against what this provider actually serves)",
                     );
                 } else {
                     tracing::warn!(
@@ -2466,9 +2463,12 @@ mod tests {
                 outcome: Ok(text.to_string()),
             }
         }
+        /// The name gets a unique suffix: a model-class failure poisons its
+        /// `(provider, model)` process-wide, so two tests sharing a name would
+        /// see each other's poison.
         fn failing(name: &str, raw_error: &str) -> Self {
             Self {
-                name: name.to_string(),
+                name: format!("{name}-{}", uuid::Uuid::new_v4()),
                 calls: Arc::new(crate::sync_primitives::Mutex::new(0)),
                 outcome: Err(raw_error.to_string()),
             }
@@ -2547,6 +2547,22 @@ mod tests {
             "a poisoned cheap tier must not be retried within the run"
         );
         assert_eq!(main.call_count(), 2);
+
+        // ...nor by the next run: the compactor is rebuilt per run, while the
+        // cheap provider is the one boot built, so the poison is process-wide.
+        let next_run = ContextCompactor::new(main.clone(), CompactorConfig::default())
+            .with_cheap_provider(Some(cheap.clone()));
+        let s3 = next_run
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        assert_eq!(s3, "main-summary");
+        assert_eq!(
+            cheap.call_count(),
+            1,
+            "a later run must not pay the failed cheap call again"
+        );
+        assert_eq!(main.call_count(), 3);
     }
 
     #[tokio::test]

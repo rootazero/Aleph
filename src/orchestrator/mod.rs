@@ -16,7 +16,8 @@ pub mod sandbox_factory;
 pub use deps_builder::{
     build_cheap_summary_provider, build_context_budget_config, build_context_budget_refiner,
     build_dream_provider, build_failover_chain, build_stability_triple,
-    build_strategy_planner_provider, ContextBudgetRefiner, ProviderChain, StabilityTriple,
+    build_strategy_planner_provider, chain_fallback_names, ContextBudgetRefiner, ProviderChain,
+    StabilityTriple,
 };
 
 pub use dispatch::{

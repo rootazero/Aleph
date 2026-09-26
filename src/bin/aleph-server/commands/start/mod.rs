@@ -3526,22 +3526,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // in-line truncation.
     //
     // Both budget layers are sized from the model's usable window rather than
-    // from fixed constants (B14). `token_budget` is the same figure the context
-    // compactor derives from provider/capabilities, so a 32k local model no
-    // longer gets fixed budgets it cannot possibly honor. Large windows clamp
-    // back up to the constants. `[context_budget] enabled = false` → no window
-    // → constants.
+    // from fixed constants (B14). `token_budget` is the budget the orchestrator
+    // built for its harness (`initialize_orchestrator` above) — read back from
+    // it, not derived a second time, so there is one derivation and one
+    // startup log line. A 32k local model thus no longer gets fixed budgets it
+    // cannot possibly honor; large windows clamp back up to the constants.
+    // `[context_budget] enabled = false`, or no orchestrator (no provider, so
+    // no runs) → no window → constants.
     // The first value is a CEILING over every per-result budget (the default
     // and the larger read window), not the default budget itself.
-    let window_tokens = alephcore::orchestrator::build_context_budget_config(
-        &app_config_snapshot,
-        &app_config_snapshot
-            .general
-            .default_provider
-            .clone()
-            .unwrap_or_default(),
-    )
-    .map(|cb| cb.token_budget);
+    let window_tokens = server
+        .orchestrator
+        .as_ref()
+        .and_then(|orch| {
+            alephcore::orchestrator::HarnessRunner::context_budget_config(orch.harness.as_ref())
+        })
+        .map(|cb| cb.token_budget);
     let (per_result_tokens, max_turn_tokens) = window_tokens.map_or(
         (
             alephcore::tools::result_processing::MAX_RESULT_BUDGET_TOKENS,

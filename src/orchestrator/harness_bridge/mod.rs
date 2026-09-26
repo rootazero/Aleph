@@ -86,11 +86,12 @@ pub struct AgentHarnessRunner {
     // `run()` so each `AgentHarness` instance sees the same pressure sensor
     // / compactor / hook set.
     pub verifier_chain: Option<Arc<VerifierChain>>,
-    /// Opt-in mid-run context management (`[context_budget]`). Held as the
+    /// Mid-run context management (`[context_budget]`, on by default). Held as the
     /// *config*, not a live `ContextBudget`: `run()` constructs a fresh
     /// `ContextBudget` per call because its circuit-breaker / split state
     /// must never be shared across concurrent
-    /// sessions. `None` disables mid-run compaction entirely.
+    /// sessions. `None` (`[context_budget] enabled = false`, or a test /
+    /// direct injection) disables mid-run compaction entirely.
     pub context_budget_config: Option<ContextBudgetConfig>,
     /// Per-run companion to [`Self::context_budget_config`]: re-keys the
     /// chain-minimum startup budget onto the model actually serving each run

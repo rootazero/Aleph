@@ -72,6 +72,17 @@ on every turn unless context management is switched off
 only outside the fresh tail, and a final token guard ensures no stage can
 ever *grow* the context.
 
+### The system prompt is budgeted too
+
+With context management on (the default), the run's refined `token_budget` also
+sizes the system prompt (`prompt_build::system_prompt_budget` →
+`TokenBudget::from_context_window`): a char cap that grows with the window and
+a **token hard gate** (`max_total_tokens`) that head/tail-truncates an
+oversized dynamic suffix (memory, notes, soul). Wide windows get a larger prompt
+than the legacy fixed cap; a narrow window with a CJK-heavy suffix can now be
+truncated where it used to pass untouched. `enabled = false` restores the fixed
+cap with no token gate.
+
 ### PreflightStage Trait
 
 `src/context/budget/preflight.rs`:
@@ -287,15 +298,21 @@ pub struct Budget {
 ### Per-model threshold overrides (`[[context_budget.model_thresholds]]`)
 
 `token_budget` is already model-aware — it is sized for the *smallest* context
-window on the resolved failover chain (`derive_chain_min_budget`,
-`src/orchestrator/deps_builder.rs`). The conservative consequence: a single
+window on the failover chain (`derive_chain_min_budget`,
+`src/orchestrator/deps_builder/context_budget.rs`). "The chain" is the one the
+failover walk itself uses, asked of the built chain at boot
+(`chain_fallback_names` → `FailoverProvider::chain_composition`), not a
+re-derivation from config — so a provider the walk cannot reach never sizes the
+budget. Each provider contributes its declared `models`; preset ladder rungs
+are not counted (a migration onto one is caught by the reactive rescue). The
+conservative consequence: a single
 **narrow fallback sibling** caps the compaction budget for an otherwise-wide
 primary, so the primary compacts earlier than its real window requires. When the
 chain-min winner is *not* the primary and the budget falls below
 `CHAIN_MIN_UNDERCUT_WARN_FRACTION` (60%) of the primary's own usable window,
 `build_context_budget_config` logs a one-line startup advisory naming the
-offending sibling and the fix (reorder/trim `[fallback_provider].chain`, or pin
-an explicit `token_budget`). It is observability only — the safe smaller budget
+offending sibling and the fix (reorder/trim `[fallback_provider].chain`, pin
+an explicit `token_budget`, or `enabled = false`). It is observability only — the safe smaller budget
 still stands. The **trigger fractions** can also vary per
 model: a narrow 200k-window model often wants to compact earlier than a 1M model
 (less absolute headroom above the warning line). Declare overrides keyed off the

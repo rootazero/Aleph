@@ -515,6 +515,40 @@ critical_threshold = 0.85
             .is_some());
     }
 
+    /// The decision survives a save: an absent section is not invented on
+    /// the way out (it stays "on" by omission), and an explicit opt-out is
+    /// written and read back as off.
+    #[test]
+    fn the_context_budget_decision_survives_a_config_round_trip() {
+        use crate::config::Config;
+        let round_trip = |config: &Config| -> Config {
+            let written = toml::to_string_pretty(config).expect("serialize");
+            toml::from_str(&written).expect("parse what was written")
+        };
+
+        let absent = round_trip(&Config::default());
+        assert!(absent.context_budget.is_none(), "no section invented");
+        assert!(absent.effective_context_budget().is_some(), "still on");
+
+        let opted_out = Config {
+            context_budget: Some(ContextBudgetToml {
+                enabled: false,
+                ..ContextBudgetToml::default()
+            }),
+            ..Config::default()
+        };
+        let reloaded = round_trip(&opted_out);
+        assert_eq!(
+            reloaded.context_budget.as_ref().map(|cb| cb.enabled),
+            Some(false),
+            "`enabled = false` is written out"
+        );
+        assert!(
+            reloaded.effective_context_budget().is_none(),
+            "the opt-out survives a save"
+        );
+    }
+
     #[test]
     fn summary_model_parses_for_cheap_tier_summarization() {
         let toml_str = "[context_budget]\nenabled = true\nsummary_model = \"claude-haiku-4-5\"\n";

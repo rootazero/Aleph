@@ -605,19 +605,7 @@ impl AgentHarnessRunner {
         // and its `native_tools_enabled` opt-out were removed 2026-07-26: both
         // writers forced the flag on, and the `{reasoning, action}` text
         // envelope the layer's listings fed was deleted 2026-05-10.)
-        // Model-aware system-prompt budget (feature 1.2): when a context budget
-        // is configured, size the prompt char cap off the same chain-minimum
-        // window the history side uses (feature 2.2), so large-window models
-        // stop being capped at the fixed 80k default. Context management switched
-        // off (`[context_budget] enabled = false`) → legacy fixed default.
-        let token_budget = prompt_token_budget.map_or_else(
-            crate::thinker::prompt_budget::TokenBudget::default,
-            crate::thinker::prompt_budget::TokenBudget::from_context_window,
-        );
-        let token_budget = match prompt_estimate_factor {
-            Some(factor) => token_budget.with_estimate_factor(factor),
-            None => token_budget,
-        };
+        let token_budget = system_prompt_budget(prompt_token_budget, prompt_estimate_factor);
         // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
         // `SkillInstructionsLayer` against the active tool names. The cached
         // prompt is assembled with an empty `tools` slice (native tool_use
@@ -1101,6 +1089,29 @@ pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
 /// silently treated as a non-existent agent.
 fn is_safe_agent_path_component(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains('/') && !s.contains('\\')
+}
+
+/// The system-prompt budget for one run (feature 1.2).
+///
+/// With context management on — the default — `prompt_token_budget` is the
+/// run's refined context budget, and the prompt is sized off the same window
+/// the history side uses: a char cap that grows with the window and a token
+/// hard gate (`max_total_tokens`), which truncates an oversized dynamic suffix
+/// (memory / notes / soul) head-and-tail. Context management switched off
+/// (`[context_budget] enabled = false`) → `None` → the legacy fixed char cap
+/// and no token gate.
+pub(super) fn system_prompt_budget(
+    prompt_token_budget: Option<u64>,
+    prompt_estimate_factor: Option<f64>,
+) -> crate::thinker::prompt_budget::TokenBudget {
+    let token_budget = prompt_token_budget.map_or_else(
+        crate::thinker::prompt_budget::TokenBudget::default,
+        crate::thinker::prompt_budget::TokenBudget::from_context_window,
+    );
+    match prompt_estimate_factor {
+        Some(factor) => token_budget.with_estimate_factor(factor),
+        None => token_budget,
+    }
 }
 
 #[cfg(test)]
