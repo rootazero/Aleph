@@ -3529,7 +3529,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // from fixed constants (B14). `token_budget` is the same figure the context
     // compactor derives from provider/capabilities, so a 32k local model no
     // longer gets fixed budgets it cannot possibly honor. Large windows clamp
-    // back up to the constants. No `[context_budget]` → no window → constants.
+    // back up to the constants. `[context_budget] enabled = false` → no window
+    // → constants.
     // The first value is a CEILING over every per-result budget (the default
     // and the larger read window), not the default budget itself.
     let window_tokens = alephcore::orchestrator::build_context_budget_config(

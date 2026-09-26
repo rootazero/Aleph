@@ -63,10 +63,11 @@ LLM-free transforms.
 
 `src/harness/agent/think.rs::run_turn` step 2a invokes
 `HarnessDeps.preflight_pipeline.run(&mut messages, &pressure, fresh_tail)`
-on every turn when `[context_budget]` is configured. The pipeline is
-assembled in `src/orchestrator/harness_bridge/runner_impl.rs` and is `Some`
-whenever `context_compactor` is `Some` — same opt-in as the compactor
-itself. All stages share a single config-derived pressure gate
+on every turn unless context management is switched off
+(`[context_budget] enabled = false`; a missing section is on — see
+`Config::effective_context_budget`). The pipeline is assembled in
+`src/orchestrator/harness_bridge/runner_impl.rs` and is `Some` whenever
+`context_compactor` is `Some` — the same switch as the compactor itself. All stages share a single config-derived pressure gate
 (`PreflightPipeline::with_min_pressure_ratio(cfg.preventive_floor())`), act
 only outside the fresh tail, and a final token guard ensures no stage can
 ever *grow* the context.
@@ -301,8 +302,7 @@ model: a narrow 200k-window model often wants to compact earlier than a 1M model
 same chain-min model that sizes the budget:
 
 ```toml
-[context_budget]
-enabled = true
+[context_budget]            # on by default; `enabled = false` opts out
 warning_threshold = 0.70   # global defaults
 critical_threshold = 0.85
 

@@ -11,11 +11,10 @@ place rather than adding a second provider the agent would not use.
   --base-url URL          e.g. http://api.deepseek.com (reached via HTTP_PROXY)
   --model M               the one model (also the agent's)
   --server-context-editing  enable Anthropic server-side context editing
-  --context-budget        add `[context_budget] enabled = true`. A generated
-                          config has no such section, and without it the run
-                          builds no ContextBudget — so nothing measures the
-                          prompt's message split and `context.breakdown`
-                          has no `messages` to report.
+  --context-budget-off    add `[context_budget] enabled = false` — the opt-out.
+                          A generated config has no such section, and a
+                          missing section is ON, so this is the only way to
+                          get a run that builds no ContextBudget.
 """
 import argparse
 import re
@@ -26,7 +25,7 @@ ap.add_argument("--protocol", required=True)
 ap.add_argument("--base-url", required=True)
 ap.add_argument("--model", required=True)
 ap.add_argument("--server-context-editing", action="store_true")
-ap.add_argument("--context-budget", action="store_true")
+ap.add_argument("--context-budget-off", action="store_true")
 a = ap.parse_args()
 
 src = open(a.path).read()
@@ -50,10 +49,10 @@ if a.server_context_editing:
     block = set_line(block, "server_context_editing", "true")
 src = src[:start] + block + src[end:]
 src = re.sub(r'^model = "qa-mock-model"$', f'model = "{a.model}"', src, flags=re.M)
-if a.context_budget:
+if a.context_budget_off:
     if re.search(r"^\[context_budget\]", src, re.M):
         raise SystemExit("config already has [context_budget]; refusing to add a second header")
-    src = src.rstrip("\n") + "\n\n[context_budget]\nenabled = true\n"
+    src = src.rstrip("\n") + "\n\n[context_budget]\nenabled = false\n"
 open(a.path, "w").write(src)
 print(f"provider qa-mock -> {a.protocol} {a.base_url} {a.model}"
       f"{' +server_context_editing' if a.server_context_editing else ''}")

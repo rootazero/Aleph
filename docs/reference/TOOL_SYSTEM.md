@@ -668,11 +668,12 @@ model has no tool to open is a dead handle. `offload` checks `RecoveryTools::is_
 also declines after the write when the footer would name no callable reader (only `ctx_search`, and the index
 did not take the blob); the writer cuts head and tail instead and says the rest was not saved.
 
-Only these ingress gates run on a default install: the generated default config has no `[context_budget]`, so no
-`ContextBudget` is built (no preflight pruning, calibration or `context.breakdown` `messages`) and no window
-ceiling is installed. 默认安装只有入口两道闸。
+Context management is on by default (a missing `[context_budget]` is on; `enabled = false` opts out), so a default
+install runs these ingress gates **and** a per-run `ContextBudget` behind them (preflight pruning, calibration,
+`context.breakdown` `messages`). With `enabled = false` only the two ingress gates remain and no window ceiling is
+installed. 默认开启；显式关掉时只剩入口两道闸。
 
-Small-window models (with `[context_budget] enabled = true`): boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
+Small-window models (context management on): boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
 `MAX_RESULT_BUDGET_TOKENS` / `DEFAULT_MAX_TURN_TOKENS`); the per-result ceiling caps **every** per-result budget,
 the read window included. `tool_output::scale_to_budget` sizes digests/profiles against
 `tool_output::KNOB_REFERENCE_BUDGET_TOKENS` (the budget the knob defaults were sized for), so a smaller budget gets a

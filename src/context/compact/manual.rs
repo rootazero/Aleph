@@ -178,7 +178,7 @@ pub struct ManualCompactWiring {
     /// window at startup (`ContextBudgetConfig::summarizer_input_budget`).
     /// The manual path has no run to inherit a compactor config from, so the
     /// derived value rides the wiring; defaults to the historical constant
-    /// when the budget section is absent/disabled.
+    /// when context management is switched off (`[context_budget] enabled = false`).
     pub summarizer_input_budget: usize,
 }
 

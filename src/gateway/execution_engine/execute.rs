@@ -287,13 +287,15 @@ where
     ///   the turn cap is what actually bounds a cold seed, so the ceiling is a
     ///   backstop for one pathologically large turn rather than the operative
     ///   limit.
-    /// * **An absent `[context_budget]` is not a refusal.** That section is
-    ///   opt-in and absent on a default install, so treating `for_child`'s
-    ///   `None` as "I cannot size this" uniformly would make `/btw` refuse
-    ///   everywhere out of the box — a floor with no door. Absent means the
-    ///   install has opted out of window management altogether: the main
+    /// * **Context management switched off is not a refusal.** With
+    ///   `[context_budget] enabled = false` the harness has no budget, so
+    ///   treating `for_child`'s `None` as "I cannot size this" would make
+    ///   `/btw` refuse on every such install — a floor with no door. Off means
+    ///   the install has opted out of window management altogether: the main
     ///   conversation being forked from runs uncompacted too, so there is no
-    ///   line to stay below and the turn cap is the whole bound. This is the
+    ///   line to stay below and the turn cap is the whole bound. (A missing
+    ///   section is on — `Config::effective_context_budget` — so a default
+    ///   install takes the sized path.) This is the
     ///   same conclusion `btw::seed`'s own `delta_budget` reaches for the warm
     ///   path, and the same degradation `run_loop` applies when it declines to
     ///   hand a spawned child a budget it does not have.

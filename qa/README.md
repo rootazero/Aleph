@@ -1696,7 +1696,7 @@ widened a narrowly-scoped change into that question. Tracked in
   不在根 `CLAUDE.md` 的路由表里。
 - **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
   出站、`result_processing` 的 offload 与 footer、`ctx_search`、`context.breakdown` 或 `events.subscribe`
-  的 `except` 前跑 `{replay,carve,ingress,breakdown,gate,firstparty}`。
+  的 `except`、或 `[context_budget]` 的开关推导（`Config::effective_context_budget`）前跑 `{replay,carve,ingress,breakdown,optout,gate,firstparty}`。
   - **它怎么让一个本地 mock 站在第一方主机名后面**：Aleph 按**主机名**分类（`api.deepseek.com` =
     DeepSeek 原生、`api.anthropic.com` = 第一方、`127.0.0.1` 两者都不是），所以 `replay` `carve` 与
     `firstparty` 的 1P 臂把 `base_url` 写成 `http://api.<vendor>.com`，并以 `HTTP_PROXY` 指向 mock 启动
@@ -1716,9 +1716,11 @@ widened a narrowly-scoped change into that question. Tracked in
     Homebrew 在前时 `bash` 解析到 `/opt/homebrew/bin/bash`，seatbelt 不许 exec 它（同样 exit 71）。
     ⚠️ 后者是**既有缺陷，不是有意行为**：装置绕开它，不等于它是对的（已单独报给用户）。
   - `breakdown` — 同一轮之后 `context.breakdown` 回 `messages.tool_results > 0`、`tool_output` 带
-    `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
-    run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是
-    一条产品事实：默认安装上 `context.breakdown` 没有 `messages`。
+    `since_unix_ms` 并计到那次 Layer-2 offload。**本阶段不加任何 `[context_budget]`**：先断言生成的
+    默认配置里没有这一段（前提），再证 `messages` 在——这是「缺段即开」在真机上的证据。
+  - `optout` — 同一轮，配置里写 `[context_budget] enabled = false`：`messages` **缺席**，而
+    `tool_output` 仍计到那次 offload（锚点——入口账不依赖预算，它在就说明这是一份真 breakdown，
+    不是一份空回复）。
   - `gate` — 一个落在**单结果默认预算与旧默认之间**的结果（`awk` 打 2600 行，`QA_GATE_LINES` 可调）：
     现在被 offload（标记 + 找回 footer），在旧默认下它会原样进上下文。窗口的两端**不写在这里也不写在
     `drive.py` 里**——`drive.py` 从 `src/tools/result_processing.rs` 读

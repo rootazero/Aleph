@@ -16,6 +16,7 @@ use crate::tasks::heartbeat::config::HeartbeatConfig;
 use crate::tasks::shared::reaper::ReaperConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 // =============================================================================
@@ -228,10 +229,12 @@ pub struct Config {
     /// to an existing `[providers.<key>]` entry by toml key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_provider: Option<FallbackProviderToml>,
-    /// Opt-in mid-run context-window management. When `Some` and
-    /// `enabled = true`, the orchestrator builds a per-run `ContextBudget` +
-    /// `ContextCompactor` so long Think→Act runs compact history instead of
-    /// hard-failing on a provider context-length error.
+    /// Mid-run context-window management, **on by default**: the orchestrator
+    /// builds a per-run `ContextBudget` + `ContextCompactor` so long Think→Act
+    /// runs compact history instead of hard-failing on a provider
+    /// context-length error. `None` here means "the operator wrote no
+    /// section", not "off" — ask [`Self::effective_context_budget`] whether
+    /// the feature is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_budget: Option<ContextBudgetToml>,
     /// Opt-in (default **on**) strategic-planner welding for the three long-task
@@ -307,6 +310,23 @@ pub struct ChannelInstanceConfig {
 }
 
 impl Config {
+    /// The `[context_budget]` section in force, or `None` when mid-run context
+    /// management is switched off. The one derivation of that decision: every
+    /// reader asks here instead of reading [`Self::context_budget`], whose
+    /// `None` only means the section was never written.
+    ///
+    /// A missing section resolves to [`ContextBudgetToml::default`] (on, every
+    /// knob at its derived default) and a present section with `enabled`
+    /// omitted is on too; only an explicit `enabled = false` returns `None`.
+    #[must_use]
+    pub fn effective_context_budget(&self) -> Option<Cow<'_, ContextBudgetToml>> {
+        match self.context_budget.as_ref() {
+            None => Some(Cow::Owned(ContextBudgetToml::default())),
+            Some(cb) if cb.enabled => Some(Cow::Borrowed(cb)),
+            Some(_) => None,
+        }
+    }
+
     /// Parse the `channels` `HashMap` into resolved channel instances.
     ///
     /// Type resolution rules:

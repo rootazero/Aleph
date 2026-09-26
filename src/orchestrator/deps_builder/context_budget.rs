@@ -188,18 +188,6 @@ fn window_aware_fresh_tail(usable: u64) -> usize {
         .min(FRESH_TAIL_MAX_COUNT)
 }
 
-/// Build the optional per-run context-budget config from `[context_budget]`.
-///
-/// Returns `None` when the section is absent or `enabled = false` — the
-/// orchestrator then leaves `HarnessDeps.context_budget`/`context_compactor`
-/// as `None`, so behavior is identical to before this wiring (no mid-run
-/// compaction). When `Some`, `AgentHarnessRunner::run` constructs a *fresh*
-/// `ContextBudget` per run (its circuit-breaker / split state
-/// must not be shared across concurrent sessions).
-///
-/// `token_budget` and the two thresholds are user-tunable; the remaining
-/// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
-/// every knob needs a toml surface).
 /// A model-aware compaction budget derived from the primary model's real
 /// context window. `usable` is what the pressure sensor consumes; the rest is
 /// kept for the one observability line at startup.
@@ -347,14 +335,25 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
     })
 }
 
+/// Build the optional per-run context-budget config from `[context_budget]`.
+///
+/// Returns `None` only under an explicit `enabled = false` (or a config the
+/// validation below rejects) — the orchestrator then leaves
+/// `HarnessDeps.context_budget`/`context_compactor` as `None` (no mid-run
+/// compaction). A missing section is on: the gate is
+/// [`Config::effective_context_budget`]. When `Some`,
+/// `AgentHarnessRunner::run` constructs a *fresh* `ContextBudget` per run (its
+/// circuit-breaker / split state must not be shared across concurrent
+/// sessions).
+///
+/// `token_budget` and the two thresholds are user-tunable; the remaining
+/// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
+/// every knob needs a toml surface).
 pub fn build_context_budget_config(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<ContextBudgetConfig> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
+    let cb = config.effective_context_budget()?;
     // Resolve the chain-minimum model once: its window sizes the budget (unless
     // overridden) AND its identity keys the per-model threshold override below,
     // so the trigger fractions always match the model the budget is sized for.
@@ -525,17 +524,15 @@ pub struct ContextBudgetRefiner {
 }
 
 /// Capture the refinement inputs from `[context_budget]`. Returns `None`
-/// under exactly the same gate as [`build_context_budget_config`] (section
-/// absent or disabled), so the two handles always come and go together.
+/// under the same gate as [`build_context_budget_config`]
+/// ([`Config::effective_context_budget`]: explicitly disabled), so the two
+/// handles come and go together.
 #[must_use]
 pub fn build_context_budget_refiner(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<ContextBudgetRefiner> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
+    let cb = config.effective_context_budget()?;
     Some(ContextBudgetRefiner {
         explicit_token_budget: cb.token_budget,
         global_warning: cb.warning_threshold,
@@ -669,10 +666,57 @@ mod tests {
         }
     }
 
+    /// Default on: a config that never wrote `[context_budget]` builds the
+    /// same budget as one that wrote `enabled = true` and nothing else.
     #[test]
-    fn context_budget_none_when_section_missing() {
-        let cfg = Config::default();
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+    fn context_budget_some_when_section_missing() {
+        let missing = build_context_budget_config(&Config::default(), "primary")
+            .expect("a missing section is on");
+        let explicit = build_context_budget_config(
+            &cfg_with_context_budget(Some(ContextBudgetToml {
+                enabled: true,
+                ..ContextBudgetToml::default()
+            })),
+            "primary",
+        )
+        .expect("enabled → Some");
+        assert_cfg_eq(&missing, &explicit);
+    }
+
+    /// What a default-on run actually gets when `token_budget` is unset, for a
+    /// 1M-window model, a 200k-window model and a model the catalog does not
+    /// know: the chain-minimum `window − output reserve`, never a flat 200k.
+    #[test]
+    fn default_on_budget_follows_the_model_window() {
+        let budget_for = |model: &str| {
+            let mut providers = std::collections::HashMap::new();
+            providers.insert("p".to_string(), ProviderConfig::test_config(model));
+            let cfg = Config {
+                providers,
+                ..Config::default()
+            };
+            build_context_budget_config(&cfg, "p")
+                .expect("a missing section is on")
+                .token_budget
+        };
+        let usable = |model: &str, window: u32| {
+            let caps = capabilities_for(model).expect("catalog model");
+            assert_eq!(caps.context_window, window, "{model} is the {window} case");
+            u64::from(caps.context_window) - u64::from(caps.max_output_tokens)
+        };
+        assert_eq!(
+            budget_for("claude-sonnet-4-6"),
+            usable("claude-sonnet-4-6", 1_000_000)
+        );
+        assert_eq!(
+            budget_for("claude-opus-4-1-20250805"),
+            usable("claude-opus-4-1-20250805", 200_000)
+        );
+        assert!(capabilities_for("totally-unknown-model").is_none());
+        assert_eq!(
+            budget_for("totally-unknown-model"),
+            DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE
+        );
     }
 
     #[test]
@@ -1305,15 +1349,19 @@ mod tests {
         assert_eq!(a.max_splits, b.max_splits, "max_splits");
     }
 
+    /// The refiner comes and goes with the config: on when the section is
+    /// missing, off only under an explicit `enabled = false`.
     #[test]
-    fn refiner_none_when_section_missing_or_disabled() {
+    fn refiner_follows_the_same_gate_as_the_config() {
         let cfg = Config::default();
-        assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+        assert!(build_context_budget_refiner(&cfg, "primary").is_some());
+        assert!(build_context_budget_config(&cfg, "primary").is_some());
         let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
             enabled: false,
             ..ContextBudgetToml::default()
         }));
         assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
     }
 
     #[test]

@@ -2,9 +2,10 @@
 //! Phase-6 wiring schema — three top-level toml sections that flip
 //! Stage 5a/5b + P0 rescue from None placeholders to live values.
 //!
-//! Missing section → corresponding `Config` field stays `None` →
-//! `AgentHarnessRunner` field stays `None` → behavior identical to
-//! Stage 7 ship (commit c2cd8d293) main HEAD.
+//! Missing section → corresponding `Config` field stays `None`. For most
+//! sections that means the matching `AgentHarnessRunner` field stays `None`;
+//! `[context_budget]` and `[strategy]` are the exceptions — both default
+//! **on**, so their readers resolve a missing section to the defaults.
 //!
 //! Wired into `AgentHarnessRunner` by `orchestrator_init::build_*` helpers.
 
@@ -87,22 +88,32 @@ impl FallbackProviderToml {
     }
 }
 
-/// `[context_budget]` — opt-in mid-run context-window management. When
-/// `enabled = true`, the harness senses context pressure between turns and
-/// compacts older conversation history (LLM summarization, with a
-/// deterministic-truncation fallback) before the window overflows — so a
-/// long Think→Act run does not hard-fail on a provider context-length error.
+/// `[context_budget]` — mid-run context-window management, **on by default**.
+/// The harness senses context pressure between turns and compacts older
+/// conversation history (LLM summarization, with a deterministic-truncation
+/// fallback) before the window overflows — so a long Think→Act run does not
+/// hard-fail on a provider context-length error.
 ///
-/// Missing section, or `enabled = false`, leaves the feature off: behavior is
-/// identical to before this wiring (`context_budget`/`context_compactor` stay
-/// `None` on `HarnessDeps`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+/// A missing section and a section with `enabled` omitted are both **on**;
+/// only an explicit `enabled = false` turns it off. That decision has one
+/// derivation, [`Config::effective_context_budget`](crate::config::Config::effective_context_budget),
+/// and every reader goes through it — reading `Config::context_budget` for the
+/// on/off question would answer "off" for every install that never wrote the
+/// section.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ContextBudgetToml {
-    #[serde(default)]
+    /// Master switch. Default **true**; `false` is the opt-out (no per-run
+    /// `ContextBudget`, compactor or preflight pipeline, no window-derived
+    /// tool-output ceilings, no cheap summarizer).
+    #[serde(default = "context_budget_enabled_default")]
     pub enabled: bool,
-    /// Model context-window size in tokens. Set this to your model's real
-    /// window — compaction thresholds are fractions of this budget, so an
-    /// inaccurate value compacts too early or too late. Default `200_000`.
+    /// Usable compaction budget in tokens. **Unset (default):** derived per
+    /// model — the smallest `context_window − output reserve` over every model
+    /// the failover chain can land on (provider `context_window` /
+    /// `max_tokens` first, then the model catalog), with a 200k window as the
+    /// fallback only for a model the catalog does not know. Set it to pin a
+    /// fixed budget regardless of model; compaction thresholds are fractions
+    /// of this value, so a wrong pin compacts too early or too late.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
     /// Fraction of `token_budget` at which compaction begins. When unset the
@@ -166,6 +177,26 @@ pub struct ContextBudgetToml {
     /// which is pressure-driven and never touches the stored log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manual_compact_keep_tokens: Option<usize>,
+}
+
+/// serde default for `ContextBudgetToml::enabled` — context management is on
+/// unless an operator explicitly flips it off.
+fn context_budget_enabled_default() -> bool {
+    true
+}
+
+impl Default for ContextBudgetToml {
+    fn default() -> Self {
+        Self {
+            enabled: context_budget_enabled_default(),
+            token_budget: None,
+            warning_threshold: None,
+            critical_threshold: None,
+            summary_model: None,
+            model_thresholds: Vec::new(),
+            manual_compact_keep_tokens: None,
+        }
+    }
 }
 
 /// One `[[context_budget.model_thresholds]]` entry: a per-model override of the
@@ -239,7 +270,7 @@ impl ContextBudgetToml {
 /// Think→Act loop), is fully fail-soft, and self-gates: a trivial task or any
 /// failure stores no Strategy and leaves the prompt byte-identical.
 ///
-/// Unlike `[context_budget]`, this section defaults to **enabled = true**: the
+/// Like `[context_budget]`, this section defaults to **enabled = true**: the
 /// welded Strategy is a model-independent context-engineering win (KV-cache
 /// prefix reuse + attention anchoring), so it ships on. `enabled = false` is the
 /// one-flip A/B + Future-Proof escape valve (spec §2): if a future model shows
@@ -427,17 +458,61 @@ critical_threshold = 0.85
     }
 
     #[test]
-    fn context_budget_section_defaults_to_disabled() {
-        // `[context_budget]` present but `enabled` omitted → enabled = false,
-        // so the feature stays off unless explicitly switched on.
+    fn context_budget_section_with_enabled_omitted_is_on() {
+        // `[context_budget]` present but `enabled` omitted → enabled = true:
+        // the feature is on unless an operator writes `enabled = false`.
         let p: Probe = toml::from_str("[context_budget]\n").expect("toml parses");
         let cb = p.context_budget.expect("section present");
-        assert!(!cb.enabled);
+        assert!(cb.enabled);
         assert!(cb.token_budget.is_none());
         // Per-model overrides default to empty → every model inherits globals.
         assert!(cb.model_thresholds.is_empty());
-        // Cheap summarization is opt-in — unset by default.
+        // No explicit summary model → the preset's aux tier decides.
         assert!(cb.summary_model.is_none());
+        // The serde default and `Default` are one answer, not two.
+        assert_eq!(cb, ContextBudgetToml::default());
+    }
+
+    /// The one derivation of "is context management on": a missing section
+    /// and a section with `enabled` omitted are on; only an explicit
+    /// `enabled = false` is off.
+    #[test]
+    fn effective_context_budget_is_on_unless_explicitly_disabled() {
+        use crate::config::Config;
+        let with = |section: &str| Config {
+            context_budget: toml::from_str::<Probe>(section)
+                .expect("toml parses")
+                .context_budget,
+            ..Config::default()
+        };
+
+        let missing = with("");
+        assert!(missing.context_budget.is_none(), "no section written");
+        assert_eq!(
+            missing.effective_context_budget().as_deref(),
+            Some(&ContextBudgetToml::default()),
+            "missing section → on, every knob at its default"
+        );
+
+        let omitted = with("[context_budget]\ntoken_budget = 64000\n");
+        let cb = omitted
+            .effective_context_budget()
+            .expect("enabled omitted → on");
+        assert_eq!(
+            cb.token_budget,
+            Some(64_000),
+            "the written section is the one in force"
+        );
+
+        assert!(
+            with("[context_budget]\nenabled = false\n")
+                .effective_context_budget()
+                .is_none(),
+            "explicit enabled = false → off"
+        );
+        assert!(with("[context_budget]\nenabled = true\n")
+            .effective_context_budget()
+            .is_some());
     }
 
     #[test]

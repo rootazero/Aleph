@@ -608,8 +608,8 @@ impl AgentHarnessRunner {
         // Model-aware system-prompt budget (feature 1.2): when a context budget
         // is configured, size the prompt char cap off the same chain-minimum
         // window the history side uses (feature 2.2), so large-window models
-        // stop being capped at the fixed 80k default. No `[context_budget]`
-        // configured → legacy fixed default (byte-identical).
+        // stop being capped at the fixed 80k default. Context management switched
+        // off (`[context_budget] enabled = false`) → legacy fixed default.
         let token_budget = prompt_token_budget.map_or_else(
             crate::thinker::prompt_budget::TokenBudget::default,
             crate::thinker::prompt_budget::TokenBudget::from_context_window,

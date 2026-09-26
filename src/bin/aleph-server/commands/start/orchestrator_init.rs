@@ -414,8 +414,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         default_provider,
         named_providers,
         verifier_chain,
-        // H2: opt-in mid-run context compaction. `None` (section absent /
-        // disabled) keeps the previous behavior — no compaction. Built once
+        // H2: mid-run context compaction, on by default. `None` only under an
+        // explicit `[context_budget] enabled = false` — no compaction. Built once
         // above (the manual `/compact` wiring reads the derived
         // summarizer-input budget from the same value).
         context_budget_config,

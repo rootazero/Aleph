@@ -313,7 +313,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
   （`estimate_message_tokens_split`；`estimate_message_tokens_aware` 就是它的 `total()`，`harness_bridge::context_estimate`
   用的也是它——两者量的是不同的**集合**：运行前的日志 vs 真正发出去的 prompt，不是两个估算器）。
   reasoning 只记**边际成本**（两边用合并文本上测出的同一个密度，边际不会被夹成 0），三项之和等于总估算。
-  这一轮还没量过 prompt 时为 `None`。⚠️ 它只在 run 建了 `ContextBudget` 时才有，而那要求 `[context_budget] enabled = true`——**生成的默认配置没有这一段**，所以默认安装上 `messages` 恒缺、TUI 不出那几行（本轮之前就有的默认，未改；见 [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md)）。它是**未校准的估算**：`reconcile` 把它标成估算行（TUI 前缀 `~`），
+  这一轮还没量过 prompt 时为 `None`。⚠️ 它只在 run 建了 `ContextBudget` 时才有——上下文管理默认开（缺段即开），只有 `[context_budget] enabled = false` 时 `messages` 恒缺、TUI 不出那几行（见 [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md)）。它是**未校准的估算**：`reconcile` 把它标成估算行（TUI 前缀 `~`），
   矛盾判定只看**实测**行（layers + tools）；估算行超出 provider 计数留下的余量时按比例缩进去，行之和等于总数。
 - `tool_output` —— 这个会话自 `since_unix_ms` 起的工具输出入口账：`calls` / `produced_tokens`（Layer 2 之前的输出）/
   `in_context_tokens`（`ProcessedResult::tokens_in_context`）/ `offloaded`（**只算 Layer 2**；Layer 3 按轮预算事后溢出的结果

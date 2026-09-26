@@ -1218,3 +1218,73 @@ fn no_site_records_a_completed_terminate_reason() {
          an empty set"
     );
 }
+
+/// Drive one run on the failing-provider rig with the context-budget handles
+/// boot would build from `config`, and report whether the run measured its
+/// prompt's message split — the effect only a live `HarnessDeps.context_budget`
+/// produces (`ContextBudget::before_turn` publishes it before the provider is
+/// called, so the failing provider does not hide it).
+async fn run_measures_its_messages(agent_id: &str, config: &crate::config::Config) -> bool {
+    let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
+    let mut runner = runner_with_failing_provider(fresh_service(), agent_id);
+    runner.context_budget_config =
+        crate::orchestrator::build_context_budget_config(config, "primary");
+    runner.context_budget_refiner =
+        crate::orchestrator::build_context_budget_refiner(config, "primary");
+    let key = SessionKey::ephemeral(agent_id).to_key_string();
+    let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let result = runner
+        .run(
+            key.clone(),
+            probe_spec(agent_id),
+            FlowInput::Prompt("measure me".into()),
+            std::sync::Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx,
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            None,
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "the rig's provider rejects every call; got {result:?}"
+    );
+    let record = registry
+        .latest(&key)
+        .expect("the runner records a prompt-size row for every run");
+    record.messages.is_some()
+}
+
+/// Default on, end to end: a config that never wrote `[context_budget]` gives
+/// the run a live context budget, and an explicit `enabled = false` does not.
+///
+/// Asserts the effect (the run measured its message split), not the handle —
+/// dropping the builder's result on the way to the runner turns this red.
+#[tokio::test]
+async fn a_config_without_a_context_budget_section_runs_with_one() {
+    let no_section = crate::config::Config::default();
+    assert!(no_section.context_budget.is_none());
+    assert!(
+        run_measures_its_messages("default-on-budget-probe", &no_section).await,
+        "a missing [context_budget] must reach the harness as a live budget"
+    );
+
+    let opted_out = crate::config::Config {
+        context_budget: Some(crate::ContextBudgetToml {
+            enabled: false,
+            ..crate::ContextBudgetToml::default()
+        }),
+        ..crate::config::Config::default()
+    };
+    assert!(
+        !run_measures_its_messages("opted-out-budget-probe", &opted_out).await,
+        "an explicit enabled = false must leave the run without a budget"
+    );
+}

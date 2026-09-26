@@ -651,8 +651,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     turns,
                 )
                 .ok_or_else(|| {
-                    "sub-agent failed: context=fork cannot be sized — this run has no \
-                     [context_budget], or the child's system prompt already fills its \
+                    "sub-agent failed: context=fork cannot be sized — this run has context \
+                     management off ([context_budget] enabled = false), or the child's system prompt already fills its \
                      window. Use context=isolated or context=summary."
                         .to_string()
                 })?;

@@ -211,7 +211,7 @@ async def carve():
           f"{carved.count('stream.reasoning')} reasoning frame(s)")
 
 
-async def ingress(also_breakdown):
+async def ingress(breakdown):
     async with websockets.connect(URL, max_size=None) as ws:
         await connect(ws, "qa-context-slim")
         key, _ = await send(ws, 2, "QA ingress: run the big command")
@@ -255,7 +255,7 @@ async def ingress(also_breakdown):
               "ctx_search returned a section BODY from the persisted original",
               (hit or "")[:200].replace("\n", " | "))
 
-        if also_breakdown:
+        if breakdown:
             reply, _ = await call(ws, 9, "context.breakdown", {"session_key": key})
             res = reply.get("result") or {}
             if not check("error" not in reply, "context.breakdown answered",
@@ -264,6 +264,16 @@ async def ingress(also_breakdown):
             print(f"  context.breakdown: {json.dumps(res)[:400]}")
             messages = res.get("messages") or {}
             tool_output = res.get("tool_output") or {}
+            if breakdown == "absent":
+                # `[context_budget] enabled = false`: no ContextBudget, so
+                # nothing measured the message split. tool_output is the
+                # ingress tally and runs either way — the anchor that this
+                # reply is a real breakdown, not an empty one.
+                check(not messages, "opted out: no messages row", json.dumps(messages))
+                check((tool_output.get("offloaded") or 0) >= 1,
+                      "opted out: tool_output still counts the Layer-2 offload",
+                      json.dumps(tool_output))
+                return
             check((messages.get("tool_results") or 0) > 0,
                   "messages.tool_results > 0", json.dumps(messages))
             check(isinstance(tool_output.get("since_unix_ms"), int),
@@ -372,9 +382,11 @@ def main():
     elif PHASE == "carve":
         asyncio.run(carve())
     elif PHASE == "ingress":
-        asyncio.run(ingress(False))
+        asyncio.run(ingress(None))
     elif PHASE == "breakdown":
-        asyncio.run(ingress(True))
+        asyncio.run(ingress("present"))
+    elif PHASE == "optout":
+        asyncio.run(ingress("absent"))
     elif PHASE == "gate":
         asyncio.run(gate())
     elif PHASE == "firstparty":

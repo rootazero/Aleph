@@ -5,7 +5,8 @@
 #   ./qa/context_slim/run.sh replay      # DeepSeek thinking+tools: every prior turn's reasoning_content is sent back
 #   ./qa/context_slim/run.sh carve       # a `stream.*` subscriber can carve `stream.reasoning` out
 #   ./qa/context_slim/run.sh ingress     # a large tool result reaches the model as marker + callable footer; ctx_search returns its body
-#   ./qa/context_slim/run.sh breakdown   # after that turn, context.breakdown reports messages + tool_output
+#   ./qa/context_slim/run.sh breakdown   # after that turn, context.breakdown reports messages + tool_output (generated config, no [context_budget])
+#   ./qa/context_slim/run.sh optout      # the same turn under `[context_budget] enabled = false`: no messages
 #   ./qa/context_slim/run.sh gate        # a result between DEFAULT_RESULT_BUDGET_TOKENS and MAX_RESULT_BUDGET_TOKENS is offloaded
 #   ./qa/context_slim/run.sh firstparty  # Anthropic 1P vs a custom host: reasoning copy + context_management on the wire
 #
@@ -44,8 +45,8 @@ GATEWAY_PORT="${GATEWAY_PORT:-18841}"
 MOCK_PORT="${MOCK_PORT:-18842}"
 
 case "$PHASE" in
-  replay|carve|ingress|breakdown|gate|firstparty) ;;
-  *) echo "unknown phase: $PHASE (replay|carve|ingress|breakdown|gate|firstparty)" >&2; exit 64 ;;
+  replay|carve|ingress|breakdown|optout|gate|firstparty) ;;
+  *) echo "unknown phase: $PHASE (replay|carve|ingress|breakdown|optout|gate|firstparty)" >&2; exit 64 ;;
 esac
 
 . "$HERE/../lib/scratch_home.sh"
@@ -166,8 +167,20 @@ case "$PHASE" in
     arm "$PHASE" ingress anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 || RC=1
     ;;
   breakdown)
+    # No [context_budget] flag: the generated config has no such section, and
+    # a missing section is on — this arm is the real-machine proof of that,
+    # so its premise is checked first rather than assumed.
+    if grep -q '^\[context_budget\]' "$QA_ROOT/config.baseline.toml"; then
+      echo "  [FAIL] premise: the generated config already has [context_budget]"
+      RC=1
+    else
+      echo "  [ok] premise: the generated config has no [context_budget]"
+    fi
+    arm "$PHASE" ingress anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 || RC=1
+    ;;
+  optout)
     arm "$PHASE" ingress anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 \
-      --context-budget || RC=1
+      --context-budget-off || RC=1
     ;;
   gate)
     arm "$PHASE" gate anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 || RC=1
