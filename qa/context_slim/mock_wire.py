@@ -217,8 +217,9 @@ class Handler(BaseHTTPRequestHandler):
         tool = None
         if body.get("tools"):
             if ARGS.scenario == "ingress" and done == 0:
-                # ONE process: the macOS seatbelt profile denies process-fork, so
-                # a compound command (`seq …; echo …`) exits 71 before printing.
+                # One process is enough for this stage; compound commands also
+                # work (a `| cat` variant passed 2026-09-26). The exit 71 once
+                # blamed on process-fork was the Homebrew-bash resolution defect.
                 tool = ("bash", {"cmd": "awk 'BEGIN{for(i=1;i<=90000;i++){print i; "
                                         f"if(i==60000) print \"{NEEDLE}\"}}}}'"})
             elif ARGS.scenario == "ingress" and done == 1:

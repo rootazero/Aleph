@@ -311,6 +311,60 @@ fn locate(kind: ShellKind) -> Option<ResolvedShell> {
     found.map(|program| ResolvedShell::new(kind, program))
 }
 
+/// The `name` Aleph should spawn on this Unix host: the first match on
+/// `path_var` that the OS sandbox can execute, else the first match at all.
+///
+/// First-on-`PATH` alone is wrong here. With Homebrew ahead of the system dirs,
+/// `bash` resolved to `/opt/homebrew/bin/bash` — a symlink seatbelt refuses to
+/// read at `execvp` — so every `bash` tool call exited 71 before printing a
+/// byte, and `python3` did the same for any Homebrew / venv interpreter. The
+/// roots come from the driver's own list ([`crate::sandbox::platforms::exec_read_roots`]),
+/// not a copy of it. The system directories are tried even when `path_var`
+/// lacks them: the sandbox is the one constraint, the server's `PATH` is not.
+///
+/// The fallback keeps the old answer where no runnable candidate exists (P7):
+/// the spawn then reports the OS's own refusal, as it did before. The price of
+/// the preference is that the agent gets the system build over a newer one the
+/// user installed — `/bin/bash` is 3.2 on macOS — which is the build the
+/// sandbox was ever able to run.
+#[cfg(not(windows))]
+pub(crate) fn locate_runnable(name: &str, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let on_path: Vec<PathBuf> = which::which_in_all(name, path_var, cwd)
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    pick_runnable(&on_path, name, crate::sandbox::platforms::exec_read_roots())
+}
+
+/// [`locate_runnable`]'s decision, over explicit candidates and roots.
+///
+/// A candidate counts only if BOTH its own path and its canonical path lie
+/// under a root: seatbelt checks the path as spelled (a symlink is read at
+/// exec), and the loader then works from the file it lands on. The mode is
+/// checked here too — `which` filtered the `PATH` hits, the root candidates
+/// are this function's own.
+#[cfg(not(windows))]
+fn pick_runnable(on_path: &[PathBuf], name: &str, roots: &[&str]) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let under_roots = |p: &std::path::Path| roots.iter().any(|root| p.starts_with(root));
+    let runnable = |p: &PathBuf| {
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            && under_roots(p)
+            && std::fs::canonicalize(p).is_ok_and(|real| under_roots(&real))
+    };
+    on_path
+        .iter()
+        .cloned()
+        .chain(
+            roots
+                .iter()
+                .map(|root| std::path::Path::new(root).join(name)),
+        )
+        .find(runnable)
+        .or_else(|| on_path.first().cloned())
+}
+
 /// PowerShell 7 (`pwsh`) if it is installed.
 pub fn pwsh() -> Option<&'static ResolvedShell> {
     PWSH.get_or_init(|| locate(ShellKind::Pwsh)).as_ref()
@@ -349,6 +403,7 @@ fn cmd_shell() -> Option<ResolvedShell> {
 /// it is the one shell whose behaviour matches its cross-platform
 /// documentation (5.1 aliases `curl`/`wget` to `Invoke-WebRequest`, so scripts
 /// written for a POSIX-ish shell misbehave in ways that read as our bug).
+/// Unix takes the first `bash` the OS sandbox can run ([`locate_runnable`]).
 pub fn resolve() -> &'static ResolvedShell {
     AGENT_SHELL.get_or_init(|| {
         #[cfg(windows)]
@@ -363,9 +418,18 @@ pub fn resolve() -> &'static ResolvedShell {
         }
         #[cfg(not(windows))]
         {
-            locate(ShellKind::Bash).unwrap_or_else(|| ResolvedShell::bare(ShellKind::Bash))
+            resolve_in(std::env::var_os("PATH").as_deref())
         }
     })
+}
+
+/// [`resolve`]'s Unix answer for an explicit `PATH`, uncached — the seam the
+/// live seatbelt test drives with a `PATH` it built.
+#[cfg(not(windows))]
+pub(crate) fn resolve_in(path_var: Option<&std::ffi::OsStr>) -> ResolvedShell {
+    locate_runnable(ShellKind::Bash.label(), path_var)
+        .map(|program| ResolvedShell::new(ShellKind::Bash, program))
+        .unwrap_or_else(|| ResolvedShell::bare(ShellKind::Bash))
 }
 
 /// A resolved interpreter: the program to spawn plus any args that must
@@ -390,10 +454,11 @@ static PYTHON3: OnceLock<ResolvedInterpreter> = OnceLock::new();
 /// never started.
 ///
 /// Windows order is `py -3` (the official launcher, and the one name that
-/// stays right across installs) → `python` → `python3`. Unix keeps bare
-/// `python3` unchanged. When nothing resolves we fall back to `python3` rather
-/// than inventing a new error: the caller then gets exactly the "not found"
-/// it got before, instead of a message that only this round would explain.
+/// stays right across installs) → `python` → `python3`. Unix takes the first
+/// `python3` the OS sandbox can run ([`locate_runnable`]). When nothing
+/// resolves we fall back to `python3` rather than inventing a new error: the
+/// caller then gets exactly the "not found" it got before, instead of a
+/// message that only this round would explain.
 pub fn python3() -> &'static ResolvedInterpreter {
     PYTHON3.get_or_init(|| {
         #[cfg(windows)]
@@ -408,21 +473,30 @@ pub fn python3() -> &'static ResolvedInterpreter {
                     }
                 }
             }
+            bare_python3()
         }
         #[cfg(not(windows))]
         {
-            if let Ok(program) = which::which("python3") {
-                return ResolvedInterpreter {
-                    program,
-                    leading: Vec::new(),
-                };
-            }
-        }
-        ResolvedInterpreter {
-            program: PathBuf::from("python3"),
-            leading: Vec::new(),
+            python3_in(std::env::var_os("PATH").as_deref())
         }
     })
+}
+
+/// [`python3`]'s Unix answer for an explicit `PATH`, uncached — the seam the
+/// live seatbelt test drives with a `PATH` it built.
+#[cfg(not(windows))]
+pub(crate) fn python3_in(path_var: Option<&std::ffi::OsStr>) -> ResolvedInterpreter {
+    locate_runnable("python3", path_var).map_or_else(bare_python3, |program| ResolvedInterpreter {
+        program,
+        leading: Vec::new(),
+    })
+}
+
+fn bare_python3() -> ResolvedInterpreter {
+    ResolvedInterpreter {
+        program: PathBuf::from("python3"),
+        leading: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -569,6 +643,134 @@ mod tests {
             let seen = args.iter().any(|a| a.contains("marker-token"))
                 || stdin.is_some_and(|s| String::from_utf8_lossy(&s).contains("marker-token"));
             assert!(seen, "{kind:?} dropped the script");
+        }
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod runnable_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{pick_runnable, python3, resolve};
+    use crate::sandbox::platforms::exec_read_roots;
+
+    /// `<dir>/<name>` as an executable file.
+    fn file(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, b"").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// The temp dir's own spelling can sit behind a symlink (`/var` is
+    /// `/private/var` on macOS), and `pick_runnable` compares canonical paths
+    /// against the roots, so the fixture's roots must be canonical too.
+    fn canonical(p: &Path) -> PathBuf {
+        std::fs::canonicalize(p).unwrap()
+    }
+
+    fn root(p: &Path) -> &str {
+        p.to_str().unwrap()
+    }
+
+    /// The Homebrew shape: the first `bash` on `PATH` is outside every root the
+    /// sandbox can execute from. Taking it is the exit-71 defect.
+    #[test]
+    fn a_first_on_path_candidate_outside_the_roots_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = canonical(tmp.path());
+        let sys_dir = base.join("sys");
+        let brew = file(&base.join("brew"), "bash");
+        let sys = file(&sys_dir, "bash");
+        let roots = [root(&sys_dir)];
+        assert_eq!(
+            pick_runnable(&[brew, sys.clone()], "bash", &roots),
+            Some(sys)
+        );
+    }
+
+    /// Seatbelt reads the path as spelled, the loader the file it lands on: a
+    /// link inside a root that points outside it is not runnable either.
+    #[test]
+    fn a_symlink_leaving_the_roots_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = canonical(tmp.path());
+        let target = file(&base.join("brew"), "bash");
+        let sys = base.join("sys");
+        std::fs::create_dir_all(&sys).unwrap();
+        let link = sys.join("bash");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let sys2_dir = base.join("sys2");
+        let sys2 = file(&sys2_dir, "bash");
+        let roots = [root(&sys), root(&sys2_dir)];
+        assert_eq!(
+            pick_runnable(&[link, sys2.clone()], "bash", &roots),
+            Some(sys2)
+        );
+    }
+
+    /// The server's `PATH` need not carry the system dirs at all; the roots are
+    /// tried anyway, because the sandbox is the constraint, not `PATH`.
+    #[test]
+    fn the_roots_are_tried_when_path_lacks_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = canonical(tmp.path());
+        let sys_dir = base.join("sys");
+        let brew = file(&base.join("brew"), "bash");
+        let sys = file(&sys_dir, "bash");
+        let roots = [root(&sys_dir)];
+        assert_eq!(pick_runnable(&[brew], "bash", &roots), Some(sys));
+    }
+
+    /// No runnable candidate: keep the old answer so the spawn reports the OS's
+    /// own refusal rather than a "not found" for a program that exists.
+    #[test]
+    fn no_runnable_candidate_falls_back_to_first_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = canonical(tmp.path());
+        let sys_dir = base.join("sys");
+        let brew = file(&base.join("brew"), "bash");
+        let roots = [root(&sys_dir)];
+        assert_eq!(
+            pick_runnable(std::slice::from_ref(&brew), "bash", &roots),
+            Some(brew)
+        );
+        assert_eq!(pick_runnable(&[], "bash", &roots), None);
+
+        // A non-executable file under a root is not a candidate either.
+        let sys = file(&sys_dir, "bash");
+        std::fs::set_permissions(&sys, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .unwrap();
+        assert_eq!(pick_runnable(&[], "bash", &roots), None);
+    }
+
+    /// The two cached answers the sandboxed tools spawn, against this host's
+    /// real roots and real `PATH`. Red on any host whose `PATH` puts a bash or
+    /// python3 the sandbox cannot run ahead of the system one (Homebrew, a venv,
+    /// pyenv) — which is exactly the host the defect lived on.
+    #[test]
+    fn cached_answers_are_runnable_when_the_host_has_a_runnable_candidate() {
+        let roots = exec_read_roots();
+        let under = |p: &Path| roots.iter().any(|r| p.starts_with(r));
+        let has_candidate = |name: &str| roots.iter().any(|r| Path::new(r).join(name).is_file());
+        if has_candidate("bash") {
+            let program = &resolve().program;
+            assert!(
+                under(program),
+                "bash resolved outside {roots:?}: {}",
+                program.display()
+            );
+        }
+        if has_candidate("python3") {
+            let program = &python3().program;
+            assert!(
+                under(program),
+                "python3 resolved outside {roots:?}: {}",
+                program.display()
+            );
         }
     }
 }

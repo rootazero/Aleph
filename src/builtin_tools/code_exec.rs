@@ -544,6 +544,9 @@ fn build_shell_invocation(code: &str) -> ExecInvocation {
     }
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod seatbelt_live_tests;
+
 #[cfg(test)]
 mod shell_interpreter_tests {
     use super::{build_shell_invocation, shell_interpreter, STDIN_PIPE_THRESHOLD};

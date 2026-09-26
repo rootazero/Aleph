@@ -1237,6 +1237,25 @@ denylist with no jail. Neither is the other's fallback, and nothing asserted
 that until this cycle — so it could have been "unified" in either direction
 without a test going red. Both sides now carry the mirrored doc and a pin.
 
+## The program a sandboxed tool spawns must be one the sandbox can run (2026-09-26)
+
+**Decision.** The shell and `python3` that `code_exec` / `bash` / `code_check`
+spawn are resolved by `utils::shell::locate_runnable`: the first `PATH`
+candidate lying under `sandbox::platforms::exec_read_roots()` (the driver's own
+exec-root list) wins over first-on-`PATH`. The sandbox profile was not widened
+for Homebrew; it was widened by one read-only grant, the Command Line Tools
+developer dir (`/Library/Developer/CommandLineTools`, beside the existing
+`/Applications` grant), so the `/usr/bin/python3` and `/usr/bin/git` xcrun stubs
+run on CLT-only Macs.
+
+**Trade-off.** The agent gets the system builds — `/bin/bash` is 3.2 on macOS
+(no `declare -A`, `mapfile`, `${x,,}`) — also on the unsandboxed
+`WorktreeSandbox` path, because one process answers "which shell" once.
+Homebrew tools named *inside* the shell stay unreachable under the
+workspace-only profile; granting the Homebrew prefix is a user decision.
+
+Why (measured denials), what is not covered, and the pins: FEATURE_LOCATOR
+appendix D.3.39.
 
 ## References
 
