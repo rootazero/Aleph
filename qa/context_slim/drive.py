@@ -272,6 +272,37 @@ async def ingress(also_breakdown):
                   "tool_output counts the Layer-2 offload", json.dumps(tool_output))
 
 
+async def gate():
+    """A result between the 4k per-result default and the old 8k one is
+    offloaded now — and would have passed verbatim before."""
+    async with websockets.connect(URL, max_size=None) as ws:
+        await connect(ws, "qa-context-slim")
+        key, _ = await send(ws, 2, "QA gate: a mid-sized output")
+        if not check(key is not None, "turn accepted", f"session {key}"):
+            return
+        ok, runs = await wait_runs(1, 180)
+        check(ok, "turn completed", json.dumps([r.get("outcome") for r in runs]))
+        reply, _ = await call(ws, 9, "context.breakdown", {"session_key": key})
+    tool_output = (reply.get("result") or {}).get("tool_output") or {}
+    produced = tool_output.get("produced_tokens") or 0
+    # `produced_tokens` is `estimate_tokens_smart` of the tool's untouched
+    # output — the same estimate, of the same string, that ingress compares
+    # to the per-result budget (`ingress.rs`: `before > limit`). One call, so
+    # it is this call's measure alone.
+    in_range = tool_output.get("calls") == 1 and 4000 < produced <= 8000
+    check(in_range, "precondition: the output measures 4k < tokens <= 8k, as Layer 2 measures it",
+          json.dumps(tool_output) + ("" if in_range else " — retune QA_GATE_LINES"))
+    reqs = [r for r in requests() if r["path"].endswith("/v1/messages")]
+    text = next((t for r in reqs for (name, t) in anthropic_tool_results(r["body"])
+                 if name == "bash"), None)
+    if not check(text is not None, "a bash tool_result reached the model"):
+        return
+    check("[Full output persisted: " in text,
+          "under the 4k default it is offloaded (marker + recovery footer), not sent verbatim",
+          text[:160].replace("\n", " | "))
+
+
+
 async def firstparty():
     async with websockets.connect(URL, max_size=None) as ws:
         await connect(ws, "qa-context-slim")
@@ -323,6 +354,8 @@ def main():
         asyncio.run(ingress(False))
     elif PHASE == "breakdown":
         asyncio.run(ingress(True))
+    elif PHASE == "gate":
+        asyncio.run(gate())
     elif PHASE == "firstparty":
         asyncio.run(firstparty())
     print(f"\n{PHASE}{'/' + ARM if ARM else ''}: {'PASS' if rc == 0 else 'FAIL'}")

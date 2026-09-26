@@ -1695,7 +1695,7 @@ widened a narrowly-scoped change into that question. Tracked in
   只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
   不在根 `CLAUDE.md` 的路由表里。- **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
   出站、`result_processing` 的 offload 与 footer、`ctx_search`、`context.breakdown` 或 `events.subscribe`
-  的 `except` 前跑 `{replay,carve,ingress,breakdown,firstparty}`。
+  的 `except` 前跑 `{replay,carve,ingress,breakdown,gate,firstparty}`。
   - **它怎么让一个本地 mock 站在第一方主机名后面**：Aleph 按**主机名**分类（`api.deepseek.com` =
     DeepSeek 原生、`api.anthropic.com` = 第一方、`127.0.0.1` 两者都不是），所以 `replay` `carve` 与
     `firstparty` 的 1P 臂把 `base_url` 写成 `http://api.<vendor>.com`，并以 `HTTP_PROXY` 指向 mock 启动
@@ -1717,6 +1717,12 @@ widened a narrowly-scoped change into that question. Tracked in
     `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
     run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是
     一条产品事实：默认安装上 `context.breakdown` 没有 `messages`。
+  - `gate` — 一个落在 **4k 默认与旧 8k 默认之间**的结果（`awk` 打 2600 行，`QA_GATE_LINES` 可调）：
+    现在被 offload（标记 + 找回 footer），在旧的 8k 默认下它会原样进上下文。**先证前提再断言**：
+    `context.breakdown` 的 `tool_output.produced_tokens` 是 `estimate_tokens_smart` 对工具原始输出的
+    估算——正是 ingress 拿去和单结果预算比的那一个数、那一个字符串（`ingress.rs` 的 `before > limit`）
+    ——且 `calls == 1`，所以它就是这一次调用的量度；不在 `(4000, 8000]` 内就 FAIL 并提示重调。
+    实测 5834。**破坏开关**：`QA_GATE_LINES=1000`（≈2k）让前提与 offload 两条都 FAIL（已实测）。
   - `firstparty` — 两次 boot。1P 臂（代理）：签名 thinking 被回放（锚点）、`tool_use.input` 里**没有**
     `reasoning_content` 副本、`server_context_editing = true`（裸 bool 写法，顺带证明它能解析）让
     `context_management.edits` 与 beta 头都在 wire 上、文件日志里**没有**「不生效」告警。custom 臂

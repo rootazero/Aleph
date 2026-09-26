@@ -6,6 +6,7 @@
 #   ./qa/context_slim/run.sh carve       # a `stream.*` subscriber can carve `stream.reasoning` out
 #   ./qa/context_slim/run.sh ingress     # a large tool result reaches the model as marker + callable footer; ctx_search returns its body
 #   ./qa/context_slim/run.sh breakdown   # after that turn, context.breakdown reports messages + tool_output
+#   ./qa/context_slim/run.sh gate        # a 4k–8k-token result is offloaded under the 4k default (verbatim under the old 8k)
 #   ./qa/context_slim/run.sh firstparty  # Anthropic 1P vs a custom host: reasoning copy + context_management on the wire
 #
 #   KEEP=1 ./qa/context_slim/run.sh replay   # keep the scratch dir for post-mortem
@@ -43,8 +44,8 @@ GATEWAY_PORT="${GATEWAY_PORT:-18841}"
 MOCK_PORT="${MOCK_PORT:-18842}"
 
 case "$PHASE" in
-  replay|carve|ingress|breakdown|firstparty) ;;
-  *) echo "unknown phase: $PHASE (replay|carve|ingress|breakdown|firstparty)" >&2; exit 64 ;;
+  replay|carve|ingress|breakdown|gate|firstparty) ;;
+  *) echo "unknown phase: $PHASE (replay|carve|ingress|breakdown|gate|firstparty)" >&2; exit 64 ;;
 esac
 
 . "$HERE/../lib/scratch_home.sh"
@@ -167,6 +168,9 @@ case "$PHASE" in
   breakdown)
     arm "$PHASE" ingress anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 \
       --context-budget || RC=1
+    ;;
+  gate)
+    arm "$PHASE" gate anthropic "http://127.0.0.1:$MOCK_PORT" claude-sonnet-4-6 0 || RC=1
     ;;
   firstparty)
     arm 1p firstparty anthropic "http://api.anthropic.com" claude-sonnet-4-6 1 \

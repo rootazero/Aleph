@@ -30,7 +30,7 @@ Every request is appended to REQUEST_LOG as
 
 Usage:  mock_wire.py PORT SCENARIO REQUEST_LOG [--require-field NAME]
 
-  SCENARIO   replay | ingress | firstparty
+  SCENARIO   replay | ingress | gate | firstparty
   --require-field  the assistant-message field the 400 rule checks
              (default `reasoning_content`). Pointing it at a field the code
              never sends is the fixture's own break-it switch.
@@ -43,12 +43,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ap = argparse.ArgumentParser()
 ap.add_argument("port", type=int)
-ap.add_argument("scenario", choices=["replay", "ingress", "firstparty"])
+ap.add_argument("scenario", choices=["replay", "ingress", "gate", "firstparty"])
 ap.add_argument("request_log")
 ap.add_argument("--require-field", default="reasoning_content")
 ARGS = ap.parse_args()
 
 NEEDLE = "QA_NEEDLE_LINE unicorn marmalade"
+GATE_LINES = int(__import__("os").environ.get("QA_GATE_LINES", "2600"))
 _n = [0]
 _lock = threading.Lock()
 T0 = time.monotonic()
@@ -222,6 +223,11 @@ class Handler(BaseHTTPRequestHandler):
                                         f"if(i==60000) print \"{NEEDLE}\"}}}}'"})
             elif ARGS.scenario == "ingress" and done == 1:
                 tool = ("ctx_search", {"queries": ["unicorn marmalade"]})
+            elif ARGS.scenario == "gate" and done == 0:
+                # Sized to land between the 4k per-result default and the old
+                # 8k one; `drive.py gate` measures it the way Layer 2 does
+                # before trusting the arm.
+                tool = ("bash", {"cmd": f"awk 'BEGIN{{for(i=1;i<={GATE_LINES};i++) print i}}'"})
             elif ARGS.scenario == "firstparty" and done == 0:
                 tool = ("file_read", {"path": "/etc/hosts"})
         thinking = ARGS.scenario == "firstparty" and bool(body.get("tools"))
