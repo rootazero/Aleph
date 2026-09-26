@@ -502,6 +502,9 @@ mod tests {
 
     #[test]
     fn cache_path_sanitises_traversal_attempts() {
+        // Reads a path derived from `$ALEPH_HOME`; hold the lock so it is
+        // never another test's (possibly already deleted) temporary value.
+        let _home = crate::utils::paths::AlephHomeEnvGuard::acquire();
         let path = cache_path("../../etc/passwd").unwrap();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(name, ".._.._etc_passwd.json");
@@ -533,6 +536,12 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_refreshes_are_single_flighted() {
+        // `cache_path` resolves under `get_config_dir()`: without a private
+        // `$ALEPH_HOME` this writes into the real `~/.aleph` and races every
+        // test that points `$ALEPH_HOME` somewhere else.
+        let (_scratch, home) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&home).expect("scratch home");
+        let _home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&home);
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -610,6 +619,12 @@ mod tests {
 
     #[test]
     fn cache_only_answers_for_the_same_base_url() {
+        // `cache_path` resolves under `get_config_dir()`: without a private
+        // `$ALEPH_HOME` this writes into the real `~/.aleph` and races every
+        // test that points `$ALEPH_HOME` somewhere else.
+        let (_scratch, home) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&home).expect("scratch home");
+        let _home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&home);
         let provider = "fingerprint-probe";
         let url_a = "https://a.example/v1";
         let url_b = "https://b.example/v1";
@@ -636,6 +651,12 @@ mod tests {
 
     #[test]
     fn legacy_cache_without_fingerprint_is_not_served() {
+        // `cache_path` resolves under `get_config_dir()`: without a private
+        // `$ALEPH_HOME` this writes into the real `~/.aleph` and races every
+        // test that points `$ALEPH_HOME` somewhere else.
+        let (_scratch, home) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&home).expect("scratch home");
+        let _home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&home);
         // Entries written before the fingerprint existed carry no `base_url`;
         // they are treated as another endpoint's inventory and cost one
         // refetch rather than a guess.
