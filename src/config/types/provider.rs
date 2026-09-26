@@ -54,27 +54,46 @@ pub enum CacheRetention {
 /// as the bare flag (`server_context_editing = true`): a config file that
 /// fails to parse stops the server from booting, so the natural hand-written
 /// form must not be the one that does it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct ServerContextEditing {
     /// Send `context_management.edits: [clear_tool_uses]`.
     #[serde(default)]
     pub enabled: bool,
 }
 
+/// The written forms of [`ServerContextEditing`] — the ONE description both
+/// the parser and the published schema are derived from, so the schema can
+/// never advertise a narrower key than the loader accepts.
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum ServerContextEditingWritten {
+    /// `server_context_editing = true`
+    Flag(bool),
+    /// `server_context_editing = { enabled = true }`
+    Table {
+        #[serde(default)]
+        enabled: bool,
+    },
+}
+
 impl<'de> Deserialize<'de> for ServerContextEditing {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Written {
-            Flag(bool),
-            Table {
-                #[serde(default)]
-                enabled: bool,
+        Ok(
+            match ServerContextEditingWritten::deserialize(deserializer)? {
+                ServerContextEditingWritten::Flag(enabled)
+                | ServerContextEditingWritten::Table { enabled } => Self { enabled },
             },
-        }
-        Ok(match Written::deserialize(deserializer)? {
-            Written::Flag(enabled) | Written::Table { enabled } => Self { enabled },
-        })
+        )
+    }
+}
+
+impl JsonSchema for ServerContextEditing {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ServerContextEditing".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        ServerContextEditingWritten::json_schema(generator)
     }
 }
 
@@ -389,6 +408,27 @@ impl ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published schema describes both written forms the loader accepts
+    /// — a schema that said "object" alone would reject the bare flag a
+    /// config tool validates against it.
+    #[test]
+    fn server_context_editing_schema_admits_the_flag_and_the_table() {
+        let schema = serde_json::to_value(schemars::schema_for!(ServerContextEditing))
+            .expect("schema serializes");
+        let arms = schema["anyOf"]
+            .as_array()
+            .expect("an anyOf of the written forms");
+        assert!(
+            arms.iter().any(|a| a["type"] == "boolean"),
+            "bare flag missing: {schema}"
+        );
+        assert!(
+            arms.iter()
+                .any(|a| a["type"] == "object" && a["properties"].get("enabled").is_some()),
+            "table missing: {schema}"
+        );
+    }
 
     /// Both written forms parse, and an absent key is off.
     #[test]

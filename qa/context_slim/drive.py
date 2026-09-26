@@ -272,9 +272,27 @@ async def ingress(also_breakdown):
                   "tool_output counts the Layer-2 offload", json.dumps(tool_output))
 
 
+def result_budget_consts():
+    """`(DEFAULT_RESULT_BUDGET_TOKENS, MAX_RESULT_BUDGET_TOKENS)`, read from the
+    source that owns them — the gate arm's window is those two numbers, and a
+    copy written here would keep testing the old window after either moves."""
+    import re
+    src = open(os.path.join(os.path.dirname(__file__), "..", "..", "src", "tools",
+                            "result_processing.rs")).read()
+
+    def const(name):
+        m = re.search(rf"pub const {name}: usize = ([0-9_]+);", src)
+        if not m:
+            raise SystemExit(f"cannot find {name} in result_processing.rs")
+        return int(m.group(1).replace("_", ""))
+
+    return const("DEFAULT_RESULT_BUDGET_TOKENS"), const("MAX_RESULT_BUDGET_TOKENS")
+
+
 async def gate():
-    """A result between the 4k per-result default and the old 8k one is
-    offloaded now — and would have passed verbatim before."""
+    """A result between the per-result default (DEFAULT_RESULT_BUDGET_TOKENS)
+    and the read window it used to be (MAX_RESULT_BUDGET_TOKENS) is offloaded
+    now — and would have passed verbatim before."""
     async with websockets.connect(URL, max_size=None) as ws:
         await connect(ws, "qa-context-slim")
         key, _ = await send(ws, 2, "QA gate: a mid-sized output")
@@ -289,8 +307,11 @@ async def gate():
     # output — the same estimate, of the same string, that ingress compares
     # to the per-result budget (`ingress.rs`: `before > limit`). One call, so
     # it is this call's measure alone.
-    in_range = tool_output.get("calls") == 1 and 4000 < produced <= 8000
-    check(in_range, "precondition: the output measures 4k < tokens <= 8k, as Layer 2 measures it",
+    low, high = result_budget_consts()
+    in_range = tool_output.get("calls") == 1 and low < produced <= high
+    check(in_range,
+          f"precondition: the output measures {low} < tokens <= {high} "
+          "(DEFAULT_RESULT_BUDGET_TOKENS, MAX_RESULT_BUDGET_TOKENS), as Layer 2 measures it",
           json.dumps(tool_output) + ("" if in_range else " — retune QA_GATE_LINES"))
     reqs = [r for r in requests() if r["path"].endswith("/v1/messages")]
     text = next((t for r in reqs for (name, t) in anthropic_tool_results(r["body"])
@@ -298,7 +319,7 @@ async def gate():
     if not check(text is not None, "a bash tool_result reached the model"):
         return
     check("[Full output persisted: " in text,
-          "under the 4k default it is offloaded (marker + recovery footer), not sent verbatim",
+          "under the per-result default it is offloaded (marker + recovery footer), not verbatim",
           text[:160].replace("\n", " | "))
 
 

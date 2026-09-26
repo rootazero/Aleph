@@ -1719,12 +1719,15 @@ widened a narrowly-scoped change into that question. Tracked in
     `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
     run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是
     一条产品事实：默认安装上 `context.breakdown` 没有 `messages`。
-  - `gate` — 一个落在 **4k 默认与旧 8k 默认之间**的结果（`awk` 打 2600 行，`QA_GATE_LINES` 可调）：
-    现在被 offload（标记 + 找回 footer），在旧的 8k 默认下它会原样进上下文。**先证前提再断言**：
-    `context.breakdown` 的 `tool_output.produced_tokens` 是 `estimate_tokens_smart` 对工具原始输出的
-    估算——正是 ingress 拿去和单结果预算比的那一个数、那一个字符串（`ingress.rs` 的 `before > limit`）
-    ——且 `calls == 1`，所以它就是这一次调用的量度；不在 `(4000, 8000]` 内就 FAIL 并提示重调。
-    实测 5834。**破坏开关**：`QA_GATE_LINES=1000`（≈2k）让前提与 offload 两条都 FAIL（已实测）。
+  - `gate` — 一个落在**单结果默认预算与旧默认之间**的结果（`awk` 打 2600 行，`QA_GATE_LINES` 可调）：
+    现在被 offload（标记 + 找回 footer），在旧默认下它会原样进上下文。窗口的两端**不写在这里也不写在
+    `drive.py` 里**——`drive.py` 从 `src/tools/result_processing.rs` 读
+    `DEFAULT_RESULT_BUDGET_TOKENS` 与 `MAX_RESULT_BUDGET_TOKENS`（判据 §1：抄一份数就是第二份表述）。
+    **先证前提再断言**：`context.breakdown` 的 `tool_output.produced_tokens` 是 `estimate_tokens_smart`
+    对工具原始输出的估算——正是 ingress 拿去和单结果预算比的那一个数、那一个字符串（`ingress.rs` 的
+    `before > limit`）——且 `calls == 1`，所以它就是这一次调用的量度；不在窗口内就 FAIL 并提示重调。
+    实测 5834（`ab89b8b08` 上的 C2 重跑，2600 行）。**破坏开关**：`QA_GATE_LINES=1000`（实测 1994）让
+    前提与 offload 两条都 FAIL（`d306cf9c9` 之后的树上实测）。
   - `firstparty` — 两次 boot。1P 臂（代理）：签名 thinking 被回放（锚点）、`tool_use.input` 里**没有**
     `reasoning_content` 副本、`server_context_editing = true`（裸 bool 写法，顺带证明它能解析）让
     `context_management.edits` 与 beta 头都在 wire 上、文件日志里**没有**「不生效」告警。custom 臂

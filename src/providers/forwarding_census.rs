@@ -27,11 +27,19 @@ const PROVIDER_LEAVES: &[&str] = &[
 ];
 const TOOL_SERVICE_LEAVES: &[&str] = &["NullToolService"];
 
+/// Impls that OWN the answer: they override the methods and derive the value
+/// from their own state (the wire family and host, the dispatcher's gates)
+/// rather than from something they wrap. Every other override must delegate —
+/// call the same method on what it wraps — or it is a decorator answering a
+/// literal for everything behind it.
+const SOURCES: &[&str] = &["HttpProvider", "ScopedToolService"];
+
 struct Impl {
     trait_name: String,
     type_name: String,
     at: String,
-    methods: BTreeSet<String>,
+    /// Method name → body text, for every `fn` in the impl.
+    methods: std::collections::BTreeMap<String, String>,
 }
 
 #[test]
@@ -52,13 +60,33 @@ fn every_decorator_forwards_what_the_trait_defaults_for_a_leaf() {
         let missing: Vec<&str> = forwards
             .iter()
             .copied()
-            .filter(|m| !i.methods.contains(*m))
+            .filter(|m| !i.methods.contains_key(*m))
             .collect();
         if !missing.is_empty() {
             offenders.push(format!(
                 "{} for {} ({}) does not override {:?}",
                 i.trait_name, i.type_name, i.at, missing
             ));
+        }
+        // An override that answers without asking what it wraps is the same
+        // defect as no override, spelled so this check would miss it — unless
+        // the impl is the one that owns the answer.
+        if !SOURCES.contains(&i.type_name.as_str()) {
+            let answering: Vec<&str> = forwards
+                .iter()
+                .copied()
+                .filter(|m| {
+                    i.methods
+                        .get(*m)
+                        .is_some_and(|body| !body.contains(&format!(".{m}(")))
+                })
+                .collect();
+            if !answering.is_empty() {
+                offenders.push(format!(
+                    "{} for {} ({}) overrides {:?} without delegating to what it wraps",
+                    i.trait_name, i.type_name, i.at, answering
+                ));
+            }
         }
     }
     assert!(
@@ -76,6 +104,12 @@ fn every_decorator_forwards_what_the_trait_defaults_for_a_leaf() {
         .chain(TOOL_SERVICE_LEAVES)
         .map(|s| (*s).to_string())
         .collect();
+    let found: BTreeSet<String> = impls.iter().map(|i| i.type_name.clone()).collect();
+    let stale_sources: Vec<&&str> = SOURCES.iter().filter(|s| !found.contains(**s)).collect();
+    assert!(
+        stale_sources.is_empty(),
+        "source entries with no impl in src/: {stale_sources:?}"
+    );
     let stale: Vec<&String> = declared.difference(&seen_leaves).collect();
     assert!(
         stale.is_empty(),
@@ -154,30 +188,36 @@ fn impls_in(code: &str, rel: &str) -> Vec<Impl> {
             trait_name: trait_name.to_string(),
             type_name,
             at: format!("{rel}:{line}"),
-            methods: fn_names(&code[brace..end]),
+            methods: fn_bodies(&code[brace..end]),
         });
         search = end;
     }
     out
 }
 
-fn fn_names(body: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+/// Every `fn` in an impl block, with its body (signature to closing brace).
+fn fn_bodies(block: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
     let mut search = 0;
-    while let Some(off) = body[search..].find("fn ") {
+    while let Some(off) = block[search..].find("fn ") {
         let at = search + off;
         search = at + 3;
-        if !word_boundary(body, at, 2) {
+        if !word_boundary(block, at, 2) {
             continue;
         }
-        let name: String = body[at + 3..]
+        let name: String = block[at + 3..]
             .trim_start()
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
-        names.insert(name);
+        let Some(open) = block[at..].find('{').map(|o| at + o) else {
+            break;
+        };
+        let end = block_end(block, open);
+        out.insert(name, block[at..=end.min(block.len() - 1)].to_string());
+        search = end;
     }
-    names
+    out
 }
 
 fn word_boundary(code: &str, at: usize, len: usize) -> bool {

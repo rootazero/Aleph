@@ -6,7 +6,7 @@
 #   ./qa/context_slim/run.sh carve       # a `stream.*` subscriber can carve `stream.reasoning` out
 #   ./qa/context_slim/run.sh ingress     # a large tool result reaches the model as marker + callable footer; ctx_search returns its body
 #   ./qa/context_slim/run.sh breakdown   # after that turn, context.breakdown reports messages + tool_output
-#   ./qa/context_slim/run.sh gate        # a 4k–8k-token result is offloaded under the 4k default (verbatim under the old 8k)
+#   ./qa/context_slim/run.sh gate        # a result between DEFAULT_RESULT_BUDGET_TOKENS and MAX_RESULT_BUDGET_TOKENS is offloaded
 #   ./qa/context_slim/run.sh firstparty  # Anthropic 1P vs a custom host: reasoning copy + context_management on the wire
 #
 #   KEEP=1 ./qa/context_slim/run.sh replay   # keep the scratch dir for post-mortem

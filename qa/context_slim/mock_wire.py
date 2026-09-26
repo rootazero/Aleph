@@ -224,8 +224,8 @@ class Handler(BaseHTTPRequestHandler):
             elif ARGS.scenario == "ingress" and done == 1:
                 tool = ("ctx_search", {"queries": ["unicorn marmalade"]})
             elif ARGS.scenario == "gate" and done == 0:
-                # Sized to land between the 4k per-result default and the old
-                # 8k one; `drive.py gate` measures it the way Layer 2 does
+                # Sized to land between DEFAULT_RESULT_BUDGET_TOKENS and
+                # MAX_RESULT_BUDGET_TOKENS; `drive.py gate` measures it the way Layer 2 does
                 # before trusting the arm.
                 tool = ("bash", {"cmd": f"awk 'BEGIN{{for(i=1;i<={GATE_LINES};i++) print i}}'"})
             elif ARGS.scenario == "firstparty" and done == 0:
