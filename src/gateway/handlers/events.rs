@@ -90,10 +90,18 @@ impl SubscriptionManager {
         }
     }
 
-    /// Get patterns for a connection
-    pub async fn get_patterns(&self, conn_id: &str) -> Vec<String> {
+    /// The connection's subscription as the `events.*` calls report it: the
+    /// patterns, and the entries whole (predicates and carve-outs included).
+    pub async fn list(&self, conn_id: &str) -> aleph_protocol::SubscriptionList {
         let subs = self.subscriptions.read().await;
-        subs.get(conn_id).map(|f| f.patterns()).unwrap_or_default()
+        let entries: Vec<TopicSubscription> = subs
+            .get(conn_id)
+            .map(|f| f.subscriptions().to_vec())
+            .unwrap_or_default();
+        aleph_protocol::SubscriptionList {
+            subscribed: entries.iter().map(|e| e.pattern.clone()).collect(),
+            entries: entries.iter().map(TopicSubscription::entry).collect(),
+        }
     }
 
     /// Get the full subscription entries (with `where_clause` predicates)
@@ -166,8 +174,9 @@ pub type UnsubscribeParams = aleph_protocol::TopicsRequest;
 /// Result of subscription operations
 #[derive(Debug, Clone, Serialize)]
 pub struct SubscriptionResult {
-    /// Current subscribed patterns
-    pub subscribed: Vec<String>,
+    /// The connection's subscription after the call.
+    #[serde(flatten)]
+    pub list: aleph_protocol::SubscriptionList,
     /// Number of patterns added/removed
     pub changed: usize,
 }
@@ -200,18 +209,18 @@ pub async fn handle_subscribe(
         .map(|t| t.into_subscription().excepting(except.clone()))
         .collect();
     manager.add_subscriptions(conn_id, subs).await;
-    let subscribed = manager.get_patterns(conn_id).await;
+    let list = manager.list(conn_id).await;
 
     info!(
         conn_id = %conn_id,
-        patterns = ?subscribed,
+        patterns = ?list.subscribed,
         "Connection subscribed to topics"
     );
 
     JsonRpcResponse::success(
         request.id,
         json!(SubscriptionResult {
-            subscribed,
+            list,
             changed: count,
         }),
     )
@@ -233,7 +242,7 @@ pub async fn handle_unsubscribe(
     let removed = manager
         .remove_patterns(conn_id, &params.topics, &params.carve_out.except)
         .await;
-    let subscribed = manager.get_patterns(conn_id).await;
+    let list = manager.list(conn_id).await;
 
     debug!(
         conn_id = %conn_id,
@@ -244,7 +253,7 @@ pub async fn handle_unsubscribe(
     JsonRpcResponse::success(
         request.id,
         json!(SubscriptionResult {
-            subscribed,
+            list,
             changed: removed,
         }),
     )
@@ -258,14 +267,7 @@ pub async fn handle_list(
     conn_id: &str,
     manager: Arc<SubscriptionManager>,
 ) -> JsonRpcResponse {
-    let subscribed = manager.get_patterns(conn_id).await;
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "subscribed": subscribed,
-        }),
-    )
+    JsonRpcResponse::success(request.id, json!(manager.list(conn_id).await))
 }
 
 #[cfg(test)]
@@ -421,6 +423,62 @@ mod tests {
             .await
     }
 
+    /// The `events.*` results list each entry whole: the phone's `stream.*`
+    /// minus reasoning and the wide chat's plain `stream.*` are two entries
+    /// the flat `subscribed` list reads as one pattern twice. Parsed with the
+    /// shared type a client would read it with.
+    ///
+    /// Mutation-checked: dropping the carve-out from `TopicSubscription::entry`
+    /// turns this red.
+    #[tokio::test]
+    async fn the_listed_entries_keep_their_carve_outs() {
+        let manager = Arc::new(SubscriptionManager::new());
+        let reasoning = aleph_protocol::STREAM_REASONING_TOPIC;
+        call(
+            "events.subscribe",
+            topics(&["stream.*"], &[reasoning]),
+            "c",
+            &manager,
+        )
+        .await;
+        let subscribed = call(
+            "events.subscribe",
+            topics(&["stream.*"], &[]),
+            "c",
+            &manager,
+        )
+        .await;
+        let listed = handle_list(
+            JsonRpcRequest::new("events.list", None, Some(json!(2))),
+            "c",
+            manager.clone(),
+        )
+        .await;
+        let expected = aleph_protocol::SubscriptionList {
+            subscribed: vec!["stream.*".into(), "stream.*".into()],
+            entries: vec![
+                aleph_protocol::SubscriptionEntry {
+                    topic: "stream.*".into(),
+                    where_clause: Vec::new(),
+                    carve_out: aleph_protocol::TopicCarveOut {
+                        except: vec![reasoning.into()],
+                    },
+                },
+                aleph_protocol::SubscriptionEntry {
+                    topic: "stream.*".into(),
+                    where_clause: Vec::new(),
+                    carve_out: aleph_protocol::TopicCarveOut::default(),
+                },
+            ],
+        };
+        for response in [subscribed, listed] {
+            let list: aleph_protocol::SubscriptionList =
+                serde_json::from_value(response.result.clone().expect("a result"))
+                    .expect("the shared shape");
+            assert_eq!(list, expected);
+        }
+    }
+
     /// R-G14: a client that never renders reasoning (the phone) takes
     /// `stream.*` minus `stream.reasoning`; the rest of the pattern still
     /// arrives.
@@ -509,7 +567,28 @@ mod tests {
     /// the one caller of `should_receive`.
     #[tokio::test]
     async fn the_cli_carve_out_delivers_everything_an_unsubscribed_socket_did_but_reasoning() {
-        let frame_src = include_str!("../events/frame.rs");
+        // The census's resolved source: an arm publishing through a protocol
+        // constant (`Some(aleph_protocol::STREAM_REASONING_TOPIC)`) reads as
+        // the literal it publishes.
+        let frame_src = crate::gateway::events::frame_census::frame_source();
+        // A topic named through a constant outside `Some(…)` is not rewritten
+        // by the resolver; each is read here by its constant, and a new one
+        // turns this red rather than falling out of the scan.
+        let by_constant: Vec<&str> = frame_src
+            .match_indices("=> aleph_protocol::")
+            .map(|(at, needle)| {
+                let tail = &frame_src[at + needle.len()..];
+                let end = tail
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+                    .unwrap_or(tail.len());
+                &tail[..end]
+            })
+            .collect();
+        assert_eq!(
+            by_constant,
+            ["canvas::TOPIC"],
+            "frame.rs names a topic through a constant this test does not read"
+        );
         let mut names: Vec<String> = frame_src
             .split('"')
             .skip(1)
@@ -521,16 +600,19 @@ mod tests {
             })
             .map(str::to_string)
             .collect();
+        names.push(aleph_protocol::canvas::TOPIC.to_string());
         names.sort();
         names.dedup();
         assert!(
             names.iter().any(|t| t == "stream.run_complete")
                 && names.iter().any(|t| t == "stream.ask_user")
+                && names
+                    .iter()
+                    .any(|t| t == aleph_protocol::STREAM_REASONING_TOPIC)
                 && names.len() >= 30,
             "the topic scrape stopped matching frame.rs: {names:?}"
         );
         names.push(String::new());
-        names.push(aleph_protocol::STREAM_REASONING_TOPIC.to_string());
 
         let m = Arc::new(SubscriptionManager::new());
         let cli = topics(&["**"], &[aleph_protocol::STREAM_REASONING_TOPIC]);

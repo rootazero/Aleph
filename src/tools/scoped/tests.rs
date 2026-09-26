@@ -4406,3 +4406,61 @@ async fn a_dispatched_tool_sees_the_dispatchs_callable_retrieval_tools() {
         "got {text:?}"
     );
 }
+
+/// A subagent's allowlist narrows the retrieval set for everything under it —
+/// the dispatched tool's own view and Layer 2's footer — through the real
+/// chain (`AllowlistToolService` → `ScopedToolService`). The inner dispatcher
+/// knows only its own gates, under which both retrieval tools are callable;
+/// the wrapper's narrowing (no `ctx_search`) must win.
+///
+/// Mutation-checked: dropping the allowlist's `with_recovery_tools` scope, or
+/// letting an inner scope replace an outer one instead of intersecting, turns
+/// this red.
+#[tokio::test]
+async fn an_allowlist_narrows_the_retrieval_set_under_it() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(RecoveryProbe));
+    registry.register(Box::new(FailingTestRunner));
+    registry.register(Box::new(StubTool {
+        tool_name: "ctx_search",
+    }));
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
+    let (_scratch, store) = hygiene_store("allowlist_chain");
+    let parent: StdArc<dyn ToolService> = StdArc::new(
+        ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
+    );
+    let mut def = crate::agents::AgentDef::new("narrow", crate::agents::AgentMode::SubAgent);
+    def.allowed_tools = ["recovery_probe", "bash", "file_read"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let child =
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(parent, StdArc::new(def));
+
+    let seen = child
+        .execute("recovery_probe", json!({}))
+        .await
+        .expect("the probe runs");
+    assert_eq!(
+        seen.value.as_str(),
+        Some("ctx_search=false file_read=true"),
+        "the tool's own view"
+    );
+
+    let out = child
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let text = out.value.as_str().expect("flattened").to_string();
+    let footer = text
+        .split("[Full output persisted: ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("precondition: the result was offloaded:\n{text}"));
+    assert!(
+        !footer.contains("ctx_search"),
+        "the agent may not call ctx_search, yet Layer 2's footer names it:\n{footer}"
+    );
+    assert!(footer.contains("file_read"), "{footer}");
+}

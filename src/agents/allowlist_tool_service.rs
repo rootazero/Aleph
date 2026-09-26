@@ -57,7 +57,14 @@ impl ToolService for AllowlistToolService {
         if !self.agent_def.is_tool_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
-        crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)).await
+        // The narrowed retrieval set rides down to the dispatch this delegates
+        // to, so its footers (Layer 2, a tool's own offload) name only what
+        // this agent may call.
+        crate::tools::result_processing::with_recovery_tools(
+            self.recovery_tools(),
+            crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)),
+        )
+        .await
     }
 
     async fn execute_with_cancel(
@@ -72,9 +79,12 @@ impl ToolService for AllowlistToolService {
         if !self.agent_def.is_tool_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
-        crate::identity::as_actor(
-            &self.agent_def.id,
-            self.inner.execute_with_cancel(name, input, cancel),
+        crate::tools::result_processing::with_recovery_tools(
+            self.recovery_tools(),
+            crate::identity::as_actor(
+                &self.agent_def.id,
+                self.inner.execute_with_cancel(name, input, cancel),
+            ),
         )
         .await
     }
