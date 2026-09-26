@@ -852,6 +852,49 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     );
 }
 
+/// An abandoned interrupted run is closed under ITS OWN run id, so a by-id
+/// reader (`snap_out_of_open_run`) pairs the closer with its opener. The old
+/// `abandoned-<uuid>` closer paired with nothing.
+#[tokio::test]
+async fn an_abandoned_interrupted_run_is_closed_under_its_own_run_id() {
+    let store = store();
+    let sid = SessionKey::main("abandon-id-agent");
+    seed_crash_looped_run(&store, &sid, 3).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.abandoned, 1, "{report:?}");
+
+    let closers: Vec<String> = store
+        .load_all_events(&sid)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.event {
+            SessionEvent::RunFinished {
+                run_id,
+                outcome: RunOutcome::Abandoned,
+                ..
+            } => Some(run_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        closers,
+        vec!["r1".to_string()],
+        "the abandon closer names the run it closes"
+    );
+}
+
 /// §5.1 / §5.6: three boots whose retrigger never reaches `RunStarted` — the
 /// adapter records the call and writes nothing, i.e. a crash in admit / hook /
 /// seed. Under the old counter `trailing_starts` never moved and this looped
@@ -1646,6 +1689,93 @@ async fn a_delegated_session_the_engine_is_running_is_left_alone() {
         before,
         store.load_all_events(&sid).await.expect("load").len(),
         "not one append while somebody else is writing"
+    );
+}
+
+/// The delegated arm's twin on a session with no scheduler of its own (F28).
+/// The scan runs while the gateway is already accepting requests, so a new
+/// inbound message can open a run on a candidate between the marker load and
+/// its turn in the fan-out. The coordinator would then reduce that LIVE run as
+/// the open one, append a `ToolError` for its in-flight call, stamp it, and
+/// queue a duplicate retrigger. `RunningAdapter::execute` panics, so a
+/// retrigger alone would fail this test; the log count catches the appends.
+#[tokio::test]
+async fn an_interrupted_session_the_engine_is_running_is_left_alone() {
+    let store = store();
+    let sid = SessionKey::main("main");
+    seed_interrupted_run(&store, &sid).await;
+    let before = store.load_all_events(&sid).await.expect("load").len();
+
+    let adapter = Arc::new(RunningAdapter {
+        running: sid.to_key_string(),
+    });
+    let report = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions(),
+        test_bus(),
+    ))
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!((report.busy, report.resumed), (1, 0), "{report:?}");
+    assert_eq!(
+        before,
+        store.load_all_events(&sid).await.expect("load").len(),
+        "neither a repair nor a stamp lands in a live run's log"
+    );
+}
+
+/// The third face of the same gate: a marker-less unanswered seed on a session
+/// the engine has since started a run on. The run IS the answer being written;
+/// a `ResumeAttempted` stamp and a second dispatch on top of it are the
+/// duplicate the gate exists to stop.
+#[tokio::test]
+async fn an_unanswered_seed_on_a_session_the_engine_is_running_is_left_alone() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-running");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+
+    let adapter = Arc::new(RunningAdapter {
+        running: sid.to_key_string(),
+    });
+    let report = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    ))
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!((report.busy, report.resumed), (1, 0), "{report:?}");
+    assert!(
+        stamps(&store, &sid).await.is_empty(),
+        "no stamp lands in a live run's log"
     );
 }
 

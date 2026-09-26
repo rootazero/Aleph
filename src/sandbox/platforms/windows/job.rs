@@ -140,3 +140,72 @@ impl Drop for SandboxJob {
         }
     }
 }
+
+/// Tie `pid` to this process: the kernel kills it when this process exits,
+/// however that happens. This is the Windows arm of
+/// `utils::scratch::reap_on_exit`, and it lives here because its FFI is the
+/// same job-object primitive [`SandboxJob`] is built on (R1's
+/// process-isolation exception).
+///
+/// There is one job per process. It is created on first use with only
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and its handle is never closed on
+/// purpose. The OS closes the last handle when this process ends, whether by
+/// a normal return, `process::exit`, or an abort, and closing the job kills
+/// every process assigned to it. That covers more than the unix arm's
+/// `atexit`, which an abort skips. Processes that `pid` spawned before it was
+/// assigned are not in the job and are not killed.
+pub(crate) fn kill_on_this_process_exit(pid: u32) -> Result<(), String> {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    // The handle as an integer: `HANDLE` is a raw pointer, which a `static`
+    // cannot hold. It is only ever passed back to the kernel.
+    static JOB: OnceLock<Result<usize, String>> = OnceLock::new();
+    let job = JOB
+        .get_or_init(|| {
+            // SAFETY: plain job-object creation. On failure the half-made
+            // handle is closed before the error is returned.
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+                if handle.is_null() {
+                    return Err(format!("CreateJobObjectW failed: {}", GetLastError()));
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    let err = GetLastError();
+                    let _ = CloseHandle(handle);
+                    return Err(format!(
+                        "SetInformationJobObject(KillOnClose) failed: {err}"
+                    ));
+                }
+                Ok(handle as usize)
+            }
+        })
+        .clone()?;
+
+    // SAFETY: `OpenProcess` on a pid this process spawned. The process handle
+    // is closed on every path. Assigning does not transfer it: the job keeps
+    // its own reference to the process.
+    unsafe {
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+        if process.is_null() {
+            return Err(format!("OpenProcess({pid}) failed: {}", GetLastError()));
+        }
+        let ok = AssignProcessToJobObject(job as HANDLE, process);
+        let err = GetLastError();
+        let _ = CloseHandle(process);
+        if ok == 0 {
+            return Err(format!("AssignProcessToJobObject({pid}) failed: {err}"));
+        }
+    }
+    Ok(())
+}

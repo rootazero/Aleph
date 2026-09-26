@@ -528,6 +528,102 @@ impl TeamDispatcher {
             }
         }
     }
+
+    /// Fail clarify questions that were delivered to the channel and never
+    /// answered past a generous grace window — the no-answer twin of
+    /// [`redeliver_stalled_clarify`](Self::redeliver_stalled_clarify).
+    ///
+    /// `handle_clarify_task` parks a delivered question `Paused` with a
+    /// `clarify_delivered_at` stamp and waits for the user's reply. The
+    /// inbound router consumes a session reply when one arrives, so a
+    /// responsive user never trips this pass; a user who walks away (closed
+    /// the chat, lost the notification, abandoned the run) leaves the task
+    /// parked forever, dependents stuck in `Blocked`, and no other janitor
+    /// ever looks at it. The same DAG-stall shape the re-delivery janitor
+    /// prevents for the pre-delivery crash window.
+    ///
+    /// Deliberately generous — `ask_user`'s own 600 s timeout is for a single
+    /// turn; a workflow run is by definition multi-step and the user has more
+    /// context, so a day is the right shape (a slow approval of a long-running
+    /// pipeline should not be punished). `0` disables the pass entirely —
+    /// same convention as `DispatcherConfig::zombie_ttl_secs`. Operates only
+    /// on rows carrying the `clarify_delivered_at` stamp: redelivery rows
+    /// (`clarify_delivery_pending`) belong to the sibling janitor, and rows
+    /// with neither stamp are an operator's deliberate pause.
+    pub(super) async fn fail_unanswered_clarify(self: &Arc<Self>) {
+        /// Default grace window: 24 hours. Matches `ask_user`'s generous shape
+        /// rather than its 600 s default — a workflow run waits for a user
+        /// who is reviewing a long pipeline, not for a single-turn question.
+        /// Tunable per-deployment by changing the constant; promote to a
+        /// `DispatcherConfig` field only when a real second tuning request
+        /// shows up (the rule from `zombie_ttl_secs`'s introduction).
+        const NO_ANSWER_GRACE_SECS: u64 = 86_400;
+
+        if NO_ANSWER_GRACE_SECS == 0 {
+            return; // 0 = feature disabled
+        }
+
+        let paused = match self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                status: Some(CoordTaskStatus::Paused),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "dispatcher: fail_unanswered_clarify list_tasks failed");
+                return;
+            }
+        };
+
+        let now = Self::now_epoch();
+        for task in paused {
+            if !is_dispatcher_managed(&task) || !crate::workflow::clarify::is_clarify_task(&task) {
+                continue;
+            }
+            if !should_fail_unanswered_clarify(&task.metadata, now, NO_ANSWER_GRACE_SECS) {
+                continue;
+            }
+            tracing::warn!(
+                task_id = %task.id,
+                unanswered_secs = now.saturating_sub(
+                    crate::workflow::clarify::clarify_delivered_at(&task.metadata).unwrap_or(0)
+                ),
+                "dispatcher: clarify question delivered but never answered — failing so dependents unblock"
+            );
+            self.fail_task(
+                &task,
+                "clarify step was delivered but the user did not answer within the grace window; \
+                 failing so downstream steps do not stay Blocked forever (the workflow run is \
+                 still listed under `runs` — re-arm via workflow(action='rerun_failed') or \
+                 `workflow_step_review(action='retry')` after the question is answered offline)",
+            )
+            .await;
+        }
+    }
+}
+
+/// Free predicate for [`TeamDispatcher::fail_unanswered_clarify`] — a row is
+/// eligible to be failed for no-answer timeout iff it carries the
+/// `clarify_delivered_at` stamp AND that stamp is at least `grace_secs`
+/// seconds in the past. Rows without the stamp are either still in the
+/// pre-delivery crash window (owned by `redeliver_stalled_clarify`) or were
+/// paused by an operator by hand (deliberate — never auto-fail those).
+///
+/// Free function so the rule is testable without a dispatcher, a registry
+/// and the process-wide event-store slot; the caller resolves all three.
+#[must_use]
+pub(super) fn should_fail_unanswered_clarify(
+    metadata: &serde_json::Value,
+    now_epoch: u64,
+    grace_secs: u64,
+) -> bool {
+    let Some(delivered_at) = crate::workflow::clarify::clarify_delivered_at(metadata) else {
+        return false; // not delivered yet, or operator-paused
+    };
+    now_epoch.saturating_sub(delivered_at) >= grace_secs
 }
 
 /// Answer the dangling calls of a crash-interrupted member run, close the run
@@ -577,6 +673,100 @@ pub(super) async fn repair_crashed_attempt(
         out.push_str(text);
     }
     Ok(Some(out))
+}
+
+#[cfg(test)]
+mod unanswered_clarify_tests {
+    use super::should_fail_unanswered_clarify;
+    use crate::workflow::clarify::{
+        CLARIFY_DELIVERED_AT_KEY, CLARIFY_DELIVERY_PENDING_KEY,
+    };
+
+    /// A row with no `clarify_delivered_at` stamp is not "delivered and
+    /// unanswered" — either delivery never confirmed (owned by the
+    /// redelivery janitor) or an operator paused the row by hand.
+    #[test]
+    fn rows_without_a_delivery_stamp_are_never_failed() {
+        let delivered_at = 1_700_000_000_u64;
+        let grace = 60_u64;
+        // Redelivery-row stamp present: must NOT be failed by this janitor.
+        let pending_only = serde_json::json!({
+            CLARIFY_DELIVERY_PENDING_KEY: delivered_at,
+        });
+        assert!(
+            !should_fail_unanswered_clarify(&pending_only, delivered_at + grace + 1, grace),
+            "delivery-pending rows belong to redeliver_stalled_clarify"
+        );
+        // Empty metadata: an operator's manual pause.
+        let empty = serde_json::json!({});
+        assert!(
+            !should_fail_unanswered_clarify(&empty, delivered_at + grace + 1, grace),
+            "operator-paused rows (no stamps) are deliberate, never auto-fail"
+        );
+    }
+
+    /// Delivered recently: the user might still be reading. The grace
+    /// window must absorb any plausible interaction delay.
+    #[test]
+    fn recently_delivered_rows_are_not_failed() {
+        let delivered_at = 1_700_000_000_u64;
+        let grace = 60_u64;
+        let metadata = serde_json::json!({
+            CLARIFY_DELIVERED_AT_KEY: delivered_at,
+        });
+        assert!(
+            !should_fail_unanswered_clarify(&metadata, delivered_at, grace),
+            "delivered right now is never failed"
+        );
+        assert!(
+            !should_fail_unanswered_clarify(&metadata, delivered_at + grace - 1, grace),
+            "one second before grace elapses is still in grace"
+        );
+    }
+
+    /// Delivered longer ago than the grace window: the user is gone or
+    /// ignoring the prompt. The row is eligible to be failed so dependents
+    /// stop waiting.
+    #[test]
+    fn rows_past_the_grace_window_fail() {
+        let delivered_at = 1_700_000_000_u64;
+        let grace = 60_u64;
+        let metadata = serde_json::json!({
+            CLARIFY_DELIVERED_AT_KEY: delivered_at,
+        });
+        assert!(
+            should_fail_unanswered_clarify(&metadata, delivered_at + grace, grace),
+            "exactly at grace: fail"
+        );
+        assert!(
+            should_fail_unanswered_clarify(&metadata, delivered_at + grace + 1, grace),
+            "past grace: fail"
+        );
+        assert!(
+            should_fail_unanswered_clarify(
+                &metadata,
+                delivered_at + 24 * 60 * 60,
+                grace,
+            ),
+            "24 h past delivery (the actual default grace): fail"
+        );
+    }
+
+    /// A non-numeric stamp is malformed metadata; `clarify_delivered_at`
+    /// reads it as `None` and the predicate then refuses to act on it.
+    /// Mirrors the lenient reader in `workflow::clarify` — a corrupted
+    /// stamp never triggers a destructive auto-fail.
+    #[test]
+    fn malformed_delivery_stamp_is_not_failed() {
+        let grace = 60_u64;
+        let metadata = serde_json::json!({
+            CLARIFY_DELIVERED_AT_KEY: "right now",
+        });
+        assert!(
+            !should_fail_unanswered_clarify(&metadata, u64::MAX, grace),
+            "a non-numeric stamp is None per the lenient reader; never fails"
+        );
+    }
 }
 
 #[cfg(test)]

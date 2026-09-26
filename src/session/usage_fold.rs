@@ -5,12 +5,12 @@
 //! here; the per-call `SpendLedger` is the other fact and is untouched.
 //!
 //! The `sessions` row's `input_tokens` / `output_tokens` columns are a
-//! materialisation of this fold, accumulated one run at a time by the
-//! projector when the run's meta lands, or when a whole-session heal
-//! synthesizes the stamp of a finished run whose meta never did
-//! (`session_projector::bill_run_from_fold`, its one biller for both) — the
-//! row is a face, not a second derivation.
-use crate::session::events::{SessionEvent, SessionEventRecord};
+//! materialisation of this fold, accumulated one run at a time by the store's
+//! `stamp_and_bill_in_range`, fed by `session_projector::fold_run_bill` (which
+//! only folds; the store is what bills) when the run's meta lands, or when a
+//! whole-session heal synthesizes the stamp of a finished run whose meta
+//! never did — the row is a face, not a second derivation.
+use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsageTotals {
@@ -55,14 +55,24 @@ fn session_usage_totals(log: &[SessionEventRecord]) -> UsageTotals {
         .fold(UsageTotals::default(), |acc, r| acc.fold(&r.event))
 }
 
-/// Totals of the run opened by the LAST `RunStarted` in `slice`. `None` when
-/// the slice holds none: an unanchored fold would bill a whole session to one run.
+/// Totals of the run opened by the LAST `RunStarted` in `slice`, together with
+/// that `RunStarted`'s own seq — the anchor. `None` when the slice holds none:
+/// an unanchored fold would bill a whole session to one run.
+///
+/// The anchor is the ONE derivation of "where did this run's fold start" —
+/// callers that also need to bound a store write by it (a stamp range) must
+/// read it from here rather than re-deriving it, so the fold and the write it
+/// feeds never disagree on which run they mean (criterion #12).
 #[must_use]
-pub fn run_usage_totals(slice: &[SessionEventRecord]) -> Option<UsageTotals> {
+pub fn run_usage_totals(slice: &[SessionEventRecord]) -> Option<(EventSeq, UsageTotals)> {
     let start = slice
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::RunStarted { .. }))?;
-    slice.get(start..).map(session_usage_totals)
+    let anchor = slice[start].seq;
+    slice
+        .get(start..)
+        .map(session_usage_totals)
+        .map(|totals| (anchor, totals))
 }
 
 #[cfg(test)]
@@ -142,8 +152,9 @@ mod tests {
             rec(5, asst(Some(tb(5, 1)))),
         ];
         assert_eq!(
-            run_usage_totals(&log).map(|t| (t.input, t.output)),
-            Some((5, 1))
+            run_usage_totals(&log).map(|(anchor, t)| (anchor, t.input, t.output)),
+            Some((4, 5, 1)),
+            "the anchor is run b's own RunStarted seq, not run a's"
         );
         assert_eq!(
             run_usage_totals(&log[1..3]),
@@ -175,8 +186,8 @@ mod tests {
         );
         assert_eq!(
             run_usage_totals(&log),
-            Some(t),
-            "one run ⇒ the run fold IS the session fold"
+            Some((1, t)),
+            "one run ⇒ the run fold IS the session fold, anchored at seq 1"
         );
     }
 }

@@ -40,11 +40,16 @@
 //!
 //! # One at a time, over a span that is still there
 //!
-//! The sequence runs inside a per-session [`CompactionBracket`], and the span it
-//! summarized is re-read before anything is written. Without the first, two
+//! The sequence runs inside a per-session [`CompactionBracket`], and the batch
+//! commits only if the span it summarized is still exactly there: its
+//! `Retire::Through` names how many live rows it read, and the store rolls the
+//! whole batch back when any other count retires. Without the first, two
 //! `/compact`s racing from different surfaces each append a summary the other
 //! never retires; without the second, a `chat.clear` landing during the
-//! summarize await is undone by a summary of the turns it just erased.
+//! summarize await is undone by a summary of the turns it just erased. The
+//! span check lives inside the transaction because `chat.clear` does not go
+//! through the session actor: a re-read followed by a separate batch left a
+//! window between the two in which a clear still landed (FOLLOW-UP F25).
 //!
 //! # Where the summary sits
 //!
@@ -68,7 +73,7 @@ use crate::context::compact::summary_utils::{
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::session::events::{Retire, SessionEvent, SessionEventRecord};
-use crate::session::service::{SessionId, SessionService};
+use crate::session::service::{SessionError, SessionId, SessionService};
 use crate::sync_primitives::{Arc, Mutex};
 
 /// Default token budget for the tail kept verbatim by a manual compaction —
@@ -436,23 +441,12 @@ pub async fn compact_session(
     // live rows the whole time it runs. They go through `retire_from`, which
     // deletes the BM25 mirror precisely so erased turns can never be recalled;
     // appending a summary *of* that span now would hand the model the very turns
-    // the user just erased, at the head of every future prompt. So re-read the
-    // log and compact only if the summarized span is still exactly there.
-    // Growth past the cut is expected and fine — the run that asked for the
+    // the user just erased, at the head of every future prompt. So the batch
+    // below names how many live rows it summarized (`events[..cut]` is every
+    // live row at or below `cut_seq`: `events` is the whole live log in seq
+    // order), and the store commits only if exactly that many retire. Growth
+    // past the cut is expected and fine — the run that asked for the
     // compaction keeps appending while the summary is being written.
-    let live = service.get_events(session_id, None, None).await?;
-    let span_intact = live.len() >= cut
-        && live[..cut]
-            .iter()
-            .zip(&events[..cut])
-            .all(|(now, then)| now.seq == then.seq);
-    if !span_intact {
-        return Ok(ManualCompactOutcome::skipped(
-            live.len(),
-            "the conversation changed while the summary was being written",
-        ));
-    }
-
     let summary_turn = uuid::Uuid::new_v4();
     // One instant for both payloads: the batch is one moment, and two
     // `now_ms()` calls can straddle a millisecond.
@@ -473,10 +467,28 @@ pub async fn compact_session(
         },
     ];
     // Summary, checkpoint and retire commit together or not at all (§4.1).
-    service
-        .emit_batch(session_id, batch, Some(Retire::Through(cut_seq)))
-        .await
-        .map_err(|e| {
+    let retire = Retire::Through {
+        through: cut_seq,
+        live: cut,
+    };
+    match service.emit_batch(session_id, batch, Some(retire)).await {
+        Ok(_) => {}
+        // Not a failure: the conversation moved under the summary, and the
+        // store rolled the batch back so nothing about it landed.
+        Err(SessionError::RetireSpanChanged { expected, found }) => {
+            tracing::info!(
+                ?session_id,
+                expected,
+                found,
+                "manual compaction: the summarized span changed before commit; skipped",
+            );
+            let live = service.get_events(session_id, None, None).await?;
+            return Ok(ManualCompactOutcome::skipped(
+                live.len(),
+                "the conversation changed while the summary was being written",
+            ));
+        }
+        Err(e) => {
             // Nothing landed: no stray `[Context Summary]` for a reader of the
             // log to mistake for a compaction that happened.
             tracing::warn!(
@@ -484,8 +496,9 @@ pub async fn compact_session(
                 error = %e,
                 "manual compaction: transaction did not commit; context unchanged",
             );
-            anyhow::Error::from(e)
-        })?;
+            return Err(anyhow::Error::from(e));
+        }
+    }
     // Tell the prompt-cache watchdog this break was deliberate.
     //
     // Retiring the prefix guarantees the next turns are cache-cold — that is

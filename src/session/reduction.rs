@@ -1805,9 +1805,13 @@ mod tests {
             LegalShape {
                 // `SessionForked`, the summary, then the parent's fresh tail
                 // copied verbatim — which can start with the previous run's
-                // `RunFinished` and carry the current run's `RunStarted` —
-                // then the split's own marker, then the run finishes on the
-                // child under the original marker id.
+                // `RunFinished` and carry the current run's `RunStarted`. As
+                // logs written before 2026-09-24 record it (pre-F1): the split
+                // minted its own marker, then the run finished on the child
+                // under the original marker id. Since 2026-09-24 (F1) the
+                // split reuses the parent's run id instead of minting
+                // `split-1` — this shape stays in the table forward-only, for
+                // logs written before that date.
                 name: "session_split child",
                 events: seq_log(vec![
                     forked(),
@@ -1828,10 +1832,38 @@ mod tests {
                 allowed: &[FINISH_WITHOUT_START],
             },
             LegalShape {
-                // Too old to resume: the coordinator closes the run with an
-                // `abandoned-*` closer; the user's next message opens a new one.
-                // `c1` stays dangling (`EarlierRun`) — a fact, not a
-                // contradiction.
+                // The same split as logs written since 2026-09-24 record it:
+                // the copied tail no longer carries the parent's opener (F14),
+                // and the child reopens the run under the parent's own id
+                // (F1). The carried `RunFinished` of the previous run still
+                // closes nothing; the tail's tool call runs with no opener
+                // before it, and the split opener is the child's only one.
+                name: "session_split child (since F1)",
+                events: seq_log(vec![
+                    forked(),
+                    system("summary"),
+                    finished("r0"),
+                    run_meta("r0"),
+                    turn_started(),
+                    user("hi"),
+                    assistant("thinking"),
+                    requested("c1"),
+                    result_for("c1"),
+                    started("r1"),
+                    assistant("done"),
+                    finished("r1"),
+                    run_meta("r1"),
+                ]),
+                allowed: &[FINISH_WITHOUT_START],
+            },
+            LegalShape {
+                // Too old to resume, as logs written before 2026-09-24 record
+                // it: the coordinator closed the run with an `abandoned-*`
+                // closer; the user's next message opens a new one. `c1` stays
+                // dangling (`EarlierRun`) — a fact, not a contradiction. Since
+                // 2026-09-24 (F1) the closer's run_id is the open run's own id
+                // instead — this shape stays in the table forward-only, for
+                // logs written before that date.
                 name: "abandoned-<uuid> closer",
                 events: seq_log(vec![
                     turn_started(),
@@ -2040,6 +2072,7 @@ mod tests {
             exhibited,
             vec![
                 "session_split child",
+                "session_split child (since F1)",
                 "fork-seeded child",
                 "unanswered then abandoned closer"
             ],

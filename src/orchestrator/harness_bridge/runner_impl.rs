@@ -119,6 +119,7 @@ impl HarnessRunner for AgentHarnessRunner {
         think_level: Option<crate::agents::thinking::ThinkLevel>,
         mut envelope: crate::thinker::TurnEnvelope,
         turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        run_id: String,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -957,15 +958,16 @@ impl HarnessRunner for AgentHarnessRunner {
         // equivalent to the retiring AgentLoop StreamingSink.
         // rust-doctor-disable-next-line excessive-clone
         let mut cb = callback::BroadcastCallback::new(events.clone(), context_window);
-        // Resume run markers. `run_id` is a locally-minted UUID, and it is a
-        // DIFFERENT id from the gateway scheduler's `RunRequest.run_id` for
-        // the same run: the two are never joined, in either direction. The
-        // marker pair only has to correlate within one session log, which it
-        // does; what nothing can currently answer is "which scheduler run
-        // wrote this marker" — reading a marker id as a scheduler run id (or
-        // the reverse) finds nothing. Recorded rather than fixed (ruling A5):
-        // joining them is its own contract, with its own writers.
-        let run_marker_id = uuid::Uuid::new_v4().to_string();
+        // Resume run markers carry the ENGINE's run id — the one `execute()`
+        // stamps on this run's `AssistantRunMeta` — so every by-id reader
+        // (`already_stamped_by`, `snap_out_of_open_run`, the scan below)
+        // pairs a marker with its meta. Minting a local id here (ruling A5,
+        // until 2026-09-24) left the two unjoinable: a synthesized stamp and
+        // the late meta read as two runs and billed the run twice (F1).
+        // One engine run can write several brackets under this id — the
+        // fallback retry loop re-dispatches under the same run — so a by-id
+        // reader pairs each closer with the LAST opener before it.
+        let run_marker_id = run_id;
         // `project_root` rides on RunStarted so `ResumeCoordinator` can
         // re-trigger a crashed run in the same user-picked folder. The
         // field is omitted from the wire form when None (skip_serializing_if)
@@ -1100,9 +1102,13 @@ impl HarnessRunner for AgentHarnessRunner {
         //
         // Marker emitted at `SessionEvent::RunStarted { run_id: run_marker_id }`
         // just before `harness.run`; all seeded history/user events precede it.
-        // On a compaction-driven session split the adopted child id's log lacks
-        // this marker — the `rposition` miss falls back to scanning the whole
-        // (child-only) log, byte-identical to the prior behaviour on that path.
+        // `rposition` takes the LAST opener under this id: the fallback retry
+        // loop can leave earlier brackets of the same run in this log. On a
+        // compaction-driven session split the adopted child's log carries the
+        // split's own opener under this same id AFTER the carried tail (the
+        // parent's copied opener is filtered out of the tail, F14), so the
+        // scan counts only what the run produced after the split; the pre-split
+        // part stays in the parent's log.
         let run_scan_start = records
             .iter()
             .rposition(|r| {

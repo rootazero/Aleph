@@ -68,9 +68,15 @@ pub async fn emit_for_ambient_call(
         );
         return;
     };
+    // Cloned for the failure line only: `make` consumes the id, and a park or
+    // release that did not land is unattributable without it.
+    let logged_call_id = call_id.clone();
     if let Err(e) = svc.emit_event(session, make(turn_id, call_id)).await {
         tracing::warn!(
             site = %site,
+            session = %session,
+            turn_id = %turn_id,
+            call_id = %logged_call_id,
             what,
             error = ?e,
             "failed to persist to the session log"

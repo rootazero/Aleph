@@ -3,7 +3,10 @@
 //! Mirrors hermes-agent's `.usage.json` sidecar pattern, hardened for Aleph:
 //!   * Cross-process safety via `utils::atomic_io::with_file_lock` on
 //!     `<skills_dir>/.usage.json.lock`. Two concurrent skill reads in
-//!     different processes will not lose counter increments.
+//!     different processes never lose an increment to a lost update. An
+//!     update whose lock wait passes the lock's deadline is dropped, which
+//!     happens only on a heavily loaded host (measured, see
+//!     `concurrent_bumps_do_not_lose_counts`).
 //!   * Atomic writes via `utils::atomic_io::write_atomic`.
 //!   * Best-effort throughout: every record/load failure degrades to a
 //!     warn log and never propagates. A broken sidecar must never break
@@ -120,17 +123,15 @@ impl UsageStore {
         Self { path, lock_path }
     }
 
+    /// The sidecar's counts for the read-only faces ([`Self::get`],
+    /// [`Self::snapshot`]). An unreadable sidecar reads as empty here, with a
+    /// warn, because nothing is ever written from this answer. `mutate` does
+    /// write, so it reads through [`decode_sidecar`] itself and aborts on `Err`.
     fn load_map(&self) -> HashMap<String, UsageStats> {
-        match std::fs::read(&self.path) {
-            Ok(bytes) => match serde_json::from_slice(&bytes) {
-                Ok(map) => map,
-                Err(e) => {
-                    tracing::warn!(error = %e, path = %self.path.display(), "corrupted usage sidecar; resetting");
-                    HashMap::new()
-                }
-            },
-            Err(_) => HashMap::new(),
-        }
+        decode_sidecar(std::fs::read(&self.path), &self.path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, path = %self.path.display(), "skill usage: sidecar unreadable");
+            HashMap::new()
+        })
     }
 
     fn save_map(&self, map: &HashMap<String, UsageStats>) {
@@ -161,7 +162,10 @@ impl UsageStore {
             }
         }
         let result = with_file_lock(&self.lock_path, |_| {
-            let mut map = self.load_map();
+            // A read error aborts the whole update. Saving over a sidecar
+            // this process could not read would replace every other skill's
+            // counts with this one increment.
+            let mut map = decode_sidecar(std::fs::read(&self.path), &self.path)?;
             let entry = map.entry(skill.to_string()).or_default();
             if entry.created_at.is_none() {
                 entry.created_at = Some(now_iso());
@@ -171,7 +175,7 @@ impl UsageStore {
             Ok(())
         });
         if let Err(e) = result {
-            tracing::warn!(error = %e, skill, "skill usage: lock acquisition failed");
+            tracing::warn!(error = %e, skill, "skill usage: update dropped");
         }
     }
 
@@ -285,6 +289,28 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Turn one read of the sidecar into its counts.
+///
+/// Only `NotFound` is an empty map (no skill has been counted yet). Any other
+/// read error is returned: a file this process cannot read right now still
+/// holds real counts. Undecodable JSON stays a reset, because it cannot come
+/// from a torn write (`write_atomic` renames a complete file into place): it
+/// is a sidecar something else wrote, and keeping it would block every
+/// future count.
+fn decode_sidecar(
+    read: std::io::Result<Vec<u8>>,
+    path: &Path,
+) -> std::io::Result<HashMap<String, UsageStats>> {
+    match read {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, path = %path.display(), "corrupted usage sidecar; resetting");
+            HashMap::new()
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +336,23 @@ mod tests {
         assert!(stats.last_patched_at.is_some());
         assert_eq!(stats.state, SkillState::Active);
         assert!(!stats.pinned);
+    }
+
+    /// F5: a sidecar that exists but cannot be read is "I do not know the
+    /// counts", not "there are no counts" (criterion #8). Read as empty, the
+    /// next `mutate` would save `{skill: 1}` over every other skill's history.
+    #[test]
+    fn a_read_error_other_than_not_found_is_not_an_empty_map() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(decode_sidecar(Err(denied), Path::new("x")).is_err());
+    }
+
+    #[test]
+    fn a_missing_sidecar_is_an_empty_map() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(decode_sidecar(Err(missing), Path::new("x"))
+            .expect("a first run has no sidecar yet")
+            .is_empty());
     }
 
     #[test]
@@ -418,14 +461,20 @@ mod tests {
     /// Cross-thread concurrent bumps must not lose counts. The file lock
     /// serializes read-modify-write across both threads (and processes).
     ///
-    /// Marked `#[ignore]` because under the full `cargo test --lib` parallel
-    /// fan-out the lock acquire/release can starve on a contended Windows
-    /// runner (the test creates 4 std threads × 25 bumps = 100 lock cycles
-    /// that race with other file-using tests). Passes deterministically when
-    /// run in isolation or with `--test-threads=1`. Run with
+    /// Marked `#[ignore]` because a heavily loaded host can make one of the
+    /// four threads wait longer than `with_file_lock`'s 5 s deadline, and
+    /// `mutate` then drops that increment by design: this counter is
+    /// best-effort telemetry, and waiting longer would stall the tool call
+    /// that records the use. Measured 2026-09-24 on Windows, with this test
+    /// looped in 8 parallel processes beside a full `--lib` run: 33 of 3640
+    /// runs lost 53 increments in total, and a probe on every drop path
+    /// counted 53 lock-deadline expiries, 0 read errors and 0 write errors.
+    /// With 16 or 48 parallel processes and no `--lib` run: 240 of 240 runs
+    /// counted 100. So the loss is lock starvation under load. It is not
+    /// a lost update inside the lock. Run with
     /// `cargo test -- --include-ignored` to re-verify on demand.
     #[test]
-    #[ignore = "flaky under heavy parallel runs; passes in isolation or with --test-threads=1"]
+    #[ignore = "loses an increment when a thread waits past the 5 s lock deadline on a loaded host (measured; by design for a best-effort counter)"]
     fn concurrent_bumps_do_not_lose_counts() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().to_path_buf();

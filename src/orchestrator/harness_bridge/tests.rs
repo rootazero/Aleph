@@ -1079,6 +1079,7 @@ async fn run_until_it_fails(
             None,
             crate::thinker::TurnEnvelope::default(),
             None,
+            "probe-run".to_string(),
         )
         .await;
 
@@ -1280,4 +1281,60 @@ async fn trace_frames_keep_their_place_in_the_run_seq_order() {
         "seq must be strictly increasing in emission order: {frames:?}"
     );
     drop((cb, sink, tx));
+}
+
+/// The run's markers carry the id the ENGINE gave the run — the one
+/// `execute()` stamps on its `AssistantRunMeta` — read back from the log,
+/// not from the call. A locally-minted marker id (ruling A5, until
+/// 2026-09-24) made every by-id reader miss: a synthesized stamp and the
+/// late meta read as two runs and the session was billed twice (F1).
+/// The provider fails, so the run ends on the error arm — which is also
+/// the arm that must still close its bracket.
+#[tokio::test]
+async fn the_run_markers_carry_the_engine_run_id() {
+    let service = fresh_service();
+    let runner = runner_with_failing_provider(service.clone(), "marker-id-probe");
+    let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let key = SessionKey::ephemeral("marker-id-probe");
+
+    let _ = runner
+        .run(
+            key.to_key_string(),
+            probe_spec("marker-id-probe"),
+            FlowInput::Prompt("x".into()),
+            std::sync::Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx,
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            None,
+            "engine-run-42".to_string(),
+        )
+        .await;
+
+    let markers: Vec<(&'static str, String)> = service
+        .get_events(&key, None, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.event {
+            SessionEvent::RunStarted { run_id, .. } => Some(("start", run_id)),
+            SessionEvent::RunFinished { run_id, .. } => Some(("finish", run_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec![
+            ("start", "engine-run-42".to_string()),
+            ("finish", "engine-run-42".to_string()),
+        ],
+        "one bracket, both markers under the engine's run id"
+    );
 }

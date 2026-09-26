@@ -110,6 +110,7 @@ pub struct StubContext {
     pub cancel: CancellationToken,
     pub tool_service_override: Option<Arc<dyn ToolService>>,
     pub trace_sink: Option<Arc<dyn alephcore::harness::TraceSink>>,
+    pub run_id: String,
 }
 
 /// `HarnessRunner` impl that defers every `run` call to a user-supplied closure.
@@ -142,6 +143,7 @@ impl HarnessRunner for StubHarnessRunner {
         _think_level: Option<alephcore::agents::thinking::ThinkLevel>,
         _envelope: alephcore::thinker::TurnEnvelope,
         _turn_model: Option<alephcore::providers::session_model_handle::SessionModelPref>,
+        run_id: String,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -150,6 +152,7 @@ impl HarnessRunner for StubHarnessRunner {
             cancel,
             tool_service_override,
             trace_sink,
+            run_id,
         };
         (self.run_fn)(ctx).await
     }
@@ -239,6 +242,7 @@ pub fn basic_request() -> FlowRequest {
     FlowRequest {
         flow_id: None,
         agent_id: "main".into(),
+        run_id: "run-1".into(),
         input: FlowInput::Prompt("hello".into()),
         channel: Some("test".into()),
         session_hint: Some("test-session".into()),

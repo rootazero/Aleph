@@ -42,6 +42,23 @@ CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=1 cargo test -p alephcore --lib
 
 ---
 
+## Python Toolchain
+
+- **不要安装系统级 Python** —— Agent 不要触发系统 Python 的安装/调用；机器上已有的 system `python` / `python3`（WindowsApps stub）**不可靠**（已知该 stub 退出码 49、调用即失败）。
+- **确实需要 Python 时，用 [`uv`](https://docs.astral.sh/uv/) 搭虚拟环境**：
+
+  ```bash
+  # 一次性：建项目级 venv
+  uv venv .venv
+  uv pip install -p .venv/Scripts/python.exe <pkg>   # Windows
+  # uv pip install -p .venv/bin/python   <pkg>       # Unix
+  .venv/Scripts/python.exe script.py                  # Windows
+  ```
+- **跨平台脚本优先 Node.js**（`node` 在 PATH 中稳定可用），再考虑 `.venv/Scripts/python.exe`。
+- **不要在 `D:/Workspace/Aleph/`** 落 `python.exe`、`.python/`、系统级 site-packages；所有 venv 落在仓库子目录（如 `.venv/`），并已在 `.gitignore` 内。
+
+---
+
 ## Code Style
 
 **rustfmt** (4-space indent, 100 char width) + **clippy** (`-D warnings`).

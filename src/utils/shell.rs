@@ -353,9 +353,25 @@ pub fn resolve() -> &'static ResolvedShell {
     AGENT_SHELL.get_or_init(|| {
         #[cfg(windows)]
         {
+            let pwsh_resolved = powershell_host().is_some();
             powershell_host()
                 .cloned()
-                .or_else(cmd_shell)
+                .or_else(|| {
+                    if !pwsh_resolved {
+                        tracing::warn!(
+                            "utils::shell: no PowerShell resolved on PATH; \
+                             falling back to cmd.exe ladder"
+                        );
+                    }
+                    cmd_shell()
+                })
+                .or_else(|| {
+                    tracing::warn!(
+                        "utils::shell: neither PowerShell nor cmd resolved; \
+                         spawn will fail with ENOENT until one is installed"
+                    );
+                    None
+                })
                 // Neither PowerShell nor cmd on a Windows box is not a state we
                 // can repair; name the one we would have preferred so the error
                 // the spawn raises says something useful.
@@ -570,5 +586,45 @@ mod tests {
                 || stdin.is_some_and(|s| String::from_utf8_lossy(&s).contains("marker-token"));
             assert!(seen, "{kind:?} dropped the script");
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_alias_tests {
+    use std::path::PathBuf;
+
+    /// Exact match on the standard per-user Store alias directory.
+    #[test]
+    fn windowsapps_exact_match() {
+        let path = PathBuf::from(r"C:\Users\foo\AppData\Local\Microsoft\WindowsApps\pwsh.exe");
+        assert!(super::is_windows_apps_alias(&path));
+    }
+
+    /// The comparison is case-insensitive, so an all-uppercase component matches.
+    #[test]
+    fn windowsapps_uppercase() {
+        let path = PathBuf::from(r"C:\WINDOWSAPPS\pwsh.exe");
+        assert!(super::is_windows_apps_alias(&path));
+    }
+
+    /// The comparison is case-insensitive, so an all-lowercase component matches.
+    #[test]
+    fn windowsapps_lowercase() {
+        let path = PathBuf::from(r"C:\windowsapps\pwsh.exe");
+        assert!(super::is_windows_apps_alias(&path));
+    }
+
+    /// `WindowsApp` (singular) is a different directory name and must not match.
+    #[test]
+    fn similar_but_different() {
+        let path = PathBuf::from(r"C:\Program Files\WindowsApp Tools\pwsh.exe");
+        assert!(!super::is_windows_apps_alias(&path));
+    }
+
+    /// A path with no `WindowsApps` component at all must not match.
+    #[test]
+    fn no_windowsapps_component() {
+        let path = PathBuf::from(r"C:\Users\foo\pwsh.exe");
+        assert!(!super::is_windows_apps_alias(&path));
     }
 }

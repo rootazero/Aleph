@@ -1436,10 +1436,20 @@ nothing stops a stored row from being edited afterwards.
 (public half + fingerprint in `security.db`, private half in the existing
 encrypted vault), and every **mutating** tool call, every refusal and every
 approval decision is appended to that agent's own hash-chained, **signed**
-chain — from the same chokepoint, `tools::scoped::dispatch::execute_inner`, that
-already enforces every gate. `record_approval_decision` writes both trails: the
-ledger first, because it needs only the turn's agent identity and therefore
-covers surfaces the ambient `CallIdentity` cannot reach.
+chain. Tool calls and refusals come from the chokepoint that already enforces
+every gate, `tools::scoped::dispatch::execute_inner`. Approval decisions come
+from **two functions, one per gate**. The confirmation gate's
+`record_approval_decision` writes both trails: the ledger first, because it
+needs only the turn's agent identity and therefore covers surfaces the ambient
+`CallIdentity` cannot reach. The capability-elevation gate goes through
+`ApprovalGate::request_approval_for_action`, whose `record_gate_decision` writes
+the ledger row for every real verdict (`Timeout` / `Unavailable` are not
+recorded). The session-log copy of the same verdict is written separately, in
+`sandbox/workspace/mod.rs`. So one elevation verdict has two writers in two
+files, and a change to how either one attributes it does not reach the other
+(CLAUDE.md criteria #1 and #16). By design, elevation-gate ledger rows carry
+no `[gate: <rule_id>]` suffix. That suffix is reserved for cards produced by
+the `GateRule` chain.
 
 This is the first production consumer of `gateway/security/crypto.rs`'s Ed25519
 helpers, which had none (the `devices.public_key BLOB NOT NULL` column every

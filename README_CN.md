@@ -167,6 +167,8 @@ cd Aleph
 just shell-dev       # 以开发模式启动桌面 App（自动构建 WASM）
 ```
 
+**Windows shell 解析**。Windows 上 Aleph 用 PowerShell 7（`pwsh`）作为 agent 脚本执行 shell，回退到 Windows PowerShell 5.1（`powershell`），最后回退到 `cmd.exe`。所有 shell 探测、argv 构造和编码处理集中在 `src/utils/shell.rs`（单一源）。Windows 端的端到端硬测试（`-NoProfile` 启动耗时、`$LASTEXITCODE` 透传、32,767 字符命令行上限等）在 `qa/winshell/run.sh` 中，需要在 Windows 主机上手动运行。
+
 | 命令 | 说明 |
 |------|------|
 | `just shell-dev` | 以开发模式启动桌面 App |

@@ -67,7 +67,9 @@ pub fn scratch_root() -> (TempDir, PathBuf) {
 ///
 /// Unix only — `libc::kill` has no portable twin. On other platforms
 /// [`keep_until_exit`] falls back to the previous leak-forever behaviour rather
-/// than pretending, and the process reaper has no non-unix callers.
+/// than pretending. The process half has its own Windows arm (a kill-on-close
+/// job object, see the `cfg(windows)` [`reap_on_exit`]), and that arm reaps
+/// only the process, not the directory.
 #[cfg(unix)]
 fn register_for_exit(pid: Option<u32>, dir: PathBuf) {
     use std::sync::{Mutex, OnceLock};
@@ -105,6 +107,30 @@ fn register_for_exit(pid: Option<u32>, dir: PathBuf) {
 #[cfg(unix)]
 pub fn reap_on_exit(pid: u32, dir: PathBuf) {
     register_for_exit(Some(pid), dir);
+}
+
+/// Kill `pid` when this process exits: the Windows arm, through a
+/// kill-on-close job object. The kernel kills the child as this process's
+/// handles close, including on an abort that `atexit` would not see.
+///
+/// `dir` is **not** deleted. The child holds files open inside it until the
+/// kernel kills it, and that happens after anything this process could still
+/// run. So the tree is left behind, which is the same thing
+/// [`keep_until_exit`] does on this platform. That leak costs disk space. The
+/// leak this function fixes was a live `aleph-server.exe` holding the test
+/// binary's inherited pipes, which kept a detached run's completion marker
+/// from ever being written.
+///
+/// # Panics
+///
+/// When the child cannot be tied to this process. Scaffolding that silently
+/// fails to reap is the leak this function exists to end, so failing loudly
+/// at setup is the better outcome.
+#[cfg(windows)]
+pub fn reap_on_exit(pid: u32, _dir: PathBuf) {
+    if let Err(e) = crate::sandbox::platforms::windows::kill_on_this_process_exit(pid) {
+        panic!("reap_on_exit: could not tie child {pid} to this process: {e}");
+    }
 }
 
 /// Hand a scratch directory to something that outlives every frame — a

@@ -1382,6 +1382,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
                 agent_id: agent.id().to_string(),
+                // The same id `execute()` stamps on this run's meta; the
+                // bridge writes it on the run's markers (FOLLOW-UP F1).
+                run_id: run_id.to_string(),
                 input: flow_input,
                 channel: request.metadata.get("platform").cloned(),
                 session_hint: Some(request.session_key.to_key_string()),

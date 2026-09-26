@@ -2013,6 +2013,7 @@ mod tests {
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
                 _envelope: crate::thinker::TurnEnvelope,
                 _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+                _run_id: String,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

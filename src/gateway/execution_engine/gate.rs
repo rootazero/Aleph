@@ -47,14 +47,11 @@ pub(super) enum GateOutcome {
 ///
 /// `execute()` binds this in its own body scope (NOT inside the `admit_run`
 /// match arm) so it lives across the run's execution — including every early
-/// return between admission and completion, and a panic unwind. It is
-/// dropped **explicitly** inside each terminal arm of `execute()`'s result
-/// match — on the `Ok` arm only after the run's `AssistantRunMeta` has been
-/// appended, so a queued run on the same session cannot open ahead of that
-/// meta — and in both arms before the post-run continuation/steering-rescue
-/// logic, which may re-enter `execute()` on the SAME session, rather than
-/// left to drop at the physical end of the function. See `execute.rs` for
-/// the two release sites and the ordering they pin.
+/// return between admission and completion, and a panic unwind. Where and in
+/// what order it is released is owned by `execute()` itself: the comment
+/// above its terminal `match result` names both release sites, and
+/// `execute_holds_the_run_slot_through_the_meta_stamp_and_releases_it_on_both_arms`
+/// pins them. It is not restated here, so there is one copy of it.
 pub(super) struct RunSlot {
     registry: Arc<super::session_run_registry::SessionRunRegistry>,
     session_key: SessionKey,

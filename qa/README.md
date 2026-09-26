@@ -288,7 +288,10 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                        # comparison is guarded by an explicit
                                        # `compaction_count == 0` precondition: raising the burst
                                        # turns THAT red, not the row count, which would otherwise
-                                       # read like data loss.
+                                       # read like data loss. Also claims that every live
+                                       # AssistantRunMeta carries the run id of the RunStarted
+                                       # before it — the engine→bridge run-id link (2026-09-24 §2),
+                                       # which no unit test drives end to end.
 ./qa/resume_boundary/run.sh parked     # a call parked at the approval gate when the server dies
                                        # is answered "NEVER RAN", not "OUTCOME UNKNOWN" (§6.1 /
                                        # T11–T13): the gate writes `ToolCallParked{reason}` BEFORE

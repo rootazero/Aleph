@@ -436,6 +436,15 @@ pub struct ToolInvocation {
 pub struct FlowRequest {
     pub flow_id: Option<FlowId>,
     pub agent_id: AgentId,
+    /// The engine's id for the run this dispatch serves (`RunRequest.run_id`).
+    /// The harness bridge writes it on the run's `RunStarted` / `RunFinished`
+    /// markers, and `execute()` stamps the same id on the run's
+    /// `AssistantRunMeta` — so the log's markers and its meta name one run.
+    /// Required and deliberately not defaulted: a placeholder id would be a
+    /// marker that joins nothing. The fallback retry loop rebuilds this
+    /// request under the SAME id, so one run can leave several marker
+    /// brackets in one log.
+    pub run_id: String,
     pub input: FlowInput,
     /// Originating platform (`request.metadata["platform"]`), for diagnostics
     /// only — it appears in this struct's `Debug` output and nowhere else.
@@ -588,6 +597,7 @@ impl std::fmt::Debug for FlowRequest {
         f.debug_struct("FlowRequest")
             .field("flow_id", &self.flow_id)
             .field("agent_id", &self.agent_id)
+            .field("run_id", &self.run_id)
             .field("input", &self.input)
             .field("channel", &self.channel)
             .field("session_hint", &self.session_hint)
@@ -744,6 +754,9 @@ pub trait HarnessRunner: Send + Sync {
         // Outranks the session's sticky `select_model` pick and the agent's
         // `model_hint`; `None` leaves the directive chain untouched.
         model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+        // The engine's run id (`FlowRequest::run_id`). Implementations that
+        // write run markers MUST write this id on them — see that field's doc.
+        run_id: String,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -1131,6 +1144,8 @@ impl Orchestrator {
         let envelope = req.envelope.clone();
         // rust-doctor-disable-next-line excessive-clone
         let model_directive = req.model_directive.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let run_id = req.run_id.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
@@ -1246,6 +1261,7 @@ impl Orchestrator {
                                     think_level,
                                     envelope,
                                     model_directive,
+                                    run_id,
                                 ),
                             ),
                         ),

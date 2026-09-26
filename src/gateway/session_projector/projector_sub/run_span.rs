@@ -19,11 +19,12 @@ use super::missed_seqs::RepairReport;
 /// where (if anywhere) it closed, how many assistant messages it produced,
 /// and whether an `AssistantRunMeta` landed on it.
 pub(crate) struct RunSpan {
-    /// The id its `RunStarted` carries — the harness-minted MARKER id
-    /// (`runner_impl.rs`), which is NOT the engine's `RunRequest.run_id` the
-    /// meta carries (ruling A5: the two are never joined). It is what a
-    /// synthesized stamp writes under the row's `run_id` key, and it names
-    /// this span in log lines; it is never compared to a meta's id.
+    /// The id its `RunStarted` carries. Since 2026-09-24 (F1) that is the
+    /// engine's `RunRequest.run_id`, the same id the meta carries; in older
+    /// logs it is a harness-minted marker id (`runner_impl.rs`) that no meta
+    /// names. The join is positional, so both shapes read the same. It is
+    /// what a synthesized stamp writes under the row's `run_id` key, and it
+    /// names this span in log lines; it is never compared to a meta's id.
     run_id: String,
     /// Seq of the `RunStarted` that opened it.
     start: EventSeq,
@@ -62,25 +63,28 @@ impl RunSpan {
 /// That is what lets the stamp range and the usage fold agree by
 /// construction: the fold anchors on the last `RunStarted` in the slice it
 /// is given, and over `[start, end)` that is `start`. A split child's log
-/// carries the parent's opener copied inside the tail and the child's own
-/// opener last (`session_split`); the copied one opens a span that is never
-/// closed, and so is never synthesized. The split's meta lands on the
+/// carries the child's own opener as its only one: `session_split` leaves the
+/// parent's opener out of the copied tail (F14). On a log written before
+/// that, the copied opener opens a span that is never closed, and so is
+/// never synthesized. The split's meta lands on the
 /// PARENT: `execute()` stamps `request.session_key` and never learns the
 /// adopted child (`final_session_id()` is read only by the harness bridge,
-/// for the `RunFinished`), so the parent's `RunStarted(p) … RunFinished {
-/// split_run_id } … AssistantRunMeta` is a span WITH a meta — billed live by
+/// for the `RunFinished`), so the parent's `RunStarted { R } … RunFinished {
+/// R } … AssistantRunMeta` (before F1 the opener carried a marker id of its
+/// own) is a span WITH a meta — billed live by
 /// the meta arm for its pre-split tokens plus the whole run's `cost_usd` and
-/// model. The CHILD's own span, `RunStarted { split_run_id } … RunFinished`,
-/// is the meta-less one: synthesized and billed (tokens only) at the next
-/// whole-session heal, so its tokens reach its session row no sooner than
-/// that (FOLLOW-UP F26). Assistant messages count into the newest span only
-/// while it is open.
+/// model. The CHILD's own span, `RunStarted { R } … RunFinished` (split
+/// reuses the parent run's id), is the meta-less one: synthesized and billed
+/// (tokens only) at the next whole-session heal, so its tokens reach its
+/// session row no sooner than that (FOLLOW-UP F26). Assistant messages count
+/// into the newest span only while it is open.
 ///
 /// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
-/// markers carry the harness-minted marker id and the meta carries the
-/// engine's run id, and the two are never equal on a live log (ruling A5),
-/// so an id join never matched: every finished run read as meta-less at
-/// boot, a stamp was synthesized and billed on EVERY boot, and the two
+/// older logs' markers carry a harness-minted id that is never the meta's;
+/// newer logs carry the engine id on both (F1). The join below is positional
+/// and reads both. On older logs an id join never matched: every finished
+/// run read as meta-less at boot, a stamp was synthesized and billed on EVERY
+/// boot, and the two
 /// stamps then overwrote each other's `run_id` so the next boot re-applied
 /// both — session totals doubled per restart (44 → 88 → 176 on the real
 /// machine). Position is the same derivation the projector's meta arm uses
@@ -188,34 +192,36 @@ pub(crate) fn collect_run_spans(
 /// The stamp carries the `run_id` alone — `build_message_metadata` with no
 /// occupancy — because the gauge is unknown here and a zero would read as a
 /// measurement on the Panel. It goes through the same
-/// `stamp_assistant_metadata_in_range` as a real meta, over the same shape of
+/// `stamp_and_bill_in_range` as a real meta, over the same shape of
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
 /// rows strictly between), so a later heal reads `AlreadyStamped` and bills
 /// nothing: the stamp is the idempotence guard, exactly as on the live path.
-/// Against a later heal only — the stamp carries the MARKER id, a real meta
-/// carries the engine id, and `already_stamped_by` reads a different id as a
-/// different run (see the race note below). The bill is [`bill_run_from_fold`]
-/// with `run_start = start` and the fold read up to `end`; the cost and model
-/// are `None` because there is no meta to take them from, so a synthesized
-/// bill adds tokens and never dollars. A run whose provider reported no usage
-/// is stamped (the join is still owed) and not billed — nothing to add, and
-/// `bill_run_from_fold` says nothing about it.
+/// The bill is [`fold_run_bill`] over `[start, end)` — the fold's own range,
+/// not the stamp's — handed to `stamp_and_bill_in_range` so it lands with
+/// the stamp — read before the stamp, the same as the live path (F10); the
+/// cost and model are `None`
+/// because there is no meta to take them from, so a synthesized bill adds
+/// tokens and never dollars. A run whose provider reported no usage is
+/// stamped (the join is still owed) and not billed — nothing to add. A fold
+/// that cannot be read synthesizes nothing and sets `errored`.
 ///
 /// `NoRowInRange` here means the run's row is a hole this pass could not
 /// fill — it is in `retry`, `up_to_date` is already false, and the pass that
-/// fills it synthesizes. A refused stamp sets `errored`: unlike a deferred
-/// meta there is no seq to retry, and the next whole-session pass finds the
+/// fills it synthesizes. When only a LATER row of the run is such a hole,
+/// this pass stamps an earlier one, and the pass that fills the later row
+/// reads `AlreadyStamped`: the store's guard asks every row in range for
+/// this run's id, not only the newest (I1). A refused stamp sets
+/// `errored`: unlike a deferred meta there is no seq to retry, and the next whole-session pass finds the
 /// stamp still missing.
 ///
 /// The boot reconciler runs before any run is live, so it cannot race a meta
 /// that is about to be appended. A `request_repair` on a live session (the
 /// doctor's repair) can, in the window between a run's `RunFinished` and its
-/// meta: the synthesized stamp lands first under the marker id, and the meta
-/// — carrying the engine id — then finds a row stamped by "a different run",
-/// overwrites the stamp and bills the run a second time. That window is one
-/// append wide and a T24 known limit; closing it needs the two ids joined
-/// (FOLLOW-UP "A5 join"), not a guess here about which id a stamp "really"
-/// names.
+/// meta: the synthesized stamp lands first, under the run's own id since the
+/// markers carry the engine id (F1), so the meta then reads `AlreadyStamped`
+/// and bills nothing. The run's tokens are billed once; the cost and model
+/// the meta carried are not (ruling U5). Logs written before F1 still carry
+/// a marker id there, and for them the window still double-bills — U1.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn synthesize_missing_stamps(
     store: &Arc<dyn SessionStore>,
@@ -234,21 +240,47 @@ pub(crate) async fn synthesize_missing_stamps(
         else {
             continue;
         };
+        let ctx = ProjectionCtx {
+            store,
+            events: Some(event_store),
+            present,
+            run_start: span.start,
+            bus: None,
+        };
+        // Folded first, for the same reason as the meta arm (F10). `anchor`
+        // equals `span.start` by construction here (a span's own opener is
+        // always a live RunStarted) — reading it from the fold rather than
+        // re-asserting that agreement is the same derivation the meta arm
+        // uses (I2), so the two cannot drift apart under a future change to
+        // either.
+        let Some((bill, if_stamped, anchor)) =
+            fold_run_bill(id, end, &ctx, &span.run_id, None, None, None)
+                .await
+                .plan(span.start)
+        else {
+            report.errored = true;
+            continue;
+        };
         match store
-            .stamp_assistant_metadata_in_range(id, span.start, end, &meta)
+            .stamp_and_bill_in_range(id, anchor, end, &meta, bill.as_ref())
             .await
         {
             Ok(StampOutcome::Stamped) => {
                 report.stamps_synthesized += 1;
-                let ctx = ProjectionCtx {
-                    store,
-                    events: Some(event_store),
-                    present,
-                    run_start: span.start,
-                    bus: None,
-                };
-                if bill_run_from_fold(id, end, &ctx, &span.run_id, None, None, None).await {
+                if if_stamped == BillOutcome::Billed {
                     report.usage_rebilled += 1;
+                }
+                if if_stamped == BillOutcome::Unfoldable {
+                    // Reachable only through a retire racing the heal's own
+                    // read against this fold's read — `span.start` is always
+                    // a live RunStarted when the spans were collected.
+                    tracing::warn!(
+                        session = ?id,
+                        run_id = %span.run_id,
+                        "heal: synthesized stamp landed, but its spend cannot be folded \
+                         (its RunStarted was retired between the heal's read and the \
+                         fold's); not accumulated"
+                    );
                 }
             }
             Ok(StampOutcome::AlreadyStamped | StampOutcome::NoRowInRange) => {}
@@ -257,7 +289,7 @@ pub(crate) async fn synthesize_missing_stamps(
                     session = ?id,
                     run_id = %span.run_id,
                     error = %e,
-                    "heal: synthesized stamp failed"
+                    "heal: synthesized stamp-and-bill failed"
                 );
                 report.errored = true;
             }
@@ -267,4 +299,4 @@ pub(crate) async fn synthesize_missing_stamps(
 
 // Pulled in for the `synthesize_missing_stamps` body. Defined in the parent
 // module's body (after the split these stay in `session_projector.rs`).
-use super::super::{bill_run_from_fold, ProjectionCtx};
+use super::super::{fold_run_bill, BillOutcome, ProjectionCtx};
