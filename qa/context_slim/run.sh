@@ -116,17 +116,19 @@ arm() {
   MOCK_PID=$!
   sleep 1
 
-  # The seatbelt profile lets the `bash` tool exec only system binaries: with
-  # Homebrew first on PATH, `bash` resolves to /opt/homebrew/bin/bash and the
-  # tool exits 71 (`execvp … Operation not permitted`) before it prints a byte.
-  local sys_path="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+  # The server inherits this shell's PATH as-is. With Homebrew first, `bash`
+  # used to resolve to /opt/homebrew/bin/bash, which seatbelt cannot exec
+  # (exit 71); `utils::shell::locate_runnable` now resolves to a shell the
+  # sandbox can run. Do not reorder PATH here — that would hide the defect.
+  # The line below says whether this run exercises it (a non-system first bash).
+  say "[$name] first bash on PATH: $(command -v bash)"
   say "[$name] start server (proxy=$proxy)"
   if [ "$proxy" = "1" ]; then
     HTTP_PROXY="http://127.0.0.1:$MOCK_PORT" http_proxy="http://127.0.0.1:$MOCK_PORT" \
-      NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" PATH="$sys_path" \
+      NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
       "$BIN" start >"$dir/server.log" 2>&1 &
   else
-    PATH="$sys_path" "$BIN" start >"$dir/server.log" 2>&1 &
+    "$BIN" start >"$dir/server.log" 2>&1 &
   fi
   SERVER_PID=$!
   for _ in $(seq 1 90); do

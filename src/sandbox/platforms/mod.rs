@@ -11,6 +11,32 @@ pub mod windows;
 
 pub mod common;
 
+/// Directories this platform's OS sandbox lets a child execute programs from.
+///
+/// A program resolved outside them is one the sandbox cannot run: seatbelt
+/// refuses the exec (exit 71) or dyld refuses its libraries (exit 134); bwrap's
+/// workspace-only root is a tmpfs with only these trees bound in, so the path
+/// does not exist. `utils::shell` prefers candidates under these roots for that
+/// reason. Each arm returns the list its own driver builds the sandbox from,
+/// not a copy of it. Windows has no such list — its resolver walks its own
+/// ladder (`utils::shell::resolve`).
+#[cfg(not(windows))]
+#[must_use]
+pub fn exec_read_roots() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        macos::seatbelt::EXEC_READ_ROOTS
+    }
+    #[cfg(target_os = "linux")]
+    {
+        common::LINUX_PLATFORM_DEFAULT_READ_ROOTS
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        &[]
+    }
+}
+
 #[must_use]
 pub fn create_platform_driver_from_config(
     config: &crate::sandbox::config::SandboxConfig,

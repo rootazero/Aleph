@@ -152,6 +152,22 @@ const BASE_POLICY: &str = r#"(version 1)
 /// Read-only platform defaults — system trees, frameworks, mach-lookups
 /// to logd/trustd/etc., temp scratch space, terminal/device handles.
 ///
+/// The only trees a sandboxed child may execute a program from.
+///
+/// Executing a path needs `file-read-data` on it — and on every symlink along
+/// it, which is what made Homebrew's `/opt/homebrew/bin/bash` (a link into
+/// `../Cellar`) exit 71 at `execvp` — and dyld then needs its dylibs, which
+/// for Homebrew binaries live under further symlinked `/opt/homebrew/opt/*`
+/// prefixes. System binaries under these roots link only `/usr/lib` and the
+/// system frameworks, both granted in [`PLATFORM_DEFAULTS_POLICY`].
+///
+/// One list, two readers: [`SeatbeltDriver::generate_profile`] emits the grants
+/// from it, and `utils::shell` resolves the agent's shell and interpreters
+/// against it (via `sandbox::platforms::exec_read_roots`) so it never picks a
+/// program this profile cannot run.
+pub(crate) const EXEC_READ_ROOTS: &[&str] =
+    &["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec"];
+
 /// Ported verbatim (with light annotations) from codex's
 /// `restricted_read_only_platform_defaults.sbpl`. Without these rules,
 /// a closed-by-default profile rejects even dyld's mmap of frameworks,
@@ -324,17 +340,7 @@ const PLATFORM_DEFAULTS_POLICY: &str = r#"
 (allow mach-lookup (global-name "com.apple.audio.AudioComponentRegistrar"))
 (allow mach-lookup (global-name "com.apple.PowerManagement.control"))
 
-; Allow reading the minimum system runtime so exec works.
-(allow file-read-data (subpath "/bin"))
-(allow file-read-metadata (subpath "/bin"))
-(allow file-read-data (subpath "/sbin"))
-(allow file-read-metadata (subpath "/sbin"))
-(allow file-read-data (subpath "/usr/bin"))
-(allow file-read-metadata (subpath "/usr/bin"))
-(allow file-read-data (subpath "/usr/sbin"))
-(allow file-read-metadata (subpath "/usr/sbin"))
-(allow file-read-data (subpath "/usr/libexec"))
-(allow file-read-metadata (subpath "/usr/libexec"))
+; The minimum system runtime exec needs is emitted from `EXEC_READ_ROOTS`.
 
 (allow file-read* (subpath "/Library/Preferences"))
 (allow file-read* (subpath "/opt/homebrew/lib"))
@@ -531,6 +537,14 @@ impl SeatbeltDriver {
         // This is the slab that lets `/bin/echo` and friends actually run.
         profile.push_str(PLATFORM_DEFAULTS_POLICY);
         profile.push('\n');
+
+        // Allow reading the minimum system runtime so exec works.
+        for root in EXEC_READ_ROOTS {
+            profile.push_str(&format!(
+                "(allow file-read-data (subpath \"{root}\"))\n\
+                 (allow file-read-metadata (subpath \"{root}\"))\n"
+            ));
+        }
 
         // The per-user Mach TMPDIR (`/var/folders/<xx>/<yy>/T/`) is NOT under
         // the /tmp / /var/tmp scratch grants above — macOS hands every process

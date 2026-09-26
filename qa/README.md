@@ -1711,10 +1711,11 @@ widened a narrowly-scoped change into that question. Tracked in
     `stream.*` 照常到达而推理帧一个不到。
   - `ingress` — 一个单进程的大输出命令（`awk` 打 9 万行，中间埋一行 needle）：模型收到的 tool_result
     是 persist 标记 + footer、正文留在盘上、footer 点名的工具都在该请求的工具表里、之后的请求都不带正文、
-    `ctx_search` 从 persist 的原文里返回**段落正文**（needle 在内）。⚠️ 必须是**单进程**：macOS seatbelt
-    profile 禁 fork，复合命令（`a; b`）在打印前就 exit 71；且 server 的 PATH 要**系统目录在前**——
-    Homebrew 在前时 `bash` 解析到 `/opt/homebrew/bin/bash`，seatbelt 不许 exec 它（同样 exit 71）。
-    ⚠️ 后者是**既有缺陷，不是有意行为**：装置绕开它，不等于它是对的（已单独报给用户）。
+    `ctx_search` 从 persist 的原文里返回**段落正文**（needle 在内）。装置**不再重排 PATH**：server 继承
+    调用者的 PATH，每个 arm 打印 `first bash on PATH`——是 `/opt/homebrew/bin/bash` 时，这次运行同时证明
+    `bash` 工具在 Homebrew 在前时能跑（曾经每次 exit 71，修在 `utils::shell::locate_runnable`，见
+    [SANDBOX.md](../docs/reference/SANDBOX.md)）。曾记在这里的「seatbelt 禁 fork ⇒ 复合命令 exit 71」
+    是**同一个缺陷的误归因**：2026-09-26 把命令改成 `awk … | cat` 跑本阶段仍 PASS。
   - `breakdown` — 同一轮之后 `context.breakdown` 回 `messages.tool_results > 0`、`tool_output` 带
     `since_unix_ms` 并计到那次 Layer-2 offload。⚠️ **生成的默认配置没有 `[context_budget]`**，没有它
     run 不建 `ContextBudget`，`messages` 就恒缺——本阶段显式加 `enabled = true`，这是装置的选择，也是
