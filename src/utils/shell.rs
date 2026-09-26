@@ -418,11 +418,18 @@ pub fn resolve() -> &'static ResolvedShell {
         }
         #[cfg(not(windows))]
         {
-            locate_runnable(ShellKind::Bash.label(), std::env::var_os("PATH").as_deref())
-                .map(|program| ResolvedShell::new(ShellKind::Bash, program))
-                .unwrap_or_else(|| ResolvedShell::bare(ShellKind::Bash))
+            resolve_in(std::env::var_os("PATH").as_deref())
         }
     })
+}
+
+/// [`resolve`]'s Unix answer for an explicit `PATH`, uncached — the seam the
+/// live seatbelt test drives with a `PATH` it built.
+#[cfg(not(windows))]
+pub(crate) fn resolve_in(path_var: Option<&std::ffi::OsStr>) -> ResolvedShell {
+    locate_runnable(ShellKind::Bash.label(), path_var)
+        .map(|program| ResolvedShell::new(ShellKind::Bash, program))
+        .unwrap_or_else(|| ResolvedShell::bare(ShellKind::Bash))
 }
 
 /// A resolved interpreter: the program to spawn plus any args that must
@@ -466,21 +473,30 @@ pub fn python3() -> &'static ResolvedInterpreter {
                     }
                 }
             }
+            bare_python3()
         }
         #[cfg(not(windows))]
         {
-            if let Some(program) = locate_runnable("python3", std::env::var_os("PATH").as_deref()) {
-                return ResolvedInterpreter {
-                    program,
-                    leading: Vec::new(),
-                };
-            }
-        }
-        ResolvedInterpreter {
-            program: PathBuf::from("python3"),
-            leading: Vec::new(),
+            python3_in(std::env::var_os("PATH").as_deref())
         }
     })
+}
+
+/// [`python3`]'s Unix answer for an explicit `PATH`, uncached — the seam the
+/// live seatbelt test drives with a `PATH` it built.
+#[cfg(not(windows))]
+pub(crate) fn python3_in(path_var: Option<&std::ffi::OsStr>) -> ResolvedInterpreter {
+    locate_runnable("python3", path_var).map_or_else(bare_python3, |program| ResolvedInterpreter {
+        program,
+        leading: Vec::new(),
+    })
+}
+
+fn bare_python3() -> ResolvedInterpreter {
+    ResolvedInterpreter {
+        program: PathBuf::from("python3"),
+        leading: Vec::new(),
+    }
 }
 
 #[cfg(test)]

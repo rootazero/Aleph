@@ -149,10 +149,9 @@ const BASE_POLICY: &str = r#"(version 1)
 (allow user-preference-read)
 "#;
 
-/// Read-only platform defaults — system trees, frameworks, mach-lookups
-/// to logd/trustd/etc., temp scratch space, terminal/device handles.
-///
-/// The only trees a sandboxed child may execute a program from.
+/// System trees granted `file-read-data` so that a program under them can be
+/// exec'd, symlinks along its path included (its system dylibs are granted
+/// separately, in [`PLATFORM_DEFAULTS_POLICY`]).
 ///
 /// Executing a path needs `file-read-data` on it — and on every symlink along
 /// it, which is what made Homebrew's `/opt/homebrew/bin/bash` (a link into
@@ -163,11 +162,14 @@ const BASE_POLICY: &str = r#"(version 1)
 ///
 /// One list, two readers: [`SeatbeltDriver::generate_profile`] emits the grants
 /// from it, and `utils::shell` resolves the agent's shell and interpreters
-/// against it (via `sandbox::platforms::exec_read_roots`) so it never picks a
-/// program this profile cannot run.
+/// against it (via `sandbox::platforms::exec_read_roots`), preferring a program
+/// under these roots over one this profile cannot run.
 pub(crate) const EXEC_READ_ROOTS: &[&str] =
     &["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec"];
 
+/// Read-only platform defaults — system trees, frameworks, mach-lookups
+/// to logd/trustd/etc., temp scratch space, terminal/device handles.
+///
 /// Ported verbatim (with light annotations) from codex's
 /// `restricted_read_only_platform_defaults.sbpl`. Without these rules,
 /// a closed-by-default profile rejects even dyld's mmap of frameworks,
@@ -346,6 +348,10 @@ const PLATFORM_DEFAULTS_POLICY: &str = r#"
 (allow file-read* (subpath "/opt/homebrew/lib"))
 (allow file-read* (subpath "/usr/local/lib"))
 (allow file-read* (subpath "/Applications"))
+; The Command Line Tools developer dir: `/usr/bin/python3` and `/usr/bin/git`
+; are xcrun stubs that exec from the active developer dir. Xcode.app is under
+; /Applications above; on a CLT-only Mac the stubs exit 1 without this.
+(allow file-read* (subpath "/Library/Developer/CommandLineTools"))
 
 ; Terminal basics and device handles.
 (allow file-read* (regex "^/dev/fd/(0|1|2)$"))

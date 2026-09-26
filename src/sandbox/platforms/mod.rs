@@ -11,15 +11,17 @@ pub mod windows;
 
 pub mod common;
 
-/// Directories this platform's OS sandbox lets a child execute programs from.
+/// System directories this platform's OS sandbox grants for executing
+/// programs, so `utils::shell` can prefer candidates under them.
 ///
-/// A program resolved outside them is one the sandbox cannot run: seatbelt
-/// refuses the exec (exit 71) or dyld refuses its libraries (exit 134); bwrap's
-/// workspace-only root is a tmpfs with only these trees bound in, so the path
-/// does not exist. `utils::shell` prefers candidates under these roots for that
-/// reason. Each arm returns the list its own driver builds the sandbox from,
-/// not a copy of it. Windows has no such list — its resolver walks its own
-/// ladder (`utils::shell::resolve`).
+/// A program resolved elsewhere may be one the sandbox cannot run: seatbelt
+/// refuses the exec of a symlink it may not read (exit 71) or dyld refuses the
+/// libraries (exit 134). On Linux the list is what bwrap binds into a
+/// workspace-only sandbox when `include_platform_defaults` is on (the default);
+/// with it off nothing is bound and the list is merely a preference. Each arm
+/// returns the list its own driver builds the sandbox from, not a copy of it.
+/// Windows has no such list — its resolver walks its own ladder
+/// (`utils::shell::resolve`).
 #[cfg(not(windows))]
 #[must_use]
 pub fn exec_read_roots() -> &'static [&'static str] {

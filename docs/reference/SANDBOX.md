@@ -1239,41 +1239,23 @@ without a test going red. Both sides now carry the mirrored doc and a pin.
 
 ## The program a sandboxed tool spawns must be one the sandbox can run (2026-09-26)
 
-`code_exec` / `bash` / `code_check` spawn a program resolved once per process by
-`utils::shell` (`resolve()` for the shell, `python3()` for Python). On Unix that
-used to be first-on-`PATH`, which answers "what is installed", not "what can
-this sandbox execute". With Homebrew ahead of the system dirs on the server's
-`PATH`, every `bash` call exited **71** (`sandbox-exec: execvp() of
-'/opt/homebrew/bin/bash' failed: Operation not permitted`); a Homebrew or venv
-`python3` did the same. What seatbelt refuses (the exec-time read of the
-`/opt/homebrew/bin/*` symlink, then dyld's read of the formula dylibs) is
-measured in FEATURE_LOCATOR appendix D.3.39; clearing both needs read on
-essentially all of `/opt/homebrew`.
+**Decision.** The shell and `python3` that `code_exec` / `bash` / `code_check`
+spawn are resolved by `utils::shell::locate_runnable`: the first `PATH`
+candidate lying under `sandbox::platforms::exec_read_roots()` (the driver's own
+exec-root list) wins over first-on-`PATH`. The sandbox profile was not widened
+for Homebrew; it was widened by one read-only grant, the Command Line Tools
+developer dir (`/Library/Developer/CommandLineTools`, beside the existing
+`/Applications` grant), so the `/usr/bin/python3` and `/usr/bin/git` xcrun stubs
+run on CLT-only Macs.
 
-The fix is on the resolver, not the profile: `utils::shell::locate_runnable`
-takes the first candidate on `PATH` whose path **and** canonical path lie under
-`sandbox::platforms::exec_read_roots()`, trying those roots even when `PATH`
-lacks them, and falls back to first-on-`PATH` when nothing qualifies. The roots
-are the driver's own list — seatbelt's `EXEC_READ_ROOTS` (which now also
-generates the profile's exec grants) and bwrap's
-`LINUX_PLATFORM_DEFAULT_READ_ROOTS` — not a copy. Trade-off: the agent gets the
-system build (`/bin/bash` is 3.2 on macOS; no `declare -A`, `mapfile`,
-`${x,,}`), and the unsandboxed `WorktreeSandbox` path gets it too, because one
-process answers "which shell" once.
+**Trade-off.** The agent gets the system builds — `/bin/bash` is 3.2 on macOS
+(no `declare -A`, `mapfile`, `${x,,}`) — also on the unsandboxed
+`WorktreeSandbox` path, because one process answers "which shell" once.
+Homebrew tools named *inside* the shell stay unreachable under the
+workspace-only profile; granting the Homebrew prefix is a user decision.
 
-**Not fixed, by design:** programs the model names *inside* the shell. Homebrew
-tools on the child's `PATH` (`rg`, `jq`, `gh`, …) are not readable under the
-workspace-only profile, and bash reports them as `command not found` (it cannot
-stat them) rather than as denied. Making them runnable means granting read on
-the Homebrew prefix — a sandbox-scope decision, not a resolver fix.
-`code_exec{javascript}` spawns bare `node`, and macOS has no system node, so
-there is no runnable candidate to prefer.
-
-Pins: `utils::shell::runnable_tests` (the decision, plus the two cached answers
-against this host's real `PATH`) and `code_exec::seatbelt_live_tests` (macOS:
-a symlinked `bash` ahead on `PATH` exits 71 under the `bash` tool's real
-profile, the resolved one runs a compound command).
-
+Why (measured denials), what is not covered, and the pins: FEATURE_LOCATOR
+appendix D.3.39.
 
 ## References
 
