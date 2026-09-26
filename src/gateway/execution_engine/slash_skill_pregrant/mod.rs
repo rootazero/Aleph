@@ -40,9 +40,11 @@
 //!    with (the first thing [`split`] does is remove one).
 //!
 //! The pre-grant is folded into the turn's policy by
-//! `turn_permissions::apply_pregrant`, which keeps explicit entries, a
-//! non-`allow` default, the `Plan` floor, a tool's own
-//! `requires_confirmation` and the gate-removal floor in force.
+//! `turn_permissions::apply_pregrant`. It lifts the tier's NAME-level `Ask`
+//! and nothing else: explicit entries, a non-`allow` default, the `Plan`
+//! floor, a tool's own `requires_confirmation`, the gate-removal floor and
+//! the argument-level cards (the folded entries carry their provenance,
+//! `TurnToolPolicy`) all stay in force.
 
 use serde_json::Value;
 use tracing::info;

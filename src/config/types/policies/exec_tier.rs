@@ -406,9 +406,12 @@ impl ExecTier {
     ///
     /// The caller today is a skill's `allowed-tools:` pre-grant
     /// (`gateway::execution_engine::turn_permissions::apply_pregrant`): it
-    /// folds exact `allow` entries into a turn's policy, and an exact entry is
-    /// what stands this floor down — but a skill author's list is not a
-    /// decision the operator wrote about this tool.
+    /// folds exact `allow` entries into a turn's policy, and never one for a
+    /// tool this floor covers — a skill author's list is not a decision the
+    /// operator wrote about the tool that retires the gates. (The folded
+    /// entries also carry their provenance, so the tool gate would not read
+    /// one as that decision either; this keeps even the name-level lift off
+    /// `self_config`.)
     #[must_use]
     pub fn has_argument_floor(name: &str) -> bool {
         name == "self_config"

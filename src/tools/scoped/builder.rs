@@ -44,6 +44,7 @@ impl ScopedToolService {
             deferred: super::DeferredTools::empty(),
             last_deferred_generation: std::sync::atomic::AtomicU64::new(0),
             tool_permissions: None,
+            pregranted: BTreeSet::new(),
             exec_tier: None,
             unattended: false,
         }
@@ -60,6 +61,16 @@ impl ScopedToolService {
         permissions: crate::config::types::policies::ToolPermissionsConfig,
     ) -> Self {
         self.tool_permissions = Some(permissions);
+        self
+    }
+
+    /// Mark which exact `allow` entries of [`Self::with_tool_permissions`]'s
+    /// policy are a `/<skill>`'s pre-grant rather than a person's decision —
+    /// see [`Self::pregranted`]. The names are the ones
+    /// `turn_permissions::apply_pregrant` folded into that same policy.
+    #[must_use]
+    pub fn with_pregranted(mut self, names: BTreeSet<String>) -> Self {
+        self.pregranted = names;
         self
     }
 
@@ -353,10 +364,15 @@ impl ScopedToolService {
     /// The glob-resolving lookup is still what decides allow/ask/deny for the
     /// tool itself ([`Self::permission_for`]); only this one question is
     /// exact.
+    ///
+    /// A `/<skill>`'s pre-grant is an exact entry nobody here wrote — the
+    /// skill's author did ([`Self::pregranted`]) — so, like a glob, it lifts
+    /// the name-level `Ask` and leaves the argument-level cards standing.
     fn explicitly_named(&self, name: &str) -> bool {
         self.tool_permissions
             .as_ref()
             .is_some_and(|p| p.overrides.contains_key(name))
+            && !self.pregranted.contains(name)
     }
 
     /// The tool's DECLARED facts, as the tier rules consume them. An unknown
@@ -386,15 +402,28 @@ impl ScopedToolService {
     /// filter included — only speaks when nobody did. "Explicitly" is literal
     /// (see [`Self::explicitly_named`]); a glob is a blanket preference, not a
     /// decision about this tool.
+    ///
+    /// For a pre-granted tool ([`Self::pregranted`]) the argument rules are
+    /// at least `Auto`'s: `ask` covers `file_ops delete` and its kin with the
+    /// name-level `Ask` the pre-grant just lifted, so without this the
+    /// stricter tier would leave the destructive call uncarded while `auto`
+    /// cards it.
     pub(super) fn tier_asks_for_arguments(&self, name: &str, input: &Value) -> bool {
+        use crate::config::types::policies::ExecTier;
         if self.explicitly_named(name) {
             return false;
         }
         if self.gate_removal_floor(name, input) {
             return true;
         }
-        self.exec_tier
-            .is_some_and(|tier| tier.asks_for_arguments(name, input))
+        self.exec_tier.is_some_and(|tier| {
+            let tier = if tier == ExecTier::Ask && self.pregranted.contains(name) {
+                ExecTier::Auto
+            } else {
+                tier
+            };
+            tier.asks_for_arguments(name, input)
+        })
     }
 
     /// `true` when this call trips the argument-level rule **no tier stands

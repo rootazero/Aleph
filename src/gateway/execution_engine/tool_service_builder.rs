@@ -130,8 +130,10 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   `ctx_search` relies on that equality to find what this service offloaded.
 /// * `tool_permissions` — merged EXPLICIT tool permission policy for this turn
 ///   (global `[policies.tool_permissions]` → agent override → channel
-///   override, most restrictive wins). `None` = all-default policy; pass
-///   `None` rather than a default config so the hot path stays a no-op.
+///   override, most restrictive wins, plus a `/<skill>`'s pre-granted
+///   `allow` entries and their provenance — `TurnPermissions::explicit`, as
+///   one value). `None` = all-default policy; pass `None` rather than a
+///   default config so the hot path stays a no-op.
 /// * `exec_tier` — effective execution tier (global → session → channel clamp).
 ///   Decides every tool the explicit policy above does not name, from the
 ///   tool's declared metadata.
@@ -157,7 +159,7 @@ pub fn build_request_tool_service(
     turn_context: Option<crate::tools::turn_context::TurnContext>,
     hook_executor: Option<Arc<HookExecutor>>,
     session_id: impl Into<String>,
-    tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    tool_permissions: Option<super::turn_permissions::TurnToolPolicy>,
     exec_tier: crate::config::types::policies::ExecTier,
     unattended: bool,
     core_tools: &[String],
@@ -170,8 +172,10 @@ pub fn build_request_tool_service(
     if let Some(st) = subagent_tool {
         svc = svc.with_subagent_tool(st);
     }
-    if let Some(perms) = tool_permissions {
-        svc = svc.with_tool_permissions(perms);
+    if let Some(explicit) = tool_permissions {
+        svc = svc
+            .with_tool_permissions(explicit.policy)
+            .with_pregranted(explicit.pregranted);
     }
     if let Some(health) = tool_health {
         svc = svc.with_health(health);

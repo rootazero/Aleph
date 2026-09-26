@@ -132,6 +132,13 @@ pub struct ScopedToolService {
     /// `confirm_tools`. `None` = no policy configured (allow-all default,
     /// byte-identical to pre-wiring behavior).
     pub(super) tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    /// The names whose exact `allow` entry in [`Self::tool_permissions`] is a
+    /// `/<skill>`'s `allowed-tools:` pre-grant rather than an entry a person
+    /// wrote. The entry lifts the tier's name-level `Ask` like any other; it
+    /// does NOT count as the operator's decision about the tool
+    /// ([`Self::explicitly_named`]), so the argument-level cards stay. Empty
+    /// on every turn that is not a skill's.
+    pub(super) pregranted: BTreeSet<String>,
     /// Effective execution tier for this turn (global → session → channel
     /// clamp, resolved by the run loop). Consulted by `permission_for` only
     /// for tools no explicit override names, and it reads the tool's DECLARED

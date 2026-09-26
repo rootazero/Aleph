@@ -38,8 +38,9 @@ const SKILL: &str = "p411-probe";
 const AGENT: &str = "p411-agent";
 const PLUGIN: &str = "p411-plug";
 /// The tools the gate below holds. The first three are mutating, so the
-/// `ask` tier cards each of them unless something lifts it.
-const TOOLS: [&str; 4] = ["bash", "file_write", "file_edit", "self_config"];
+/// `ask` tier cards each of them unless something lifts it; `self_config`
+/// and `file_ops` carry argument-level rules.
+const TOOLS: [&str; 5] = ["bash", "file_write", "file_edit", "self_config", "file_ops"];
 
 /// A leaf that always succeeds: reaching it means every gate let the call by.
 struct Stub(&'static str);
@@ -627,6 +628,56 @@ async fn the_floors_hold_under_a_pregrant() {
     assert!(
         !t.runs("file_write").await,
         "plan's floor lost to the pre-grant"
+    );
+}
+
+/// A pre-grant lifts the NAME-level `Ask` only. Its entry is not a decision
+/// a person wrote, so the tool gate must not read it as one: the
+/// argument-level cards stay. A pre-granted `file_ops` lists without a card
+/// and still cards a destructive `delete` — under `auto`, and under `ask`,
+/// where the name-level `Ask` the pre-grant lifted was what covered it. The
+/// control is the same call under an operator's own exact `allow`, which is a
+/// person's decision and does stand the card down.
+#[tokio::test]
+async fn a_pregranted_tool_keeps_its_argument_cards() {
+    let w = World::new().await;
+    write_skill(&w.user, SKILL, "[file_ops]");
+    w.scan(std::slice::from_ref(&w.user)).await;
+    let list = json!({ "operation": "list", "path": "." });
+    let delete = json!({ "operation": "delete", "path": "gone.txt" });
+    let at = |tier: ExecTier, mut request: RunRequest| {
+        request
+            .metadata
+            .insert(EXEC_TIER_SESSION_KEY.to_string(), tier.id().to_string());
+        request
+    };
+
+    for tier in [ExecTier::Auto, ExecTier::Ask] {
+        let t = w
+            .turn(&engine(None), at(tier, w.skill_request(None).await))
+            .await;
+        assert_eq!(t.pregrant(), names(&["file_ops"]), "{tier:?}");
+        assert!(
+            t.runs_with("file_ops", list.clone()).await,
+            "{tier:?}: the name-level lift is gone"
+        );
+        assert!(
+            !t.runs_with("file_ops", delete.clone()).await,
+            "{tier:?}: a pre-granted destructive file_ops ran without its argument card"
+        );
+    }
+
+    let t = w
+        .turn(
+            &engine(Some(
+                r#"{"default":"allow","overrides":{"file_ops":"allow"}}"#,
+            )),
+            at(ExecTier::Auto, w.skill_request(None).await),
+        )
+        .await;
+    assert!(
+        t.runs_with("file_ops", delete).await,
+        "control: an operator's own exact allow stands the argument card down"
     );
 }
 

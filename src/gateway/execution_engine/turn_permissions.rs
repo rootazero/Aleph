@@ -30,7 +30,7 @@ pub(super) struct TurnPermissions {
     pub(super) tier: ExecTier,
     /// The merged EXPLICIT policy, or `None` when everything is all-default
     /// (so the `ScopedToolService` hot path stays a no-op).
-    pub(super) explicit: Option<ToolPermissionsConfig>,
+    pub(super) explicit: Option<TurnToolPolicy>,
     /// The plan → build handoff cell — `Some` when `tier` is
     /// [`ExecTier::Plan`] **and this is not a `/btw` side question**. Rides the
     /// turn context into both tool services the run builds, so one human
@@ -112,11 +112,31 @@ impl TurnPermissions {
     /// denies whatever the policy says.
     pub(super) fn builtin_permission(&self, name: &str) -> crate::extension::PermissionAction {
         crate::config::types::policies::effective_permission(
-            self.explicit.as_ref(),
+            self.explicit.as_ref().map(|explicit| &explicit.policy),
             Some(self.tier),
             builtin_tool_facts(name),
         )
     }
+}
+
+/// A turn's merged explicit policy together with the provenance of its
+/// entries: which exact `allow` entries a `/<skill>`'s `allowed-tools:`
+/// pre-granted ([`apply_pregrant`]) rather than a person wrote.
+///
+/// One value, not two fields, because the two halves must never travel
+/// apart: the entry lifts the tier's name-level `Ask` wherever the policy is
+/// read, and the provenance is what keeps the tool gate from reading that same
+/// entry as the operator's decision about the tool
+/// (`ScopedToolService::explicitly_named`), which would stand down its
+/// argument-level cards. A policy handed on without its provenance would do
+/// exactly that.
+#[derive(Debug, Clone)]
+pub(crate) struct TurnToolPolicy {
+    /// Global, agent and channel layers merged, most restrictive wins, with
+    /// the pre-granted `allow` entries folded in.
+    pub(crate) policy: ToolPermissionsConfig,
+    /// The names [`apply_pregrant`] folded into [`Self::policy`].
+    pub(crate) pregranted: std::collections::BTreeSet<String>,
 }
 
 /// The facts the tier reads for a builtin or plugin tool known by name — the
@@ -136,24 +156,26 @@ pub(super) fn builtin_tool_facts(name: &str) -> crate::config::types::policies::
 /// Fold a `/<skill>` turn's pre-granted names into the merged explicit
 /// policy as exact-name `Allow` entries, and return the names folded.
 ///
-/// What this lifts is the TIER's `Ask` for those names and nothing else —
-/// Claude Code's "your permission settings still govern tools that are not
-/// listed", and govern the listed ones wherever they say something:
+/// What this lifts is the tier's NAME-level `Ask` for those names and nothing
+/// else — Claude Code's "your permission settings still govern tools that
+/// are not listed", and govern the listed ones wherever they say something:
 ///
 /// - an explicit entry (exact or glob) that already binds the name wins, so
 ///   an operator's or a channel's `deny` / `ask` stands;
 /// - a policy whose `default` is not `allow` gets nothing: an exact `allow`
 ///   would outrank that default, and the operator's default is not the tier;
 /// - a tool the gate-removal floor covers
-///   ([`ExecTier::has_argument_floor`]) gets nothing: an exact entry stands
-///   that floor down, and a skill author's list is not the operator's
-///   decision about the tool;
+///   ([`ExecTier::has_argument_floor`]) gets nothing, not even the
+///   name-level lift: a skill author's list is not the operator's decision
+///   about the tool that retires the gates;
 /// - the `Plan` floor (`effective_permission` rung 0) and a tool's own
 ///   `requires_confirmation` gate are read independently of any entry.
 ///
-/// An exact entry also stands down the `Auto` tier's argument-level asks
-/// (`ScopedToolService::tier_asks_for_arguments`) for that tool — the same
-/// thing an `Ask` tier's name-level lift already covers.
+/// The argument-level cards stay: the returned names ride with the policy
+/// ([`TurnToolPolicy::pregranted`]) so the tool gate does not read a folded
+/// entry as the operator's decision about the tool
+/// (`ScopedToolService::explicitly_named`) — a skill's author wrote it, not a
+/// person at this install.
 pub(super) fn apply_pregrant(
     merged: &mut ToolPermissionsConfig,
     pregrant: &[String],
@@ -393,6 +415,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // command's inline shell all read — after every layer that may
         // restrict it.
         let pregrant = super::slash_skill_scope::pregrant_from_metadata(&request.metadata);
+        let mut pregranted = std::collections::BTreeSet::new();
         if !pregrant.is_empty() {
             let folded = apply_pregrant(&mut merged, &pregrant);
             info!(
@@ -401,6 +424,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 folded = ?folded,
                 "Skill allowed-tools pre-granted for this turn"
             );
+            pregranted.extend(folded);
         }
         let is_all_default = merged.default == crate::extension::PermissionAction::Allow
             && merged.overrides.is_empty();
@@ -477,7 +501,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         );
         TurnPermissions {
             tier,
-            explicit: (!is_all_default).then_some(merged),
+            explicit: (!is_all_default).then_some(TurnToolPolicy {
+                policy: merged,
+                pregranted,
+            }),
             plan_gate,
             side_question,
         }

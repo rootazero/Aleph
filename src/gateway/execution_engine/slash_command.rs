@@ -581,7 +581,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // above), so the name-keyed facts are the tier's real input, not a
         // fail-closed stand-in that would make every command fall through.
         let facts = super::turn_permissions::builtin_tool_facts(name);
-        let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
+        let permission = effective_permission(
+            tool_permissions.as_ref().map(|explicit| &explicit.policy),
+            Some(exec_tier),
+            facts,
+        );
 
         if permission != PermissionAction::Allow {
             return Err(format!(
