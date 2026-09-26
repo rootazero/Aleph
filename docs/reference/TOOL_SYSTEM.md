@@ -657,7 +657,9 @@ FEATURE_LOCATOR §3.14「已定位·未做」）。
 |---|---|---|
 | Per result (Layer 2) | `tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS`, or a tool's `AlephTool::MAX_RESULT_TOKENS` | One result. Over it, the original is offloaded (persisted + indexed) and the model gets the recovery footer. **No builtin declares `MAX_RESULT_TOKENS`** — a larger budget belongs only on output that *is* the window the model chose; a merely large result (a build log, a page) is better offloaded and searched. The registry census `result_budgets_come_from_declarations_and_default_everywhere` pins it. |
 | Per turn (Layer 3) | `tools::turn_budget::DEFAULT_MAX_TURN_TOKENS` | All results of one Think→Act turn. Past it, `TurnResultBudget::record` spills **the result it was just handed** (the only one still rewritable). |
-| Read window | `result_processing::read_backstop_tokens()` (= `MAX_RESULT_BUDGET_TOKENS` clamped by the window ceiling) | The read family (`result_processing::is_read_family`: `read_file` / `Read` / `file_read`). **Never offloaded, at either layer**: Layer 2 resolves no budget for it, Layer 3 counts its tokens but never spills it — an offloaded read hands back a marker to read again. |
+| Read window | `result_processing::read_backstop_tokens()` (= `MAX_RESULT_BUDGET_TOKENS` clamped by the window ceiling) | The read family (`result_processing::is_read_family`: the builtin `file_read`). **Not offloaded at Layer 2** — it resolves no budget there and is truncated at the read window instead, because an offloaded read hands back a marker to read again. **Layer 3 does not exempt it**: the per-turn budget is the only per-turn bound on reads, and a spilled read is persisted and indexed (a re-read, not a loss). |
+
+Neither layer swaps a result for a marker at least as large as the result — measured on that call's own marker (`ToolResultStore::marker_for`). 两层都不把结果换成不比它小的 marker。
 
 Small-window models: boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
 `MAX_RESULT_BUDGET_TOKENS` / `DEFAULT_MAX_TURN_TOKENS`); the per-result ceiling caps **every** per-result budget,
@@ -673,20 +675,29 @@ call**. Who knows that set:
 
 | Writer | Where the `RecoveryTools` come from |
 |---|---|
-| Dispatcher, Layer 2 (`scoped/dispatch.rs::apply_layer_two`) | `ScopedToolService::recovery_tools()` — registered + allowed + not hidden |
+| Dispatcher, Layer 2 (`scoped/dispatch.rs::apply_layer_two`) | `ScopedToolService::recovery_tools()` — registered + allowed + not hidden — intersected with any outer scope (`dispatch_recovery_tools()`) |
 | Harness Layer-3 spill | `ToolService::recovery_tools()` — decorators forward it; `AllowlistToolService` narrows it to the agent's allow set |
-| A tool offloading its own output (browser offload, `web_fetch` fetch by intent) | `result_processing::dispatch_recovery_tools()` — a task-local the dispatcher scopes around the tool's execution (`with_recovery_tools`); `RecoveryTools::ALL` only outside a dispatch, where nothing about the gates is known |
+| A tool offloading its own output (browser offload, `web_fetch` fetch by intent) | `result_processing::dispatch_recovery_tools()` — a task-local scoped around the tool's execution by the dispatcher and by `AllowlistToolService` (`with_recovery_tools`, which intersects with an outer scope: an inner dispatcher cannot widen a wrapper's narrowing); `RecoveryTools::ALL` only outside a dispatch, where nothing about the gates is known |
 
 A fenced source (external content) gets no "First sections:" preview in its footer — the preview would be untrusted
 text outside the fence. `ctx_search` returns whole sections, each scrubbed and fenced on its own
 (`ContentSource::OffloadedToolOutput { tool }`), fitted to its budget by measurement.
 
-**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs::sections_for_prompt`) — `web_fetch` with a
-`prompt` on a page longer than the tool's `max_content_length`: the page is extracted whole (bounded by
-`WebFetchTool::INTENT_EXTRACT_MAX_CHARS`), offloaded and indexed through `recovery_footer_for` into the same store
-`ctx_search` reads, BM25-searched with the prompt, filtered to this page's own sections, and returned in page order
-within `max_content_length`, fenced, followed by the footer. No match → the page head, and the note says so. Pure
-retrieval (R7), no second index; prompted fetches bypass the URL cache (it holds capped pages).
+**`web_fetch` sizing · 定尺** — the content cap is derived from the budget Layer 2 will hold the result to
+(`chars_for_result_token_budget(resolve_result_budget(web_fetch, …))`); the policy's `max_content_length` can only
+lower it. `fit_to_budget` measures the whole result the way Layer 2 does (flattened JSON: fence, URL, title, focus
+marker) and shrinks the cap until it fits, so the result arrives inline instead of being offloaded again.
+
+**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
+longer than that cap: the page is extracted whole (bounded by `WebFetchTool::INTENT_EXTRACT_MAX_CHARS`);
+`index_page` offloads and indexes it **once** through `recovery_footer_for` into the same store `ctx_search`
+reads; `sections_for_prompt` BM25-searches **this page's own sections** with the prompt
+(`ContentIndex::search_source` — the source restriction is in the query, not a filter over the session's pooled top
+hits) and returns them in page order within the cap, fenced, followed by the footer; refitting re-selects
+sections only. No match → the page head, and the note says so. Layer 2 recognises a result carrying the marker of
+its own call's blob (as written or JSON-escaped) and never persists it again — the blob is named by the call id,
+so a second write would replace the page with the sections result. Pure retrieval (R7), no second index; prompted
+fetches bypass the URL cache (it holds capped pages).
 
 Why and how this round changed them → [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md).
 
