@@ -145,20 +145,16 @@ mod tests {
     fn every_aleph_target_is_a_real_tool_name() {
         // The table is hand-written; the registry is not. Every right-hand
         // side must be a name the executor can dispatch, or the alias maps a
-        // CC hook onto nothing while looking like it works.
-        // `BuiltinToolDefinition.name` is `&'static str`; `subagent` and
-        // `tool_search` are the two dispatchable names that live outside that
-        // catalog (`SUBAGENT_TOOL_NAME`, `ToolSearchTool::NAME`).
-        let known: std::collections::HashSet<&str> = crate::executor::BUILTIN_TOOL_DEFINITIONS
-            .iter()
-            .map(|d| d.name)
-            .chain([
-                crate::agents::subagent_tool::SUBAGENT_TOOL_NAME,
-                crate::tools::tool_search::ToolSearchTool::NAME,
-            ])
-            .collect();
+        // CC hook onto nothing while looking like it works. "Real" is the one
+        // predicate slash-row registration also reads
+        // (`executor::is_builtin_tool_name`: the definitions plus
+        // `TOOLS_OUTSIDE_DEFINITIONS`), so a target this guard accepts is one
+        // registration keeps.
         for (cc, aleph) in CC_TOOL_ALIASES {
-            assert!(known.contains(aleph), "{cc} -> {aleph}: no such Aleph tool");
+            assert!(
+                crate::executor::is_builtin_tool_name(aleph),
+                "{cc} -> {aleph}: no such Aleph tool"
+            );
         }
     }
 

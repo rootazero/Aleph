@@ -225,8 +225,10 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// (`tool_metadata::registry::registration`). The skill keeps its slash
 /// command; only a plugin command's list is refused over an unknown name.
 ///
-/// Returns `None` when the key is absent or null (no declaration → allow-all),
-/// and `Some(names)` otherwise, possibly empty (explicit deny-all).
+/// Returns `None` when the key is absent or null (no declaration), and
+/// `Some(names)` otherwise, possibly empty. For a skill both pre-grant nothing;
+/// the two are kept apart because the same shapes on a plugin command mean
+/// allow-all and deny-all.
 ///
 /// A shape that is neither a sequence nor a scalar (a mapping, say) warns and
 /// resolves to `None`. That is the one fail-open in this chain and it is
@@ -238,9 +240,11 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// # Deny-all has exactly one spelling, and it is a sequence
 ///
 /// A **sequence** that comes out empty — `allowed-tools: []` — is a
-/// declaration: `Some(vec![])`, which
-/// [`crate::gateway::execution_engine::slash_skill_scope`] enforces as
-/// deny-all, so the slash command can call zero tools.
+/// declaration: `Some(vec![])`. On a plugin command
+/// [`crate::gateway::execution_engine::slash_skill_scope`] enforces it as
+/// deny-all, so the slash command can call zero tools; on a skill it
+/// pre-grants nothing (and restricts only on the stale-row arm
+/// `slash_skill_pregrant::split` describes).
 ///
 /// A **scalar** that names no tool is not. `allowed-tools: ,` /
 /// `allowed-tools: ""` / `allowed-tools: "   "` warn and resolve to `None`,

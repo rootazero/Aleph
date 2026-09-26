@@ -174,6 +174,7 @@ mod tests {
             ("same", "Read, Grep, Bash(git status:*), NotebookEdit"),
             ("nothing", "NotebookEdit"),
             ("unknown", "Read, Frobnicate"),
+            ("delegate", "Task"),
         ] {
             std::fs::write(
                 commands.join(format!("{name}.md")),
@@ -191,7 +192,7 @@ mod tests {
                 })
                 .collect();
         let infos = plugin_command_skill_infos(&regs);
-        assert_eq!(infos.len(), 3, "precondition: {infos:?}");
+        assert_eq!(infos.len(), 4, "precondition: {infos:?}");
 
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
@@ -228,6 +229,11 @@ mod tests {
         );
         assert_eq!(row("plug:nothing"), names(&[]), "deny-all");
         assert_eq!(row("plug:unknown"), None, "an unknown name refuses it");
+        assert_eq!(
+            row("plug:delegate"),
+            names(&["subagent"]),
+            "`Task` is the real `subagent` tool: the command restricts to it"
+        );
         assert_eq!(
             row("same-skill"),
             names(&["file_read", "grep"]),

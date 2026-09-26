@@ -412,8 +412,12 @@ impl ToolRegistrar {
     /// naming the skill and the entry. The skill still registers: a skill's
     /// list only grants, so a dropped entry costs the author that grant and
     /// nothing else. `None` — declared nothing; `Some(vec![])` — declared, and
-    /// nothing survived: nothing is pre-granted (never a deny-all — only a
-    /// plugin command's list narrows the surface).
+    /// nothing survived: nothing is pre-granted. Only a plugin command's list
+    /// narrows the surface — with one exception on the turn side: a skill row
+    /// whose manifest is gone by the time `/<skill>` is typed (removed or
+    /// renamed since boot) is not recognised as a skill, and its list
+    /// restricts that turn like a command's (`slash_skill_pregrant::split`),
+    /// so an all-dropped list there leaves no tools.
     async fn resolve_skill_pregrant_scope(
         skill_id: &str,
         declared: Option<&[String]>,
@@ -438,7 +442,8 @@ impl ToolRegistrar {
                     skill = %skill_id,
                     entry = %entry,
                     tool = %tool,
-                    "skill `allowed-tools:` entry names no Aleph tool; dropped — the skill \
+                    "skill `allowed-tools:` entry names no tool Aleph knows when skills \
+                     register (plugin and MCP tools register later); dropped — the skill \
                      still registers"
                 );
                 continue;
@@ -453,9 +458,12 @@ impl ToolRegistrar {
     /// Whether `name` is a tool the run loop can offer.
     ///
     /// Three sources are unioned:
-    /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
-    ///   static list, and the same one the `ExecutionEngine` seeds its tool
-    ///   list from. Consulting it means this answer does not depend on how
+    /// * [`crate::executor::is_builtin_tool_name`] — the executor's own static
+    ///   list (the same one the `ExecutionEngine` seeds its tool list from)
+    ///   plus [`crate::executor::TOOLS_OUTSIDE_DEFINITIONS`], the real tools
+    ///   no catalog row names (`subagent`, `tool_search`). It is the predicate
+    ///   the Claude Code alias table's guard reads, so every alias target is a
+    ///   name kept here. Consulting it means this answer does not depend on how
     ///   much of the catalog happens to be populated when rows register. A
     ///   guard whose known-set is "whatever registered first" starts rejecting
     ///   valid rows the day boot order changes, and a guard that rejects
@@ -484,10 +492,7 @@ impl ToolRegistrar {
         conflict_resolver: &ConflictResolver,
         admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> bool {
-        if crate::executor::BUILTIN_TOOL_DEFINITIONS
-            .iter()
-            .any(|def| def.name == name)
-        {
+        if crate::executor::is_builtin_tool_name(name) {
             return true;
         }
         if conflict_resolver

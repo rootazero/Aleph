@@ -165,7 +165,9 @@ pub struct UnifiedTool {
     /// declares nothing, so the run keeps the agent's full tool surface;
     /// `Some(vec![])` = an explicit deny-all. For a skill it is what a typed
     /// `/<skill>` may pre-grant — Claude Code names mapped, what grants
-    /// nothing dropped — and never narrows anything. The `Option` is not decoration:
+    /// nothing dropped — and narrows nothing, except on the stale-row arm: a
+    /// skill row whose manifest is gone by the turn restricts like a command's
+    /// (`slash_skill_pregrant::split`). The `Option` is not decoration:
     /// it is the only thing that keeps "deny everything" distinguishable from
     /// "said nothing" by the time the value reaches `ScopedToolService`, which
     /// reads an empty allow-set as allow-all.

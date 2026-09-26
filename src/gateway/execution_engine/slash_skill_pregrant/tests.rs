@@ -470,6 +470,74 @@ async fn a_claude_code_skill_pregrants_its_mapped_names() {
     );
 }
 
+/// The gate over stubs named like the two real tools no catalog row names
+/// (`executor::TOOLS_OUTSIDE_DEFINITIONS`) plus `bash`, each held only when
+/// the turn's restriction admits it.
+fn outside_stubs(registry: &mut LoopToolRegistry, admits: &dyn Fn(&str) -> bool) {
+    for name in ["subagent", "tool_search", "bash"] {
+        if admits(name) {
+            registry.register(Box::new(Stub(name)));
+        }
+    }
+}
+
+/// `Task` / `Agent` map to `subagent`, `ToolSearch` to `tool_search`: real
+/// tools, though no catalog row names them when skills register. An
+/// operator's typed `/skill` pre-grants both, and `subagent` — which the
+/// `ask` tier cards by that name (it is not idempotent) — runs uncarded. The
+/// control skill that does not declare it leaves `subagent` carded.
+#[tokio::test]
+async fn a_claude_code_skill_pregrants_subagent_and_it_runs_uncarded() {
+    for (allowed, granted) in [("Task, ToolSearch", true), ("[grep]", false)] {
+        let w = World::new().await;
+        write_skill(&w.user, SKILL, allowed);
+        w.scan(std::slice::from_ref(&w.user)).await;
+        let t = w.turn(&engine(None), w.skill_request(None).await).await;
+        let gate = gate(
+            &t.request,
+            &t.permissions,
+            t.permissions.explicit.clone(),
+            outside_stubs,
+        );
+        if granted {
+            assert_eq!(t.pregrant(), names(&["subagent", "tool_search"]));
+        }
+        assert_eq!(
+            runs_with(&gate, "subagent", json!({})).await,
+            granted,
+            "{allowed}: subagent ran uncarded = {}",
+            !granted
+        );
+        assert!(!runs_with(&gate, "bash", json!({})).await, "{allowed}");
+    }
+}
+
+/// A plugin command naming `subagent` (Claude Code's `Task`) registers and
+/// restricts its turn to exactly that name.
+#[tokio::test]
+async fn a_command_restricted_to_subagent_lists_only_subagent() {
+    let w = World::new().await;
+    w.register_command("delegate", &["subagent"]).await;
+    let request = w
+        .request(&format!("/{PLUGIN}:delegate go"), None, Stamp::Handler, &[])
+        .await;
+    let t = w.turn(&engine(None), request).await;
+    assert_eq!(
+        t.restriction(),
+        Some(BTreeSet::from(["subagent".to_string()]))
+    );
+    assert!(t.pregrant().is_empty());
+    let gate = gate(
+        &t.request,
+        &t.permissions,
+        t.permissions.explicit.clone(),
+        outside_stubs,
+    );
+    let mut listed: Vec<String> = gate.list().await.into_iter().map(|d| d.name).collect();
+    listed.sort();
+    assert_eq!(listed, names(&["subagent"]));
+}
+
 /// A global plugin's skill pre-grants from either `Global` plugin parent —
 /// Aleph's `<config>/plugins` or Claude Code's `~/.claude/plugins` cache.
 /// The same skill does not under a project-scoped plugin, nor under a

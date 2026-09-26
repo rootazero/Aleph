@@ -798,6 +798,61 @@ mod wire_tests {
         );
     }
 
+    /// `subagent` and `tool_search` are real tools that no catalog row names
+    /// when slash rows register (`executor::TOOLS_OUTSIDE_DEFINITIONS`).
+    /// Claude Code's `Task` / `Agent` / `ToolSearch` map to them, so a skill
+    /// keeps them, and a plugin command naming them registers restricted to
+    /// them instead of being refused.
+    #[tokio::test]
+    async fn the_tools_outside_the_definitions_are_real_for_both_kinds() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        let row = |id: &str, plugin: Option<&str>, allowed: &[&str]| SkillInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "names tools outside the definitions".to_string(),
+            scope: crate::domain::skill::PromptScope::System,
+            version: None,
+            allowed_tools: Some(allowed.iter().map(|s| (*s).to_string()).collect()),
+            argument_hint: None,
+            plugin_id: plugin.map(str::to_string),
+        };
+        catalog
+            .register_skills(&[row(
+                "delegator",
+                None,
+                &["Task", "Agent", "ToolSearch", "Read"],
+            )])
+            .await;
+        assert_eq!(
+            row_list(&catalog, "delegator").await,
+            Some(vec![
+                "subagent".to_string(),
+                "tool_search".to_string(),
+                "file_read".to_string()
+            ])
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(
+                &[
+                    row("plug:sub", Some("plug"), &["subagent"]),
+                    row("plug:ts", Some("plug"), &["tool_search"]),
+                ],
+                &|_| false,
+            )
+            .await;
+        assert!(rejected.is_empty(), "refused: {rejected:?}");
+        assert_eq!(
+            row_list(&catalog, "plug:sub").await,
+            Some(vec!["subagent".to_string()])
+        );
+        assert_eq!(
+            row_list(&catalog, "plug:ts").await,
+            Some(vec!["tool_search".to_string()])
+        );
+    }
+
     /// Nothing survives ⇒ the skill still registers, with an empty validated
     /// list — nothing to pre-grant, not a lost skill.
     #[tokio::test]
