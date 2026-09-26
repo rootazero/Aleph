@@ -40,6 +40,18 @@ use serde::{Deserialize, Serialize};
 /// File name under `<data_dir>`; the twin is `skills.toml`.
 pub const PLUGINS_CONFIG_FILE: &str = "plugins.toml";
 
+/// Whether a plugin loads, and why not — [`PluginsConfig::activation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// An explicit `true`, or no preference on an origin that loads by default.
+    Enabled,
+    /// An explicit `false`: the operator turned it off.
+    Disabled,
+    /// No preference, on an origin that is off by default (a Claude Code
+    /// install): nobody turned it off; nobody has turned it on.
+    NotEnabled,
+}
+
 /// Per-plugin persisted preferences.
 // `Eq` is deliberately absent: `settings` holds `toml::Value`, which can
 // contain a float, and float equality is not reflexive.
@@ -195,10 +207,24 @@ impl PluginsConfig {
     /// [`PluginOrigin::enabled_by_default`]: crate::extension::PluginOrigin::enabled_by_default
     #[must_use]
     pub fn is_enabled_for(&self, plugin_id: &str, origin: crate::extension::PluginOrigin) -> bool {
-        self.entries
-            .get(plugin_id)
-            .and_then(|e| e.enabled)
-            .unwrap_or(origin.enabled_by_default())
+        matches!(self.activation(plugin_id, origin), Activation::Enabled)
+    }
+
+    /// [`Self::is_enabled_for`] with the reason kept: an explicit `false` is
+    /// the operator's disable; an absent preference on an origin that is off
+    /// by default is "never enabled" — two different things to tell a reader.
+    #[must_use]
+    pub fn activation(
+        &self,
+        plugin_id: &str,
+        origin: crate::extension::PluginOrigin,
+    ) -> Activation {
+        match self.entries.get(plugin_id).and_then(|e| e.enabled) {
+            Some(true) => Activation::Enabled,
+            Some(false) => Activation::Disabled,
+            None if origin.enabled_by_default() => Activation::Enabled,
+            None => Activation::NotEnabled,
+        }
     }
 
     /// Materialise the runtime owner-trust policy from this document.

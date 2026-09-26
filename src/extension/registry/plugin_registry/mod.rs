@@ -44,6 +44,13 @@ pub struct PluginRegistry {
 
     /// Accumulated diagnostics from plugins
     diagnostics: Vec<PluginDiagnostic>,
+
+    /// Plugin sources the load that built these rows could not read
+    /// (`discovery::PluginDiscovery::unreadable`). Non-empty means the rows
+    /// are INCOMPLETE: a plugin missing from them may be unknown rather than
+    /// uninstalled. Held here, beside the rows, so a reader gets both from
+    /// one guard and they are cleared together.
+    unreadable_sources: Vec<std::path::PathBuf>,
 }
 
 impl PluginRegistry {
@@ -64,6 +71,19 @@ impl PluginRegistry {
         self.skills.clear();
         self.agents.clear();
         self.diagnostics.clear();
+        self.unreadable_sources.clear();
+    }
+
+    /// Record the sources the current load could not read (see the field).
+    pub fn set_unreadable_sources(&mut self, sources: Vec<std::path::PathBuf>) {
+        self.unreadable_sources = sources;
+    }
+
+    /// The sources the load behind these rows could not read. Non-empty ⇒
+    /// the plugin list is incomplete, not authoritative.
+    #[must_use]
+    pub fn unreadable_sources(&self) -> &[std::path::PathBuf] {
+        &self.unreadable_sources
     }
 
     // =========================================================================

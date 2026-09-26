@@ -105,11 +105,13 @@ impl DiscoveryManager {
     /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
     /// so project-local installs are discovered alongside the global ones.
     /// Each extra parent names the project it belongs to; every plugin found
-    /// under it carries that root as its [`DiscoveryScope`].
+    /// under it carries that root as its [`DiscoveryScope`]. Claude Code's
+    /// installs come too when the Claude root is on; a source that could not
+    /// be read is named in [`PluginDiscovery::unreadable`].
     pub fn discover_plugins_with_extra(
         &self,
         extra_parents: &[ProjectPluginParent],
-    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+    ) -> DiscoveryResult<PluginDiscovery> {
         self.scanner.discover_plugins_with_extra(extra_parents)
     }
 }

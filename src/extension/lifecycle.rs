@@ -34,6 +34,7 @@ use super::error::ExtensionResult;
 use super::hooks::{HookExecutor, ShellHookConsent};
 use super::manifest::adapter::AdapterOutput;
 use super::manifest::PluginManifest;
+use super::plugin_state::Activation;
 use super::projection::Views;
 use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
@@ -58,6 +59,14 @@ pub enum MountError {
     Blocked { id: String, origin: String },
     #[error("plugin '{0}' is disabled by the operator (plugins.toml)")]
     Disabled(String),
+    /// Off by default and never enabled — `PluginOrigin::enabled_by_default`
+    /// is false only for Claude Code's installs. Not `Disabled`: nobody
+    /// turned it off, and saying so would send the reader looking for who.
+    #[error(
+        "plugin '{0}' was installed by Claude Code and is not enabled in Aleph; \
+         an operator enables it (`aleph plugin enable {0}`, or the Panel's plugin settings)"
+    )]
+    NotEnabled(String),
     #[error("plugin '{id}' manifest could not be parsed: {reason}")]
     Parse { id: String, reason: String },
     #[error("plugin '{id}' failed at step '{step}': {reason}")]
@@ -75,6 +84,24 @@ pub enum UnmountError {
     NotFound(String),
     #[error("plugin '{0}' is not mounted")]
     NotMounted(String),
+}
+
+/// One discovered directory, as the load walk names it
+/// ([`ExtensionManager::identify`]).
+enum Identified {
+    /// The manifest parsed; the id is `AdapterOutput::plugin_id`.
+    Parsed(AdapterOutput),
+    /// It did not; `id` is the one its error row gets.
+    Unparsed { id: String, error: String },
+}
+
+impl Identified {
+    fn id(&self) -> &str {
+        match self {
+            Self::Parsed(output) => &output.plugin_id,
+            Self::Unparsed { id, .. } => id,
+        }
+    }
 }
 
 /// What a full reload did.
@@ -186,8 +213,15 @@ impl ExtensionManager {
         // config is a plugin the operator configured and cannot tell.
         self.publish_plugin_settings().await;
 
-        let plugin_dirs = self.collect_plugin_dirs()?;
-        self.plugin_registry.write().await.clear();
+        let collected = self.collect_plugin_dirs()?;
+        {
+            // The sources this pass could not read are stored WITH its rows:
+            // a reader of the registry gets both from one guard, so "unknown
+            // this load" cannot be read as "not installed".
+            let mut registry = self.plugin_registry.write().await;
+            registry.clear();
+            registry.set_unreadable_sources(collected.unreadable.clone());
+        }
 
         // Shadow resolution: dirs are walked highest-priority first, so a
         // repeat id lost. `winners` only tracks SUCCESSFUL parses — a parse
@@ -196,19 +230,21 @@ impl ExtensionManager {
         let mut winners: HashMap<String, PathBuf> = HashMap::new();
         let mut failed_plugin_ids: HashSet<String> = HashSet::new();
 
-        for found in plugin_dirs.iter().rev() {
+        for found in collected.dirs.iter().rev() {
             let dir_path = &found.path;
-            let output = match self.adapter_registry.parse_dir(dir_path) {
-                Ok(output) => output,
-                Err(e) => {
-                    let fallback_id = Self::unparsed_plugin_id(dir_path, found.origin);
+            let output = match self.identify(found) {
+                Identified::Parsed(output) => output,
+                Identified::Unparsed {
+                    id: fallback_id,
+                    error,
+                } => {
                     tracing::warn!(
-                        plugin_dir = %dir_path.display(), error = %e,
+                        plugin_dir = %dir_path.display(), error = %error,
                         "plugin manifest could not be parsed; listing it as errored"
                     );
                     summary
                         .errors
-                        .push(format!("{}: {}", dir_path.display(), e));
+                        .push(format!("{}: {}", dir_path.display(), error));
                     if failed_plugin_ids.insert(fallback_id.clone()) {
                         self.plugin_registry
                             .write()
@@ -216,7 +252,7 @@ impl ExtensionManager {
                             .register_plugin(Self::unparsed_record(
                                 dir_path,
                                 fallback_id,
-                                &e.to_string(),
+                                &error,
                                 found.origin,
                                 found.scope_key.clone(),
                             ));
@@ -281,9 +317,18 @@ impl ExtensionManager {
                     self.plugin_registry.write().await.register_plugin(record);
                     summary.disabled_by_operator += 1;
                 }
+                Err(e @ MountError::NotEnabled(_)) => {
+                    // Off by default and nobody turned it on — not an
+                    // operator's disable, and the row says which (判据 §17).
+                    let detail = e.to_string();
+                    self.plugin_registry
+                        .write()
+                        .await
+                        .register_plugin(record.inactive(PluginStatus::Disabled, detail));
+                }
                 Err(other) => {
-                    // `admit` only produces Blocked / Disabled; anything else is
-                    // a bug in this file, not a plugin outcome.
+                    // `admit` only produces Blocked / Disabled / NotEnabled;
+                    // anything else is a bug in this file, not a plugin outcome.
                     unreachable!("admit returned {other:?}");
                 }
                 Ok(()) => match self.mount_parsed(output, record).await {
@@ -356,6 +401,36 @@ impl ExtensionManager {
         record
     }
 
+    /// What the load walk calls one discovered directory: its manifest's id,
+    /// or — when the manifest does not parse — the id its error row gets.
+    /// The one derivation `load_all` and `discovered_plugin_ids` share.
+    fn identify(&self, found: &super::DiscoveredExtensionDir) -> Identified {
+        match self.adapter_registry.parse_dir(&found.path) {
+            Ok(output) => Identified::Parsed(output),
+            Err(e) => Identified::Unparsed {
+                id: Self::unparsed_plugin_id(&found.path, found.origin),
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Every plugin id one discovery pass finds, with its origin — the same
+    /// walk and id derivation as `load_all`, and none of its side effects: no
+    /// mount, no marker migration, no registry write, nothing written under
+    /// any plugin root.
+    ///
+    /// The offline CLI's answer to "is this an installed plugin?", so that
+    /// `aleph-server plugin enable <id>` accepts exactly the ids a load would
+    /// list — a Claude Code install included — and nothing else.
+    pub fn discovered_plugin_ids(&self) -> ExtensionResult<Vec<(String, PluginOrigin)>> {
+        Ok(self
+            .collect_plugin_dirs()?
+            .dirs
+            .iter()
+            .map(|found| (self.identify(found).id().to_string(), found.origin))
+            .collect())
+    }
+
     /// The id of a directory whose manifest does not parse: the directory's
     /// name — except in Claude Code's cache, whose layout is
     /// `cache/<marketplace>/<name>/<version>`. There the leaf is a VERSION
@@ -400,9 +475,10 @@ impl ExtensionManager {
     }
 
     /// The two admission gates, pure: owner trust, then the operator's
-    /// durable preference (`plugins.toml`, `is_enabled_for`) — origin-aware,
-    /// so a Claude Code install with no preference stays off. Callers write
-    /// the refusal onto the row.
+    /// durable preference (`plugins.toml`, `PluginsConfig::activation`) —
+    /// origin-aware, so a Claude Code install with no preference stays off,
+    /// and the refusal says whether an operator disabled it or nobody
+    /// enabled it. Callers write the refusal onto the row.
     async fn admit(&self, id: &str, origin: PluginOrigin) -> Result<(), MountError> {
         let trust_allows = self
             .owner_trust_policy
@@ -415,10 +491,11 @@ impl ExtensionManager {
                 origin: format!("{origin:?}"),
             });
         }
-        if !self.plugins_config.read().await.is_enabled_for(id, origin) {
-            return Err(MountError::Disabled(id.to_string()));
+        match self.plugins_config.read().await.activation(id, origin) {
+            Activation::Enabled => Ok(()),
+            Activation::Disabled => Err(MountError::Disabled(id.to_string())),
+            Activation::NotEnabled => Err(MountError::NotEnabled(id.to_string())),
         }
-        Ok(())
     }
 
     // ── Mount ─────────────────────────────────────────────────────────────
@@ -451,6 +528,10 @@ impl ExtensionManager {
                     MountError::Disabled(_) => {
                         row.status = PluginStatus::Disabled;
                         row.error = None;
+                    }
+                    MountError::NotEnabled(_) => {
+                        row.status = PluginStatus::Disabled;
+                        row.error = Some(e.to_string());
                     }
                     _ => {}
                 }

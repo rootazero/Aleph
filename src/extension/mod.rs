@@ -159,6 +159,13 @@ struct DiscoveredExtensionDir {
     scope_key: visibility::ScopeKey,
 }
 
+/// One discovery pass as the load walk consumes it: the plugin roots, and
+/// the sources that pass could not read (`PluginDiscovery::unreadable`).
+struct CollectedPluginDirs {
+    dirs: Vec<DiscoveredExtensionDir>,
+    unreadable: Vec<PathBuf>,
+}
+
 /// Extension Manager - main entry point for the extension system
 pub struct ExtensionManager {
     /// Discovery manager. Shared (`Arc`) because it is one of the
@@ -694,7 +701,11 @@ impl ExtensionManager {
     /// gate) and was retracted (R10). The union itself carried no plugin the
     /// plugin scanner didn't already find, so it has been removed: this walk
     /// now returns plugin roots only, from `discover_plugins_with_extra`.
-    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<DiscoveredExtensionDir>> {
+    ///
+    /// The sources that pass could not read ride along (`unreadable`): the
+    /// load stores them with its rows, so "unknown this load" is never read
+    /// as "not installed" downstream.
+    fn collect_plugin_dirs(&self) -> ExtensionResult<CollectedPluginDirs> {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
@@ -743,10 +754,10 @@ impl ExtensionManager {
         // plugin root — no manifest adapter can match one — so unioning them
         // here only manufactured `Error` rows in `plugins.list` (88 of 89 on
         // the first real-machine run of the 2026-09-20 round, D-2).
-        for d in self
+        let discovery = self
             .discovery
-            .discover_plugins_with_extra(&project_plugin_parents)?
-        {
+            .discover_plugins_with_extra(&project_plugin_parents)?;
+        for d in discovery.found {
             let canonical = match d.path.canonicalize() {
                 Ok(path) => path,
                 Err(e) => {
@@ -763,7 +774,10 @@ impl ExtensionManager {
             }
         }
 
-        Ok(result)
+        Ok(CollectedPluginDirs {
+            dirs: result,
+            unreadable: discovery.unreadable,
+        })
     }
 }
 
@@ -1457,6 +1471,7 @@ mod tests {
         let found: Vec<PathBuf> = manager
             .collect_plugin_dirs()
             .unwrap()
+            .dirs
             .into_iter()
             .map(|d| d.path)
             .collect();

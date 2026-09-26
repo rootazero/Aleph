@@ -2,7 +2,9 @@
 //!
 //! Spec C policy: **`NoLock`**. All plugin operations target
 //! `~/.aleph/plugins/` (extension dir) or read `~/.aleph/config.toml`
-//! for marketplace metadata; none of them write to `~/.aleph/data/`.
+//! for marketplace metadata; `enable` / `disable` also READ Claude Code's
+//! `~/.claude/plugins` index (never writing there) and write only
+//! `plugins.toml`, atomically (see `set_enabled_locally`).
 //! Each handler enters via a marker `run_no_lock` call to satisfy
 //! the reverse-regression check (Task 25).
 
@@ -223,17 +225,28 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
 /// No-lock path (Spec C): this only touches the plugin config document, and
 /// [`PluginsConfig::save`] is an atomic temp+rename. A running daemon re-reads
 /// the file on its next `load_all`.
+///
+/// "Is this an installed plugin?" is answered by the same read-only walk a
+/// load makes (`ExtensionManager::discovered_plugin_ids`: the Aleph plugin
+/// dirs, registered projects, and Claude Code's installs), not by probing
+/// `default_plugins_dir()` — a Claude Code install is never there. Nothing is
+/// mounted and nothing under any plugin root, `~/.claude` included, is
+/// written.
 async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
     use alephcore::extension::plugin_state::PluginsConfig;
+    use alephcore::extension::ExtensionManager;
 
     alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
 
-    let plugin_path = default_plugins_dir().join(name);
-    if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
+    let discovered = ExtensionManager::with_defaults()
+        .await?
+        .discovered_plugin_ids()?;
+    if !discovered.iter().any(|(id, _)| id == name) {
         eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
+    let plugin_path = default_plugins_dir().join(name);
 
     let path = PluginsConfig::default_path()?;
     let mut config = PluginsConfig::load(&path);

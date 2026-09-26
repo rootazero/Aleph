@@ -67,8 +67,10 @@ impl CachedPlugin {
 struct InstalledPlugins {
     version: u64,
     /// Required: a file without it is a shape this reader does not know,
-    /// not an install with no plugins. Entries stay untyped so one entry of
-    /// an unexpected shape costs that entry, not the whole file.
+    /// not an install with no plugins. Each key must map to an ARRAY — a
+    /// non-array value fails the whole file (unknown shape). The array's
+    /// entries stay untyped, so one entry of an unexpected shape costs that
+    /// entry, not the whole file.
     plugins: BTreeMap<String, Vec<Value>>,
 }
 
@@ -148,29 +150,35 @@ fn is_user_install(key: &str, entry: &Value) -> bool {
     false
 }
 
-/// Every cache dir named by the file that exists (not through a symlink) and
-/// carries `.claude-plugin/plugin.json`. Missing file → nothing; unreadable
-/// or foreign file → one `warn!` and nothing.
+/// Every cache dir named by the file that exists, is not itself a symlink
+/// (the version dir is checked no-follow; the `<marketplace>` / `<name>`
+/// dirs above it are followed like any path), and carries
+/// `.claude-plugin/plugin.json`.
+///
+/// Missing file → `Ok` and nothing (there is no source). A file that exists
+/// but is unreadable or of a shape this reader does not know → one `warn!`
+/// and `Err(index path)`: the source is UNKNOWN this pass, which the caller
+/// must carry as such and never read as "no plugins" (ruling 5).
 ///
 /// The manifest is required, not merely a component dir: a plugin without
 /// one takes its name from its marketplace entry, and Aleph's no-manifest
 /// fallback names a plugin after its directory — here the VERSION, which
 /// many plugins share.
-pub(crate) fn discover_claude_cache(claude_home: &Path) -> Vec<DiscoveredPath> {
+pub(crate) fn discover_claude_cache(claude_home: &Path) -> Result<Vec<DiscoveredPath>, PathBuf> {
     let file = claude_home.join(PLUGINS_DIR).join(INSTALLED_PLUGINS_FILE);
     let text = match std::fs::read_to_string(&file) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => {
-            warn!(path = %file.display(), error = %e, "cannot read Claude Code's installed_plugins.json; source skipped");
-            return Vec::new();
+            warn!(path = %file.display(), error = %e, "cannot read Claude Code's installed_plugins.json; source unknown this load");
+            return Err(file);
         }
     };
     let cached = match parse_installed_plugins(&text) {
         Ok(c) => c,
         Err(e) => {
-            warn!(path = %file.display(), error = %e, "installed_plugins.json is not a shape this build reads; source skipped");
-            return Vec::new();
+            warn!(path = %file.display(), error = %e, "installed_plugins.json is not a shape this build reads; source unknown this load");
+            return Err(file);
         }
     };
     let mut out = Vec::new();
@@ -196,7 +204,7 @@ pub(crate) fn discover_claude_cache(claude_home: &Path) -> Vec<DiscoveredPath> {
             CLAUDE_CACHE_PRIORITY,
         ));
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -313,7 +321,7 @@ mod tests {
         for name in ["mine", "theirs", "local", "unscoped"] {
             plant_manifest(&plugins.join(format!("cache/m/{name}/1.0.0")), name);
         }
-        let found = discover_claude_cache(home.path());
+        let found = discover_claude_cache(home.path()).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].path.ends_with("cache/m/mine/1.0.0"));
     }
@@ -333,7 +341,7 @@ mod tests {
         plant_manifest(&plugins.join("cache/m/twice/1.0.0"), "twice");
         plant_manifest(&plugins.join("cache/m/twice/2.0.0"), "twice");
         plant_manifest(&plugins.join("cache/m/once/1.0.0"), "once");
-        let found = discover_claude_cache(home.path());
+        let found = discover_claude_cache(home.path()).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].path.ends_with("cache/m/once/1.0.0"));
     }
@@ -350,7 +358,7 @@ mod tests {
         );
         std::fs::create_dir_all(plugins.join("cache/claude-plugins-official/clangd-lsp/1.0.0"))
             .unwrap();
-        let found = discover_claude_cache(home.path());
+        let found = discover_claude_cache(home.path()).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
             found[0].scope,
@@ -378,7 +386,7 @@ mod tests {
             r#"{"version": 2, "plugins": {"inline@m": [{"scope": "user", "version": "1.0.0"}]}}"#,
         );
         std::fs::create_dir_all(plugins.join("cache/m/inline/1.0.0/commands")).unwrap();
-        assert!(discover_claude_cache(home.path()).is_empty());
+        assert!(discover_claude_cache(home.path()).unwrap().is_empty());
     }
 
     /// A cache dir that is a symlink is not enumerated as if it lived in the
@@ -395,12 +403,32 @@ mod tests {
         );
         std::fs::create_dir_all(plugins.join("cache/m/linked")).unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), plugins.join("cache/m/linked/1.0.0")).unwrap();
-        assert!(discover_claude_cache(home.path()).is_empty());
+        assert!(discover_claude_cache(home.path()).unwrap().is_empty());
     }
 
     #[test]
     fn a_missing_file_is_a_silent_no_op() {
         let home = tempfile::tempdir().unwrap();
-        assert!(discover_claude_cache(home.path()).is_empty());
+        assert!(discover_claude_cache(home.path()).unwrap().is_empty());
+    }
+
+    /// Ruling 5: a file that exists and cannot be understood is UNKNOWN —
+    /// named as such (`Err(index)`), not answered as "no plugins".
+    #[test]
+    fn an_unreadable_or_foreign_index_is_unknown_not_empty() {
+        for text in [
+            "{ not json",
+            r#"{"version": 3, "plugins": {}}"#,
+            r#"{"version": 2}"#,
+            r#"{"version": 2, "plugins": {"k@m": {"not": "an array"}}}"#,
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let plugins = write_index(home.path(), text);
+            assert_eq!(
+                discover_claude_cache(home.path()).err(),
+                Some(plugins.join(INSTALLED_PLUGINS_FILE)),
+                "{text}"
+            );
+        }
     }
 }

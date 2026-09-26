@@ -130,6 +130,13 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
     );
     assert!(!cc.enabled);
     assert_eq!(cc.path, root.display().to_string());
+    // Nobody disabled it: the row must not say an operator did (判据 §17).
+    let detail = cc.error.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("installed by Claude Code") && detail.contains("not enabled in Aleph"),
+        "{detail:?}"
+    );
+    assert!(!detail.contains("by the operator"), "{detail:?}");
     assert!(
         !PluginsConfig::load(&cfg_path).entries.contains_key("qa-cc"),
         "loading records no preference: the foreign marker is not migrated into a disable"
@@ -239,13 +246,22 @@ async fn a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind(
         vec![Some(v1.clone())],
         "rooted at the versioned cache dir"
     );
+    // Enabling approves nothing: the hook is there, gated, and pending. An
+    // empty filter, or a snapshot with no consent gate (`consent: None`),
+    // would satisfy "nothing approved" without testing it.
     let inventory = manager.hook_executor_snapshot().await.inventory();
+    let hooky: Vec<Option<&str>> = inventory
+        .iter()
+        .filter(|h| h.source == "hooky")
+        .map(|h| h.consent.as_deref())
+        .collect();
     assert!(
-        inventory
-            .iter()
-            .filter(|h| h.source == "hooky")
-            .all(|h| h.consent.as_deref() != Some("approved")),
-        "enabling a plugin approves none of its hooks: {inventory:?}"
+        !hooky.is_empty(),
+        "the plugin's hook must be live: {inventory:?}"
+    );
+    assert!(
+        hooky.iter().all(|c| *c == Some("pending")),
+        "enabling a plugin approves none of its hooks: {hooky:?}"
     );
 
     // The operator reviews and approves the hook as it runs from v1.
@@ -342,4 +358,196 @@ async fn two_broken_claude_code_plugins_at_one_version_are_two_error_rows() {
         errors,
         vec![("broken-a", "claude_cache"), ("broken-b", "claude_cache")]
     );
+}
+
+/// Fix round 1, F1 — the human faces resolve the id in the REGISTRY, not in
+/// `default_plugins_dir()`: `plugins.enable` / `plugins.disable` (the RPC the
+/// CLI's `aleph plugin enable|disable` and the Panel toggle both call) turn a
+/// Claude Code install on and off. An id nothing discovered is still refused.
+#[tokio::test]
+async fn the_rpc_face_enables_and_disables_a_claude_cache_row() {
+    use crate::gateway::handlers::plugins::set_enabled_via_registry;
+
+    let claude_home = tempfile::tempdir().unwrap();
+    write_index(claude_home.path(), &[("rpc-cc", "m", "1.0.0")]);
+    write_cc_plugin(claude_home.path(), "m", "rpc-cc", "1.0.0");
+    let before = snapshot(claude_home.path());
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let (manager, cfg_path) =
+        isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
+
+    let on = set_enabled_via_registry(&manager, None, "rpc-cc", true).await;
+    assert!(on.is_success(), "{on:?}");
+    let info = manager.get_plugin_info().await;
+    assert_eq!(row(&info, "rpc-cc").unwrap().status, "loaded");
+
+    let off = set_enabled_via_registry(&manager, None, "rpc-cc", false).await;
+    assert!(off.is_success(), "{off:?}");
+    let info = manager.get_plugin_info().await;
+    assert_eq!(row(&info, "rpc-cc").unwrap().status, "disabled");
+    assert!(!PluginsConfig::load(&cfg_path).is_enabled_for("rpc-cc", PluginOrigin::ClaudeCache));
+
+    let unknown = set_enabled_via_registry(&manager, None, "nothing-found", true).await;
+    assert!(unknown.is_error(), "{unknown:?}");
+    assert!(!PluginsConfig::load(&cfg_path)
+        .entries
+        .contains_key("nothing-found"));
+    assert_eq!(
+        snapshot(claude_home.path()),
+        before,
+        "nothing under ~/.claude may change"
+    );
+}
+
+/// Fix round 1, F1 — the offline `aleph-server plugin enable|disable` asks
+/// the same walk `load_all` makes, minus every side effect: a Claude Code id
+/// is found, nothing is mounted, and nothing under the Claude home changes.
+#[tokio::test]
+async fn read_only_discovery_names_a_claude_cache_id_without_loading_it() {
+    let claude_home = tempfile::tempdir().unwrap();
+    write_index(claude_home.path(), &[("cli-cc", "m", "1.0.0")]);
+    write_cc_plugin(claude_home.path(), "m", "cli-cc", "1.0.0");
+    let before = snapshot(claude_home.path());
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let (manager, _cfg) =
+        isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
+    let ids = manager.discovered_plugin_ids().unwrap();
+    assert!(
+        ids.contains(&("cli-cc".to_string(), PluginOrigin::ClaudeCache)),
+        "{ids:?}"
+    );
+    assert!(
+        manager.get_plugin_info().await.is_empty(),
+        "discovery alone registers nothing"
+    );
+    assert_eq!(snapshot(claude_home.path()), before);
+}
+
+/// Fix round 1, D-A (provisional ruling) — the MODEL face may turn a Claude
+/// Code install off, never on: enabling runs code another tool installed, so
+/// `plugin_manage` answers with the human command and writes nothing. An id
+/// that nothing discovered is refused too, or the model could pre-record an
+/// opt-in for a Claude Code plugin that is not listed yet.
+#[tokio::test]
+async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
+    use crate::builtin_tools::plugin_manage::{PluginAction, PluginManageArgs, PluginManageTool};
+    use crate::gateway::handlers::plugins::set_enabled_via_registry;
+
+    let claude_home = tempfile::tempdir().unwrap();
+    write_index(claude_home.path(), &[("model-cc", "m", "1.0.0")]);
+    write_cc_plugin(claude_home.path(), "m", "model-cc", "1.0.0");
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let (manager, cfg_path) =
+        isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
+    manager.load_all().await.unwrap();
+    let args = |action, name: &str| PluginManageArgs {
+        action,
+        name: Some(name.to_string()),
+        source: None,
+        query: None,
+        config: None,
+        enforce: None,
+    };
+
+    let refused = PluginManageTool::call_on(&manager, args(PluginAction::Enable, "model-cc"))
+        .await
+        .expect_err("the model must not enable a Claude Code install")
+        .to_string();
+    assert!(
+        refused.contains("aleph plugin enable model-cc"),
+        "{refused}"
+    );
+    assert!(!PluginsConfig::load(&cfg_path)
+        .entries
+        .contains_key("model-cc"));
+    let info = manager.get_plugin_info().await;
+    assert_eq!(row(&info, "model-cc").unwrap().status, "disabled");
+
+    // F3 on the mount face: a reload of the default-off row says why without
+    // blaming an operator.
+    let reload = PluginManageTool::call_on(&manager, args(PluginAction::Reload, "model-cc"))
+        .await
+        .expect_err("a plugin that is not enabled does not mount")
+        .to_string();
+    assert!(reload.contains("not enabled in Aleph"), "{reload}");
+    assert!(!reload.contains("by the operator"), "{reload}");
+
+    let pre = PluginManageTool::call_on(&manager, args(PluginAction::Enable, "not-listed-yet"))
+        .await
+        .expect_err("an id nothing discovered cannot be pre-enabled");
+    assert!(pre.to_string().contains("not-listed-yet"), "{pre}");
+    assert!(!PluginsConfig::load(&cfg_path)
+        .entries
+        .contains_key("not-listed-yet"));
+
+    // The operator turns it on; the model may turn it off.
+    assert!(set_enabled_via_registry(&manager, None, "model-cc", true)
+        .await
+        .is_success());
+    PluginManageTool::call_on(&manager, args(PluginAction::Disable, "model-cc"))
+        .await
+        .expect("disabling is the fail-safe direction");
+    let info = manager.get_plugin_info().await;
+    assert_eq!(row(&info, "model-cc").unwrap().status, "disabled");
+    assert!(!PluginsConfig::load(&cfg_path).is_enabled_for("model-cc", PluginOrigin::ClaudeCache));
+}
+
+/// Fix round 1, F2 (ruling 5 on the usage face) — while Claude Code's index
+/// cannot be read, its plugins are UNKNOWN: the usage inventory says the
+/// plugin kind is unavailable, no `plugin:<id>` row is declared an orphan,
+/// and `forget_orphans` deletes nothing. The signal is the one read discovery
+/// made, carried with that load's rows.
+#[tokio::test]
+async fn an_unreadable_index_keeps_the_usage_history() {
+    use crate::tools::usage::report::{add_extension_inventory, forget_orphans, ExtensionKind};
+    use crate::tools::usage::store::ToolUsageStore;
+    use crate::tools::usage::{build_report, UsageInventory};
+
+    let claude_home = tempfile::tempdir().unwrap();
+    write_index(claude_home.path(), &[("used", "m", "1.0.0")]);
+    write_cc_plugin(claude_home.path(), "m", "used", "1.0.0");
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let store = ToolUsageStore::at(scratch.path().join("tool_usage.json"));
+    let (manager, _cfg) =
+        isolated_manager_with_claude_home(scratch.path(), claude_home.path()).await;
+    manager.load_all().await.unwrap();
+    assert!(manager.set_plugin_enabled("used", true).await);
+    store.record_call("plugin:used", "some_tool", true);
+
+    std::fs::write(
+        claude_home.path().join("plugins/installed_plugins.json"),
+        "{ not json",
+    )
+    .unwrap();
+    manager.load_all().await.unwrap();
+
+    let mut inventory = UsageInventory::default();
+    add_extension_inventory(&manager, &mut inventory).await;
+    assert_eq!(inventory.unavailable, vec![ExtensionKind::Plugin]);
+    let report = build_report(&inventory, &store.snapshot(), chrono::Utc::now());
+    assert!(report.orphans.is_empty(), "{:?}", report.orphans);
+    assert_eq!(forget_orphans(&report, &store), 0);
+    assert!(store.snapshot().contains_key("plugin:used"));
+
+    // Readable again: the plugin claims its own row, and the kind is whole.
+    write_index(claude_home.path(), &[("used", "m", "1.0.0")]);
+    manager.load_all().await.unwrap();
+    let mut inventory = UsageInventory::default();
+    add_extension_inventory(&manager, &mut inventory).await;
+    assert!(
+        inventory.unavailable.is_empty(),
+        "{:?}",
+        inventory.unavailable
+    );
+    let report = build_report(&inventory, &store.snapshot(), chrono::Utc::now());
+    assert!(report.orphans.is_empty(), "{:?}", report.orphans);
+    assert!(report.entries.iter().any(|e| e.id == "used"));
 }

@@ -98,6 +98,21 @@ pub struct ProjectPluginParent {
     pub dir: PathBuf,
 }
 
+/// One plugin-discovery pass: the plugin roots it found, and the sources it
+/// could not read.
+///
+/// `unreadable` is the "unknown, not none" half (ruling 5): a source listed
+/// here exists but was not understood this pass (Claude Code's
+/// `installed_plugins.json` unreadable or of an unknown shape), so the
+/// plugins it would name are absent from `found` because they are UNKNOWN —
+/// not because they were uninstalled. It is the same read that produced
+/// `found`, never a second look at the file.
+#[derive(Debug, Default)]
+pub struct PluginDiscovery {
+    pub found: Vec<DiscoveredPath>,
+    pub unreadable: Vec<PathBuf>,
+}
+
 /// A discovered path with metadata
 #[derive(Debug, Clone)]
 pub struct DiscoveredPath {

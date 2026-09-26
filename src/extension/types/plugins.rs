@@ -305,9 +305,12 @@ pub struct LoadSummary {
     /// higher-priority scope.
     pub shadowed: usize,
     /// Number of plugins registered but held inactive because the operator
-    /// disabled them (`<data_dir>/plugins.toml`). Distinct from
-    /// [`Self::skipped_by_trust`]: that is a policy refusal, this is a
-    /// deliberate per-plugin toggle, and the two need different remedies.
+    /// disabled them (an explicit `enabled = false` in
+    /// `<data_dir>/plugins.toml`). Distinct from [`Self::skipped_by_trust`]:
+    /// that is a policy refusal, this is a deliberate per-plugin toggle, and
+    /// the two need different remedies. A Claude Code install that is merely
+    /// not enabled yet is NOT counted here — nobody toggled it; its row says
+    /// so in its detail (`MountError::NotEnabled`).
     pub disabled_by_operator: usize,
     /// Errors encountered during loading
     pub errors: Vec<String>,

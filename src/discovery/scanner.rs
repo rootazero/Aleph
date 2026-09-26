@@ -8,7 +8,7 @@ use super::paths::{
     SKILL_FILE,
 };
 use super::types::{
-    DiscoveredPath, DiscoveryScope, GlobalRoot, ProjectPluginParent, ScanDirectory,
+    DiscoveredPath, DiscoveryScope, GlobalRoot, PluginDiscovery, ProjectPluginParent, ScanDirectory,
 };
 use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
@@ -232,12 +232,15 @@ impl DirectoryScanner {
     ///
     /// With the Claude root on, Claude Code's own installs are added too
     /// (`claude_cache::discover_claude_cache`, read-only): an index resolved
-    /// to plugin dirs, not a parent to enumerate.
+    /// to plugin dirs, not a parent to enumerate. An index that exists but
+    /// cannot be read is named in [`PluginDiscovery::unreadable`] — its
+    /// plugins are unknown this pass, not absent.
     pub fn discover_plugins_with_extra(
         &self,
         extra_parents: &[ProjectPluginParent],
-    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+    ) -> DiscoveryResult<PluginDiscovery> {
         let mut discovered = Vec::new();
+        let mut unreadable = Vec::new();
         self.scan_plugin_parent(
             &self.aleph_home.join(PLUGINS_DIR),
             &mut discovered,
@@ -258,7 +261,10 @@ impl DirectoryScanner {
         // `~/.claude/{skills,commands,agents}` (`scan_claude_dirs` is what
         // leaves `claude_home` unset).
         if let Some(claude_home) = self.claude_home.as_deref() {
-            discovered.extend(super::claude_cache::discover_claude_cache(claude_home));
+            match super::claude_cache::discover_claude_cache(claude_home) {
+                Ok(found) => discovered.extend(found),
+                Err(index) => unreadable.push(index),
+            }
         }
         // Ascending-priority sort (Claude Code cache 5 < global 10 < project
         // 20): `collect_plugin_dirs` — the only consumer — dedups by
@@ -273,7 +279,10 @@ impl DirectoryScanner {
             discovered.len(),
             extra_parents.len()
         );
-        Ok(discovered)
+        Ok(PluginDiscovery {
+            found: discovered,
+            unreadable,
+        })
     }
 
     /// Scan a single plugin-parent directory, pushing each plugin root (direct
@@ -760,7 +769,7 @@ mod tests {
             config: DiscoveryConfig::default(),
         };
 
-        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
+        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap().found;
         assert_eq!(plugins.len(), 1);
         assert!(plugins[0].path.ends_with("my-plugin"));
     }
@@ -793,7 +802,7 @@ mod tests {
             config: DiscoveryConfig::default(),
         };
 
-        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
+        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap().found;
         assert_eq!(plugins.len(), 2);
         let names: Vec<String> = plugins
             .iter()
@@ -836,7 +845,14 @@ mod tests {
         };
 
         // Plain discover_plugins sees only the global one.
-        assert_eq!(scanner.discover_plugins_with_extra(&[]).unwrap().len(), 1);
+        assert_eq!(
+            scanner
+                .discover_plugins_with_extra(&[])
+                .unwrap()
+                .found
+                .len(),
+            1
+        );
 
         // With the project's plugin parent, both are discovered.
         let plugins = scanner
@@ -844,7 +860,8 @@ mod tests {
                 project_root: project.clone(),
                 dir: project.join(".aleph/plugins"),
             }])
-            .unwrap();
+            .unwrap()
+            .found;
         let names: Vec<String> = plugins
             .iter()
             .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
@@ -865,7 +882,8 @@ mod tests {
                     dir: root.join("workspace/proj-missing/.aleph/plugins"),
                 },
             ])
-            .unwrap();
+            .unwrap()
+            .found;
         assert_eq!(plugins2.len(), 2);
     }
 
@@ -904,7 +922,8 @@ mod tests {
                 project_root: root.path().to_path_buf(),
                 dir: root.path().join(".aleph/plugins.local"),
             }])
-            .unwrap();
+            .unwrap()
+            .found;
         let hit = found
             .iter()
             .find(|d| d.path.ends_with("proj-local"))
@@ -959,7 +978,7 @@ mod tests {
             .unwrap()
         };
 
-        let found = scanner.discover_plugins_with_extra(&[]).unwrap();
+        let found = scanner.discover_plugins_with_extra(&[]).unwrap().found;
         let paths: Vec<&Path> = found.iter().map(|d| d.path.as_path()).collect();
         assert_eq!(paths, vec![cached.as_path(), own.as_path()], "{found:?}");
         assert_eq!(found[0].source(), DiscoverySource::ClaudeCache);
@@ -985,17 +1004,47 @@ mod tests {
 
         let on = DirectoryScanner::new(&config(true)).unwrap();
         assert_eq!(on.claude_home.as_deref(), Some(claude.as_path()));
-        let found = on.discover_plugins_with_extra(&[]).unwrap();
+        let found = on.discover_plugins_with_extra(&[]).unwrap().found;
         assert!(found.iter().any(|d| d.path == cached), "{found:?}");
 
         let off = DirectoryScanner::new(&config(false)).unwrap();
         assert!(off.claude_home.is_none());
-        let found = off.discover_plugins_with_extra(&[]).unwrap();
+        let found = off.discover_plugins_with_extra(&[]).unwrap().found;
         assert!(
             !found
                 .iter()
                 .any(|d| d.source() == DiscoverySource::ClaudeCache),
             "{found:?}"
         );
+    }
+
+    /// An index that exists and cannot be read contributes no plugin AND is
+    /// named in `unreadable`, so the load that follows can say "unknown"
+    /// instead of "none installed" (ruling 5).
+    #[test]
+    fn an_unreadable_claude_cache_index_is_named_not_emptied() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let temp = TempDir::new().unwrap();
+        let claude = temp.path().join("claude");
+        claude_home_with_one_install(&claude);
+        let index = claude.join("plugins/installed_plugins.json");
+        std::fs::write(&index, "{ not json").unwrap();
+        let scanner = DirectoryScanner::new(&DiscoveryConfig {
+            working_dir: temp.path().to_path_buf(),
+            scan_claude_dirs: true,
+            scan_project_dirs: false,
+            max_upward_depth: 0,
+            claude_home_override: Some(claude.clone()),
+        })
+        .unwrap();
+        let discovery = scanner.discover_plugins_with_extra(&[]).unwrap();
+        assert!(
+            !discovery
+                .found
+                .iter()
+                .any(|d| d.source() == DiscoverySource::ClaudeCache),
+            "{discovery:?}"
+        );
+        assert_eq!(discovery.unreadable, vec![index]);
     }
 }
