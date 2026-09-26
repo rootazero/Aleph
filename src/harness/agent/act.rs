@@ -1053,10 +1053,10 @@ impl AgentHarness {
 // =============================================================================
 
 impl AgentHarness {
-    /// Apply Layer-3 turn budget: record this result, persist any spills via
-    /// the shared result store, and rewrite `output.value` to a marker string
-    /// when THIS call's result was the one spilled (so the LLM's next Think
-    /// sees the marker, not the full text). No-op when budget is unset.
+    /// Apply Layer-3 turn budget: record this result and, when THIS call's
+    /// result is the one spilled, rewrite `output.value` to what
+    /// `result_processing::spill_replacement` leaves (so the LLM's next Think
+    /// sees that, not the full text). No-op when budget is unset.
     fn apply_turn_budget(
         &self,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
@@ -1067,16 +1067,12 @@ impl AgentHarness {
             return;
         };
         let text = crate::providers::message::value_as_model_text(&output.value).into_owned();
-        // The marker may sit below a Layer-2 error digest, not at byte 0; the
-        // store's own reader finds it on any line.
-        let already_persisted = crate::tools::result_store::extract_persisted_ref(&text).is_some();
         let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
         let record = crate::tools::turn_budget::TurnResult {
             call_id: call.id.clone(),
             tool_name: call.name.clone(),
             tokens_in_context: tokens,
             in_context_text: text,
-            already_persisted,
         };
         // `record` only ever spills the result it was just handed, so the
         // rewrite lands BEFORE the SessionEvent is emitted: the LLM sees the
@@ -1085,20 +1081,14 @@ impl AgentHarness {
         let Some(spill) = spills.into_iter().find(|s| s.call_id == call.id) else {
             return;
         };
-        let Some(store) = self.deps.result_store.as_ref() else {
-            return;
-        };
-        let footer = crate::tools::result_processing::recovery_footer_for(
-            Some(store),
-            &spill.call_id,
-            &spill.tool_name,
-            &spill.original_text,
-            0,
-            self.deps.tools.recovery_tools(),
-        );
-        if let Some((footer, _)) = footer {
-            output.value = serde_json::Value::String(footer);
-        }
+        output.value =
+            serde_json::Value::String(crate::tools::result_processing::spill_replacement(
+                self.deps.result_store.as_deref(),
+                &spill.call_id,
+                &spill.tool_name,
+                &spill.original_text,
+                self.deps.tools.recovery_tools(),
+            ));
     }
 
     /// Persist a successful tool call to the transcript: emit

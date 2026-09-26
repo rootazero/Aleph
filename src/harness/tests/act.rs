@@ -2895,16 +2895,23 @@ async fn layer3_spill_footer_follows_the_scoped_services_allow_set() {
     );
 }
 
-/// A result that already carries a Layer-2 persist marker — here below an
-/// inline error digest, not at byte 0 — is never offloaded a second time: the
-/// turn budget does not spend a spill re-offloading a marker.
+/// A result that already carries THIS call's Layer-2 persist marker — here
+/// below an inline error digest large enough to be worth spilling, so only
+/// the marker check keeps it — is never offloaded a second time: the turn
+/// budget does not spend a spill re-offloading a marker.
 #[tokio::test]
 async fn layer3_spill_leaves_an_already_persisted_marker_alone() {
-    let original = "error: build failed (3 errors)\n\
-                    [Full output persisted: /tmp/x/c0_bash.txt (9000 tokens, bash)]\n\
-                    [Read it back with file_read on that path — page it with offset/limit]";
+    let digest: String = (0..60)
+        .map(|i| format!("error[E{i:04}]: mismatched types in module_{i}\n"))
+        .collect();
+    let original = format!(
+        "{digest}{}/tmp/x/{} (9000 tokens, bash)]\n\
+         [Read it back with file_read on that path — page it with offset/limit]",
+        crate::tools::result_store::PERSISTED_REF_PREFIX,
+        crate::tools::result_store::blob_file_name("c1", "bash"),
+    );
     let tools = ScriptedTools::new(vec![Ok(ok_output(serde_json::Value::String(
-        original.to_string(),
+        original.clone(),
     )))]);
     let (_s, store) = scratch_store();
     let text = spilled_result_text(tools, "bash", store).await;

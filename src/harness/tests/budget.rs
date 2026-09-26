@@ -705,7 +705,14 @@ const BUDGETED: [&str; 12] = [
 ///     "already persisted?" test asks the store's own reader
 ///     (`result_store::extract_persisted_ref`) instead of re-spelling the
 ///     `[Full output persisted: ` prefix and its any-line scan (判据 §1).
-const CEILING: usize = 5233;
+/// −10 (5233 → 5223, 2026-09-26, context-slim review): the Layer-3 spill's
+///     replacement is one call to `result_processing::spill_replacement`, which
+///     owns the no-store / nothing-callable / failed-write residue the harness
+///     used to answer by leaving the result as it was; and the harness stops
+///     deciding "already persisted" (`TurnResultBudget::record` asks
+///     `carries_own_persisted_marker` itself, so the `already_persisted` field
+///     is CUT).
+const CEILING: usize = 5223;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

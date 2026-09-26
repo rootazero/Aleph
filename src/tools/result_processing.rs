@@ -685,14 +685,6 @@ fn longest_hint_tokens() -> usize {
 /// that the rest was not saved. Every branch leaves at most what the turn
 /// budget booked, so the per-turn bound holds whether or not the write did.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the harness Layer-3 spill (harness/agent/act.rs) switches to this; drop this \
-                  attribute in that change"
-    )
-)]
 pub(crate) fn spill_replacement(
     store: Option<&ToolResultStore>,
     tool_call_id: &str,

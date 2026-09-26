@@ -176,13 +176,11 @@ pub struct TurnResult {
     pub call_id: String,
     pub tool_name: String,
     pub tokens_in_context: usize,
+    /// What the model would see. [`TurnResultBudget::record`] reads "already
+    /// persisted" from it, as Layer 2 does: this call's own marker only
+    /// (`result_processing::carries_own_persisted_marker`), never any marker
+    /// line — a `file_read` of a file quoting one is content.
     pub in_context_text: String,
-    /// NOT READ. [`TurnResultBudget::record`] derives "already persisted"
-    /// itself, from `in_context_text`, as Layer 2 does: this call's own marker
-    /// only (`result_processing::carries_own_persisted_marker`). The harness
-    /// still sets it from "any marker line", which also matched a `file_read`
-    /// of a file quoting one; the field goes when that line does.
-    pub already_persisted: bool,
 }
 
 /// Instruction for the caller to evict the result it just recorded.
@@ -366,8 +364,7 @@ mod tests {
     }
 
     /// `result` as a Layer-2 marker of its own call: what `record` treats as
-    /// already persisted. (Not the `already_persisted` flag, which it does not
-    /// read.)
+    /// already persisted.
     fn own_marker(result: TurnResult) -> TurnResult {
         let name = crate::tools::result_store::blob_file_name(&result.call_id, &result.tool_name);
         TurnResult {
@@ -387,7 +384,6 @@ mod tests {
             tool_name: "bash".into(),
             tokens_in_context: tokens,
             in_context_text: "x".repeat(tokens.saturating_mul(4)),
-            already_persisted: false,
         }
     }
 
@@ -512,7 +508,6 @@ mod tests {
                             tool_name: "file_read".to_string(),
                             tokens_in_context: 2_000,
                             in_context_text: "x".repeat(10),
-                            already_persisted: false,
                         },
                     )
                     .is_empty()
@@ -563,7 +558,6 @@ mod tests {
                 tool_name: "bash".to_string(),
                 tokens_in_context: tokens,
                 in_context_text: text.clone(),
-                already_persisted: false,
             };
             assert_eq!(
                 budget.floor_tokens(&result),
@@ -616,7 +610,6 @@ mod tests {
             tool_name: "file_read".to_string(),
             tokens_in_context: 5_000,
             in_context_text: quoted,
-            already_persisted: true,
         };
         assert_eq!(
             budget.record(&id, read).len(),
@@ -645,7 +638,6 @@ mod tests {
             tool_name: "file_edit".to_string(),
             tokens_in_context: tokens,
             in_context_text: "ok".to_string(),
-            already_persisted: false,
         };
         assert!(budget.record(&id, result("big", 99)).is_empty());
         assert!(
