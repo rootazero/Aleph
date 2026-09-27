@@ -53,7 +53,7 @@
   - `pub async fn fulfill_request(conn: &CdpConnection, session: Option<&SessionId>, request_id: &str, status: u16, headers: &[(String, String)], body: &[u8]) -> Result<()>`
   - `pub enum FailReason { Failed, BlockedByClient }` + `pub async fn fail_request(conn, session, request_id, reason: FailReason) -> Result<()>`
 
-- [ ] **Step 1: 写失败测试**（追加到 `crates/aleph-cdp/tests/methods.rs`，沿用 `replying()`/`scripted()` 既有形状）
+- [x] **Step 1: 写失败测试**（追加到 `crates/aleph-cdp/tests/methods.rs`，沿用 `replying()`/`scripted()` 既有形状）
 
 ```rust
 #[tokio::test]
@@ -96,12 +96,12 @@ async fn fetch_fail_request_maps_reasons() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `awk '/MemAvailable/{exit ($2<4194304)?1:0}' /proc/meminfo && CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=1 cargo test -p aleph-cdp --test methods fetch 2>&1 | tail -5`
 Expected: FAIL（`fetch` 模块不存在，编译错误）
 
-- [ ] **Step 3: 实现 `methods/fetch.rs`**
+- [x] **Step 3: 实现 `methods/fetch.rs`**
 
 ```rust
 //! `Fetch.*` — request interception for `browser_network`'s mock routes.
@@ -222,12 +222,12 @@ pub async fn fail_request(
 
 `methods/mod.rs` 加 `pub mod fetch;`（按字母序挂到既有模块清单里）。
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p aleph-cdp --test methods fetch 2>&1 | tail -5`
 Expected: 4 条新测试 PASS
 
-- [ ] **Step 5: 证伪 + commit**
+- [x] **Step 5: 证伪 + commit**
 
 证伪：把 `fulfill_request` 的 `.encode(body)` 临时改成 `String::from_utf8_lossy(body).into_owned()` → Step 1 测试红 → 恢复。
 
@@ -257,7 +257,7 @@ git commit -m "aleph-cdp: hand-written Fetch domain wrappers for request interce
   - `impl RouteRegistry`: `add(tab_id, url_contains, method, kind, scope, note) -> RouteRuleInfo`、`remove(id) -> Option<RouteRuleInfo>`、`clear(scope_filter) -> usize`、`list() -> Vec<RouteRuleInfo>`、`pub(crate) fn match_lifo(tab_id, url, method) -> Option<MatchedRoute>`
   - `CdpBackend` 内部：`ensure_intercept_loop(&self, tab_id, session) `（幂等，惰性启动）；规则清空时 `stop_intercept_loop_if_idle(tab_id)`
 
-- [ ] **Step 1: 纯函数半的失败测试**（routes.rs `#[cfg(test)]`）
+- [x] **Step 1: 纯函数半的失败测试**（routes.rs `#[cfg(test)]`）
 
 ```rust
 // 测试助手（本模块内定义）：
@@ -287,9 +287,9 @@ fn method_filter_narrows_and_substring_matches_anywhere() {
 fn hits_are_counted_on_the_rule_that_matched() { /* 命中计数 +1，未命中规则不变 */ }
 ```
 
-- [ ] **Step 2: 跑确认红** → `cargo test -p alephcore --lib browser::cdp_backend::routes 2>&1 | tail -3`（编译错即红）
+- [x] **Step 2: 跑确认红** → `cargo test -p alephcore --lib browser::cdp_backend::routes 2>&1 | tail -3`（编译错即红）
 
-- [ ] **Step 3: 实现 RouteRegistry 纯函数半**
+- [x] **Step 3: 实现 RouteRegistry 纯函数半**
 
 ```rust
 //! Mock routes and the per-tab interception loop (spec §2/§3).
@@ -312,9 +312,9 @@ impl RouteRegistry {
 }
 ```
 
-- [ ] **Step 4: 纯函数半绿 + commit `browser: mock route registry with LIFO tab-over-profile matching`**
+- [x] **Step 4: 纯函数半绿 + commit `browser: mock route registry with LIFO tab-over-profile matching`**
 
-- [ ] **Step 5: InterceptLoop 的失败集成测试**（FakeCdpServer 驱动真 task——先例：`crates/aleph-cdp/tests/methods.rs` 的 `scripted` 只能应答不能推事件；若 FakeCdpServer 不支持服务端主动推事件，给它加一个 `push_event(method, params, session)` responder 动作，这是夹具的正当扩展）
+- [x] **Step 5: InterceptLoop 的失败集成测试**（FakeCdpServer 驱动真 task——先例：`crates/aleph-cdp/tests/methods.rs` 的 `scripted` 只能应答不能推事件；若 FakeCdpServer 不支持服务端主动推事件，给它加一个 `push_event(method, params, session)` responder 动作，这是夹具的正当扩展）
 
 ```rust
 #[tokio::test]
@@ -336,7 +336,7 @@ async fn an_ssrf_veto_never_falls_back_to_continue() {
 }
 ```
 
-- [ ] **Step 6: 实现 InterceptLoop**
+- [x] **Step 6: 实现 InterceptLoop**
 
 ```rust
 /// Per-tab consumer: subscribe BEFORE `Fetch.enable` (the connection's
@@ -389,7 +389,7 @@ async fn run_loop(
 }
 ```
 
-- [ ] **Step 7: Review Focus #2 测试**（决策途中 tab 死亡）
+- [x] **Step 7: Review Focus #2 测试**（决策途中 tab 死亡）
 
 ```rust
 #[tokio::test]
@@ -399,7 +399,7 @@ async fn the_loop_exits_when_its_session_dies_mid_decision() {
 }
 ```
 
-- [ ] **Step 8: Review Focus #3 测试**（orphan 应答容忍）
+- [x] **Step 8: Review Focus #3 测试**（orphan 应答容忍）
 
 ```rust
 #[tokio::test]
@@ -408,7 +408,7 @@ async fn an_orphan_paused_event_after_disable_is_tolerated() {
 }
 ```
 
-- [ ] **Step 9: Review Focus #5 测试 + 惰性启停**
+- [x] **Step 9: Review Focus #5 测试 + 惰性启停**
 
 ```rust
 #[tokio::test]
@@ -425,7 +425,7 @@ async fn zero_rules_means_no_fetch_enable_and_no_loop() {
 
 实现要点：`ensure_intercept_loop` 在 cdp 后端的 tab 接入点（`ensure_tab`/attach 完成处）被调用，幂等（`loops` 里有条目即返回）；`clear`/`remove` 使某 tab 规则归零时 `Fetch.disable` + abort loop；profile 级规则变化时对该 profile 所有活 tab 重放 enable/disable。
 
-- [ ] **Step 10: 全绿 + 证伪（每条守卫变异一次：删 SSRF 优先序 → Step 5 对抗用例红；删 session 死亡退出 → Step 7 红；删 enable 先于 navigate → Step 9 红）+ commit**
+- [x] **Step 10: 全绿 + 证伪（每条守卫变异一次：删 SSRF 优先序 → Step 5 对抗用例红；删 session 死亡退出 → Step 7 红；删 enable 先于 navigate → Step 9 红）+ commit**
 
 ```bash
 git commit -m "browser: per-tab interception loop with SSRF-first mock route pipeline"
