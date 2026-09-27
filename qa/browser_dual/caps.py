@@ -39,6 +39,10 @@ class Raw:
 
     def __init__(self, ws):
         self.ws, self._id = ws, 0
+        # Events that arrive while a call waits for ITS reply are stashed, not
+        # dropped: the network_interception probe's requestPaused lands inside
+        # Page.navigate's wait, and a stashed event is still an event.
+        self.events = []
 
     async def call(self, method, params=None, session=None, timeout=90):
         self._id += 1
@@ -50,6 +54,30 @@ class Raw:
             m = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=timeout))
             if m.get("id") == self._id:
                 return m
+            if "method" in m:
+                self.events.append(m)
+
+    async def wait_event(self, method, session, timeout=15):
+        """The next `method` event on `session` — stash first, then the wire.
+
+        Never concurrent with `call` (both read the socket); the probes below
+        sequence them.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            if self.events:
+                m = self.events.pop(0)
+            else:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                try:
+                    m = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=remaining))
+                except asyncio.TimeoutError:
+                    return None
+            if m.get("method") == method and m.get("sessionId") == session:
+                return m.get("params", {})
 
 
 def find_node(node, tag, ident):
@@ -98,12 +126,14 @@ async def probe_obscura(ws_url, page_url, led):
                            {"type": "dragOver", "x": 10, "y": 10, "data": {"items": []}}, s)
         found["drag"] = "supported" if "error" not in r and await ev("window.__dragged") else "unsupported"
 
-        # `touch`, `screencast`, `network_interception` and `multi_connection`
-        # are NOT probed here, and their absence is the point: R39 cut them from
-        # the capability table because no `browser_*` verb dispatches them. A QA
-        # stage that kept probing them would be measuring something the table no
-        # longer claims — and the diff below would fail on the prober's surplus
-        # rather than on a wrong claim.
+        # `touch`, `screencast` and `multi_connection` are NOT probed here,
+        # and their absence is the point: R39 cut them from the capability
+        # table because no `browser_*` verb dispatches them. A QA stage that
+        # kept probing them would be measuring something the table no longer
+        # claims — and the diff below would fail on the prober's surplus
+        # rather than on a wrong claim. (`network_interception` LEFT that
+        # list when `browser_network`'s mock actions became its verb, and is
+        # probed at the end of this function.)
         doc = await cdp.call("DOM.getDocument", {"depth": -1}, s)
         root = doc["result"]["root"]
         file_id = find_node(root, "input", "file")
@@ -232,6 +262,75 @@ async def probe_obscura(ws_url, page_url, led):
             nav_sound = "error" in r or navhit == "click"
         found["effect_probe"] = (
             "supported" if persist and delivered and nav_sound else "unsupported")
+
+        # network_interception — the Fetch handshake Aleph's mock routes are
+        # built on, link by link, on a FRESH target that starts at
+        # about:blank so "the pause actually HELD" is observable: while the
+        # navigation's requestPaused sits unanswered, about:blank must still
+        # be the document. Measured 2026-09-27 on the pinned v0.2.2 (the full
+        # five-link measurement is docs/superpowers/specs/
+        # 2026-09-24-browser-network-mock-design/probes/fetch-probe.mjs):
+        # enable answers, the navigation event ARRIVES but the request is NOT
+        # held (the real page completes while the pause sits unanswered), and
+        # the fulfill is accepted and moot. So the row is supported only when
+        # all three links hold: the event arrives, the pause holds, and the
+        # PAGE ends up showing the mock body. The plan's draft criterion
+        # ("requestPaused arrives ⇒ supported") predates that measurement and
+        # would have certified the advisory pause — a probe that reads the
+        # event count but not the effect is 判据 §11's shape.
+        ni = "unsupported"
+        made2 = await cdp.call("Target.createTarget", {"url": "about:blank"})
+        tid2 = made2.get("result", {}).get("targetId")
+        att2 = (await cdp.call("Target.attachToTarget",
+                               {"targetId": tid2, "flatten": True})) if tid2 else {}
+        s2 = att2.get("result", {}).get("sessionId")
+        if not s2:
+            led.log("  network_interception: could not attach a fresh target — "
+                    "the row stays unprobed this run and will diff red")
+        else:
+            async def ev2(expr):
+                r = await cdp.call("Runtime.evaluate",
+                                   {"expression": expr, "returnByValue": True}, s2)
+                return r.get("result", {}).get("result", {}).get("value")
+
+            await cdp.call("Page.enable", {}, s2)
+            await cdp.call("Runtime.enable", {}, s2)
+            en = await cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, s2)
+            if "error" in en:
+                led.log(f"  network_interception: Fetch.enable refused: {json.dumps(en)[:200]}")
+            else:
+                await cdp.call("Page.navigate", {"url": page_url}, s2)
+                paused_ev = await cdp.wait_event("Fetch.requestPaused", s2, timeout=15)
+                if not paused_ev:
+                    led.log("  network_interception: no requestPaused within 15s "
+                            "(enable is a no-op)")
+                else:
+                    led.check("network_interception's pause names the URL under navigation",
+                              page_url in str(paused_ev.get("request", {}).get("url", "")),
+                              json.dumps(paused_ev)[:200])
+                    # Deliberately UNANSWERED for a second: a held request
+                    # cannot have delivered its document.
+                    await asyncio.sleep(1.0)
+                    held = bool(await ev2("location.href === 'about:blank'"))
+                    mock = ("<!doctype html><title>caps-mock</title>"
+                            "<body>MOCK-SERVED-7f3a</body>")
+                    fu = await cdp.call("Fetch.fulfillRequest", {
+                        "requestId": paused_ev["requestId"],
+                        "responseCode": 200,
+                        "responseHeaders": [{"name": "content-type",
+                                             "value": "text/html; charset=utf-8"}],
+                        "body": base64.b64encode(mock.encode()).decode(),
+                    }, s2)
+                    await asyncio.sleep(1.5)
+                    served = await ev2("document.body ? document.body.textContent.trim() : ''")
+                    led.log(f"  network_interception: held={held} "
+                            f"fulfill={'ok' if 'error' not in fu else json.dumps(fu)[:160]} "
+                            f"page={served!r}")
+                    if held and "error" not in fu and served == "MOCK-SERVED-7f3a":
+                        ni = "supported"
+                    await cdp.call("Fetch.disable", {}, s2)
+            await cdp.call("Target.closeTarget", {"targetId": tid2})
+        found["network_interception"] = ni
 
         return found
 
