@@ -49,6 +49,7 @@ use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use tokio::sync::{oneshot, RwLock};
 
+use crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer;
 use crate::gateway::interfaces::whatsapp::reactions::{ReactionHandler, ReactionSender};
 use pairing::PairingState;
 
@@ -63,6 +64,7 @@ pub struct WhatsAppChannel {
     connected: Arc<AtomicBool>,
     test_mode: bool,
     reaction_handler: Option<Arc<ReactionHandler>>,
+    history_buffer: Arc<GroupHistoryBuffer>,
 }
 
 impl WhatsAppChannel {
@@ -89,6 +91,7 @@ impl WhatsAppChannel {
             config.reactions.ack.clone(),
             Arc::new(NoopReactionSender),
         )));
+        let history_buffer = Arc::new(GroupHistoryBuffer::new(config.history.clone()));
 
         Self {
             info,
@@ -100,6 +103,7 @@ impl WhatsAppChannel {
             connected: Arc::new(AtomicBool::new(false)),
             test_mode,
             reaction_handler,
+            history_buffer,
         }
     }
 
@@ -208,6 +212,7 @@ impl Channel for WhatsAppChannel {
         let pairing_state = Arc::clone(&self.pairing_state);
         let inbound_tx = self.channel_state.sender();
         let channel_id = self.info.id.clone();
+        let history_buffer = Arc::clone(&self.history_buffer);
         let reaction_handler = Arc::clone(&reaction_handler);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -241,7 +246,7 @@ impl Channel for WhatsAppChannel {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
-                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
+                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
                                             // Spec §3.2 / Task 5: fire the configured

@@ -114,3 +114,55 @@ impl GroupHistoryBuffer {
         buffers.remove(conv_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::channel::{ChannelId, MessageId, UserId};
+    use chrono::Utc;
+
+    fn make_group_message(conv: &str, text: &str) -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new(format!("msg-{text}")),
+            channel_id: ChannelId::new("whatsapp"),
+            conversation_id: ConversationId::new(conv),
+            sender_id: UserId::new("user-1"),
+            sender_name: Some("Alice".to_string()),
+            text: text.to_string(),
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: true,
+            raw: None,
+            metadata: vec![],
+        }
+    }
+
+    /// Two group messages buffered into the same conversation must both
+    /// surface in `get_context` so the agent has them when it sees the next
+    /// message. Direct-message calls to `add` must be a no-op so we do not
+    /// mix private chats into a group's history.
+    #[tokio::test]
+    async fn group_message_buffered_then_injected() {
+        let buffer = GroupHistoryBuffer::new(HistoryBufferConfig::default());
+        let conv = ConversationId::new("chat-1@g.us");
+
+        buffer.add(&make_group_message(conv.as_str(), "hello")).await;
+        buffer
+            .add(&make_group_message(conv.as_str(), "world"))
+            .await;
+
+        let ctx = buffer
+            .get_context(&conv)
+            .await
+            .expect("context should be present for non-empty group buffer");
+        assert!(
+            ctx.contains("hello"),
+            "context missing first message: {ctx}"
+        );
+        assert!(
+            ctx.contains("world"),
+            "context missing second message: {ctx}"
+        );
+    }
+}

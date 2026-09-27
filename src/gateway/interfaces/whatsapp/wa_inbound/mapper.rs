@@ -1,9 +1,11 @@
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
+use crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer;
 use tracing::debug;
 
-pub fn map_event_to_inbound(
+pub async fn map_event_to_inbound(
     event: &whatsapp_rust::types::events::Event,
     channel_id: &ChannelId,
+    buffer: &GroupHistoryBuffer,
 ) -> Option<InboundMessage> {
     use whatsapp_rust::types::events::Event;
 
@@ -25,7 +27,7 @@ pub fn map_event_to_inbound(
                 .and_then(|ctx| ctx.stanza_id.as_ref())
                 .map(MessageId::new);
 
-            Some(InboundMessage {
+            let inbound = InboundMessage {
                 id: MessageId::new(info.id.to_string()),
                 channel_id: channel_id.clone(),
                 conversation_id: ConversationId::new(&conversation_id),
@@ -38,7 +40,15 @@ pub fn map_event_to_inbound(
                 is_group,
                 raw: None,
                 metadata: vec![],
-            })
+            };
+
+            // Hand the freshly mapped message to the group history buffer so
+            // the next agent turn has context for the conversation. The
+            // buffer itself short-circuits non-group messages, so this is a
+            // safe no-op for DMs.
+            buffer.add(&inbound).await;
+
+            Some(inbound)
         }
         _ => {
             debug!("Skipping non-message event");
