@@ -60,13 +60,13 @@ static INLINE_SHELL_REGEX: LazyLock<Regex> =
 /// Every `` !`cmd` `` in `content`, in document order: the byte range of the
 /// whole span and the command it runs (trimmed).
 ///
-/// The one place that decides which text of an adapter-parsed body is shell
-/// source for [`SkillTemplate::render`]: render runs exactly these, and the
-/// manifest adapter leaves exactly these unexpanded
+/// The one place that decides which text of a body is shell source, on every
+/// face that runs one: [`SkillTemplate::render`] (a command's body) and
+/// `skill_read`'s preprocessor (`skill::preprocess`, a skill's body) run
+/// exactly these, and the manifest adapter leaves exactly these unexpanded
 /// (`AdapterRegistry::parse_dir`), so a plugin's install path never becomes
-/// part of such a command's source. Known exception, tracked as P4.17:
-/// `skill_read`'s preprocessor (`skill::preprocess::find_inline_spans`) has
-/// its own scanner and runs a skill's spans from the file on disk.
+/// part of such a command's source. Both runners take the spans from the
+/// text as written and never rescan what they insert around them.
 #[must_use]
 pub(crate) fn inline_commands(content: &str) -> Vec<(Range<usize>, &str)> {
     INLINE_SHELL_REGEX
@@ -78,6 +78,16 @@ pub(crate) fn inline_commands(content: &str) -> Vec<(Range<usize>, &str)> {
 /// The environment variable an inline command reads the whole argument
 /// string from (`$ARGUMENTS`).
 const ARGUMENTS_VAR: &str = "ARGUMENTS";
+
+/// The variable naming a skill's own directory: exported to a skill's inline
+/// commands ([`InlineSite::skill_dir`]), and — spelled [`SKILL_DIR_TOKEN`] —
+/// expanded as text in a skill's prose (`skill::preprocess`).
+pub const SKILL_DIR_VARIABLE: &str = "ALEPH_SKILL_DIR";
+
+/// [`SKILL_DIR_VARIABLE`] as a skill's prose spells it.
+// rust-doctor-disable-next-line hardcoded-secrets
+// Not a secret: this is the literal placeholder name used in skill templates.
+pub(crate) const SKILL_DIR_TOKEN: &str = "${ALEPH_SKILL_DIR}";
 
 /// The daemon's environment an inline command inherits: what a shell and the
 /// programs it starts need to run — where programs are, whose home and
@@ -210,15 +220,20 @@ pub fn split_arguments(args: &str) -> Vec<String> {
 /// ([`command_hook_invocation`](crate::extension::hooks::command_hook_invocation)).
 #[derive(Debug, Clone, Copy)]
 pub struct InlineSite<'a> {
-    /// The run's directory: the child's working directory AND
-    /// `CLAUDE_PROJECT_DIR` — one value, so the two cannot disagree. There is
-    /// no default: a caller that does not know it must not spawn.
+    /// The run's directory: `CLAUDE_PROJECT_DIR`, and the child's working
+    /// directory unless the command is a skill's ([`Self::skill_dir`]). One
+    /// value for a command, so the two cannot disagree there. There is no
+    /// default: a caller that does not know it must not spawn.
     pub cwd: &'a Path,
     /// The plugin that ships the command: its id and its install root (not
     /// its `commands/` directory). Sets `CLAUDE_PLUGIN_ROOT` and every
     /// spelling of it and, for a valid plugin id, the `_DATA` pair. `None`:
     /// all of them are removed.
     pub plugin: Option<(&'a str, &'a Path)>,
+    /// The skill whose body holds the command: the child runs in this
+    /// directory and `ALEPH_SKILL_DIR` ([`SKILL_DIR_VARIABLE`]) names it.
+    /// `None` (a command's body): the variable is removed, never inherited.
+    pub skill_dir: Option<&'a Path>,
 }
 
 /// The process for one `` !`cmd` ``: `cmd` is the shell's source, the
@@ -241,11 +256,12 @@ pub struct InlineSite<'a> {
 /// nothing is appended and `ARGUMENTS` is removed, not exported.
 ///
 /// `cmd` holds the path variables as the plugin wrote them
-/// (`${CLAUDE_PLUGIN_ROOT}/x`): the manifest adapter leaves every inline
-/// command unexpanded. On unix they reach the shell through the environment
-/// only; on Windows `cmd` cannot expand `${…}`, so they — and nothing else —
-/// are substituted into the line, the one derivation a command hook uses
-/// ([`plugin_shell_line`]).
+/// (`${CLAUDE_PLUGIN_ROOT}/x`, `${ALEPH_SKILL_DIR}/x`): the manifest adapter
+/// and the skill preprocessor leave every inline command unexpanded. On unix
+/// they reach the shell through the environment only; on Windows `cmd`
+/// cannot expand `${…}`, so they — and nothing else — are substituted into
+/// the line: the plugin's by the one derivation a command hook uses
+/// ([`plugin_shell_line`]), then the skill's directory.
 ///
 /// The daemon's environment is cleared first, except what a shell and its
 /// programs need ([`INHERITED_ENV`]) — unlike a plugin command hook, which
@@ -258,9 +274,10 @@ pub struct InlineSite<'a> {
 /// inside a Claude Code session has them). The data directory is created
 /// when the command names it, as for a hook.
 ///
-/// The child runs in `site.cwd` with stdin closed (`/dev/null`) and is killed
-/// when the handle is dropped, so a timeout does not orphan it. The caller
-/// sets stdout / stderr and the timeout.
+/// The child runs in `site.cwd` — a skill's command in its skill directory —
+/// with stdin closed (`/dev/null`) and is killed when the handle is dropped,
+/// so a timeout does not orphan it. The caller sets stdout / stderr and the
+/// timeout.
 #[must_use]
 pub fn inline_shell_command(
     cmd: &str,
@@ -276,6 +293,10 @@ pub fn inline_shell_command(
         site.plugin.map(|(_, root)| root),
         site.plugin.map_or("", |(id, _)| id),
     );
+    let line = match site.skill_dir {
+        Some(dir) if cfg!(windows) => line.replace(SKILL_DIR_TOKEN, &dir.to_string_lossy()),
+        _ => line,
+    };
     let mut command = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" });
     command
         .env_clear()
@@ -307,9 +328,10 @@ pub fn inline_shell_command(
         &PLUGIN_DATA_VARIABLES,
         vars.as_ref().map(PluginVars::data_dir),
     );
+    set_or_remove(&mut command, &[SKILL_DIR_VARIABLE], site.skill_dir);
     command
         .env("CLAUDE_PROJECT_DIR", site.cwd)
-        .current_dir(site.cwd)
+        .current_dir(site.skill_dir.unwrap_or(site.cwd))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .no_window();
@@ -366,8 +388,9 @@ fn argument_value(cap: &regex::Captures<'_>, args: &InlineArgs<'_>) -> String {
 }
 
 /// One inline command's expansion: its stdout, the runner's placeholder, or —
-/// with no runner — a placeholder saying so.
-async fn run_inline(cmd: &str, args: &InlineArgs<'_>, ctx: &TemplateCtx<'_>) -> String {
+/// with no runner — a placeholder saying so. Every face's: a command body's
+/// ([`SkillTemplate::render`]) and a skill body's (`skill::preprocess`).
+pub(crate) async fn run_inline(cmd: &str, args: &InlineArgs<'_>, ctx: &TemplateCtx<'_>) -> String {
     match ctx.shell {
         Some(shell) => match shell.run(cmd, args).await {
             Ok(stdout) => stdout.trim_end().to_string(),
@@ -1066,6 +1089,7 @@ mod tests {
             &InlineSite {
                 cwd: Path::new("/"),
                 plugin: None,
+                skill_dir: None,
             },
         );
         let env: Vec<_> = cmd.as_std().get_envs().collect();
@@ -1095,6 +1119,7 @@ mod tests {
             &InlineSite {
                 cwd: &cwd,
                 plugin: None,
+                skill_dir: None,
             },
         );
         assert!(cmd.get_kill_on_drop(), "kill_on_drop is not set");
@@ -1118,6 +1143,7 @@ mod tests {
             let site = InlineSite {
                 cwd: &self.0,
                 plugin: None,
+                skill_dir: None,
             };
             let out = inline_shell_command(cmd, args, &site)
                 .output()
@@ -1213,7 +1239,11 @@ mod tests {
                 raw: "",
                 positional: &none,
             },
-            &InlineSite { cwd, plugin },
+            &InlineSite {
+                cwd,
+                plugin,
+                skill_dir: None,
+            },
         )
         .output()
         .await
@@ -1257,6 +1287,7 @@ mod tests {
             &InlineSite {
                 cwd: &cwd,
                 plugin: Some(("plug", root)),
+                skill_dir: None,
             },
         )
         .as_std()
@@ -1289,6 +1320,117 @@ mod tests {
             shell_args(r"type ${CLAUDE_PLUGIN_ROOT}\x %ARGUMENTS%", root),
             ["/C", r"type C:\plugins\plug\x %ARGUMENTS%"]
         );
+    }
+
+    /// A skill's inline command: the text as written is the source (unix),
+    /// the child runs in the skill's directory, `ALEPH_SKILL_DIR` names it —
+    /// a directory named with a command substitution stays one word of data
+    /// — and `CLAUDE_PROJECT_DIR` is the run's directory, not the skill's.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_skills_command_runs_in_its_dir_and_names_it_only_through_the_environment() {
+        let tmp = TempDir::new().unwrap();
+        let skill = tmp.path().join("s $(touch M)");
+        std::fs::create_dir_all(&skill).unwrap();
+        let run = tmp.path().join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        let none: [String; 0] = [];
+        let cmd = r#"printf '%s\n' "${ALEPH_SKILL_DIR}" "$CLAUDE_PROJECT_DIR"; pwd -P"#;
+        let mut command = inline_shell_command(
+            cmd,
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite {
+                cwd: &run,
+                plugin: None,
+                skill_dir: Some(&skill),
+            },
+        );
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["-c", cmd, "sh"]);
+        let out = command.output().await.unwrap();
+        let shown = String::from_utf8_lossy(&out.stdout).to_string();
+        let lines: Vec<&str> = shown.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                skill.to_string_lossy().as_ref(),
+                run.to_string_lossy().as_ref(),
+                std::fs::canonicalize(&skill)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref(),
+            ],
+            "{shown}"
+        );
+        assert!(!skill.join("M").exists() && !run.join("M").exists());
+    }
+
+    /// A command body's inline command gets no `ALEPH_SKILL_DIR`, even when
+    /// the daemon has one.
+    #[tokio::test]
+    #[cfg(unix)]
+    #[serial_test::serial] // writes process env a spawned child reads
+    async fn a_commands_inline_command_does_not_inherit_a_skill_dir() {
+        struct DaemonEnv;
+        impl Drop for DaemonEnv {
+            fn drop(&mut self) {
+                std::env::remove_var(SKILL_DIR_VARIABLE);
+            }
+        }
+        let _daemon = DaemonEnv;
+        std::env::set_var(SKILL_DIR_VARIABLE, "from-the-daemon");
+        let cwd = TempDir::new().unwrap();
+        let none: [String; 0] = [];
+        let out = inline_shell_command(
+            r#"printf '%s' "${ALEPH_SKILL_DIR-unset}""#,
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite {
+                cwd: cwd.path(),
+                plugin: None,
+                skill_dir: None,
+            },
+        )
+        .output()
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "unset");
+    }
+
+    /// On Windows a skill's `${ALEPH_SKILL_DIR}` is substituted into the
+    /// line beside the plugin's path variables.
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_a_skills_command_gets_its_dir_substituted() {
+        let none: [String; 0] = [];
+        let cwd = std::env::temp_dir();
+        let skill = Path::new(r"C:\skills\demo");
+        let args: Vec<String> = inline_shell_command(
+            r"type ${ALEPH_SKILL_DIR}\x",
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite {
+                cwd: &cwd,
+                plugin: None,
+                skill_dir: Some(skill),
+            },
+        )
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(args, ["/C", r"type C:\skills\demo\x"]);
     }
 
     /// A name the site does not know is removed, not inherited from the
@@ -1384,6 +1526,7 @@ mod tests {
             &InlineSite {
                 cwd: cwd.path(),
                 plugin: None,
+                skill_dir: None,
             },
         )
         .output()

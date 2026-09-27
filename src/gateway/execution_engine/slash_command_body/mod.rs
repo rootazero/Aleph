@@ -39,7 +39,9 @@
 //! template text, then the production builder
 //! ([`inline_shell_command`](crate::extension::inline_shell_command)) — and
 //! only for an operator, on a turn whose tool gate does not deny the model
-//! `bash` ([`inline_shell_refusal`]).
+//! `bash` ([`inline_shell_refusal`]). A skill's inline commands
+//! (`skill::preprocess`) take the same rule, consent check, placeholder and
+//! process run from the same place (`extension::inline_shell`).
 //!
 //! **`model:`** pins this turn's model when the request carries none
 //! ([`command_model_pin`]) — applied before the run is admitted
@@ -47,14 +49,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{
-    read_capped, ShellHookConsent, INLINE_COMMAND_EVENT, MAX_HOOK_OUTPUT_BYTES,
-};
+use crate::extension::hooks::{ShellHookConsent, INLINE_COMMAND_EVENT};
+use crate::extension::inline_shell::{run_inline_process, withheld, InlineConsent, Withheld};
 use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
@@ -77,12 +76,6 @@ const ADMITTED_KEY: &str = "slash_command_admitted";
 /// `model:` rather than the request's own pick, so [`strip`] can tell the two
 /// apart once both sit in the same field.
 const MODEL_PIN_KEY: &str = "slash_command_model";
-
-/// Bound on one `` !`cmd` `` expansion. Well under the hook ceiling: this
-/// runs BEFORE the turn's first Think, and a command that takes longer is one
-/// that belongs in the body as an instruction to the model, not in an inline
-/// expansion.
-const INLINE_SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Admit this turn's plugin command, if its slash mode names one: judge its
 /// `model:` into `model_override` and mark the request for
@@ -209,35 +202,23 @@ pub(super) async fn render_admitted(
     }
 }
 
-/// Why this turn may run none of its command's inline commands, or `None`.
-///
-/// An inline command is a shell run as the daemon's user, outside the
-/// sandbox and the `[sandbox.command_policy]` floor, with arguments the
-/// sender picks. So — as `/moa` arms only for an operator on its channel
-/// face — it runs only for an OPERATOR (`role_is_operator`: loopback and
-/// authorized clients; a channel's chat-tier sender is a guest), and only
-/// on a turn whose tool gate would not deny the model its own shell
-/// (`bash`): an approved command would otherwise be the very shell the
-/// operator switched off. That is the tool gate's own answer
-/// ([`TurnPermissions::builtin_permission`]) — the global, agent and channel
-/// policies merged, and the tier, so a `plan` turn and a `/btw` side question
-/// run none — not a second reading of any one layer. `Ask` on `bash` does not
-/// withhold: the command's consent entry is its own question, asked once per
-/// command text. The body still renders; each inline command is a placeholder
-/// naming the reason.
+/// Why this turn may run none of its command's inline commands, or `None`:
+/// the one rule every inline face applies
+/// ([`inline_shell_refusal`](crate::extension::inline_shell::inline_shell_refusal)
+/// has it and why), on this turn's caller role and on what this turn's tool
+/// gate answers for `bash` ([`TurnPermissions::builtin_permission`] — the
+/// permissions the run's tool gate is built from). A skill's inline commands
+/// get the same rule on the same two facts, as the tool gate publishes them
+/// (`tools::turn_context::TURN_INLINE_SHELL`).
 fn inline_shell_refusal(
     metadata: &HashMap<String, String>,
     permissions: &TurnPermissions,
 ) -> Option<&'static str> {
     use crate::tools::AlephTool;
-    if !crate::tools::turn_context::role_is_operator(
+    crate::extension::inline_shell::inline_shell_refusal(
         metadata.get("caller_role").map(String::as_str),
-    ) {
-        return Some("inline commands run only for an operator");
-    }
-    (permissions.builtin_permission(crate::builtin_tools::BashExecTool::NAME)
-        == crate::extension::PermissionAction::Deny)
-        .then_some("this turn's permissions deny `bash`")
+        permissions.builtin_permission(crate::builtin_tools::BashExecTool::NAME),
+    )
 }
 
 /// The slash-mode JSON a request carries, if any.
@@ -299,17 +280,6 @@ pub(super) async fn render_command(
         .map_err(|e| e.to_string())?;
     let block = wrap_block(&qualified, &reg.plugin_id, &rendered);
     Ok(Some((qualified, block)))
-}
-
-/// An inline-command runner that runs nothing: every `` !`cmd` `` becomes a
-/// visible placeholder naming why.
-struct Withheld(&'static str);
-
-#[async_trait::async_trait]
-impl InlineShell for Withheld {
-    async fn run(&self, cmd: &str, _args: &InlineArgs<'_>) -> Result<String, String> {
-        Err(format!("[!`{cmd}` not run: {}]", self.0))
-    }
 }
 
 /// The plugin command a slash mode names — the one the fast path's owner gate
@@ -437,13 +407,13 @@ pub(super) fn strip(
 /// The `` !`cmd` `` runner: the SAME consent registry, and the same
 /// `(plugin, scope, command)` key and root binding, as a plugin's
 /// `hooks.json` shell command (`HookExecutor::execute_command`), so
-/// `aleph-server hooks list` / `aleph-server hooks test` review both. Known
-/// exception, tracked as P4.17: `skill_read`'s preprocessor
-/// (`skill::preprocess`) runs a skill's own `` !`cmd` `` spans — a plugin
-/// skill's included, when its SKILL.md sets `allow-inline-shell: true` —
-/// with no consent entry and its own span scanner. The entry is filed under
-/// [`INLINE_COMMAND_EVENT`] with the template's own text; only an approval
-/// that says so covers it. A command with a relative word ahead of the
+/// `aleph-server hooks list` / `aleph-server hooks test` review both — and a
+/// skill's inline commands (`skill::preprocess::SkillShell`, under
+/// [`SKILL_INLINE_EVENT`](crate::extension::hooks::SKILL_INLINE_EVENT)): the
+/// one review surface for every inline shell a body can hold, whoever wrote
+/// the body. The entry is filed under [`INLINE_COMMAND_EVENT`] with the
+/// template's own text; only an approval that says so covers it
+/// ([`InlineConsent::admit`]). A command with a relative word ahead of the
 /// script consent binds is never filed or run
 /// ([`ShellHookConsent::root_relative_script`], which also names what it
 /// does not look at).
@@ -451,7 +421,8 @@ pub(super) fn strip(
 /// Approved, the command runs through the production builder in the run's
 /// directory, with the plugin's settings minus every secret
 /// ([`SettingsForm::WithoutSecrets`]), stdout capped like a hook's, stderr
-/// discarded, [`INLINE_SHELL_TIMEOUT`]; a failure is a visible placeholder.
+/// discarded, [`INLINE_SHELL_TIMEOUT`](crate::extension::inline_shell::INLINE_SHELL_TIMEOUT)
+/// ([`run_inline_process`]); a failure is a visible placeholder.
 pub(super) struct ConsentedShell {
     plugin_id: String,
     scope: ScopeKey,
@@ -485,85 +456,25 @@ impl InlineShell for ConsentedShell {
                  `${{CLAUDE_PLUGIN_ROOT}}/{word}` for its own script]"
             ));
         }
-        let approval =
-            self.consent
-                .approved_entry(&self.plugin_id, &self.scope, &self.plugin_root, cmd);
-        let Some(approval) = approval else {
-            self.consent.record_pending(
-                &self.plugin_id,
-                &self.scope,
-                cmd,
-                INLINE_COMMAND_EVENT,
-                &self.plugin_root,
-            );
-            tracing::warn!(
-                plugin = %self.plugin_id,
-                command = %cmd,
-                "inline command not approved — withheld; review with `aleph-server hooks list`"
-            );
-            return Err(format!(
-                "[!`{cmd}` not run: pending operator approval — `aleph-server hooks list` / `aleph-server hooks test`]"
-            ));
-        };
-        // The key has no event, so a `hooks.json` command with the same text
-        // shares it — and an approval given to that hook, reviewed without
-        // arguments in its root, does not cover this sender-driven face.
-        // Judged on the entry that approved, from the same read.
-        if approval.event != INLINE_COMMAND_EVENT {
-            return Err(format!(
-                "[!`{cmd}` not run: its approval was given to a hook with the same text — \
-                 `aleph-server hooks revoke {}`, then review it as an inline command]",
-                approval.fingerprint
-            ));
+        InlineConsent {
+            consent: &self.consent,
+            owner: &self.plugin_id,
+            scope: &self.scope,
+            root: &self.plugin_root,
+            event: INLINE_COMMAND_EVENT,
         }
+        .admit(cmd)?;
         let Some(cwd) = self.cwd.as_deref() else {
-            return Err(format!(
-                "[!`{cmd}` not run: no working directory is known for this turn]"
-            ));
+            return Err(withheld(cmd, "no working directory is known for this turn"));
         };
         let site = InlineSite {
             cwd,
             plugin: Some((&self.plugin_id, &self.plugin_root)),
+            skill_dir: None,
         };
         let mut command = inline_shell_command(cmd, args, &site);
-        command
-            .envs(self.settings_env.iter().map(|(k, v)| (k, v)))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let run = async {
-            let mut child = command
-                .spawn()
-                .map_err(|e| format!("[!`{cmd}` failed to start: {e}]"))?;
-            let (buf, truncated) = match child.stdout.take() {
-                Some(stdout) => read_capped(stdout, MAX_HOOK_OUTPUT_BYTES).await,
-                None => (Vec::new(), false),
-            };
-            let status = child
-                .wait()
-                .await
-                .map_err(|e| format!("[!`{cmd}` failed: {e}]"))?;
-            if !status.success() {
-                let code = status
-                    .code()
-                    .map_or_else(|| "by signal".to_string(), |c| c.to_string());
-                return Err(format!("[!`{cmd}` exited {code}]"));
-            }
-            let mut text = String::from_utf8_lossy(&buf).into_owned();
-            if truncated {
-                text.push_str(&format!(
-                    "\n...[truncated: output exceeds {} KiB]",
-                    MAX_HOOK_OUTPUT_BYTES / 1024
-                ));
-            }
-            Ok(text)
-        };
-        match tokio::time::timeout(INLINE_SHELL_TIMEOUT, run).await {
-            Ok(result) => result,
-            Err(_) => Err(format!(
-                "[!`{cmd}` timed out after {}s]",
-                INLINE_SHELL_TIMEOUT.as_secs()
-            )),
-        }
+        command.envs(self.settings_env.iter().map(|(k, v)| (k, v)));
+        run_inline_process(cmd, command).await
     }
 }
 

@@ -39,6 +39,9 @@ mod tests;
 mod hook_block_tests;
 #[cfg(all(test, unix))]
 mod refusal_tests;
+// POSIX-only: the skills' inline commands under test run through `sh`.
+#[cfg(all(test, unix))]
+mod skill_inline_tests;
 
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
@@ -432,6 +435,14 @@ impl ToolService for ScopedToolService {
                 None => fut.await,
             }
         };
+
+        // Publish whether this call may run a skill's inline shell commands
+        // (`TURN_INLINE_SHELL`, consumed by `skill_read`): the one rule every
+        // inline face applies, over this turn's caller role and what this
+        // gate itself answers for `bash` on this call — not a second reading
+        // of the policy layers.
+        let inline_shell_refusal = self.inline_shell_refusal();
+        let fut = crate::tools::turn_context::TURN_INLINE_SHELL.scope(inline_shell_refusal, fut);
 
         // Contain a panic raised anywhere below this seam — gate chain, hook
         // stages, tool body — to the call that raised it. The Act phase polls

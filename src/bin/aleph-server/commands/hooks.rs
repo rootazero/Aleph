@@ -4,9 +4,10 @@
 //! gates them behind the consent allowlist
 //! (`~/.aleph/shell-hooks-allowlist.json`): an un-approved shell hook is
 //! skipped and recorded as `pending`. These subcommands let the operator
-//! review, test, approve, and revoke those hooks — and a plugin command's
-//! inline shell commands (`` !`cmd` ``), which the same allowlist gates under
-//! the event `SlashCommand`.
+//! review, test, approve, and revoke those hooks — and the inline shell
+//! commands (`` !`cmd` ``) the same allowlist gates: a plugin command's, under
+//! the event `SlashCommand`, and a skill's (`allow-inline-shell: true`),
+//! under the event `SkillRead`.
 //!
 //! The allowlist file lives outside `~/.aleph/data/` and the consent module
 //! guards it with an `fs2` lock + atomic rename, so these commands are safe
@@ -17,7 +18,7 @@ use std::io::{self, Write};
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
     CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, Superseded,
-    INLINE_COMMAND_EVENT, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
+    INLINE_COMMAND_EVENT, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES, SKILL_INLINE_EVENT,
 };
 use alephcore::utils::no_window::NoWindow;
 
@@ -67,7 +68,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
         if let Some(note) = why.and_then(spliced_text_note) {
             println!("{:<18} {note}", "");
         }
-        if let Some(note) = e.invoker_arguments_note() {
+        if let Some(note) = e.invoker_arguments_note().or(e.skill_read_note()) {
             println!("{:<18} {note}", "");
         }
     }
@@ -102,7 +103,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         println!("Project:     {note}");
     }
     println!("Event:       {}", entry.event);
-    if let Some(note) = entry.invoker_arguments_note() {
+    if let Some(note) = entry.invoker_arguments_note().or(entry.skill_read_note()) {
         println!("Note:        {note}");
     }
     println!("Status:      {}", status_label(entry.status));
@@ -187,13 +188,15 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
 const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '>', '<', '\n', '\r'];
 
 /// `line` as the metacharacter gate reads it: without its path-variable
-/// references. On unix the shell expands `${CLAUDE_PLUGIN_ROOT}` from the
-/// hook's environment as one word of data; on Windows the line already holds
-/// the path in its place, which is judged as written.
+/// references. On unix the shell expands `${CLAUDE_PLUGIN_ROOT}` (and a
+/// skill's `${ALEPH_SKILL_DIR}`) from the child's environment as one word of
+/// data; on Windows the line already holds the path in its place, which is
+/// judged as written.
 fn gated_text(line: &str) -> String {
     PLUGIN_ROOT_VARIABLES
         .iter()
         .chain(&PLUGIN_DATA_VARIABLES)
+        .chain(&[alephcore::extension::SKILL_DIR_VARIABLE])
         .fold(line.to_string(), |text, name| {
             text.replace(&format!("${{{name}}}"), "")
         })
@@ -235,15 +238,64 @@ fn print_output(output: &std::process::Output) {
     println!("----------------");
 }
 
-/// The review run of `entry`: an inline command (a plugin command's
-/// `` !`cmd` ``) the way the slash-command runner spawns it, a hook the way
-/// the hook executor does. `cwd` is where an inline command runs.
+/// The review run of `entry`: a plugin command's `` !`cmd` `` the way the
+/// slash-command runner spawns it, a skill's the way `skill_read` does, a
+/// hook the way the hook executor does. `cwd` is this shell's directory: where
+/// a command's inline command runs, and a skill's `CLAUDE_PROJECT_DIR`.
 fn run_for_review(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
     if entry.event == INLINE_COMMAND_EVENT {
         run_inline_command(entry, cwd)
+    } else if entry.event == SKILL_INLINE_EVENT {
+        run_skill_inline_command(entry, cwd)
     } else {
         run_command_with_payload(entry)
     }
+}
+
+/// Run a recorded skill inline command through the production builder
+/// ([`inline_shell_command`](alephcore::extension::inline_shell_command)) as
+/// `skill_read` spawns it: in the skill's directory — the entry's root, which
+/// an approval binds to — with `ALEPH_SKILL_DIR` naming it, and no arguments.
+/// `CLAUDE_PROJECT_DIR` is `cwd` (production: the run's directory). A plugin
+/// skill's path variables are NOT set here: the entry records the skill's
+/// directory, not its plugin's root (production sets them). Not production's
+/// timeout, output cap or daemon environment either.
+fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult {
+    use alephcore::extension::{inline_shell_command, InlineArgs, InlineSite};
+
+    let Some(skill_dir) = entry.plugin_root.as_deref() else {
+        return Err(
+            "the entry records no skill directory: let the model read the skill once \
+             (that records it), then review it again"
+                .into(),
+        );
+    };
+    refuse_shell_metachars(&entry.command)?;
+    println!(
+        "(skill inline command: run in {} with ALEPH_SKILL_DIR set to it; a plugin skill's \
+         CLAUDE_PLUGIN_ROOT & co. are unset in this review run — production sets them)",
+        skill_dir.display()
+    );
+    let site = InlineSite {
+        cwd,
+        plugin: None,
+        skill_dir: Some(skill_dir),
+    };
+    let mut command = inline_shell_command(
+        &entry.command,
+        &InlineArgs {
+            raw: "",
+            positional: &[],
+        },
+        &site,
+    );
+    let output = command
+        .as_std_mut()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    print_output(&output);
+    Ok(())
 }
 
 /// Run a recorded inline command through the production builder
@@ -284,6 +336,7 @@ fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult 
             .plugin_root
             .as_deref()
             .map(|root| (entry.plugin_name.as_str(), root)),
+        skill_dir: None,
     };
     let mut command = inline_shell_command(
         &entry.command,
@@ -699,6 +752,43 @@ mod tests {
         for dir in [root.path(), cwd.path()] {
             assert!(!dir.join("RAN").exists(), "the relative script ran");
         }
+    }
+
+    /// A skill's inline command is reviewed the way `skill_read` spawns it
+    /// — through the inline builder, in the skill's directory (the recorded
+    /// root), `ALEPH_SKILL_DIR` naming it, `CLAUDE_PROJECT_DIR` the given
+    /// directory — and its `${ALEPH_SKILL_DIR}` reference is no metacharacter.
+    /// Driven through `run_for_review`, the function `aleph-server hooks
+    /// test` calls.
+    #[cfg(unix)]
+    #[test]
+    fn a_reviewed_skill_inline_command_runs_as_skill_read_spawns_it() {
+        let skill = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::write(
+            skill.path().join("probe.sh"),
+            "printf '%s' \"$ALEPH_SKILL_DIR\" > skill_dir.txt\n\
+             printf '%s' \"$CLAUDE_PROJECT_DIR\" > project_dir.txt\n\
+             pwd -P > pwd.txt\n",
+        )
+        .unwrap();
+        let entry = ConsentEntry {
+            plugin_name: ShellHookConsent::skill_owner("user", "demo"),
+            event: SKILL_INLINE_EVENT.into(),
+            ..pending_entry(r#"sh "${ALEPH_SKILL_DIR}/probe.sh""#, skill.path())
+        };
+
+        run_for_review(&entry, cwd.path()).expect("a skill-dir reference is not a metacharacter");
+
+        let read = |name: &str| std::fs::read_to_string(skill.path().join(name)).unwrap();
+        assert_eq!(read("skill_dir.txt"), skill.path().to_string_lossy());
+        assert_eq!(read("project_dir.txt"), cwd.path().to_string_lossy());
+        assert_eq!(
+            read("pwd.txt").trim_end(),
+            std::fs::canonicalize(skill.path())
+                .unwrap()
+                .to_string_lossy()
+        );
     }
 
     /// A pending `user:global` entry for `command`, recorded from `root`.

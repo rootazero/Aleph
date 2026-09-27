@@ -569,6 +569,7 @@ async fn a_plugin_skill_pregrants_only_from_a_global_plugin() {
             dir: plugin_skills.clone(),
             plugin_id: PLUGIN.into(),
             scope_key,
+            plugin_root: plugin_skills.parent().unwrap().to_path_buf(),
         }]);
         w.scan(std::slice::from_ref(&w.user)).await;
         let source = w

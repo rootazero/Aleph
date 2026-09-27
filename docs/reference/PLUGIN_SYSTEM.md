@@ -403,13 +403,25 @@ aleph plugin list
 四个变量在**同一个点**展开：`mcp_config.rs::substitute_vars`，路径单一源
 `extension::plugin_data_dir`。**shell 源码例外**——hook 的 `command` 与命令正文里的
 `` !`cmd` ``：解析插件时（`AdapterRegistry::parse_dir`）只展开 skill / 命令 / agent 正文里的
-散文，这两处原样保留（对经 adapter 解析、由 `SkillTemplate::render` 渲染的正文，哪段是 `` !`cmd` ``
-由 `template::inline_commands` 决定；**已知例外，记为 P4.17**：`skill_read` 的预处理器
-`skill::preprocess` 用它自己的扫描器，直接从磁盘上的 SKILL.md 跑 `allow-inline-shell: true` 的
-`` !`cmd` ``——插件 skill 也在内——不过同意清单，且把 `${ALEPH_SKILL_DIR}` 按文本拼进 `sh -c` 源码）；
-unix 上这些变量只写进子进程的环境、由 `sh` 当数据展开（目录名里的 `$(…)` / `"` / 空格不会被
-当作源码解析；单引号 `'${CLAUDE_PLUGIN_ROOT}'` 因此保持字面量）；Windows 的 `cmd` 不会展开
-`${…}`，在起进程时替换——hook 与 inline 命令共用 `hooks::plugin_shell_line` 这一个推导。
+散文，这两处原样保留（哪段是 `` !`cmd` `` 由 `template::inline_commands` 这一个识别器决定——
+命令正文（`SkillTemplate::render`）与 skill 正文（`skill_read` 的预处理器 `skill::preprocess`）
+两张脸都用它，都在原文上找、从不重扫自己插进去的文字）；unix 上这些变量——以及 skill 的
+`${ALEPH_SKILL_DIR}`——只写进子进程的环境、由 `sh` 当数据展开（目录名里的 `$(…)` / `"` / 空格
+不会被当作源码解析；单引号 `'${CLAUDE_PLUGIN_ROOT}'` 因此保持字面量）；Windows 的 `cmd` 不会展开
+`${…}`，在起进程时替换——hook 与 inline 命令共用 `hooks::plugin_shell_line` 这一个推导（skill 的
+`${ALEPH_SKILL_DIR}` 在同一个构造器 `template::inline_shell_command` 里紧随其后替换）。
+
+**skill 的 inline shell（`allow-inline-shell: true`，2026-09-28 起）与命令的走同一道闸**
+（`extension::inline_shell`）：只在操作者的调用、且这一轮的工具闸不拒 `bash` 时跑
+（`inline_shell_refusal`，工具面由派发咽喉 `ScopedToolService` 每次调用发布为
+`TURN_INLINE_SHELL`；没经过咽喉的调用——`tools.invoke`、直接调用——一律不跑）；且原文必须在
+同意清单里被批准，按 `(owner, skill, 原文)` 记在事件 `SkillRead` 下（插件 skill 的 owner 是插件
+id + 插件的可见性键；其它 skill——**用户自己写的也算**——owner 是 `user`、按所在 skills 目录
+键控），批准绑定 skill 目录，经 `aleph-server hooks list` / `hooks test` 审——模型能写 skill
+（`skill_manage`、往项目 `.aleph/skills` 里 `file_write`），所以 skill 的来路不是批准。否则
+原位留占位 `[!`cmd` not run: <原因>]`，与命令面同一个字面量。子进程在 skill 目录里跑，
+`CLAUDE_PROJECT_DIR` 是这一轮的目录，插件 skill 另有插件的路径变量；超时 30 s、输出 64 KiB，与
+命令面相同。**迁移**：此前跑过 inline shell 的 skill，升级后先显示占位，直到被批准一次。
 同意清单因此记的是插件写下的原文（`${CLAUDE_PLUGIN_ROOT}/…`），不是展开后的路径（2026-09-27 起；
 此前用展开文本记下的批准失效、回到 pending 一次）。安装路径若会改动正文里的 `` !`cmd` ``
 （路径里带反引号），正文整段不展开并记一条 warn。拼写清单单一源：`hooks::{PLUGIN_ROOT_VARIABLES, PLUGIN_DATA_VARIABLES}`。数据目录在插件**首次引用它**时创建（无条件创建会给每个

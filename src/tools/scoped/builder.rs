@@ -270,6 +270,22 @@ impl ScopedToolService {
         )
     }
 
+    /// Why this call may run no inline shell command (a skill's
+    /// `` !`cmd` ``), or `None`: the one rule every inline face applies
+    /// ([`inline_shell_refusal`](crate::extension::inline_shell::inline_shell_refusal)),
+    /// over this turn's caller role and [`Self::permission_for`]`("bash")` —
+    /// what this gate answers the model's own shell on this call. Published
+    /// per call by `execute` as `turn_context::TURN_INLINE_SHELL`.
+    pub(super) fn inline_shell_refusal(&self) -> Option<&'static str> {
+        use crate::tools::AlephTool;
+        crate::extension::inline_shell::inline_shell_refusal(
+            self.turn_context
+                .as_ref()
+                .and_then(|t| t.caller_role.as_deref()),
+            self.permission_for(crate::builtin_tools::BashExecTool::NAME),
+        )
+    }
+
     /// Whether this turn is a `/btw` side question — from [`TurnContext`],
     /// the same carrier [`Self::effective_exec_tier`]'s `plan_gate` read
     /// rides on.

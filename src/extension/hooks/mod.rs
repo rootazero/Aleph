@@ -63,6 +63,7 @@ mod user_settings;
 pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_tool_head};
 pub use consent::{
     ConsentEntry, ConsentStatus, ShellHookConsent, Superseded, INLINE_COMMAND_EVENT,
+    SKILL_INLINE_EVENT,
 };
 pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
@@ -589,14 +590,13 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
 }
 
 /// The line a shell parses for a plugin's command text — a command hook's
-/// `command`, or a command body's `` !`cmd` `` — on this platform.
+/// `command`, or a command or skill body's `` !`cmd` `` — on this platform.
 ///
-/// The text arrives as the plugin wrote it: the manifest adapter never
-/// expands a path variable inside either (`AdapterRegistry::parse_dir`), so
-/// for these two this is the only place one can be resolved into source.
-/// Known exception outside them, tracked as P4.17: `skill_read`'s
-/// preprocessor (`skill::preprocess`) splices `${ALEPH_SKILL_DIR}` into a
-/// skill's `` !`cmd` `` text before `sh -c` runs it.
+/// The text arrives as it was written: the manifest adapter never expands a
+/// path variable inside either (`AdapterRegistry::parse_dir`), nor does the
+/// skill preprocessor (`skill::preprocess`), so this is the only place one
+/// can be resolved into source (a skill's `${ALEPH_SKILL_DIR}` is resolved
+/// beside it, in [`inline_shell_command`](crate::extension::inline_shell_command)).
 ///
 /// - unix: the text verbatim. Each path variable reaches the child through
 ///   its environment ([`PLUGIN_ROOT_VARIABLES`], [`PLUGIN_DATA_VARIABLES`],

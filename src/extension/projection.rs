@@ -164,6 +164,7 @@ impl Views {
                     dir,
                     plugin_id: record.id.clone(),
                     scope_key: record.scope_key.clone(),
+                    plugin_root: record.root_dir.clone(),
                 });
             }
         }

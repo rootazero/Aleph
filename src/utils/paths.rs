@@ -656,7 +656,7 @@ fn collect_project_skills_dirs(
 static PLUGIN_SKILL_DIRS: RwLock<Vec<PublishedPluginSkillDir>> = RwLock::new(Vec::new());
 
 /// One published plugin skill base directory (`<plugin_root>/skills`) with
-/// the two facts about its owner that the readers need.
+/// the facts about its owner that the readers need.
 ///
 /// `plugin_id` is the REGISTRY id (`manifest::sanitize_plugin_id` of the
 /// declared id or of the directory name), copied from the same `PluginRecord`
@@ -670,6 +670,10 @@ pub struct PublishedPluginSkillDir {
     pub dir: PathBuf,
     pub plugin_id: String,
     pub scope_key: crate::extension::visibility::ScopeKey,
+    /// The owning plugin's install root (`record.root_dir`, the same record):
+    /// what its path variables name to a skill's inline commands
+    /// (`skill::preprocess::SkillShell`).
+    pub plugin_root: PathBuf,
 }
 
 /// Publish the installed plugins' skill base directories, each with the
@@ -2014,11 +2018,13 @@ mod tests {
                 dir: a_plugin_skills.clone(),
                 plugin_id: "plugin-a".into(),
                 scope_key: ScopeKey::project(proj_a.path()),
+                plugin_root: proj_a.path().join("plugin-a"),
             },
             PublishedPluginSkillDir {
                 dir: global_plugin_skills.clone(),
                 plugin_id: "plugin-g".into(),
                 scope_key: ScopeKey::Global,
+                plugin_root: proj_a.path().join("plugin-g"),
             },
         ]);
 
@@ -2288,6 +2294,7 @@ mod tests {
             dir: plugin_skills.clone(),
             plugin_id: "alpha".into(),
             scope_key: ScopeKey::Global,
+            plugin_root: plugin_skills.parent().unwrap().to_path_buf(),
         }]);
 
         let dirs = get_all_skills_dirs(Some(&project)).unwrap();

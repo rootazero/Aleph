@@ -40,6 +40,7 @@ pub mod effects;
 pub mod registrar;
 
 mod error;
+pub(crate) mod inline_shell;
 pub(crate) mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
@@ -75,9 +76,10 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
+pub(crate) use template::{inline_commands, run_inline, SKILL_DIR_TOKEN};
 pub use template::{
     inline_shell_command, split_arguments, InlineArgs, InlineShell, InlineSite, SkillTemplate,
-    TemplateCtx,
+    TemplateCtx, SKILL_DIR_VARIABLE,
 };
 pub use types::*;
 

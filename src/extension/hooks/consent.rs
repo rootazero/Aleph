@@ -98,6 +98,16 @@
 //! (naming the entry that replaces it) and `aleph doctor` counts it apart
 //! ([`ConsentEntry::superseded_in`] — exact: an entry with no such sibling
 //! is left unmarked, never guessed).
+//!
+//! **A skill's inline command** ([`SKILL_INLINE_EVENT`], 2026-09-28) is keyed
+//! `(<owner>/<skill>, project, text)` ([`ShellHookConsent::skill_owner`]) and
+//! bound to the skill's own directory — where it runs, and what
+//! `$ALEPH_SKILL_DIR` names. A script word is resolved against that
+//! directory (relative, or through `$ALEPH_SKILL_DIR`) and content-bound
+//! like a hook's; one spelled through a plugin path variable or
+//! `$CLAUDE_PROJECT_DIR` binds nothing — their values in the child are not
+//! that directory. Skills ran their inline commands with no entry until
+//! then: each one comes back `pending` once and runs from its approval on.
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
@@ -120,6 +130,20 @@ const REGISTRY_VERSION: u32 = 1;
 /// here like a `hooks.json` command. Written by the gateway's slash-command
 /// runner; read by `aleph-server hooks list` / `test` to tell the two apart.
 pub const INLINE_COMMAND_EVENT: &str = "SlashCommand";
+
+/// The [`ConsentEntry::event`] of a skill's inline shell command (`` !`cmd` ``
+/// in a `SKILL.md` that sets `allow-inline-shell: true`), which runs when the
+/// model reads the skill. Named for that face — `skill_read` — as
+/// [`INLINE_COMMAND_EVENT`] is for `/command`, and spelled like no hook event,
+/// so an approval given on one face never covers another. Written by
+/// `skill::preprocess::SkillShell`; read by `aleph-server hooks list` / `test`.
+/// Its owner label is [`ShellHookConsent::skill_owner`]'s.
+pub const SKILL_INLINE_EVENT: &str = "SkillRead";
+
+/// What separates a skill label's owner from its skill
+/// ([`ShellHookConsent::skill_owner`]). No plugin id contains it
+/// (`manifest::validate_plugin_id`), nor does any hook-file label.
+const SKILL_LABEL_SEPARATOR: char = '/';
 
 /// Cheap change-detection fingerprint for the registry file: `(mtime, len)`.
 /// Length is included because some filesystems have coarse mtime resolution —
@@ -313,6 +337,17 @@ impl ConsentEntry {
              to takes them as its options.",
         )
     }
+
+    /// What an approval of a skill's inline command approves, for the review
+    /// surfaces to print; `None` for anything else.
+    #[must_use]
+    pub fn skill_read_note(&self) -> Option<&'static str> {
+        (self.event == SKILL_INLINE_EVENT).then_some(
+            "inline command of a skill (allow-inline-shell): it runs in the skill's directory \
+             (the root) each time the model reads the skill with skill_read, on an operator's \
+             turn whose permissions do not deny bash. $ALEPH_SKILL_DIR names that directory.",
+        )
+    }
 }
 
 /// The project a consent key names: the root of a hook bound to one project,
@@ -374,6 +409,21 @@ impl ShellHookConsent {
         hasher.update([0u8]);
         hasher.update(command.as_bytes());
         hex16(&hasher.finalize())
+    }
+
+    /// The owner label a skill's inline commands are filed under
+    /// ([`SKILL_INLINE_EVENT`]): `<owner>/<skill>`, so the key is `(owner,
+    /// skill, text)` — two skills of one owner with the same text are two
+    /// entries. `owner` is the plugin id for a plugin's skill, `user`
+    /// otherwise; `skill` is the skill's directory name.
+    #[must_use]
+    pub fn skill_owner(owner: &str, skill: &str) -> String {
+        format!("{owner}{SKILL_LABEL_SEPARATOR}{skill}")
+    }
+
+    /// Whether `owner` is a [`Self::skill_owner`] label.
+    fn is_skill_owner(owner: &str) -> bool {
+        owner.contains(SKILL_LABEL_SEPARATOR)
     }
 
     /// The script word of an INLINE command (a plugin command's `` !`cmd` ``,
@@ -952,10 +1002,18 @@ struct ScriptContext<'a> {
     /// whenever that hook can fire. `None` for a hook that fires everywhere,
     /// where that variable names a different directory per session.
     project: Option<&'a Path>,
+    /// A skill's inline command ([`ShellHookConsent::skill_owner`]): its root
+    /// is the skill's directory — where it runs and what `$ALEPH_SKILL_DIR`
+    /// names — and nothing else. A plugin skill's child gets the plugin's
+    /// path variables, whose values are not this root, and
+    /// `$CLAUDE_PROJECT_DIR` is the run's directory: a word through them is
+    /// left unresolved (bound to nothing) rather than bound to another file.
+    skill: bool,
 }
 
 impl<'a> ScriptContext<'a> {
     fn new(owner: &str, project: Option<&'a Path>, root: Option<&'a Path>) -> Self {
+        let skill = ShellHookConsent::is_skill_owner(owner);
         let data = root
             .filter(|_| crate::extension::manifest::validate_plugin_id(owner).is_ok())
             .map(|root| {
@@ -966,13 +1024,21 @@ impl<'a> ScriptContext<'a> {
         Self {
             root,
             data,
-            project,
+            project: project.filter(|_| !skill),
+            skill,
         }
     }
 
     /// Every variable this context can resolve, with its value.
     fn variables(&self) -> Vec<(&'static str, &Path)> {
         let mut out = Vec::new();
+        if self.skill {
+            out.extend(
+                self.root
+                    .map(|root| (crate::extension::SKILL_DIR_VARIABLE, root)),
+            );
+            return out;
+        }
         if let Some(root) = self.root {
             out.extend(super::PLUGIN_ROOT_VARIABLES.map(|name| (name, root)));
         }
@@ -1286,6 +1352,47 @@ mod tests {
             "{notes:?}"
         );
         assert!(notes.contains(&("lint".to_string(), false)), "{notes:?}");
+    }
+
+    /// Each face's entry carries its own note and only its own.
+    #[test]
+    fn only_a_skill_entry_carries_the_skill_read_note() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        let skill = ShellHookConsent::skill_owner("user", "demo");
+        consent.record_pending(
+            &skill,
+            &ScopeKey::Global,
+            "date",
+            SKILL_INLINE_EVENT,
+            root.path(),
+        );
+        consent.record_pending(
+            "plug",
+            &ScopeKey::Global,
+            "git status",
+            INLINE_COMMAND_EVENT,
+            root.path(),
+        );
+        let notes: Vec<(String, bool, bool)> = consent
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    e.command.clone(),
+                    e.skill_read_note().is_some(),
+                    e.invoker_arguments_note().is_some(),
+                )
+            })
+            .collect();
+        assert!(
+            notes.contains(&("date".to_string(), true, false)),
+            "{notes:?}"
+        );
+        assert!(
+            notes.contains(&("git status".to_string(), false, true)),
+            "{notes:?}"
+        );
     }
 
     /// Which inline commands name a script consent would resolve in the wrong
@@ -1811,7 +1918,33 @@ mod tests {
         root: None,
         data: None,
         project: None,
+        skill: false,
     };
+
+    /// A skill's entry binds the script it names relative to its directory
+    /// or through `$ALEPH_SKILL_DIR` — where it runs — and nothing through a
+    /// plugin path variable or `$CLAUDE_PROJECT_DIR`, whose values in its
+    /// child are not that directory. A hook with the same root still
+    /// resolves the plugin variable (the control).
+    #[test]
+    fn a_skill_entry_binds_its_own_dir_and_no_other_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let go = dir.path().join("go.sh");
+        std::fs::write(&go, "echo hi").unwrap();
+        let skill = ShellHookConsent::skill_owner("plug", "demo");
+        let ctx = ScriptContext::new(&skill, Some(dir.path()), Some(dir.path()));
+        let found = |cmd: &str| script_path_from_command(cmd, &ctx);
+        assert_eq!(found(r#"sh "$ALEPH_SKILL_DIR/go.sh""#), Some(go.clone()));
+        assert_eq!(found(r#"sh "${ALEPH_SKILL_DIR}"/go.sh"#), Some(go.clone()));
+        assert_eq!(found("sh go.sh"), Some(go.clone()));
+        assert_eq!(found(r#"sh "${CLAUDE_PLUGIN_ROOT}/go.sh""#), None);
+        assert_eq!(found(r#"sh "$CLAUDE_PROJECT_DIR/go.sh""#), None);
+        let hook = ScriptContext::new("plug", None, Some(dir.path()));
+        assert_eq!(
+            script_path_from_command(r#"sh "${CLAUDE_PLUGIN_ROOT}/go.sh""#, &hook),
+            Some(go)
+        );
+    }
 
     /// The shapes a hook written the Claude Code way names its script with —
     /// each resolved from the hook's root (or project), whatever directory

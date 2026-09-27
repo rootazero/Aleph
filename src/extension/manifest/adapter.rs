@@ -504,6 +504,7 @@ mod tests {
             let site = crate::extension::template::InlineSite {
                 cwd: self.cwd,
                 plugin: Some(("f1probe", self.root)),
+                skill_dir: None,
             };
             let out = crate::extension::template::inline_shell_command(cmd, args, &site)
                 .output()
