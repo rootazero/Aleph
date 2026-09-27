@@ -73,6 +73,12 @@ pub(crate) struct FakeBackend {
     screenshot_png: Vec<u8>,
     console_text: String,
     network_text: String,
+    /// The fake's mock-route table — a REAL registry, not a canned answer:
+    /// the table is engine-free (arming the interception loop is the cdp
+    /// backend's half), so the double can keep honest book-keeping for
+    /// tool-layer tests without a browser. `active` on every listed rule
+    /// reads false here, which is the truth: no loop ever arms.
+    routes: super::cdp_backend::routes::RouteRegistry,
     /// Queued `evaluate` answers. The last entry sticks once the queue is down
     /// to one, so a polling loop can be given a steady "absent" without
     /// guessing how many probes it will run.
@@ -91,6 +97,7 @@ impl FakeBackend {
             screenshot_png: Vec::new(),
             console_text: String::new(),
             network_text: String::new(),
+            routes: super::cdp_backend::routes::RouteRegistry::new(),
             evaluate_responses: Mutex::new(VecDeque::new()),
         }
     }
@@ -361,6 +368,56 @@ impl BrowserBackend for FakeBackend {
     async fn network_log(&self, _tab_id: &str) -> Result<String, BrowserError> {
         self.record("network_log".into())?;
         Ok(self.network_text.clone())
+    }
+
+    /// The route verbs run against the fake's real [`RouteRegistry`] under
+    /// the fixed profile `"fake"` (the double has no profile concept). What
+    /// the fake does NOT do is arm anything — that is the engine half, and a
+    /// browserless double that claimed it would be lying.
+    async fn route_add(
+        &self,
+        tab_id: &str,
+        rule: super::cdp_backend::routes::NewRouteRule,
+    ) -> Result<super::cdp_backend::routes::RouteRuleInfo, BrowserError> {
+        self.record(format!("route_add:{tab_id}:{}", rule.url_contains))?;
+        self.routes
+            .add(
+                "fake",
+                tab_id,
+                &rule.url_contains,
+                rule.method.as_deref(),
+                rule.kind,
+                rule.scope,
+                rule.note,
+            )
+            .map_err(|e| BrowserError::ActionFailed(e.to_string()))
+    }
+
+    async fn route_list(&self) -> Result<Vec<super::cdp_backend::routes::RouteRuleInfo>, BrowserError> {
+        self.record("route_list".into())?;
+        Ok(self.routes.list("fake"))
+    }
+
+    async fn route_remove(
+        &self,
+        rule_id: &str,
+    ) -> Result<super::cdp_backend::routes::RouteRuleInfo, BrowserError> {
+        self.record(format!("route_remove:{rule_id}"))?;
+        self.routes.remove(rule_id).ok_or_else(|| {
+            BrowserError::ActionFailed(format!("no mock route {rule_id:?}"))
+        })
+    }
+
+    async fn route_clear(
+        &self,
+        tab_id: &str,
+        scope: super::cdp_backend::routes::RouteScope,
+    ) -> Result<usize, BrowserError> {
+        self.record(format!("route_clear:{tab_id}:{scope:?}"))?;
+        Ok(match scope {
+            super::cdp_backend::routes::RouteScope::Tab => self.routes.clear_tab("fake", tab_id),
+            super::cdp_backend::routes::RouteScope::Profile => self.routes.clear_profile("fake"),
+        })
     }
 
     async fn pdf(&self, _tab_id: &str, output_path: &Path) -> Result<(), BrowserError> {

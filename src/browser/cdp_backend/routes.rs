@@ -32,15 +32,36 @@ pub enum RouteKind {
 /// `Profile` serves every tab of ITS profile — never another profile's
 /// (spec §4: "profile 下所有 tab", and a mock that bled across principals
 /// would be an isolation breach, not a feature).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Serialize` because `RouteRuleInfo` (which carries it) is part of
+/// `browser_network`'s tool output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RouteScope {
     Tab,
     Profile,
 }
 
+/// Everything `route_add` needs beyond WHERE the rule binds (the backend
+/// supplies the profile from its own identity; the call supplies the tab).
+/// Grouped because the trait signature would otherwise be seven positional
+/// parameters wide.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewRouteRule {
+    pub url_contains: String,
+    pub method: Option<String>,
+    pub kind: RouteKind,
+    pub scope: RouteScope,
+    pub note: Option<String>,
+}
+
 /// What `mock_list` shows. A snapshot struct rather than a borrow so the
 /// registry lock is never held across a read the caller formats.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Serialize` because this struct IS `browser_network`'s wire answer —
+/// `kind` travels as the label, never the material (the body can be 256 KiB
+/// and the model that listed the rules already knows what it wrote).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct RouteRuleInfo {
     pub id: String,
     pub url_contains: String,
@@ -590,6 +611,132 @@ impl CdpBackend {
             }
         }
         abort.abort();
+    }
+
+    /// `browser_network{action:"mock_add"}`: register the rule, then ARM
+    /// whoever it applies to — registration without arming was T2's wiring
+    /// debt (its hook covers `navigate()` only, and `history()` never passes
+    /// through it), and a rule that sits in the table unserved reads exactly
+    /// like a served one everywhere but the `active` flag.
+    ///
+    /// Rollback, not best-effort: if the arm fails (an engine that refuses
+    /// `Fetch.enable`), the rule is removed again and the caller gets the
+    /// error — the model should not have to audit a flag to learn its
+    /// registration never took effect (判据 §8).
+    pub(crate) async fn route_add(
+        &self,
+        tab_id: &str,
+        rule: NewRouteRule,
+    ) -> Result<RouteRuleInfo, BrowserError> {
+        // The capability gate runs BEFORE the registry: an engine whose Fetch
+        // path is unprobed (obscura today) refuses before any state changes.
+        // Only `route_add` is gated — list/remove/clear are pure table
+        // operations that must stay reachable, or rules registered under one
+        // engine could never be cleaned up after a `switch_engine`.
+        super::require(
+            crate::browser::engine::capabilities(self.engine()),
+            self.engine(),
+            |c| c.network_interception,
+            "route_add",
+        )?;
+        let profile = self.profile_name().to_string();
+        let scope = rule.scope;
+        let info = self
+            .routes
+            .add(
+                &profile,
+                tab_id,
+                &rule.url_contains,
+                rule.method.as_deref(),
+                rule.kind,
+                scope,
+                rule.note,
+            )
+            .map_err(|e| BrowserError::ActionFailed(e.to_string()))?;
+        if let Err(e) = self.arm_applicable_tabs(scope, tab_id).await {
+            let _ = self.routes.remove(&info.id);
+            self.disarm_idle_loops().await;
+            return Err(e);
+        }
+        Ok(info)
+    }
+
+    /// `browser_network{action:"mock_list"}` — the profile's table, as-is.
+    pub(crate) async fn route_list(&self) -> Result<Vec<RouteRuleInfo>, BrowserError> {
+        Ok(self.routes.list(self.profile_name()))
+    }
+
+    /// `browser_network{action:"mock_remove"}` — remove by id. An unknown id
+    /// is a model mistake, so it is an error naming the id, not a quiet Ok.
+    pub(crate) async fn route_remove(&self, rule_id: &str) -> Result<RouteRuleInfo, BrowserError> {
+        let info = self.routes.remove(rule_id).ok_or_else(|| {
+            BrowserError::ActionFailed(format!(
+                "no mock route {rule_id:?} — browser_network{{action:\"mock_list\"}} \
+                 lists the live rule ids"
+            ))
+        })?;
+        self.disarm_idle_loops().await;
+        Ok(info)
+    }
+
+    /// `browser_network{action:"mock_clear"}` — the scope picks WHICH half of
+    /// the table goes (the tool layer makes the scope mandatory, so a clear
+    /// is never ambiguous).
+    pub(crate) async fn route_clear(
+        &self,
+        tab_id: &str,
+        scope: RouteScope,
+    ) -> Result<usize, BrowserError> {
+        let profile = self.profile_name();
+        let cleared = match scope {
+            RouteScope::Tab => self.routes.clear_tab(profile, tab_id),
+            RouteScope::Profile => self.routes.clear_profile(profile),
+        };
+        self.disarm_idle_loops().await;
+        Ok(cleared)
+    }
+
+    /// Arm the tabs `scope` + `tab_id` make a fresh rule applicable to: the
+    /// one tab for `Tab`; EVERY live tab of the profile for `Profile` (T2's
+    /// wiring debt, obligation 2 — the navigate hook arms only FUTURE
+    /// navigations, so without this replay an already-open tab would wait
+    /// for its next `browser_navigate` before the rule served it).
+    async fn arm_applicable_tabs(
+        &self,
+        scope: RouteScope,
+        tab_id: &str,
+    ) -> Result<(), BrowserError> {
+        let handle = self.handle().await?;
+        match scope {
+            RouteScope::Tab => {
+                let session = handle.ensure_tab(tab_id).await?;
+                self.ensure_intercept_loop(tab_id, &session).await
+            }
+            RouteScope::Profile => {
+                let tab_ids: Vec<String> =
+                    handle.tabs.lock().await.entries.keys().cloned().collect();
+                for id in tab_ids {
+                    let session = handle.ensure_tab(&id).await?;
+                    self.ensure_intercept_loop(&id, &session).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// After a removal, every live tab whose applicable rule set went to zero
+    /// gets disarmed — the zero-overhead clause's tool-layer half (T2 wired
+    /// the same check into `close_tab`; removal paths must not wait for a
+    /// tab to die). Best-effort like its sibling: a dead engine makes the
+    /// disable moot, and the loop's own session-death exit covers the rest.
+    async fn disarm_idle_loops(&self) {
+        let Ok(handle) = self.handle().await else {
+            return;
+        };
+        let tab_ids: Vec<String> = handle.tabs.lock().await.entries.keys().cloned().collect();
+        for tab_id in tab_ids {
+            self.stop_intercept_loop_if_idle(&tab_id).await;
+        }
     }
 }
 
@@ -1606,5 +1753,222 @@ mod tests {
             !routes.loop_running("default", "T1"),
             "the loop is disarmed with the tab"
         );
+    }
+
+    // ===================== the tool-facing route_* verbs (Task 3) =====================
+
+    fn new_rule(url_contains: &str, scope: RouteScope) -> NewRouteRule {
+        NewRouteRule {
+            url_contains: url_contains.to_string(),
+            method: None,
+            kind: mock_json(200, "x"),
+            scope,
+            note: None,
+        }
+    }
+
+    /// T2's wiring debt, obligation 1: `navigate()` is not the only way a live
+    /// tab reaches a matching URL (`history()` never passes through it, and an
+    /// already-open page needs no navigation at all), so `mock_add` must arm
+    /// the tab itself — a rule registered against an open page must not sit
+    /// in the table serving nothing until the next `browser_navigate`.
+    #[tokio::test]
+    async fn route_add_on_a_live_tab_arms_it_without_a_navigate() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (backend, routes) = backend_with_tab(&server).await;
+
+        let info = backend
+            .route_add("T1", new_rule("api", RouteScope::Tab))
+            .await
+            .expect("add");
+        assert_eq!(info.id, "r1");
+
+        // The enable is awaited inside route_add, so it is already on the wire.
+        assert_eq!(
+            server.received_for("Fetch.enable").len(),
+            1,
+            "the live tab is armed at registration time, with no navigate"
+        );
+        assert!(routes.loop_running("default", "T1"));
+        assert!(
+            routes.list("default")[0].active,
+            "a served rule reads active"
+        );
+    }
+
+    /// T2's wiring debt, obligation 2 (the eager ruling): a profile-scope rule
+    /// applies to every tab of the profile INCLUDING the ones already open, so
+    /// registration replays the arm to each live tab — not just the tab the
+    /// call happened to name.
+    #[tokio::test]
+    async fn route_add_with_profile_scope_arms_every_live_tab_of_the_profile() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (backend, routes) = backend_with_tab(&server).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T2".into()))
+            .await
+            .expect("attach T2");
+
+        backend
+            .route_add("T1", new_rule("api", RouteScope::Profile))
+            .await
+            .expect("add");
+
+        assert_eq!(
+            server.received_for("Fetch.enable").len(),
+            2,
+            "both live tabs are armed, not only the one the call named"
+        );
+        assert!(routes.loop_running("default", "T1"));
+        assert!(routes.loop_running("default", "T2"));
+    }
+
+    /// Fail-closed, the same rule the navigate hook lives by: a rule that
+    /// cannot be armed must not stay in the table pretending to be served —
+    /// the registration is rolled back and the caller gets the error.
+    #[tokio::test]
+    async fn route_add_rolls_the_rule_back_when_the_engine_refuses_fetch() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Fetch.enable",
+            Responder::Error {
+                code: -32601,
+                message: "'Fetch.enable' wasn't found".to_string(),
+            },
+        );
+        let (backend, routes) = backend_with_tab(&server).await;
+
+        let err = backend
+            .route_add("T1", new_rule("api", RouteScope::Tab))
+            .await
+            .expect_err("an unarmable rule is refused");
+        assert!(
+            format!("{err}").contains("Fetch.enable"),
+            "the refusal names what could not be armed: {err}"
+        );
+        assert!(
+            routes.list("default").is_empty(),
+            "the refused rule never stays in the table"
+        );
+        assert!(!routes.loop_running("default", "T1"), "no half-armed loop");
+    }
+
+    /// The capability row is the gate: obscura's `network_interception` is
+    /// `Unsupported` (NOT_PROBED — the plan's Task 4 probe is the expiry
+    /// check), so the refusal arrives BEFORE any Fetch handshake and names
+    /// the engine that does serve the verb (判据 §14).
+    #[tokio::test]
+    async fn route_add_is_refused_on_an_engine_the_table_says_cannot_serve_it() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
+
+        let err = backend
+            .route_add("T1", new_rule("api", RouteScope::Tab))
+            .await
+            .expect_err("obscura refuses before the wire");
+        match err {
+            BrowserError::UnsupportedByEngine {
+                verb,
+                supported_by,
+                ..
+            } => {
+                assert_eq!(verb, "route_add");
+                assert_eq!(supported_by, Some(Engine::Chromium));
+            }
+            other => panic!("expected UnsupportedByEngine, got {other:?}"),
+        }
+        assert!(
+            server.received_for("Fetch.enable").is_empty(),
+            "the refusal happens before any Fetch handshake"
+        );
+    }
+
+    /// The zero-overhead clause at the TOOL layer: once nothing applies to a
+    /// tab any more, `Fetch.disable` goes out and the loop ends — without
+    /// waiting for a `close_tab`.
+    #[tokio::test]
+    async fn route_remove_of_the_last_applicable_rule_disarms_the_tab() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (backend, routes) = backend_with_tab(&server).await;
+        let info = backend
+            .route_add("T1", new_rule("api", RouteScope::Tab))
+            .await
+            .expect("add");
+        assert_eq!(server.received_for("Fetch.enable").len(), 1);
+
+        let removed = backend.route_remove(&info.id).await.expect("remove");
+        assert_eq!(removed.id, info.id, "the confirmation names the rule");
+        assert_eq!(removed.hits, 0);
+
+        assert_eq!(
+            server.received_for("Fetch.disable").len(),
+            1,
+            "Fetch.disable reached the engine"
+        );
+        assert!(!routes.loop_running("default", "T1"), "the loop is gone");
+    }
+
+    #[tokio::test]
+    async fn route_clear_scopes_and_reports_counts() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (backend, routes) = backend_with_tab(&server).await;
+        backend
+            .route_add("T1", new_rule("api", RouteScope::Tab))
+            .await
+            .expect("add tab rule");
+        backend
+            .route_add("T1", new_rule("api", RouteScope::Profile))
+            .await
+            .expect("add profile rule");
+        assert_eq!(routes.list("default").len(), 2);
+
+        let n = backend
+            .route_clear("T1", RouteScope::Tab)
+            .await
+            .expect("clear tab scope");
+        assert_eq!(n, 1, "only T1's tab rules were cleared");
+        let remaining = routes.list("default");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].scope, RouteScope::Profile);
+        assert!(
+            routes.loop_running("default", "T1"),
+            "the profile rule still applies — the loop stays armed"
+        );
+        assert!(server.received_for("Fetch.disable").is_empty());
+
+        let n = backend
+            .route_clear("T1", RouteScope::Profile)
+            .await
+            .expect("clear profile scope");
+        assert_eq!(n, 1);
+        assert!(routes.list("default").is_empty());
+        assert_eq!(
+            server.received_for("Fetch.disable").len(),
+            1,
+            "nothing applies any more — the tab is disarmed"
+        );
+        assert!(!routes.loop_running("default", "T1"));
+    }
+
+    /// Removing an id nobody registered is a model mistake, not a no-op: the
+    /// error names the id so the model can re-list (判据 §8).
+    #[tokio::test]
+    async fn route_remove_of_an_unknown_id_fails_loudly() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (backend, _routes) = backend_with_tab(&server).await;
+
+        let err = backend
+            .route_remove("r99")
+            .await
+            .expect_err("an unknown id is not a silent success");
+        assert!(format!("{err}").contains("r99"), "{err}");
     }
 }

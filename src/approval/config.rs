@@ -404,6 +404,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserNetworkMock, DefaultDecision::Ask);
         defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);

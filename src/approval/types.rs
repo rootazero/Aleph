@@ -114,6 +114,13 @@ declare_action_types! {
     /// bulk operation ungated while the single-cookie one asked would have
     /// made the gate trivially avoidable.
     BrowserSessionState,
+    /// Register, remove or clear mock network routes
+    /// (`browser_network{action:"mock_add"|"mock_remove"|"mock_clear"}`). A
+    /// mock route decides what a page's requests RECEIVE — fabricated
+    /// responses, or none — so it is a page-visible state change in the same
+    /// family as [`Self::BrowserEvaluate`], with the same Ask default.
+    /// `mock_list` is a read and is not classified here.
+    BrowserNetworkMock,
     /// Edit / install / uninstall event hooks that fire arbitrary commands
     /// or HTTP requests on lifecycle events. Hooks are a control-plane
     /// write, hence operator-tier defaults already cover `hooks_manage` at
@@ -203,6 +210,7 @@ impl fmt::Display for ActionType {
             Self::BrowserCookiesWrite => "browser cookies write",
             Self::BrowserIdentityOverride => "browser identity override",
             Self::BrowserSessionState => "browser session state",
+            Self::BrowserNetworkMock => "browser network mock",
             Self::HooksManage => "hooks manage",
             Self::DesktopClick => "desktop click",
             Self::DesktopType => "desktop type",

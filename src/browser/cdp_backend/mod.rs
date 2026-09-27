@@ -483,6 +483,26 @@ impl BrowserBackend for CdpBackend {
     async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError> {
         events::network_log(self, tab_id).await
     }
+    async fn route_add(
+        &self,
+        tab_id: &str,
+        rule: routes::NewRouteRule,
+    ) -> Result<routes::RouteRuleInfo, BrowserError> {
+        CdpBackend::route_add(self, tab_id, rule).await
+    }
+    async fn route_list(&self) -> Result<Vec<routes::RouteRuleInfo>, BrowserError> {
+        CdpBackend::route_list(self).await
+    }
+    async fn route_remove(&self, rule_id: &str) -> Result<routes::RouteRuleInfo, BrowserError> {
+        CdpBackend::route_remove(self, rule_id).await
+    }
+    async fn route_clear(
+        &self,
+        tab_id: &str,
+        scope: routes::RouteScope,
+    ) -> Result<usize, BrowserError> {
+        CdpBackend::route_clear(self, tab_id, scope).await
+    }
     async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
         cookies::cookies(self, op).await
     }
@@ -633,6 +653,7 @@ pub(crate) mod test_support {
             insert_text: Cap::Supported,
             effect_probe: Cap::Supported,
             ref_precheck: Cap::Supported,
+            network_interception: Cap::Supported,
             measured_on: "test fixture",
         }
     }

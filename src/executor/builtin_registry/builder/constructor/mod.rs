@@ -631,7 +631,8 @@ impl BuiltinToolRegistry {
         let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
-        let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager));
+        let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager))

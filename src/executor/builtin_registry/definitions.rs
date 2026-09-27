@@ -2973,7 +2973,21 @@ mod tests {
     /// 114_393 would give 115_935), which is exactly why this ledger forbids
     /// deriving a ceiling by addition. No description was edited in the
     /// merge; the +30 Windows gap recorded above is carried forward unchanged.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_904;
+    /// 2026-09-26 (C1 browser_network mock routes): 115_904 -> 116_114 B,
+    /// measured on Linux (96_518 catalog + 16_613 registry-only + 1_039
+    /// injected + 1_944 bridge); the only red test was this one and the
+    /// delta (+210 B) is `browser_network`'s DESCRIPTION naming its four new
+    /// mock actions, whole. Three questions: (1) the action inventory with
+    /// each action's required field, and the `driver="cdp"` gate, are runtime
+    /// facts the model cannot infer — the refusal only names the door AFTER a
+    /// wasted call; (2) the per-field detail (status default, the 256 KiB
+    /// body cap, abort carrying no material) stays in the JsonSchema doc
+    /// comments, not here; (3) no other tool names the mock surface — the
+    /// capability table is a runtime answer, not catalog bytes the model
+    /// reads before choosing the tool. The pre-change headroom was 15 B, so
+    /// no amount of tightening could name four actions within the old
+    /// ceiling.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_114;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

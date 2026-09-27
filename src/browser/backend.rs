@@ -4,6 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use super::cdp_backend::routes::{NewRouteRule, RouteRuleInfo, RouteScope};
 use super::engine::Engine;
 use super::error::BrowserError;
 use super::profile::BrowserDriver;
@@ -164,6 +165,47 @@ pub trait BrowserBackend: Send + Sync {
     ///
     /// Required method — all three backends have a native network listing.
     async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError>;
+
+    /// Register a mock route (`browser_network{action:"mock_add"}`). The
+    /// backend arms interception for every tab the rule applies to — the one
+    /// tab for `RouteScope::Tab`, every live tab of the profile for
+    /// `RouteScope::Profile` — and a rule that cannot be armed must roll the
+    /// registration back and fail, never sit in the table unserved.
+    ///
+    /// Not universal: interception is a Fetch-domain handshake only the cdp
+    /// backend drives, so the default names that driver (see [`Self::pdf`]
+    /// for why the refusal names the door that opens).
+    async fn route_add(
+        &self,
+        tab_id: &str,
+        rule: NewRouteRule,
+    ) -> Result<RouteRuleInfo, BrowserError> {
+        let _ = (tab_id, rule);
+        Err(unsupported_by_driver("route_add", BrowserDriver::Cdp))
+    }
+
+    /// The profile's mock-route table (`browser_network{action:"mock_list"}`).
+    /// Not universal — see [`Self::route_add`].
+    async fn route_list(&self) -> Result<Vec<RouteRuleInfo>, BrowserError> {
+        Err(unsupported_by_driver("route_list", BrowserDriver::Cdp))
+    }
+
+    /// Remove one mock route by id, returning its final state (hit count
+    /// included — that is the confirmation `mock_remove` reports). An
+    /// unknown id is an error, not a quiet Ok. Not universal — see
+    /// [`Self::route_add`].
+    async fn route_remove(&self, rule_id: &str) -> Result<RouteRuleInfo, BrowserError> {
+        let _ = rule_id;
+        Err(unsupported_by_driver("route_remove", BrowserDriver::Cdp))
+    }
+
+    /// Clear one scope of the profile's mock routes — `Tab` clears the rules
+    /// bound to `tab_id`, `Profile` the profile-wide ones — returning how
+    /// many went. Not universal — see [`Self::route_add`].
+    async fn route_clear(&self, tab_id: &str, scope: RouteScope) -> Result<usize, BrowserError> {
+        let _ = (tab_id, scope);
+        Err(unsupported_by_driver("route_clear", BrowserDriver::Cdp))
+    }
 
     /// Print-to-PDF — writes PDF to `output_path`.
     ///
@@ -367,3 +409,10 @@ pub(crate) fn unsupported_by_driver(op: &'static str, supported_by: BrowserDrive
         supported_by.as_wire()
     ))
 }
+
+// ⚠️ No `mod tests` here, ever: testkit's
+// `fake_backend_implements_every_backend_method` derives the trait's method
+// list by scanning THIS file for async-fn declarations, and a test function
+// would be counted as a trait verb. The route default-arm test lives in
+// `playwright_cli_backend.rs`'s tests, which construct the real text-driver
+// backend that leaves these four verbs defaulted.

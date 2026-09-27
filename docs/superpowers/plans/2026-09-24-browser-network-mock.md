@@ -448,7 +448,7 @@ git commit -m "browser: per-tab interception loop with SSRF-first mock route pip
 - Consumes: Task 2 的 `RouteRegistry`（经 `manager.route_registry()` 与 backend 的 Arc）与 `RouteRuleInfo`；`make_backend_and_tab_guarded`（mod.rs:429）；`check_browser_approval`（mod.rs:56）
 - Produces: `browser_network` 的 `NetworkAction::{Log, MockAdd, MockList, MockRemove, MockClear}`；trait `route_add/route_list/route_remove/route_clear`；`network_interception` 能力行
 
-- [ ] **Step 1: trait 默认方法 + 失败测试**
+- [x] **Step 1: trait 默认方法 + 失败测试**
 
 ```rust
 // backend.rs，紧挨 network_log：
@@ -465,7 +465,7 @@ async fn route_add(&self, tab_id: &str, rule: NewRouteRule) -> Result<RouteRuleI
 
 测试（testkit FakeBackend 走默认臂 → `UnsupportedByDriver`；cdp 后端覆盖臂的判决委托 RouteRegistry）。
 
-- [ ] **Step 2: 工具输入校验的失败测试**
+- [x] **Step 2: 工具输入校验的失败测试**
 
 ```rust
 #[tokio::test]
@@ -480,13 +480,13 @@ async fn mock_add_rejects_a_body_over_256_kib() { /* spec §4 上限 */ }
 async fn mock_clear_requires_an_explicit_scope() { /* 防误清：scope 必填，无默认 */ }
 ```
 
-- [ ] **Step 3: 实现工具分支**（`BrowserNetworkArgs` 加 `#[serde(default)] action: NetworkAction`，默认 `Log`——现状调用零变化；输出结构加 `rules: Option<Vec<RouteRuleInfo>>`；四个 mock 分支经 `make_backend_and_tab_guarded` → `backend.route_*`；错误走 `backend_error_text` 咽喉自动继承 recovery 拖车；approval：`ActionType::BrowserNetworkMock`（或按 ActionType 家族现状命名）+ `check_browser_approval` 调用点 + 默认 Deny 的测试默认值（click.rs:265 先例）+ 若有 ActionType 穷尽 census 同步）
+- [x] **Step 3: 实现工具分支**（`BrowserNetworkArgs` 加 `#[serde(default)] action: NetworkAction`，默认 `Log`——现状调用零变化；输出结构加 `rules: Option<Vec<RouteRuleInfo>>`；四个 mock 分支经 `make_backend_and_tab_guarded` → `backend.route_*`；错误走 `backend_error_text` 咽喉自动继承 recovery 拖车；approval：`ActionType::BrowserNetworkMock`（或按 ActionType 家族现状命名）+ `check_browser_approval` 调用点 + 默认 Deny 的测试默认值（click.rs:265 先例）+ 若有 ActionType 穷尽 census 同步）
 
-- [ ] **Step 4: 能力台账恢复**
+- [x] **Step 4: 能力台账恢复**
 
 `capability.rs`：`EngineCapabilities` 加 `pub network_interception: Cap` 字段（doc comment 点名 `browser_network` 的 mock_add/mock_list/mock_remove/mock_clear 四个 action——判据 §5）；`CAP_FIELDS` 加行；OBSCURA 行 = `Cap::Unsupported`（注释 NOT_PROBED + Task 4 是到期检查）；CHROMIUM 行 = `Cap::Supported`（依据：Fetch 域五方法全链路 Task 1/2 建立在 console/evaluate 已实测的同一连接与事件泵上）；:548 与 :1090 两处防护测试反转断言（行存在且点名动词）。
 
-- [ ] **Step 5: 跑 + 证伪 + commit**
+- [x] **Step 5: 跑 + 证伪 + commit**
 
 Run: `cargo test -p alephcore --lib browser_tools::network` + `--lib capability` + `--lib browser::backend`
 证伪：`CAP_FIELDS` 摘行 → 三条 census 红（T6 先例）；DESCRIPTION 超字节 → 字节守卫红（存在的话）。
