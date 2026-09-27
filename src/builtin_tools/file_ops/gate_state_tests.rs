@@ -80,3 +80,71 @@ async fn the_models_file_tools_cannot_write_a_human_only_gate() {
         .expect("a sibling file in the same home is writable");
     assert_eq!(std::fs::read_to_string(&sibling).unwrap(), "ok");
 }
+
+/// `name` with every other letter upper-cased (`sHeLl-…`).
+#[cfg(any(target_os = "macos", windows))]
+fn mixed_case(name: &str) -> String {
+    name.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i % 2 == 1 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Review P4.17 R2-I-1. With a gate file ABSENT — a fresh install never
+/// creates the consent registry, the always-grants or the approval policy
+/// until a human does something — an upper-case or mixed-case spelling of
+/// its name is, on a case-insensitive volume, the file its store then reads.
+/// `file_write` refuses both spellings, and the gate file still does not
+/// exist.
+#[cfg(any(target_os = "macos", windows))]
+#[tokio::test]
+async fn a_case_variant_of_an_absent_gate_file_is_refused() {
+    let _env = IsolatedAlephHome::new();
+    let write = FileWriteTool::new();
+
+    for (what, path) in gate_files() {
+        assert!(!path.exists(), "{what}: {} exists", path.display());
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        for variant in [name.to_uppercase(), mixed_case(&name)] {
+            let alias = path.with_file_name(&variant);
+            let written = write
+                .call_json(json!({ "file_path": alias, "content": "{\"entries\":[]}" }))
+                .await;
+            assert!(written.is_err(), "{what}: file_write wrote {variant}");
+            assert!(!path.exists(), "{what}: {variant} created the gate file");
+        }
+    }
+}
+
+/// The same hole in an absent credential leaf, the class this round's gate
+/// files joined: a `~/.netrc` entry (here in a tempdir, so the real home is
+/// never written) refuses `.NETRC` and `.NetRc` while nothing is there, and a
+/// file whose name matches no entry in any case is written (the control).
+#[cfg(any(target_os = "macos", windows))]
+#[tokio::test]
+async fn a_case_variant_of_an_absent_credential_leaf_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let netrc = home.path().join(".netrc");
+    let write = FileWriteTool::with_denied_paths(vec![netrc.to_string_lossy().into_owned()]);
+
+    for variant in [".NETRC", ".NetRc"] {
+        let written = write
+            .call_json(json!({ "file_path": home.path().join(variant), "content": "machine x" }))
+            .await;
+        assert!(written.is_err(), "file_write wrote {variant}");
+        assert!(!netrc.exists(), "{variant} created .netrc");
+    }
+
+    let other = home.path().join("NOTES.txt");
+    write
+        .call_json(json!({ "file_path": other, "content": "ok" }))
+        .await
+        .expect("a name no entry covers is writable in any case");
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "ok");
+}
