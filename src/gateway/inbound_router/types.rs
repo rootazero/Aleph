@@ -631,6 +631,7 @@ mod telegram_bridge_tests {
         let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
             dm_policy: Some(TgDm::Allowlist),
             allowed_users: Some(vec![123, 456]),
+            token_fingerprint: None,
             ..Default::default()
         }));
         assert!(matches!(c.dm_policy, DmPolicy::Allowlist));
@@ -644,6 +645,7 @@ mod telegram_bridge_tests {
         let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
             group_policy: Some(TgGroup::Allowlist),
             allowed_groups: None,
+            token_fingerprint: None,
             ..Default::default()
         }));
         assert!(matches!(c.group_policy, GroupPolicy::Open));
@@ -655,6 +657,7 @@ mod telegram_bridge_tests {
         let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
             group_policy: Some(TgGroup::Allowlist),
             allowed_groups: Some(vec![-100111]),
+            token_fingerprint: None,
             ..Default::default()
         }));
         assert!(matches!(c.group_policy, GroupPolicy::Allowlist));

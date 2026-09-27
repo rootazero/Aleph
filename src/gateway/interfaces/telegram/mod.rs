@@ -1032,6 +1032,7 @@ mod tests {
                 crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
                     id: "default".to_string(),
                     bot_token: "123:ABC".to_string(),
+                    token_fingerprint: None,
                     ..Default::default()
                 },
             ],

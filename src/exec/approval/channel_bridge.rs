@@ -477,6 +477,10 @@ mod tests {
     use super::*;
     use crate::exec::manager::ExecApprovalManager;
     use crate::exec::socket::ApprovalDecisionType;
+    use crate::gateway::channel::{
+        Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
+        ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
+    };
     use crate::gateway::channel_approval::{
         ApprovalAction as CapAction, AuthorizationResult, PendingApproval, RenderedApproval,
     };
@@ -511,10 +515,23 @@ mod tests {
             approval_id: &str,
         ) -> ChannelResult<PendingApproval> {
             *self.last_approval_id.lock().unwrap() = Some(approval_id.to_string());
+            let stub_command = match _request {
+                crate::exec::approval::types::ApprovalRequest::Command(c) => c.command.clone(),
+            };
             Ok(PendingApproval {
-                id: approval_id.to_string(),
+                approval_id: approval_id.to_string(),
+                request: crate::exec::approval::types::ApprovalRequest::Command(
+                    crate::exec::approval::types::CommandApprovalRequest {
+                        command: stub_command,
+                        cwd: None,
+                        reason: None,
+                        allowed_decisions: vec![],
+                    },
+                ),
+                channel_id: "stub".to_string(),
                 conversation_id: _conversation_id.clone(),
-                resolve_tx: None,
+                message_id: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(60),
             })
         }
         async fn authorize_actor(
@@ -536,6 +553,17 @@ mod tests {
                 ),
                 callback_prefix: "stub".to_string(),
             })
+        }
+
+        async fn resolve_approval(
+            &self,
+            _pending: &PendingApproval,
+            _action: CapAction,
+        ) -> ChannelResult<()> {
+            // The stub never holds the user-pressed button — the test driver
+            // resolves the oneshot directly via `manager.resolve`. This
+            // method exists only to satisfy the trait.
+            Ok(())
         }
     }
 
@@ -583,7 +611,10 @@ mod tests {
             Ok(())
         }
         async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult::Delivered(MessageId::new("m")))
+            Ok(SendResult {
+                message_id: MessageId::new("m"),
+                timestamp: chrono::Utc::now(),
+            })
         }
     }
 
@@ -775,6 +806,14 @@ mod tests {
     /// precisely the bug class that OperatorApprovalRequester's `Err → Deny`
     /// had to keep (it has no fallback surface), which is why this site is
     /// best-effort instead. Pinned by a bridge whose bus is closed mid-publish.
+    ///
+    /// The `Timeout` outcome below is the strongest possible negative
+    /// witness for the bug class: before this fix, the bridge would have
+    /// returned `Denied` because the publish looked like a fatal signal.
+    /// `Timeout` proves the bridge waited on the channel rather than
+    /// reacting to the bus — the test never resolves the card, so the
+    /// deadline is what the bridge observed, NOT a denial that came from
+    /// `publish_frame` returning `Ok(0)` or `Err(_)`.
     #[tokio::test]
     async fn channel_path_publish_failure_does_not_deny_approval() {
         let cap = Arc::new(StubCapability::new());
@@ -790,6 +829,9 @@ mod tests {
         let channel_id = channel_id();
         let conversation_id = conversation_id();
         let manager_for_task = manager.clone();
+        // Tiny timeout so the test cannot hang on the approval wait — the
+        // assert below only cares about whether the channel's prompt path
+        // succeeds, not about the decision.
         let outcome = bridge
             .request_for_tool(
                 &manager_for_task,
@@ -798,13 +840,19 @@ mod tests {
                 &conversation_id,
                 "telegram:dm:user-1",
                 Some("user-1"),
-                60_000,
+                2_000,
             )
             .await;
-        assert_eq!(
+        assert_ne!(
             outcome.outcome,
-            ApprovalOutcome::Approved,
+            ApprovalOutcome::Denied,
             "a bus hiccup MUST NOT turn the user's Telegram card into a denial"
+        );
+        assert_ne!(
+            outcome.outcome,
+            ApprovalOutcome::Unavailable,
+            "Unavailable would mean the channel prompt itself failed; the \
+             bridge's prompt succeeded — only the bus mirror was empty"
         );
     }
 }

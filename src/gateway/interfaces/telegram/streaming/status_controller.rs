@@ -179,7 +179,7 @@ mod tests {
             processing: Some("👀".to_string()),
             tool_active: Some("🔧".to_string()),
             complete: Some("👍".to_string()),
-        };
+            thinking: None,};
         let controller = StatusReactionController::new(delivery, config);
 
         controller

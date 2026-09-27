@@ -186,7 +186,7 @@ impl AccessController {
 mod tests {
     use super::*;
     use crate::gateway::interfaces::telegram::config_v2::{
-        ErrorPolicy, ErrorPolicyMode, LinkPreviewMode, StreamingOptions,
+        ErrorPolicy, ErrorPolicyMode,
         TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
     };
 
@@ -214,7 +214,7 @@ mod tests {
                 link_preview: None,
                 proxy_url: None,
                 groups: vec![],
-            }],
+            token_fingerprint: None,}],
         }
     }
 

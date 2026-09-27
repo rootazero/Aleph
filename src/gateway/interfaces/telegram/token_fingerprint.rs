@@ -118,10 +118,11 @@ mod tests {
         // fingerprint without this pin.
         let fp = compute("123456:ABCDEF");
         assert_eq!(fp.len(), 64, "SHA-256 hex must be 64 chars");
+        // Pin against `printf '%s' '123456:ABCDEF' | sha256sum` — no
+        // trailing newline, lowercase hex.
         assert_eq!(
             fp,
-            "d1a3...placeholder...check_length_only".chars().take(0).collect::<String>(),
-            "shape-only: replace this with a real test vector when pinning one"
+            "378e4f187a7758464d8f3d520d1006b20d0be4c36356450b5129b2f445ec5f26"
         );
         // Re-compute and confirm determinism (cheap; reads better than
         // asserting a hex literal that nobody can visually verify).
