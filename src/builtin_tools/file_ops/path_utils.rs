@@ -23,7 +23,7 @@ use crate::builtin_tools::error::ToolError;
 /// clobber through its file tools.
 ///
 /// The returned list carries TWO kinds of entry, told apart by
-/// [`looks_like_glob`] and compiled by [`compile_denied_entry`]:
+/// [`looks_like_glob`] and compiled by [`denied_entry_normalized`]:
 /// 1. the fixed credential locations above, matched by canonicalizing prefix;
 /// 2. the operator's `[sandbox] deny_read_globs`
 ///    ([`configured_deny_read_globs`]), matched by the same anchored regex the
@@ -246,7 +246,7 @@ fn parse_deny_read_globs(toml_text: &str) -> Vec<String> {
 /// expansion is a no-op there.
 ///
 /// Pattern entries deliberately do NOT come through here — see
-/// [`compile_denied_entry`].
+/// [`compile_denied_pattern`].
 fn expand_denied_entry(denied: &str) -> String {
     // `mut` is only exercised on Windows (the env-token expansion below); on
     // other targets the binding is written once.
@@ -345,64 +345,97 @@ fn glob_shape_subject(entry: &str) -> &str {
     entry.strip_prefix(r"\\?\").unwrap_or(entry)
 }
 
-/// Compile one raw denylist entry into the form the matchers use.
-fn compile_denied_entry(denied: &str) -> DeniedEntry {
-    if looks_like_glob(denied) {
-        // Deliberately NO `~` / `%APPDATA%` expansion for patterns: the OS
-        // floor does not expand either, and a pattern that meant two different
-        // things to the two faces is the very asymmetry this wiring closes.
-        let Some(pattern) = crate::sandbox::deny_globs::glob_to_anchored_regex(denied) else {
-            warn!(entry = %denied, "file_ops: empty deny_read_globs entry ignored");
-            return DeniedEntry::InertGlob;
-        };
-        return match regex::Regex::new(&pattern) {
-            Ok(re) => DeniedEntry::Glob(re),
-            Err(e) => {
-                warn!(
-                    entry = %denied,
-                    regex = %pattern,
-                    error = %e,
-                    "file_ops: deny_read_globs pattern failed to compile; it denies NOTHING to the file tools"
-                );
-                DeniedEntry::InertGlob
-            }
-        };
+/// A pattern entry, as written. Whether an entry is one is decided on its
+/// raw spelling, in [`denied_entry_normalized`], and nowhere else — see
+/// [`compile_denied_literal`] for why never on an expansion.
+fn compile_denied_pattern(denied: &str) -> DeniedEntry {
+    // Deliberately NO `~` / `%APPDATA%` expansion for patterns: the OS
+    // floor does not expand either, and a pattern that meant two different
+    // things to the two faces is the very asymmetry this wiring closes.
+    let Some(pattern) = crate::sandbox::deny_globs::glob_to_anchored_regex(denied) else {
+        warn!(entry = %denied, "file_ops: empty deny_read_globs entry ignored");
+        return DeniedEntry::InertGlob;
+    };
+    match regex::Regex::new(&pattern) {
+        Ok(re) => DeniedEntry::Glob(re),
+        Err(e) => {
+            warn!(
+                entry = %denied,
+                regex = %pattern,
+                error = %e,
+                "file_ops: deny_read_globs pattern failed to compile; it denies NOTHING to the file tools"
+            );
+            DeniedEntry::InertGlob
+        }
     }
-    let expanded = expand_denied_entry(denied);
+}
+
+/// A literal entry, from its already-expanded form ([`expand_denied_entry`]).
+///
+/// Never re-classified: an expansion may contain `*`, `?` or `[` — a home
+/// directory named `a[1]` — and is still the one location the operator's
+/// spelling (`~/.ssh`) names. Classified on the expansion, `[1]` became a
+/// character class: the real `~/.ssh` stopped being refused, silently, and a
+/// sibling the class matched was refused instead.
+fn compile_denied_literal(expanded: &str) -> DeniedEntry {
     DeniedEntry::Literal(
-        safe_normalize(Path::new(&expanded)).unwrap_or_else(|_| PathBuf::from(&expanded)),
+        safe_normalize(Path::new(expanded)).unwrap_or_else(|_| PathBuf::from(expanded)),
     )
 }
 
 /// Memo of the compiled form of each denylist entry, keyed by
 /// [`denied_entry_key`] — what the entry names, not how it is spelled.
-static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, Arc<DeniedEntry>>>> = OnceLock::new();
+static DENIED_NORM_CACHE: OnceLock<RwLock<DeniedMemo>> = OnceLock::new();
+
+/// Patterns and literals in separate keyspaces: a literal's expansion can be
+/// the very text of some pattern entry (`/h[1]/.ssh` from `~/.ssh` under
+/// `HOME=/h[1]`), and one map would hand either the other's compile.
+#[derive(Default)]
+struct DeniedMemo {
+    patterns: HashMap<String, Arc<DeniedEntry>>,
+    literals: HashMap<String, Arc<DeniedEntry>>,
+}
+
+impl DeniedMemo {
+    fn side(&mut self, pattern: bool) -> &mut HashMap<String, Arc<DeniedEntry>> {
+        if pattern {
+            &mut self.patterns
+        } else {
+            &mut self.literals
+        }
+    }
+}
 
 /// The key an entry is memoised under: a literal's expansion under the
-/// current `$HOME` / environment, a pattern's own text.
+/// current `$HOME` / environment, a pattern's own text. `pattern` is the raw
+/// entry's classification ([`looks_like_glob`]), made by the caller before
+/// anything is expanded.
 ///
 /// Keyed by the raw spelling, `~/.ssh` was compiled once under whatever home
 /// was current at the first lookup and then served under every home after it —
-/// a key coarser than its derivation. Production never sees the difference
-/// (`$HOME` does not move in a running server, so each literal maps to one key
-/// and compiles exactly once, as before); a test binary does, where a fixture
-/// that moves `$HOME` got to compile the entry first and every later test was
-/// judged against that fixture's dead temp directory. Expanding on every
-/// lookup is an env read and a join; the `canonicalize()` / regex work the memo
-/// exists to avoid stays memoised per expanded path.
+/// a key coarser than its derivation. That only ever showed in a test binary,
+/// where a fixture that moves `$HOME` got to compile the entry first and every
+/// later test was judged against that fixture's dead temp directory.
+/// **With a constant `$HOME` — every running server — behaviour is the same as
+/// when the key was the raw spelling:** each entry maps to exactly one key,
+/// compiles exactly once, and is classified on its raw spelling (the
+/// expansion is never re-classified; see [`compile_denied_literal`]).
+/// Expanding on every lookup is an env read and a join; the
+/// `canonicalize()` / regex work the memo exists to avoid stays memoised.
 ///
 /// Patterns are keyed as written because they are never expanded (see
-/// [`compile_denied_entry`]); literals without a `~` or `%…%` token expand to
-/// themselves and borrow.
-fn denied_entry_key(denied: &str) -> std::borrow::Cow<'_, str> {
-    if looks_like_glob(denied) || !(denied.starts_with('~') || denied.contains('%')) {
+/// [`compile_denied_pattern`]); literals without a `~` or `%…%` token expand
+/// to themselves and borrow.
+fn denied_entry_key(denied: &str, pattern: bool) -> std::borrow::Cow<'_, str> {
+    if pattern || !(denied.starts_with('~') || denied.contains('%')) {
         std::borrow::Cow::Borrowed(denied)
     } else {
         std::borrow::Cow::Owned(expand_denied_entry(denied))
     }
 }
 
-/// The compiled ([`compile_denied_entry`]) form of one denylist entry —
+/// The compiled ([`compile_denied_pattern`] / [`compile_denied_literal`])
+/// form of one denylist entry —
 /// computed once per process for each thing it names.
 ///
 /// [`path_is_denied`] runs once per glob match inside the `search` / `stats`
@@ -420,22 +453,34 @@ fn denied_entry_key(denied: &str) -> std::borrow::Cow<'_, str> {
 /// [`path_is_denied`] and [`contains_denied_descendant`] read an entry's
 /// meaning from here and nowhere else.
 fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
-    let key = denied_entry_key(denied);
+    let pattern = looks_like_glob(denied);
+    let key = denied_entry_key(denied, pattern);
     let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
-    if let Some(hit) = cache
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(key.as_ref())
-        .cloned()
-    {
+    let hit = {
+        let memo = cache.read().unwrap_or_else(|e| e.into_inner());
+        let side = if pattern {
+            &memo.patterns
+        } else {
+            &memo.literals
+        };
+        side.get(key.as_ref()).cloned()
+    };
+    if let Some(hit) = hit {
         return hit;
     }
-    // Compiled from the key, not the raw entry, so the stored meaning is the
-    // one the key names even if `$HOME` moves between the two expansions.
-    let compiled = Arc::new(compile_denied_entry(&key));
+    // A literal is compiled from the key, not the raw entry, so the stored
+    // meaning is the one the key names even if `$HOME` moves between the two
+    // expansions — and it is compiled AS a literal, whatever its expansion
+    // spells.
+    let compiled = Arc::new(if pattern {
+        compile_denied_pattern(denied)
+    } else {
+        compile_denied_literal(&key)
+    });
     cache
         .write()
         .unwrap_or_else(|e| e.into_inner())
+        .side(pattern)
         .insert(key.into_owned(), Arc::clone(&compiled));
     compiled
 }
@@ -1396,7 +1441,10 @@ mod tests {
             "the `?` in the verbatim prefix is not a wildcard"
         );
         assert!(
-            matches!(compile_denied_entry(CANONICAL), DeniedEntry::Literal(_)),
+            matches!(
+                &*denied_entry_normalized(CANONICAL),
+                DeniedEntry::Literal(_)
+            ),
             "a canonical Windows entry must compile to a literal location, \
              or the deny it encodes matches nothing"
         );
@@ -1514,7 +1562,10 @@ deny_read_globs = ["**/.env", "**/*.pem"]
 
         {
             let _home = HomeEnvGuard::acquire_and_set(&a);
-            assert!(path_is_denied(&under(&a), &entries));
+            assert!(
+                path_is_denied(&under(&a), &entries),
+                "home A's ~/.ssh was judged against an earlier home's compile"
+            );
         }
         let _home = HomeEnvGuard::acquire_and_set(&b);
         assert!(
@@ -1525,6 +1576,42 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             !path_is_denied(&under(&a), &entries),
             "home A's ~/.ssh is still refused under home B"
         );
+    }
+
+    /// A `$HOME` whose path carries glob metacharacters is still a literal
+    /// location. Whether an entry is a pattern is a property of how the
+    /// operator spelled it (`~/.ssh`), never of what it expands to: classified
+    /// on the expansion, `[1]` in the home's name became a character class, so
+    /// the home's own `~/.ssh` stopped being refused and a sibling directory
+    /// the class happens to match was refused in its place.
+    #[test]
+    fn a_home_with_glob_metacharacters_is_still_a_literal_location() {
+        use crate::runtimes::post_install::HomeEnvGuard;
+        let entries = ["~/.ssh".to_string()];
+        let parent = tempdir().unwrap();
+        let parent_path = parent.path().canonicalize().unwrap();
+        let under = |home: &Path| home.join(".ssh").join("id_ed25519");
+        // (home directory name, a sibling only its metacharacters match)
+        let mut cases = vec![("a[1]b", "a1b")];
+        if cfg!(unix) {
+            // Not legal in a Windows file name.
+            cases.push(("a*b", "a-anything-b"));
+            cases.push(("a?b", "aqb"));
+        }
+
+        for (name, sibling) in cases {
+            let home = parent_path.join(name);
+            std::fs::create_dir(&home).unwrap();
+            let _home = HomeEnvGuard::acquire_and_set(&home);
+            assert!(
+                path_is_denied(&under(&home), &entries),
+                "HOME {name:?}: its own ~/.ssh is not refused"
+            );
+            assert!(
+                !path_is_denied(&under(&parent_path.join(sibling)), &entries),
+                "HOME {name:?}: {sibling:?}'s .ssh is refused because HOME's name was read as a pattern"
+            );
+        }
     }
 
     /// The shape test that tells a pattern entry from a concrete location.
