@@ -9,6 +9,14 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, info, warn};
 
+/// Cheap to clone: every internal field is either `Arc` (so the clone shares
+/// state) or a `Sender` (also `Clone`), except for `shutdown_tx` which is
+/// intentionally left as `None` on clones so only the original instance can
+/// trigger shutdown. The `start`/`shutdown` `&mut self` methods are only
+/// ever called on that original; clones are read-only and only invoke the
+/// `&self` `send_*` methods. Sharing a clone with `ReactionHandler` (Task 5)
+/// is therefore free at runtime — both holders route through the same
+/// internal `Arc<Mutex<Option<Client>>>`.
 pub struct WaRuntime {
     state: Arc<AtomicConnectionState>,
     auth: WaAuthManager,
@@ -17,6 +25,23 @@ pub struct WaRuntime {
     bot_handle: Arc<Mutex<Option<whatsapp_rust::bot::BotHandle>>>,
     client: Arc<Mutex<Option<Arc<whatsapp_rust::Client>>>>,
     message_jids: Arc<Mutex<HashMap<String, whatsapp_rust::Jid>>>,
+}
+
+impl Clone for WaRuntime {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            auth: self.auth.clone(),
+            event_tx: self.event_tx.clone(),
+            // `oneshot::Sender` is intentionally not cloned — only the
+            // original WaRuntime owns the shutdown signal. Clones are
+            // read-only observers.
+            shutdown_tx: None,
+            bot_handle: Arc::clone(&self.bot_handle),
+            client: Arc::clone(&self.client),
+            message_jids: Arc::clone(&self.message_jids),
+        }
+    }
 }
 
 impl WaRuntime {

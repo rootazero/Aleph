@@ -49,6 +49,7 @@ use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use tokio::sync::{oneshot, RwLock};
 
+use crate::gateway::interfaces::whatsapp::reactions::{ReactionHandler, ReactionSender};
 use pairing::PairingState;
 
 /// `WhatsApp` channel implementation backed by native Rust runtime.
@@ -61,6 +62,7 @@ pub struct WhatsAppChannel {
     shutdown_tx: Option<oneshot::Sender<()>>,
     connected: Arc<AtomicBool>,
     test_mode: bool,
+    reaction_handler: Option<Arc<ReactionHandler>>,
 }
 
 impl WhatsAppChannel {
@@ -77,6 +79,17 @@ impl WhatsAppChannel {
             capabilities: Self::capabilities(),
         };
 
+        // `ReactionHandler` wraps a `ReactionSender`; the production sender is
+        // a thin adapter over `WaRuntime::send_reaction`. In `test_mode` and
+        // pre-`start()` we hold a no-op sender so the handler is safely
+        // callable but cannot accidentally reach the network. `start()`
+        // replaces the handler with one wired to the real `WaRuntime`.
+        let reaction_handler = Some(Arc::new(ReactionHandler::new(
+            config.reactions.level,
+            config.reactions.ack.clone(),
+            Arc::new(NoopReactionSender),
+        )));
+
         Self {
             info,
             config,
@@ -86,6 +99,7 @@ impl WhatsAppChannel {
             shutdown_tx: None,
             connected: Arc::new(AtomicBool::new(false)),
             test_mode,
+            reaction_handler,
         }
     }
 
@@ -178,10 +192,23 @@ impl Channel for WhatsAppChannel {
             .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {e}")))?;
         runtime.start().await?;
 
+        // Replace the no-op reaction handler installed in `with_mode` with
+        // one wired to the real `WaRuntime` adapter. The handler is the only
+        // route reactions take to the network, so this is the wiring that
+        // turns `config.reactions` from a parsed-and-ignored field into
+        // something the inbound event loop actually consumes (Task 5).
+        let reaction_handler = Arc::new(ReactionHandler::new(
+            self.config.reactions.level,
+            self.config.reactions.ack.clone(),
+            Arc::new(WaRuntimeReactionAdapter { runtime: runtime.clone() }),
+        ));
+        self.reaction_handler = Some(Arc::clone(&reaction_handler));
+
         let connected = Arc::clone(&self.connected);
         let pairing_state = Arc::clone(&self.pairing_state);
         let inbound_tx = self.channel_state.sender();
         let channel_id = self.info.id.clone();
+        let reaction_handler = Arc::clone(&reaction_handler);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let access = AccessConfig {
@@ -217,6 +244,21 @@ impl Channel for WhatsAppChannel {
                                 if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                            // Spec §3.2 / Task 5: fire the configured
+                                            // ack reaction (pre-reply emoji) right
+                                            // after the inbound message is accepted
+                                            // by policy. `ReactionHandler::send_ack`
+                                            // is a no-op for `Off`/`Minimal` levels
+                                            // and for group `Mentions` mode, so this
+                                            // is safe to call unconditionally on
+                                            // every accepted inbound.
+                                            if let Err(e) = reaction_handler.send_ack(&msg).await {
+                                                tracing::debug!(
+                                                    channel = %channel_id,
+                                                    error = %e,
+                                                    "reaction_handler.send_ack failed (non-fatal)"
+                                                );
+                                            }
                                             if inbound_tx.send(msg).is_err() {
                                                 break;
                                             }
@@ -328,6 +370,46 @@ impl Channel for WhatsAppChannel {
         runtime
             .send_reaction(conversation_id.as_str(), message_id.as_str(), reaction)
             .await
+    }
+}
+
+/// Pre-`start()` and `test_mode` stand-in for the real sender. Returning
+/// `Ok(())` keeps `ReactionHandler::send_ack` callable from anywhere but
+/// guarantees no network traffic until the real adapter is wired in.
+struct NoopReactionSender;
+
+#[async_trait]
+impl ReactionSender for NoopReactionSender {
+    async fn send_reaction(
+        &self,
+        _jid: &str,
+        _msg_id: &str,
+        _emoji: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Thin adapter that routes `ReactionSender::send_reaction` to
+/// `WaRuntime::send_reaction`. `WaRuntime` is cheaply `Clone` (all internal
+/// state is `Arc`/`Mutex`/`Sender`); sharing one clone with the handler is
+/// the minimum-friction wiring called for by spec §3.2.
+struct WaRuntimeReactionAdapter {
+    runtime: WaRuntime,
+}
+
+#[async_trait]
+impl ReactionSender for WaRuntimeReactionAdapter {
+    async fn send_reaction(
+        &self,
+        jid: &str,
+        msg_id: &str,
+        emoji: &str,
+    ) -> Result<(), String> {
+        self.runtime
+            .send_reaction(jid, msg_id, emoji)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
