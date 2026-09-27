@@ -489,23 +489,30 @@ The single sources are `HookEvent::match_subject()` / `supports_interceptor()`
 (`src/extension/types/hooks.rs`); both are surfaced per hook by
 `hooks_manage(action="list")` and as a catalogue by
 `hooks_manage(action="events")`. A matcher is tested against the event's
-subject, as in Claude Code: the tool name (tool, permission and notification
-events — the Aleph name and every CC spelling), the session source for
-`SessionStart` (Aleph fires it only as `startup`, on an empty history — so
-superpowers' `startup|clear|compact` fires, and a matcher that names only
-`resume` / `clear` / `compact` never does), and nothing on every other event,
-where the matcher is **ignored** and the hook fires on every occurrence (a
-load-time warning says so). `"*"` and `""` match everything, like no matcher
-(`hooks::matcher::compile_matcher`, the one compile for both hook files).
-Two shapes that can never fire:
+subject: the tool name on tool and permission events (the Aleph name and
+every CC spelling — Claude Code's documented reading); the tool name on
+`Notification` too (DEVIATION: Claude Code matches a notification *type*
+there, so `permission_prompt` never matches here, and the inventory says so);
+the session source on `SessionStart` (INFERRED from superpowers' real
+`startup|clear|compact` matcher, not documented in the evidence). Aleph fires
+SessionStart on an empty history only, always as `startup` — a session
+emptied by `reset_session` fires as `startup` too; Aleph never sends
+`resume` / `clear` / `compact`, so superpowers' matcher fires and a matcher
+naming only those never does. On every other event Aleph has nothing to test
+the matcher against: it is **ignored** and the hook fires on every occurrence
+(a load-time warning says so). `"*"` and `""` match everything, like no
+matcher (`hooks::matcher::compile_matcher`, the one compile for every hook
+reader). Two shapes that can never fire:
 
-- a matcher that is not a valid regex, or a `SessionStart` matcher that does
-  not match `startup`;
+- on an event that tests its matcher, one that is not a valid regex, or a
+  `SessionStart` matcher that does not match `startup`;
 - `"kind": "interceptor"` on an event whose fire-site dispatches observers
   only (message / provider / gateway / subagent seams).
 
-Both are warned at load time — by `~/.aleph/hooks.json` and a plugin's
-`hooks.json` alike (`hooks::matcher::warn_on_matcher`) — **and** reported per
+Both are warned at load time — by `~/.aleph/hooks.json`, a plugin's
+`hooks.json` and an `aleph.plugin.toml` `[[hooks]] filter` alike
+(`hooks::matcher::warn_on_matcher`), and by both writing faces
+(`hooks_manage add`, the `hooks.add` RPC's `matcher_warning`) — **and** reported per
 hook as `reachable: false` with an `issue` string by the runtime inventory.
 
 #### Available Hook Events

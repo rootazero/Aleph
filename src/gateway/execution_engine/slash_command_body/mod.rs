@@ -437,8 +437,11 @@ pub(super) fn strip(
 /// The `` !`cmd` `` runner: the SAME consent registry, and the same
 /// `(plugin, scope, command)` key and root binding, as a plugin's
 /// `hooks.json` shell command (`HookExecutor::execute_command`), so
-/// `aleph-server hooks list` / `aleph-server hooks test` are the one review surface for
-/// every shell a plugin can reach. The entry is filed under
+/// `aleph-server hooks list` / `aleph-server hooks test` review both. Known
+/// exception, tracked as P4.17: `skill_read`'s preprocessor
+/// (`skill::preprocess`) runs a skill's own `` !`cmd` `` spans — a plugin
+/// skill's included, when its SKILL.md sets `allow-inline-shell: true` —
+/// with no consent entry and its own span scanner. The entry is filed under
 /// [`INLINE_COMMAND_EVENT`] with the template's own text; only an approval
 /// that says so covers it. A command with a relative word ahead of the
 /// script consent binds is never filed or run

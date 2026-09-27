@@ -4,7 +4,8 @@
 //! helpers build lifecycle hook contexts and the project-context / project-skill
 //! `<system-reminder>` blocks that the agent loop injects each turn.
 
-use crate::extension::hooks::HookContext;
+use crate::extension::hooks::{join_messages, HookContext, HookExecutor};
+use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 
 /// Build a `HookContext` for an agent/session lifecycle event. Carries the
@@ -32,19 +33,50 @@ pub(crate) fn lifecycle_hook_context(
     ctx
 }
 
-/// The `SessionStart` context: [`lifecycle_hook_context`] plus how the
-/// session began — what a SessionStart `matcher` is tested against and what
-/// the stdin JSON's `source` says. The fire site runs on an empty history
-/// only, which Claude Code calls `startup`; Aleph has no resume / clear /
-/// compact start ([`SESSION_SOURCES_FIRED`](crate::extension::SESSION_SOURCES_FIRED)).
-pub(crate) fn session_start_hook_context(
+/// The `SessionStart` seam — the ONE function the fire site in
+/// `run_loop/inner.rs` calls (on an empty history), so a test that drives it
+/// drives the production dispatch, context included.
+///
+/// Builds the context — [`lifecycle_hook_context`] plus how the session
+/// began, which a SessionStart `matcher` is tested against and the stdin
+/// JSON's `source` says — then runs both of the seam's dispatches: observers
+/// fire-and-forget, then interceptors, whose output is harvested as context
+/// (`context:` lines / JSON `additionalContext` AND plain stdout lines,
+/// Claude Code's convention on this event). Block / deny is ignored here,
+/// as in Claude Code: SessionStart does not stop a run. Returns the raw
+/// blocks; the caller budgets them.
+///
+/// The source is always [`SESSION_SOURCE_STARTUP`](crate::extension::SESSION_SOURCE_STARTUP):
+/// the fire site cannot tell a brand-new key from a session emptied by
+/// `SessionStore::reset_session` (both are an empty history), so a reset
+/// session fires as `startup` too, and Aleph never sends `resume` / `clear`
+/// / `compact`.
+pub(crate) async fn fire_session_start(
+    executor: &HookExecutor,
     session_id: &str,
     run_id: &str,
     agent: &AgentInstance,
     permission_mode: &'static str,
-) -> HookContext {
-    lifecycle_hook_context(session_id, run_id, agent, Some(permission_mode))
-        .with_session_source(crate::extension::SESSION_SOURCE_STARTUP)
+) -> Vec<String> {
+    let ctx = lifecycle_hook_context(session_id, run_id, agent, Some(permission_mode))
+        .with_session_source(crate::extension::SESSION_SOURCE_STARTUP);
+    executor
+        .execute_observers(HookEvent::SessionStart, &ctx)
+        .await;
+    match executor
+        .execute_interceptors(HookEvent::SessionStart, ctx)
+        .await
+    {
+        Ok((_ctx, hr)) => {
+            let mut blocks = hr.additional_contexts;
+            blocks.extend(join_messages(&hr.messages));
+            blocks
+        }
+        Err(e) => {
+            tracing::warn!(run_id = run_id, error = %e, "SessionStart hook failed");
+            Vec::new()
+        }
+    }
 }
 
 /// Upper bound on how many project-local skills are advertised in the
@@ -189,14 +221,12 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::hooks::HookExecutor;
-    use crate::extension::HookEvent;
 
     /// P4.14 F-2: superpowers' bootstrap hook — `SessionStart` with
     /// `"matcher": "startup|clear|compact"`, its real shape — fires at a
     /// fresh session. Parsed by the plugin parser, converted as the registry
-    /// sync does, fired through the SessionStart seam's own context builder
-    /// on both of the seam's dispatches. Before the match subject existed the
+    /// sync does, fired through `fire_session_start` — the function the
+    /// production fire site calls. Before the match subject existed the
     /// matcher was tested against a tool name SessionStart does not have, so
     /// this hook never ran; a matcher naming no source Aleph fires stays
     /// silent (the control).
@@ -257,14 +287,7 @@ mod tests {
         {
             let marker = temp.path().join(format!("fired-{i}"));
             let executor = HookExecutor::new(hooks_for(matcher, &marker));
-            let ctx = session_start_hook_context("s", "run", &agent, "default");
-            executor
-                .execute_observers(HookEvent::SessionStart, &ctx)
-                .await;
-            executor
-                .execute_interceptors(HookEvent::SessionStart, ctx)
-                .await
-                .expect("the seam's interceptor pass");
+            fire_session_start(&executor, "s", "run", &agent, "default").await;
             assert_eq!(marker.exists(), want, "matcher {matcher:?}");
         }
     }

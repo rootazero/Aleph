@@ -70,8 +70,8 @@ pub(crate) fn matcher_verdict(event: HookEvent, matcher: Option<&str>) -> Matche
     match compile_matcher(pattern) {
         CompiledMatcher::All => MatcherVerdict::Fires,
         _ if subject == MatchSubject::Ignored => MatcherVerdict::Caveat(format!(
-            "`matcher` `{pattern}` is ignored: this event has nothing to match it against \
-             (Claude Code ignores it too), so the hook fires on every occurrence"
+            "`matcher` `{pattern}` is ignored: Aleph has nothing to test it against on this \
+             event, so the hook fires on every occurrence"
         )),
         CompiledMatcher::Invalid(why) => MatcherVerdict::Never(format!(
             "`matcher` `{pattern}` is not a valid regex ({why}), so this hook never fires; \
@@ -83,27 +83,46 @@ pub(crate) fn matcher_verdict(event: HookEvent, matcher: Option<&str>) -> Matche
         {
             MatcherVerdict::Never(format!(
                 "`matcher` `{pattern}` is tested against the session source, and Aleph fires \
-                 this event only as {SESSION_SOURCES_FIRED:?} (it has no resume / clear / \
-                 compact start), so this hook never fires"
+                 this event only as {SESSION_SOURCES_FIRED:?} (a reset session fires as \
+                 `startup` too; Aleph never sends `resume` / `clear` / `compact`), so this \
+                 hook never fires"
+            ))
+        }
+        // DEVIATION A3: Claude Code's documentation (outside this round's
+        // evidence) matches a Notification against its notification type;
+        // Aleph has only the tool the permission card is about.
+        CompiledMatcher::Regex(_) if event == HookEvent::Notification => {
+            MatcherVerdict::Caveat(format!(
+                "`matcher` `{pattern}` is tested against the tool name the notification is \
+                 about, not a notification type (`permission_prompt`, `idle_prompt`, … never \
+                 match here)"
             ))
         }
         CompiledMatcher::Regex(_) => MatcherVerdict::Fires,
     }
 }
 
-/// Log [`matcher_verdict`]'s notice for a hook a file reader just loaded —
-/// `source` is the file's path or the plugin's id, `event` as written.
+/// [`matcher_verdict`]'s notice, when it has one: what both writing faces
+/// return (`hooks_manage add`, the `hooks.add` RPC) and every reader logs
+/// ([`warn_on_matcher`]).
+#[must_use]
+pub(crate) fn matcher_notice(event: HookEvent, matcher: Option<&str>) -> Option<String> {
+    match matcher_verdict(event, matcher) {
+        MatcherVerdict::Fires => None,
+        MatcherVerdict::Caveat(notice) | MatcherVerdict::Never(notice) => Some(notice),
+    }
+}
+
+/// Log [`matcher_notice`] for a hook a file reader just loaded — `source` is
+/// the file's path or the plugin's id, `event` as written.
 pub(crate) fn warn_on_matcher(
     source: &str,
     declared_event: &str,
     event: HookEvent,
     matcher: Option<&str>,
 ) {
-    match matcher_verdict(event, matcher) {
-        MatcherVerdict::Fires => {}
-        MatcherVerdict::Caveat(notice) | MatcherVerdict::Never(notice) => {
-            tracing::warn!(source, event = declared_event, "hook matcher: {notice}");
-        }
+    if let Some(notice) = matcher_notice(event, matcher) {
+        tracing::warn!(source, event = declared_event, "hook matcher: {notice}");
     }
 }
 
@@ -142,5 +161,11 @@ mod tests {
         assert!(matches!(v(HookEvent::Stop, "(("), Caveat(_)));
         assert_eq!(v(HookEvent::Stop, "*"), Fires);
         assert_eq!(matcher_verdict(HookEvent::SessionStart, None), Fires);
+        // DEVIATION A3, said rather than listed as a plain match.
+        assert!(matches!(
+            v(HookEvent::Notification, "permission_prompt"),
+            Caveat(_)
+        ));
+        assert_eq!(v(HookEvent::Notification, "*"), Fires);
     }
 }

@@ -228,12 +228,14 @@ impl HookEvent {
     /// notices, the runtime inventory (`HookExecutor::inventory`) and the
     /// `hooks_manage` catalogue read, so none of them can disagree.
     ///
-    /// Claude Code's reading (`scan-cc-plugin-format.md` §5): a tool event
-    /// matches the tool name; `SessionStart` matches how the session began
-    /// (superpowers ships `"matcher": "startup|clear|compact"`). Where the
-    /// evidence names no subject, the matcher is ignored and the hook fires
-    /// on every occurrence — a matcher never silently means "never fires".
-    /// Exhaustive, so a new event has to choose.
+    /// A tool event matches the tool name (`scan-cc-plugin-format.md` §5
+    /// documents tool-name matchers). `SessionStart` matching how the session
+    /// began is INFERRED, not documented in the evidence: the scan shows only
+    /// superpowers' `"matcher": "startup|clear|compact"` on that event. Where
+    /// the evidence names no subject, Aleph has nothing to test the matcher
+    /// against: it is ignored and the hook fires on every occurrence — a
+    /// matcher never silently means "never fires". Exhaustive, so a new
+    /// event has to choose.
     #[must_use]
     pub const fn match_subject(self) -> MatchSubject {
         use HookEvent::*;
@@ -278,9 +280,10 @@ pub enum MatchSubject {
     /// The tool's name: the Aleph name and every Claude Code spelling of it
     /// (`Edit` for `file_edit`).
     ToolName,
-    /// How the session began — Claude Code's SessionStart `source`
-    /// (`startup`, `resume`, `clear`, `compact`). Aleph fires SessionStart
-    /// only on an empty history, and only as [`SESSION_SOURCE_STARTUP`].
+    /// How the session began — inferred to be what Claude Code's SessionStart
+    /// matcher selects (`startup`, `clear`, `compact`, …). Aleph fires
+    /// SessionStart only on an empty history, and only as
+    /// [`SESSION_SOURCE_STARTUP`].
     SessionSource,
     /// Nothing to select among: a matcher is ignored and the hook fires on
     /// every occurrence.
@@ -299,12 +302,13 @@ impl MatchSubject {
     }
 }
 
-/// The session source of the one SessionStart Aleph fires: a brand-new
-/// session, which Claude Code calls `startup`.
+/// The session source of the one SessionStart Aleph fires: an empty history
+/// — a brand-new session, which Claude Code calls `startup`, or one emptied
+/// by `reset_session`, which the fire site cannot tell apart.
 pub const SESSION_SOURCE_STARTUP: &str = "startup";
 
-/// Every session source Aleph fires SessionStart with. Claude Code also
-/// fires `resume`, `clear` and `compact`; Aleph has no such moment, so a
+/// Every session source Aleph fires SessionStart with. A reset session fires
+/// as `startup` too; Aleph never sends `resume` / `clear` / `compact`, so a
 /// matcher that selects only those never fires here.
 pub const SESSION_SOURCES_FIRED: [&str; 1] = [SESSION_SOURCE_STARTUP];
 

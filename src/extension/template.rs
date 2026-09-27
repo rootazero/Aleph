@@ -60,10 +60,13 @@ static INLINE_SHELL_REGEX: LazyLock<Regex> =
 /// Every `` !`cmd` `` in `content`, in document order: the byte range of the
 /// whole span and the command it runs (trimmed).
 ///
-/// The one place that decides which text of a body is shell source:
-/// [`SkillTemplate::render`] runs exactly these, and the manifest adapter
-/// leaves exactly these unexpanded (`AdapterRegistry::parse_dir`), so a
-/// plugin's install path never becomes part of a command's source.
+/// The one place that decides which text of an adapter-parsed body is shell
+/// source for [`SkillTemplate::render`]: render runs exactly these, and the
+/// manifest adapter leaves exactly these unexpanded
+/// (`AdapterRegistry::parse_dir`), so a plugin's install path never becomes
+/// part of such a command's source. Known exception, tracked as P4.17:
+/// `skill_read`'s preprocessor (`skill::preprocess::find_inline_spans`) has
+/// its own scanner and runs a skill's spans from the file on disk.
 #[must_use]
 pub(crate) fn inline_commands(content: &str) -> Vec<(Range<usize>, &str)> {
     INLINE_SHELL_REGEX

@@ -91,8 +91,12 @@
 //! list` showed — the expanded path. Every approval of such a text that
 //! names a path variable is keyed differently now and authorises nothing:
 //! it comes back as `pending` once, and a guard among them stops blocking
-//! until it is approved again. A text that names no path variable keeps its
-//! key.
+//! until it is approved again. A text that names no path variable — or only
+//! `${PLUGIN_ROOT}`, which the adapter never expanded — keeps its key. The
+//! old entry is kept on disk; `aleph-server hooks list` marks it superseded
+//! and `aleph doctor` counts it apart
+//! ([`ConsentEntry::predates_literal_plugin_text`], which also names what it
+//! cannot tell apart).
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
@@ -227,6 +231,40 @@ impl ConsentEntry {
     pub fn predates_project_binding(&self) -> bool {
         self.project_root.is_none()
             && super::user_settings::PROJECT_LABELS.contains(&self.plugin_name.as_str())
+    }
+
+    /// Whether this is a plugin entry recorded before a plugin's command
+    /// text was kept as written (2026-09-27): its command holds the entry's
+    /// own install root — or the plugin's data directory — spliced in where
+    /// the plugin wrote `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`. A
+    /// hook or inline command is now looked up under the text as written,
+    /// so this key is never asked for again: it authorises nothing.
+    ///
+    /// Told apart by structure: a plugin-owned entry (a plugin id, not a
+    /// settings label) with a recorded root whose command contains that
+    /// root, or the data directory, verbatim. What it cannot tell apart: a
+    /// plugin whose own `hooks.json` spells its absolute install path is
+    /// marked too though it is live (no plugin can know that path in
+    /// advance), and an entry recorded before roots were kept (no root to
+    /// compare) is not marked though it is just as inert.
+    #[must_use]
+    pub fn predates_literal_plugin_text(&self) -> bool {
+        if crate::extension::manifest::validate_plugin_id(&self.plugin_name).is_err() {
+            return false;
+        }
+        let Some(root) = self.plugin_root.as_deref().map(Path::to_string_lossy) else {
+            return false;
+        };
+        let data = crate::extension::plugin_data_dir(&self.plugin_name);
+        (!root.is_empty() && self.command.contains(root.as_ref()))
+            || self.command.contains(data.to_string_lossy().as_ref())
+    }
+
+    /// Whether this entry authorises nothing and never fires again — one of
+    /// the two re-keys the module doc's Migration section describes.
+    #[must_use]
+    pub fn is_superseded(&self) -> bool {
+        self.predates_project_binding() || self.predates_literal_plugin_text()
     }
 
     /// What an approval of an inline command also approves, for the review
@@ -1330,6 +1368,49 @@ mod tests {
             .collect();
         marked.sort();
         assert_eq!(marked, ["a", "b"]);
+    }
+
+    /// P4.16 review M-4: an approval recorded while the adapter still
+    /// spliced the install path into a plugin's command holds its own root
+    /// (or data directory) verbatim — and authorises nothing now that the
+    /// text as written is the key. The text as written, a settings hook
+    /// whose command names the same directory, and an entry with no root are
+    /// not marked.
+    #[test]
+    fn a_plugin_entry_holding_its_own_spliced_root_predates_the_literal_text() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let (_d, consent) = tmp_consent();
+        let data = crate::extension::plugin_data_dir("fmt");
+        let data_cmd = format!("cat {}/state", data.display());
+        for (owner, command) in [
+            ("fmt", "sh /inst/fmt/x.sh"),
+            ("fmt", data_cmd.as_str()),
+            ("fmt", "sh ${CLAUDE_PLUGIN_ROOT}/x.sh"),
+            ("user:global", "sh /inst/fmt/y.sh"),
+        ] {
+            consent.record_pending(
+                owner,
+                &ScopeKey::Global,
+                command,
+                "e",
+                Path::new("/inst/fmt"),
+            );
+        }
+        let mut marked: Vec<String> = consent
+            .entries()
+            .into_iter()
+            .filter(ConsentEntry::predates_literal_plugin_text)
+            .map(|e| e.command)
+            .collect();
+        marked.sort();
+        let mut want = vec![data_cmd.clone(), "sh /inst/fmt/x.sh".to_string()];
+        want.sort();
+        assert_eq!(marked, want);
+        assert!(consent
+            .entries()
+            .iter()
+            .filter(|e| e.predates_literal_plugin_text())
+            .all(ConsentEntry::is_superseded));
     }
 
     // -- the root an approval attests to ------------------------------------

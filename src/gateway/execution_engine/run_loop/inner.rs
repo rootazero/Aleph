@@ -27,8 +27,7 @@ use super::super::tool_refresh::active_plugin_tools_for_agent;
 
 // Free helpers carved into the sibling project_context module.
 use super::project_context::{
-    collect_project_skill_block, lifecycle_hook_context, session_start_hook_context,
-    workspace_directive,
+    collect_project_skill_block, fire_session_start, lifecycle_hook_context, workspace_directive,
 };
 // The pre-seed hook-stop receipt (§5.4), shared with `BeforeAgentStart`.
 use super::journal_hook_stop;
@@ -340,8 +339,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             *deadline.lock().await += compress_elapsed;
         }
 
-        // SessionStart — the first turn of a brand-new session has no prior
-        // history. Firing here (not inside `src/harness/`) keeps the dumb
+        // SessionStart — the first turn of a brand-new session (or of one
+        // emptied by `reset_session`) has no prior history. Firing here (not inside `src/harness/`) keeps the dumb
         // loop free of lifecycle logic (R10). Observers run fire-and-forget;
         // interceptor-kind hooks are harvested for context (Claude Code /
         // codex parity: a SessionStart hook's stdout is injected into the
@@ -350,35 +349,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mut session_start_blocks: Vec<String> = Vec::new();
         if history.is_empty() {
             if let Some(executor) = hook_executor.as_ref() {
-                let ctx = session_start_hook_context(
+                // Context build + both dispatches live in one function, so
+                // the test that drives superpowers' real hook through it
+                // drives this seam.
+                let blocks = fire_session_start(
+                    executor,
                     &hook_session_id,
                     run_id,
                     &agent,
                     exec_tier.cc_permission_mode(),
-                );
-                executor
-                    .execute_observers(HookEvent::SessionStart, &ctx)
-                    .await;
-                match executor
-                    .execute_interceptors(HookEvent::SessionStart, ctx)
-                    .await
-                {
-                    Ok((_ctx, hr)) => {
-                        // Claude-Code convention: `context:` lines / JSON
-                        // additionalContext AND plain stdout lines both count
-                        // as injected context on this event. Everything this
-                        // seam injects rides in the session context for the
-                        // REST OF THE SESSION, so it goes through the shared
-                        // hook-context budget — over-budget blocks spill to
-                        // disk and are replaced by a recoverable preview.
-                        let mut blocks = hr.additional_contexts;
-                        blocks.extend(join_messages(&hr.messages));
-                        session_start_blocks
-                            .extend(budget_hook_contexts(&hook_session_id, blocks).await);
-                    }
-                    Err(e) => {
-                        warn!(run_id = run_id, error = %e, "SessionStart hook failed")
-                    }
+                )
+                .await;
+                // Everything this seam injects rides in the session context
+                // for the REST OF THE SESSION, so it goes through the shared
+                // hook-context budget — over-budget blocks spill to disk and
+                // are replaced by a recoverable preview.
+                if !blocks.is_empty() {
+                    session_start_blocks
+                        .extend(budget_hook_contexts(&hook_session_id, blocks).await);
                 }
             }
         }

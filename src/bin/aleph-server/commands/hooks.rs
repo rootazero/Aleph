@@ -61,6 +61,9 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
         if let Some(note) = project_note(e) {
             println!("{:<18} project: {note}", "");
         }
+        if let Some(note) = spliced_text_note(e) {
+            println!("{:<18} {note}", "");
+        }
         if let Some(note) = e.invoker_arguments_note() {
             println!("{:<18} {note}", "");
         }
@@ -68,7 +71,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
 
     let pending = entries
         .iter()
-        .filter(|e| e.status == ConsentStatus::Pending)
+        .filter(|e| e.status == ConsentStatus::Pending && !e.is_superseded())
         .count();
     if pending > 0 {
         println!();
@@ -409,17 +412,18 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     println!("  Exists:  {}", path.exists());
 
     let entries = consent.entries();
-    // An old `user:project*` entry authorises nothing and never fires again:
-    // counted apart, not as an approval or as awaiting one.
-    let (kept, live): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.predates_project_binding());
+    // An old `user:project*` entry, or a plugin entry recorded with the
+    // install path spliced into its text, authorises nothing and never fires
+    // again: counted apart, not as an approval or as awaiting one.
+    let (kept, live): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.is_superseded());
     let approved = live
         .iter()
         .filter(|e| e.status == ConsentStatus::Approved)
         .count();
     let pending = live.len() - approved;
     println!(
-        "  Entries: {} ({approved} approved, {pending} pending, {} from before project \
-         binding — authorise nothing)",
+        "  Entries: {} ({approved} approved, {pending} pending, {} superseded — recorded \
+         before project binding or with the install path expanded; authorise nothing)",
         entries.len(),
         kept.len()
     );
@@ -462,6 +466,16 @@ fn project_note(entry: &ConsentEntry) -> Option<String> {
     })
 }
 
+/// For a plugin entry recorded with the install path spliced into its text
+/// (before 2026-09-27): that it authorises nothing
+/// ([`ConsentEntry::predates_literal_plugin_text`]).
+fn spliced_text_note(entry: &ConsentEntry) -> Option<&'static str> {
+    entry.predates_literal_plugin_text().then_some(
+        "superseded: recorded with the install path expanded into the command; authorises \
+         nothing. Approve the new pending entry (the text as the plugin wrote it) instead.",
+    )
+}
+
 const fn status_label(status: ConsentStatus) -> &'static str {
     match status {
         ConsentStatus::Pending => "pending",
@@ -500,6 +514,31 @@ mod tests {
         let out = truncate("0123456789", 5);
         assert_eq!(out.chars().count(), 5);
         assert!(out.ends_with('…'));
+    }
+
+    /// P4.16 review M-4: `hooks list` marks an approval given to the text
+    /// with the install path spliced in as authorising nothing, and leaves
+    /// the text as the plugin wrote it alone.
+    #[test]
+    fn hooks_list_marks_a_spliced_text_approval_superseded() {
+        let entry = |command: &str| ConsentEntry {
+            fingerprint: "0123456789abcdef".into(),
+            plugin_name: "fmt".into(),
+            project_root: None,
+            command: command.into(),
+            event: "PreToolUse".into(),
+            plugin_root: Some(std::path::PathBuf::from("/inst/fmt")),
+            status: ConsentStatus::Approved,
+            first_seen: 0,
+            approved_at: Some(1),
+            script_fingerprint: None,
+        };
+        let note = spliced_text_note(&entry("sh /inst/fmt/x.sh")).unwrap_or_default();
+        assert!(note.contains("authorises nothing"), "{note}");
+        assert_eq!(
+            spliced_text_note(&entry("sh ${CLAUDE_PLUGIN_ROOT}/x.sh")),
+            None
+        );
     }
 
     #[test]

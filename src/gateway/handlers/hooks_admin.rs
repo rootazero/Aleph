@@ -25,7 +25,9 @@
 //! - `hooks.list` → `{ events: { EventName: [Group] }, path, exists }`
 //! - `hooks.registry` → `{ hooks: [HookInventoryEntry], total, unreachable }`
 //! - `hooks.add` (params: `{ event, command|prompt|agent|http, matcher?, timeout_secs? }`)
-//!   → appends one entry; returns the same shape as `hooks.list`
+//!   → appends one entry; returns the same shape as `hooks.list`, plus
+//!   `matcher_warning` when the matcher never fires or its event ignores it
+//!   (`hooks::matcher_notice`, the text `hooks_manage add` gives too)
 //! - `hooks.remove` (params: `{ event, command? | index? }`)
 //!   → filters out matching entries; returns the new view
 //! - `hooks.reload` → forces a full extension-manager reload from disk;
@@ -313,10 +315,19 @@ pub async fn handle_hooks_add(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(e) = append_user_hook(&params.event, action, params.matcher.as_deref()) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
     }
+    // A matcher that never fires, or one its event ignores, is said — the
+    // same notice the tool twin (`hooks_manage add`) and every loader give.
+    let matcher_warning = crate::extension::hooks::parse_event(&params.event).and_then(|event| {
+        crate::extension::hooks::matcher_notice(event, params.matcher.as_deref())
+    });
 
     match read_hooks_file() {
         Ok((path, exists, events)) => {
-            JsonRpcResponse::success(request.id, list_response(path, exists, events))
+            let mut body = list_response(path, exists, events);
+            if let Some(warning) = matcher_warning {
+                body["matcher_warning"] = Value::String(warning);
+            }
+            JsonRpcResponse::success(request.id, body)
         }
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     }
@@ -595,6 +606,29 @@ mod tests {
             written.display(),
             read.display()
         );
+    }
+
+    /// P4.16 review M-5: the RPC face of `hooks_manage add` says what the
+    /// tool face says about a matcher — from the same `matcher_notice` —
+    /// and says nothing about one that simply works.
+    #[tokio::test]
+    async fn hooks_add_warns_about_a_matcher_the_way_its_tool_twin_does() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        async fn add(params: Value) -> Value {
+            handle_hooks_add(JsonRpcRequest::with_id("hooks.add", Some(params), json!(1)))
+                .await
+                .result
+                .expect("hooks.add succeeds")
+        }
+        let ignored =
+            add(json!({"event": "UserPromptSubmit", "command": "true", "matcher": "x"})).await;
+        let warning = ignored["matcher_warning"].as_str().unwrap_or_default();
+        assert!(warning.contains("ignored"), "{ignored}");
+        let broken = add(json!({"event": "PreToolUse", "command": "true", "matcher": "(("})).await;
+        let warning = broken["matcher_warning"].as_str().unwrap_or_default();
+        assert!(warning.contains("not a valid regex"), "{broken}");
+        let fine = add(json!({"event": "PreToolUse", "command": "true", "matcher": "Bash"})).await;
+        assert!(fine.get("matcher_warning").is_none(), "{fine}");
     }
 
     #[test]

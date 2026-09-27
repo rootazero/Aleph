@@ -349,14 +349,11 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
         );
     }
     // The verdict `hooks list` and the load-time notice read.
-    if let Some(parsed) = crate::extension::hooks::parse_event(&event) {
-        use crate::extension::hooks::MatcherVerdict;
-        match crate::extension::hooks::matcher_verdict(parsed, args.matcher.as_deref()) {
-            MatcherVerdict::Fires => {}
-            MatcherVerdict::Caveat(notice) | MatcherVerdict::Never(notice) => {
-                summary.push_str(&format!(" WARNING: {notice}."));
-            }
-        }
+    // The same notice as the RPC twin `hooks.add` (`matcher_warning`).
+    if let Some(notice) = crate::extension::hooks::parse_event(&event)
+        .and_then(|parsed| crate::extension::hooks::matcher_notice(parsed, args.matcher.as_deref()))
+    {
+        summary.push_str(&format!(" WARNING: {notice}."));
     }
 
     Ok(HooksManageOutput {

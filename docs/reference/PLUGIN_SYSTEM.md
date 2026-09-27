@@ -403,7 +403,10 @@ aleph plugin list
 四个变量在**同一个点**展开：`mcp_config.rs::substitute_vars`，路径单一源
 `extension::plugin_data_dir`。**shell 源码例外**——hook 的 `command` 与命令正文里的
 `` !`cmd` ``：解析插件时（`AdapterRegistry::parse_dir`）只展开 skill / 命令 / agent 正文里的
-散文，这两处原样保留（哪段是 `` !`cmd` `` 由 `template::inline_commands` 这一个识别器决定）；
+散文，这两处原样保留（对经 adapter 解析、由 `SkillTemplate::render` 渲染的正文，哪段是 `` !`cmd` ``
+由 `template::inline_commands` 决定；**已知例外，记为 P4.17**：`skill_read` 的预处理器
+`skill::preprocess` 用它自己的扫描器，直接从磁盘上的 SKILL.md 跑 `allow-inline-shell: true` 的
+`` !`cmd` ``——插件 skill 也在内——不过同意清单，且把 `${ALEPH_SKILL_DIR}` 按文本拼进 `sh -c` 源码）；
 unix 上这些变量只写进子进程的环境、由 `sh` 当数据展开（目录名里的 `$(…)` / `"` / 空格不会被
 当作源码解析；单引号 `'${CLAUDE_PLUGIN_ROOT}'` 因此保持字面量）；Windows 的 `cmd` 不会展开
 `${…}`，在起进程时替换——hook 与 inline 命令共用 `hooks::plugin_shell_line` 这一个推导。

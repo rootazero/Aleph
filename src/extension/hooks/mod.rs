@@ -64,7 +64,7 @@ pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_t
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT};
 pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
-pub(crate) use matcher::{matcher_verdict, warn_on_matcher, MatcherVerdict};
+pub(crate) use matcher::{matcher_notice, warn_on_matcher};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
@@ -591,7 +591,10 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
 ///
 /// The text arrives as the plugin wrote it: the manifest adapter never
 /// expands a path variable inside either (`AdapterRegistry::parse_dir`), so
-/// this is the only place one can be resolved into source.
+/// for these two this is the only place one can be resolved into source.
+/// Known exception outside them, tracked as P4.17: `skill_read`'s
+/// preprocessor (`skill::preprocess`) splices `${ALEPH_SKILL_DIR}` into a
+/// skill's `` !`cmd` `` text before `sh -c` runs it.
 ///
 /// - unix: the text verbatim. Each path variable reaches the child through
 ///   its environment ([`PLUGIN_ROOT_VARIABLES`], [`PLUGIN_DATA_VARIABLES`],
