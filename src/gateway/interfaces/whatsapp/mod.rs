@@ -43,6 +43,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
+use crate::gateway::interfaces::whatsapp::wa_runtime::fake::FakeWaRuntime;
 use crate::gateway::interfaces::whatsapp::wa_runtime::{RealWaRuntime, WaRuntime};
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, Ordering};
@@ -59,6 +60,12 @@ pub struct WhatsAppChannel {
     config: WhatsAppConfig,
     channel_state: ChannelState,
     runtime: Option<Arc<dyn WaRuntime>>,
+    /// Held alongside `runtime` so tests can reach the fake's emit
+    /// methods and recorded-send bookkeeping. `None` in production
+    /// paths. Set by `for_test_with_fake`; the legacy `for_test` path
+    /// also installs a fake (Task 8) so the existing `test_mode`
+    /// shortcut can be retired safely.
+    fake: Option<Arc<FakeWaRuntime>>,
     pairing_state: Arc<RwLock<PairingState>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     connected: Arc<AtomicBool>,
@@ -98,6 +105,7 @@ impl WhatsAppChannel {
             config,
             channel_state: ChannelState::new(100),
             runtime: None,
+            fake: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
             shutdown_tx: None,
             connected: Arc::new(AtomicBool::new(false)),
@@ -107,8 +115,168 @@ impl WhatsAppChannel {
         }
     }
 
+    /// Construct a channel backed by `FakeWaRuntime`. Returns both the
+    /// channel and the fake so tests can call `emit_*` and inspect
+    /// recorded sends. The fake defaults to `PairingState::Connected`
+    /// so the existing `for_test` tests that assert `Connected` after
+    /// `start()` keep passing; tests that want to exercise the QR
+    /// pairing flow call `fake.set_pairing_state(PairingState::Idle)`
+    /// (and the matching `WhatsAppChannel::reset_pairing_state_for_test`)
+    /// before driving events.
+    pub fn for_test_with_fake(
+        id: impl Into<String>,
+        config: WhatsAppConfig,
+    ) -> (Self, Arc<FakeWaRuntime>) {
+        let mut channel = Self::with_mode(id, config, false);
+        let fake = FakeWaRuntime::new();
+        // Wire the fake as the runtime so the channel's event loop can
+        // pull events off the fake's internal mpsc.
+        let runtime: Arc<dyn WaRuntime> = Arc::clone(&fake) as Arc<dyn WaRuntime>;
+        channel.runtime = Some(runtime);
+        channel.fake = Some(Arc::clone(&fake));
+        (channel, fake)
+    }
+
+    /// Test-only helper: reset the channel's pairing-state mirror to a
+    /// known starting point. `FakeWaRuntime` carries its own pairing
+    /// state internally; the channel carries a separate
+    /// `Arc<RwLock<PairingState>>` that drives `Channel::status()`. Both
+    /// must be in sync for assertions to be meaningful, so scenario tests
+    /// call this alongside `fake.set_pairing_state(...)`.
+    pub async fn reset_pairing_state_for_test(&self, state: PairingState) {
+        *self.pairing_state.write().await = state;
+    }
+
+    /// Test-only getter: snapshot the channel's pairing state. The
+    /// fake's `wait_for_pairing_state` accepts a getter closure so
+    /// tests can poll the channel's `PairingState` (the same field
+    /// `Channel::status()` reads from) without reaching into private
+    /// state.
+    pub async fn pairing_state(&self) -> PairingState {
+        self.pairing_state.read().await.clone()
+    }
+
+    /// Spawn the channel's event loop pulling from the fake's mpsc.
+    /// Mirrors the production path's `tokio::spawn(async move { ... })`
+    /// block in `start()` but takes the rx from `fake.take_event_receiver`
+    /// and the runtime adapter from the fake itself rather than the
+    /// `RealWaRuntime`/`WaAuthManager` plumbing that the production path
+    /// uses.
+    async fn run_fake_event_loop(
+        &mut self,
+        fake: Arc<FakeWaRuntime>,
+    ) -> ChannelResult<()> {
+        let mut event_rx = fake.take_event_receiver().ok_or_else(|| {
+            ChannelError::Internal("fake runtime receiver already taken".into())
+        })?;
+
+        // Replace the no-op reaction handler with one wired to the
+        // fake's `send_reaction`. Without this, ack reactions on
+        // accepted inbound messages would silently no-op (the
+        // `NoopReactionSender` from `with_mode`).
+        let reaction_handler = Arc::new(ReactionHandler::new(
+            self.config.reactions.level,
+            self.config.reactions.ack.clone(),
+            Arc::new(WaRuntimeReactionAdapter {
+                runtime: Arc::clone(&fake) as Arc<dyn WaRuntime>,
+            }),
+        ));
+        self.reaction_handler = Some(Arc::clone(&reaction_handler));
+
+        let connected = Arc::clone(&self.connected);
+        let pairing_state = Arc::clone(&self.pairing_state);
+        let inbound_tx = self.channel_state.sender();
+        let channel_id = self.info.id.clone();
+        let history_buffer = Arc::clone(&self.history_buffer);
+        let reaction_handler = Arc::clone(&reaction_handler);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let access = AccessConfig {
+            dm_policy: self.config.access.dm_policy,
+            allow_from: self.config.access.allow_from.clone(),
+            group_policy: self.config.access.group_policy,
+            group_allow_from: self.config.access.group_allow_from.clone(),
+            groups: self.config.access.groups.clone(),
+        };
+        let policy = crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicy::new(
+            access,
+            vec![],
+        );
+        let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
+        let mut shutdown_rx = shutdown_rx;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(event) = event_rx.recv() => {
+                        use whatsapp_rust::types::events::Event;
+                        // Drive PairingState from the same 4 events the
+                        // production path drives (Task 2). The fake's
+                        // synthetic `start()` event is `PairSuccess`, so
+                        // by the time we get here `pairing_state` is
+                        // already `Connected` and this call is a
+                        // no-op.
+                        driver.apply(&event).await;
+                        match event {
+                            Event::Connected(_) => {
+                                connected.store(true, Ordering::SeqCst);
+                            }
+                            Event::Disconnected(_) => {
+                                connected.store(false, Ordering::SeqCst);
+                            }
+                            _ => {
+                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                    match policy.evaluate(&msg) {
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                            if let Err(e) = reaction_handler.send_ack(&msg).await {
+                                                tracing::debug!(
+                                                    channel = %channel_id,
+                                                    error = %e,
+                                                    "reaction_handler.send_ack failed (non-fatal)"
+                                                );
+                                            }
+                                            if inbound_tx.send(msg).is_err() {
+                                                break;
+                                            }
+                                        }
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
+                                            tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
+                                        }
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
+                                            tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
+                                            if inbound_tx.send(msg).is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ = &mut shutdown_rx => break,
+                }
+            }
+            connected.store(false, Ordering::SeqCst);
+            let mut state = pairing_state.write().await;
+            *state = PairingState::Idle;
+        });
+
+        self.shutdown_tx = Some(shutdown_tx);
+        Ok(())
+    }
+
+    /// Access the `FakeWaRuntime` backing this channel, if any. Returns
+    /// `None` for channels built via `new()` or any non-fake path.
+    pub fn fake_runtime(&self) -> Option<Arc<FakeWaRuntime>> {
+        self.fake.as_ref().map(Arc::clone)
+    }
+
     pub fn for_test(id: impl Into<String>, config: WhatsAppConfig) -> Self {
-        Self::with_mode(id, config, true)
+        // Task 8: prefer the FakeWaRuntime-backed channel so the event
+        // loop is exercised end-to-end in tests. The pre-Task-8
+        // `test_mode` shortcut still lives in `start()` as a fallback
+        // for callers that explicitly do not want a fake.
+        let (channel, _fake) = Self::for_test_with_fake(id, config);
+        channel
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -177,6 +345,20 @@ impl Channel for WhatsAppChannel {
                 .await;
             tracing::info!("WhatsApp channel started in test mode");
             return Ok(());
+        }
+
+        // Fake runtime path (Task 8): the fake carries its own event
+        // channel and a default `PairingState::Connected`. We mirror
+        // that initial state into the channel's `pairing_state` so
+        // `Channel::status()` agrees with the fake immediately after
+        // `start()` returns, and skip the production-only
+        // `Initializing` flip below.
+        if let Some(fake) = &self.fake {
+            fake.start()
+                .await
+                .map_err(|e| ChannelError::Internal(format!("fake runtime start: {e}")))?;
+            *self.pairing_state.write().await = fake.pairing_state().await;
+            return self.run_fake_event_loop(Arc::clone(fake)).await;
         }
 
         *self.pairing_state.write().await = PairingState::Initializing;
