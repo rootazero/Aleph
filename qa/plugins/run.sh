@@ -17,6 +17,18 @@
 #   ./qa/plugins/run.sh visibility # a project's .aleph/plugins/<p> plugin (skill,
 #                                  # agent, MCP tool) reaches the model only for
 #                                  # a run bound to that project
+#   ./qa/plugins/run.sh command    # `/cmd args` puts the command's rendered body
+#                                  # in front of the model; the persisted turn
+#                                  # stays the raw `/cmd` text
+#   ./qa/plugins/run.sh exit2      # a `>&2; exit 2` PreToolUse hook, approved the
+#                                  # operator's way, blocks file_read and its
+#                                  # stderr is the tool result the model reads
+#   ./qa/plugins/run.sh subagent   # a command's `allowed-tools` restriction also
+#                                  # bounds the `subagent` child it delegates to
+#   ./qa/plugins/run.sh cc-cache  # a Claude Code install under ~/.claude/plugins:
+#                                  # listed, disabled, the model may not enable it,
+#                                  # the operator can; its .mcp.json server mounts;
+#                                  # durable; nothing under ~/.claude is written
 #
 # `marketplaces` drives WebSocket-RPC; `panel` is the DOM half of the same
 # screen and is deliberately separate. The RPC fixture cannot see anything the
@@ -160,6 +172,35 @@ start_server() {
     sleep 1
   done
   echo "gateway never came up"; tail -40 "$QA_ROOT/server.log"; return 1
+}
+
+# The mock Anthropic provider (`busy_input/mock_anthropic.py`), recording every
+# request it answers to $4 — the only witness to what the MODEL was handed.
+# Args: <probe_path> <plan> <tool_spec or ""> <request_log>. Replaces any mock
+# this run already started: its turn counter is global, so a second phase that
+# needs a fresh plan needs a fresh process.
+start_mock() {
+  if [ -n "$MOCK_PID" ]; then kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; MOCK_PID=""; fi
+  python3 "$BUSY/mock_anthropic.py" "$MOCK_PORT" "$1" "$2" "$3" "$4" >>"$QA_ROOT/mock.log" 2>&1 &
+  MOCK_PID=$!
+  for _ in $(seq 1 20); do
+    curl -sf -o /dev/null "http://127.0.0.1:$MOCK_PORT/v1/models" 2>/dev/null && return 0
+    sleep 0.5
+  done
+  echo "mock provider never came up"; tail -20 "$QA_ROOT/mock.log"; return 1
+}
+
+# A `Simulated` daemon never calls the mock, so every assertion about what the
+# model received would fail for a reason that has nothing to do with plugins.
+# Name the cause first (the `visibility` arm does the same inline).
+assert_real_mode() {
+  local line
+  line="$(grep "Mode:" "$QA_ROOT/server.log" | tail -1)"
+  echo "  ${line:-(no Mode: line in the server log)}"
+  case "$line" in
+    *"Real AgentLoop"*) echo "  [PASS] the daemon runs a real agent loop against the mock provider" ;;
+    *) echo "  [FAIL] the daemon is not in real mode — no run below would reach the mock"; RC=1 ;;
+  esac
 }
 
 RC=0
@@ -527,8 +568,221 @@ visibility)
   say "probe: one run inside the project, one run with no project"
   python3 "$HERE/drive_visibility.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PROJECT" "$REQ_LOG" probe || RC=$?
   ;;
+
+command)
+  # The claim: `/cmd args` puts the command's RENDERED BODY in front of the
+  # model. Before this round the body sat in `SkillRegistration.content`,
+  # parsed and never read; `/cmd` reached the model as the literal text.
+  # The only oracle for "what the model received" is the mock's request log —
+  # the persisted history deliberately stays the RAW input (the session title
+  # is derived from it), so `chat.history` is asserted the other way round.
+  #
+  # The turn's caller is an operator (loopback, no credential). Since P4.7c an
+  # inline `` !`cmd` `` runs only for an operator, and even then only once its
+  # text is approved — so this turn files a PENDING consent entry under the
+  # `SlashCommand` event and withholds the command with the operator
+  # placeholder. Both are asserted: the placeholder in the request log, the
+  # entry on the operator's own review surface (`aleph-server hooks list`).
+  export ALEPH_ACTIVATION_GATE=fatal
+  REQ_LOG="$QA_ROOT/requests.jsonl"
+  say "plant a plugin with a command"
+  python3 - "$INSTALLED" <<'PY' || exit 1
+import pathlib, sys
+root = pathlib.Path(sys.argv[1], "qa-cmd-plugin")
+(root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+(root / "commands").mkdir(exist_ok=True)
+(root / ".claude-plugin" / "plugin.json").write_text('{"name": "qa-cmd-plugin", "version": "1.0.0"}\n')
+# The inline command's output (QA_INLINE_RAN) is not a substring of its source,
+# which the withheld placeholder quotes — so "absent output" means "did not run".
+(root / "commands" / "greet.md").write_text(
+    "---\ndescription: Greet someone\nargument-hint: \"[name]\"\n---\n"
+    "Say hello to $1 and mention the token QA_CMD_MARKER_$1 verbatim.\n"
+    "Second: ${2:-nobody}. Inline: !`printf 'QA_%s_RAN' INLINE`\n")
+PY
+  say "start mock provider (single-shot: every turn ends with no tool call)"
+  start_mock /etc/hostname single-shot "" "$REQ_LOG" || exit 1
+  say "start server"
+  start_server || exit 1
+  assert_real_mode
+  say "drive"
+  python3 "$HERE/drive_command.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" || RC=$?
+  say "the withheld inline command is pending on the operator's review surface"
+  HOOKS_OUT="$("$BIN" hooks list 2>&1)"
+  printf '%s\n' "$HOOKS_OUT" | head -12
+  if printf '%s\n' "$HOOKS_OUT" | grep -E "pending +qa-cmd-plugin +printf 'QA_%s_RAN' INLINE" >/dev/null; then
+    echo "  [PASS] \`aleph-server hooks list\` shows the inline command pending under qa-cmd-plugin"
+  else
+    echo "  [FAIL] no pending qa-cmd-plugin inline-command entry in \`aleph-server hooks list\`"; RC=1
+  fi
+  ;;
+
+exit2)
+  # The claim: a PreToolUse hook written the Claude Code way —
+  # `echo reason >&2; exit 2` — BLOCKS the tool and its stderr reaches the
+  # model as the tool result. Before this round the exit code was recorded
+  # and never consulted: the hook ran, printed, and the tool ran anyway.
+  # The matcher is spelled `Read` (Claude Code's name for `file_read`) so the
+  # alias table is on the same wire.
+  #
+  # Approved the operator's way, not by writing the allowlist by hand: an
+  # approval is bound to the root the hook fired from, and `approve` mints
+  # none without one — so the hook fires once (un-approved: skipped, recorded
+  # pending, the tool runs), then `aleph-server hooks test <fp>` reviews and
+  # approves it, and a second run is the one that must be blocked. The first
+  # run is the control: the probe content DOES reach the model there, so the
+  # second run's absence of it means the hook, not a broken fixture.
+  # `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` is the documented operator override
+  # for reviewing a command that chains (`;`, `>&2`) — which this idiom does.
+  export ALEPH_ACTIVATION_GATE=fatal
+  PROBE="$QA_ROOT/probe.txt"
+  printf 'QA_PROBE_CONTENT_MUST_NOT_REACH_THE_MODEL\n' > "$PROBE"
+  say "plant a user-level hooks.json (matcher \`Read\`)"
+  python3 - "$ALEPH_HOME" <<'PY' || exit 1
+import json, pathlib, sys
+cmd = "echo QA_BLOCK_REASON_policy >&2; exit 2"
+pathlib.Path(sys.argv[1], "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+    {"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}}, indent=2))
+PY
+  python3 -c 'import json,sys; json.dump({"name": "file_read", "input": {"path": sys.argv[1]}}, open(sys.argv[2], "w"))' \
+    "$PROBE" "$QA_ROOT/spec.json" || exit 1
+  # Started from $QA_ROOT: the daemon's CWD is a hook layer of its own
+  # (`<cwd>/.aleph/hooks.json`), and this stage means the user layer only.
+  SERVER_CWD="$QA_ROOT"
+  say "start mock provider (tool-chain: every turn reads the probe)"
+  start_mock "$PROBE" tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests-prime.jsonl" || exit 1
+  say "start server"
+  start_server || exit 1
+  assert_real_mode
+  say "run 1 — the hook is not approved yet (control)"
+  python3 "$HERE/drive_exit2.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests-prime.jsonl" prime || RC=$?
+  say "the operator reviews and approves it"
+  "$BIN" hooks list 2>&1 | head -12
+  FP="$("$BIN" hooks list 2>/dev/null | awk '$3 == "user:global" && $2 == "pending" {print $1; exit}')"
+  if [ -z "$FP" ]; then
+    echo "  [FAIL] the Read-matched hook fired no pending user:global entry — the matcher never matched file_read"
+    RC=1
+  else
+    echo "  [PASS] the hook fired on file_read and filed pending entry $FP (matcher \`Read\` reached file_read)"
+    APPROVE_OUT="$(printf 'y\ny\n' | ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 "$BIN" hooks test "$FP" 2>&1)"
+    printf '%s\n' "$APPROVE_OUT" | sed 's/^/    /'
+    if printf '%s' "$APPROVE_OUT" | grep -q "Approved $FP"; then
+      echo "  [PASS] \`aleph-server hooks test $FP\` approved it"
+    else
+      echo "  [FAIL] \`aleph-server hooks test $FP\` did not approve it"; RC=1
+    fi
+  fi
+  say "run 2 — approved: the hook must block (no restart: approvals are re-read by stamp)"
+  start_mock "$PROBE" tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests.jsonl" || exit 1
+  python3 "$HERE/drive_exit2.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests.jsonl" block || RC=$?
+  ;;
+
+subagent)
+  # The claim (P4.13 ruling 5, optional): a plugin command whose
+  # `allowed-tools` restricts the turn to a list hands a `subagent` it spawns
+  # the SAME restricted view, not the full catalogue — otherwise one delegation
+  # undoes the restriction (判据 §14: two legal steps, together equivalent to
+  # the forbidden one). The oracle is the tools[] of each request the mock
+  # received: the parent turn's (carrying the `<command>` block) and the
+  # child's (whose first user message is the delegated task). A control
+  # asserts the parent's view really is restricted, so the child comparison
+  # cannot pass against an unrestricted parent.
+  export ALEPH_ACTIVATION_GATE=fatal
+  REQ_LOG="$QA_ROOT/requests.jsonl"
+  say "plant a plugin whose command restricts the turn to Read + Task"
+  python3 - "$INSTALLED" <<'PY' || exit 1
+import pathlib, sys
+root = pathlib.Path(sys.argv[1], "qa-sub-plugin")
+(root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+(root / "commands").mkdir(exist_ok=True)
+(root / ".claude-plugin" / "plugin.json").write_text('{"name": "qa-sub-plugin", "version": "1.0.0"}\n')
+# `Read` → file_read, `Task` → subagent (the CC alias table).
+(root / "commands" / "delegate.md").write_text(
+    "---\ndescription: Delegate a read\nallowed-tools: Read, Task\n---\n"
+    "Delegate the task to a sub-agent. QA_SUB_PARENT_MARKER\n")
+PY
+  # Every tool turn delegates; the child's first user message is the task.
+  # `coder`, not the default child: it names `bash` in its own allowlist, so
+  # "restricted" and "unrestricted" differ by one named tool, and the control
+  # phase proves an unrestricted parent's coder child does carry it.
+  python3 -c 'import json,sys; json.dump({"name": "subagent", "input": {"task": "QA_SUB_CHILD_TASK read nothing and stop", "agent_type": "coder"}}, open(sys.argv[1], "w"))' \
+    "$QA_ROOT/spec.json" || exit 1
+  say "start mock provider (tool-chain: every tool turn calls subagent)"
+  start_mock /etc/hostname tool-chain "$QA_ROOT/spec.json" "$REQ_LOG" || exit 1
+  say "start server"
+  start_server || exit 1
+  assert_real_mode
+  say "drive: /cmd delegates (the claim)"
+  python3 "$HERE/drive_subagent.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$REQ_LOG" restricted || RC=$?
+  say "control: a plain turn delegates (its child must carry the full view)"
+  start_mock /etc/hostname tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests-control.jsonl" || exit 1
+  python3 "$HERE/drive_subagent.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests-control.jsonl" control || RC=$?
+  ;;
+
+cc-cache)
+  # The claim: a plugin Claude Code installed under ~/.claude/plugins is
+  # discovered, listed with origin `claude_cache`, DISABLED until the operator
+  # enables it, its MCP server (declared the Claude Code way — a `.mcp.json`
+  # beside the manifest, NO `aleph.runtime`, P4.15) mounts on enable, and
+  # nothing under ~/.claude is written. $HOME is the scratch root here
+  # (qa_redirect_home), so the fixture IS ~/.claude for the server.
+  #
+  # The model may NOT enable it (P4.10 D-A: `plugin_manage enable` refuses a
+  # `claude_cache` row); the operator does, through `plugins.enable` — what
+  # `aleph plugin enable` and the Panel call. Both are driven, in that order.
+  #
+  # Also pinned (P4.11 R2-I2 — accepted compat cost, P4.14 DEVIATION row;
+  # candidate plugin-resource face in the final review): the model's
+  # `file_read` of a file under the CC plugin root is denied, because
+  # `~/.claude/plugins` is a pre-grant root (`utils::paths::pregrant_roots`).
+  # Asserted as it is today so that a change is noticed, not as a goal.
+  export ALEPH_ACTIVATION_GATE=fatal
+  CC_HOME="$HOME/.claude"
+  CC_ROOT="$CC_HOME/plugins/cache/qa-market/qa-cc/1.0.0"
+  say "plant a Claude Code plugin cache"
+  python3 - "$CC_HOME" "$HERE/mcp_mock_server.py" <<'PY' || exit 1
+import json, pathlib, sys
+plugins = pathlib.Path(sys.argv[1], "plugins")
+mock = pathlib.Path(sys.argv[2]).resolve()   # the `scope` stage's stdio MCP mock
+root = plugins / "cache" / "qa-market" / "qa-cc" / "1.0.0"
+(root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+(root / "commands").mkdir(exist_ok=True)
+(root / ".claude-plugin" / "plugin.json").write_text('{"name": "qa-cc", "version": "1.0.0", "description": "CC-installed"}\n')
+(root / ".mcp.json").write_text(json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [str(mock)]}}}))
+(root / "commands" / "hello.md").write_text("---\ndescription: hi\n---\nSay hi to $ARGUMENTS. QA_CC_COMMAND_BODY\n")
+# The shape Claude Code writes: `installPath` is the absolute cache dir on the
+# machine that wrote it. Aleph derives the dir from key + version and never
+# follows this field (`discovery/claude_cache.rs`); it is written true anyway.
+(plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+    "qa-cc@qa-market": [{"scope": "user", "installPath": str(root), "version": "1.0.0",
+                         "installedAt": "2026-01-01T00:00:00.000Z", "lastUpdated": "2026-01-01T00:00:00.000Z"}]}}, indent=2))
+PY
+  python3 -c 'import json,sys; json.dump({"name": "file_read", "input": {"path": sys.argv[1]}}, open(sys.argv[2], "w"))' \
+    "$CC_ROOT/commands/hello.md" "$QA_ROOT/spec.json" || exit 1
+  MARK="$QA_ROOT/.mark"; touch "$MARK"; sleep 1
+  say "start mock provider (tool-chain: file_read of the CC plugin's command file)"
+  start_mock /etc/hostname tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests.jsonl" || exit 1
+  say "start server"
+  start_server || exit 1
+  assert_real_mode
+  say "drive (discovered, disabled, model refused, operator enables → command + MCP tool appear)"
+  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" first "$QA_ROOT/requests.jsonl" || RC=$?
+  say "restart (the enable is durable; boot mounts the command and the server again)"
+  stop_server
+  start_server || exit 1
+  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" second "$QA_ROOT/requests.jsonl" || RC=$?
+  say "the enable bit lives in Aleph's plugins.toml"
+  if grep -A3 'qa-cc' "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | grep -q 'enabled = true'; then
+    echo "  [PASS] plugins.toml records qa-cc enabled"
+  else
+    echo "  [FAIL] no 'enabled = true' for qa-cc in $ALEPH_HOME/data/plugins.toml"; RC=1
+    cat "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | head -20
+  fi
+  say "nothing under ~/.claude changed"
+  CHANGED="$(find "$CC_HOME" -newer "$MARK" | grep -v '^$' || true)"
+  if [ -z "$CHANGED" ]; then echo "  [PASS] no file under $CC_HOME was written"; else echo "  [FAIL] written under ~/.claude:"; echo "$CHANGED"; RC=1; fi
+  ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | cc-cache)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

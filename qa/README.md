@@ -635,6 +635,27 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # before its handle was installed. Every `plugins` stage
                                  # needs python3 (the preamble's config patcher is python):
                                  # without it the script is UNRUN (exit 2), never PASS.
+./qa/plugins/run.sh command      # `/cmd args` → the command's rendered body (with $1 / ${2:-d}
+                                 # substituted and an un-approved !`cmd` withheld with the
+                                 # operator placeholder) is in the messages the MODEL received;
+                                 # the persisted turn stays raw; the withheld command is pending
+                                 # on `aleph-server hooks list`
+./qa/plugins/run.sh exit2        # a `>&2; exit 2` PreToolUse hook — Claude Code's most common
+                                 # idiom, matcher spelled `Read` — fires once un-approved (the
+                                 # control: the tool runs), is approved the operator's way
+                                 # (`aleph-server hooks test`), then blocks file_read and its
+                                 # stderr is the tool result the model reads
+./qa/plugins/run.sh subagent     # a command's `allowed-tools` also bounds the `subagent` child
+                                 # it delegates to; the control (a plain turn) proves the same
+                                 # child otherwise carries `bash`
+./qa/plugins/run.sh cc-cache     # ~/.claude/plugins/installed_plugins.json → discovered, origin
+                                 # claude_cache, DISABLED; the model's `plugin_manage` enable is
+                                 # refused, the operator's `plugins.enable` works and is durable;
+                                 # its `.mcp.json` server (no aleph.runtime) reaches tools.catalog;
+                                 # a model file_read under the plugin root is denied (R2-I2,
+                                 # accepted compat cost); nothing under ~/.claude is written
+                                 # (find -newer). The command/exit2/subagent/cc-cache stages
+                                 # export ALEPH_ACTIVATION_GATE=fatal.
 
 ./qa/memory_curated/run.sh       # the curated hot tier's three verbs, the note window's
                                  # load-more, and the partition contract every enumerating
@@ -1701,6 +1722,21 @@ widened a narrowly-scoped change into that question. Tracked in
   - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**——2026-09-05 起**每一个有生成 boot 的装置都带了**
     （此前只有它和 `channels`；`webview_compat` 没有生成 boot，不在其列）：那一次 boot 绑的是**内置默认端口**，机器上只要有别的 server 占着，进程在写出 config
     之前就退出了，症状是 `no config generated at …`——读起来像路径或权限问题，原因在日志下一行。
+- **`plugins`** — 改 `src/extension/`、`src/discovery/`、`src/gateway/execution_engine/slash_command_body/`
+  或插件相关 handler 前跑。阶段清单在本文件顶部的命令块与 `qa/plugins/run.sh` 的头注释里（**不在这里再抄一份**）。
+  下面三行只写 2026-09-27 加入的几个阶段各自挡的那一类假绿：
+  - `command` — `/cmd` 的渲染体**只走 transient 通道**、从不落盘，所以 `chat.history` 在这里是**反向**断言
+    （持久化的是原文），模型收到了什么只有 mock 的 request log 能答。未批准的 `` !`cmd` `` 的占位符
+    **引用命令原文**，所以 fixture 让命令的输出 ≠ 原文——否则「没跑」和「跑了」读起来一样。
+  - `exit2` — 批准绑定在 hook 触发时记下的 root 上，**手写 allowlist 不被承认**；所以先让 hook 未批准地
+    触发一次（这次**就是对照组**：工具照跑、probe 内容到达模型），再走 `aleph-server hooks test` 批准，
+    第二次才必须被挡。没有第一次，第二次的「probe 没到」可能只是 fixture 坏了。
+  - `subagent` — 受限命令派出的子 agent 只能看到受限视图。**必须带对照组**（普通回合派出的同一个子 agent
+    看得到 `bash`）：默认子 agent 自己就窄，没有对照时这条负断言**恒绿**（判据 §2）；子回合按内容归属且
+    必须晚于父回合入 log——上一个 run 还在跑的子 agent 会把请求写进下一段 log。
+  - `cc-cache` — `$HOME` 是 scratch，所以 fixture **就是**服务端眼里的 `~/.claude`；模型的 enable 被拒
+    （D-A）、人类面 `plugins.enable` 生效，`find -newer` 证明 `~/.claude` 下什么都没写（它没有运行内的
+    正向对照——2026-09-27 在保留的产物上 `touch` 过一次，确认它会变红）。
 - **`rooms_channel_bind`** — 把一个通道群会话绑到项目房间（`Real-machine QA for binding a channel
   group conversation to a project room.`，见其 `run.sh:2`）。改 `projects.channel.*` handler、绑定的
   CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
