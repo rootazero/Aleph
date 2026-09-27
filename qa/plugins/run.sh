@@ -583,6 +583,8 @@ command)
   # `SlashCommand` event and withholds the command with the operator
   # placeholder. Both are asserted: the placeholder in the request log, the
   # entry on the operator's own review surface (`aleph-server hooks list`).
+  # Before the turn the listing is shown to be GATED: disabled, the command is
+  # gone; enabled again, it is back — so its presence is not a fixture fact.
   export ALEPH_ACTIVATION_GATE=fatal
   REQ_LOG="$QA_ROOT/requests.jsonl"
   say "plant a plugin with a command"
@@ -631,15 +633,24 @@ exit2)
   # approves it, and a second run is the one that must be blocked. The first
   # run is the control: the probe content DOES reach the model there, so the
   # second run's absence of it means the hook, not a broken fixture.
-  # `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` is the documented operator override
-  # for reviewing a command that chains (`;`, `>&2`) — which this idiom does.
+  #
+  # PINNED, not endorsed (P4.13 review M-2 / O-B): `aleph-server hooks test`
+  # REFUSES to review — and so to approve — any command with `; & | $ \` > <`,
+  # which is Claude Code's most common hook idiom, unless the operator sets
+  # `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1`. The override is named only in that
+  # refusal's own text (nothing under docs/). The refusal is asserted first
+  # so a change to it is noticed; then the stage approves WITH the override.
+  #
+  # The hook's stderr (`QA_BLOCK_REASON`) is not a substring of its source
+  # (`printf 'QA_%s' …`, review M-1): a message that quoted the command could
+  # not pass for the stderr having arrived.
   export ALEPH_ACTIVATION_GATE=fatal
   PROBE="$QA_ROOT/probe.txt"
   printf 'QA_PROBE_CONTENT_MUST_NOT_REACH_THE_MODEL\n' > "$PROBE"
   say "plant a user-level hooks.json (matcher \`Read\`)"
   python3 - "$ALEPH_HOME" <<'PY' || exit 1
 import json, pathlib, sys
-cmd = "echo QA_BLOCK_REASON_policy >&2; exit 2"
+cmd = "printf 'QA_%s' BLOCK_REASON >&2; exit 2"
 pathlib.Path(sys.argv[1], "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": [
     {"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}}, indent=2))
 PY
@@ -656,13 +667,32 @@ PY
   say "run 1 — the hook is not approved yet (control)"
   python3 "$HERE/drive_exit2.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$QA_ROOT/requests-prime.jsonl" prime || RC=$?
   say "the operator reviews and approves it"
-  "$BIN" hooks list 2>&1 | head -12
-  FP="$("$BIN" hooks list 2>/dev/null | awk '$3 == "user:global" && $2 == "pending" {print $1; exit}')"
+  HOOKS_OUT="$("$BIN" hooks list 2>&1)"
+  printf '%s\n' "$HOOKS_OUT" | head -12
+  # O-A (P4.13a): the review surface names the verb that exists.
+  if printf '%s\n' "$HOOKS_OUT" | grep -qF 'review with `aleph-server hooks test <fingerprint>`' \
+      && ! printf '%s\n' "$HOOKS_OUT" | grep -qF '`aleph hooks'; then
+    echo "  [PASS] \`hooks list\` points at \`aleph-server hooks test\`, never bare \`aleph hooks\`"
+  else
+    echo "  [FAIL] \`hooks list\` does not name \`aleph-server hooks test\` (or still says \`aleph hooks\`)"; RC=1
+  fi
+  FP="$(printf '%s\n' "$HOOKS_OUT" | awk '$3 == "user:global" && $2 == "pending" {print $1; exit}')"
   if [ -z "$FP" ]; then
     echo "  [FAIL] the Read-matched hook fired no pending user:global entry — the matcher never matched file_read"
     RC=1
   else
     echo "  [PASS] the hook fired on file_read and filed pending entry $FP (matcher \`Read\` reached file_read)"
+    # M-2 pin: without the override the review — the only approval path — refuses.
+    REFUSE_OUT="$(printf 'y\ny\n' | env -u ALEPH_HOOK_ALLOW_SHELL_METACHARS "$BIN" hooks test "$FP" 2>&1)"
+    REFUSE_RC=$?
+    STILL="$("$BIN" hooks list 2>/dev/null | awk -v fp="$FP" '$1 == fp {print $2}')"
+    if [ "$REFUSE_RC" -ne 0 ] && printf '%s' "$REFUSE_OUT" | grep -q "contains shell metacharacters" \
+        && ! printf '%s' "$REFUSE_OUT" | grep -q "Approved $FP" && [ "$STILL" = "pending" ]; then
+      echo "  [PASS] pinned (M-2/O-B): without ALEPH_HOOK_ALLOW_SHELL_METACHARS the review refuses this idiom (rc=$REFUSE_RC) and the entry stays pending"
+    else
+      echo "  [FAIL] the no-override review behaved differently from the pin (rc=$REFUSE_RC, status=$STILL) — a change to notice:"
+      printf '%s\n' "$REFUSE_OUT" | sed 's/^/    /' | head -8; RC=1
+    fi
     APPROVE_OUT="$(printf 'y\ny\n' | ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 "$BIN" hooks test "$FP" 2>&1)"
     printf '%s\n' "$APPROVE_OUT" | sed 's/^/    /'
     if printf '%s' "$APPROVE_OUT" | grep -q "Approved $FP"; then
@@ -756,30 +786,76 @@ root = plugins / "cache" / "qa-market" / "qa-cc" / "1.0.0"
     "qa-cc@qa-market": [{"scope": "user", "installPath": str(root), "version": "1.0.0",
                          "installedAt": "2026-01-01T00:00:00.000Z", "lastUpdated": "2026-01-01T00:00:00.000Z"}]}}, indent=2))
 PY
+  # Phase `first`'s model turn calls `plugin_manage enable` (the model face of
+  # the refusal); phase `second`'s calls `file_read` under the plugin root.
+  python3 -c 'import json,sys; json.dump({"name": "plugin_manage", "input": {"action": "enable", "name": "qa-cc"}}, open(sys.argv[1], "w"))' \
+    "$QA_ROOT/spec-enable.json" || exit 1
   python3 -c 'import json,sys; json.dump({"name": "file_read", "input": {"path": sys.argv[1]}}, open(sys.argv[2], "w"))' \
     "$CC_ROOT/commands/hello.md" "$QA_ROOT/spec.json" || exit 1
+  # "Nothing written" is read two ways (review M-3): mtimes (`find -newer`)
+  # and a content digest of every path under ~/.claude — the digest also
+  # sees a write that keeps its mtime and a tree that vanished.
+  cc_digest() {
+    python3 - "$CC_HOME" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+if not os.path.isdir(root):
+    print("MISSING"); sys.exit(0)
+h = hashlib.sha256()
+for d, dirs, files in sorted(os.walk(root)):
+    dirs.sort()
+    h.update(os.path.relpath(d, root).encode() + b"/\0")
+    for f in sorted(files):
+        p = os.path.join(d, f)
+        h.update(os.path.relpath(p, root).encode() + b"\0")
+        h.update(open(p, "rb").read() if not os.path.islink(p) else os.readlink(p).encode())
+print(h.hexdigest())
+PY
+  }
+  CC_BEFORE="$(cc_digest)"
   MARK="$QA_ROOT/.mark"; touch "$MARK"; sleep 1
-  say "start mock provider (tool-chain: file_read of the CC plugin's command file)"
-  start_mock /etc/hostname tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests.jsonl" || exit 1
+  say "start mock provider (tool-chain: the model tries plugin_manage enable)"
+  start_mock /etc/hostname tool-chain "$QA_ROOT/spec-enable.json" "$QA_ROOT/requests-first.jsonl" || exit 1
   say "start server"
   start_server || exit 1
   assert_real_mode
-  say "drive (discovered, disabled, model refused, operator enables → command + MCP tool appear)"
-  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" first "$QA_ROOT/requests.jsonl" || RC=$?
+  say "drive (discovered, disabled, model refused on both faces, operator enables → command + MCP tool appear)"
+  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" first "$QA_ROOT/requests-first.jsonl" \
+    "$SERVER_PID" "$HERE/mcp_mock_server.py" || RC=$?
   say "restart (the enable is durable; boot mounts the command and the server again)"
   stop_server
+  start_mock /etc/hostname tool-chain "$QA_ROOT/spec.json" "$QA_ROOT/requests.jsonl" || exit 1
   start_server || exit 1
-  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" second "$QA_ROOT/requests.jsonl" || RC=$?
+  python3 "$HERE/drive_cc_cache.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" second "$QA_ROOT/requests.jsonl" \
+    "$SERVER_PID" "$HERE/mcp_mock_server.py" || RC=$?
   say "the enable bit lives in Aleph's plugins.toml"
-  if grep -A3 'qa-cc' "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | grep -q 'enabled = true'; then
-    echo "  [PASS] plugins.toml records qa-cc enabled"
+  # Parsed, not grepped (review M-6): a neighbour's `enabled = true` within a
+  # few lines must not answer for qa-cc.
+  TOML_OUT="$(python3 - "$ALEPH_HOME/data/plugins.toml" <<'PY'
+import sys, tomllib
+try:
+    doc = tomllib.load(open(sys.argv[1], "rb"))
+except (OSError, tomllib.TOMLDecodeError) as e:
+    print(f"unreadable: {e}"); sys.exit(1)
+entry = (doc.get("entries") or {}).get("qa-cc")
+print(f"entries.qa-cc = {entry}")
+sys.exit(0 if isinstance(entry, dict) and entry.get("enabled") is True else 1)
+PY
+)"
+  if [ $? -eq 0 ]; then
+    echo "  [PASS] plugins.toml records qa-cc enabled — $TOML_OUT"
   else
-    echo "  [FAIL] no 'enabled = true' for qa-cc in $ALEPH_HOME/data/plugins.toml"; RC=1
-    cat "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | head -20
+    echo "  [FAIL] plugins.toml does not record qa-cc enabled — $TOML_OUT"; RC=1
   fi
   say "nothing under ~/.claude changed"
-  CHANGED="$(find "$CC_HOME" -newer "$MARK" | grep -v '^$' || true)"
-  if [ -z "$CHANGED" ]; then echo "  [PASS] no file under $CC_HOME was written"; else echo "  [FAIL] written under ~/.claude:"; echo "$CHANGED"; RC=1; fi
+  CHANGED="$(find "$CC_HOME" -newer "$MARK" 2>&1 | grep -v '^$' || true)"
+  if [ -z "$CHANGED" ]; then echo "  [PASS] no path under $CC_HOME has a newer mtime"; else echo "  [FAIL] written under ~/.claude:"; echo "$CHANGED"; RC=1; fi
+  CC_AFTER="$(cc_digest)"
+  if [ "$CC_BEFORE" = "$CC_AFTER" ] && [ "$CC_AFTER" != "MISSING" ]; then
+    echo "  [PASS] the content digest of $CC_HOME is unchanged (${CC_AFTER:0:16}…)"
+  else
+    echo "  [FAIL] the content of $CC_HOME changed: before=${CC_BEFORE:0:16} after=${CC_AFTER:0:16}"; RC=1
+  fi
   ;;
 *)
   echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | scope | panel | visibility | command | exit2 | subagent | cc-cache)" >&2; exit 2;;

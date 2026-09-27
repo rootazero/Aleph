@@ -31,7 +31,8 @@ from qa_rpc import Ledger, ws_connect  # noqa: E402
 
 WS, REQ_LOG = sys.argv[1], Path(sys.argv[2])
 L = Ledger()
-SLASH = "qa-cmd-plugin:greet"
+PLUGIN = "qa-cmd-plugin"
+SLASH = f"{PLUGIN}:greet"
 SENT = f"/{SLASH} World"
 MARKER = "QA_CMD_MARKER_World"
 INLINE_OUTPUT = "QA_INLINE_RAN"
@@ -78,6 +79,20 @@ class Conn:
         return "no_terminal_frame", None
 
 
+def rows_naming(node, needle, out):
+    """Every object in an RPC result that has a string field containing
+    `needle` — the row a listing keeps for one command, whatever its envelope."""
+    if isinstance(node, dict):
+        if any(isinstance(v, str) and needle in v for v in node.values()):
+            out.append(node)
+        for v in node.values():
+            rows_naming(v, needle, out)
+    elif isinstance(node, list):
+        for v in node:
+            rows_naming(v, needle, out)
+    return out
+
+
 def one_line(text):
     return text.replace("\n", " \u23ce ")
 
@@ -107,9 +122,28 @@ async def main():
         await conn.call("connect", {"client_info": {"name": "qa-command"}})
 
         L.log("\n--- the listing ---")
-        cmds = json.dumps(await conn.call("commands.list", {}))
+        listing = await conn.call("commands.list", {})
+        cmds = json.dumps(listing)
         L.check("the plugin command is listed", SLASH in cmds, f"payload {len(cmds)}B")
-        L.check("argument-hint reaches the listing (usage string)", "[name]" in cmds)
+        # Scoped to the plugin's own row: another command whose hint is also
+        # `[name]` must not satisfy this.
+        own = rows_naming(listing, SLASH, [])
+        L.check("argument-hint reaches the plugin's own row (usage string)",
+                any("[name]" in json.dumps(r) for r in own), f"{len(own)} row(s) name {SLASH}")
+
+        # The listing is gated on the plugin being enabled: a stage whose
+        # positive would also hold for a plugin nobody enabled proves nothing.
+        L.log("\n--- disabled, the command is gone; enabled again, it is back ---")
+        off = await conn.call("plugins.disable", {"name": PLUGIN})
+        L.check("plugins.disable accepted", (off.get("result") or {}).get("ok") is True,
+                json.dumps(off.get("error") or off.get("result"))[:200])
+        L.check("a disabled plugin's command is NOT listed",
+                SLASH not in json.dumps(await conn.call("commands.list", {})))
+        on = await conn.call("plugins.enable", {"name": PLUGIN})
+        L.check("plugins.enable accepted", (on.get("result") or {}).get("ok") is True,
+                json.dumps(on.get("error") or on.get("result"))[:200])
+        L.check("re-enabled, the command is listed again",
+                SLASH in json.dumps(await conn.call("commands.list", {})))
 
         L.log("\n--- /cmd args ---")
         sent = await conn.call("chat.send", {"message": SENT, "session_key": "agent:main:qa-command"})
@@ -132,6 +166,11 @@ async def main():
                     OPERATOR_PLACEHOLDER in hit,
                     "guest placeholder instead — the turn ran as a non-operator" if GUEST_PLACEHOLDER in hit
                     else one_line(hit[hit.find("Inline:"):][:240]))
+            # O-A (P4.13a): the review verbs exist only on `aleph-server hooks`;
+            # `aleph hooks` is the hooks.json editor and has no `test`.
+            L.check("the placeholder names the verbs that exist (`aleph-server hooks …`, never bare `aleph hooks`)",
+                    "`aleph-server hooks list`" in hit and "`aleph hooks" not in hit,
+                    one_line(hit[hit.find("not run:"):][:200]))
 
         L.log("\n--- what was persisted ---")
         hist = await conn.call("chat.history", {"session_key": result.get("session_key"), "limit": 10})

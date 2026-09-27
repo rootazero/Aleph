@@ -26,7 +26,14 @@ from qa_rpc import Ledger, ws_connect  # noqa: E402
 
 WS, REQ_LOG, PHASE = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
 L = Ledger()
-REASON = "QA_BLOCK_REASON_policy"
+# The hook prints this with `printf 'QA_%s' BLOCK_REASON`: it is its OUTPUT,
+# not a substring of its source.
+REASON = "QA_BLOCK_REASON"
+# `ToolError::Refused` renders `tool {name} {RefusedBy::head()}: {reason}`, and
+# the model reads that rendering (`compose_tool_error_msg`). `Hook`'s head is
+# the policy kind; `Execution`'s head was the pre-P4.13a framing.
+REFUSED_BY_HOOK = f"tool file_read was refused by a policy hook: {REASON}"
+EXECUTION_HEAD = "execution failed"
 PROBE_CONTENT = "QA_PROBE_CONTENT_MUST_NOT_REACH_THE_MODEL"
 BUDGET = 150.0
 
@@ -115,6 +122,13 @@ async def block():
     L.check("the exit-2 hook's stderr reached the model as the tool result", True, blocked[:200])
     L.check("the tool did NOT run (probe content never reached the model)",
             all(PROBE_CONTENT not in t for t in results), f"{len(results)} tool_result(s)")
+    # P4.13a: the block is a policy refusal from its variant, with the hook's
+    # reason verbatim — not an execution failure whose kind is guessed from
+    # the hook author's prose.
+    L.check("the block reads as a policy refusal carrying the reason verbatim",
+            REFUSED_BY_HOOK in blocked and EXECUTION_HEAD not in blocked, blocked[:200])
+    L.check("the block carries no persistence hint at all (a Permission kind admits no ladder)",
+            "[persistence_hint" not in blocked, blocked[:200])
     # P4.13a: a hook block is a refusal — no tool_result (the block itself, or
     # the harness's refusal of an identical repeat) points the model around it.
     steering = [t for t in results if "switch=" in t or "ladder_must" in t or "try a different tool" in t]
