@@ -146,4 +146,26 @@
 **附带（同类 bug，越界 §3.2→§2 Context，未改）**：`src/context/budget/cheap_passes/tool_result_pruning.rs:88` 的 `original_text.starts_with("[Full output persisted: ")` 与本批 act.rs 修复同源——同样应改为按行扫描。属 Context 层，留待用户裁定是否一并修。
 
 > **执行建议**：H1（High，真功能断裂）优先；H3/H4/H10 是 YAGNI 删除候选（确认零消费者后一次 cargo 验证落地）；H6/H7 是小而独立的健壮性补；H9 是一行连线。**全部需一次 `cargo check` 兜底**，符合"用户统一 cargo 验证"节奏。
-</content>
+
+---
+
+## 2026-09-27 扫描新增待办（Discord R1 遗留 / R2 起点）
+
+> 来源：Discord R1 线2 收尾报告的「已知风险/遗留问题」+ vs `/home/zou/mnt/macmini/TBU4/Github/openclaw/extensions/discord/` Gap 分析的剩余项。R1 spec、merge commit `4453a4db2`、独立 backlog spec 见 [docs/superpowers/specs/2026-09-27-discord-r2-backlog.md](../superpowers/specs/2026-09-27-discord-r2-backlog.md)、[FEATURE_LOCATOR §5.15b](FEATURE_LOCATOR.md)。
+>
+> **D1–D8 分两类**：A 类（D1/D2/D3/D6）是 **R1 脚手架未接线**（必须还的债）；B 类（D4/D5/D7/D8）是 **产品增强**（可选排期）。
+>
+> 状态：均 **未开始**。R1 线1 subagent 仍在跑，可能在其收尾时顺带交几个 A 类——以合 main 后的实际状态为准。
+
+| # | 项目 | 模块 | 类型 | 工作量 | 严重度/置信 | 决策点 |
+|---|------|------|------|--------|-----------|--------|
+| **D1** | `CommandRegistry` 替换 `handle_component` 的 raw `cb_<id>` 路径（旧路径还在走，会按回退文本通道） | discord.commands | broken-wiring | M | High / 0.95 | 替换旧路径 + 保留 `ComponentKind::Callback` fallback 文本门，防回归 |
+| **D2** | `audit_hooks.rs` 三个 helper（requested/resolved/blocked）落地 + `manager.rs::resolve_with_reason` 末尾单行钩入 | discord.audit + exec.manager | new-feature | S | High / 0.9 | R1 线1 **已部分完成**：generic AuthorityChange 钩入在 `exec/manager.rs::resolve_with_reason`（commit `5d374224e`），discord-shaped helper `record_discord_*` 在 `discord/security/audit_hooks.rs` 就位但仍需 mod.rs handler 路径调入——R2 D2 收尾为“线2 派工” |
+| **D3** | `startup_audit` 钩入 `start()`（每个 allowed_guild 启动期记一条 audit） | discord.security.startup_audit + mod.start | new-feature | S | Med / 0.9 | R1 线1 已交付 `startup_audit.rs`（commit `2fee00ebd`）但 `start()` 还没调它——R2 D3 是“在 `start()` 中抓 ready_notify 后调 `security::startup_audit_for_guild`”的接线 |
+| **D4** | Discord approval capability 接入（按钮走 typed ComponentId，不再 raw text 兜底） | discord.commands + approval handlers | new-feature | M | Med / 0.85 | 紧跟 D1，依赖 typed dispatch |
+| **D5** | Discord TTS outbound（需 voice 子系统先暴露 `voice.synthesize`） | discord.send + voice.outbound | blocked | M | Med / 0.7 | blocked on voice 子系统 R?；R2 不主动 unblock |
+| **D6** | `ReconnectCoordinator::mark_event` 接入生效路径（每条 serenity gateway event 触发） | discord.reconnect + Handler impl | broken-wiring | S | High / 0.85 | 僵尸安全网现在还是不完整——last_event_at 需被填 |
+| **D7** | PluralKit 检测 + 转发身份处理（PK 转发消息的 actor_user 解析） | 新增 discord.pluralkit | new-feature | M | Low / 0.75 | 对标 openclaw `pluralkit.ts`；需 per-guild 缓存避免 PK API 限频 |
+| **D8** | session-key normalization + DM/group policy 抽 module（SSOT 重构） | 新增 discord.session_key + discord.group_policy | new-feature | M | Low / 0.8 | 对标 openclaw `session-key-normalization.ts` + `group-policy.ts` |
+
+> **执行建议**（依 R2 backlog spec）：**先 A 类后 B 类**。D2+D3+D6 是 R1 脚手架未接线，不做则下次重构仍是死代码；D1 是 D4 的前置；D5 blocked，D7/D8 排到 D1/D2 之后。
