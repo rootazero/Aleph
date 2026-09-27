@@ -1845,7 +1845,7 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
 
 修法是把两个判据拆成两个具名函数：`declared_over_limit(Option<u64>, usize)`（纯，可直接问边界：`limit` 通过、`limit+1` 拒绝）与 `accumulate_capped(stream, limit)`（泛型于流，测试自己给 chunk 边界）。变异证伪：把 `buf.len() + chunk.len() > limit` 改成 `buf.len() > limit`，**只有新的那条流式测试红，六条服务器驱动的全绿**——这就是"那两条自称测流式的测试从没覆盖过流式检查"的直接证据。两条被误命名的测试改了名、doc 写上它们实际经过的分支，并加了一条 `content_length() == Some(2049)` 的断言把这次测量钉住。
 
-**⑤ 另外两条**：`platform_ocr` 的 `96 / 4 * 3 = 72` 漏掉了 `==` 两个 padding 字符，真实解码长度是 **70**（生产代码是对的）。whatsapp 那条的 `auth.save(&data).unwrap()` 是死脚手架——`WaRuntime::new` 从不读存下的 blob，而 `WaAuthManager::new` 解析的是 `SecretVault::default_path()`，所以它一直在往**开发者真实的 vault** 里写 `whatsapp/auth/test`；改用 `with_vault` + `TempDir`。生产侧的 fail-closed 是对的（`SharedTokenManager::set_global` 在 `gateway/server/mod.rs` 的启动路径上，WhatsApp 通道构造在其后）。
+**⑤ 另外两条**：`platform_ocr` 的 `96 / 4 * 3 = 72` 漏掉了 `==` 两个 padding 字符，真实解码长度是 **70**（生产代码是对的）。whatsapp vault 测试隔离 — ✅ **已修复**（`2d883ee23` / `e09258505`，2026-04~08）：`vault_store.rs:155-205` 测试改用 `TempDir::new()` + `SecretVault::open(dir.path().join("test.vault"))` + `WaAuthManager::with_vault_and_crypto` 注入，单元测试零污染开发者真实 vault；生产路径 `WaAuthManager::new` 仍走 `SecretVault::default_path()` 是预期行为。生产侧的 fail-closed 是对的（`SharedTokenManager::set_global` 在 `gateway/server/mod.rs` 的启动路径上，WhatsApp 通道构造在其后）。
 
 **⑥ 第五个面并进表：那个"产品决定"的两半从来没有被并排读过**
 
