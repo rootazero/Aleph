@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn long_text_splits_at_paragraph_break() {
-        let c = DraftChunker::with_cap(50, "..", "..");
+        let c = DraftChunker::new(50, "..", "..");
         let text = "alpha alpha alpha.\n\nbeta beta beta.\n\ngamma gamma gamma.";
         let out = c.chunk(text);
         assert!(out.len() >= 2, "expected at least 2 chunks, got {}", out.len());
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn chunk_reserves_marker_budget() {
         // 60-char cap + 8-char marker means the body must be ≤ 52 chars.
-        let c = DraftChunker::with_cap(60, "(more)", "(end)");
+        let c = DraftChunker::new(60, "(more)", "(end)");
         let body = "x".repeat(120);
         let out = c.chunk(&body);
         for chunk in &out {
@@ -582,7 +582,7 @@ mod tests {
     fn chunk_does_not_split_inside_code_fence() {
         // A code fence straddles the cap; the chunker should split at the
         // fence boundary, not inside the fence.
-        let c = DraftChunker::with_cap(40, "(more)", "(end)");
+        let c = DraftChunker::new(40, "(more)", "(end)");
         let text = "intro line\n```rust\nfn a() {}\nfn b() {}\n```\nafter fence";
         let out = c.chunk(text);
         // No chunk should be missing its closing ``` (the splitter must
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn chunker_total_field_reflects_sequence_length() {
-        let c = DraftChunker::with_cap(30, "(m)", "(e)");
+        let c = DraftChunker::new(30, "(m)", "(e)");
         let text = "word ".repeat(50);
         let out = c.chunk(&text);
         for (i, chunk) in out.iter().enumerate() {
