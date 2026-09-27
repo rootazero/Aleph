@@ -504,11 +504,11 @@ git commit -m "browser: browser_network gains mock routes; network_interception 
 - Modify: `src/browser/engine/capability.rs`（obscura 行按实测翻转或维持，注释写测量日期/方法/版本）
 - Modify: `docs/reference/FEATURE_LOCATOR.md` §3.12（Round 2 段）+ `qa/README.md`
 
-- [ ] **Step 1: obscura Fetch 探针**（本机已装 v0.2.2，`~/.aleph/runtimes/obscura/v0.2.2/obscura`）：raw CDP 连真 obscura → `Fetch.enable`（patterns `*`）→ `Page.navigate` 一个本地页 → 断言 `requestPaused` 事件到达 → `fulfillRequest` 应答 → 断言页面拿到 mock body。**三个结局都如实记**：全通→行翻 Supported；enable 报错→Unsupported（启用路径不存在）；事件不到达→Unsupported（noop）。
-- [ ] **Step 2: 按实测更新 capability.rs obscura 行**（注释：「Measured on v0.2.2, 2026-09-24, probes/fetch-probe.mjs」）；`cargo test -p alephcore --lib capability` 绿（census 钉值测试同步）
-- [ ] **Step 3: caps.py 加 `network_interception` 行探测**（raw CDP 半：Fetch.enable→navigate→requestPaused 到达即 supported；加入 `found` 使 `every claimed row was probed` 覆盖新行）+ `./qa/browser_dual/run.sh caps` 真机跑绿；**证伪**：临时翻转表值 → diff 红
-- [ ] **Step 4: 文档**：FL §3.12 加 Round 2 (C1) 段（落地清单、SSRF 优先序红线、决策管线、obscura 实测裁决、刻意不做——HAR/二进制/请求改写/exec 步骤/持久化）；qa/README.md 更新；勾选本计划 checkbox
-- [ ] **Step 5: 全量验证集**（七条命令同 Round 1 T8：`--lib --no-run`、`--bins`、`--features test-helpers --test '*' --no-run`、`-p aleph-panel --lib --no-run`、`just test-shared`、clippy workspace、`--lib` 全量；基线 19475 passed/7 既存红，集合不许变大）+ commit `docs: browser network mock — locator entry, caps probe, plan ledger`
+- [x] **Step 1: obscura Fetch 探针**（本机已装 v0.2.2，`~/.aleph/runtimes/obscura/v0.2.2/obscura`）：raw CDP 连真 obscura → `Fetch.enable`（patterns `*`）→ `Page.navigate` 一个本地页 → 断言 `requestPaused` 事件到达 → `fulfillRequest` 应答 → 断言页面拿到 mock body。**三个结局都如实记**：全通→行翻 Supported；enable 报错→Unsupported（启用路径不存在）；事件不到达→Unsupported（noop）。
+- [x] **Step 2: 按实测更新 capability.rs obscura 行**（注释：「Measured on v0.2.2, 2026-09-24, probes/fetch-probe.mjs」）；`cargo test -p alephcore --lib capability` 绿（census 钉值测试同步）
+- [x] **Step 3: caps.py 加 `network_interception` 行探测**（raw CDP 半：Fetch.enable→navigate→requestPaused 到达即 supported；加入 `found` 使 `every claimed row was probed` 覆盖新行）+ `./qa/browser_dual/run.sh caps` 真机跑绿；**证伪**：临时翻转表值 → diff 红。〔amended 2026-09-27：「到达即 supported」是测量前的草稿判据——实测发现 obscura 的导航暂停是建议性的（事件到达而请求不被挂住），于是探测按链路收紧为「到达 **且挂住** 且页面拿到 mock body」，否则该行会在 obscura 上恒报 supported 而台账说 unsupported）
+- [x] **Step 4: 文档**：FL §3.12 加 Round 2 (C1) 段（落地清单、SSRF 优先序红线、决策管线、obscura 实测裁决、刻意不做——HAR/二进制/请求改写/exec 步骤/持久化）；qa/README.md 更新；勾选本计划 checkbox
+- [x] **Step 5: 全量验证集**（七条命令同 Round 1 T8：`--lib --no-run`、`--bins`、`--features test-helpers --test '*' --no-run`、`-p aleph-panel --lib --no-run`、`just test-shared`、clippy workspace、`--lib` 全量；基线 19475 passed/7 既存红，集合不许变大）+ commit `docs: browser network mock — locator entry, caps probe, plan ledger`
 
 ---
 
