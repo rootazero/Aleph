@@ -246,14 +246,29 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
     ref_precheck: Cap::Supported,
-    // **Unsupported as the fail-closed answer to an unknown — NOT_PROBED.**
-    // Aleph's Fetch chain (enable → requestPaused → fulfill/fail/continue)
-    // has never run against a real obscura: the source survey predates the
-    // question and T0's matrix has no Fetch label. The expiry check is
-    // Task 4 of docs/superpowers/plans/2026-09-24-browser-network-mock.md
-    // (probes/fetch-probe.mjs), which drives `Fetch.enable` on the pinned
-    // v0.2.2 binary and flips or keeps this row. Until then the row must not
-    // be spent as a permission (判据 §8), and the refusal names chromium.
+    // **Unsupported as a MEASURED verdict, 2026-09-27, obscura v0.2.2
+    // (x86_64-linux) — the probe the mock plan's Task 4 promised
+    // (docs/superpowers/specs/2026-09-24-browser-network-mock-design/
+    // probes/fetch-probe.mjs), which measures the handshake link by link
+    // rather than end to end:**
+    //   1. `Fetch.enable{catch-all}` answers ok — the arm EXISTS;
+    //   2. a navigation's `requestPaused` ARRIVES — but the request is NOT
+    //      HELD: left unanswered for 1.5 s the page still reaches `complete`
+    //      with the real body (3/3 runs). The pause is advisory;
+    //   3. `fulfillRequest` on that pause answers ok and changes nothing —
+    //      the page shows the REAL body (3/3): a fulfilled-nothing;
+    //   4. a subresource `fetch()` pause arrives only SOMETIMES (2 of 3 runs;
+    //      when it does not, the fetch wedges pending forever — a request
+    //      held with no event to answer it is worse than no interception);
+    //   5. when the subresource event does arrive, fulfill serves the mock
+    //      correctly — the one working link cannot carry the chain.
+    // A mock route on this engine would report `active` while every page
+    // load slips past it — the exact lie this row exists to prevent. Written
+    // `Unsupported` at implementation time as the fail-closed answer to an
+    // unknown; the probe turned the unknown into a measured NO (判据 §8
+    // spent the other way). What would flip it: a build whose navigation
+    // pauses HOLD (link 2) and whose subresource events are reliable
+    // (link 4) — re-run the probe.
     network_interception: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
@@ -473,9 +488,12 @@ mod tests {
         ),
         (
             "network_interception",
-            "T0's wire matrix has no Fetch label; obscura's Fetch.enable path is \
-             UNMEASURED — Task 4 of docs/superpowers/plans/2026-09-24-browser-network-mock.md \
-             (probes/fetch-probe.mjs) is the expiry check that flips or keeps this row",
+            "T0's wire matrix has no Fetch label; settled instead by the mock plan's \
+             Task 4 probe (docs/superpowers/specs/2026-09-24-browser-network-mock-design/\
+             probes/fetch-probe.mjs) against the pinned build on 2026-09-27: \
+             Fetch.enable answers and events arrive, but navigation pauses are \
+             advisory (the request completes unanswered) and subresource pauses \
+             are unreliable — a MEASURED Unsupported, not an unknown",
         ),
     ];
 
@@ -758,13 +776,13 @@ mod tests {
             src.contains("qa/browser_dual") && src.contains("clean null"),
             "obscura's effect_probe row no longer states the measurement it rests on"
         );
-        // network_interception's disagreement rests on a plan, not a
-        // measurement: chromium's row is Supported on the strength of the
-        // Fetch chain running over the same connection and event pump the
-        // probed verbs already use; obscura's is the fail-closed answer to an
-        // UNMEASURED path whose expiry check is the plan's Task 4 probe. Both
-        // rows must keep naming that probe, or the route published to the
-        // model rests on an argument nobody can read.
+        // network_interception's disagreement rests on a MEASUREMENT on the
+        // obscura side since 2026-09-27 (the mock plan's Task 4 probe:
+        // navigation pauses advisory, subresource pauses unreliable), while
+        // chromium's Supported still rests on the Fetch chain running over
+        // the same connection and event pump the probed verbs already use.
+        // Both rows must keep naming that probe, or the route published to
+        // the model rests on an argument nobody can read.
         // Scoped to the PRODUCTION prefix: the plan name also appears in
         // NOT_PROBED, which is test text — a citation that lives only beside
         // the guard certifies nothing about the rows it guards.
