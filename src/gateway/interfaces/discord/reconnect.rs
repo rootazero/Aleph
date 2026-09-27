@@ -263,7 +263,10 @@ impl ReconnectCoordinator {
             return Some(0);
         }
         let delta_nanos = (now - nanos).max(0) as u64;
-        Some((delta_nanos / 1_000_000_000).max(1))
+        // Return real delta (including 0) so callers with sub-second
+        // `stale_after` thresholds can distinguish "just stamped" from
+        // "stale". Health monitor uses `stale_after >= 1s` in production.
+        Some(delta_nanos / 1_000_000_000)
     }
 
     /// `true` iff the channel has been silent for at least `stale_after`.
@@ -271,10 +274,20 @@ impl ReconnectCoordinator {
     /// threshold so the global monitor doesn't have to know about us.
     #[must_use]
     pub fn is_zombie(&self) -> bool {
-        match self.seconds_since_last_event() {
-            None => false,
-            Some(secs) => Duration::from_secs(secs) >= self.stale_after,
+        // Compare in nanoseconds so sub-second `stale_after` thresholds
+        // (used in tests; production is 5min) can distinguish "just stamped"
+        // from "stale". Going through `seconds_since_last_event` loses
+        // precision: 100ms / 1e9 = 0.
+        let nanos = self.last_event_nanos.load(Ordering::Acquire);
+        if nanos == 0 {
+            return false;
         }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+        let delta = now.saturating_sub(nanos);
+        delta >= self.stale_after.as_nanos() as i64
     }
 
     /// Read the presence cooldown. Same shape as
@@ -296,8 +309,18 @@ impl ReconnectCoordinator {
             .unwrap_or_else(|e| e.into_inner());
         let decision = if is_success {
             backoff.reset();
-            self.cooldown.stamp();
-            ReconnectDecision::Proceed
+            // Check cooldown BEFORE stamping so a fresh coordinator (no
+            // prior stamp → is_ready=true) gets Proceed on the first
+            // success, while a second success within the cooldown window
+            // is held back.
+            if self.cooldown.is_ready() {
+                self.cooldown.stamp();
+                ReconnectDecision::Proceed
+            } else {
+                ReconnectDecision::Cooldown {
+                    retry_after: self.cooldown.retry_after(),
+                }
+            }
         } else {
             match backoff.next_delay() {
                 None => ReconnectDecision::Proceed,
@@ -371,8 +394,8 @@ mod tests {
         assert!(!c.cooldown.is_ready());
     }
 
-    #[test]
-    fn plan_resets_backoff_after_success() {
+    #[tokio::test]
+    async fn plan_resets_backoff_after_success() {
         let c = ReconnectCoordinator::with_defaults();
         // Burn three failures to advance the schedule.
         let _ = c.plan(false);
@@ -435,9 +458,14 @@ mod tests {
         );
         c.mark_event();
         assert!(!c.is_zombie());
+        assert_eq!(c.seconds_since_last_event(), Some(0));
         std::thread::sleep(Duration::from_millis(100));
         assert!(c.is_zombie());
-        assert!(c.seconds_since_last_event().unwrap_or(0) >= 1);
+        // `seconds_since_last_event` returns the floor of real elapsed
+        // seconds — 100ms after mark_event it returns Some(0) (integer
+        // division loses sub-second precision). The real signal is
+        // `is_zombie()`, already asserted above.
+        assert_eq!(c.seconds_since_last_event(), Some(0));
     }
 
     #[test]

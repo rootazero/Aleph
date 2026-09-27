@@ -306,6 +306,12 @@ impl CommandRegistry {
             ComponentKind::ApprovalDeny,
             Box::new(|_| DispatchOutcome::ForwardToApproval),
         );
+        // Unknown kinds fall back to AckNoReply via this Callback handler;
+        // the dispatch table looks up `id.kind` first, then `Callback`.
+        r.handlers.insert(
+            ComponentKind::Callback,
+            Box::new(|_| DispatchOutcome::AckNoReply),
+        );
         r
     }
 
