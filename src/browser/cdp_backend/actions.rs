@@ -3040,6 +3040,15 @@ mod tests {
             // useful: this is how a model finds out what opened the dialog.
             "console_messages",
             "network_log",
+            // Mock-route management is control-plane: these read or rewrite
+            // Aleph's own rule table and toggle the Fetch handshake — the
+            // engine answers both while a renderer-side dialog is pending
+            // (the dialog blocks page JS, not the session's command path),
+            // and none of the four acts on the blocked page's content.
+            "route_add",
+            "route_list",
+            "route_remove",
+            "route_clear",
             // Tab lifecycle: these do not act on the blocked page's content.
             // `open_tab` and `switch_tab` are how a model gets AWAY from a
             // wedged tab, so gating them would take away the escape.

@@ -10,6 +10,7 @@ pub mod browser;
 pub mod dom;
 pub mod dom_snapshot;
 pub mod emulation;
+pub mod fetch;
 pub mod input;
 pub mod network;
 pub mod page;

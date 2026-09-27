@@ -133,6 +133,11 @@ pub struct ProfileManager {
     /// An `Arc` because the cdp backend — constructed per call — records the
     /// identities it discovers straight into it.
     tab_registry: Arc<TabRegistry>,
+    /// The mock-route table (`browser_network` 的 mock_* 规则 + per-tab
+    /// interception loops). Same residency argument as `tab_registry`:
+    /// backends are rebuilt per call, so the rules and the loops' kill
+    /// switches must outlive any one backend.
+    route_registry: Arc<super::cdp_backend::routes::RouteRegistry>,
     /// The live CDP engines, for `driver = "cdp"` profiles.
     ///
     /// An `Arc` because [`Self::get_backend`] is SYNCHRONOUS (and the idle
@@ -303,6 +308,7 @@ impl ProfileManager {
             playwright_cli_driver,
             idle_reaper_started: AtomicBool::new(false),
             tab_registry: Arc::new(TabRegistry::new()),
+            route_registry: Arc::new(super::cdp_backend::routes::RouteRegistry::new()),
             engines,
         }
     }
@@ -546,6 +552,9 @@ impl ProfileManager {
                     // to "is this tab still that tab" survives the per-call
                     // backend itself.
                     self.tab_registry.clone(),
+                    // The shared mock-route table: rules and interception
+                    // loops outlive the per-call backend.
+                    self.route_registry.clone(),
                 )))
             }
         }
@@ -565,6 +574,12 @@ impl ProfileManager {
     #[must_use]
     pub const fn tab_registry(&self) -> &Arc<TabRegistry> {
         &self.tab_registry
+    }
+
+    /// The shared mock-route table handed to every cdp backend this manager
+    /// builds (see the field's own doc for why it lives here).
+    pub fn route_registry(&self) -> &Arc<super::cdp_backend::routes::RouteRegistry> {
+        &self.route_registry
     }
 
     /// The per-command CDP timeout both engines are driven with.

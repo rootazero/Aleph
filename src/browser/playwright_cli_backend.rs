@@ -684,6 +684,60 @@ mod tests {
         PlaywrightCliBackend::new(driver, "test", guard, SessionLaunch::headless_default())
     }
 
+    /// The four mock-route verbs stay on the trait default for this backend
+    /// — a text driver owns no Fetch handshake — and the default arm must
+    /// refuse NAMING the driver that does serve them (`unsupported_by_driver`,
+    /// the `pdf` precedent): a bare "unsupported" leaves the model unable to
+    /// tell whether the action, the profile or the page is at fault.
+    ///
+    /// This test cannot live in backend.rs: testkit's
+    /// `fake_backend_implements_every_backend_method` derives the trait's
+    /// verb list by scanning that file for async-fn declarations, and a test
+    /// function there would be counted as a verb.
+    #[tokio::test]
+    async fn the_route_defaults_refuse_naming_the_driver_that_serves_them() {
+        use crate::browser::cdp_backend::routes::{NewRouteRule, RouteKind, RouteScope};
+        let rule = |scope: RouteScope| NewRouteRule {
+            url_contains: "/api/".to_string(),
+            method: None,
+            kind: RouteKind::Mock {
+                status: 200,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+            scope,
+            note: None,
+        };
+        let backend = test_backend();
+        let err = backend
+            .route_add("t1", rule(RouteScope::Tab))
+            .await
+            .expect_err("the default arm refuses");
+        let text = err.to_string();
+        assert!(
+            text.contains("route_add") && text.contains("driver = \"cdp\""),
+            "the refusal names the verb and the door: {text}"
+        );
+
+        let err = backend
+            .route_list()
+            .await
+            .expect_err("the default arm refuses");
+        assert!(err.to_string().contains("route_list"), "{err}");
+
+        let err = backend
+            .route_remove("r1")
+            .await
+            .expect_err("the default arm refuses");
+        assert!(err.to_string().contains("route_remove"), "{err}");
+
+        let err = backend
+            .route_clear("t1", RouteScope::Tab)
+            .await
+            .expect_err("the default arm refuses");
+        assert!(err.to_string().contains("route_clear"), "{err}");
+    }
+
     /// The staging directory has to be CREATED, not merely resolved.
     ///
     /// `browser_state_dir` joins path components and nothing else, and the CLI

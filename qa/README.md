@@ -62,7 +62,14 @@ ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Al
                                    # layer (stale-ref refusal + recovery trailer),
                                    # effect_probe by three raw-CDP premises; obscura's
                                    # effect_probe measured Unsupported on v0.2.2 — the
-                                   # read-back cannot survive a self-navigating click)
+                                   # read-back cannot survive a self-navigating click;
+                                   # round-2/C1's network_interception probed since
+                                   # 2026-09-27 by the Fetch handshake link by link —
+                                   # enable, the pause ARRIVING and actually HOLDING
+                                   # (about:blank must still be the document), the page
+                                   # receiving the mock body — and measured Unsupported
+                                   # on v0.2.2: navigation pauses are advisory, so the
+                                   # real page completes unanswered)
 ./qa/browser_dual/run.sh escape    # the host this branch is BUILT for: no playwright-cli
                                    # anywhere (PATH scrubbed, fnm env unset, scratch
                                    # ledger). obscura still opens AND so does a Chrome

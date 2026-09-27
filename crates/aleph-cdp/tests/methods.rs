@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use aleph_cdp::methods::{
-    browser, dom, dom_snapshot, emulation, input, network, page, runtime, target,
+    browser, dom, dom_snapshot, emulation, fetch, input, network, page, runtime, target,
 };
 use aleph_cdp::testkit::{scripted, FakeCdpServer, Responder};
 use aleph_cdp::{CdpConnection, CdpError, ConnectOptions, SessionId, TargetId};
@@ -1586,6 +1586,104 @@ async fn dom_snapshot_keeps_the_raw_reply_and_exposes_its_two_arrays() {
         "an absent array reads as empty here; the FETCHER is the one that must refuse it, and \
          Task 11's test is where that refusal is asserted"
     );
+}
+
+// ===================== Fetch =====================
+
+#[tokio::test]
+async fn fetch_fulfill_request_base64_encodes_the_body_on_the_wire() {
+    // Review Focus #2 of the plan: the wire body MUST be base64 — a caller that sends raw bytes
+    // gets a silently garbled page. The server asserts the encoded shape.
+    let (server, conn) = replying("Fetch.fulfillRequest", json!({})).await;
+    fetch::fulfill_request(
+        &conn,
+        None,
+        "r1",
+        200,
+        &[("content-type".into(), "application/json".into())],
+        b"{}",
+    )
+    .await
+    .expect("fulfill");
+    let params = server
+        .last_params("Fetch.fulfillRequest")
+        .expect("a fulfillRequest frame reached the engine");
+    assert_eq!(params["body"], "e30=", "base64 of `{{}}`");
+    assert_eq!(params["responseCode"], 200);
+    assert_eq!(params["requestId"], "r1");
+    assert_eq!(
+        params["responseHeaders"],
+        json!([{"name": "content-type", "value": "application/json"}])
+    );
+}
+
+#[tokio::test]
+async fn fetch_request_paused_decodes_event_params() {
+    let paused = fetch::request_paused(&json!({
+        "requestId": "r9",
+        "resourceType": "XHR",
+        "request": {"url": "https://a.test/api", "method": "POST"}
+    }))
+    .expect("decode");
+    assert_eq!(paused.request_id, "r9");
+    assert_eq!(paused.request.url, "https://a.test/api");
+    assert_eq!(paused.request.method, "POST");
+    assert_eq!(paused.resource_type.as_deref(), Some("XHR"));
+
+    // `resourceType` is optional on the wire (an engine that omits it is not malformed).
+    let minimal = fetch::request_paused(&json!({
+        "requestId": "r10",
+        "request": {"url": "https://a.test/", "method": "GET"}
+    }))
+    .expect("decode without resourceType");
+    assert_eq!(minimal.resource_type, None);
+}
+
+#[tokio::test]
+async fn fetch_enable_sends_a_catch_all_pattern() {
+    // The coarse pattern is deliberate (spec §2): matching happens in Aleph, so an engine whose
+    // pattern grammar differs only changes how many events arrive, never what the decision is.
+    let (server, conn) = replying("Fetch.enable", json!({})).await;
+    fetch::enable(&conn, None).await.expect("enable");
+    let params = server
+        .last_params("Fetch.enable")
+        .expect("an enable frame reached the engine");
+    assert_eq!(params, json!({ "patterns": [{ "urlPattern": "*" }] }));
+}
+
+#[tokio::test]
+async fn fetch_disable_and_continue_send_exactly_their_arguments() {
+    let (server, conn) = replying("Fetch.disable", json!({})).await;
+    fetch::disable(&conn, None).await.expect("disable");
+    assert_eq!(
+        server.last_params("Fetch.disable"),
+        Some(json!({})),
+        "disable carries no params"
+    );
+
+    let (server, conn) = replying("Fetch.continueRequest", json!({})).await;
+    fetch::continue_request(&conn, None, "r42")
+        .await
+        .expect("continue");
+    assert_eq!(
+        server.last_params("Fetch.continueRequest"),
+        Some(json!({ "requestId": "r42" }))
+    );
+}
+
+#[tokio::test]
+async fn fetch_fail_request_maps_reasons() {
+    let (server, conn) = replying("Fetch.failRequest", json!({})).await;
+    fetch::fail_request(&conn, None, "r1", fetch::FailReason::Failed)
+        .await
+        .expect("fail Failed");
+    fetch::fail_request(&conn, None, "r2", fetch::FailReason::BlockedByClient)
+        .await
+        .expect("fail BlockedByClient");
+    let frames = server.received_for("Fetch.failRequest");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["params"]["errorReason"], "Failed");
+    assert_eq!(frames[1]["params"]["errorReason"], "BlockedByClient");
 }
 
 // ===================== The void census =====================

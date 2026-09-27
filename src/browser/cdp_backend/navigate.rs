@@ -193,6 +193,11 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
         .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
     let handle = be.handle().await?;
     let session = handle.ensure_tab(tab_id).await?;
+    // Mock routes arm BEFORE the navigation's first byte: `Fetch.enable` must
+    // reach the engine ahead of `Page.navigate` or the page's first request
+    // slips past interception (Review Focus #5). With no applicable rule this
+    // is a no-op — no enable, no task (spec §2's zero-overhead clause).
+    be.ensure_intercept_loop(tab_id, &session).await?;
 
     let mut events = handle.conn.events();
     let result = page::navigate(&handle.conn, Some(&session), url)

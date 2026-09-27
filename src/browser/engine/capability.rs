@@ -67,13 +67,14 @@ impl Cap {
 /// This table is published to the model through
 /// `browser_session{action:"capabilities"}`, so a row with no verb behind it
 /// tells the model Aleph can do something no tool can reach — a capability
-/// with no client is not delivered. Four rows were cut on exactly that test:
+/// with no client is not delivered. Three rows were cut on exactly that test:
 /// `touch` (no `browser_tap`; nothing dispatches `Input.dispatchTouchEvent`),
 /// `screencast` (nothing calls `Page.startScreencast` at HEAD or in Tasks
-/// 12-19), `network_interception` (spec §7.2 defers `Fetch.*`; `rg "Fetch\."
-/// src/ crates/` at HEAD returns nothing), and `multi_connection` (an
-/// architectural property, not a verb — it belongs in the live-view design
-/// notes, not in a table the model reads as a menu).
+/// 12-19) and `multi_connection` (an architectural property, not a verb — it
+/// belongs in the live-view design notes, not in a table the model reads as a
+/// menu). A fourth, `network_interception`, was cut under the same rule when
+/// no verb dispatched `Fetch.*`, and is RESTORED now that `browser_network`'s
+/// mock actions do (docs/superpowers/plans/2026-09-24-browser-network-mock.md).
 pub struct EngineCapabilities {
     /// `browser_dialog` — `Page.handleJavaScriptDialog`, plus the
     /// `Page.javascriptDialogOpening` event the backend tracks to know a
@@ -126,6 +127,11 @@ pub struct EngineCapabilities {
     /// so the check skips them (a skip, not a pass) — and this engine-keyed
     /// table cannot say so, which is why the doc does.
     pub ref_precheck: Cap,
+    /// `browser_network`'s four mock actions — `mock_add`, `mock_list`,
+    /// `mock_remove`, `mock_clear` — served by the Fetch-domain handshake
+    /// (`Fetch.enable` plus the per-tab `requestPaused` loop) that only the
+    /// cdp backend drives.
+    pub network_interception: Cap,
     /// The build each row above was measured against. A capability claim with
     /// no measurement date is a list that expires without telling anyone.
     pub measured_on: &'static str,
@@ -136,7 +142,7 @@ pub struct EngineCapabilities {
 /// being described, serialised or falsified, so Task 16's
 /// `cap_fields_covers_every_cap_typed_field_of_the_struct` derives the expected
 /// set from this file's own source (判据 §3).
-pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 7] = [
+pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 8] = [
     ("js_dialogs", |c| c.js_dialogs),
     ("drag", |c| c.drag),
     ("file_upload", |c| c.file_upload),
@@ -144,6 +150,7 @@ pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 7] = [
     ("insert_text", |c| c.insert_text),
     ("effect_probe", |c| c.effect_probe),
     ("ref_precheck", |c| c.ref_precheck),
+    ("network_interception", |c| c.network_interception),
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
@@ -239,6 +246,30 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // A pure lookup against Aleph's own per-tab `RefTable` — no engine
     // round-trip, so nothing to measure per engine (see the field doc).
     ref_precheck: Cap::Supported,
+    // **Unsupported as a MEASURED verdict, 2026-09-27, obscura v0.2.2
+    // (x86_64-linux) — the probe the mock plan's Task 4 promised
+    // (docs/superpowers/specs/2026-09-24-browser-network-mock-design/
+    // probes/fetch-probe.mjs), which measures the handshake link by link
+    // rather than end to end:**
+    //   1. `Fetch.enable{catch-all}` answers ok — the arm EXISTS;
+    //   2. a navigation's `requestPaused` ARRIVES — but the request is NOT
+    //      HELD: left unanswered for 1.5 s the page still reaches `complete`
+    //      with the real body (3/3 runs). The pause is advisory;
+    //   3. `fulfillRequest` on that pause answers ok and changes nothing —
+    //      the page shows the REAL body (3/3): a fulfilled-nothing;
+    //   4. a subresource `fetch()` pause arrives only SOMETIMES (2 of 3 runs;
+    //      when it does not, the fetch wedges pending forever — a request
+    //      held with no event to answer it is worse than no interception);
+    //   5. when the subresource event does arrive, fulfill serves the mock
+    //      correctly — the one working link cannot carry the chain.
+    // A mock route on this engine would report `active` while every page
+    // load slips past it — the exact lie this row exists to prevent. Written
+    // `Unsupported` at implementation time as the fail-closed answer to an
+    // unknown; the probe turned the unknown into a measured NO (判据 §8
+    // spent the other way). What would flip it: a build whose navigation
+    // pauses HOLD (link 2) and whose subresource events are reliable
+    // (link 4) — re-run the probe.
+    network_interception: Cap::Unsupported,
     // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
     // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
     // this — … everything else follows". A literal here made this row a second
@@ -274,6 +305,14 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     effect_probe: Cap::Supported,
     // Engine-agnostic: a local table read, no wire call (see the field doc).
     ref_precheck: Cap::Supported,
+    // The Fetch chain runs over the same connection and event pump that the
+    // console/evaluate verbs already run on (both measured), and the five
+    // method wrappers' wire shapes are pinned by aleph-cdp's FakeCdpServer
+    // tests — but no REAL chromium has served a mocked request end to end
+    // yet: qa/browser_dual's caps stage (Task 4 of
+    // docs/superpowers/plans/2026-09-24-browser-network-mock.md) is the
+    // expiry check, same role it plays for `effect_probe`.
+    network_interception: Cap::Supported,
     // Provenance, not a freshness stamp: this row records the build the
     // capabilities were measured on. Re-confirmed unchanged on Chrome
     // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
@@ -425,7 +464,7 @@ mod tests {
     /// ran the three premises against the real pinned-tag binary and the
     /// row is now a measured `Unsupported` (see the `OBSCURA` row for the
     /// evidence and what would open the gate).
-    const NOT_PROBED: [(&str, &str); 3] = [
+    const NOT_PROBED: [(&str, &str); 4] = [
         (
             "drag",
             "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
@@ -446,6 +485,15 @@ mod tests {
             "no engine round-trip to probe: the check is a pure lookup against the cdp \
              backend's per-tab RefTable plus the tab registry's URL-drift signal, so the \
              wire matrix has no label that could decide it",
+        ),
+        (
+            "network_interception",
+            "T0's wire matrix has no Fetch label; settled instead by the mock plan's \
+             Task 4 probe (docs/superpowers/specs/2026-09-24-browser-network-mock-design/\
+             probes/fetch-probe.mjs) against the pinned build on 2026-09-27: \
+             Fetch.enable answers and events arrive, but navigation pauses are \
+             advisory (the request completes unanswered) and subresource pauses \
+             are unreliable — a MEASURED Unsupported, not an unknown",
         ),
     ];
 
@@ -544,10 +592,6 @@ mod tests {
                 "screencast",
                 "nothing calls Page.startScreencast at HEAD or in Tasks 12-19",
             ),
-            (
-                "network_interception",
-                "spec §7.2 defers Fetch.*; no verb enables it",
-            ),
             ("multi_connection", "an architectural property, not a verb"),
         ] {
             assert!(
@@ -586,6 +630,14 @@ mod tests {
             ("ref_precheck", "browser_fill_form"),
             ("ref_precheck", "browser_select"),
             ("ref_precheck", "browser_hover"),
+            // The mock routes are one row behind four actions of ONE verb;
+            // the doc must name the verb and every action, or the model
+            // cannot tell which calls the row governs.
+            ("network_interception", "browser_network"),
+            ("network_interception", "mock_add"),
+            ("network_interception", "mock_list"),
+            ("network_interception", "mock_remove"),
+            ("network_interception", "mock_clear"),
         ] {
             assert!(
                 CAP_FIELDS.iter().any(|(n, _)| *n == name),
@@ -706,9 +758,9 @@ mod tests {
             .collect();
         assert_eq!(
             exempt_disagreements,
-            vec!["drag", "effect_probe"],
-            "a matrix-exempt row other than `drag`/`effect_probe` now answers \
-             differently per engine. That difference is published to the model \
+            vec!["drag", "effect_probe", "network_interception"],
+            "a matrix-exempt row other than `drag`/`effect_probe`/`network_interception` \
+             now answers differently per engine. That difference is published to the model \
              as a route, and nothing in the matrix decides it — state the \
              reading that does, beside BOTH values, and check it here"
         );
@@ -723,6 +775,22 @@ mod tests {
         assert!(
             src.contains("qa/browser_dual") && src.contains("clean null"),
             "obscura's effect_probe row no longer states the measurement it rests on"
+        );
+        // network_interception's disagreement rests on a MEASUREMENT on the
+        // obscura side since 2026-09-27 (the mock plan's Task 4 probe:
+        // navigation pauses advisory, subresource pauses unreliable), while
+        // chromium's Supported still rests on the Fetch chain running over
+        // the same connection and event pump the probed verbs already use.
+        // Both rows must keep naming that probe, or the route published to
+        // the model rests on an argument nobody can read.
+        // Scoped to the PRODUCTION prefix: the plan name also appears in
+        // NOT_PROBED, which is test text — a citation that lives only beside
+        // the guard certifies nothing about the rows it guards.
+        let production = crate::utils::source_scan::production_prefix(src);
+        assert!(
+            production.contains("2026-09-24-browser-network-mock"),
+            "the network_interception rows no longer name the Task 4 probe that \
+             decides obscura's value"
         );
 
         // The citation, checked rather than trusted. `driver` drives the verb
@@ -1082,14 +1150,13 @@ mod tests {
         assert_eq!(json["chromium"]["js_dialogs"], "supported");
         assert_eq!(json["obscura"]["file_upload"], "unsupported");
         assert_eq!(json["chromium"]["file_upload"], "supported");
+        // The restored row reads both ways: chromium serves the Fetch
+        // handshake, obscura is the fail-closed answer to an unprobed one.
+        assert_eq!(json["chromium"]["network_interception"], "supported");
+        assert_eq!(json["obscura"]["network_interception"], "unsupported");
         // The cut rows must not reappear in the published object either — this
         // is the face the QA `caps` stage and the model both read.
-        for cut in [
-            "touch",
-            "screencast",
-            "network_interception",
-            "multi_connection",
-        ] {
+        for cut in ["touch", "screencast", "multi_connection"] {
             assert!(
                 json["obscura"].get(cut).is_none(),
                 "`{cut}` is back in the published capability object (R39)"
