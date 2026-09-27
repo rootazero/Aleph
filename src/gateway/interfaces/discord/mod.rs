@@ -26,12 +26,18 @@
 //! ```
 
 pub mod api;
+pub mod commands;
 pub mod config;
+pub mod draft;
 pub mod permissions;
+pub mod reconnect;
 pub mod resolver;
 pub mod security;
 
+pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
+pub use draft::{DraftChunker, DraftStream};
+pub use reconnect::{CooldownStore, ReconnectCoordinator, ReconnectDecision};
 pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
@@ -109,6 +115,18 @@ pub struct DiscordChannel {
     http: Option<Arc<serenity::http::Http>>,
     /// Test mode: skip real gateway connection, return mock results
     test_mode: bool,
+    /// Voice wiring (T2.1): when set, audio attachments on inbound messages
+    /// are transcribed via `gateway/voice/inbound::process_inbound_voice` before
+    /// the agent loop sees them. `None` for channels that never opted in —
+    /// `start()` will leave the slot empty if `resolve_stt_source` returned
+    /// `None` (no enabled provider), and the inbound path then forwards audio
+    /// messages untouched so they remain visible to the user.
+    stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
+    /// Reconnect coordinator (T2.5): owns the backoff schedule, presence
+    /// cooldown gate, and `last_event_at` watchdog that feeds the channel
+    /// health monitor's zombie-detection sweep. Always present (constructed
+    /// with defaults in `new()`) so the wiring never silently disappears.
+    reconnect: reconnect::ReconnectCoordinator,
 }
 
 impl DiscordChannel {
@@ -129,6 +147,8 @@ impl DiscordChannel {
             shutdown_tx: None,
             http: None,
             test_mode: false,
+            stt_source: None,
+            reconnect: reconnect::ReconnectCoordinator::with_defaults(),
         }
     }
 
@@ -136,6 +156,39 @@ impl DiscordChannel {
         let mut channel = Self::new(id, config);
         channel.test_mode = true;
         channel
+    }
+
+    /// Inject an STT source (T2.1 voice wiring). Callers that boot from a
+    /// generation config + vault (the gateway bootstrap) resolve the source
+    /// once via `gateway::voice::inbound::resolve_stt_source` and pass it in;
+    /// channels that don't expose voice leave the slot empty and audio
+    /// attachments pass through untouched. The setter is `&mut self` because
+    /// STT source lifetime is tied to the channel's start cycle — callers
+    /// wire it before `start()` so the inbound path can read it without
+    /// locking on the hot path.
+    pub fn with_stt_source(
+        &mut self,
+        source: Arc<crate::gateway::voice::inbound::SttSource>,
+    ) -> &mut Self {
+        self.stt_source = Some(source);
+        self
+    }
+
+    /// Read-only view of the configured STT source. Used by tests and by the
+    /// inbound router when it needs to introspect why a particular message
+    /// was or wasn't transcribed.
+    #[must_use]
+    pub fn stt_source(&self) -> Option<&Arc<crate::gateway::voice::inbound::SttSource>> {
+        self.stt_source.as_ref()
+    }
+
+    /// Read-only view of the reconnect coordinator. Exposed so the health
+    /// monitor's sweep (which lives in `channel_health_monitor`) and the
+    /// inbound path share the same schedule — every place that touches the
+    /// backoff goes through this handle.
+    #[must_use]
+    pub fn reconnect(&self) -> &reconnect::ReconnectCoordinator {
+        &self.reconnect
     }
 
     /// Get Discord-specific capabilities
@@ -242,6 +295,12 @@ struct Handler {
     /// the 500ms guess return while the channel still read `Connecting`, and
     /// an immediate `send_attempt` then failed `NotConnected`).
     ready_notify: Arc<tokio::sync::Notify>,
+    /// Voice wiring (T2.1): when set, audio attachments on inbound messages
+    /// are transcribed before they reach the agent loop. `None` for channels
+    /// whose STT source couldn't be resolved at boot (no enabled provider);
+    /// the inbound path then forwards audio messages untouched so they remain
+    /// visible to the user, and the agent sees the raw attachment metadata.
+    stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
 }
 
 impl Handler {
@@ -256,15 +315,30 @@ impl Handler {
         // button can't drive the agent from a non-allowed surface.
         if let Some(guild_id) = component.guild_id {
             if !self.config.is_guild_allowed(guild_id.get()) {
+                commands::audit_command_blocked(
+                    Some(&component.user.id.to_string()),
+                    &component.channel_id.to_string(),
+                    "guild_not_allowlisted",
+                );
                 return;
             }
         }
         if component.guild_id.is_none() && !self.config.dm_allowed {
+            commands::audit_command_blocked(
+                Some(&component.user.id.to_string()),
+                &component.channel_id.to_string(),
+                "dm_disallowed",
+            );
             return;
         }
         if component.guild_id.is_some()
             && !self.config.is_channel_allowed(component.channel_id.get())
         {
+            commands::audit_command_blocked(
+                Some(&component.user.id.to_string()),
+                &component.channel_id.to_string(),
+                "channel_not_allowlisted",
+            );
             return;
         }
 
@@ -461,6 +535,48 @@ impl EventHandler for Handler {
             })),
             metadata,
         };
+
+        // Voice wiring (T2.1): when an inbound Discord message carries at
+        // least one audio attachment AND an STT source was injected at boot,
+        // hand the whole `InboundMessage` to `gateway::voice::inbound::
+        // process_inbound_voice` for transcription. The audio branch spawns a
+        // tokio task because transcription is network-bound and would otherwise
+        // stall the event-handler dispatch loop; the text-only path keeps its
+        // synchronous forward so the agent loop sees non-voice messages
+        // without latency.
+        //
+        // If `stt_source` is `None` (no enabled provider at boot), audio
+        // attachments pass through untouched. The agent loop still sees the
+        // attachment metadata; only the transcribed text would have been
+        // missing, and that's the same shape it would have seen from a
+        // pre-voice-wiring build — silent skip, not a behavioural regression.
+        if crate::gateway::voice::inbound::has_audio_attachment(&inbound) {
+            if let Some(stt_source) = self.stt_source.clone() {
+                let inbound_tx = self.inbound_tx.clone();
+                tokio::spawn(async move {
+                    let result = crate::gateway::voice::inbound::process_inbound_voice(
+                        inbound, &stt_source,
+                    )
+                    .await;
+                    if let Err(e) = inbound_tx.send(result.message) {
+                        tracing::error!(
+                            error = ?e,
+                            transcribed = result.transcribed,
+                            "Failed to send transcribed Discord voice message"
+                        );
+                    }
+                });
+                // Skip the synchronous forward — the spawned task owns the
+                // post-transcription delivery.
+                if self.config.send_typing {
+                    let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
+                }
+                return;
+            }
+            tracing::debug!(
+                "Discord inbound had audio attachment but no STT source was configured; passing through untouched"
+            );
+        }
 
         // Send to channel
         if let Err(e) = self.inbound_tx.send(inbound) {
@@ -700,6 +816,7 @@ impl Channel for DiscordChannel {
             bot_user_id: Arc::new(RwLock::new(None)),
             thread_bindings: Arc::new(RwLock::new(HashMap::new())),
             ready_notify: ready_notify.clone(),
+            stt_source: self.stt_source.clone(),
         };
 
         // Build client
