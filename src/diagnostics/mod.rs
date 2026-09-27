@@ -115,6 +115,7 @@ impl DiagnosticEngine {
             Arc::new(checks::HooksConsentCheck::from_default_path()),
             Arc::new(checks::BrowserRuntimeCheck::new()),
             Arc::new(checks::MediaCodecsCheck::new()),
+            Arc::new(checks::DiscordChannelHealthCheck::from_default_path()),
             Arc::new(checks::DuplicateInstanceCheck::new()),
         ];
         // Derived from `Engine::ALL`, not hand-listed. A third engine is a
