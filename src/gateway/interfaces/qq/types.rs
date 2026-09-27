@@ -53,7 +53,7 @@ pub struct QQAttachment {
     pub size: Option<u64>,
     pub height: Option<u32>,
     pub width: Option<u32>,
-}
+        }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageScene {

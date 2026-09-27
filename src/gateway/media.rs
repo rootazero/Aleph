@@ -134,7 +134,9 @@ pub(crate) fn resolved_test_attachment() -> crate::gateway::channel::Attachment 
                 .into_owned(),
         ),
         data: None,
-    }
+            is_voice_note: false,
+            is_video_note: false,
+        }
 }
 
 /// Detect MIME type from URL extension, with a fallback default based on `media_type`.

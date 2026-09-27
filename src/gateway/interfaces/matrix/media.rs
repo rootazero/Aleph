@@ -161,6 +161,8 @@ mod tests {
             url: url.map(String::from),
             path: None,
             data,
+            is_voice_note: false,
+            is_video_note: false,
         }
     }
 

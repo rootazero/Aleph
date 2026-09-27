@@ -365,7 +365,9 @@ impl MessagesDb {
                             url: None,
                             path: resolved_path.map(|p| p.to_string_lossy().into_owned()),
                             data: None,
-                        }
+            is_voice_note: false,
+            is_video_note: false,
+        }
                     })
                     .collect(),
                 timestamp: apple_timestamp_to_datetime(raw.date),

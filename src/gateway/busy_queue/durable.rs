@@ -857,6 +857,8 @@ mod tests {
             url: None,
             path: None,
             data: Some(vec![0u8; MAX_INLINE_ATTACHMENT_BYTES + 1]),
+            is_voice_note: false,
+            is_video_note: false,
         });
         assert!(!record_enqueued(p));
         assert!(survivors().is_empty());

@@ -30,7 +30,7 @@ pub struct Attachment {
     pub mime_type: String,
     /// Base64-encoded file content
     pub data: String,
-}
+        }
 
 /// Parameters for agent.run request
 #[derive(Debug, Clone, Deserialize)]
@@ -1029,6 +1029,8 @@ pub async fn build_run_request(
                 url: None,
                 path: None,
                 data: Some(bytes),
+                is_voice_note: false,
+                is_video_note: false,
             }),
             Err(e) => {
                 error!(name = %a.name, error = %e, "Dropping attachment with invalid base64 data");
@@ -1836,7 +1838,7 @@ mod tests {
                 name: "shot.png".to_string(),
                 mime_type: "image/png".to_string(),
                 data: BASE64.encode(b"png-bytes"),
-            }],
+        }],
             agent_id: None,
             project_root: None,
             model_override: Some(ModelOverride::Qualified {

@@ -629,9 +629,11 @@ pub(crate) async fn send_message(
         }
     };
 
-    // Send attachments if any
-    for attachment in &message.attachments {
-        send_attachment(bot, chat_id, thread_id, attachment).await?;
+    // Send attachments if any (P2-A: photo albums — when ≥2 attachments are
+    // image/*, send them as a single `sendMediaGroup` so Telegram renders
+    // them as one album instead of N separate messages).
+    if !message.attachments.is_empty() {
+        send_attachments(bot, chat_id, thread_id, &message.attachments).await?;
     }
 
     // Delivery succeeded — clear any cooldown for this conversation
@@ -735,6 +737,138 @@ pub(crate) async fn send_reaction(
 // Attachments
 // ---------------------------------------------------------------------------
 
+/// Send a batch of attachments, picking `sendMediaGroup` when ≥2 of them
+/// are images. Telegram requires every media-group entry to be the same
+/// kind (photo+video mixes are rejected); the function below splits by kind
+/// so each group is internally uniform.
+///
+/// Returns `Ok(())` on success and propagates the first error otherwise. A
+/// partial send (some succeeded, some failed) is signalled by the upstream
+/// cooldown — the caller treats any error as full failure and lets the
+/// cooldown backoff schedule the retry.
+pub(crate) async fn send_attachments(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<i32>,
+    attachments: &[crate::gateway::channel::Attachment],
+) -> ChannelResult<()> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+
+    // Pass 1: collect image attachments into groups of up to 10 (Telegram's
+    // media-group ceiling). Non-image attachments and images whose MIME
+    // could not be resolved fall through to the per-item path. The split
+    // is by MIME up front so a `sendMediaGroup` never carries a video /
+    // document — Telegram would 400 the whole batch.
+    const ALBUM_MAX: usize = 10;
+    let mut image_buf: Vec<&crate::gateway::channel::Attachment> = Vec::new();
+    let mut singles: Vec<&crate::gateway::channel::Attachment> = Vec::new();
+
+    for att in attachments {
+        if att.mime_type.starts_with("image/") {
+            image_buf.push(att);
+        } else {
+            // Flush any in-progress album so the per-item send can start
+            // clean.
+            if !image_buf.is_empty() {
+                flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+                image_buf.clear();
+            }
+            singles.push(att);
+        }
+        if image_buf.len() >= ALBUM_MAX {
+            flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+            image_buf.clear();
+        }
+    }
+    if !image_buf.is_empty() {
+        flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+    }
+
+    // Anything not in an album gets the per-item path (voice, video,
+    // sticker, document, etc.).
+    for att in singles {
+        send_attachment(bot, chat_id, thread_id, att).await?;
+    }
+    Ok(())
+}
+
+/// Send one Telegram media-group with the buffered images.
+///
+/// Two-image threshold (not 1): a single image uses `sendPhoto`, which
+/// renders with the bot's name as the byline and the photo's full metadata;
+/// a media-group of one is functionally the same but loses the byline on
+/// some clients (openclaw § 5.14 observation). We only batch when there
+/// is at least one other image waiting, which is also when Telegram's UI
+/// starts grouping them anyway.
+async fn flush_image_album(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<i32>,
+    images: &[&crate::gateway::channel::Attachment],
+) -> ChannelResult<()> {
+    use teloxide::types::{InputMedia, InputMediaPhoto};
+
+    if images.len() < 2 {
+        // Single image — never batch.
+        for att in images {
+            send_attachment(bot, chat_id, thread_id, att).await?;
+        }
+        return Ok(());
+    }
+
+    let media: Vec<InputMedia> = images
+        .iter()
+        .map(|att| {
+            let input_file = attachment_to_input_file(att)?;
+            Ok::<InputMedia, ChannelError>(InputMedia::Photo(InputMediaPhoto {
+                media: input_file,
+                caption: None,
+                parse_mode: None,
+                caption_entities: None,
+                has_spoiler: false,
+                show_caption_above_media: false,
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut req = bot.send_media_group(chat_id, media);
+    if let Some(tid) = thread_id {
+        // Telegram rejects media-group with thread_id == 1 (General topic);
+        // the per-item `send_attachment` path omits it for the same reason.
+        if tid != 1 {
+            req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+        }
+    }
+    req.await
+        .map_err(|e| ChannelError::SendFailed(format!("Failed to send media group: {e}")))?;
+    Ok(())
+}
+
+/// Convert a channel-agnostic `Attachment` to teloxide's `InputFile`.
+/// Used by `flush_image_album` (and reserved for future album kinds) — the
+/// per-MIME destination (send_photo vs send_voice) still lives in
+/// `send_attachment` and the per-item fallback in `send_attachments`.
+fn attachment_to_input_file(
+    attachment: &crate::gateway::channel::Attachment,
+) -> Result<teloxide::types::InputFile, ChannelError> {
+    use teloxide::types::InputFile;
+    if let Some(data) = &attachment.data {
+        Ok(InputFile::memory(data.clone()))
+    } else if let Some(path) = &attachment.path {
+        Ok(InputFile::file(path))
+    } else if let Some(url) = &attachment.url {
+        url.parse()
+            .map(InputFile::url)
+            .map_err(|e| ChannelError::SendFailed(format!("Invalid attachment URL: {e}")))
+    } else {
+        Err(ChannelError::SendFailed(
+            "Attachment has no data, path, or URL".to_string(),
+        ))
+    }
+}
+
 /// Send an attachment with optional forum-topic routing.
 pub(crate) async fn send_attachment(
     bot: &Bot,
@@ -779,9 +913,25 @@ pub(crate) async fn send_attachment(
         req.await
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else if mime.starts_with("video/") {
-        let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
+        if attachment.is_video_note {
+            // Video note (round bubble) — Telegram-specific surface; ignored
+            // by other channels via the `is_video_note` flag.
+            let req = with_thread!(bot.send_video_note(chat_id, input_file), thread_id);
+            req.await.map_err(|e| {
+                ChannelError::SendFailed(format!("Failed to send video note: {e}"))
+            })?;
+        } else {
+            let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
+        }
+    } else if attachment.is_voice_note {
+        // Voice-note hint on a non-audio MIME (e.g. MP4 audio track). Honour
+        // the caller's intent — some TTS pipelines emit a video/* container
+        // and want it rendered as the round bubble anyway.
+        let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else {
         let req = with_thread!(bot.send_document(chat_id, input_file), thread_id);
         req.await

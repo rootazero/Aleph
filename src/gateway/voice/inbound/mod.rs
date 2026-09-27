@@ -224,6 +224,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }
     }
 

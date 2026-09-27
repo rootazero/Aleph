@@ -16,6 +16,7 @@
 //! - Smart retry with error classification
 
 pub mod access;
+pub mod audit;
 pub mod approval;
 pub mod bot_instance;
 pub mod chunking;
@@ -74,6 +75,12 @@ pub struct TelegramChannel {
     /// surfaced to the doctor. The doctor reads this without touching the
     /// vault, so an operator can spot a misroute without restarting.
     token_fingerprint_verdicts: std::collections::HashMap<String, token_fingerprint::TokenFingerprintVerdict>,
+    /// Channel-wide audit log (P2-C): one ring buffer per channel instance,
+    /// consulted by the doctor to answer "what did this channel actually
+    /// do in chat X". Restart clears it — the audit log is a debugging
+    /// artefact, not a system of record (that is the agent-identity
+    /// ledger's job).
+    audit_log: Arc<audit::AuditLog>,
     /// Per-conversation error cooldown and typing circuit breaker.
     error_cooldown: Arc<ErrorCooldown>,
     /// Persistent polling offset tracker (set via `set_offset_tracker`).
@@ -126,6 +133,7 @@ impl TelegramChannel {
             tool_registry: None,
             access_by_account,
             token_fingerprint_verdicts: std::collections::HashMap::new(),
+            audit_log: Arc::new(audit::AuditLog::new()),
             error_cooldown: Arc::new(ErrorCooldown::new()),
             offset_tracker: None,
             state_db: None,
@@ -175,6 +183,18 @@ impl TelegramChannel {
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
+    }
+}
+
+impl TelegramChannel {
+    /// Channel-wide audit log accessor (P2-C). Used by the doctor to
+    /// answer "what did this Telegram channel actually do" without
+    /// needing to scrape logs. Not part of the `Channel` trait — this is
+    /// a Telegram-specific diagnostic that other channels may grow their
+    /// own equivalent for.
+    #[must_use]
+    pub fn audit_log(&self) -> &Arc<audit::AuditLog> {
+        &self.audit_log
     }
 }
 
@@ -790,13 +810,36 @@ impl Channel for TelegramChannel {
                      Ensure the chat_id is covered by allowed_groups or account config"
                 ))
             })?;
-        delivery::send_message(
+        let result = delivery::send_message(
             &instance.bot,
             &instance.resolved_config,
             &message,
             &self.error_cooldown,
         )
-        .await
+        .await;
+        // P2-C: write the audit row regardless of outcome. A failed send
+        // is the most useful kind to record (the doctor can answer "why
+        // did chat X stop responding" without scraping logs). The
+        // audit_log.push is best-effort and never panics.
+        let outcome = match &result {
+            Ok(r) => format!("succeeded: msg_id={}", r.message_id.as_str()),
+            Err(e) => format!("failed: {e}"),
+        };
+        self.audit_log.push(audit::entry(
+            instance.account_id.clone(),
+            Some(chat_id_i64),
+            thread_id,
+            audit::AuditKind::SendAttempted {
+                message_id_kind: message
+                    .text
+                    .chars()
+                    .take(64)
+                    .collect::<String>()
+                    .replace('\n', " "),
+                outcome,
+            },
+        ));
+        result
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -930,6 +973,7 @@ impl Channel for TelegramChannel {
                         first_access.clone(),
                     )]),
                     token_fingerprint_verdicts: self.token_fingerprint_verdicts.clone(),
+                    audit_log: self.audit_log.clone(),
                     error_cooldown: self.error_cooldown.clone(),
                     offset_tracker: self.offset_tracker.clone(),
                     state_db: self.state_db.clone(),

@@ -875,6 +875,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }];
         assert!(carries_more_than_text(&with_file));
     }
@@ -1172,6 +1174,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }];
         assert!(has_steering_content(&req));
     }
