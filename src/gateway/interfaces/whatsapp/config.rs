@@ -8,7 +8,6 @@ use crate::gateway::interfaces::whatsapp::history_buffer::HistoryBufferConfig;
 use crate::gateway::interfaces::whatsapp::media::MediaConfig;
 use crate::gateway::interfaces::whatsapp::reactions::{AckReactionConfig, ReactionLevel};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WhatsAppConfig {
@@ -22,8 +21,6 @@ pub struct WhatsAppConfig {
     pub allowed_chats: Vec<String>,
     #[serde(default)]
     pub default_account_id: Option<String>,
-    #[serde(default)]
-    pub accounts: Option<HashMap<String, WhatsAppAccountConfig>>,
     #[serde(default)]
     pub access: ChannelAccessConfig,
     #[serde(default)]
@@ -117,33 +114,6 @@ impl Default for ReactionConfig {
         Self {
             level: ReactionLevel::Minimal,
             ack: Some(AckReactionConfig::default()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhatsAppAccountConfig {
-    pub enabled: bool,
-    pub phone_number: Option<String>,
-    #[serde(default)]
-    pub access: AccessConfig,
-    #[serde(default)]
-    pub delivery: DeliveryConfig,
-    #[serde(default)]
-    pub reactions: ReactionConfig,
-    #[serde(default)]
-    pub media: MediaConfig,
-}
-
-impl Default for WhatsAppAccountConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            phone_number: None,
-            access: Default::default(),
-            delivery: Default::default(),
-            reactions: Default::default(),
-            media: Default::default(),
         }
     }
 }

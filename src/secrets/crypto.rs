@@ -32,6 +32,7 @@ const HKDF_INFO: &[u8] = b"aleph-secrets-v1";
 /// Encryption engine using AES-256-GCM with per-entry HKDF key derivation.
 ///
 /// The master key is held in a `SecretString` which is zeroized on drop.
+#[derive(Clone)]
 pub struct SecretsCrypto {
     master_key: SecretString,
 }

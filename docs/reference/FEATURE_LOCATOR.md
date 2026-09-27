@@ -1845,7 +1845,7 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
 
 修法是把两个判据拆成两个具名函数：`declared_over_limit(Option<u64>, usize)`（纯，可直接问边界：`limit` 通过、`limit+1` 拒绝）与 `accumulate_capped(stream, limit)`（泛型于流，测试自己给 chunk 边界）。变异证伪：把 `buf.len() + chunk.len() > limit` 改成 `buf.len() > limit`，**只有新的那条流式测试红，六条服务器驱动的全绿**——这就是"那两条自称测流式的测试从没覆盖过流式检查"的直接证据。两条被误命名的测试改了名、doc 写上它们实际经过的分支，并加了一条 `content_length() == Some(2049)` 的断言把这次测量钉住。
 
-**⑤ 另外两条**：`platform_ocr` 的 `96 / 4 * 3 = 72` 漏掉了 `==` 两个 padding 字符，真实解码长度是 **70**（生产代码是对的）。whatsapp 那条的 `auth.save(&data).unwrap()` 是死脚手架——`WaRuntime::new` 从不读存下的 blob，而 `WaAuthManager::new` 解析的是 `SecretVault::default_path()`，所以它一直在往**开发者真实的 vault** 里写 `whatsapp/auth/test`；改用 `with_vault` + `TempDir`。生产侧的 fail-closed 是对的（`SharedTokenManager::set_global` 在 `gateway/server/mod.rs` 的启动路径上，WhatsApp 通道构造在其后）。
+**⑤ 另外两条**：`platform_ocr` 的 `96 / 4 * 3 = 72` 漏掉了 `==` 两个 padding 字符，真实解码长度是 **70**（生产代码是对的）。whatsapp vault 测试隔离 — ✅ **已修复**（`2d883ee23` / `e09258505`，2026-04~08）：`vault_store.rs:155-205` 测试改用 `TempDir::new()` + `SecretVault::open(dir.path().join("test.vault"))` + `WaAuthManager::with_vault_and_crypto` 注入，单元测试零污染开发者真实 vault；生产路径 `WaAuthManager::new` 仍走 `SecretVault::default_path()` 是预期行为。生产侧的 fail-closed 是对的（`SharedTokenManager::set_global` 在 `gateway/server/mod.rs` 的启动路径上，WhatsApp 通道构造在其后）。
 
 **⑥ 第五个面并进表：那个"产品决定"的两半从来没有被并排读过**
 
@@ -3828,6 +3828,19 @@ CUT：`StateDatabase::list_trace_tasks`（零调用者）· Panel `TraceApi::lis
 | `subagent.rs::handle_tree` 的 owner-vs-role | 同一族的第四处，**取决于一条尚未做出的「operator 是不是超级用户」的裁定**；本轮修的两处都有各自独立的理由（一个是特权、一个是分歧），这一处两者都不是 |
 
 - **打磨话术**：「**改任何一个 `visible_owner_filter()` 之前先说出你答的是哪一问**——`caller_is_member` 答特权、`session_visible_to` 答归属，而 operator 的 `CALLER_USER` 是 `OWNER_USER_ID` 不是 `None`，所以后者对 operator 照样生效。**一条钉住"两个面一致"的守卫要从其中一个面的谓词派生，别复述它**。**一个源码级普查在扫之前先过 `source_scan::production_prefix`**，否则它会把别的守卫的搜索串当成命中。**`Option<T>` 字段不需要 `#[serde(default)]` 就有默认值**，所以"每个字段缺席都会响亮失败"的守卫对它恒绿。**一个谓词如果是另一个谓词派生出来的，检查两者关系的守卫恒真**。**权威位要当参数传，不要在每个消费点重新推导**——第九个消费点是复审抓到的。**棘轮红了要缩内容不要抬闸。**」
+
+### 5.27 WhatsApp 通道架构加固 R1：PairingState 单源化 + 孤儿清理 + 闭环测试 (WhatsApp Channel Arch R1 · 2026-04-22)
+
+- **口语关键词**：WhatsApp 通道重构 / 状态机单源化 / 多账户孤儿 / reactions 不消费 / history 不消费 / FakeWaRuntime 端到端测试 / vault 测试隔离
+- **代码锚点**：`src/gateway/interfaces/whatsapp/mod.rs`（事件循环补 4 事件映射 + status 走 PairingState）· `src/gateway/interfaces/whatsapp/pairing.rs`（保留 9 变体 FSM，作为单源）· `src/gateway/interfaces/whatsapp/wa_runtime/{traits.rs,fake.rs}`（新）· `src/gateway/interfaces/whatsapp/reactions.rs`（trait ReactionSender）· `src/gateway/interfaces/whatsapp/history_buffer.rs`（mapper 接 add）· `src/gateway/interfaces/whatsapp/wa_outbound/media.rs`（保守版：size + MIME）· `src/gateway/interfaces/whatsapp/account.rs`（删）· `src/gateway/interfaces/whatsapp/account_registry.rs`（删）· `src/gateway/interfaces/whatsapp/wa_runtime/state.rs`（ConnectionState 删，由 PairingState 接管）· `src/gateway/interfaces/whatsapp/wa_auth/vault_store.rs:155-205`（已 TempDir 隔离）
+- **规模**：spec 365 行 → plan 762 行 → 8 commit → +85 / -456 净 diff（熵减 371 行）· WhatsApp 测试 60 → 64 PASS（含 4 新增 fake-runtime 端到端场景）
+- **状态**：✅ 已合入 `whatsapp-arch-r1` 分支（未合 main，待审查合并）
+- **设计依据**：`docs/superpowers/specs/2026-04-22-whatsapp-arch-r1-design.md`
+- **实施计划**：`docs/superpowers/plans/2026-04-22-whatsapp-arch-r1.md`
+- **当前架构**：`docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md`（取代 2026-04-06 1306 行"Baileys migration"过时文档）
+- **CLAUDE.md 判据命中**：§0 孤儿清理（account registry + ConnectionState + 字段无消费者）· §1 两份表述修正（vault 描述与代码一致）· §8 fail-closed（status 走 PairingState + PairError → Failed）· §11 no-op 消除（reactions/history 真接入）· §19 加宽避免（多账户暂不做 CUT）
+- **R2 待办**：多账户路由（spec §6 草案留档）· Scanned 事件适配（wacore 0.5.0 缺失）· `history_buffer.get_context` 下游注入 · image crate 实编 · `should_agent_react` 接线 · `qa/channels/run.sh` 加 whatsapp 段
+- **打磨话术**：「**两个状态机各走各的，每个都用同样的 `Event::Connected` 做不同的事，等于只有一个是真的** —— 撤销 `ConnectionState` 让 `PairingState::to_channel_status()` 当唯一派生闸，`status()` 不再读 runtime 直接读 pairing。**孤儿结构的最贵形态是"有完整的实现 + 有完整的测试 + 零个外部调用者"** —— `WhatsAppAccountRegistry` 三件套全有（struct / add/get/default/list/remove / Default impl）且符合 clippy，但全仓 grep 自身文件 4 命中 = 零调用方；CLAUDE.md §0「先简化再复杂化」主张 CUT，留档待 R2 重建。**`config.foo` 字段被 serde 解析但没人读，是 §11 no-op 的典型形态** —— `reactions` / `history` 走完整管道但不驱动任何行为，等于声明了一个永远用不上的开关。**保守版 media 不引 image crate**：R3 主张"先简化"，size 超限 fail-closed 足以拒绝大图，实编重编码是性能优化不是正确性修复，留到 R2。」
 
 ## 6. UI / Panel
 
