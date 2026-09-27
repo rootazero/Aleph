@@ -61,7 +61,9 @@ mod session_facts;
 mod user_settings;
 
 pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_tool_head};
-pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT};
+pub use consent::{
+    ConsentEntry, ConsentStatus, ShellHookConsent, Superseded, INLINE_COMMAND_EVENT,
+};
 pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
 pub(crate) use matcher::{matcher_notice, warn_on_matcher};

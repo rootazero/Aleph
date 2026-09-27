@@ -93,10 +93,11 @@
 //! it comes back as `pending` once, and a guard among them stops blocking
 //! until it is approved again. A text that names no path variable — or only
 //! `${PLUGIN_ROOT}`, which the adapter never expanded — keeps its key. The
-//! old entry is kept on disk; `aleph-server hooks list` marks it superseded
-//! and `aleph doctor` counts it apart
-//! ([`ConsentEntry::predates_literal_plugin_text`], which also names what it
-//! cannot tell apart).
+//! old entry is kept on disk; once the hook has fired and recorded its text
+//! as written, `aleph-server hooks list` shows the old one as `superseded`
+//! (naming the entry that replaces it) and `aleph doctor` counts it apart
+//! ([`ConsentEntry::superseded_in`] — exact: an entry with no such sibling
+//! is left unmarked, never guessed).
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
@@ -133,6 +134,18 @@ pub enum ConsentStatus {
     Pending,
     /// Operator-approved. The hook runs normally.
     Approved,
+}
+
+/// Why an entry authorises nothing ([`ConsentEntry::superseded_in`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Superseded {
+    /// A `user:project*` entry recorded before approvals were bound to a
+    /// project ([`ConsentEntry::predates_project_binding`]).
+    PredatesProjectBinding,
+    /// A plugin entry recorded with the install path spliced into its
+    /// command; `literal` is the fingerprint of the entry holding the text
+    /// as the plugin wrote it ([`ConsentEntry::is_spliced_form_of`]).
+    SplicedText { literal: String },
 }
 
 /// A single shell-hook consent record.
@@ -233,38 +246,53 @@ impl ConsentEntry {
             && super::user_settings::PROJECT_LABELS.contains(&self.plugin_name.as_str())
     }
 
-    /// Whether this is a plugin entry recorded before a plugin's command
-    /// text was kept as written (2026-09-27): its command holds the entry's
-    /// own install root — or the plugin's data directory — spliced in where
-    /// the plugin wrote `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`. A
-    /// hook or inline command is now looked up under the text as written,
-    /// so this key is never asked for again: it authorises nothing.
+    /// Whether this entry is `literal`'s text as the manifest adapter used to
+    /// record it (before 2026-09-27): the same plugin and project, a
+    /// different command, and `literal`'s command with the plugin variables
+    /// expanded by the derivation that did the splice
+    /// ([`PluginVars::expand`](crate::extension::plugin_vars::PluginVars::expand),
+    /// against this entry's recorded root) is exactly this entry's command.
     ///
-    /// Told apart by structure: a plugin-owned entry (a plugin id, not a
-    /// settings label) with a recorded root whose command contains that
-    /// root, or the data directory, verbatim. What it cannot tell apart: a
-    /// plugin whose own `hooks.json` spells its absolute install path is
-    /// marked too though it is live (no plugin can know that path in
-    /// advance), and an entry recorded before roots were kept (no root to
-    /// compare) is not marked though it is just as inert.
+    /// Exact, not a guess: a text the author wrote with an absolute path —
+    /// or one naming a sibling directory that shares a prefix with the root
+    /// — has no differing sibling that expands to it. The cost is silence,
+    /// not a false label: an old entry whose hook has not fired since the
+    /// upgrade (so no literal sibling is recorded yet) is not recognised,
+    /// nor is one recorded before roots were kept.
     #[must_use]
-    pub fn predates_literal_plugin_text(&self) -> bool {
-        if crate::extension::manifest::validate_plugin_id(&self.plugin_name).is_err() {
-            return false;
-        }
-        let Some(root) = self.plugin_root.as_deref().map(Path::to_string_lossy) else {
+    pub fn is_spliced_form_of(&self, literal: &Self) -> bool {
+        let Some(root) = self.plugin_root.as_deref() else {
             return false;
         };
-        let data = crate::extension::plugin_data_dir(&self.plugin_name);
-        (!root.is_empty() && self.command.contains(root.as_ref()))
-            || self.command.contains(data.to_string_lossy().as_ref())
+        crate::extension::manifest::validate_plugin_id(&self.plugin_name).is_ok()
+            && literal.plugin_name == self.plugin_name
+            && literal.project_root == self.project_root
+            && literal.command != self.command
+            && crate::extension::plugin_vars::PluginVars::new(&self.plugin_name, root)
+                .expand(&literal.command)
+                == self.command
     }
 
-    /// Whether this entry authorises nothing and never fires again — one of
-    /// the two re-keys the module doc's Migration section describes.
+    /// Every entry in `entries` that authorises nothing and never fires
+    /// again, keyed by fingerprint, with why — the two re-keys the module
+    /// doc's Migration section describes. The one derivation `aleph-server
+    /// hooks list` / `hooks doctor` and `core/hooks-consent` read.
     #[must_use]
-    pub fn is_superseded(&self) -> bool {
-        self.predates_project_binding() || self.predates_literal_plugin_text()
+    pub fn superseded_in(entries: &[Self]) -> BTreeMap<String, Superseded> {
+        entries
+            .iter()
+            .filter_map(|e| {
+                let why = if e.predates_project_binding() {
+                    Superseded::PredatesProjectBinding
+                } else {
+                    let literal = entries.iter().find(|n| e.is_spliced_form_of(n))?;
+                    Superseded::SplicedText {
+                        literal: literal.fingerprint.clone(),
+                    }
+                };
+                Some((e.fingerprint.clone(), why))
+            })
+            .collect()
     }
 
     /// What an approval of an inline command also approves, for the review
@@ -1370,47 +1398,66 @@ mod tests {
         assert_eq!(marked, ["a", "b"]);
     }
 
-    /// P4.16 review M-4: an approval recorded while the adapter still
-    /// spliced the install path into a plugin's command holds its own root
-    /// (or data directory) verbatim — and authorises nothing now that the
-    /// text as written is the key. The text as written, a settings hook
-    /// whose command names the same directory, and an entry with no root are
-    /// not marked.
+    /// P4.16 review M-4 / N-1: an entry recorded while the adapter still
+    /// spliced the install path into a plugin's command is superseded ONLY
+    /// when the entry holding the text as written sits beside it — the same
+    /// plugin and project, and `PluginVars::expand` of that text is exactly
+    /// the old one. The two false-positive shapes of a `contains` test stay
+    /// live: a path under a sibling directory sharing the root's prefix,
+    /// and an absolute path the author wrote. An old entry with no such
+    /// sibling is not guessed at, nor is a pair split across projects.
     #[test]
-    fn a_plugin_entry_holding_its_own_spliced_root_predates_the_literal_text() {
+    fn only_a_spliced_text_beside_its_literal_sibling_is_superseded() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let (_d, consent) = tmp_consent();
+        let project = tempfile::tempdir().expect("project");
         let data = crate::extension::plugin_data_dir("fmt");
         let data_cmd = format!("cat {}/state", data.display());
-        for (owner, command) in [
-            ("fmt", "sh /inst/fmt/x.sh"),
-            ("fmt", data_cmd.as_str()),
-            ("fmt", "sh ${CLAUDE_PLUGIN_ROOT}/x.sh"),
-            ("user:global", "sh /inst/fmt/y.sh"),
+        let root = Path::new("/inst/fmt");
+        let global = ScopeKey::Global;
+        let in_project = ScopeKey::project(project.path());
+        for (owner, scope, command) in [
+            ("fmt", &global, "sh ${CLAUDE_PLUGIN_ROOT}/x.sh"),
+            ("fmt", &global, "sh /inst/fmt/x.sh"),
+            ("fmt", &global, "cat ${CLAUDE_PLUGIN_DATA}/state"),
+            ("fmt", &global, data_cmd.as_str()),
+            ("fmt", &global, "sh /inst/fmt2/x.sh"),
+            ("fmt", &global, "sh /inst/fmt/guard.sh"),
+            ("fmt", &global, "sh /inst/fmt/old.sh"),
+            ("user:global", &global, "sh /inst/fmt/x.sh"),
+            ("fmt", &global, "sh ${CLAUDE_PLUGIN_ROOT}/y.sh"),
+            ("fmt", &in_project, "sh /inst/fmt/y.sh"),
         ] {
-            consent.record_pending(
-                owner,
-                &ScopeKey::Global,
-                command,
-                "e",
-                Path::new("/inst/fmt"),
-            );
+            consent.record_pending(owner, scope, command, "e", root);
         }
-        let mut marked: Vec<String> = consent
-            .entries()
+        let entries = consent.entries();
+        let command_of = |fp: &str| {
+            entries
+                .iter()
+                .find(|e| e.fingerprint == fp)
+                .map(|e| e.command.clone())
+                .unwrap_or_default()
+        };
+        let mut marked: Vec<(String, String)> = ConsentEntry::superseded_in(&entries)
             .into_iter()
-            .filter(ConsentEntry::predates_literal_plugin_text)
-            .map(|e| e.command)
+            .map(|(fp, why)| match why {
+                Superseded::SplicedText { literal } => (command_of(&fp), command_of(&literal)),
+                Superseded::PredatesProjectBinding => (command_of(&fp), String::new()),
+            })
             .collect();
         marked.sort();
-        let mut want = vec![data_cmd.clone(), "sh /inst/fmt/x.sh".to_string()];
+        let mut want = vec![
+            (
+                data_cmd.clone(),
+                "cat ${CLAUDE_PLUGIN_DATA}/state".to_string(),
+            ),
+            (
+                "sh /inst/fmt/x.sh".to_string(),
+                "sh ${CLAUDE_PLUGIN_ROOT}/x.sh".to_string(),
+            ),
+        ];
         want.sort();
         assert_eq!(marked, want);
-        assert!(consent
-            .entries()
-            .iter()
-            .filter(|e| e.predates_literal_plugin_text())
-            .all(ConsentEntry::is_superseded));
     }
 
     // -- the root an approval attests to ------------------------------------

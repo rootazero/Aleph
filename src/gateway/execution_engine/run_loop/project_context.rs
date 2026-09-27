@@ -222,6 +222,34 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
 mod tests {
     use super::*;
 
+    /// P4.16 review I-2 residual: the SessionStart seam guard above drives
+    /// `fire_session_start`, so a fire site that bypassed it — re-inlining
+    /// its own dispatch — would stay green. Census: outside `src/extension/`
+    /// (the event's own definition, the executor and the readers live
+    /// there), production code names `HookEvent::SessionStart` in this file
+    /// only. Comments and `#[cfg(test)]` items are stripped before counting
+    /// (`production_code_text`). Limits: a fire site inside `src/extension/`,
+    /// or one spelled through `use HookEvent::*`, is not seen.
+    #[test]
+    fn only_the_seam_names_the_session_start_event_outside_extension() {
+        use crate::utils::source_scan::{production_code_text, rust_sources_under};
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let naming: Vec<String> = rust_sources_under(&src)
+            .into_iter()
+            .filter(|(rel, _)| !rel.starts_with("src/extension/"))
+            .filter(|(rel, text)| {
+                production_code_text(std::path::Path::new(rel), text)
+                    .contains("HookEvent::SessionStart")
+            })
+            .map(|(rel, _)| rel)
+            .collect();
+        assert_eq!(
+            naming,
+            ["src/gateway/execution_engine/run_loop/project_context.rs"],
+            "a SessionStart fire site outside `fire_session_start`"
+        );
+    }
+
     /// P4.14 F-2: superpowers' bootstrap hook — `SessionStart` with
     /// `"matcher": "startup|clear|compact"`, its real shape — fires at a
     /// fresh session. Parsed by the plugin parser, converted as the registry

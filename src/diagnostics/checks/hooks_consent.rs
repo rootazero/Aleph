@@ -12,7 +12,7 @@ use async_trait::async_trait;
 
 use crate::diagnostics::check::{HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
-use crate::extension::hooks::{ConsentStatus, ShellHookConsent};
+use crate::extension::hooks::{ConsentEntry, ConsentStatus, ShellHookConsent, Superseded};
 
 const ID: &str = "core/hooks-consent";
 
@@ -45,6 +45,8 @@ impl HooksConsentCheck {
         }
 
         let mut findings = Vec::new();
+        // The one derivation of "authorises nothing" (`ConsentEntry::superseded_in`).
+        let superseded_in = ConsentEntry::superseded_in(&entries);
 
         // Approvals given under the shared `user:project` label before
         // approvals were bound to a project. No project hook is looked up
@@ -78,14 +80,23 @@ impl HooksConsentCheck {
         }
 
         // Approvals of a plugin's hook or inline command recorded while the
-        // install path was still spliced into its text (before 2026-09-27).
-        // The text as written is the key now, so each authorises nothing —
-        // and that hook or command, a blocking guard included, does not run
-        // until the new pending entry (the text as the plugin wrote it) is
-        // approved.
+        // install path was still spliced into its text (before 2026-09-27),
+        // whose hook has since fired and recorded the text as written — which
+        // is the key now and is still pending. So the old approval authorises
+        // nothing and that hook or command, a blocking guard included, is not
+        // running until the entry that replaces it is approved. An old entry
+        // whose replacement is already approved is only clutter (counted in
+        // the OK summary), and one whose hook has not fired since is not
+        // recognised at all (`ConsentEntry::is_spliced_form_of`).
         let spliced = entries
             .iter()
-            .filter(|e| e.status == ConsentStatus::Approved && e.predates_literal_plugin_text())
+            .filter(|e| e.status == ConsentStatus::Approved)
+            .filter(|e| match superseded_in.get(&e.fingerprint) {
+                Some(Superseded::SplicedText { literal }) => entries
+                    .iter()
+                    .any(|n| &n.fingerprint == literal && n.status == ConsentStatus::Pending),
+                _ => false,
+            })
             .count();
         if spliced > 0 {
             findings.push(
@@ -96,14 +107,16 @@ impl HooksConsentCheck {
                     format!(
                         "{spliced} plugin hook / inline-command approval(s) were given to the \
                          text with the install path expanded into it and authorise nothing — \
-                         those commands, blocking hooks included, are not running; approve \
-                         the new pending entry, recorded as the plugin wrote it."
+                         those commands, blocking hooks included, are not running until the \
+                         pending entry that replaces each (the text as the plugin wrote it) \
+                         is approved."
                     ),
                 )
                 .with_fix_hint(
-                    "`aleph-server hooks list` marks the old entries. Review each new pending \
-                     entry with `aleph-server hooks test <fingerprint>`, then \
-                     `aleph-server hooks revoke <old fingerprint>` to clear this warning.",
+                    "`aleph-server hooks list` shows each old entry as `superseded` and names \
+                     the entry that replaces it. Review that one with \
+                     `aleph-server hooks test <fingerprint>`; then \
+                     `aleph-server hooks revoke <old fingerprint>` clears this warning.",
                 ),
             );
         }
@@ -112,7 +125,9 @@ impl HooksConsentCheck {
         // awaiting anything.
         let pending = entries
             .iter()
-            .filter(|e| e.status == ConsentStatus::Pending && !e.is_superseded())
+            .filter(|e| {
+                e.status == ConsentStatus::Pending && !superseded_in.contains_key(&e.fingerprint)
+            })
             .count();
         if pending > 0 {
             findings.push(
@@ -162,7 +177,9 @@ impl HooksConsentCheck {
         if findings.is_empty() {
             // Old `user:project*` entries left pending are not hooks anyone
             // can approve into running; they are not "all approved".
-            let (kept, live): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.is_superseded());
+            let (kept, live): (Vec<_>, Vec<_>) = entries
+                .iter()
+                .partition(|e| superseded_in.contains_key(&e.fingerprint));
             let detail = match kept.len() {
                 0 => format!(
                     "{} hook(s) recorded, all approved and consistent.",
@@ -276,10 +293,13 @@ mod tests {
         );
     }
 
-    /// P4.16 review M-4: a plugin approval given to the text with the install
-    /// path spliced in (before 2026-09-27) authorises nothing. The doctor
-    /// says so, does not count its pending sibling as awaiting approval, and
-    /// stops once it is revoked; the text as written is a live entry.
+    /// P4.16 review M-4 / N-1: a plugin approval given to the text with the
+    /// install path spliced in authorises nothing once the text as written
+    /// sits beside it, pending. The doctor says so, counts that pending
+    /// replacement as awaiting approval, and stops once the old approval is
+    /// revoked. The two false-positive shapes of a `contains` test — a
+    /// prefix-sharing sibling directory and an absolute path the author
+    /// wrote — stay live: still awaiting approval, never "authorise nothing".
     #[test]
     fn a_plugin_approval_of_the_spliced_text_is_reported_as_not_running() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -293,8 +313,9 @@ mod tests {
         };
         let registry = serde_json::json!({ "version": 1, "entries": [
             entry("sh /inst/fmt/guard.sh", "approved"),
-            entry("sh /inst/fmt/old.sh", "pending"),
-            entry("sh ${CLAUDE_PLUGIN_ROOT}/live.sh", "approved"),
+            entry("sh ${CLAUDE_PLUGIN_ROOT}/guard.sh", "pending"),
+            entry("sh /inst/fmt2/x.sh", "pending"),
+            entry("sh /inst/fmt/own.sh", "pending"),
         ] });
         std::fs::write(&path, registry.to_string()).expect("seed registry");
         let diagnose = || HooksConsentCheck::new(ShellHookConsent::with_path(&path)).diagnose();
@@ -309,9 +330,15 @@ mod tests {
             "{}",
             lapsed.detail
         );
+        // The literal replacement and both live look-alikes await approval.
+        let awaiting = findings
+            .iter()
+            .find(|f| f.title == "Hooks await approval")
+            .unwrap_or_else(|| panic!("live pending entries went unreported: {findings:?}"));
         assert!(
-            findings.iter().all(|f| f.title != "Hooks await approval"),
-            "a superseded plugin entry is not awaiting approval: {findings:?}"
+            awaiting.detail.starts_with("3 shell hook(s)"),
+            "{}",
+            awaiting.detail
         );
 
         let guard = ShellHookConsent::fingerprint("fmt", None, "sh /inst/fmt/guard.sh");
@@ -320,7 +347,9 @@ mod tests {
             .expect("revoke")
             .expect("entry");
         assert!(
-            diagnose().iter().all(|f| !f.is_problem()),
+            diagnose()
+                .iter()
+                .all(|f| f.title != "Plugin-hook approvals of the expanded path no longer apply"),
             "revoking the old approval clears the warning"
         );
     }

@@ -16,8 +16,8 @@ use std::io::{self, Write};
 
 use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
-    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT,
-    PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
+    CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, Superseded,
+    INLINE_COMMAND_EVENT, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
 };
 use alephcore::utils::no_window::NoWindow;
 
@@ -44,24 +44,27 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
         return Ok(());
     }
 
+    // The one derivation of "authorises nothing" (`ConsentEntry::superseded_in`).
+    let superseded = ConsentEntry::superseded_in(&entries);
     println!("Shell-command hooks ({}):", entries.len());
     println!(
-        "{:<18} {:<9} {:<20} COMMAND",
+        "{:<18} {:<10} {:<20} COMMAND",
         "FINGERPRINT", "STATUS", "PLUGIN"
     );
-    println!("{}", "-".repeat(88));
+    println!("{}", "-".repeat(89));
     for e in &entries {
+        let why = superseded.get(&e.fingerprint);
         println!(
-            "{:<18} {:<9} {:<20} {}",
+            "{:<18} {:<10} {:<20} {}",
             e.fingerprint,
-            status_label(e.status),
+            row_status(e.status, why),
             truncate(&e.plugin_name, 20),
             truncate(&e.command, 44),
         );
         if let Some(note) = project_note(e) {
             println!("{:<18} project: {note}", "");
         }
-        if let Some(note) = spliced_text_note(e) {
+        if let Some(note) = why.and_then(spliced_text_note) {
             println!("{:<18} {note}", "");
         }
         if let Some(note) = e.invoker_arguments_note() {
@@ -71,7 +74,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
 
     let pending = entries
         .iter()
-        .filter(|e| e.status == ConsentStatus::Pending && !e.is_superseded())
+        .filter(|e| e.status == ConsentStatus::Pending && !superseded.contains_key(&e.fingerprint))
         .count();
     if pending > 0 {
         println!();
@@ -415,7 +418,10 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     // An old `user:project*` entry, or a plugin entry recorded with the
     // install path spliced into its text, authorises nothing and never fires
     // again: counted apart, not as an approval or as awaiting one.
-    let (kept, live): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.is_superseded());
+    let superseded = ConsentEntry::superseded_in(&entries);
+    let (kept, live): (Vec<_>, Vec<_>) = entries
+        .iter()
+        .partition(|e| superseded.contains_key(&e.fingerprint));
     let approved = live
         .iter()
         .filter(|e| e.status == ConsentStatus::Approved)
@@ -467,13 +473,27 @@ fn project_note(entry: &ConsentEntry) -> Option<String> {
 }
 
 /// For a plugin entry recorded with the install path spliced into its text
-/// (before 2026-09-27): that it authorises nothing
-/// ([`ConsentEntry::predates_literal_plugin_text`]).
-fn spliced_text_note(entry: &ConsentEntry) -> Option<&'static str> {
-    entry.predates_literal_plugin_text().then_some(
-        "superseded: recorded with the install path expanded into the command; authorises \
-         nothing. Approve the new pending entry (the text as the plugin wrote it) instead.",
-    )
+/// (before 2026-09-27) beside the entry holding that text as written: which
+/// entry replaces it ([`ConsentEntry::is_spliced_form_of`]).
+fn spliced_text_note(why: &Superseded) -> Option<String> {
+    match why {
+        Superseded::SplicedText { literal } => Some(format!(
+            "superseded by {literal} (the text as the plugin wrote it): this one was recorded \
+             with the install path expanded and authorises nothing. Review {literal}, then \
+             revoke this one."
+        )),
+        Superseded::PredatesProjectBinding => None,
+    }
+}
+
+/// The STATUS column: `superseded` for an entry that authorises nothing
+/// ([`ConsentEntry::superseded_in`]), else the stored status.
+fn row_status(status: ConsentStatus, superseded: Option<&Superseded>) -> &'static str {
+    if superseded.is_some() {
+        "superseded"
+    } else {
+        status_label(status)
+    }
 }
 
 const fn status_label(status: ConsentStatus) -> &'static str {
@@ -516,13 +536,14 @@ mod tests {
         assert!(out.ends_with('…'));
     }
 
-    /// P4.16 review M-4: `hooks list` marks an approval given to the text
-    /// with the install path spliced in as authorising nothing, and leaves
-    /// the text as the plugin wrote it alone.
+    /// P4.16 review M-4 / N-1: `hooks list` shows an approval given to the
+    /// text with the install path spliced in as `superseded` — naming the
+    /// entry that replaces it — only beside that entry. An absolute path the
+    /// author wrote and a prefix-sharing sibling directory stay `approved`.
     #[test]
     fn hooks_list_marks_a_spliced_text_approval_superseded() {
         let entry = |command: &str| ConsentEntry {
-            fingerprint: "0123456789abcdef".into(),
+            fingerprint: ShellHookConsent::fingerprint("fmt", None, command),
             plugin_name: "fmt".into(),
             project_root: None,
             command: command.into(),
@@ -533,12 +554,24 @@ mod tests {
             approved_at: Some(1),
             script_fingerprint: None,
         };
-        let note = spliced_text_note(&entry("sh /inst/fmt/x.sh")).unwrap_or_default();
+        let entries = [
+            entry("sh /inst/fmt/x.sh"),
+            entry("sh ${CLAUDE_PLUGIN_ROOT}/x.sh"),
+            entry("sh /inst/fmt/guard.sh"),
+            entry("sh /inst/fmt2/y.sh"),
+        ];
+        let superseded = ConsentEntry::superseded_in(&entries);
+        let status: Vec<&str> = entries
+            .iter()
+            .map(|e| row_status(e.status, superseded.get(&e.fingerprint)))
+            .collect();
+        assert_eq!(status, ["superseded", "approved", "approved", "approved"]);
+        let note = superseded
+            .get(&entries[0].fingerprint)
+            .and_then(spliced_text_note)
+            .unwrap_or_default();
+        assert!(note.contains(&entries[1].fingerprint), "{note}");
         assert!(note.contains("authorises nothing"), "{note}");
-        assert_eq!(
-            spliced_text_note(&entry("sh ${CLAUDE_PLUGIN_ROOT}/x.sh")),
-            None
-        );
     }
 
     #[test]

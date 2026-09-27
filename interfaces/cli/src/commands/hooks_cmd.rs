@@ -135,10 +135,24 @@ pub async fn add(
     if json_out {
         output::print_json(&result);
     } else {
-        println!("✓ Hook added for event '{event}'");
+        for line in added_lines(event, &result) {
+            println!("{line}");
+        }
     }
     client.close().await?;
     Ok(())
+}
+
+/// What `hooks add` prints in human mode: the confirmation, and the
+/// server's `matcher_warning` when the matcher never fires or its event
+/// ignores it — the notice the `hooks_manage` tool gives too. Dropping it
+/// here would leave the RPC's warning with no reader.
+fn added_lines(event: &str, result: &Value) -> Vec<String> {
+    let mut lines = vec![format!("✓ Hook added for event '{event}'")];
+    if let Some(warning) = result.get("matcher_warning").and_then(Value::as_str) {
+        lines.push(format!("⚠ {warning}"));
+    }
+    lines
 }
 
 pub async fn remove(
@@ -220,4 +234,25 @@ pub async fn events(server_url: &str, config: &CliConfig, json_out: bool) -> Cli
     }
     client.close().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P4.16 review N-2: the server's `matcher_warning` reaches a human
+    /// reader, and a response without one prints the confirmation alone.
+    #[test]
+    fn hooks_add_prints_the_servers_matcher_warning() {
+        let warned = added_lines(
+            "UserPromptSubmit",
+            &json!({"matcher_warning": "`matcher` `x` is ignored: Aleph has nothing to test it against"}),
+        );
+        assert_eq!(warned.len(), 2, "{warned:?}");
+        assert!(warned[1].contains("is ignored"), "{warned:?}");
+        assert_eq!(
+            added_lines("PreToolUse", &json!({"events": {}})),
+            ["✓ Hook added for event 'PreToolUse'"]
+        );
+    }
 }
