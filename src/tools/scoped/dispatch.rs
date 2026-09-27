@@ -1286,9 +1286,9 @@ impl ScopedToolService {
         let (_ctx, hook_result) = executor
             .execute_interceptors(HookEvent::BeforeToolCall, ctx)
             .await
-            .map_err(|e| ToolError::Execution {
+            .map_err(|e| ToolError::HookBlocked {
                 name: name.to_string(),
-                cause: format!("BeforeToolCall hook executor failed: {e}"),
+                reason: format!("BeforeToolCall hook executor failed: {e}"),
             })?;
 
         // Hard deny — not retryable.
@@ -1301,11 +1301,14 @@ impl ScopedToolService {
             });
         }
 
-        // Soft block — surfaces as an execution error so the LLM can react.
+        // Block (exit 2, `decision: "block"`, `block:`, or a hook that failed
+        // and blocked fail-closed) — a policy refusal the model reads with the
+        // hook's reason and no route around it, but not a `PermissionDenied`:
+        // a hook's verdict does not fire the PermissionDenied observers.
         if hook_result.blocked {
-            return Err(ToolError::Execution {
+            return Err(ToolError::HookBlocked {
                 name: name.to_string(),
-                cause: hook_result
+                reason: hook_result
                     .block_reason
                     .unwrap_or_else(|| "blocked by hook".to_string()),
             });

@@ -305,23 +305,25 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 ///  doctrine=ladder_must_be_climbed_before_fail]
 /// ```
 ///
-/// When the registry has no suggestion (e.g. Validation / Permission
-/// errors, where switching tools doesn't help), the `switch=` clause
-/// is omitted and the hint shrinks to the doctrine reminder. The hint
-/// is ALWAYS appended even when no suggestion is available — the
+/// When the registry has no suggestion (e.g. Validation errors, where
+/// switching tools doesn't help), the `switch=` clause is omitted and the
+/// hint shrinks to the doctrine reminder — the
 /// `doctrine=ladder_must_be_climbed_before_fail` reminder keeps the
 /// LLM aligned with the persistence doctrine in `provider_guidance.rs`.
+///
+/// No hint at all for a kind that admits no ladder
+/// ([`ToolErrorKind::admits_ladder`]): a cancelled call (the user pressed
+/// stop; nothing failed) and a policy refusal (a permission gate, or a
+/// BeforeToolCall hook's block). Pointing the model past a policy refusal —
+/// "switch to `file_ops`", "the ladder must be climbed" — steers it around
+/// the guard; the error's own text says who refused and why.
 ///
 /// The output is intentionally compact (single line, ~200 chars typ.)
 /// so it doesn't dominate the `tool_result` body in the next prompt.
 #[must_use]
 pub fn render_persistence_hint(err: &ToolError, tool_name: &str) -> String {
     let kind = err.kind();
-    // A cancelled call is not a rung of any ladder. The user pressed stop; the
-    // tool did not fail, was not blocked, and has no alternative worth
-    // suggesting. Telling the model to "climb the ladder before failing" here
-    // reads as advice about a failure that never happened.
-    if kind == ToolErrorKind::Cancelled {
+    if !kind.admits_ladder() {
         return String::new();
     }
     let alternatives = suggest_alternatives(tool_name, kind);
@@ -367,8 +369,8 @@ mod tests {
 
     #[test]
     fn validation_returns_empty_no_routing_signal() {
-        // Validation / Permission / ToolNotFound / Duplicate are caller
-        // bugs — switching tools doesn't help.
+        // Validation / ToolNotFound / Duplicate are caller bugs, Permission
+        // a verdict — switching tools doesn't help.
         assert!(suggest_alternatives("search", ToolErrorKind::Validation).is_empty());
         assert!(suggest_alternatives("bash", ToolErrorKind::Permission).is_empty());
         assert!(suggest_alternatives("foo", ToolErrorKind::ToolNotFound).is_empty());
@@ -484,6 +486,33 @@ mod tests {
         assert!(hint.contains("kind=validation"));
         assert!(!hint.contains("switch="));
         assert!(hint.contains("doctrine=ladder_must_be_climbed_before_fail"));
+    }
+
+    /// Every way a call reaches the `Permission` kind gets no hint: a gate's
+    /// `PermissionDenied` (tool permission rule, operator gate, sub-agent
+    /// allowlist, hook `deny`), a hook's block — worded here like the WAF block
+    /// `web_fetch` would otherwise be told to route around — and a cause that
+    /// says "permission denied" (an OS EACCES, a tool's own policy refusal).
+    #[test]
+    fn render_persistence_hint_is_empty_for_a_policy_refusal() {
+        let refusals = [
+            ToolError::PermissionDenied {
+                name: "web_fetch".into(),
+                reason: "denied by [policies.tool_permissions]".into(),
+            },
+            ToolError::HookBlocked {
+                name: "web_fetch".into(),
+                reason: "cloudflare challenge: access denied".into(),
+            },
+            ToolError::Execution {
+                name: "web_fetch".into(),
+                cause: "Permission denied: not for this agent".into(),
+            },
+        ];
+        for err in &refusals {
+            assert_eq!(err.kind(), ToolErrorKind::Permission, "{err}");
+            assert_eq!(render_persistence_hint(err, "web_fetch"), "", "{err}");
+        }
     }
 
     #[test]

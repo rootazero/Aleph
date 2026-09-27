@@ -24,7 +24,7 @@
 //!   the spawning task had (so `cwd` as there), but not the transcript
 //!   source — no `transcript_path`.
 //! - **Faces fired outside any run** (`SessionEnd` from the RPC, inbound
-//!   `MessageReceived`, the gateway start/stop observers, `aleph hooks
+//!   `MessageReceived`, the gateway start/stop observers, `aleph-server hooks
 //!   test`): neither.
 
 use std::path::PathBuf;

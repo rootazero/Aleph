@@ -75,7 +75,10 @@ pub struct ToolFailureGroup {
 }
 
 /// Walk `events` and tally `ToolError` records grouped by
-/// `(tool_name, error_kind)`. Returns rows sorted by `count` descending,
+/// `(tool_name, error_kind)`, leaving out the kinds that admit no ladder
+/// ([`ToolErrorKind::admits_ladder`] — a policy refusal is a verdict, and a
+/// summary that counts it tells the model to route around it). Returns rows
+/// sorted by `count` descending,
 /// then `(tool, kind.label())` ascending so the output is deterministic
 /// for snapshot tests.
 ///
@@ -101,6 +104,11 @@ pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup
             continue;
         };
         let kind = classify_error_str(error);
+        // A policy refusal is not a failure to climb away from — the same rule
+        // the per-call hint applies (`ToolErrorKind::admits_ladder`).
+        if !kind.admits_ladder() {
+            continue;
+        }
         *counts.entry((tool.to_string(), kind)).or_insert(0) += 1;
     }
 

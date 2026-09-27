@@ -24,6 +24,18 @@ pub enum ToolError {
     #[error("tool {name} execution failed: {cause}")]
     Execution { name: String, cause: String },
 
+    /// A BeforeToolCall hook blocked the call (exit 2, `decision: "block"`,
+    /// `block:`), or failed and so blocked it fail-closed. A policy decision,
+    /// not a failure: its kind is `Permission` whatever the hook wrote as its
+    /// reason, so the model gets no route to another tool. Distinct from
+    /// `PermissionDenied` because a hook's verdict does not fire the
+    /// `PermissionDenied` observers (`HookEvent::PermissionDenied`).
+    ///
+    /// `error_kind::classify_error_str` recognises this rendering when it
+    /// re-reads a persisted error; keep the two in step.
+    #[error("tool {name} was refused by a policy hook: {reason}")]
+    HookBlocked { name: String, reason: String },
+
     #[error("tool {name} timed out after {elapsed_ms}ms")]
     Timeout { name: String, elapsed_ms: u64 },
 

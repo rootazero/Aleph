@@ -153,12 +153,17 @@ impl PluginManageTool {
             None => Err(AlephError::config(format!(
                 "No plugin '{name}'. Call action='list' to see what is installed."
             ))),
-            Some(PluginOrigin::ClaudeCache) => Err(AlephError::config(format!(
-                "'{name}' was installed by Claude Code (origin claude_cache). Enabling it runs \
-                 code another tool installed, so the operator turns it on: \
-                 `aleph plugin enable {name}`, or the Panel's plugin settings. Tell them that; \
-                 you may still disable it."
-            ))),
+            // A deliberate refusal, so the policy label — not `config`, whose
+            // "Configuration/Database error:" reads as something broken.
+            Some(PluginOrigin::ClaudeCache) => Err(AlephError::PermissionDenied {
+                message: format!(
+                    "'{name}' was installed by Claude Code (origin claude_cache). Enabling it \
+                     runs code another tool installed, so the operator turns it on: \
+                     `aleph plugin enable {name}`, or the Panel's plugin settings. Tell them \
+                     that; you may still disable it."
+                ),
+                suggestion: None,
+            }),
             // Named, no wildcard: a new origin decides whether the model may
             // turn it on.
             Some(

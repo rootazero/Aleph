@@ -43,7 +43,9 @@ pub enum ToolErrorKind {
     Transport,
     /// Aleph-internal: caller-supplied input violated the tool's schema.
     Validation,
-    /// Aleph-internal: permission gate rejected the call.
+    /// Aleph-internal: a policy refused the call — a permission gate
+    /// (`ToolError::PermissionDenied`) or a BeforeToolCall hook's block
+    /// (`ToolError::HookBlocked`). A verdict, not a failure: no ladder.
     Permission,
     /// Aleph-internal: the named tool is not registered.
     ToolNotFound,
@@ -111,6 +113,30 @@ impl ToolErrorKind {
                 | Self::Cancelled
         )
     }
+
+    /// Whether the model may be pointed at another route after a failure of
+    /// this kind — the one question both ladder surfaces ask:
+    /// `fallback_registry::render_persistence_hint` (per call) and
+    /// `attempt_summary::aggregate_failures` (per run).
+    ///
+    /// `false` for a call nobody judged (`Cancelled`) and for a call a policy
+    /// refused (`Permission`): suggesting a way around a policy refusal is
+    /// steering the model around the guard (a path-scoped `Read` hook plus
+    /// "`file_ops copy`, then read the copy" is the same read).
+    #[must_use]
+    pub const fn admits_ladder(self) -> bool {
+        !matches!(self, Self::Cancelled | Self::Permission)
+    }
+}
+
+/// The rendering of `ToolError::HookBlocked` (`"tool <name> was refused by a
+/// policy hook: <reason>"`), matched on its fixed head so the hook's own
+/// reason — which follows it — is never scanned for a kind.
+fn is_hook_block_rendering(lower: &str) -> bool {
+    lower
+        .strip_prefix("tool ")
+        .and_then(|rest| rest.split_once(' '))
+        .is_some_and(|(_, tail)| tail.starts_with("was refused by a policy hook:"))
 }
 
 /// Classify a rendered tool-error string. Used when only the
@@ -123,6 +149,12 @@ impl ToolErrorKind {
 #[must_use]
 pub fn classify_error_str(s: &str) -> ToolErrorKind {
     let lower = s.to_ascii_lowercase();
+
+    // First: a hook block's reason is the hook author's prose, and whatever it
+    // says ("not found", "timed out after", "429") is not the kind.
+    if is_hook_block_rendering(&lower) {
+        return ToolErrorKind::Permission;
+    }
 
     // The Aleph-internal variants render with a recognisable prefix —
     // catch them first so we don't mis-flag a `Timeout` containing the
@@ -264,7 +296,12 @@ pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
         ToolError::Timeout { .. } | ToolError::ApprovalExpired { .. } => ToolErrorKind::Timeout,
         ToolError::Transport { .. } => ToolErrorKind::Transport,
         ToolError::ValidationFailed { .. } => ToolErrorKind::Validation,
-        ToolError::PermissionDenied { .. } => ToolErrorKind::Permission,
+        // A hook block is a policy decision. Never the string scan: the reason
+        // is the hook author's prose, and the same block would otherwise be
+        // labelled `timeout` or `upstream_not_found` by how it was worded.
+        ToolError::PermissionDenied { .. } | ToolError::HookBlocked { .. } => {
+            ToolErrorKind::Permission
+        }
         ToolError::NotFound { .. } => ToolErrorKind::ToolNotFound,
         ToolError::Duplicate { .. } => ToolErrorKind::Duplicate,
         // Never falls through to the string scan: the cause of a cancellation
@@ -395,6 +432,10 @@ mod tests {
                 name: "t".into(),
                 cause: "boom".into(),
             },
+            ToolError::HookBlocked {
+                name: "t".into(),
+                reason: "timed out after 5ms".into(),
+            },
             ToolError::Timeout {
                 name: "t".into(),
                 elapsed_ms: 1,
@@ -421,6 +462,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The two faces of one kind: the variant (live) and its rendering (the
+    /// persisted error the run summary re-reads) say `Permission` for a hook
+    /// block, however the hook worded its reason. Only the head counts: the
+    /// same words inside another error's cause are that cause's prose.
+    #[test]
+    fn a_hook_block_reads_back_as_the_kind_it_was_given() {
+        use crate::tools::service::ToolError;
+
+        for reason in ["HTTP 404 not found", "timed out after 5ms", "429", ""] {
+            let block = ToolError::HookBlocked {
+                name: "file_read".into(),
+                reason: reason.into(),
+            };
+            assert_eq!(block.kind(), ToolErrorKind::Permission, "{block}");
+            assert_eq!(
+                classify_error_str(&block.to_string()),
+                ToolErrorKind::Permission,
+                "{block}"
+            );
+        }
+        let quoted = ToolError::Execution {
+            name: "web_fetch".into(),
+            cause: "page said: tool x was refused by a policy hook: HTTP 404".into(),
+        };
+        assert_eq!(
+            classify_error_str(&quoted.to_string()),
+            ToolErrorKind::UpstreamNotFound
+        );
     }
 
     #[test]

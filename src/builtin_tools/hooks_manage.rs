@@ -27,7 +27,7 @@
 //! arbitrary URL). Letting the model approve hooks would let a prompt-injected
 //! model write a hook AND consent to it in one turn, which is exactly the
 //! attack consent exists to stop. Approval stays on the operator's terminal
-//! (`aleph hooks test <fingerprint>`), where the command is printed and run
+//! (`aleph-server hooks test <fingerprint>`), where the command is printed and run
 //! for review first. This tool can only *report* consent state, never grant it.
 
 use async_trait::async_trait;
@@ -68,7 +68,7 @@ pub struct HooksManageArgs {
 
     /// Shell command to run. Exactly one of command/prompt/agent/url for `add`.
     /// NOTE: a newly-added shell hook does NOT run until the operator approves
-    /// it at their terminal with `aleph hooks test <fingerprint>`.
+    /// it at their terminal with `aleph-server hooks test <fingerprint>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
@@ -150,7 +150,7 @@ impl AlephTool for HooksManageTool {
          intentionally read-only here since they live in repos. \
          IMPORTANT: adding a shell or http hook does NOT make it run — it is recorded as \
          pending until the operator approves it at their own terminal with \
-         `aleph hooks test <fingerprint>`. Say so when you add one; you cannot approve it \
+         `aleph-server hooks test <fingerprint>`. Say so when you add one; you cannot approve it \
          yourself and must not claim the hook is active.";
 
     type Args = HooksManageArgs;
@@ -202,7 +202,7 @@ impl AlephTool for HooksManageTool {
                     }
                     crate::approval::ApprovalDecision::Ask { prompt } => {
                         return Err(AlephError::tool(format!(
-                            "Approval required: {prompt} (run `aleph hooks test <fingerprint>` \
+                            "Approval required: {prompt} (run `aleph-server hooks test <fingerprint>` \
                              to grant consent at the operator terminal instead)"
                         )));
                     }
@@ -261,7 +261,7 @@ async fn list_registry(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     if pending > 0 {
         summary.push_str(&format!(
             " {pending} are waiting on operator consent and will be skipped until \
-             approved at the terminal with `aleph hooks test <fingerprint>`."
+             approved at the terminal with `aleph-server hooks test <fingerprint>`."
         ));
     }
     if shown.is_empty() && total == 0 {
@@ -342,8 +342,8 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     if gated {
         summary.push_str(
             " It will NOT run yet: shell and HTTP hooks stay pending until the operator \
-             reviews and approves them at their own terminal with `aleph hooks list` then \
-             `aleph hooks test <fingerprint>`.",
+             reviews and approves them at their own terminal with `aleph-server hooks list` then \
+             `aleph-server hooks test <fingerprint>`.",
         );
     }
     if args.matcher.is_some() && !supports_matcher(&event) {

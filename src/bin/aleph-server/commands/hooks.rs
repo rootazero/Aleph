@@ -1,4 +1,4 @@
-//! `aleph hooks` — shell-hook consent management.
+//! `aleph-server hooks` — shell-hook consent management.
 //!
 //! Shell-command hooks shipped by plugins execute arbitrary code. The server
 //! gates them behind the consent allowlist
@@ -25,7 +25,7 @@ use crate::cli::HooksAction;
 
 type CmdResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Entry point for `aleph hooks <action>`.
+/// Entry point for `aleph-server hooks <action>`.
 pub fn handle_hooks_command(action: HooksAction) -> CmdResult {
     let consent = ShellHookConsent::with_path(ShellHookConsent::default_path());
     match action {
@@ -73,7 +73,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
     if pending > 0 {
         println!();
         println!(
-            "{pending} hook(s) pending approval — review with `aleph hooks test <fingerprint>`."
+            "{pending} hook(s) pending approval — review with `aleph-server hooks test <fingerprint>`."
         );
     }
     Ok(())
@@ -131,7 +131,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         // revoking first: the next fire records what it runs now.
         println!(
             "Hook is already approved. If the server refuses it (its script or root changed), \
-             run `aleph hooks revoke {}` and review it again after it next fires.",
+             run `aleph-server hooks revoke {}` and review it again after it next fires.",
             entry.fingerprint
         );
         return Ok(());
@@ -141,7 +141,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     if entry.plugin_root.is_none() {
         println!(
             "This entry has no recorded root, so it cannot be approved yet: let the hook fire \
-             once (that records the directory it runs from), then run `aleph hooks test {}` \
+             once (that records the directory it runs from), then run `aleph-server hooks test {}` \
              again.",
             entry.fingerprint
         );
@@ -160,7 +160,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
             Some(_) => println!("Approved {}.", entry.fingerprint),
             None => println!(
                 "Could not approve — the hook is no longer in the registry, or it now runs \
-                 from another root. Run `aleph hooks test {}` again.",
+                 from another root. Run `aleph-server hooks test {}` again.",
                 entry.fingerprint
             ),
         }
@@ -346,7 +346,7 @@ fn run_command_with_payload(entry: &ConsentEntry) -> CmdResult {
     Ok(())
 }
 
-/// The child `aleph hooks test` spawns for `entry`: a synthetic tool call,
+/// The child `aleph-server hooks test` spawns for `entry`: a synthetic tool call,
 /// through the production derivation.
 ///
 /// `hook_event_name` is the entry's recorded name verbatim — the spelling the
@@ -425,7 +425,7 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     );
 
     // Issue detection is owned by the unified diagnostics check so that
-    // `aleph hooks doctor` and `aleph doctor` never drift apart (entropy reduction — the
+    // `aleph-server hooks doctor` and `aleph doctor` never drift apart (entropy reduction — the
     // pending/empty/fingerprint-drift logic now lives in exactly one place).
     let check = HooksConsentCheck::new(ShellHookConsent::with_path(path.to_path_buf()));
     let mut issues = 0usize;
@@ -513,7 +513,7 @@ mod tests {
     /// recorded root (which is also the working directory) from the
     /// environment, as the data variables do — and the metacharacter gate
     /// letting that reference through. Driven through
-    /// `run_command_with_payload`, the function `aleph hooks test` calls.
+    /// `run_command_with_payload`, the function `aleph-server hooks test` calls.
     #[cfg(unix)]
     #[test]
     fn a_reviewed_hook_runs_as_production_runs_it() {
@@ -567,7 +567,7 @@ mod tests {
     /// hook: `ARGUMENTS` set and empty (no arguments sent), no `TOOL_NAME`,
     /// nothing on stdin, in the directory given, with the recorded root as
     /// its path variable. Driven through `run_for_review`, the function
-    /// `aleph hooks test` calls.
+    /// `aleph-server hooks test` calls.
     #[cfg(unix)]
     #[test]
     fn a_reviewed_inline_command_runs_as_the_slash_command_runner_spawns_it() {

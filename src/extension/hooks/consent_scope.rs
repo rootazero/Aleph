@@ -159,7 +159,7 @@ async fn approving_a_project_hook_in_one_repo_leaves_the_same_template_in_anothe
 
     assert!(ran_a, "approved under a: runs under a");
     assert!(!ran_b, "a's approval ran b's lint.sh");
-    // Each copy is its own entry, named by its project, so `aleph hooks
+    // Each copy is its own entry, named by its project, so `aleph-server hooks
     // test` can say which repo it is approving.
     let a_entry = entry_for(&consent, a.path()).expect("a's copy is recorded under a");
     let b_entry = entry_for(&consent, b.path()).expect("b's copy is recorded under b");
@@ -388,7 +388,7 @@ async fn an_approved_hook_whose_script_is_rewritten_does_not_run() {
 /// An approval given while the script could not be hashed — every approval
 /// of a `${…}` script before the resolver learned the path variables —
 /// attests to no content. Once the script can be hashed it is refused, and
-/// the fire withdraws it to pending, so `aleph hooks test` reviews and binds
+/// the fire withdraws it to pending, so `aleph-server hooks test` reviews and binds
 /// what runs now.
 #[tokio::test]
 async fn an_approval_that_attests_to_no_script_is_withdrawn_once_the_script_can_be_hashed() {

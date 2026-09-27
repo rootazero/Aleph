@@ -544,7 +544,7 @@ fn parse_tool_output(value: &Value) -> Value {
 
 #[tokio::test]
 #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
-async fn before_tool_hook_block_returns_execution_error() {
+async fn before_tool_hook_block_returns_hook_blocked() {
     let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
         HookEvent::BeforeToolCall,
         HookKind::Interceptor,
@@ -554,14 +554,14 @@ async fn before_tool_hook_block_returns_execution_error() {
         .with_hook_executor(executor, "test-session");
 
     match svc.execute("echo", json!({})).await {
-        Err(ToolError::Execution { name, cause }) => {
+        Err(ToolError::HookBlocked { name, reason }) => {
             assert_eq!(name, "echo");
             assert!(
-                cause.contains("blocked by policy"),
-                "unexpected cause: {cause}"
+                reason.contains("blocked by policy"),
+                "unexpected reason: {reason}"
             );
         }
-        other => panic!("expected Execution error from block hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
+        other => panic!("expected HookBlocked from block hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -790,8 +790,10 @@ async fn a_hook_deny_fires_the_permission_denied_observer() {
 }
 
 /// The other direction of the gate (判据 §14): a call that succeeds, and one
-/// refused as something other than `PermissionDenied` (a hook `block:` is an
-/// `Execution` error the model may react to), never fire it.
+/// refused as something other than `PermissionDenied`, never fire it. A hook
+/// `block:` is such a refusal: the model reads it as a policy refusal (kind
+/// `permission`), but it is not a `PermissionDenied` — a hook's verdict does
+/// not re-fire hooks.
 #[cfg(unix)]
 #[tokio::test]
 async fn only_a_permission_denied_fires_the_permission_denied_observer() {
@@ -815,10 +817,15 @@ async fn only_a_permission_denied_fires_the_permission_denied_observer() {
         "test-session",
     );
     let err = blocked.execute("echo", json!({})).await.unwrap_err();
-    assert!(matches!(err, ToolError::Execution { .. }), "{err:?}");
+    assert!(matches!(err, ToolError::HookBlocked { .. }), "{err:?}");
+    assert_eq!(
+        err.kind(),
+        crate::tools::error_kind::ToolErrorKind::Permission,
+        "{err:?}"
+    );
     assert!(
         !marker.exists(),
-        "neither a success nor an Execution error is a permission denial"
+        "neither a success nor a hook block is a permission denial"
     );
 }
 

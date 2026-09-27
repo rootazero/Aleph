@@ -4,12 +4,12 @@
 //! agent's environment. Hermes-inspired: before such a hook runs, its command
 //! must be explicitly approved by the operator. Un-approved shell hooks are
 //! skipped (fail-safe) and recorded as `pending` so the operator can review
-//! them via `aleph hooks list` / `aleph hooks test`.
+//! them via `aleph-server hooks list` / `aleph-server hooks test`.
 //!
 //! Registry file: `~/.aleph/shell-hooks-allowlist.json`. The file's
 //! `(mtime, len)` pair is the cache fingerprint — `is_approved` re-reads the
 //! registry whenever the file changes on disk, so an approval made via the
-//! `aleph hooks` CLI is picked up by a running server without a restart.
+//! `aleph-server hooks` CLI is picked up by a running server without a restart.
 //!
 //! # What an approval is bound to
 //!
@@ -31,7 +31,7 @@
 //!   must not run repo B's `lint.sh`. A project-scoped plugin is the same
 //!   case — another repo can ship a plugin with the same id.
 //!
-//! Within its key, an approval also attests to what `aleph hooks test`
+//! Within its key, an approval also attests to what `aleph-server hooks test`
 //! reviewed: the hook's root directory ([`ConsentEntry::plugin_root`]) and
 //! the content of ONE script file — the first word of the command with a
 //! script extension, else the first path — when that word is an absolute or
@@ -69,7 +69,7 @@
 //! old approvals from project hook files (`core/hooks-consent`, "Project-hook
 //! approvals no longer apply"); an old approval of a plugin installed inside
 //! a project cannot be told apart and is not counted — it shows as pending
-//! once the hook fires. `aleph hooks list` / `test` mark such a
+//! once the hook fires. `aleph-server hooks list` / `test` mark such a
 //! `user:project*` entry ([`ConsentEntry::predates_project_binding`]). An
 //! approval of a hook that fires everywhere, recorded before roots were
 //! recorded, keeps working from any root until it is revoked, fires once
@@ -103,7 +103,7 @@ const REGISTRY_VERSION: u32 = 1;
 /// The [`ConsentEntry::event`] of a plugin command's inline shell command
 /// (`` !`cmd` `` in `commands/<name>.md`), which is reviewed and approved
 /// here like a `hooks.json` command. Written by the gateway's slash-command
-/// runner; read by `aleph hooks list` / `test` to tell the two apart.
+/// runner; read by `aleph-server hooks list` / `test` to tell the two apart.
 pub const INLINE_COMMAND_EVENT: &str = "SlashCommand";
 
 /// Cheap change-detection fingerprint for the registry file: `(mtime, len)`.
@@ -141,7 +141,7 @@ pub struct ConsentEntry {
     pub command: String,
     /// The event name the hook is dispatched with — its registered spelling
     /// (`PreToolUse`, `before_tool_call`), exactly what its payload's
-    /// `hook_event_name` carries — so `aleph hooks test` can hand it the same
+    /// `hook_event_name` carries — so `aleph-server hooks test` can hand it the same
     /// value. Best-effort: one entry per `(plugin, project, command)`, so a
     /// command bound to two events carries whichever fired last while it is
     /// pending ([`ShellHookConsent::record_pending`] refreshes it), and the
@@ -153,7 +153,7 @@ pub struct ConsentEntry {
     #[serde(default)]
     pub event: String,
     /// The hook's plugin root, which its path variables
-    /// (`${CLAUDE_PLUGIN_ROOT}` …) resolve to, so `aleph hooks test` runs the
+    /// (`${CLAUDE_PLUGIN_ROOT}` …) resolve to, so `aleph-server hooks test` runs the
     /// command as production does. Once approved, it is the directory the
     /// approval is bound to: the same key from another root is refused
     /// ([`ShellHookConsent::is_approved`]). While pending, the latest fire's.
@@ -387,7 +387,7 @@ impl ShellHookConsent {
     /// project and nowhere else (module doc).
     ///
     /// Re-reads the registry first if the file changed on disk, so approvals
-    /// made via the `aleph hooks` CLI are honored without a server restart.
+    /// made via the `aleph-server hooks` CLI are honored without a server restart.
     ///
     /// Three conditions, all required:
     ///
@@ -400,7 +400,7 @@ impl ShellHookConsent {
     ///    none was recorded, the command still names no script that can be
     ///    hashed.
     ///
-    /// (2) binds the approval to the root `aleph hooks test` reviewed: the
+    /// (2) binds the approval to the root `aleph-server hooks test` reviewed: the
     /// same key from another directory — a plugin id installed again
     /// elsewhere — runs other code behind `${CLAUDE_PLUGIN_ROOT}`. (3) is the
     /// TOCTOU guard: `sh scripts/deploy.sh` approved in March must not keep
@@ -408,8 +408,8 @@ impl ShellHookConsent {
     /// SAFE (the hook is skipped, exactly like an un-approved one) and is
     /// logged loudly, because the alternative — running code nobody reviewed
     /// — is the whole thing consent exists to prevent. The way back is
-    /// `aleph hooks revoke`: the entry turns pending, the next fire records
-    /// what it runs now ([`Self::record_pending`]), and `aleph hooks test`
+    /// `aleph-server hooks revoke`: the entry turns pending, the next fire records
+    /// what it runs now ([`Self::record_pending`]), and `aleph-server hooks test`
     /// reviews and approves that.
     ///
     /// An entry with no recorded root predates root recording and keeps the
@@ -459,8 +459,8 @@ impl ShellHookConsent {
                     approved_root = %approved_root.display(),
                     root = %plugin_root.display(),
                     "Hook was approved for another directory — refusing to run. \
-                     `aleph hooks revoke <fingerprint>`, then review it again with \
-                     `aleph hooks test <fingerprint>` after it next fires."
+                     `aleph-server hooks revoke <fingerprint>`, then review it again with \
+                     `aleph-server hooks test <fingerprint>` after it next fires."
                 );
                 return None;
             }
@@ -483,7 +483,7 @@ impl ShellHookConsent {
                     plugin = plugin_name,
                     command,
                     "Hook was approved before its script could be content-bound — refusing \
-                     to run. Review it again with `aleph hooks test <fingerprint>`."
+                     to run. Review it again with `aleph-server hooks test <fingerprint>`."
                 );
                 false
             }
@@ -493,8 +493,8 @@ impl ShellHookConsent {
                     plugin = plugin_name,
                     command,
                     "Hook script changed since it was approved — refusing to run. \
-                     `aleph hooks revoke <fingerprint>`, then review it again with \
-                     `aleph hooks test <fingerprint>`."
+                     `aleph-server hooks revoke <fingerprint>`, then review it again with \
+                     `aleph-server hooks test <fingerprint>`."
                 );
                 false
             }
@@ -518,7 +518,7 @@ impl ShellHookConsent {
     /// `scope` is the hook's `scope_key`, keyed exactly as in
     /// [`Self::is_approved`]. `event` is the name the hook is dispatched with
     /// (`HookConfig::event_name`) and `plugin_root` the root its path
-    /// variables resolve to — what `aleph hooks test` rebuilds the run from.
+    /// variables resolve to — what `aleph-server hooks test` rebuilds the run from.
     ///
     /// A key already on file is refreshed while it is still `pending`: its
     /// `event` and `plugin_root` become this fire's, so a review runs what
@@ -528,7 +528,7 @@ impl ShellHookConsent {
     /// are what the approval attests to ([`Self::is_approved`]). The one
     /// thing a fire does to an approved entry is withdraw an approval that
     /// attests to no script content once this fire's script can be hashed
-    /// — it turns `pending`, refreshed, for `aleph hooks test` to review —
+    /// — it turns `pending`, refreshed, for `aleph-server hooks test` to review —
     /// and only from the root it was approved at (or when it recorded none),
     /// so another install's fire cannot withdraw it.
     pub fn record_pending(
@@ -603,7 +603,7 @@ impl ShellHookConsent {
     /// root is no longer `reviewed_root` — or when there is no root at all.
     ///
     /// `reviewed_root` is the [`plugin_root`](ConsentEntry::plugin_root) the
-    /// operator's review ran against (`aleph hooks test` reads it from the
+    /// operator's review ran against (`aleph-server hooks test` reads it from the
     /// entry). A pending entry follows the hook's latest fire
     /// ([`Self::record_pending`]), so it can move to another root between
     /// that review and this call; approving it anyway would bind the
@@ -632,7 +632,7 @@ impl ShellHookConsent {
                     if reviewed_root.is_some() && entry.plugin_root.as_deref() == reviewed_root =>
                 {
                     // Re-hash at approval time, not record time: the operator
-                    // just reviewed (and `aleph hooks test` just RAN) the
+                    // just reviewed (and `aleph-server hooks test` just RAN) the
                     // script as it exists NOW, so that content is what the
                     // approval attests to. A stale record-time hash would
                     // refuse the very version the operator green-lit. The
@@ -815,7 +815,7 @@ fn match_prefix(entries: &BTreeMap<String, ConsentEntry>, prefix: &str) -> Optio
     // is 16 hex chars (see `fingerprint`), so 4 hex chars still has ~65k
     // possible prefixes per entry and stops a one-character prefix from
     // resolving to whichever entry happens to sort first alphabetically.
-    // Without this, `aleph hooks approve a` would approve the first entry
+    // Without this, `aleph-server hooks test a` would approve the first entry
     // starting with `a` and silently skip the matching-by-prefix step.
     if prefix.len() < 4 {
         return None;
@@ -1517,7 +1517,7 @@ mod tests {
 
     #[test]
     fn approving_records_the_content_reviewed_at_approval_time() {
-        // `aleph hooks test` runs the script, THEN asks to approve. If the
+        // `aleph-server hooks test` runs the script, THEN asks to approve. If the
         // fingerprint were frozen at record time, editing between the two
         // steps would make the just-approved version fail on first fire.
         let (_d, consent) = tmp_consent();

@@ -118,10 +118,11 @@ pub enum HookEvent {
     ///   the denial ledger remembers being refused — `Execution`;
     /// - a BeforeToolCall hook's `ask:` that the person declined or that
     ///   could not be raised — `Execution`;
-    /// - a BeforeToolCall hook's `block:` (or exit 2) — a soft block the
-    ///   model can react to — including a BeforeToolCall hook that failed to
-    ///   run, which blocks fail-closed, and a failure of the hook executor
-    ///   itself — `Execution`;
+    /// - a BeforeToolCall hook's block (`block:`, exit 2, `decision: "block"`)
+    ///   — including a BeforeToolCall hook that failed to run, which blocks
+    ///   fail-closed, and a failure of the hook executor itself —
+    ///   `HookBlocked`: the model reads it as a policy refusal (kind
+    ///   `permission`), but a hook's verdict does not re-fire hooks;
     /// - a card that expired unanswered — `ApprovalExpired`: nobody refused;
     /// - a sub-agent calling a tool outside its allowlist
     ///   (`AllowlistToolService`): decided above the chokepoint, before this
@@ -450,7 +451,7 @@ pub enum HookAction {
     ///   that name is whatever the daemon's environment holds, so a script
     ///   that reads `"$DENY_REASON"` should check `hook_event_name` first.
     ///
-    /// `aleph hooks test` builds its run by the same derivation, so a command
+    /// `aleph-server hooks test` builds its run by the same derivation, so a command
     /// reviewed there sees these same variables (on a synthetic tool call).
     ///
     /// On Windows `cmd` expands `%VAR%` before it parses the line, so a `&`,

@@ -112,7 +112,7 @@ pub struct HookContext {
     /// `transcript_path` (derived by the executor, `session_facts`), only a
     /// fire site that holds the tier can say it: tool dispatch
     /// (`build_hook_context`) and the turn-start seams in
-    /// `run_loop/inner.rs` (plus `aleph hooks test`'s synthetic tool call,
+    /// `run_loop/inner.rs` (plus `aleph-server hooks test`'s synthetic tool call,
     /// which states the default tier). Every other face leaves it `None` and
     /// the payload omits the key — unknown, not a default tier.
     pub permission_mode: Option<&'static str>,
@@ -514,7 +514,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// One list for the three places that must agree on it: the text
 /// substitution ([`substitute_path_variables`]), the variables a command
 /// hook's environment carries ([`command_hook_invocation`]) and the
-/// `aleph hooks test` metacharacter gate, which does not count a reference
+/// `aleph-server hooks test` metacharacter gate, which does not count a reference
 /// to one as shell syntax. A spelling substituted but not exported would
 /// read as empty in a unix hook, where the shell expands it.
 pub const PLUGIN_ROOT_VARIABLES: [&str; 3] =

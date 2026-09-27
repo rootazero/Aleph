@@ -463,6 +463,26 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
         refused.contains("aleph plugin enable model-cc"),
         "{refused}"
     );
+    // A deliberate refusal wears the policy label, not a config/DB one — and,
+    // wrapped as the tool adapter wraps it for the model, reads as a policy
+    // refusal with no route to another tool.
+    assert!(refused.starts_with("Permission denied: "), "{refused}");
+    assert!(!refused.contains("Configuration/Database"), "{refused}");
+    let as_model_reads_it = crate::tools::service::ToolError::Execution {
+        name: "plugin_manage".to_string(),
+        cause: refused.clone(),
+    };
+    assert_eq!(
+        as_model_reads_it.kind(),
+        crate::tools::error_kind::ToolErrorKind::Permission
+    );
+    assert_eq!(
+        crate::tools::fallback_registry::render_persistence_hint(
+            &as_model_reads_it,
+            "plugin_manage"
+        ),
+        ""
+    );
     assert!(!PluginsConfig::load(&cfg_path)
         .entries
         .contains_key("model-cc"));

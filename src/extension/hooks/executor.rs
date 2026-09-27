@@ -98,7 +98,7 @@ pub(crate) fn bounded_env_value(key: &str, value: &str, read_instead: &str) -> S
 /// A command hook's child process, derived once from the action: the shell
 /// line, the directory, the environment and the stdin JSON.
 ///
-/// Production ([`HookExecutor`]'s command action) and `aleph hooks test` both
+/// Production ([`HookExecutor`]'s command action) and `aleph-server hooks test` both
 /// spawn from this value, so a script an operator reviews there sees the same
 /// path substitution, the same data variables and the same payload it will
 /// get in production. Production adds one thing: the plugin's runtime
@@ -368,7 +368,7 @@ fn tool_response_value(output: &str) -> serde_json::Value {
 }
 
 /// Build a Claude Code-style event payload JSON string for stdin / HTTP body.
-/// `aleph hooks test` reaches it through [`command_hook_invocation`], so a
+/// `aleph-server hooks test` reaches it through [`command_hook_invocation`], so a
 /// hook exercised there reads the exact payload production sends.
 fn build_event_payload(event_name: &str, context: &HookContext, facts: &SessionFacts) -> String {
     serde_json::to_string(&build_event_payload_value(event_name, context, facts))
@@ -435,7 +435,7 @@ impl HookExecutor {
     /// Attach a shell-hook consent allowlist. With it set, `HookAction::Command`
     /// hooks run only when their command is operator-approved; un-approved
     /// commands are skipped and recorded as `pending` for review via the
-    /// `aleph hooks` CLI.
+    /// `aleph-server hooks` CLI.
     pub fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
         self.consent = Some(consent);
         self
@@ -737,7 +737,7 @@ impl HookExecutor {
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         // Shell-hook consent gate: an un-approved command must not run. It is
-        // recorded as `pending` (so `aleph hooks list` surfaces it) and the
+        // recorded as `pending` (so `aleph-server hooks list` surfaces it) and the
         // action returns a non-success result with no output — interceptors
         // treat empty output as "no effect", so a skipped hook never blocks
         // the tool call. Approving arbitrary code execution is the operator's
@@ -747,7 +747,7 @@ impl HookExecutor {
             // `project_scope_allows` reads — so a project hook's approval is
             // its project's alone (`consent.rs`, module doc).
             if !consent.is_approved(plugin_name, scope_key, plugin_root, command) {
-                // What `aleph hooks test` rebuilds the run from: the spelling
+                // What `aleph-server hooks test` rebuilds the run from: the spelling
                 // this hook is dispatched with and the root its path
                 // variables resolve to.
                 consent.record_pending(plugin_name, scope_key, command, event_name, plugin_root);
@@ -755,14 +755,14 @@ impl HookExecutor {
                     plugin = plugin_name,
                     event = ?event,
                     scope = ?scope_key,
-                    "Shell hook command not approved — skipped. Review with `aleph hooks list`."
+                    "Shell hook command not approved — skipped. Review with `aleph-server hooks list`."
                 );
                 return Ok(ActionResult {
                     success: false,
                     output: None,
                     error: Some(format!(
                         "shell hook from plugin '{plugin_name}' is not approved; \
-                         run `aleph hooks test` to review and approve it"
+                         run `aleph-server hooks test` to review and approve it"
                     )),
                     exit_code: None,
                 });
@@ -770,7 +770,7 @@ impl HookExecutor {
         }
 
         // Shell line, directory, environment and stdin payload: one derivation,
-        // shared with `aleph hooks test` so a reviewed script runs as it does
+        // shared with `aleph-server hooks test` so a reviewed script runs as it does
         // here.
         let invocation =
             command_hook_invocation(command, event_name, context, Some(plugin_root), plugin_name);
@@ -986,14 +986,14 @@ impl HookExecutor {
                     plugin = plugin_name,
                     event = ?event,
                     scope = ?scope_key,
-                    "HTTP hook URL not approved — skipped. Review with `aleph hooks list`."
+                    "HTTP hook URL not approved — skipped. Review with `aleph-server hooks list`."
                 );
                 return Ok(ActionResult {
                     success: false,
                     output: None,
                     error: Some(format!(
                         "http hook from plugin '{plugin_name}' is not approved; \
-                         run `aleph hooks test` to review and approve it"
+                         run `aleph-server hooks test` to review and approve it"
                     )),
                     exit_code: None,
                 });
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     /// The stdin JSON a command hook registered under `event`'s canonical
-    /// name is handed — the same derivation production and `aleph hooks
+    /// name is handed — the same derivation production and `aleph-server hooks
     /// test` spawn from.
     fn stdin_json(event: HookEvent, ctx: &HookContext) -> String {
         command_hook_invocation("true", &event.canonical_name(), ctx, None, "test").stdin
@@ -2084,7 +2084,7 @@ mod tests {
         assert_eq!(seen("observer.json")["hook_event_name"], "PostToolUse");
     }
 
-    /// `aleph hooks test` rebuilds a hook's run from its consent entry, so the
+    /// `aleph-server hooks test` rebuilds a hook's run from its consent entry, so the
     /// entry must hold what production derived: the spelling the hook is
     /// dispatched with (not the enum's Rust name) and the root its path
     /// variables resolve to — recorded at the real consent gate.
@@ -2727,7 +2727,7 @@ mod tests {
     }
 
     /// A settings hook has a root but no data directory, and a hook with no
-    /// recorded root (an old consent entry, rebuilt by `aleph hooks test`)
+    /// recorded root (an old consent entry, rebuilt by `aleph-server hooks test`)
     /// has neither: whatever is unknown is removed, not inherited from the
     /// daemon — which may itself run inside a Claude Code plugin.
     #[cfg(unix)]

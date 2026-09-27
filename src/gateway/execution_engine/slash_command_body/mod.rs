@@ -437,7 +437,7 @@ pub(super) fn strip(
 /// The `` !`cmd` `` runner: the SAME consent registry, and the same
 /// `(plugin, scope, command)` key and root binding, as a plugin's
 /// `hooks.json` shell command (`HookExecutor::execute_command`), so
-/// `aleph hooks list` / `aleph hooks test` are the one review surface for
+/// `aleph-server hooks list` / `aleph-server hooks test` are the one review surface for
 /// every shell a plugin can reach. The entry is filed under
 /// [`INLINE_COMMAND_EVENT`] with the template's own text; only an approval
 /// that says so covers it. A command with a relative word ahead of the
@@ -496,10 +496,10 @@ impl InlineShell for ConsentedShell {
             tracing::warn!(
                 plugin = %self.plugin_id,
                 command = %cmd,
-                "inline command not approved — withheld; review with `aleph hooks list`"
+                "inline command not approved — withheld; review with `aleph-server hooks list`"
             );
             return Err(format!(
-                "[!`{cmd}` not run: pending operator approval — `aleph hooks list` / `aleph hooks test`]"
+                "[!`{cmd}` not run: pending operator approval — `aleph-server hooks list` / `aleph-server hooks test`]"
             ));
         };
         // The key has no event, so a `hooks.json` command with the same text
@@ -509,7 +509,7 @@ impl InlineShell for ConsentedShell {
         if approval.event != INLINE_COMMAND_EVENT {
             return Err(format!(
                 "[!`{cmd}` not run: its approval was given to a hook with the same text — \
-                 `aleph hooks revoke {}`, then review it as an inline command]",
+                 `aleph-server hooks revoke {}`, then review it as an inline command]",
                 approval.fingerprint
             ));
         }

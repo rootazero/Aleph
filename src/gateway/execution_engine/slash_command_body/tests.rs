@@ -102,7 +102,7 @@ impl Fixture {
         }
     }
 
-    /// Approve `cmd` the way `aleph hooks test` does: a fire records it
+    /// Approve `cmd` the way `aleph-server hooks test` does: a fire records it
     /// pending with its root, and the approval is bound to that root.
     fn approve(&self, cmd: &str) {
         self.consent.record_pending(
@@ -354,7 +354,10 @@ async fn consent_is_asked_under_the_plugin_id_and_withheld_by_default() {
     let shell = f.shell(Some(f.work.clone()));
     let out = shell.run("echo hi", &no_args()).await;
     let placeholder = out.expect_err("unapproved must be withheld");
-    assert!(placeholder.contains("aleph hooks"), "names the remedy");
+    assert!(
+        placeholder.contains("aleph-server hooks"),
+        "names the remedy"
+    );
 
     let entries = f.consent.entries();
     assert_eq!(entries.len(), 1);

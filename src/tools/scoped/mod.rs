@@ -34,6 +34,9 @@ pub(crate) use ledger::record_allowlist_refusal;
 
 #[cfg(test)]
 mod tests;
+// POSIX-only: the hooks under test are `sh` commands.
+#[cfg(all(test, unix))]
+mod hook_block_tests;
 
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;

@@ -1,8 +1,8 @@
 //! `core/hooks-consent` — audit the shell-hook consent registry.
 //!
 //! Hoists the diagnosis that previously lived inline in
-//! `aleph hooks doctor` into a reusable check, so the unified `aleph doctor`
-//! and the `doctor` tool report consent health too. The `aleph hooks doctor`
+//! `aleph-server hooks doctor` into a reusable check, so the unified `aleph doctor`
+//! and the `doctor` tool report consent health too. The `aleph-server hooks doctor`
 //! CLI now renders these same findings (single source of truth — entropy reduction).
 //!
 //! Read-only: approving a pending hook is a deliberate human trust decision,
@@ -70,9 +70,9 @@ impl HooksConsentCheck {
                     ),
                 )
                 .with_fix_hint(
-                    "`aleph hooks list` marks the old entries. Review each project's pending \
-                     entry with `aleph hooks test <fingerprint>`, then \
-                     `aleph hooks revoke <old fingerprint>` to clear this warning.",
+                    "`aleph-server hooks list` marks the old entries. Review each project's pending \
+                     entry with `aleph-server hooks test <fingerprint>`, then \
+                     `aleph-server hooks revoke <old fingerprint>` to clear this warning.",
                 ),
             );
         }
@@ -91,7 +91,7 @@ impl HooksConsentCheck {
                     "Hooks await approval",
                     format!("{pending} shell hook(s) are pending approval and will be skipped until reviewed."),
                 )
-                .with_fix_hint("Review each with `aleph hooks test <fingerprint>`, then approve if trusted."),
+                .with_fix_hint("Review each with `aleph-server hooks test <fingerprint>`, then approve if trusted."),
             );
         }
 
@@ -124,7 +124,7 @@ impl HooksConsentCheck {
                     "Stale fingerprint",
                     format!("{drifted} entr(ies) have a fingerprint that no longer matches their command (registry hand-edited?)."),
                 )
-                .with_fix_hint("Revoke and re-approve the affected hooks: `aleph hooks revoke <fingerprint>`."),
+                .with_fix_hint("Revoke and re-approve the affected hooks: `aleph-server hooks revoke <fingerprint>`."),
             );
         }
 
