@@ -1,42 +1,53 @@
 use crate::gateway::channel::{ChannelError, ChannelResult, MessageId, OutboundMessage};
+use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::http_client::ReqwestHttpClient;
 use crate::gateway::interfaces::whatsapp::wa_runtime::state::{
     AtomicConnectionState, ConnectionState,
 };
+use crate::gateway::interfaces::whatsapp::wa_runtime::traits::{WaEvent, WaRuntime, WaRuntimeError};
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, info, warn};
 
-/// Cheap to clone: every internal field is either `Arc` (so the clone shares
-/// state) or a `Sender` (also `Clone`), except for `shutdown_tx` which is
-/// intentionally left as `None` on clones so only the original instance can
-/// trigger shutdown. The `start`/`shutdown` `&mut self` methods are only
-/// ever called on that original; clones are read-only and only invoke the
-/// `&self` `send_*` methods. Sharing a clone with `ReactionHandler` (Task 5)
-/// is therefore free at runtime — both holders route through the same
+/// Production WhatsApp runtime.
+///
+/// Cheap to clone: every internal field is either `Arc` (so the clone
+/// shares state) or a `Sender` (also `Clone`), except for `shutdown_tx`
+/// which is now `Arc<Mutex<Option<...>>>` so the trait can drive it via
+/// `&self` (Task 7). Cloning a `RealWaRuntime` no longer takes the
+/// shutdown signal — the original instance owns it — and clones are
+/// read-only observers. Sharing a clone with `ReactionHandler` is
+/// therefore free at runtime; both holders route through the same
 /// internal `Arc<Mutex<Option<Client>>>`.
-pub struct WaRuntime {
+pub struct RealWaRuntime {
     state: Arc<AtomicConnectionState>,
     auth: WaAuthManager,
-    event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    event_tx: mpsc::Sender<WaEvent>,
+    /// `Arc<Mutex<Option<...>>>` (instead of `Option<...>`) so
+    /// `start()` / `shutdown()` can be called via `&self` for trait
+    /// object safety. Only the original `RealWaRuntime` mutates this;
+    /// clones see the same value through the shared `Arc`.
+    shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     bot_handle: Arc<Mutex<Option<whatsapp_rust::bot::BotHandle>>>,
     client: Arc<Mutex<Option<Arc<whatsapp_rust::Client>>>>,
     message_jids: Arc<Mutex<HashMap<String, whatsapp_rust::Jid>>>,
 }
 
-impl Clone for WaRuntime {
+impl Clone for RealWaRuntime {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
             auth: self.auth.clone(),
             event_tx: self.event_tx.clone(),
-            // `oneshot::Sender` is intentionally not cloned — only the
-            // original WaRuntime owns the shutdown signal. Clones are
-            // read-only observers.
-            shutdown_tx: None,
+            // Shared via `Arc` so the original instance's `start()` /
+            // `shutdown()` writes are visible to clones. Clones never
+            // *write* through it; they only observe via `pairing_phase`
+            // etc. This is the change that lets the trait method take
+            // `&self`.
+            shutdown_tx: Arc::clone(&self.shutdown_tx),
             bot_handle: Arc::clone(&self.bot_handle),
             client: Arc::clone(&self.client),
             message_jids: Arc::clone(&self.message_jids),
@@ -44,16 +55,16 @@ impl Clone for WaRuntime {
     }
 }
 
-impl WaRuntime {
+impl RealWaRuntime {
     pub async fn new(
         auth: WaAuthManager,
-        event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
+        event_tx: mpsc::Sender<WaEvent>,
     ) -> ChannelResult<Self> {
         Ok(Self {
             state: Arc::new(AtomicConnectionState::new(ConnectionState::Disconnected)),
             auth,
             event_tx,
-            shutdown_tx: None,
+            shutdown_tx: Arc::new(Mutex::new(None)),
             bot_handle: Arc::new(Mutex::new(None)),
             client: Arc::new(Mutex::new(None)),
             message_jids: Arc::new(Mutex::new(HashMap::new())),
@@ -70,7 +81,27 @@ impl WaRuntime {
         Arc::clone(&self.state)
     }
 
-    pub async fn start(&mut self) -> ChannelResult<()> {
+    async fn create_backend(
+        &self,
+        db_path: &str,
+    ) -> ChannelResult<Arc<dyn whatsapp_rust::store::traits::Backend>> {
+        let backend = whatsapp_rust::store::SqliteStore::new(db_path)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to create SQLite backend: {e}")))?;
+        Ok(Arc::new(backend) as Arc<dyn whatsapp_rust::store::traits::Backend>)
+    }
+
+    async fn get_client(&self) -> ChannelResult<Arc<whatsapp_rust::Client>> {
+        let guard = self.client.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp client not ready".into()))
+    }
+
+    /// Internal `start`-mapped method. The trait method `start` is
+    /// `&self`; this helper is `&mut self`-free because all mutable
+    /// state lives behind `Arc<Mutex<...>>` already (Task 7 refactor).
+    async fn start_inner(&self) -> ChannelResult<()> {
         info!("Starting WhatsApp runtime...");
 
         let db_path = self.auth.db_path();
@@ -79,13 +110,27 @@ impl WaRuntime {
         let http_client = ReqwestHttpClient::new();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        self.shutdown_tx = Some(shutdown_tx);
+        {
+            let mut guard = self.shutdown_tx.lock().await;
+            // If a previous `start()` left a sender here, drop it
+            // silently — that previous shutdown signal will never fire
+            // (the task it was paired with already exited). Refuse to
+            // overwrite only if the BotHandle still exists, which is
+            // the operational meaning of "already started".
+            if self.bot_handle.lock().await.is_some() {
+                return Err(ChannelError::Internal(
+                    "WhatsApp runtime already started".into(),
+                ));
+            }
+            *guard = Some(shutdown_tx);
+        }
 
         let event_tx_for_bot = self.event_tx.clone();
         let state_for_bot = Arc::clone(&self.state);
         let bot_handle_arc = Arc::clone(&self.bot_handle);
         let client_arc = Arc::clone(&self.client);
         let message_jids_arc = Arc::clone(&self.message_jids);
+        let shutdown_tx_for_task = Arc::clone(&self.shutdown_tx);
 
         tokio::spawn(async move {
             let event_tx = event_tx_for_bot.clone();
@@ -147,25 +192,25 @@ impl WaRuntime {
                 let mut guard = client_arc.lock().await;
                 *guard = None;
             }
+            // Clear the channel's stored shutdown sender so a future
+            // `start()` can install a fresh one.
+            let mut guard = shutdown_tx_for_task.lock().await;
+            *guard = None;
             state_for_bot.set(ConnectionState::Disconnected);
         });
 
         Ok(())
     }
 
-    async fn create_backend(
-        &self,
-        db_path: &str,
-    ) -> ChannelResult<Arc<dyn whatsapp_rust::store::traits::Backend>> {
-        let backend = whatsapp_rust::store::SqliteStore::new(db_path)
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to create SQLite backend: {e}")))?;
-        Ok(Arc::new(backend) as Arc<dyn whatsapp_rust::store::traits::Backend>)
-    }
-
-    pub async fn shutdown(&mut self) {
+    /// Internal `shutdown`-mapped method. See `start_inner` for why
+    /// this is now `&self`.
+    async fn shutdown_inner(&self) {
         info!("Shutting down WhatsApp runtime...");
-        if let Some(tx) = self.shutdown_tx.take() {
+        let tx = {
+            let mut guard = self.shutdown_tx.lock().await;
+            guard.take()
+        };
+        if let Some(tx) = tx {
             let _ = tx.send(());
         }
         {
@@ -183,13 +228,6 @@ impl WaRuntime {
             guard.clear();
         }
         self.state.set(ConnectionState::Disconnected);
-    }
-
-    async fn get_client(&self) -> ChannelResult<Arc<whatsapp_rust::Client>> {
-        let guard = self.client.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| ChannelError::NotConnected("WhatsApp client not ready".into()))
     }
 
     pub async fn send_message(&self, msg: OutboundMessage) -> ChannelResult<MessageId> {
@@ -304,10 +342,103 @@ impl WaRuntime {
     }
 }
 
+#[async_trait]
+impl WaRuntime for RealWaRuntime {
+    async fn start(&self) -> Result<(), WaRuntimeError> {
+        self.start_inner()
+            .await
+            .map_err(|e| WaRuntimeError::Internal(e.to_string()))
+    }
+
+    async fn shutdown(&self) {
+        self.shutdown_inner().await;
+    }
+
+    async fn pairing_phase(&self) -> PairingState {
+        // `PairingState` is the single source of truth for
+        // `WhatsAppChannel::status()` (spec §3.1 D1). The legacy
+        // atomic `ConnectionState` is kept for backward compat with
+        // `ensure_connected()` and `state_handle()`; we derive the
+        // pairing phase from it rather than maintaining two parallel
+        // state machines. Reconnection / failure paths funnel through
+        // `Event::Disconnected` and `Event::PairError` which the event
+        // loop's `PairingStateDriver` maps to the full 9-variant FSM.
+        match self.state.get() {
+            ConnectionState::Disconnected => PairingState::Disconnected {
+                reason: "runtime disconnected".to_string(),
+            },
+            ConnectionState::Pairing => PairingState::WaitingQr {
+                qr_data: String::new(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(60),
+            },
+            ConnectionState::Connecting => PairingState::Initializing,
+            ConnectionState::Connected => PairingState::Connected {
+                device_name: String::new(),
+                phone_number: String::new(),
+            },
+            ConnectionState::Error => PairingState::Failed {
+                error: "runtime error".to_string(),
+            },
+        }
+    }
+
+    async fn send_message(&self, msg: OutboundMessage) -> Result<MessageId, WaRuntimeError> {
+        Self::send_message(self, msg)
+            .await
+            .map_err(|e| match e {
+                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+                ChannelError::SendFailed(m) => WaRuntimeError::SendFailed(m),
+                other => WaRuntimeError::Internal(other.to_string()),
+            })
+    }
+
+    async fn send_typing(&self, conversation_id: &str) -> Result<(), WaRuntimeError> {
+        Self::send_typing(self, conversation_id)
+            .await
+            .map_err(|e| match e {
+                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+                other => WaRuntimeError::Internal(other.to_string()),
+            })
+    }
+
+    async fn mark_read(&self, message_id: &str) -> Result<(), WaRuntimeError> {
+        Self::mark_read(self, message_id)
+            .await
+            .map_err(|e| match e {
+                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+                other => WaRuntimeError::Internal(other.to_string()),
+            })
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> Result<(), WaRuntimeError> {
+        Self::send_reaction(self, conversation_id, message_id, emoji)
+            .await
+            .map_err(|e| match e {
+                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+                other => WaRuntimeError::Internal(other.to_string()),
+            })
+    }
+
+    fn take_event_receiver(&self) -> Option<mpsc::Receiver<WaEvent>> {
+        // The production runtime does not own its event channel —
+        // `WhatsAppChannel::start()` passes a `Sender` in via
+        // `RealWaRuntime::new` and retains the `Receiver` for its own
+        // event loop. There is nothing to "take" here; the trait
+        // method exists so the fake can hand its receiver to test
+        // code.
+        None
+    }
+}
+
 async fn handle_bot_event(
-    event: whatsapp_rust::types::events::Event,
+    event: WaEvent,
     state: Arc<AtomicConnectionState>,
-    event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
+    event_tx: mpsc::Sender<WaEvent>,
     message_jids: Arc<Mutex<HashMap<String, whatsapp_rust::Jid>>>,
 ) {
     match &event {

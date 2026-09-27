@@ -43,7 +43,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
-use crate::gateway::interfaces::whatsapp::wa_runtime::WaRuntime;
+use crate::gateway::interfaces::whatsapp::wa_runtime::{RealWaRuntime, WaRuntime};
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ pub struct WhatsAppChannel {
     info: ChannelInfo,
     config: WhatsAppConfig,
     channel_state: ChannelState,
-    runtime: Option<WaRuntime>,
+    runtime: Option<Arc<dyn WaRuntime>>,
     pairing_state: Arc<RwLock<PairingState>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     connected: Arc<AtomicBool>,
@@ -191,10 +191,14 @@ impl Channel for WhatsAppChannel {
             .unwrap_or("default");
         let auth = WaAuthManager::new(account_id);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
-        let mut runtime = WaRuntime::new(auth, event_tx)
+        let runtime = RealWaRuntime::new(auth, event_tx)
             .await
             .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {e}")))?;
-        runtime.start().await?;
+        let runtime: Arc<dyn WaRuntime> = Arc::new(runtime);
+        runtime
+            .start()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to start runtime: {e}")))?;
 
         // Replace the no-op reaction handler installed in `with_mode` with
         // one wired to the real `WaRuntime` adapter. The handler is the only
@@ -204,7 +208,9 @@ impl Channel for WhatsAppChannel {
         let reaction_handler = Arc::new(ReactionHandler::new(
             self.config.reactions.level,
             self.config.reactions.ack.clone(),
-            Arc::new(WaRuntimeReactionAdapter { runtime: runtime.clone() }),
+            Arc::new(WaRuntimeReactionAdapter {
+                runtime: Arc::clone(&runtime),
+            }),
         ));
         self.reaction_handler = Some(Arc::clone(&reaction_handler));
 
@@ -299,7 +305,7 @@ impl Channel for WhatsAppChannel {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
-        if let Some(mut runtime) = self.runtime.take() {
+        if let Some(runtime) = self.runtime.take() {
             runtime.shutdown().await;
         }
         *self.pairing_state.write().await = PairingState::Idle;
@@ -324,7 +330,10 @@ impl Channel for WhatsAppChannel {
             .runtime
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
-        let message_id = runtime.send_message(message).await?;
+        let message_id = runtime
+            .send_message(message)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("send_message: {e}")))?;
         Ok(SendResult {
             message_id,
             timestamp: chrono::Utc::now(),
@@ -343,7 +352,10 @@ impl Channel for WhatsAppChannel {
             .runtime
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
-        runtime.send_typing(conversation_id.as_str()).await
+        runtime
+            .send_typing(conversation_id.as_str())
+            .await
+            .map_err(|e| ChannelError::Internal(format!("send_typing: {e}")))
     }
 
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
@@ -355,7 +367,10 @@ impl Channel for WhatsAppChannel {
             .runtime
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
-        runtime.mark_read(message_id.as_str()).await
+        runtime
+            .mark_read(message_id.as_str())
+            .await
+            .map_err(|e| ChannelError::Internal(format!("mark_read: {e}")))
     }
 
     async fn react(
@@ -375,6 +390,7 @@ impl Channel for WhatsAppChannel {
         runtime
             .send_reaction(conversation_id.as_str(), message_id.as_str(), reaction)
             .await
+            .map_err(|e| ChannelError::Internal(format!("send_reaction: {e}")))
     }
 }
 
@@ -397,10 +413,10 @@ impl ReactionSender for NoopReactionSender {
 
 /// Thin adapter that routes `ReactionSender::send_reaction` to
 /// `WaRuntime::send_reaction`. `WaRuntime` is cheaply `Clone` (all internal
-/// state is `Arc`/`Mutex`/`Sender`); sharing one clone with the handler is
-/// the minimum-friction wiring called for by spec §3.2.
+/// state is `Arc`/`Mutex`/`Sender`); sharing one `Arc<dyn WaRuntime>` clone
+/// with the handler is the minimum-friction wiring called for by spec §3.2.
 struct WaRuntimeReactionAdapter {
-    runtime: WaRuntime,
+    runtime: Arc<dyn WaRuntime>,
 }
 
 #[async_trait]
