@@ -195,18 +195,18 @@ impl Channel for WhatsAppChannel {
             access,
             vec![],
         );
+        let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
                         use whatsapp_rust::types::events::Event;
+                        // Drive PairingState from the 4 events that have a
+                        // stable source in `whatsapp_rust::types::events::Event`
+                        // (Task 2). Other events are a no-op for PairingState.
+                        driver.apply(&event).await;
                         match event {
-                            Event::PairingQrCode { code, timeout } => {
-                                let expires_at = chrono::Utc::now() + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::seconds(60));
-                                let mut state = pairing_state.write().await;
-                                *state = PairingState::WaitingQr { qr_data: code, expires_at };
-                            }
                             Event::Connected(_) => {
                                 connected.store(true, Ordering::SeqCst);
                             }
@@ -331,6 +331,61 @@ impl Channel for WhatsAppChannel {
     }
 }
 
+/// Drives [`PairingState`] from `whatsapp_rust` runtime events.
+///
+/// Owns only the `PairingState`; the legacy atomic `connected` flag is
+/// kept by the caller. This is intentionally the thinnest possible
+/// adapter so that `to_channel_status()` stays the single source of
+/// truth for `Channel::status()` (Task 3).
+///
+/// wacore does not emit a generic `Scanned` event for QR-scanned flow
+/// (only `QrScannedWithoutMultidevice`), so the spec's `Scanned` arm
+/// from §3.1 D1 is omitted. `PairError` is mapped to `Failed` because
+/// it carries a concrete error reason and would otherwise become a
+/// silent no-op.
+struct PairingStateDriver {
+    state: Arc<RwLock<PairingState>>,
+}
+
+impl PairingStateDriver {
+    fn new(state: Arc<RwLock<PairingState>>) -> Self {
+        Self { state }
+    }
+
+    async fn apply(&self, event: &whatsapp_rust::types::events::Event) {
+        use whatsapp_rust::types::events::Event;
+        let mut s = self.state.write().await;
+        match event {
+            Event::PairingQrCode { code, timeout } => {
+                let expires_at = chrono::Utc::now()
+                    + chrono::Duration::from_std(*timeout)
+                        .unwrap_or_else(|_| chrono::Duration::seconds(60));
+                *s = PairingState::WaitingQr {
+                    qr_data: code.clone(),
+                    expires_at,
+                };
+            }
+            Event::PairSuccess(p) => {
+                *s = PairingState::Connected {
+                    device_name: p.business_name.clone(),
+                    phone_number: p.id.to_string(),
+                };
+            }
+            Event::PairError(p) => {
+                *s = PairingState::Failed {
+                    error: p.error.clone(),
+                };
+            }
+            Event::Disconnected(_) => {
+                *s = PairingState::Disconnected {
+                    reason: "remote disconnected".to_string(),
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Factory for creating `WhatsApp` channels
 pub struct WhatsAppChannelFactory;
 
@@ -364,6 +419,7 @@ pub fn register_with_plugin() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 
     #[test]
     fn test_factory_channel_type() {
@@ -381,4 +437,76 @@ mod tests {
         let factory = whatsapp_factory_creator(config).expect("factory creator should succeed");
         assert_eq!(factory.channel_type(), "whatsapp");
     }
+
+    /// TDD Task 2: PairingStateDriver must drive `PairingState` from the
+    /// 4 events that have a stable source in `whatsapp_rust::types::events::Event`
+    /// (`PairingQrCode`, `PairSuccess`, `PairError`, `Disconnected`). wacore does
+    /// not emit a generic `Scanned` event, so that arm is omitted.
+    #[tokio::test]
+    async fn pairing_state_driven_by_events() {
+        let state = Arc::new(RwLock::new(PairingState::Idle));
+        let driver = PairingStateDriver::new(state.clone());
+
+        // QR ready: Idle → WaitingQr
+        driver
+            .apply(&whatsapp_rust::types::events::Event::PairingQrCode {
+                code: "abc".to_string(),
+                timeout: std::time::Duration::from_secs(60),
+            })
+            .await;
+        assert!(
+            matches!(*state.read().await, PairingState::WaitingQr { .. }),
+            "expected WaitingQr, got {:?}",
+            *state.read().await
+        );
+
+        // PairSuccess: WaitingQr → Connected
+        let pair_success = whatsapp_rust::types::events::PairSuccess {
+            id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
+            lid: whatsapp_rust::Jid::new("abcd", "lid"),
+            business_name: "My Phone".to_string(),
+            platform: "smba".to_string(),
+        };
+        driver
+            .apply(&whatsapp_rust::types::events::Event::PairSuccess(
+                pair_success,
+            ))
+            .await;
+        match &*state.read().await {
+            PairingState::Connected {
+                device_name,
+                phone_number,
+            } => {
+                assert_eq!(device_name, "My Phone");
+                assert_eq!(phone_number, "1234@s.whatsapp.net");
+            }
+            other => panic!("expected Connected, got {other:?}"),
+        }
+
+        // Disconnected: Connected → Disconnected
+        driver
+            .apply(&whatsapp_rust::types::events::Event::Disconnected(
+                whatsapp_rust::types::events::Disconnected,
+            ))
+            .await;
+        assert!(matches!(
+            *state.read().await,
+            PairingState::Disconnected { .. }
+        ));
+
+        // PairError: Disconnected → Failed
+        driver
+            .apply(&whatsapp_rust::types::events::Event::PairError(
+                whatsapp_rust::types::events::PairError {
+                    id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
+                    lid: whatsapp_rust::Jid::new("abcd", "lid"),
+                    business_name: String::new(),
+                    platform: String::new(),
+                    error: "401 logout".to_string(),
+                },
+            ))
+            .await;
+        assert!(matches!(*state.read().await, PairingState::Failed { .. }));
+
+        }
 }
