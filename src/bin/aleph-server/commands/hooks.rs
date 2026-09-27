@@ -19,6 +19,7 @@ use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{
     CommandHookInvocation, ConsentEntry, ConsentStatus, ShellHookConsent, Superseded,
     INLINE_COMMAND_EVENT, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES, SKILL_INLINE_EVENT,
+    USER_SKILL_OWNER,
 };
 use alephcore::utils::no_window::NoWindow;
 
@@ -63,7 +64,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
             truncate(&e.command, 44),
         );
         if let Some(note) = project_note(e) {
-            println!("{:<18} project: {note}", "");
+            println!("{:<18} {}: {note}", "", e.scope_label());
         }
         if let Some(note) = why.and_then(spliced_text_note) {
             println!("{:<18} {note}", "");
@@ -100,7 +101,7 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     // The same template in two projects is two entries; this line is what
     // tells them apart before approving one.
     if let Some(note) = project_note(&entry) {
-        println!("Project:     {note}");
+        println!("{:<13}{note}", scope_heading(&entry));
     }
     println!("Event:       {}", entry.event);
     if let Some(note) = entry.invoker_arguments_note().or(entry.skill_read_note()) {
@@ -270,10 +271,37 @@ fn run_skill_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdR
                 .into(),
         );
     };
+    // The server never runs such a command (it withholds it before consent),
+    // so it is never reviewed or approved here either.
+    if let Some(word) = ShellHookConsent::unbindable_script_word(
+        &entry.plugin_name,
+        entry.project_root.as_deref(),
+        Some(skill_dir),
+        &entry.command,
+    ) {
+        return Err(format!(
+            "the skill's inline command is never run by the server, so it cannot be approved: {}",
+            alephcore::skill::preprocess::unbindable_reason(&word)
+        )
+        .into());
+    }
+    // A plugin skill's command gets its plugin's path variables in
+    // production; the entry records the skill's directory, not the plugin's
+    // root, so a review run of a text that names one would run another
+    // command than production does.
+    let plugin_owned = ShellHookConsent::skill_owner_of(&entry.plugin_name)
+        .is_some_and(|owner| owner != USER_SKILL_OWNER);
+    if plugin_owned && names_a_plugin_variable(&entry.command) {
+        return Err(
+            "the plugin skill's inline command names a plugin path variable \
+             (CLAUDE_PLUGIN_ROOT & co.), which this review cannot set: the entry records the \
+             skill's directory, not its plugin's root. It cannot be reviewed or approved here."
+                .into(),
+        );
+    }
     refuse_shell_metachars(&entry.command)?;
     println!(
-        "(skill inline command: run in {} with ALEPH_SKILL_DIR set to it; a plugin skill's \
-         CLAUDE_PLUGIN_ROOT & co. are unset in this review run — production sets them)",
+        "(skill inline command: run in {} with ALEPH_SKILL_DIR set to it and no arguments)",
         skill_dir.display()
     );
     let site = InlineSite {
@@ -311,7 +339,7 @@ fn run_inline_command(entry: &ConsentEntry, cwd: &std::path::Path) -> CmdResult 
 
     // The server never runs such a command (it withholds it before consent),
     // so it is never reviewed or approved here either.
-    if let Some(word) = ShellHookConsent::root_relative_script(
+    if let Some(word) = ShellHookConsent::unbindable_script_word(
         &entry.plugin_name,
         entry.project_root.as_deref(),
         entry.plugin_root.as_deref(),
@@ -514,6 +542,22 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
 /// Which project an entry's approval is bound to, or — for a project-settings
 /// entry recorded before approvals were bound to a project — that it
 /// authorises nothing. `None` for a hook that fires everywhere.
+/// The heading `aleph-server hooks test` prints before [`project_note`].
+fn scope_heading(entry: &ConsentEntry) -> &'static str {
+    match entry.scope_label() {
+        "skills dir" => "Skills dir:",
+        _ => "Project:",
+    }
+}
+
+/// Whether `text` names a plugin path variable (`$NAME` / `${NAME}`).
+fn names_a_plugin_variable(text: &str) -> bool {
+    PLUGIN_ROOT_VARIABLES
+        .iter()
+        .chain(&PLUGIN_DATA_VARIABLES)
+        .any(|name| text.contains(&format!("${name}")) || text.contains(&format!("${{{name}}}")))
+}
+
 fn project_note(entry: &ConsentEntry) -> Option<String> {
     if let Some(root) = &entry.project_root {
         return Some(root.display().to_string());
@@ -789,6 +833,38 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
         );
+    }
+
+    /// A skill's inline command the server never runs is never reviewed
+    /// either: a script named through a variable consent cannot resolve for a
+    /// skill (the refusal the server applies), and — for a plugin's skill — a
+    /// text naming a plugin path variable, which the entry cannot supply.
+    /// Neither review run starts anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_inline_command_the_server_never_runs_is_not_reviewed() {
+        let skill = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let entry = |owner: &str, command: &str| ConsentEntry {
+            plugin_name: ShellHookConsent::skill_owner(owner, "demo"),
+            event: SKILL_INLINE_EVENT.into(),
+            ..pending_entry(command, skill.path())
+        };
+        let touch_root = r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh"; touch ran"#;
+        let err = run_for_review(&entry("plug", touch_root), cwd.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("${CLAUDE_PLUGIN_ROOT}/x.sh"),
+            "{err}"
+        );
+        let printf_root = r#"printf '%s' "$CLAUDE_PLUGIN_ROOT" > ran"#;
+        let err = run_for_review(&entry("plug", printf_root), cwd.path()).unwrap_err();
+        assert!(err.to_string().contains("plugin path variable"), "{err}");
+        assert!(!skill.path().join("ran").exists());
+        assert_eq!(
+            scope_heading(&entry(USER_SKILL_OWNER, "date")),
+            "Skills dir:"
+        );
+        assert_eq!(scope_heading(&entry("plug", "date")), "Project:");
     }
 
     /// A pending `user:global` entry for `command`, recorded from `root`.

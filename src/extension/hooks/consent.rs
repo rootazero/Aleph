@@ -104,10 +104,12 @@
 //! bound to the skill's own directory — where it runs, and what
 //! `$ALEPH_SKILL_DIR` names. A script word is resolved against that
 //! directory (relative, or through `$ALEPH_SKILL_DIR`) and content-bound
-//! like a hook's; one spelled through a plugin path variable or
-//! `$CLAUDE_PROJECT_DIR` binds nothing — their values in the child are not
-//! that directory. Skills ran their inline commands with no entry until
-//! then: each one comes back `pending` once and runs from its approval on.
+//! like a hook's. A command whose script word goes through any other
+//! variable (a plugin path variable, `$CLAUDE_PROJECT_DIR`, `$HOME`) names a
+//! file consent cannot find: it is never filed or run
+//! ([`ShellHookConsent::unbindable_script_word`]). Skills ran their inline
+//! commands with no entry until then: each one comes back `pending` once and
+//! runs from its approval on.
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
@@ -139,6 +141,11 @@ pub const INLINE_COMMAND_EVENT: &str = "SlashCommand";
 /// `skill::preprocess::SkillShell`; read by `aleph-server hooks list` / `test`.
 /// Its owner label is [`ShellHookConsent::skill_owner`]'s.
 pub const SKILL_INLINE_EVENT: &str = "SkillRead";
+
+/// The owner of a skill no plugin ships ([`ShellHookConsent::skill_owner`]):
+/// a user's, a project's or an agent's skills directory, keyed by that
+/// directory.
+pub const USER_SKILL_OWNER: &str = "user";
 
 /// What separates a skill label's owner from its skill
 /// ([`ShellHookConsent::skill_owner`]). No plugin id contains it
@@ -338,6 +345,18 @@ impl ConsentEntry {
         )
     }
 
+    /// What the review surfaces call this entry's [`Self::project_root`]:
+    /// `skills dir` for a skill no plugin ships — its key is the skills
+    /// directory it sits in, not a project ([`ShellHookConsent::skill_owner`])
+    /// — `project` otherwise.
+    #[must_use]
+    pub fn scope_label(&self) -> &'static str {
+        match ShellHookConsent::skill_owner_of(&self.plugin_name) {
+            Some(USER_SKILL_OWNER) => "skills dir",
+            _ => "project",
+        }
+    }
+
     /// What an approval of a skill's inline command approves, for the review
     /// surfaces to print; `None` for anything else.
     #[must_use]
@@ -426,43 +445,79 @@ impl ShellHookConsent {
         owner.contains(SKILL_LABEL_SEPARATOR)
     }
 
-    /// The script word of an INLINE command (a plugin command's `` !`cmd` ``,
-    /// [`INLINE_COMMAND_EVENT`]) that consent cannot bind to what runs, if any.
+    /// The owner part of a [`Self::skill_owner`] label (`None` for any other
+    /// label): a plugin id, or [`USER_SKILL_OWNER`].
+    #[must_use]
+    pub fn skill_owner_of(label: &str) -> Option<&str> {
+        label
+            .split_once(SKILL_LABEL_SEPARATOR)
+            .map(|(owner, _)| owner)
+    }
+
+    /// The script word of an INLINE command that consent cannot bind to what
+    /// runs, if any — the one refusal both inline faces apply before a
+    /// command is filed or run: such a command is never approved as a string
+    /// while its script could change under the approval. Which words consent
+    /// cannot bind follows from where the command runs, read from its owner
+    /// label (a [`Self::skill_owner`] label is a skill's):
     ///
-    /// Consent finds a command's script among its candidate words, in its
-    /// order, and resolves a relative word against the hook's root — the
-    /// directory a hook runs in. An inline command runs in the session's
-    /// directory instead, so a relative script word would be reviewed and
-    /// hashed as the plugin's copy (or, when the plugin ships none, bound to
-    /// nothing) while the session's copy runs. The first candidate that is
-    /// relative decides (`Some(word)`); one that is an existing absolute or
-    /// `~/` file is what consent binds — correctly — and ends the scan.
-    /// `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so a plugin's own script
-    /// stays content-bound and allowed. A path-shaped ARGUMENT to a program
-    /// (`git diff src/app.ts`) met before that point is refused too: consent
+    /// - **A plugin command's** (`` !`cmd` `` in `commands/<name>.md`,
+    ///   [`INLINE_COMMAND_EVENT`]) runs in the session's directory, not in its
+    ///   root. Consent resolves a relative word against the root, so a
+    ///   relative script word would be reviewed and hashed as the plugin's
+    ///   copy (or, when the plugin ships none, bound to nothing) while the
+    ///   session's copy runs. `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so
+    ///   a plugin's own script stays content-bound and allowed. A word
+    ///   through a variable consent does not know is not looked at here: it
+    ///   binds nothing, as for a hook (the module doc).
+    /// - **A skill's** (`allow-inline-shell: true`, [`SKILL_INLINE_EVENT`])
+    ///   runs in its root, the skill's directory, where consent resolves
+    ///   relative words and `$ALEPH_SKILL_DIR` and nothing else. A word
+    ///   through any other variable — `${CLAUDE_PLUGIN_ROOT}`,
+    ///   `$CLAUDE_PROJECT_DIR`, `$HOME` — names a file consent cannot find:
+    ///   it is refused. The skill ships the script in its directory and
+    ///   names it relative to it or through `$ALEPH_SKILL_DIR`.
+    ///
+    /// Candidates are consent's, in its order: the first word that names
+    /// itself a script, then every path-shaped word. The first one consent
+    /// cannot bind decides (`Some(word)`); one that is an existing file
+    /// consent binds ends the scan. A path-shaped ARGUMENT to a program
+    /// (`git diff src/app.ts`) met before that point counts too: consent
     /// cannot tell it from a script, and binds whichever comes first. What the
     /// command writes to (`2>/dev/null`, `> out/log`) and a URL are no
-    /// candidate for either (`script_candidates`); what it reads from
-    /// (`sh <x.sh`) is.
+    /// candidate (`script_words`); what it reads from (`sh <x.sh`) is.
     ///
     /// The scan stops where consent's binding stops, which keeps the refusal
-    /// its exact dual: a relative word AFTER the bound script is not looked
-    /// at. `sh ${CLAUDE_PLUGIN_ROOT}/setup.sh && ./scripts/build.sh` runs the
+    /// its exact dual: a word AFTER the bound script is not looked at.
+    /// `sh ${CLAUDE_PLUGIN_ROOT}/setup.sh && ./scripts/build.sh` runs the
     /// session's `build.sh` unbound, under an approval whose content binding
     /// covers `setup.sh` only — the text the operator approved says so.
     #[must_use]
-    pub fn root_relative_script(
+    pub fn unbindable_script_word(
         plugin_name: &str,
         project_root: Option<&Path>,
         plugin_root: Option<&Path>,
         command: &str,
     ) -> Option<String> {
         let context = ScriptContext::new(plugin_name, project_root, plugin_root);
+        let bound = |path: &str| candidate_path(path, &context).is_some_and(|p| p.is_file());
+        if context.skill {
+            let words = script_words(command, &context);
+            for word in consent_order(&words, ScriptWord::judged) {
+                if word.names_unknown_variable {
+                    return Some(word.written.clone());
+                }
+                if word.path.as_deref().is_some_and(bound) {
+                    return None;
+                }
+            }
+            return None;
+        }
         for token in script_candidates(command, &context) {
             if !token.starts_with("~/") && !Path::new(&token).is_absolute() {
                 return Some(token);
             }
-            if candidate_path(&token, &context).is_some_and(|path| path.is_file()) {
+            if bound(&token) {
                 return None;
             }
         }
@@ -994,7 +1049,8 @@ struct ScriptContext<'a> {
     /// a hook's command runs in (so what a relative path is relative to).
     /// A plugin command's inline command runs in the session's directory
     /// instead, which is why a relative word ahead of the script consent
-    /// binds refuses it ([`ShellHookConsent::root_relative_script`]).
+    /// binds refuses it ([`ShellHookConsent::unbindable_script_word`]); a
+    /// skill's runs here, in its skill directory.
     root: Option<&'a Path>,
     /// A plugin hook's data directory (`${CLAUDE_PLUGIN_DATA}` …).
     data: Option<PathBuf>,
@@ -1007,7 +1063,8 @@ struct ScriptContext<'a> {
     /// names — and nothing else. A plugin skill's child gets the plugin's
     /// path variables, whose values are not this root, and
     /// `$CLAUDE_PROJECT_DIR` is the run's directory: a word through them is
-    /// left unresolved (bound to nothing) rather than bound to another file.
+    /// left unresolved — never bound to another file — and refused
+    /// ([`ShellHookConsent::unbindable_script_word`]).
     skill: bool,
 }
 
@@ -1058,17 +1115,30 @@ impl<'a> ScriptContext<'a> {
     /// `*` is the word as written minus the known variables — not their
     /// values: a root named `a$b` is still one path.
     fn expand(&self, raw: &str) -> Option<String> {
+        let (expanded, rest) = self.substitute(raw);
+        let stable = !expanded.is_empty() && !rest.contains('$') && !rest.contains('*');
+        stable.then_some(expanded)
+    }
+
+    /// Whether `raw` still refers to a variable once the known ones are set
+    /// aside — a word whose path this context cannot know.
+    fn names_unknown_variable(&self, raw: &str) -> bool {
+        self.substitute(raw).1.contains('$')
+    }
+
+    /// `raw` without its quotes: with the known variables expanded, and with
+    /// them removed (what is left to judge).
+    fn substitute(&self, raw: &str) -> (String, String) {
         let unquoted: String = raw.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
-        let (mut expanded, mut written) = (unquoted.clone(), unquoted);
+        let (mut expanded, mut rest) = (unquoted.clone(), unquoted);
         for (name, value) in self.variables() {
             let Some(value) = value.to_str() else {
                 continue;
             };
             expanded = replace_variable(&expanded, name, value);
-            written = replace_variable(&written, name, "");
+            rest = replace_variable(&rest, name, "");
         }
-        let stable = !expanded.is_empty() && !written.contains('$') && !written.contains('*');
-        stable.then_some(expanded)
+        (expanded, rest)
     }
 }
 
@@ -1127,24 +1197,57 @@ fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Optio
         .find(|path| path.is_file())
 }
 
-/// The words a command's script is looked for among, in consent's order: the
-/// first word that names itself a script, then every path-shaped word — each
-/// with the context's known variables expanded ([`ScriptContext::expand`]).
-/// What a command writes to (an output redirection's target) and a URL are
-/// not words a script can be: `2>/dev/null`, `> out/log` and `https://…`
-/// name nothing that runs. What it reads from (`<x.sh`) can be, and is judged
-/// by its target ([`redirection`]). A redirection is recognised on the word
-/// as written, before quotes are removed: a quoted `'>'` or `"2>"` is an
-/// argument the shell passes on, and the word after it is judged.
+/// The words a command's script is looked for among, in consent's order
+/// ([`consent_order`]): the stable paths among [`script_words`], each with
+/// the context's known variables expanded ([`ScriptContext::expand`]).
 fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> {
-    let mut tokens: Vec<String> = Vec::new();
+    // Anything with a glob or a variable nobody here can resolve is not a
+    // stable path, so it is dropped entirely — and so is the empty source of
+    // a `<` written apart from its target.
+    let tokens: Vec<String> = script_words(command, context)
+        .into_iter()
+        .filter_map(|word| word.path)
+        .collect();
+    consent_order(&tokens, String::as_str)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// One word of a command that can name its script ([`script_words`]).
+struct ScriptWord {
+    /// The word with the quotes a shell removes gone, variables as written.
+    written: String,
+    /// The path it names, when it is a stable one ([`ScriptContext::expand`]).
+    path: Option<String>,
+    /// It refers to a variable the context does not know.
+    names_unknown_variable: bool,
+}
+
+impl ScriptWord {
+    /// What consent's order judges the word by: the path it names, else the
+    /// word as written.
+    fn judged(&self) -> &str {
+        self.path.as_deref().unwrap_or(&self.written)
+    }
+}
+
+/// Every word of `command` that can name its script, in command order: what
+/// it writes to (an output redirection's target) and a URL are not words a
+/// script can be — `2>/dev/null`, `> out/log` and `https://…` name nothing
+/// that runs. What it reads from (`<x.sh`) can be, and is judged by its
+/// target ([`redirection`]). A redirection is recognised on the word as
+/// written, before quotes are removed: a quoted `'>'` or `"2>"` is an
+/// argument the shell passes on, and the word after it is judged.
+fn script_words(command: &str, context: &ScriptContext<'_>) -> Vec<ScriptWord> {
+    let mut words = Vec::new();
     let mut writes_to_next = false;
     for raw in command.split_whitespace() {
         // The target of an output operator written apart (`> out/log`).
         if std::mem::take(&mut writes_to_next) {
             continue;
         }
-        let written = match redirection(raw) {
+        let word = match redirection(raw) {
             Redirection::Writes { target_follows } => {
                 writes_to_next = target_follows;
                 continue;
@@ -1152,30 +1255,36 @@ fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> 
             Redirection::Reads(source) => source,
             Redirection::Not => raw,
         };
-        // Anything with a glob or a variable nobody here can resolve is not a
-        // stable path, so it is dropped entirely — and so is the empty
-        // source of a `<` written apart from its target.
-        let Some(candidate) = context.expand(written) else {
+        let written: String = word.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+        if written.is_empty() {
             continue;
-        };
-        if !is_url(&candidate) {
-            tokens.push(candidate);
         }
+        let path = context.expand(word);
+        if is_url(path.as_deref().unwrap_or(&written)) {
+            continue;
+        }
+        words.push(ScriptWord {
+            names_unknown_variable: context.names_unknown_variable(word),
+            written,
+            path,
+        });
     }
+    words
+}
 
-    // Pass 1: a token that names itself a script.
-    let by_extension = tokens
+/// Consent's order over candidate words, each judged by `text`: first the
+/// word that names itself a script, then every path-shaped word (a bare
+/// `./hook`, no extension).
+fn consent_order<T>(words: &[T], text: impl Fn(&T) -> &str) -> Vec<&T> {
+    // Pass 1: a word that names itself a script.
+    let by_extension = words.iter().find(|w| {
+        let lower = text(w).to_ascii_lowercase();
+        SCRIPT_EXTENSIONS.iter().any(|e| lower.ends_with(e))
+    });
+    // Pass 2: fall back to anything path-shaped.
+    let path_shaped = words
         .iter()
-        .find(|t| {
-            let lower = t.to_ascii_lowercase();
-            SCRIPT_EXTENSIONS.iter().any(|e| lower.ends_with(e))
-        })
-        .cloned();
-    // Pass 2: fall back to anything path-shaped (a bare `./hook`, no extension).
-    let path_shaped = tokens
-        .iter()
-        .filter(|t| t.contains('/') || t.contains('\\'))
-        .cloned();
+        .filter(|w| text(w).contains('/') || text(w).contains('\\'));
     by_extension.into_iter().chain(path_shaped).collect()
 }
 
@@ -1406,7 +1515,7 @@ mod tests {
         std::fs::write(root.path().join("check.sh"), "true").unwrap();
         let abs = root.path().join("check.sh").display().to_string();
         let relative = |command: &str| {
-            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
         };
         assert_eq!(
             relative("sh scripts/check.sh"),
@@ -1431,7 +1540,7 @@ mod tests {
         std::fs::write(root.path().join("x.sh"), "true").unwrap();
         std::fs::write(root.path().join("last-run"), "then").unwrap();
         let relative = |command: &str| {
-            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
         };
         for writes in [
             "git status 2>/dev/null",
@@ -1472,7 +1581,7 @@ mod tests {
     fn a_quoted_redirection_operator_is_an_argument() {
         let root = tempfile::tempdir().expect("tempdir");
         let relative = |command: &str| {
-            ShellHookConsent::root_relative_script("plug", None, Some(root.path()), command)
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
         };
         assert_eq!(
             relative(r#"bash -c 'sh "$1"' '>' ./x.sh"#),
@@ -1944,6 +2053,76 @@ mod tests {
             script_path_from_command(r#"sh "${CLAUDE_PLUGIN_ROOT}/go.sh""#, &hook),
             Some(go)
         );
+    }
+
+    /// The refusal both inline faces share, per face. A skill's command is
+    /// refused at the first script candidate that goes through a variable
+    /// other than `$ALEPH_SKILL_DIR` (consent could not find its file); one
+    /// consent binds, a relative one (the skill runs in its directory), and a
+    /// variable that is no script word pass. A plugin command's keeps its
+    /// rule: a relative word is refused, an unknown variable is not looked at.
+    #[test]
+    fn a_skill_refuses_a_script_it_cannot_bind_and_a_command_keeps_its_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x.sh"), "echo hi").unwrap();
+        let skill = ShellHookConsent::skill_owner(USER_SKILL_OWNER, "demo");
+        let as_skill = |cmd: &str| {
+            ShellHookConsent::unbindable_script_word(
+                &skill,
+                Some(dir.path()),
+                Some(dir.path()),
+                cmd,
+            )
+        };
+        let word = |w: &str| Some(w.to_string());
+        assert_eq!(
+            as_skill(r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh""#),
+            word("${CLAUDE_PLUGIN_ROOT}/x.sh")
+        );
+        assert_eq!(
+            as_skill(r#"sh "$CLAUDE_PROJECT_DIR/x.sh""#),
+            word("$CLAUDE_PROJECT_DIR/x.sh")
+        );
+        assert_eq!(as_skill("cat $HOME/notes"), word("$HOME/notes"));
+        assert_eq!(
+            as_skill(r#"sh x.sh "$HOME/notes""#),
+            None,
+            "the bound script ends the scan"
+        );
+        assert_eq!(as_skill(r#"sh "$ALEPH_SKILL_DIR/x.sh""#), None);
+        assert_eq!(as_skill("sh x.sh"), None);
+        assert_eq!(as_skill(r#"printf '%s' "$CLAUDE_PLUGIN_ROOT""#), None);
+        assert_eq!(as_skill("git status"), None);
+
+        let as_command = |cmd: &str| {
+            ShellHookConsent::unbindable_script_word("plug", None, Some(dir.path()), cmd)
+        };
+        assert_eq!(as_command("sh x.sh"), word("x.sh"));
+        assert_eq!(as_command(r#"sh "$HOME/y.sh""#), None);
+        assert_eq!(as_command(r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh""#), None);
+    }
+
+    /// A skill no plugin ships is keyed by its skills directory, and the
+    /// review surfaces say so; anything else names a project.
+    #[test]
+    fn a_user_skill_entry_is_labelled_by_its_skills_dir() {
+        let entry = |owner: &str| ConsentEntry {
+            fingerprint: String::new(),
+            plugin_name: owner.to_string(),
+            project_root: Some(PathBuf::from("/p")),
+            command: "date".into(),
+            event: SKILL_INLINE_EVENT.into(),
+            plugin_root: None,
+            status: ConsentStatus::Pending,
+            first_seen: 0,
+            approved_at: None,
+            script_fingerprint: None,
+        };
+        let user = ShellHookConsent::skill_owner(USER_SKILL_OWNER, "demo");
+        assert_eq!(entry(&user).scope_label(), "skills dir");
+        let plugin = ShellHookConsent::skill_owner("plug", "demo");
+        assert_eq!(entry(&plugin).scope_label(), "project");
+        assert_eq!(entry("user:project").scope_label(), "project");
     }
 
     /// The shapes a hook written the Claude Code way names its script with —

@@ -53,7 +53,9 @@ use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
 use crate::extension::hooks::{ShellHookConsent, INLINE_COMMAND_EVENT};
-use crate::extension::inline_shell::{run_inline_process, withheld, InlineConsent, Withheld};
+use crate::extension::inline_shell::{
+    run_inline_process, withheld, InlineConsent, Withheld, NO_RUN_DIRECTORY,
+};
 use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
@@ -415,7 +417,7 @@ pub(super) fn strip(
 /// template's own text; only an approval that says so covers it
 /// ([`InlineConsent::admit`]). A command with a relative word ahead of the
 /// script consent binds is never filed or run
-/// ([`ShellHookConsent::root_relative_script`], which also names what it
+/// ([`ShellHookConsent::unbindable_script_word`], which also names what it
 /// does not look at).
 ///
 /// Approved, the command runs through the production builder in the run's
@@ -444,7 +446,7 @@ impl InlineShell for ConsentedShell {
         };
         // Consent would review a relative script in the plugin's root while
         // this runs the session's copy: never filed, never run.
-        if let Some(word) = ShellHookConsent::root_relative_script(
+        if let Some(word) = ShellHookConsent::unbindable_script_word(
             &self.plugin_id,
             project,
             Some(&self.plugin_root),
@@ -465,7 +467,7 @@ impl InlineShell for ConsentedShell {
         }
         .admit(cmd)?;
         let Some(cwd) = self.cwd.as_deref() else {
-            return Err(withheld(cmd, "no working directory is known for this turn"));
+            return Err(withheld(cmd, NO_RUN_DIRECTORY));
         };
         let site = InlineSite {
             cwd,

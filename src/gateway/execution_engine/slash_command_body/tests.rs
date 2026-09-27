@@ -439,7 +439,10 @@ async fn an_approved_inline_command_is_withheld_when_no_directory_is_known() {
     let out = f.shell(None).run("echo hi", &no_args()).await;
     assert_eq!(
         out,
-        Err("[!`echo hi` not run: no working directory is known for this turn]".to_string())
+        Err(format!(
+            "[!`echo hi` not run: {}]",
+            crate::extension::inline_shell::NO_RUN_DIRECTORY
+        ))
     );
 }
 
@@ -790,7 +793,10 @@ async fn a_vanished_run_directory_withholds_the_inline_commands() {
         .unwrap()
         .unwrap();
     assert!(
-        block.contains("[[!`echo hi` not run: no working directory is known for this turn]]"),
+        block.contains(&format!(
+            "[[!`echo hi` not run: {}]]",
+            crate::extension::inline_shell::NO_RUN_DIRECTORY
+        )),
         "{block}"
     );
 }

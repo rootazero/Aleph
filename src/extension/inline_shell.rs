@@ -34,6 +34,11 @@ use super::inline_shell_command;
 /// instruction to the model, not in an inline expansion.
 pub(crate) const INLINE_SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The reason an approved command is withheld when the run's directory —
+/// its `CLAUDE_PROJECT_DIR`, and a command's working directory — is not
+/// known. One spelling for both faces.
+pub(crate) const NO_RUN_DIRECTORY: &str = "the run's directory is not known for this turn";
+
 /// The reason a command is withheld while its consent entry is pending.
 pub(crate) const PENDING_APPROVAL: &str =
     "pending operator approval — `aleph-server hooks list` / `aleph-server hooks test`";

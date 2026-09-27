@@ -325,8 +325,10 @@ impl ConfigApprovalPolicy {
         }
     }
 
-    /// Return the expected path for the configuration file.
-    fn config_path() -> PathBuf {
+    /// Return the expected path for the configuration file. Also one of the
+    /// paths the model's file tools may never touch
+    /// (`builtin_tools::file_ops::get_denied_paths`).
+    pub(crate) fn config_path() -> PathBuf {
         crate::utils::paths::get_config_dir().map_or_else(
             |_| {
                 warn!(

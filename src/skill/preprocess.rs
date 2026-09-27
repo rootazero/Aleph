@@ -51,8 +51,11 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use crate::extension::hooks::{ShellHookConsent, SKILL_INLINE_EVENT};
-use crate::extension::inline_shell::{run_inline_process, withheld, InlineConsent, Withheld};
+use crate::extension::hooks::{ShellHookConsent, SKILL_INLINE_EVENT, USER_SKILL_OWNER};
+use crate::extension::inline_shell::{
+    run_inline_process, withheld, InlineConsent, Withheld, NO_RUN_DIRECTORY,
+};
+use crate::extension::plugin_secrets::SettingsForm;
 use crate::extension::visibility::ScopeKey;
 use crate::extension::{
     inline_commands, inline_shell_command, run_inline, InlineArgs, InlineShell, InlineSite,
@@ -273,8 +276,13 @@ async fn expand_inline_shell(
 /// skill's directory ([`InlineConsent`]); an approved one runs through the
 /// production builder ([`inline_shell_command`]) in the skill's directory,
 /// `ALEPH_SKILL_DIR` naming it, `CLAUDE_PROJECT_DIR` the run's directory,
-/// and — for a plugin's skill — the plugin's path variables, with the
-/// command face's timeout and output cap ([`run_inline_process`]).
+/// and — for a plugin's skill — the plugin's path variables and its settings
+/// minus every secret (the command face's `plugin_settings_env` call), with
+/// the command face's timeout and output cap ([`run_inline_process`]). A
+/// command whose script consent cannot bind — named through any variable but
+/// `$ALEPH_SKILL_DIR` — is never filed or run
+/// ([`ShellHookConsent::unbindable_script_word`]): its approval would be of a
+/// string whose script can change under it.
 ///
 /// The owner is the plugin whose published `skills/` directory holds the
 /// skill (its id and visibility key), or `user` for any other skill, keyed
@@ -312,7 +320,7 @@ impl SkillShell {
                 Some((p.plugin_id, p.plugin_root)),
             ),
             None => (
-                ShellHookConsent::skill_owner("user", &skill),
+                ShellHookConsent::skill_owner(USER_SKILL_OWNER, &skill),
                 ScopeKey::project(&base),
                 None,
             ),
@@ -331,6 +339,18 @@ impl SkillShell {
 #[async_trait::async_trait]
 impl InlineShell for SkillShell {
     async fn run(&self, cmd: &str, args: &InlineArgs<'_>) -> Result<String, String> {
+        let project = match &self.scope {
+            ScopeKey::Project(root) => Some(root.as_path()),
+            ScopeKey::Global => None,
+        };
+        if let Some(word) = ShellHookConsent::unbindable_script_word(
+            &self.owner,
+            project,
+            Some(&self.skill_dir),
+            cmd,
+        ) {
+            return Err(withheld(cmd, &unbindable_reason(&word)));
+        }
         InlineConsent {
             consent: &self.consent,
             owner: &self.owner,
@@ -340,7 +360,7 @@ impl InlineShell for SkillShell {
         }
         .admit(cmd)?;
         let Some(run_dir) = self.run_dir.as_deref() else {
-            return Err(withheld(cmd, "this turn's directory is not known"));
+            return Err(withheld(cmd, NO_RUN_DIRECTORY));
         };
         let site = InlineSite {
             cwd: run_dir,
@@ -350,8 +370,30 @@ impl InlineShell for SkillShell {
                 .map(|(id, root)| (id.as_str(), root.as_path())),
             skill_dir: Some(&self.skill_dir),
         };
-        run_inline_process(cmd, inline_shell_command(cmd, args, &site)).await
+        let mut command = inline_shell_command(cmd, args, &site);
+        if let (Some((id, _)), Some(manager)) =
+            (&self.plugin, crate::extension::try_extension_manager())
+        {
+            command.envs(
+                manager
+                    .plugin_settings_env(id, SettingsForm::WithoutSecrets)
+                    .await,
+            );
+        }
+        run_inline_process(cmd, command).await
     }
+}
+
+/// Why a skill's command naming `word` is never filed or run
+/// ([`ShellHookConsent::unbindable_script_word`]). Shared with the review
+/// surface (`aleph-server hooks test`).
+#[must_use]
+pub fn unbindable_reason(word: &str) -> String {
+    format!(
+        "`{word}` names its script through a variable consent cannot resolve for a skill — \
+         the skill should ship the script in its directory and name it relative to it or \
+         through `$ALEPH_SKILL_DIR`"
+    )
 }
 
 #[cfg(test)]

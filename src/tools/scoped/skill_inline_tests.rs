@@ -10,10 +10,9 @@ use crate::config::types::policies::ToolPermissionsConfig;
 use crate::extension::hooks::{ConsentEntry, ConsentStatus, ShellHookConsent, SKILL_INLINE_EVENT};
 use crate::extension::visibility::ScopeKey;
 use crate::extension::PermissionAction;
-use crate::runtimes::post_install::HomeEnvGuards;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
 use crate::tools::AlephTool;
-use crate::utils::paths::{publish_plugin_skill_dirs, PublishedPluginSkillDir};
+use crate::utils::paths::{publish_plugin_skill_dirs, IsolatedAlephHome, PublishedPluginSkillDir};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -52,7 +51,8 @@ enum Caller {
 }
 
 /// A skills directory holding one opted-in skill, a consent file, a run
-/// directory, and `$HOME` / `$ALEPH_HOME` pointed into the tempdir.
+/// directory, and `$ALEPH_HOME` isolated (`$HOME` is not read on this path,
+/// and moving it would race the unguarded `~/…` tests beside these).
 struct Fixture {
     tmp: tempfile::TempDir,
     consent: Arc<ShellHookConsent>,
@@ -61,7 +61,7 @@ struct Fixture {
     run_dir: PathBuf,
     /// Held last: the published plugin dir is process-wide, and every test
     /// that publishes one holds this lock.
-    _env: HomeEnvGuards,
+    _env: IsolatedAlephHome,
 }
 
 impl Fixture {
@@ -69,7 +69,7 @@ impl Fixture {
     /// holds `commands`, with a data file `x`.
     fn new(skills: &str, skill: &str, commands: &[&str]) -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let env = HomeEnvGuards::acquire_and_set(tmp.path().join("aleph"), tmp.path().join("home"));
+        let env = IsolatedAlephHome::new();
         let skills = tmp.path().join(skills);
         let skill_dir = skills.join(skill);
         std::fs::create_dir_all(&skill_dir).unwrap();
@@ -368,4 +368,75 @@ async fn a_call_outside_the_chokepoint_runs_no_inline_command() {
         "{direct}"
     );
     assert!(!f.skill_dir().join("ran").exists());
+}
+
+/// The reason a skill's command naming `word` is refused.
+fn unbindable(cmd: &str, word: &str) -> String {
+    format!(
+        "[!`{cmd}` not run: {}]",
+        crate::skill::preprocess::unbindable_reason(word)
+    )
+}
+
+/// Review I-1, the swap probe: a PLUGIN skill whose command names its script
+/// through `${CLAUDE_PLUGIN_ROOT}` — or `$CLAUDE_PROJECT_DIR` — which consent
+/// cannot resolve for a skill, is never filed or run. Before and after the
+/// script is swapped the model gets the refusal naming the word, nothing is
+/// pending to approve, and neither version of the script ran.
+#[tokio::test]
+async fn a_skill_script_named_through_another_variable_is_never_filed_or_run() {
+    const VIA_ROOT: &str = r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh""#;
+    const VIA_PROJECT: &str = r#"sh "$CLAUDE_PROJECT_DIR/x.sh""#;
+    let f = Fixture::plugin("demo", &[VIA_ROOT, VIA_PROJECT]);
+    for dir in [f.plugin_root(), f.run_dir.clone()] {
+        std::fs::write(dir.join("x.sh"), "echo v1-ran\n").unwrap();
+    }
+
+    let first = f.read(Caller::Operator).await;
+    f.approve_all();
+    for dir in [f.plugin_root(), f.run_dir.clone()] {
+        std::fs::write(dir.join("x.sh"), "echo v2-swapped\n").unwrap();
+    }
+    let second = f.read(Caller::Operator).await;
+
+    assert!(
+        !second.contains("v2-swapped"),
+        "the swapped script ran: {second}"
+    );
+    for body in [&first, &second] {
+        assert!(
+            !body.contains("v1-ran") && !body.contains("v2-swapped"),
+            "{body}"
+        );
+        assert!(
+            body.contains(&unbindable(VIA_ROOT, "${CLAUDE_PLUGIN_ROOT}/x.sh")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&unbindable(VIA_PROJECT, "$CLAUDE_PROJECT_DIR/x.sh")),
+            "{body}"
+        );
+    }
+    assert!(f.consent.entries().is_empty(), "{:?}", f.consent.entries());
+}
+
+/// The control: the same script shipped in the skill's directory and named
+/// relative to it is content-bound. Approved, it runs; swapped, its approval
+/// no longer covers it and the model gets the pending placeholder.
+#[tokio::test]
+async fn a_skill_script_named_relative_to_its_dir_is_bound_to_its_content() {
+    const RELATIVE: &str = "sh x.sh";
+    let f = Fixture::plugin("demo", &[RELATIVE]);
+    let script = f.skill_dir().join("x.sh");
+    std::fs::write(&script, "echo v1-ran\n").unwrap();
+
+    let _ = f.read(Caller::Operator).await;
+    f.approve_all();
+    let approved = f.read(Caller::Operator).await;
+    std::fs::write(&script, "echo v2-swapped\n").unwrap();
+    let swapped = f.read(Caller::Operator).await;
+
+    assert!(approved.contains("- v1-ran\n"), "{approved}");
+    assert!(!swapped.contains("v2-swapped"), "{swapped}");
+    assert!(swapped.contains(&pending(RELATIVE)), "{swapped}");
 }

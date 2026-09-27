@@ -82,6 +82,31 @@ pub fn get_denied_paths() -> Vec<String> {
         denied_paths.push(format!("{}/secrets.vault", config_dir.display()));
         denied_paths.push(format!("{}/secrets.vault.lock", config_dir.display()));
         denied_paths.push(format!("{}/data", config_dir.display()));
+        // The state of the gates only a HUMAN opens. A model that could write
+        // one could open its own gate — on an operator turn it can already
+        // write a skill (`skill_manage`, a project's `.aleph/skills`), so one
+        // more `file_write` of an `approved` consent entry would be a shell
+        // outside the sandbox with nobody in the loop. Each path comes from
+        // the store that owns it, never re-spelled here:
+        // - the shell-command consent registry (hooks, and every inline
+        //   `` !`cmd` `` — a plugin command's and a skill's);
+        // - the exec-approval grants a human gave "always";
+        // - the config-tier approval policy (its allow/block lists);
+        // - plugin enable + owner-trust state (`plugins.toml` — only a human
+        //   enables a Claude Code install). It sits under `data/` (above);
+        //   named on its own so moving it out of `data/` cannot un-deny it.
+        for gate in [
+            crate::extension::hooks::ShellHookConsent::default_path(),
+            crate::sandbox::exec_approval::grants::GrantStore::default_path(),
+            crate::approval::ConfigApprovalPolicy::config_path(),
+        ]
+        .into_iter()
+        .chain(
+            aleph_protocol::paths::data_dir()
+                .map(|data| data.join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)),
+        ) {
+            denied_paths.push(gate.display().to_string());
+        }
         // Note: output directory is intentionally NOT denied
     }
 
