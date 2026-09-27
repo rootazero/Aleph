@@ -242,8 +242,10 @@ fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
 /// A **sequence** that comes out empty — `allowed-tools: []` — is a
 /// declaration: `Some(vec![])`. On a plugin command
 /// [`crate::gateway::execution_engine::slash_skill_scope`] enforces it as
-/// deny-all, so the slash command can call zero tools; on a skill it
-/// pre-grants nothing (and restricts only on the stale-row arm
+/// deny-all: the slash command can call none of its declared tools, and only
+/// what the run attaches itself remains (`subagent`, and the disclosure /
+/// deferral meta-tools `get_tool_schema` / `tool_search` when those are on).
+/// On a skill it pre-grants nothing (and restricts only on the stale-row arm
 /// `slash_skill_pregrant::split` describes).
 ///
 /// A **scalar** that names no tool is not. `allowed-tools: ,` /
@@ -559,7 +561,8 @@ mod tests {
     /// A scalar that names no tool at all is the same typo one step further —
     /// and resolving it to `Some(empty)` would hand the author the *harshest*
     /// outcome on the whole chain (`slash_skill_scope`'s explicit deny-all, so
-    /// the slash command can call zero tools) for a pure-punctuation slip,
+    /// the slash command can call none of its declared tools) for a
+    /// pure-punctuation slip,
     /// silently: registration warns about each entry it drops, and an empty
     /// set has no entries to warn about.
     ///
