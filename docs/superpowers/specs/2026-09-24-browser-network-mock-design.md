@@ -62,10 +62,11 @@ browser_network 工具 ──→ BrowserBackend::route_* 默认 no-op（老后�
 
 ## 4. 工具面与 wire 契约（第 3 节已批）
 
-**`browser_network`**（第 27 个 browser 工具）：
+**`browser_network`（既有工具的扩展，不是新工具）**：该工具今天已存在（`browser_tools/network.rs`，只读网络日志查看器，`backend.network_log`），C1 给它加 `action` 字段（默认 `log`＝现状行为，向后兼容）而非造第 27 个工具（计划阶段发现，对第 3 节「新工具」表述的修订——更少面、零新增 catalog 条目字节压力，DESCRIPTION 改动走既有字节守卫）：
 
 | Action | 参数 | 输出 |
 |---|---|---|
+| `log`（默认，现状） | — | 网络日志文本（现状不变） |
 | `mock_add` | `url_contains`（必填）、`method?`、`kind: mock{status,headers,body} \| abort`、`scope: tab\|profile`（默认 tab）、`note?` | `{rule_id, scope}` |
 | `mock_list` | `scope?` | 规则表 `{rule_id, url_contains, method, kind, hits, active}` |
 | `mock_remove` | `rule_id` | 确认 + 最终命中数 |
