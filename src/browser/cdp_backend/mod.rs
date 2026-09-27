@@ -65,6 +65,7 @@ mod evaluate;
 mod events;
 pub(crate) mod migration;
 mod navigate;
+pub(crate) mod routes;
 mod screenshot;
 mod snapshot;
 mod tabs;
