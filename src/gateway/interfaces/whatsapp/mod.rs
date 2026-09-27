@@ -25,8 +25,6 @@ pub mod config;
 pub mod message;
 pub mod pairing;
 
-pub mod account;
-pub mod account_registry;
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
@@ -37,9 +35,7 @@ pub mod wa_outbound;
 pub mod wa_policy;
 pub mod wa_runtime;
 
-pub use config::{
-    AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppAccountConfig, WhatsAppConfig,
-};
+pub use config::{AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppConfig};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,

@@ -1,12 +1,12 @@
 use crate::gateway::channel::Attachment;
-use crate::gateway::interfaces::whatsapp::config::WhatsAppAccountConfig;
+use crate::gateway::interfaces::whatsapp::config::WhatsAppConfig;
 
 pub struct MediaProcessor;
 
 impl MediaProcessor {
     pub fn preprocess(
         attachment: &Attachment,
-        config: &WhatsAppAccountConfig,
+        config: &WhatsAppConfig,
     ) -> Result<ProcessedMedia, String> {
         let max_bytes = config.media.max_outbound_mb * 1024 * 1024;
         let data = attachment.data.as_ref().ok_or("Attachment has no data")?;
@@ -54,14 +54,7 @@ mod tests {
             path: None,
             data: Some(vec![0, 1, 2, 3]),
         };
-        let config = WhatsAppAccountConfig {
-            enabled: true,
-            phone_number: None,
-            access: Default::default(),
-            delivery: Default::default(),
-            reactions: Default::default(),
-            media: Default::default(),
-        };
+        let config = WhatsAppConfig::default();
         let proc = MediaProcessor::preprocess(&att, &config).unwrap();
         assert_eq!(proc.mime_type, "audio/ogg; codecs=opus");
     }
