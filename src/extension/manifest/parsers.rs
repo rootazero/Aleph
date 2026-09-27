@@ -220,9 +220,14 @@ struct HookMatcher {
 
 /// Hook action wire shape inside a plugin's `hooks.json` (Claude-Code
 /// format). Only `command` actions are supported from plugin manifests;
-/// other `type` values parse (command stays `None`) and are skipped.
+/// other `type` values parse (command stays `None`) and are skipped, each
+/// with a warning that names it.
 #[derive(Debug, Deserialize)]
 struct HookAction {
+    /// `command` / `prompt` / `http` / `agent`, as written — read only to
+    /// name a dropped action.
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
     #[serde(default)]
     command: Option<String>,
     /// Per-action timeout. Claude Code spells it `timeout`; Aleph's user
@@ -837,6 +842,13 @@ pub fn parse_hooks_content(
             continue;
         };
         for (idx, matcher) in matchers.into_iter().enumerate() {
+            // The notice `~/.aleph/hooks.json` gives for the same matcher.
+            crate::extension::hooks::warn_on_matcher(
+                plugin_id,
+                &event_str,
+                event,
+                matcher.matcher.as_deref(),
+            );
             // Emit ONE registration per command action so the executor can
             // actually run each when the event fires, with ITS OWN timeout.
             // (These previously collapsed into a semicolon-joined
@@ -849,6 +861,16 @@ pub fn parse_hooks_content(
             // through the operator consent gate before first execution.
             for a in &matcher.hooks {
                 let Some(command) = a.command.as_ref().filter(|c| !c.is_empty()) else {
+                    // The user layer runs `prompt` / `http` / `agent`
+                    // actions from the same shape; a plugin's are not run,
+                    // and a drop is said, never silent.
+                    warn!(
+                        plugin = plugin_id,
+                        event = %event_str,
+                        action = a.kind.as_deref().unwrap_or("(no type)"),
+                        "plugin hooks.json action dropped: only `command` actions with a \
+                         command run from a plugin"
+                    );
                     continue;
                 };
                 caps.push(CapabilityDeclaration::Hook(
@@ -1069,6 +1091,8 @@ pub fn parse_v2_hooks(
             );
             continue;
         };
+        // The third reader of a matcher: the same notice as both hook files.
+        crate::extension::hooks::warn_on_matcher(plugin_id, &h.event, event, h.filter.as_deref());
         caps.push(CapabilityDeclaration::Hook(HookRegistration {
             event,
             priority: HookPriority::from_str_or_default(&h.priority).as_i32(),
@@ -2080,6 +2104,169 @@ mod tests {
             declared_hooks(&caps),
             vec![(HookEvent::AfterCompaction, Some("PostCompact".into()))]
         );
+    }
+
+    /// P4.14 F-5: a plugin's `prompt` / `http` / `agent` actions are not run
+    /// (the user layer runs all three), and each drop is named — plugin,
+    /// event, action type — instead of vanishing.
+    #[test]
+    fn every_dropped_plugin_hook_action_is_named() {
+        let (caps, logged) = warnings_during(|| {
+            parse_hooks_content(
+                r#"{"hooks": {
+                    "Stop": [{"hooks": [{"type": "prompt", "prompt": "ok?"}]}],
+                    "PreToolUse": [{"hooks": [
+                        {"type": "http", "url": "http://127.0.0.1:9/h"},
+                        {"type": "agent", "agent": "reviewer"},
+                        {"type": "command", "command": "echo ok"}
+                    ]}]}}"#,
+                std::path::Path::new("/p"),
+                "f5plug",
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            declared_hooks(&caps),
+            vec![(HookEvent::BeforeToolCall, Some("PreToolUse".into()))]
+        );
+        let dropped: Vec<&str> = logged
+            .lines()
+            .filter(|l| l.contains("action dropped"))
+            .collect();
+        assert_eq!(dropped.len(), 3, "{logged}");
+        for (kind, event) in [
+            ("prompt", "Stop"),
+            ("http", "PreToolUse"),
+            ("agent", "PreToolUse"),
+        ] {
+            assert!(
+                dropped
+                    .iter()
+                    .any(|l| l.contains(kind) && l.contains(event) && l.contains("f5plug")),
+                "no warning names the {kind} action on {event}: {logged}"
+            );
+        }
+    }
+
+    /// The twin of `~/.aleph/hooks.json`'s load-time notice: a plugin's
+    /// matcher that never fires, or that its event ignores, is said too — and
+    /// superpowers' real SessionStart matcher is not flagged.
+    #[test]
+    fn a_plugin_hook_matcher_gets_the_user_layers_notice() {
+        let (_, logged) = warnings_during(|| {
+            parse_hooks_content(
+                r#"{"hooks": {
+                    "SessionStart": [
+                        {"matcher": "resume", "hooks": [{"type": "command", "command": "a"}]},
+                        {"matcher": "startup|clear|compact", "hooks": [{"type": "command", "command": "b"}]}
+                    ],
+                    "UserPromptSubmit": [{"matcher": "x", "hooks": [{"type": "command", "command": "c"}]}]
+                }}"#,
+                std::path::Path::new("/p"),
+                "twin",
+            )
+            .unwrap()
+        });
+        let notices: Vec<&str> = logged
+            .lines()
+            .filter(|l| l.contains("hook matcher"))
+            .collect();
+        assert_eq!(notices.len(), 2, "{logged}");
+        assert!(notices
+            .iter()
+            .any(|l| l.contains("`resume`") && l.contains("never fires")));
+        assert!(notices
+            .iter()
+            .any(|l| l.contains("`x`") && l.contains("ignored")));
+    }
+
+    /// The third reader of a matcher, `aleph.plugin.toml`'s `[[hooks]]
+    /// filter`, gives the same notice.
+    #[test]
+    fn an_aleph_toml_hook_filter_gets_the_same_notice() {
+        use crate::extension::manifest::HookSection;
+        let (caps, logged) = warnings_during(|| {
+            parse_v2_hooks(
+                &[HookSection {
+                    event: "before_tool_call".into(),
+                    kind: None,
+                    handler: Some("onTool".into()),
+                    priority: "normal".into(),
+                    filter: Some("((".into()),
+                }],
+                "tomlplug",
+            )
+        });
+        assert_eq!(caps.len(), 1, "the hook still loads");
+        assert!(
+            logged.contains("hook matcher") && logged.contains("not a valid regex"),
+            "{logged}"
+        );
+    }
+
+    /// Parses `hooks_json` as plugin `p`'s file, fires `event` through the
+    /// production executor (observers, then interceptors, as the lifecycle
+    /// seams do) and says whether its command ran.
+    #[cfg(unix)]
+    async fn fires(
+        hooks_json: &str,
+        event: HookEvent,
+        ctx: crate::extension::hooks::HookContext,
+    ) -> bool {
+        use crate::extension::hooks::HookExecutor;
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("fired");
+        let json = hooks_json.replace("MARK", &marker.display().to_string());
+        let hooks = parse_hooks_content(&json, dir.path(), "p")
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Hook(h) => {
+                    Some(crate::extension::hook_config_from_registration(
+                        h,
+                        crate::extension::visibility::ScopeKey::Global,
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let executor = HookExecutor::new(hooks);
+        executor.execute_observers(event, &ctx).await;
+        executor
+            .execute_interceptors(event, ctx)
+            .await
+            .expect("the hooks run");
+        marker.exists()
+    }
+
+    /// P4.14 F-2: Claude Code's `"*"` is a wildcard, not an invalid regex.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_star_matcher_fires_for_every_tool() {
+        let ctx = crate::extension::hooks::HookContext::new("s").with_tool_name("bash");
+        let json = r#"{"hooks": {"PreToolUse": [{"matcher": "*",
+            "hooks": [{"type": "command", "command": "touch 'MARK'"}]}]}}"#;
+        assert!(fires(json, HookEvent::BeforeToolCall, ctx).await);
+    }
+
+    /// P4.14 F-2: on an event with nothing to match (Claude Code ignores the
+    /// matcher there), a matcher never stops the hook.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_matcher_on_an_event_that_ignores_it_still_fires() {
+        for (name, event) in [
+            ("UserPromptSubmit", HookEvent::UserPromptSubmit),
+            ("Stop", HookEvent::Stop),
+            ("PreCompact", HookEvent::BeforeCompaction),
+            ("SubagentStop", HookEvent::SubagentStop),
+        ] {
+            let json = format!(
+                r#"{{"hooks": {{"{name}": [{{"matcher": "manual",
+                    "hooks": [{{"type": "command", "command": "touch 'MARK'"}}]}}]}}}}"#
+            );
+            let ctx = crate::extension::hooks::HookContext::new("s");
+            assert!(fires(&json, event, ctx).await, "{name}");
+        }
     }
 
     #[test]

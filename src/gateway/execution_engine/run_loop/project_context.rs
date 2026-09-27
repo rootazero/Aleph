@@ -32,6 +32,21 @@ pub(crate) fn lifecycle_hook_context(
     ctx
 }
 
+/// The `SessionStart` context: [`lifecycle_hook_context`] plus how the
+/// session began — what a SessionStart `matcher` is tested against and what
+/// the stdin JSON's `source` says. The fire site runs on an empty history
+/// only, which Claude Code calls `startup`; Aleph has no resume / clear /
+/// compact start ([`SESSION_SOURCES_FIRED`](crate::extension::SESSION_SOURCES_FIRED)).
+pub(crate) fn session_start_hook_context(
+    session_id: &str,
+    run_id: &str,
+    agent: &AgentInstance,
+    permission_mode: &'static str,
+) -> HookContext {
+    lifecycle_hook_context(session_id, run_id, agent, Some(permission_mode))
+        .with_session_source(crate::extension::SESSION_SOURCE_STARTUP)
+}
+
 /// Upper bound on how many project-local skills are advertised in the
 /// `<project_skills>` reminder. A folder with hundreds of skills would
 /// otherwise crowd out the prompt; the model can still enumerate the full
@@ -169,4 +184,88 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
         them. Use `skill_list` to see the complete set including global skills.\n\n{}",
         lines.join("\n")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::hooks::HookExecutor;
+    use crate::extension::HookEvent;
+
+    /// P4.14 F-2: superpowers' bootstrap hook — `SessionStart` with
+    /// `"matcher": "startup|clear|compact"`, its real shape — fires at a
+    /// fresh session. Parsed by the plugin parser, converted as the registry
+    /// sync does, fired through the SessionStart seam's own context builder
+    /// on both of the seam's dispatches. Before the match subject existed the
+    /// matcher was tested against a tool name SessionStart does not have, so
+    /// this hook never ran; a matcher naming no source Aleph fires stays
+    /// silent (the control).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn superpowers_session_start_hook_fires_at_a_fresh_session() {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::sync_primitives::Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let agent = AgentInstance::new(
+            AgentInstanceConfig {
+                agent_id: "main".to_string(),
+                workspace: temp.path().join("workspace"),
+                agent_dir: temp.path().join("agent"),
+                ..Default::default()
+            },
+            store,
+        )
+        .unwrap();
+
+        let hooks_for = |matcher: &str, marker: &std::path::Path| {
+            let json = serde_json::json!({"hooks": {"SessionStart": [{
+                "matcher": matcher,
+                "hooks": [{"type": "command", "command": format!("touch '{}'", marker.display()),
+                           "shell": "bash", "async": false}]
+            }]}})
+            .to_string();
+            crate::extension::manifest::parsers::parse_hooks_content(
+                &json,
+                temp.path(),
+                "superpowers",
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                crate::extension::capability::CapabilityDeclaration::Hook(h) => {
+                    Some(crate::extension::hook_config_from_registration(
+                        h,
+                        crate::extension::visibility::ScopeKey::Global,
+                    ))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+        };
+
+        for (i, (matcher, want)) in [("startup|clear|compact", true), ("resume", false)]
+            .into_iter()
+            .enumerate()
+        {
+            let marker = temp.path().join(format!("fired-{i}"));
+            let executor = HookExecutor::new(hooks_for(matcher, &marker));
+            let ctx = session_start_hook_context("s", "run", &agent, "default");
+            executor
+                .execute_observers(HookEvent::SessionStart, &ctx)
+                .await;
+            executor
+                .execute_interceptors(HookEvent::SessionStart, ctx)
+                .await
+                .expect("the seam's interceptor pass");
+            assert_eq!(marker.exists(), want, "matcher {matcher:?}");
+        }
+    }
 }

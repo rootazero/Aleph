@@ -1,8 +1,9 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
+use super::matcher::{compile_matcher, matcher_verdict, CompiledMatcher, MatcherVerdict};
 use super::session_facts::SessionFacts;
 use super::{
-    substitute_path_variables, substitute_variables, ActionResult, HookContext, ShellHookConsent,
+    plugin_shell_line, substitute_variables, ActionResult, HookContext, ShellHookConsent,
     DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS, PLUGIN_DATA_VARIABLES,
     PLUGIN_ROOT_VARIABLES,
 };
@@ -162,21 +163,11 @@ pub fn command_hook_invocation(
     // resolved string. On Windows `cmd` cannot expand `${…}`, so the path
     // variables (never the data) are substituted into the line: the one
     // platform difference. `cmd` would expand a `%VAR%` before parsing, so
-    // data is read from the stdin JSON there.
-    let line = if cfg!(windows) {
-        plugin_root.map_or_else(
-            || command.to_string(),
-            |root| substitute_path_variables(command, root, plugin_name),
-        )
-    } else {
-        // `substitute_path_variables` creates the data directory when the
-        // template names it; with no splice that is done here, from the same
-        // template text.
-        if let Some(vars) = &plugin_vars {
-            vars.ensure_data_dir_if_referenced(command);
-        }
-        command.to_string()
-    };
+    // data is read from the stdin JSON there. One derivation with an inline
+    // `` !`cmd` `` (`inline_shell_command`), and the only one: a plugin's
+    // `hooks.json` command reaches here as written — the manifest adapter
+    // expands no path variable inside it.
+    let line = plugin_shell_line(command, plugin_root, plugin_name);
     let (program, flag) = if cfg!(windows) {
         ("cmd", "/C")
     } else {
@@ -280,7 +271,7 @@ fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> S
 /// Build a Claude Code-style event payload as a JSON value.
 ///
 /// Schema (keyed `snake_case` to match the rest of the hook surface):
-/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, <CC_POST_TOOL_RESULT_KEY>?, tool_error?, cwd?, transcript_path?, permission_mode?, env? }`
+/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, <CC_POST_TOOL_RESULT_KEY>?, tool_error?, cwd?, transcript_path?, permission_mode?, source?, env? }`
 ///
 /// Shared by the stdin/HTTP string form ([`build_event_payload`]) and the
 /// plugin-hook path, which passes the value straight to `execute_plugin_hook`
@@ -337,6 +328,10 @@ fn build_event_payload_value(
     }
     if let Some(m) = context.permission_mode {
         payload.insert("permission_mode".into(), Value::String(m.to_string()));
+    }
+    // What a SessionStart matcher is tested against, under Claude Code's key.
+    if let Some(source) = context.session_source {
+        payload.insert("source".into(), Value::String(source.to_string()));
     }
     if !context.env.is_empty() {
         payload.insert("env".into(), json!(context.env));
@@ -403,8 +398,9 @@ pub struct HookExecutor {
     pub(super) hooks: Vec<HookConfig>,
     /// Command timeout in seconds
     pub(super) command_timeout: Duration,
-    /// Compiled regex cache: matcher string -> compiled Regex (None if invalid)
-    regex_cache: HashMap<String, Option<regex::Regex>>,
+    /// Compiled matcher cache: matcher string -> its one compilation
+    /// ([`compile_matcher`]).
+    regex_cache: HashMap<String, CompiledMatcher>,
     /// Optional shell-hook consent allowlist. When set, `HookAction::Command`
     /// hooks only run if their command is operator-approved; un-approved
     /// commands are skipped (fail-safe) and recorded as `pending`. `None`
@@ -473,39 +469,20 @@ impl HookExecutor {
         before - self.hooks.len()
     }
 
-    /// Build regex cache from all hooks
-    fn build_regex_cache(hooks: &[HookConfig]) -> HashMap<String, Option<regex::Regex>> {
-        let mut cache = HashMap::new();
-        for hook in hooks {
-            if let Some(ref matcher) = hook.matcher {
-                if !cache.contains_key(matcher) {
-                    match crate::security::safe_regex::bounded_builder(matcher).build() {
-                        Ok(re) => {
-                            cache.insert(matcher.clone(), Some(re));
-                        }
-                        Err(e) => {
-                            warn!("Invalid hook matcher regex '{}': {}", matcher, e);
-                            cache.insert(matcher.clone(), None);
-                        }
-                    }
-                }
-            }
-        }
-        cache
+    /// Build the matcher cache from all hooks
+    fn build_regex_cache(hooks: &[HookConfig]) -> HashMap<String, CompiledMatcher> {
+        hooks
+            .iter()
+            .filter_map(|hook| hook.matcher.as_ref())
+            .map(|m| (m.clone(), compile_matcher(m)))
+            .collect()
     }
 
-    /// Cache a single regex pattern
+    /// Cache a single matcher
     fn cache_regex(&mut self, pattern: &str) {
         if !self.regex_cache.contains_key(pattern) {
-            match crate::security::safe_regex::bounded_builder(pattern).build() {
-                Ok(re) => {
-                    self.regex_cache.insert(pattern.to_string(), Some(re));
-                }
-                Err(e) => {
-                    warn!("Invalid hook matcher regex '{}': {}", pattern, e);
-                    self.regex_cache.insert(pattern.to_string(), None);
-                }
-            }
+            self.regex_cache
+                .insert(pattern.to_string(), compile_matcher(pattern));
         }
     }
 
@@ -530,41 +507,51 @@ impl HookExecutor {
         &self.hooks
     }
 
-    /// Check if a hook's pattern matches the context
+    /// Check if a hook's matcher selects this occurrence of its event.
+    ///
+    /// The matcher is tested against the event's subject
+    /// ([`HookEvent::match_subject`]): the tool name (and every Claude Code
+    /// spelling of it), SessionStart's source, or nothing — on an event
+    /// with no subject the matcher is ignored and the hook fires, as in
+    /// Claude Code. `*` and `""` match everything ([`compile_matcher`]).
     fn matches_pattern(&self, hook: &HookConfig, context: &HookContext) -> bool {
-        // If no matcher, hook applies to all
-        let matcher = match &hook.matcher {
-            Some(m) => m,
-            None => return true,
+        use crate::extension::types::MatchSubject;
+        let Some(matcher) = &hook.matcher else {
+            return true;
         };
-
-        // Get the tool name to match against
-        let tool_name = match &context.tool_name {
-            Some(n) => n,
-            None => return false, // No tool name, can't match
-        };
-
-        // Test the regex against the Aleph name AND every Claude Code spelling
-        // of it (`Edit` for `file_edit`, `mcp__srv__tool` for `srv__tool`), so
-        // a matcher copied from a CC `settings.json` selects the tool it names.
-        let candidates: Vec<String> = std::iter::once(tool_name.clone())
-            .chain(super::cc_spellings(tool_name))
-            .collect();
-        let hit = |re: &regex::Regex| candidates.iter().any(|c| re.is_match(c));
-
-        // Look up compiled regex from cache
-        match self.regex_cache.get(matcher.as_str()) {
-            Some(Some(re)) => hit(re),
-            Some(None) => false, // Invalid regex, logged at cache time
+        // Compiled when the hook was added; compiled here only for a hook
+        // that bypassed `add_hook`.
+        let compiled_here;
+        let compiled = match self.regex_cache.get(matcher.as_str()) {
+            Some(compiled) => compiled,
             None => {
-                // Fallback: compile on the fly (should not happen if add_hook was used)
-                match crate::security::safe_regex::bounded_builder(matcher).build() {
-                    Ok(re) => hit(&re),
-                    Err(e) => {
-                        warn!("Invalid hook matcher regex '{}': {}", matcher, e);
-                        false
-                    }
-                }
+                compiled_here = compile_matcher(matcher);
+                &compiled_here
+            }
+        };
+        match hook.event.match_subject() {
+            MatchSubject::Ignored => {
+                debug!(
+                    event = ?hook.event,
+                    matcher = %matcher,
+                    "hook matcher ignored: this event has nothing to match it against"
+                );
+                true
+            }
+            MatchSubject::SessionSource => context
+                .session_source
+                .is_some_and(|source| compiled.is_match(source)),
+            MatchSubject::ToolName => {
+                let Some(tool_name) = &context.tool_name else {
+                    return false;
+                };
+                // The Aleph name AND every Claude Code spelling of it (`Edit`
+                // for `file_edit`, `mcp__srv__tool` for `srv__tool`), so a
+                // matcher copied from a CC `settings.json` selects the tool
+                // it names.
+                std::iter::once(tool_name.clone())
+                    .chain(super::cc_spellings(tool_name))
+                    .any(|candidate| compiled.is_match(&candidate))
             }
         }
     }
@@ -1269,28 +1256,22 @@ impl HookExecutor {
             HookKind::Observer => "observer",
         };
 
-        // Reachability mirrors the two load-time foot-gun warnings, reading
-        // the SAME predicates on `HookEvent` so the two can never disagree.
-        let (reachable, issue) = if hook.matcher.is_some() && !hook.event.supports_matcher() {
-            (
-                false,
-                Some(
-                    "`matcher` is set on an event that carries no tool name; matchers test \
-                     tool_name only, so this hook never fires. Drop the matcher."
-                        .to_string(),
-                ),
-            )
-        } else if hook.kind == HookKind::Interceptor && !hook.event.supports_interceptor() {
-            (
+        // Reachability reads the SAME verdict the two hook-file readers log
+        // at load time (`matcher_verdict`) and the same event predicate, so
+        // the inventory and the load-time notice can never disagree.
+        let verdict = matcher_verdict(hook.event, hook.matcher.as_deref());
+        let (reachable, issue) = match verdict {
+            MatcherVerdict::Never(why) => (false, Some(why)),
+            _ if hook.kind == HookKind::Interceptor && !hook.event.supports_interceptor() => (
                 false,
                 Some(
                     "kind is `interceptor` but this event's fire-site dispatches observers \
                      only, so this hook never executes. Use `\"kind\": \"observer\"`."
                         .to_string(),
                 ),
-            )
-        } else {
-            (true, None)
+            ),
+            MatcherVerdict::Caveat(notice) => (true, Some(notice)),
+            MatcherVerdict::Fires => (true, None),
         };
 
         super::HookInventoryEntry {
@@ -1451,27 +1432,37 @@ mod tests {
         command_hook_invocation("true", &event.canonical_name(), ctx, None, "test").stdin
     }
 
+    /// The inventory reads the matcher the way the executor does: a
+    /// SessionStart matcher is tested against the session source (Aleph
+    /// fires only `startup`), a broken regex can never fire (§17: never
+    /// listed as reachable), and a matcher on an event with nothing to match
+    /// is ignored — reachable, with the caveat said.
     #[test]
-    fn inventory_flags_a_matcher_on_a_tool_less_event() {
-        // Foot-gun #1: matchers test `tool_name`, which SessionStart has none
-        // of — the hook loads, never fires, and used to say so only in a boot
-        // log line nobody reads hours later.
-        let mut hook = dummy_hook("user:global");
-        hook.event = HookEvent::SessionStart;
-        hook.kind = HookKind::Observer;
-        hook.matcher = Some("Write".into());
+    fn inventory_labels_each_matcher_by_what_it_is_tested_against() {
+        let entry = |event, matcher: &str| {
+            let mut hook = dummy_hook("user:global");
+            hook.event = event;
+            hook.kind = HookKind::Observer;
+            hook.matcher = Some(matcher.into());
+            HookExecutor::new(vec![hook]).inventory().remove(0)
+        };
+        let resume = entry(HookEvent::SessionStart, "resume");
+        assert!(!resume.reachable, "{resume:?}");
+        assert!(resume.issue.unwrap_or_default().contains("startup"));
+        assert!(entry(HookEvent::SessionStart, "startup|clear|compact").reachable);
 
-        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
-        assert!(!entry.reachable);
-        assert!(
-            entry
-                .issue
-                .as_deref()
-                .unwrap_or_default()
-                .contains("matcher"),
-            "issue must name the cause: {:?}",
-            entry.issue
-        );
+        let star = entry(HookEvent::BeforeToolCall, "*");
+        assert!(star.reachable && star.issue.is_none(), "{star:?}");
+        let broken = entry(HookEvent::BeforeToolCall, "((");
+        assert!(!broken.reachable, "{broken:?}");
+        assert!(broken
+            .issue
+            .unwrap_or_default()
+            .contains("not a valid regex"));
+
+        let ignored = entry(HookEvent::UserPromptSubmit, "anything");
+        assert!(ignored.reachable, "{ignored:?}");
+        assert!(ignored.issue.unwrap_or_default().contains("ignored"));
     }
 
     #[test]

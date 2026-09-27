@@ -83,6 +83,16 @@
 //! its first fire after the upgrade until it is approved again it does not
 //! run, so a guard among them stops blocking. The doctor does not count
 //! these; the hook shows as pending once it has fired.
+//!
+//! A third re-key (2026-09-27): a plugin's `hooks.json` command and a
+//! command body's `` !`cmd` `` are recorded as the plugin wrote them
+//! (`${CLAUDE_PLUGIN_ROOT}/…`). Until then the manifest adapter had already
+//! spliced the install path into both, so their key hashed — and `hooks
+//! list` showed — the expanded path. Every approval of such a text that
+//! names a path variable is keyed differently now and authorises nothing:
+//! it comes back as `pending` once, and a guard among them stops blocking
+//! until it is approved again. A text that names no path variable keeps its
+//! key.
 
 use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};

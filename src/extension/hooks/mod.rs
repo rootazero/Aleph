@@ -53,6 +53,7 @@ mod consent;
 mod consent_scope;
 mod executor;
 mod json_output;
+mod matcher;
 mod output_budget;
 #[cfg(test)]
 mod producer_census;
@@ -63,6 +64,7 @@ pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_t
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent, INLINE_COMMAND_EVENT};
 pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
 pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
+pub(crate) use matcher::{matcher_verdict, warn_on_matcher, MatcherVerdict};
 pub use output_budget::{budget_hook_contexts, join_messages};
 pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
@@ -116,6 +118,12 @@ pub struct HookContext {
     /// which states the default tier). Every other face leaves it `None` and
     /// the payload omits the key — unknown, not a default tier.
     pub permission_mode: Option<&'static str>,
+    /// How the session began, for `SessionStart` — Claude Code's `source`
+    /// (the stdin JSON's `source`, and what a SessionStart `matcher` is
+    /// tested against: `HookEvent::match_subject`). Only the SessionStart
+    /// fire site sets it (`session_start_hook_context`), and only to
+    /// [`SESSION_SOURCE_STARTUP`](crate::extension::types::SESSION_SOURCE_STARTUP).
+    pub session_source: Option<&'static str>,
 }
 
 impl HookContext {
@@ -176,6 +184,13 @@ impl HookContext {
         self.permission_mode = Some(mode);
         self
     }
+
+    /// Set how the session began (SessionStart's `source`).
+    #[must_use]
+    pub const fn with_session_source(mut self, source: &'static str) -> Self {
+        self.session_source = Some(source);
+        self
+    }
 }
 
 /// One registered hook as the running server actually sees it.
@@ -205,7 +220,8 @@ pub struct HookInventoryEntry {
     pub kind: String,
     /// Priority bucket; interceptors run in ascending order.
     pub priority: String,
-    /// Tool-name regex, when set.
+    /// The matcher as written, when set — tested against the event's subject
+    /// (`HookEvent::match_subject`).
     pub matcher: Option<String>,
     /// One label per action, e.g. `command: ./lint.sh` / `http: https://…`.
     pub actions: Vec<String>,
@@ -570,6 +586,38 @@ pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owne
     result
 }
 
+/// The line a shell parses for a plugin's command text — a command hook's
+/// `command`, or a command body's `` !`cmd` `` — on this platform.
+///
+/// The text arrives as the plugin wrote it: the manifest adapter never
+/// expands a path variable inside either (`AdapterRegistry::parse_dir`), so
+/// this is the only place one can be resolved into source.
+///
+/// - unix: the text verbatim. Each path variable reaches the child through
+///   its environment ([`PLUGIN_ROOT_VARIABLES`], [`PLUGIN_DATA_VARIABLES`],
+///   set by the caller), and `sh` expands `"${CLAUDE_PLUGIN_ROOT}"` as one
+///   word of data — a root named `r $(touch M) "` stays one path.
+/// - Windows: `cmd` cannot expand `${…}`, so the path variables — and
+///   nothing else — are substituted ([`substitute_path_variables`]).
+///
+/// Either way the data directory is created when the text names it, for a
+/// plugin-owned owner only. `plugin_root` is `None` only when the root is
+/// unknown (an old consent entry): the line is then the text as written.
+#[must_use]
+pub(crate) fn plugin_shell_line(command: &str, plugin_root: Option<&Path>, owner: &str) -> String {
+    let Some(root) = plugin_root else {
+        return command.to_string();
+    };
+    if cfg!(windows) {
+        return substitute_path_variables(command, root, owner);
+    }
+    if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
+        crate::extension::plugin_vars::PluginVars::new(owner, root)
+            .ensure_data_dir_if_referenced(command);
+    }
+    command.to_string()
+}
+
 /// Substitute variables in a string that is NOT shell source: a Prompt
 /// action's prompt, an Http action's URL and header values.
 ///
@@ -704,6 +752,7 @@ mod tests {
             tool_output: None,
             tool_error: None,
             permission_mode: None,
+            session_source: None,
         };
 
         let plugin_root = PathBuf::from("/plugins/my-plugin");

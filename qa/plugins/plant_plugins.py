@@ -58,15 +58,13 @@ def plant_inline(root: Path):
             }
         },
         # The hook command carries a `${CLAUDE_PLUGIN_ROOT}` reference because
-        # the hook registry is the one surface that serves an expanded body
-        # back over the wire. `commands.list` returns a name/description tree
-        # and never the body, so asserting "no unexpanded variable survives"
-        # there passes for a plugin whose expansion is completely broken.
+        # the hook registry serves the stored command back over the wire, and
+        # phase C asserts it comes back exactly as written: the root reaches a
+        # hook through its environment, never spliced into its source (P4.16).
         #
         # `m.sh` is short for a reason: the hook inventory elides action labels
-        # at 80 characters, and the expanded absolute path plus a longer script
-        # name pushes the plugin id past the cut -- leaving a payload that
-        # proves only "some path", not "this plugin's path".
+        # at 80 characters (a leftover of when the command was stored with the
+        # absolute path expanded into it).
         "hooks": {
             "PreToolUse": [
                 {

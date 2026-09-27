@@ -17,9 +17,11 @@ groups, each chosen because a unit test structurally cannot settle it:
      other; if the union were still a bare `String`, all three would collapse
      to the same "not found".
 
-  C. `${CLAUDE_PLUGIN_ROOT}` expands to this plugin's own install directory.
-     The value is a property of the installed tree, so a unit test can only
-     assert the substitution, never the root.
+  C. A plugin hook's command reaches the registry as the plugin wrote it --
+     `${CLAUDE_PLUGIN_ROOT}` NOT spliced in. The install path is a directory
+     name, and spliced into shell source it is parsed as code (P4.14 F-1:
+     a root named `r $(touch M)` ran `touch M`); since P4.16 the root reaches
+     the hook only through its environment, when it is spawned.
 
   D. Per-plugin configuration is durable. `config_set` then a *server restart*
      then `config_get`. Everything before the restart is in-process state.
@@ -203,48 +205,38 @@ async def phase_b(rpc):
 
 
 async def phase_c(rpc):
-    L.log("\n--- C. ${CLAUDE_PLUGIN_ROOT} expands to this plugin's own root ---")
-    # `hooks_manage(list)` is the documented RUNTIME view of the hook registry
-    # -- the commands that would actually be executed -- and hook handlers are
-    # one of the fields `expand_plugin_variables` rewrites.
+    L.log("\n--- C. a plugin hook's command is stored as written, root not spliced ---")
+    # `hooks.registry` is the RUNTIME view of the hook registry -- the
+    # commands that would actually be executed, serialised whole (the tool
+    # face, `hooks_manage(list)`, elides long action strings).
     #
-    # `commands.list` was the obvious surface and is the wrong one: it returns
-    # a name/description tree and never a body, so "no unexpanded variable
-    # survives" passes there whether expansion works or not. A negative
-    # assertion over a payload that cannot contain the string either way is
-    # not an assertion.
-    # The RPC face, not the tool face: `hooks_manage(list)` elides long action
-    # strings, and the elision lands mid-path -- so the plugin id, which is the
-    # part that distinguishes "expanded correctly" from "expanded to something",
-    # is exactly what gets cut. `hooks.registry` serialises the inventory whole.
+    # Until P4.16 this phase asserted the opposite: that the command came back
+    # with the install path expanded into it. That was the defect -- the
+    # manifest adapter spliced the root into the shell SOURCE at parse time --
+    # and this phase was its only real-machine witness.
     msg = await rpc.call("hooks.registry", {})
     res = msg.get("result", msg)
     text = json.dumps(res)
     L.check("hooks.registry answers", "error" not in msg, text[:200])
 
-    # Anchor on the command's invariant head. Every assertion below is only
+    # Anchor on the command's invariant tail. Every assertion below is only
     # meaningful because this one passed: a negative assertion over a payload
-    # that could not contain the string either way is not an assertion, which
-    # is how the first version of this check passed against `commands.list`
-    # (a name/description tree that never carries a body at all).
-    marker = "sh "
+    # that could not contain the string either way is not an assertion.
     anchored = "m.sh" in text
     L.check("the plugin's hook command is present in the payload, whole",
             anchored, f"payload {len(text)}B")
 
     if anchored:
-        L.check("no literal ${CLAUDE_PLUGIN_ROOT} survives into the hook registry",
-                "CLAUDE_PLUGIN_ROOT" not in text,
-                "found an unexpanded variable" if "CLAUDE_PLUGIN_ROOT" in text else "clean")
+        L.check("the command is exactly what the plugin wrote",
+                "command: sh ${CLAUDE_PLUGIN_ROOT}/m.sh" in text,
+                "looking for: command: sh ${CLAUDE_PLUGIN_ROOT}/m.sh")
         # `//` is collapsed on both sides: macOS `$TMPDIR` ends in a slash, so
-        # this fixture's own scratch root is spelled `/T//aleph-qa-...`. That is
-        # a property of the harness, not of the expander, and asserting on
-        # slash spelling would make this fail for a reason nobody cares about.
+        # a scratch root can be spelled `/T//aleph-qa-...`.
         norm = text.replace("//", "/")
-        expected = str(ALEPH_HOME / "plugins" / "installed" / "qa-inline").replace("//", "/")
-        L.check("the command expands to THIS plugin's own install directory",
-                f"command: sh {expected}/m.sh" in norm,
-                f"looking for: command: sh {expected}/m.sh")
+        installed = str(ALEPH_HOME / "plugins" / "installed" / "qa-inline").replace("//", "/")
+        L.check("the install path is not spliced into the command",
+                f"{installed}/m.sh" not in norm,
+                f"must be absent: {installed}/m.sh")
 
 
 async def phase_d_set(rpc):

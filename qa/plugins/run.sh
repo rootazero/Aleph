@@ -67,10 +67,11 @@ BUSY="$HERE/../busy_input"
 # fixtures. The hook inventory elides action labels at 80 characters -- a
 # documented "what is wired up" listing, not a config dump -- and macOS spells
 # `$TMPDIR` as a 48-character path. Under it, the elision lands mid-path and
-# cuts off the plugin id, which is the one segment that distinguishes
-# "expanded to this plugin's root" from "expanded to something". A short root
-# keeps the whole expanded command inside the budget so the assertion can be
-# exact. Don't "tidy" this back to $TMPDIR without re-reading phase C.
+# cuts off the plugin id. Phase C was written when a plugin hook's command was
+# stored with the install path expanded into it (P4.16 removed that splice: it
+# now asserts the command comes back as written and the path is absent), and
+# the seat-rules still ask for a short QA_ROOT; the paths every stage prints
+# stay readable. Don't "tidy" this back to $TMPDIR without re-reading phase C.
 QA_ROOT="${QA_ROOT:-$(mktemp -d "/tmp/aleph-qa-plg-XXXXXX")}"
 KEEP="${KEEP:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-18801}"

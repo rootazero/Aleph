@@ -223,28 +223,29 @@ impl HookEvent {
         }
     }
 
-    /// Whether this event's [`HookContext`](crate::extension::hooks::HookContext)
-    /// carries a `tool_name`, so a `matcher` regex can meaningfully select
-    /// among invocations.
+    /// What a hook's `matcher` is tested against on this event — the one
+    /// derivation the executor's match, both hook-file readers' load-time
+    /// notices, the runtime inventory (`HookExecutor::inventory`) and the
+    /// `hooks_manage` catalogue read, so none of them can disagree.
     ///
-    /// The executor matches `matcher` against `tool_name` ONLY. On any other
-    /// event the matcher can never match and the hook silently never fires —
-    /// a foot-gun surfaced at load time (`user_settings.rs`) and reported per
-    /// hook by the runtime inventory (`HookExecutor::inventory`). Keeping the
-    /// predicate on the event itself is what stops those two from drifting.
+    /// Claude Code's reading (`scan-cc-plugin-format.md` §5): a tool event
+    /// matches the tool name; `SessionStart` matches how the session began
+    /// (superpowers ships `"matcher": "startup|clear|compact"`). Where the
+    /// evidence names no subject, the matcher is ignored and the hook fires
+    /// on every occurrence — a matcher never silently means "never fires".
+    /// Exhaustive, so a new event has to choose.
     #[must_use]
-    pub const fn supports_matcher(self) -> bool {
+    pub const fn match_subject(self) -> MatchSubject {
         use HookEvent::*;
-        matches!(
-            self,
-            BeforeToolCall
-                | AfterToolCall
-                | AfterToolCallFailure
-                | ToolResultPersist
-                | PermissionRequest
-                | PermissionDenied
-                | Notification
-        )
+        match self {
+            BeforeToolCall | AfterToolCall | AfterToolCallFailure | ToolResultPersist
+            | PermissionRequest | PermissionDenied | Notification => MatchSubject::ToolName,
+            SessionStart => MatchSubject::SessionSource,
+            BeforeAgentStart | AgentEnd | MessageReceived | MessageSending | MessageSent
+            | SessionEnd | BeforeCompaction | AfterCompaction | PreApiRequest | PostApiRequest
+            | GatewayStart | GatewayStop | UserPromptSubmit | SubagentStart | SubagentStop
+            | Stop => MatchSubject::Ignored,
+        }
     }
 
     /// Whether this event's production fire-site dispatches interceptor-kind
@@ -270,6 +271,42 @@ impl HookEvent {
         )
     }
 }
+
+/// What a hook's `matcher` is tested against ([`HookEvent::match_subject`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchSubject {
+    /// The tool's name: the Aleph name and every Claude Code spelling of it
+    /// (`Edit` for `file_edit`).
+    ToolName,
+    /// How the session began — Claude Code's SessionStart `source`
+    /// (`startup`, `resume`, `clear`, `compact`). Aleph fires SessionStart
+    /// only on an empty history, and only as [`SESSION_SOURCE_STARTUP`].
+    SessionSource,
+    /// Nothing to select among: a matcher is ignored and the hook fires on
+    /// every occurrence.
+    Ignored,
+}
+
+impl MatchSubject {
+    /// The name the `hooks_manage` catalogue shows.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolName => "tool_name",
+            Self::SessionSource => "session_source",
+            Self::Ignored => "ignored",
+        }
+    }
+}
+
+/// The session source of the one SessionStart Aleph fires: a brand-new
+/// session, which Claude Code calls `startup`.
+pub const SESSION_SOURCE_STARTUP: &str = "startup";
+
+/// Every session source Aleph fires SessionStart with. Claude Code also
+/// fires `resume`, `clear` and `compact`; Aleph has no such moment, so a
+/// matcher that selects only those never fires here.
+pub const SESSION_SOURCES_FIRED: [&str; 1] = [SESSION_SOURCE_STARTUP];
 
 /// Hook execution kind - determines how the hook is executed
 ///
@@ -422,7 +459,10 @@ pub enum HookAction {
     /// `"${CLAUDE_PLUGIN_ROOT}"/hooks/x.sh` survives a space. Where `sh` does
     /// not expand — single quotes (`'${CLAUDE_PLUGIN_ROOT}'`), a quoted
     /// heredoc (`<<'EOF'`), an escaped `\${…}` — the text stays literal; it
-    /// was replaced before 2026-09-24. A nested `sh -c '…${CLAUDE_PLUGIN_ROOT}…'`
+    /// was replaced before 2026-09-24 (and in a plugin's `hooks.json` until
+    /// 2026-09-27, where the manifest adapter spliced the root in at parse
+    /// time — `AdapterRegistry::parse_dir` now leaves the command as
+    /// written). A nested `sh -c '…${CLAUDE_PLUGIN_ROOT}…'`
     /// still reads the path, from the environment it inherits.
     ///
     /// On Windows `cmd` cannot expand `${…}`, so the path variables — never
@@ -678,8 +718,9 @@ mod tests {
         let e: HookEvent = serde_json::from_str("\"PermissionDenied\"").unwrap();
         assert_eq!(e, HookEvent::PermissionDenied);
         assert_eq!(serde_json::to_value(e).unwrap(), "permission_denied");
-        assert!(
-            e.supports_matcher(),
+        assert_eq!(
+            e.match_subject(),
+            MatchSubject::ToolName,
             "the refusal names a tool; a matcher can select it"
         );
         assert!(

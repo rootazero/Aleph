@@ -616,8 +616,8 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # first one drifted (16 in prose, 18 on screen).
 
 ./qa/plugins/run.sh manifest     # Claude Code manifest + marketplace unions through a real
-                                 # load_all; ${CLAUDE_PLUGIN_ROOT}; per-plugin config across
-                                 # a server restart
+                                 # load_all; a hook's ${CLAUDE_PLUGIN_ROOT} stored unspliced;
+                                 # per-plugin config across a server restart
 ./qa/plugins/run.sh scaffold     # `aleph plugin init --type <rt>` output really installs and
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
@@ -794,9 +794,12 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
 its siblings. The hook inventory elides action labels at 80 characters — a
 documented "what is wired up" listing — and macOS spells `$TMPDIR` as a
-48-character path, so under it the elision lands mid-path and cuts off the very
-plugin id that distinguishes "expanded to this plugin's root" from "expanded to
-something". Don't tidy that back without re-reading phase C.
+48-character path, so under it the elision lands mid-path. Phase C was written
+to read the install path expanded into a plugin hook's command — which was the
+defect: P4.14 F-1 showed that splice runs a root named `r $(touch M)` as code.
+Since P4.16 phase C asserts the opposite: the command comes back exactly as the
+plugin wrote it (`sh ${CLAUDE_PLUGIN_ROOT}/m.sh`), with the install path absent.
+Don't tidy the scratch root back without re-reading phase C.
 
 Two of this fixture's own assertions were wrong before they were right, and both
 mistakes are the kind worth naming. Phase C first read `commands.list`, which

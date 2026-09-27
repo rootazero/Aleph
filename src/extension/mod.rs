@@ -865,75 +865,8 @@ impl projection::Views {
                 .collect()
         };
 
-        // Convert HookRegistration → HookConfig for the executor, consuming
-        // each registration by value so its fields move into the config.
-        // Every field is named (no `..`): a field added to the registration
-        // must be decided on here, not silently dropped between the parser
-        // that filled it and the executor that should read it.
         for (hr, scope_key) in hook_regs {
-            let HookRegistration {
-                event,
-                priority,
-                handler,
-                name: _,
-                description: _,
-                plugin_id,
-                kind,
-                matcher,
-                actions,
-                plugin_root,
-                timeout_secs,
-                declared_event,
-            } = hr;
-            // Registrations carrying concrete actions (plugin-shipped
-            // hooks.json shell hooks) dispatch those directly — through the
-            // consent gate for command/http. Registrations without actions
-            // are runtime (WASM) hooks: emit a live Plugin dispatch action so
-            // the executor invokes the plugin's exported `handler` via the
-            // process-global ExtensionManager when the event fires. The
-            // `handler` field is kept for diagnostics display either way.
-            let runtime_hook = actions.is_empty();
-            let actions = if runtime_hook {
-                vec![HookAction::Plugin {
-                    plugin_id: plugin_id.clone(),
-                    handler: handler.clone(),
-                }]
-            } else {
-                actions
-            };
-            // Kind: explicit registration wins. Otherwise file-based action
-            // hooks get the same per-event default the user-hooks loader
-            // applies (blocking-capable events → interceptor, so a plugin
-            // PreToolUse command hook can actually block), while runtime
-            // (WASM) handler hooks keep their historical Observer default —
-            // flipping them implicitly would turn a handler error into a
-            // fail-closed tool block existing plugins never signed up for.
-            let kind = kind.unwrap_or_else(|| {
-                if runtime_hook {
-                    HookKind::default()
-                } else {
-                    hooks::default_kind_for_event(event)
-                }
-            });
-            let hook_config = HookConfig {
-                event,
-                kind,
-                priority: match priority {
-                    i if i <= HookPriority::System.as_i32() => HookPriority::System,
-                    i if i <= HookPriority::High.as_i32() => HookPriority::High,
-                    i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
-                    _ => HookPriority::Normal,
-                },
-                matcher,
-                actions,
-                plugin_name: plugin_id,
-                plugin_root: plugin_root.unwrap_or_default(),
-                handler: Some(handler),
-                timeout_secs,
-                declared_event,
-                scope_key,
-            };
-            executor.add_hook(hook_config);
+            executor.add_hook(hook_config_from_registration(hr, scope_key));
         }
     }
 
@@ -1073,6 +1006,83 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
+    }
+}
+
+/// One plugin hook registration as the executor runs it, stamped with the
+/// OWNING ROW's `scope_key`. The one conversion: `sync_hooks_from_registry`
+/// feeds every active plugin's hooks through it, and a test that parses a
+/// plugin directory crosses the same derivation.
+///
+/// Consumes the registration by value so its fields move into the config.
+/// Every field is named (no `..`): a field added to the registration must be
+/// decided on here, not silently dropped between the parser that filled it
+/// and the executor that should read it.
+pub(crate) fn hook_config_from_registration(
+    hr: HookRegistration,
+    scope_key: visibility::ScopeKey,
+) -> HookConfig {
+    let HookRegistration {
+        event,
+        priority,
+        handler,
+        name: _,
+        description: _,
+        plugin_id,
+        kind,
+        matcher,
+        actions,
+        plugin_root,
+        timeout_secs,
+        declared_event,
+    } = hr;
+    // Registrations carrying concrete actions (plugin-shipped hooks.json
+    // shell hooks) dispatch those directly — through the consent gate for
+    // command/http. Registrations without actions are runtime (WASM) hooks:
+    // emit a live Plugin dispatch action so the executor invokes the
+    // plugin's exported `handler` via the process-global ExtensionManager
+    // when the event fires. The `handler` field is kept for diagnostics
+    // display either way.
+    let runtime_hook = actions.is_empty();
+    let actions = if runtime_hook {
+        vec![HookAction::Plugin {
+            plugin_id: plugin_id.clone(),
+            handler: handler.clone(),
+        }]
+    } else {
+        actions
+    };
+    // Kind: explicit registration wins. Otherwise file-based action hooks
+    // get the same per-event default the user-hooks loader applies
+    // (blocking-capable events → interceptor, so a plugin PreToolUse command
+    // hook can actually block), while runtime (WASM) handler hooks keep
+    // their historical Observer default — flipping them implicitly would
+    // turn a handler error into a fail-closed tool block existing plugins
+    // never signed up for.
+    let kind = kind.unwrap_or_else(|| {
+        if runtime_hook {
+            HookKind::default()
+        } else {
+            hooks::default_kind_for_event(event)
+        }
+    });
+    HookConfig {
+        event,
+        kind,
+        priority: match priority {
+            i if i <= HookPriority::System.as_i32() => HookPriority::System,
+            i if i <= HookPriority::High.as_i32() => HookPriority::High,
+            i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
+            _ => HookPriority::Normal,
+        },
+        matcher,
+        actions,
+        plugin_name: plugin_id,
+        plugin_root: plugin_root.unwrap_or_default(),
+        handler: Some(handler),
+        timeout_secs,
+        declared_event,
+        scope_key,
     }
 }
 

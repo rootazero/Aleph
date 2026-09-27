@@ -84,7 +84,9 @@ pub struct HooksManageArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 
-    /// Tool-name regex. ONLY meaningful on tool events — see `action="events"`.
+    /// Regex tested against the event's subject — the tool name, or
+    /// SessionStart's source (`startup`); ignored elsewhere. `*` = all. See
+    /// `action="events"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
 
@@ -143,7 +145,7 @@ impl AlephTool for HooksManageTool {
          user prompt submit, stop, compaction, …). \
          Use action='list' to see every registered hook and whether it can actually fire — \
          this is the answer to 'why isn't my hook running?', because it reports the two \
-         silent-death causes (a `matcher` on an event that has no tool name, and \
+         silent-death causes (a `matcher` that can never match, and \
          kind=interceptor on an observer-only event) plus whether the hook is still \
          waiting on operator consent. Pass only_unreachable=true to see just the broken ones. \
          action='add'/'remove' edit the global ~/.aleph/hooks.json; project hook files are \
@@ -346,11 +348,15 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
              `aleph-server hooks test <fingerprint>`.",
         );
     }
-    if args.matcher.is_some() && !supports_matcher(&event) {
-        summary.push_str(
-            " WARNING: the matcher was saved but this event carries no tool name, so the \
-             hook will never fire — remove the matcher to have it fire every time.",
-        );
+    // The verdict `hooks list` and the load-time notice read.
+    if let Some(parsed) = crate::extension::hooks::parse_event(&event) {
+        use crate::extension::hooks::MatcherVerdict;
+        match crate::extension::hooks::matcher_verdict(parsed, args.matcher.as_deref()) {
+            MatcherVerdict::Fires => {}
+            MatcherVerdict::Caveat(notice) | MatcherVerdict::Never(notice) => {
+                summary.push_str(&format!(" WARNING: {notice}."));
+            }
+        }
     }
 
     Ok(HooksManageOutput {
@@ -414,15 +420,16 @@ fn events() -> HooksManageOutput {
         .map(|e| {
             serde_json::json!({
                 "event": e.canonical_name(),
-                "supports_matcher": e.supports_matcher(),
+                "matcher_subject": e.match_subject().as_str(),
                 "supports_interceptor": e.supports_interceptor(),
             })
         })
         .collect();
     HooksManageOutput {
         summary: format!(
-            "{} hook events. `supports_matcher=false` means a `matcher` there never \
-             matches (the event carries no tool name). `supports_interceptor=false` means \
+            "{} hook events. `matcher_subject` is what a `matcher` is tested against: \
+             `tool_name`, `session_source` (Aleph fires only `startup`), or `ignored` (the \
+             hook fires on every occurrence). `supports_interceptor=false` means \
              the event only runs observer-kind hooks, so it cannot block or rewrite.",
             rows.len()
         ),
@@ -438,11 +445,6 @@ fn events() -> HooksManageOutput {
 /// works here works in the config file too.
 fn parse_event_name(raw: &str) -> Option<String> {
     crate::extension::hooks::parse_event(raw).map(crate::extension::HookEvent::canonical_name)
-}
-
-fn supports_matcher(canonical: &str) -> bool {
-    crate::extension::hooks::parse_event(canonical)
-        .is_some_and(crate::extension::HookEvent::supports_matcher)
 }
 
 fn unknown_event(raw: &str) -> AlephError {
@@ -480,11 +482,13 @@ mod tests {
         };
         // A tool event: matcher meaningful, can intercept.
         let pre = find(&parse_event_name("PreToolUse").unwrap());
-        assert_eq!(pre["supports_matcher"], true);
+        assert_eq!(pre["matcher_subject"], "tool_name");
         assert_eq!(pre["supports_interceptor"], true);
-        // A lifecycle event with no tool name: matcher is a dead end.
+        // SessionStart matches its source; a lifecycle event ignores it.
         let start = find(&parse_event_name("SessionStart").unwrap());
-        assert_eq!(start["supports_matcher"], false);
+        assert_eq!(start["matcher_subject"], "session_source");
+        let prompt = find(&parse_event_name("UserPromptSubmit").unwrap());
+        assert_eq!(prompt["matcher_subject"], "ignored");
         // An observer-only seam: an interceptor there never executes.
         let sent = find(&parse_event_name("MessageSent").unwrap());
         assert_eq!(sent["supports_interceptor"], false);

@@ -13,7 +13,9 @@
 //! - `@/path` - absolute file reference: rejected (left as written)
 
 use super::error::{ExtensionError, ExtensionResult};
-use super::hooks::{bounded_env_value, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES};
+use super::hooks::{
+    bounded_env_value, plugin_shell_line, PLUGIN_DATA_VARIABLES, PLUGIN_ROOT_VARIABLES,
+};
 use super::plugin_vars::PluginVars;
 use once_cell::sync::OnceCell;
 use regex::Regex;
@@ -54,6 +56,21 @@ static ARGUMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// `` !`cmd` `` — a backtick-fenced shell body after a bang.
 static INLINE_SHELL_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"!`([^`]+)`").expect("hardcoded inline-shell regex must compile"));
+
+/// Every `` !`cmd` `` in `content`, in document order: the byte range of the
+/// whole span and the command it runs (trimmed).
+///
+/// The one place that decides which text of a body is shell source:
+/// [`SkillTemplate::render`] runs exactly these, and the manifest adapter
+/// leaves exactly these unexpanded (`AdapterRegistry::parse_dir`), so a
+/// plugin's install path never becomes part of a command's source.
+#[must_use]
+pub(crate) fn inline_commands(content: &str) -> Vec<(Range<usize>, &str)> {
+    INLINE_SHELL_REGEX
+        .captures_iter(content)
+        .filter_map(|cap| Some((cap.get(0)?.range(), cap.get(1)?.as_str().trim())))
+        .collect()
+}
 
 /// The environment variable an inline command reads the whole argument
 /// string from (`$ARGUMENTS`).
@@ -220,6 +237,13 @@ pub struct InlineSite<'a> {
 /// the line is parsed — so no argument reaches an inline command there:
 /// nothing is appended and `ARGUMENTS` is removed, not exported.
 ///
+/// `cmd` holds the path variables as the plugin wrote them
+/// (`${CLAUDE_PLUGIN_ROOT}/x`): the manifest adapter leaves every inline
+/// command unexpanded. On unix they reach the shell through the environment
+/// only; on Windows `cmd` cannot expand `${…}`, so they — and nothing else —
+/// are substituted into the line, the one derivation a command hook uses
+/// ([`plugin_shell_line`]).
+///
 /// The daemon's environment is cleared first, except what a shell and its
 /// programs need ([`INHERITED_ENV`]) — unlike a plugin command hook, which
 /// inherits all of it: an inline command's arguments are picked by whoever
@@ -241,17 +265,28 @@ pub fn inline_shell_command(
     site: &InlineSite<'_>,
 ) -> tokio::process::Command {
     use crate::utils::no_window::NoWindow;
+    // What the shell parses: the command hook's derivation — verbatim on
+    // unix, the path variables substituted on Windows — and it creates the
+    // data directory when the command names it.
+    let line = plugin_shell_line(
+        cmd,
+        site.plugin.map(|(_, root)| root),
+        site.plugin.map_or("", |(id, _)| id),
+    );
     let mut command = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" });
     command
         .env_clear()
         .envs(std::env::vars_os().filter(|(name, _)| inherited(name)));
     if cfg!(windows) {
-        command.args(["/C", cmd]);
+        command.args(["/C", line.as_str()]);
     } else {
-        command.args(["-c", cmd, "sh"]).args(args.positional).env(
-            ARGUMENTS_VAR,
-            bounded_env_value(ARGUMENTS_VAR, args.raw, "$1 … $N"),
-        );
+        command
+            .args(["-c", line.as_str(), "sh"])
+            .args(args.positional)
+            .env(
+                ARGUMENTS_VAR,
+                bounded_env_value(ARGUMENTS_VAR, args.raw, "$1 … $N"),
+            );
     }
     // A data directory for plugin-owned commands only, as for a hook: a
     // label that is not a plugin id has none.
@@ -259,9 +294,6 @@ pub fn inline_shell_command(
         .plugin
         .filter(|(id, _)| crate::extension::manifest::validate_plugin_id(id).is_ok())
         .map(|(id, root)| PluginVars::new(id, root));
-    if let Some(vars) = &vars {
-        vars.ensure_data_dir_if_referenced(cmd);
-    }
     set_or_remove(
         &mut command,
         &PLUGIN_ROOT_VARIABLES,
@@ -415,10 +447,7 @@ impl SkillTemplate {
         };
         // Collected before the first `.await`: the match iterator is not held
         // across one.
-        let commands: Vec<(std::ops::Range<usize>, &str)> = INLINE_SHELL_REGEX
-            .captures_iter(&self.content)
-            .filter_map(|cap| Some((cap.get(0)?.range(), cap.get(1)?.as_str().trim())))
-            .collect();
+        let commands = inline_commands(&self.content);
         let text = |range: Range<usize>| self.content.get(range).unwrap_or_default();
         // File references attempted so far, across every stretch of the render.
         let mut refs = 0;
@@ -1209,6 +1238,54 @@ mod tests {
             );
         }
         assert_eq!(shown[5], cwd.path().to_string_lossy(), "{shown:?}");
+    }
+
+    /// The line the shell receives for a plugin's inline command, on this
+    /// platform: its args after the program.
+    fn shell_args(cmd: &str, root: &Path) -> Vec<String> {
+        let none: [String; 0] = [];
+        let cwd = std::env::temp_dir();
+        inline_shell_command(
+            cmd,
+            &InlineArgs {
+                raw: "",
+                positional: &none,
+            },
+            &InlineSite {
+                cwd: &cwd,
+                plugin: Some(("plug", root)),
+            },
+        )
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    /// On unix the plugin's text is the source, unchanged: the root reaches
+    /// it through the environment (`the_path_variables_come_from_the_site`),
+    /// never spliced into what `sh` parses.
+    #[test]
+    #[cfg(unix)]
+    fn on_unix_an_inline_command_is_the_text_as_written() {
+        let cmd = r#"cat "${CLAUDE_PLUGIN_ROOT}/x""#;
+        assert_eq!(
+            shell_args(cmd, Path::new("/r $(touch M)")),
+            ["-c", cmd, "sh"]
+        );
+    }
+
+    /// On Windows `cmd` cannot expand `${…}`: the path variables — and
+    /// nothing else — are substituted into the line, as for a command hook
+    /// (`plugin_shell_line`).
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_an_inline_command_gets_the_path_variables_substituted() {
+        let root = Path::new(r"C:\plugins\plug");
+        assert_eq!(
+            shell_args(r"type ${CLAUDE_PLUGIN_ROOT}\x %ARGUMENTS%", root),
+            ["/C", r"type C:\plugins\plug\x %ARGUMENTS%"]
+        );
     }
 
     /// A name the site does not know is removed, not inherited from the

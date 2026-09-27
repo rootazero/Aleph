@@ -27,7 +27,8 @@ use super::super::tool_refresh::active_plugin_tools_for_agent;
 
 // Free helpers carved into the sibling project_context module.
 use super::project_context::{
-    collect_project_skill_block, lifecycle_hook_context, workspace_directive,
+    collect_project_skill_block, lifecycle_hook_context, session_start_hook_context,
+    workspace_directive,
 };
 // The pre-seed hook-stop receipt (§5.4), shared with `BeforeAgentStart`.
 use super::journal_hook_stop;
@@ -349,11 +350,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mut session_start_blocks: Vec<String> = Vec::new();
         if history.is_empty() {
             if let Some(executor) = hook_executor.as_ref() {
-                let ctx = lifecycle_hook_context(
+                let ctx = session_start_hook_context(
                     &hook_session_id,
                     run_id,
                     &agent,
-                    Some(exec_tier.cc_permission_mode()),
+                    exec_tier.cc_permission_mode(),
                 );
                 executor
                     .execute_observers(HookEvent::SessionStart, &ctx)

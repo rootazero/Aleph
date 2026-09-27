@@ -57,8 +57,9 @@ use crate::extension::visibility::{canonical_root, ScopeKey};
 /// One contiguous group from a `hooks.json` file.
 #[derive(Debug, Clone, Deserialize)]
 struct UserHookGroup {
-    /// Optional regex matched against `tool_name` for tool-related events.
-    /// Empty / missing = match all.
+    /// Optional regex tested against the event's subject
+    /// (`HookEvent::match_subject`: the tool name, SessionStart's source, or
+    /// nothing — then it is ignored). Empty / `*` / missing = match all.
     #[serde(default)]
     matcher: Option<String>,
 
@@ -89,7 +90,9 @@ struct UserHookGroup {
 enum UserHookAction {
     Command {
         command: String,
-        #[serde(default)]
+        /// Claude Code spells it `timeout`, as a plugin's `hooks.json` does
+        /// (`manifest::parsers::HookAction`) — take either.
+        #[serde(default, alias = "timeout")]
         timeout_secs: Option<u64>,
     },
     Prompt {
@@ -102,7 +105,7 @@ enum UserHookAction {
         url: String,
         #[serde(default)]
         headers: HashMap<String, String>,
-        #[serde(default)]
+        #[serde(default, alias = "timeout")]
         timeout_secs: Option<u64>,
     },
 }
@@ -217,18 +220,14 @@ fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<Ho
                 .unwrap_or_default();
 
             let matcher = g.matcher.clone().filter(|s| !s.is_empty());
-            // Foot-gun guard: matchers test `tool_name` only, so a matcher on
-            // an event whose context has no tool name silently never fires.
-            // Warn at load time rather than leaving a mysteriously-dead hook.
-            if matcher.is_some() && !event.supports_matcher() {
-                warn!(
-                    path = %path.display(),
-                    event = %event_str,
-                    "Hook `matcher` set on an event with no tool name; matchers test \
-                     tool_name only, so this hook will never fire — drop the matcher \
-                     to fire on every occurrence of this event"
-                );
-            }
+            // A matcher that never fires, or one this event ignores, is said
+            // at load time — the same notice a plugin's `hooks.json` gives.
+            super::warn_on_matcher(
+                &path.display().to_string(),
+                &event_str,
+                event,
+                matcher.as_deref(),
+            );
             // Second foot-gun: interceptor-kind hooks only run on events whose
             // fire-sites dispatch interceptors; the global fire-and-forget
             // seams (messages / provider / gateway / subagent…) run observers
@@ -367,48 +366,86 @@ mod tests {
         std::fs::write(path, contents).unwrap();
     }
 
+    /// The subject census: what a matcher is tested against, per event.
     #[test]
-    fn event_supports_matcher_only_for_tool_name_events() {
-        // Tool-name-bearing events accept a matcher.
-        assert!(HookEvent::supports_matcher(HookEvent::BeforeToolCall));
-        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCall));
-        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCallFailure));
-        assert!(HookEvent::supports_matcher(HookEvent::ToolResultPersist));
-        assert!(HookEvent::supports_matcher(HookEvent::PermissionRequest));
-        assert!(HookEvent::supports_matcher(HookEvent::PermissionDenied));
-        assert!(HookEvent::supports_matcher(HookEvent::Notification));
-        // Lifecycle events have no tool name; a matcher there never fires.
-        assert!(!HookEvent::supports_matcher(HookEvent::SessionStart));
-        assert!(!HookEvent::supports_matcher(HookEvent::BeforeAgentStart));
-        assert!(!HookEvent::supports_matcher(HookEvent::UserPromptSubmit));
-        assert!(!HookEvent::supports_matcher(HookEvent::AgentEnd));
+    fn a_matcher_is_tested_against_the_events_subject() {
+        use crate::extension::types::MatchSubject::{Ignored, SessionSource, ToolName};
+        for event in [
+            HookEvent::BeforeToolCall,
+            HookEvent::AfterToolCall,
+            HookEvent::AfterToolCallFailure,
+            HookEvent::ToolResultPersist,
+            HookEvent::PermissionRequest,
+            HookEvent::PermissionDenied,
+            HookEvent::Notification,
+        ] {
+            assert_eq!(event.match_subject(), ToolName, "{event:?}");
+        }
+        assert_eq!(HookEvent::SessionStart.match_subject(), SessionSource);
+        for event in [
+            HookEvent::BeforeAgentStart,
+            HookEvent::UserPromptSubmit,
+            HookEvent::AgentEnd,
+            HookEvent::Stop,
+            HookEvent::BeforeCompaction,
+        ] {
+            assert_eq!(event.match_subject(), Ignored, "{event:?}");
+        }
     }
 
-    #[test]
-    fn matcher_on_non_tool_event_still_loads_but_is_a_footgun() {
-        // The hook still loads (back-compat); we only warn. The matcher is
-        // preserved so behavior is unchanged — it simply will not match.
+    /// Retired `matcher_on_non_tool_event_still_loads_but_is_a_footgun`: a
+    /// matcher on an event with nothing to match is no longer a hook that
+    /// never fires. It loads with its matcher as written, and the executor
+    /// ignores it — the hook runs on every occurrence.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_matcher_on_an_event_with_nothing_to_match_is_ignored() {
         let dir = tempdir().unwrap();
+        let marker = dir.path().join("fired");
         let cfg = dir.path().join(".aleph/hooks.json");
         write(
             &cfg,
-            r#"{
-                "hooks": {
-                    "SessionStart": [
-                        { "matcher": "anything",
-                          "hooks": [
-                            { "type": "command", "command": "echo hi" }
-                          ]
-                        }
-                    ]
-                }
-            }"#,
+            &serde_json::json!({"hooks": {"UserPromptSubmit": [{
+                "matcher": "anything",
+                "hooks": [{"type": "command", "command": format!("touch '{}'", marker.display())}]
+            }]}})
+            .to_string(),
         );
         let mut out = Vec::new();
         load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].event, HookEvent::SessionStart);
         assert_eq!(out[0].matcher.as_deref(), Some("anything"));
+        crate::extension::hooks::HookExecutor::new(out)
+            .execute_interceptors(
+                HookEvent::UserPromptSubmit,
+                crate::extension::hooks::HookContext::new("s"),
+            )
+            .await
+            .expect("the hook runs");
+        assert!(marker.exists(), "an ignored matcher must not stop the hook");
+    }
+
+    /// P4.14 F-3: Claude Code spells an action's timeout `timeout`, and a
+    /// plugin's `hooks.json` already takes it. `~/.aleph/hooks.json` takes
+    /// both spellings, for `command` and `http` alike.
+    #[test]
+    fn an_actions_timeout_takes_either_spelling() {
+        for key in ["timeout", "timeout_secs"] {
+            let dir = tempdir().unwrap();
+            let cfg = dir.path().join(".aleph/hooks.json");
+            write(
+                &cfg,
+                &serde_json::json!({"hooks": {"PreToolUse": [{"hooks": [
+                    {"type": "command", "command": "true", key: 30},
+                    {"type": "http", "url": "http://127.0.0.1:9/h", key: 31}
+                ]}]}})
+                .to_string(),
+            );
+            let mut out = Vec::new();
+            load_into(&cfg, "user:global", &ScopeKey::Global, &mut out);
+            let timeouts: Vec<Option<u64>> = out.iter().map(|h| h.timeout_secs).collect();
+            assert_eq!(timeouts, [Some(30), Some(31)], "{key}");
+        }
     }
 
     #[test]

@@ -133,11 +133,16 @@ impl AdapterRegistry {
     /// `${CLAUDE_PLUGIN_ROOT}`. `.mcp.json` had its own expander and hooks had
     /// a third; skill / command / agent bodies had none.
     ///
-    /// Scope: only the fields whose consumer is the model — bodies and hook
-    /// commands. Names and ids are identifiers, not paths, and expanding them
-    /// would let a manifest smuggle an absolute path into a registry key.
+    /// Scope: only the prose whose consumer is the model — skill, command and
+    /// agent bodies. Never shell source: a hook's `command` and a body's
+    /// `` !`cmd` `` ([`inline_commands`](crate::extension::template::inline_commands))
+    /// stay as written, and the variables reach those through the child's
+    /// environment (on Windows, substituted at spawn —
+    /// `hooks::plugin_shell_line`). The install path is a directory name, and
+    /// `r $(touch M) "` spliced into source is parsed as code. Names and ids
+    /// are identifiers, not paths, and expanding them would let a manifest
+    /// smuggle an absolute path into a registry key.
     fn expand_plugin_variables(output: &mut AdapterOutput, plugin_dir: &Path) {
-        use crate::extension::capability::CapabilityDeclaration;
         use crate::extension::plugin_vars::PluginVars;
 
         let vars = PluginVars::new(&output.plugin_id, plugin_dir);
@@ -145,28 +150,26 @@ impl AdapterRegistry {
             match cap {
                 CapabilityDeclaration::Skill(skill) => {
                     vars.ensure_data_dir_if_referenced(&skill.content);
-                    skill.content = vars.expand(&skill.content);
+                    skill.content = expand_outside_inline_commands(&vars, &skill.content);
                 }
                 CapabilityDeclaration::Agent(agent) => {
                     vars.ensure_data_dir_if_referenced(&agent.content);
                     agent.content = vars.expand(&agent.content);
                 }
-                CapabilityDeclaration::Hook(hook) => {
-                    vars.ensure_data_dir_if_referenced(&hook.handler);
-                    hook.handler = vars.expand(&hook.handler);
-                    for action in &mut hook.actions {
-                        if let crate::extension::types::HookAction::Command { command } = action {
-                            *command = vars.expand(command);
-                        }
-                    }
-                }
+                // A hook's text is shell source (a `command`) or an
+                // identifier (`handler`): neither is expanded. The executor
+                // hands the command its path variables when it spawns it
+                // (`command_hook_invocation`), and creates the data
+                // directory then if the command names it.
+                //
                 // Tool parameters are a JSON Schema, services and MCP servers
                 // are handled by their own layers (an MCP server arrives here
                 // already expanded and resolved by `mcp_config.rs`, the one
                 // reader — expanding it twice could only differ from what its
                 // containment check saw), and none of them is prose the model
                 // reads.
-                CapabilityDeclaration::Tool(_)
+                CapabilityDeclaration::Hook(_)
+                | CapabilityDeclaration::Tool(_)
                 | CapabilityDeclaration::Service(_)
                 | CapabilityDeclaration::McpServer(_) => {}
             }
@@ -184,6 +187,47 @@ impl AdapterRegistry {
     pub fn is_empty(&self) -> bool {
         self.adapters.is_empty()
     }
+}
+
+/// `content` with the plugin variables expanded everywhere except inside its
+/// `` !`cmd` `` spans, which stay exactly as written.
+///
+/// If the expanded paths would change which spans the body has — an install
+/// path holding a backtick can close a span early or, with a `!`, open a new
+/// one — the body is returned unexpanded and a warning says why: prose that
+/// shows `${CLAUDE_PLUGIN_ROOT}` is a nuisance, a path that turns into a
+/// command is not.
+fn expand_outside_inline_commands(
+    vars: &crate::extension::plugin_vars::PluginVars,
+    content: &str,
+) -> String {
+    use crate::extension::template::inline_commands;
+
+    let spans = inline_commands(content);
+    let text = |from: usize, to: usize| content.get(from..to).unwrap_or_default();
+    let mut out = String::with_capacity(content.len());
+    let mut last = 0;
+    for (span, _) in &spans {
+        out.push_str(&vars.expand(text(last, span.start)));
+        out.push_str(text(span.start, span.end));
+        last = span.end;
+    }
+    out.push_str(&vars.expand(text(last, content.len())));
+
+    let before: Vec<&str> = spans.iter().map(|(_, cmd)| *cmd).collect();
+    let after: Vec<&str> = inline_commands(&out)
+        .into_iter()
+        .map(|(_, cmd)| cmd)
+        .collect();
+    if before != after {
+        tracing::warn!(
+            root = %vars.root_dir().display(),
+            "plugin path variables left unexpanded in a body: the install path would \
+             change its inline commands"
+        );
+        return content.to_string();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -408,5 +452,176 @@ mod tests {
             )),
             "a name must be left alone"
         );
+    }
+
+    /// Writes a Claude Code plugin at `root` with one `hooks.json` command
+    /// hook and one command whose body has a prose reference and an inline
+    /// command, each reading `${CLAUDE_PLUGIN_ROOT}/x`. The hook writes what
+    /// it read to `out`.
+    #[cfg(unix)]
+    fn write_root_reading_plugin(root: &Path, out: &Path) {
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::create_dir_all(root.join("hooks")).unwrap();
+        std::fs::create_dir_all(root.join("commands")).unwrap();
+        std::fs::write(
+            root.join(".claude-plugin/plugin.json"),
+            r#"{"name": "f1probe"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("x"), "from-x").unwrap();
+        let hook = format!(r#"cat "${{CLAUDE_PLUGIN_ROOT}}/x" > '{}'"#, out.display());
+        std::fs::write(
+            root.join("hooks/hooks.json"),
+            serde_json::json!({
+                "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": hook}]}]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("commands/c.md"),
+            "---\ndescription: d\n---\nSee ${CLAUDE_PLUGIN_ROOT}/x.\nOut: !`cat \"${CLAUDE_PLUGIN_ROOT}/x\"`\n",
+        )
+        .unwrap();
+    }
+
+    /// Runs a command body's inline commands through the production process
+    /// builder, as the plugin that ships it (`InlineSite::plugin`), in `cwd`.
+    #[cfg(unix)]
+    struct PluginSh<'a> {
+        cwd: &'a Path,
+        root: &'a Path,
+    }
+
+    #[cfg(unix)]
+    #[async_trait::async_trait]
+    impl crate::extension::template::InlineShell for PluginSh<'_> {
+        async fn run(
+            &self,
+            cmd: &str,
+            args: &crate::extension::template::InlineArgs<'_>,
+        ) -> Result<String, String> {
+            let site = crate::extension::template::InlineSite {
+                cwd: self.cwd,
+                plugin: Some(("f1probe", self.root)),
+            };
+            let out = crate::extension::template::inline_shell_command(cmd, args, &site)
+                .output()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+    }
+
+    /// P4.14 F-1. An install path is a directory name, and a directory name
+    /// can hold `$(…)` and `"`. Parsed by the production adapter chain, run by
+    /// the production hook executor and inline-command builder: nothing runs,
+    /// and both read the intended file. The P4.4d guard
+    /// (`a_plugin_root_named_with_a_command_substitution_is_one_word_of_data`)
+    /// builds its hook by hand and never crosses `parse_dir`, which is where
+    /// the root used to be spliced in; this is its sibling that does.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_plugin_root_is_data_to_its_hooks_and_inline_commands() {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::hooks::{HookContext, HookExecutor};
+        use crate::extension::template::{SkillTemplate, TemplateCtx};
+        use crate::extension::types::HookEvent;
+        use crate::extension::visibility::ScopeKey;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join(r#"r $(touch M) ""#);
+        let out = base.path().join("out");
+        write_root_reading_plugin(&root, &out);
+
+        let parsed = AdapterRegistry::with_defaults().parse_dir(&root).unwrap();
+        let mut hooks = Vec::new();
+        let mut body = None;
+        for cap in parsed.capabilities {
+            match cap {
+                CapabilityDeclaration::Hook(h) => hooks.push(
+                    crate::extension::hook_config_from_registration(h, ScopeKey::Global),
+                ),
+                CapabilityDeclaration::Skill(s) if s.name == "c" => body = Some(s.content),
+                _ => {}
+            }
+        }
+        assert_eq!(hooks.len(), 1, "the plugin's one hook");
+        let body = body.expect("the command is parsed");
+
+        // The hook, through the executor: its directory is the root.
+        HookExecutor::new(hooks)
+            .execute_interceptors(
+                HookEvent::BeforeToolCall,
+                HookContext::new("s").with_tool_name("bash"),
+            )
+            .await
+            .expect("the hook runs");
+        assert!(
+            !root.join("M").exists(),
+            "the root's `$(…)` ran in the hook"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("the hook ran"),
+            "from-x"
+        );
+
+        // The inline command, through the production builder, in `base`.
+        let rendered = SkillTemplate::with_base_dir(&body, root.join("commands"))
+            .render(
+                "",
+                &TemplateCtx {
+                    shell: Some(&PluginSh {
+                        cwd: base.path(),
+                        root: &root,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            !base.path().join("M").exists() && !root.join("M").exists(),
+            "the root's `$(…)` ran in the inline command"
+        );
+        assert!(rendered.contains("Out: from-x"), "{rendered}");
+        // The prose around it is still expanded for the model.
+        assert!(
+            rendered.contains(&format!("See {}/x.", root.display())),
+            "{rendered}"
+        );
+    }
+
+    /// An install path that would open or close an inline command — a
+    /// backtick, here after a `!` — leaves the whole body unexpanded, so the
+    /// body's commands are exactly the ones its author wrote.
+    #[test]
+    fn a_root_that_would_change_a_bodys_inline_commands_is_not_expanded() {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::template::inline_commands;
+
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("r!`touch M`");
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::create_dir_all(root.join("commands")).unwrap();
+        std::fs::write(
+            root.join(".claude-plugin/plugin.json"),
+            r#"{"name": "tickroot"}"#,
+        )
+        .unwrap();
+        let written = "---\ndescription: d\n---\nSee ${CLAUDE_PLUGIN_ROOT}/x.\nNow: !`date`\n";
+        std::fs::write(root.join("commands/c.md"), written).unwrap();
+
+        let parsed = AdapterRegistry::with_defaults().parse_dir(&root).unwrap();
+        let body = parsed
+            .capabilities
+            .into_iter()
+            .find_map(|c| match c {
+                CapabilityDeclaration::Skill(s) if s.name == "c" => Some(s.content),
+                _ => None,
+            })
+            .expect("the command is parsed");
+        let commands: Vec<&str> = inline_commands(&body).into_iter().map(|(_, c)| c).collect();
+        assert_eq!(commands, vec!["date"], "{body}");
+        assert!(body.contains("See ${CLAUDE_PLUGIN_ROOT}/x."), "{body}");
     }
 }
