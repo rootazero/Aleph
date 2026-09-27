@@ -14,7 +14,8 @@
 //! the harness never *acts* on the kind itself (R7 / R9 keep tool
 //! selection in the LLM's hands), it only labels the failure.
 
-use super::service::ToolError;
+use super::service::{RefusedBy, ToolError};
+use crate::thinker::nudges::CROSS_BATCH_REFUSED_CAUSE;
 
 /// Coarse, stable classification of a tool-call failure.
 ///
@@ -43,9 +44,9 @@ pub enum ToolErrorKind {
     Transport,
     /// Aleph-internal: caller-supplied input violated the tool's schema.
     Validation,
-    /// Aleph-internal: a policy refused the call — a permission gate
-    /// (`ToolError::PermissionDenied`) or a BeforeToolCall hook's block
-    /// (`ToolError::HookBlocked`). A verdict, not a failure: no ladder.
+    /// Aleph-internal: the call was refused — a permission gate
+    /// (`ToolError::PermissionDenied`), or a hook, a person, or nobody being
+    /// there to ask (`ToolError::Refused`). A verdict, not a failure: no ladder.
     Permission,
     /// Aleph-internal: the named tool is not registered.
     ToolNotFound,
@@ -54,6 +55,13 @@ pub enum ToolErrorKind {
     /// Aleph-internal: the run was stopped while the call was in flight.
     /// Says nothing about the call — the user did not judge it.
     Cancelled,
+    /// The harness refused an identical repeat of a call that already failed
+    /// with a non-retryable error this run (`CROSS_BATCH_REFUSED_CAUSE`); the
+    /// call did not run. The earlier failure's kind is the one that means
+    /// something, and this error does not carry it — the per-call hint cannot
+    /// see it (no ladder here: the earlier error already had whatever hint its
+    /// own kind admitted), the run summary looks it up in the event log.
+    Repeated,
     /// Fallback when no other classifier matched. Treat as opaque —
     /// the LLM should switch methods rather than blindly retry.
     Execution,
@@ -79,6 +87,7 @@ impl ToolErrorKind {
             Self::ToolNotFound => "tool_not_found",
             Self::Duplicate => "duplicate",
             Self::Cancelled => "cancelled",
+            Self::Repeated => "repeated",
             Self::Execution => "execution",
         }
     }
@@ -119,24 +128,53 @@ impl ToolErrorKind {
     /// `fallback_registry::render_persistence_hint` (per call) and
     /// `attempt_summary::aggregate_failures` (per run).
     ///
-    /// `false` for a call nobody judged (`Cancelled`) and for a call a policy
-    /// refused (`Permission`): suggesting a way around a policy refusal is
-    /// steering the model around the guard (a path-scoped `Read` hook plus
-    /// "`file_ops copy`, then read the copy" is the same read).
+    /// `false` for a call nobody judged (`Cancelled`), for a call that was
+    /// refused (`Permission`) and for a refused repeat whose own kind is
+    /// unknown here (`Repeated`): suggesting a way around a refusal is steering
+    /// the model around the guard (a path-scoped `Read` hook plus "`file_ops
+    /// copy`, then read the copy" is the same read).
     #[must_use]
     pub const fn admits_ladder(self) -> bool {
-        !matches!(self, Self::Cancelled | Self::Permission)
+        !matches!(self, Self::Cancelled | Self::Permission | Self::Repeated)
     }
 }
 
-/// The rendering of `ToolError::HookBlocked` (`"tool <name> was refused by a
-/// policy hook: <reason>"`), matched on its fixed head so the hook's own
-/// reason — which follows it — is never scanned for a kind.
-fn is_hook_block_rendering(lower: &str) -> bool {
-    lower
-        .strip_prefix("tool ")
-        .and_then(|rest| rest.split_once(' '))
-        .is_some_and(|(_, tail)| tail.starts_with("was refused by a policy hook:"))
+/// The kind a rendering states by its fixed head — the part of `Display` the
+/// variant writes, before any content (a hook's prose, a user's words, a
+/// cause) it carries. `None` when the content is all there is to go on
+/// (`Execution`, `Other`). Checked before any content scan, so the read-back
+/// face agrees with `classify_tool_error` (判据 §12).
+fn kind_from_head(lower: &str) -> Option<ToolErrorKind> {
+    const HEADS: [(&str, ToolErrorKind); 5] = [
+        ("permission denied for tool ", ToolErrorKind::Permission),
+        ("invalid input for tool ", ToolErrorKind::Validation),
+        ("tool not found: ", ToolErrorKind::ToolNotFound),
+        ("duplicate tool name: ", ToolErrorKind::Duplicate),
+        ("approval for tool ", ToolErrorKind::Timeout),
+    ];
+    if let Some((_, kind)) = HEADS.iter().find(|(head, _)| lower.starts_with(head)) {
+        return Some(*kind);
+    }
+    // The rest render as `tool <name> <tail>`.
+    let (_, tail) = lower.strip_prefix("tool ")?.split_once(' ')?;
+    if let Some(cause) = tail.strip_prefix("execution failed: ") {
+        return cause
+            .starts_with(CROSS_BATCH_REFUSED_CAUSE)
+            .then_some(ToolErrorKind::Repeated);
+    }
+    if RefusedBy::ALL.iter().any(|by| {
+        tail.strip_prefix(by.head())
+            .is_some_and(|r| r.starts_with(':'))
+    }) {
+        return Some(ToolErrorKind::Permission);
+    }
+    [
+        ("timed out after ", ToolErrorKind::Timeout),
+        ("transport error: ", ToolErrorKind::Transport),
+        ("was cancelled — ", ToolErrorKind::Cancelled),
+    ]
+    .into_iter()
+    .find_map(|(head, kind)| tail.starts_with(head).then_some(kind))
 }
 
 /// Classify a rendered tool-error string. Used when only the
@@ -150,10 +188,11 @@ fn is_hook_block_rendering(lower: &str) -> bool {
 pub fn classify_error_str(s: &str) -> ToolErrorKind {
     let lower = s.to_ascii_lowercase();
 
-    // First: a hook block's reason is the hook author's prose, and whatever it
-    // says ("not found", "timed out after", "429") is not the kind.
-    if is_hook_block_rendering(&lower) {
-        return ToolErrorKind::Permission;
+    // First, the variant's own head: what follows it is a hook's prose, a
+    // user's words or a tool's cause, and whatever that says ("not found",
+    // "timed out after", "429") is not the kind of a refusal.
+    if let Some(kind) = kind_from_head(&lower) {
+        return kind;
     }
 
     // The Aleph-internal variants render with a recognisable prefix —
@@ -296,11 +335,15 @@ pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
         ToolError::Timeout { .. } | ToolError::ApprovalExpired { .. } => ToolErrorKind::Timeout,
         ToolError::Transport { .. } => ToolErrorKind::Transport,
         ToolError::ValidationFailed { .. } => ToolErrorKind::Validation,
-        // A hook block is a policy decision. Never the string scan: the reason
-        // is the hook author's prose, and the same block would otherwise be
-        // labelled `timeout` or `upstream_not_found` by how it was worded.
-        ToolError::PermissionDenied { .. } | ToolError::HookBlocked { .. } => {
-            ToolErrorKind::Permission
+        // A refusal is a verdict. Never the string scan: its reason is a hook
+        // author's prose or a user's own words, and the same refusal would
+        // otherwise be labelled `timeout` or `upstream_not_found` by how it
+        // was worded.
+        ToolError::PermissionDenied { .. } | ToolError::Refused { .. } => ToolErrorKind::Permission,
+        // The harness's refusal of an identical repeat, recognised by
+        // equality with the constant it is built from — not by a substring.
+        ToolError::Execution { cause, .. } if cause == CROSS_BATCH_REFUSED_CAUSE => {
+            ToolErrorKind::Repeated
         }
         ToolError::NotFound { .. } => ToolErrorKind::ToolNotFound,
         ToolError::Duplicate { .. } => ToolErrorKind::Duplicate,
@@ -337,6 +380,8 @@ mod tests {
             ToolErrorKind::Permission,
             ToolErrorKind::ToolNotFound,
             ToolErrorKind::Duplicate,
+            ToolErrorKind::Cancelled,
+            ToolErrorKind::Repeated,
             ToolErrorKind::Execution,
         ] {
             let s = k.label();
@@ -432,8 +477,9 @@ mod tests {
                 name: "t".into(),
                 cause: "boom".into(),
             },
-            ToolError::HookBlocked {
+            ToolError::Refused {
                 name: "t".into(),
+                by: crate::tools::service::RefusedBy::Hook,
                 reason: "timed out after 5ms".into(),
             },
             ToolError::Timeout {
@@ -448,6 +494,7 @@ mod tests {
                 name: "t".into(),
                 cause: "reset".into(),
             },
+            ToolError::Cancelled { name: "t".into() },
             ToolError::Duplicate { name: "t".into() },
             ToolError::Other("opaque".into()),
         ];
@@ -464,26 +511,83 @@ mod tests {
         }
     }
 
-    /// The two faces of one kind: the variant (live) and its rendering (the
-    /// persisted error the run summary re-reads) say `Permission` for a hook
-    /// block, however the hook worded its reason. Only the head counts: the
-    /// same words inside another error's cause are that cause's prose.
+    /// M-2: the read-back face (`classify_error_str` over a persisted error)
+    /// agrees with the live face (`kind()`) for every rendering, even when the
+    /// content inside it — a hook's prose, a user's words — reads like another
+    /// kind. A variant with a fixed head is recognised by its head, before any
+    /// content is scanned.
     #[test]
-    fn a_hook_block_reads_back_as_the_kind_it_was_given() {
-        use crate::tools::service::ToolError;
+    fn every_rendering_reads_back_as_its_live_kind() {
+        use crate::tools::service::{RefusedBy, ToolError};
 
-        for reason in ["HTTP 404 not found", "timed out after 5ms", "429", ""] {
-            let block = ToolError::HookBlocked {
-                name: "file_read".into(),
-                reason: reason.into(),
-            };
-            assert_eq!(block.kind(), ToolErrorKind::Permission, "{block}");
-            assert_eq!(
-                classify_error_str(&block.to_string()),
-                ToolErrorKind::Permission,
-                "{block}"
-            );
+        let prose = "HTTP 404 not found; timed out after 5ms; permission denied; 429";
+        let t = || "file_read".to_string();
+        let mut errors = vec![
+            ToolError::NotFound { name: t() },
+            ToolError::PermissionDenied {
+                name: t(),
+                reason: prose.into(),
+            },
+            ToolError::ValidationFailed {
+                name: t(),
+                cause: prose.into(),
+            },
+            ToolError::Execution {
+                name: t(),
+                cause: prose.into(),
+            },
+            // The harness's refusal of an identical repeat.
+            ToolError::Execution {
+                name: t(),
+                cause: CROSS_BATCH_REFUSED_CAUSE.into(),
+            },
+            ToolError::Timeout {
+                name: t(),
+                elapsed_ms: 5,
+            },
+            ToolError::ApprovalExpired {
+                name: t(),
+                waited_ms: 5,
+            },
+            ToolError::Transport {
+                name: t(),
+                cause: prose.into(),
+            },
+            ToolError::Cancelled { name: t() },
+            ToolError::Duplicate { name: t() },
+            ToolError::Other(prose.into()),
+        ];
+        errors.extend(RefusedBy::ALL.map(|by| ToolError::Refused {
+            name: t(),
+            by,
+            reason: prose.into(),
+        }));
+        for e in &errors {
+            // A new variant fails to compile here until it is listed above.
+            match e {
+                ToolError::NotFound { .. }
+                | ToolError::PermissionDenied { .. }
+                | ToolError::ValidationFailed { .. }
+                | ToolError::Execution { .. }
+                | ToolError::Refused { .. }
+                | ToolError::Timeout { .. }
+                | ToolError::ApprovalExpired { .. }
+                | ToolError::Transport { .. }
+                | ToolError::Cancelled { .. }
+                | ToolError::Duplicate { .. }
+                | ToolError::Other(_) => {}
+            }
+            assert_eq!(classify_error_str(&e.to_string()), e.kind(), "{e}");
         }
+        // Every refusal and the repeat are `Permission` / `Repeated` on both
+        // faces, whatever their content says.
+        assert!(errors
+            .iter()
+            .filter(|e| matches!(e, ToolError::Refused { .. }))
+            .all(|e| e.kind() == ToolErrorKind::Permission));
+        assert_eq!(errors[4].kind(), ToolErrorKind::Repeated);
+        // Only the head counts: a refusal's head quoted inside another error's
+        // cause is that cause's prose.
         let quoted = ToolError::Execution {
             name: "web_fetch".into(),
             cause: "page said: tool x was refused by a policy hook: HTTP 404".into(),
@@ -491,6 +595,16 @@ mod tests {
         assert_eq!(
             classify_error_str(&quoted.to_string()),
             ToolErrorKind::UpstreamNotFound
+        );
+        // …and the repeat is recognised by the whole constant, not a fragment.
+        let fragment = ToolError::Execution {
+            name: t(),
+            cause: "this exact call already failed earlier in the run".into(),
+        };
+        assert_eq!(fragment.kind(), ToolErrorKind::Execution);
+        assert_eq!(
+            classify_error_str(&fragment.to_string()),
+            ToolErrorKind::Execution
         );
     }
 

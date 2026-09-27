@@ -117,9 +117,7 @@ pub enum AlephError {
 
     /// Permission denied: a missing OS grant (Accessibility / Input
     /// Monitoring — [`Self::permission_denied`] carries that suggestion), an
-    /// upstream 403, or a deliberate policy refusal. A tool that fails with it
-    /// reaches the model as kind `permission` (its rendering says "Permission
-    /// denied"), with no route to another tool.
+    /// upstream 403, or a deliberate policy refusal.
     #[error("Permission denied: {message}")]
     PermissionDenied {
         message: String,

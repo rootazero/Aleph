@@ -644,7 +644,9 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # idiom, matcher spelled `Read` — fires once un-approved (the
                                  # control: the tool runs), is approved the operator's way
                                  # (`aleph-server hooks test`), then blocks file_read and its
-                                 # stderr is the tool result the model reads
+                                 # stderr is the tool result the model reads — with nothing
+                                 # (no `switch=`, ladder, "try a different tool") routing it
+                                 # around the block
 ./qa/plugins/run.sh subagent     # a command's `allowed-tools` also bounds the `subagent` child
                                  # it delegates to; the control (a plain turn) proves the same
                                  # child otherwise carries `bash`

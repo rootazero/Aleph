@@ -490,8 +490,9 @@ mod tests {
 
     /// Every way a call reaches the `Permission` kind gets no hint: a gate's
     /// `PermissionDenied` (tool permission rule, operator gate, sub-agent
-    /// allowlist, hook `deny`), a hook's block — worded here like the WAF block
-    /// `web_fetch` would otherwise be told to route around — and a cause that
+    /// allowlist, hook `deny`), a `Refused` call — a hook's block worded here
+    /// like the WAF block `web_fetch` would otherwise be told to route around,
+    /// a person's decline in words that read like a 404 — and a cause that
     /// says "permission denied" (an OS EACCES, a tool's own policy refusal).
     #[test]
     fn render_persistence_hint_is_empty_for_a_policy_refusal() {
@@ -500,9 +501,15 @@ mod tests {
                 name: "web_fetch".into(),
                 reason: "denied by [policies.tool_permissions]".into(),
             },
-            ToolError::HookBlocked {
+            ToolError::Refused {
                 name: "web_fetch".into(),
+                by: crate::tools::service::RefusedBy::Hook,
                 reason: "cloudflare challenge: access denied".into(),
+            },
+            ToolError::Refused {
+                name: "web_fetch".into(),
+                by: crate::tools::service::RefusedBy::Person,
+                reason: "The user said: \"HTTP 404, try another source\".".into(),
             },
             ToolError::Execution {
                 name: "web_fetch".into(),

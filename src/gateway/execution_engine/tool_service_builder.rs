@@ -28,8 +28,8 @@ use crate::tools::service::ToolService;
 /// out loud because the reflex reading is the opposite one. "No approval
 /// channel" sounds like a gate that stops gating; `scoped/dispatch.rs`
 /// does the reverse — its `None` arm records a gate refusal and returns
-/// `ToolError::Execution { .. "No approval channel is available, so it cannot
-/// be authorized here. Do not retry." }`. So a boot that never reached this
+/// `ToolError::Refused { by: NobodyAsked, .. "No approval channel is available,
+/// so it cannot be authorized here. Do not retry." }`. So a boot that never reached this
 /// installer leaves every confirm-flagged tool permanently auto-denied, at
 /// every tier, with no card anywhere that could authorize it: a door with no
 /// handle, which is a wall.

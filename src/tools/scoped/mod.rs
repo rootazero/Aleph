@@ -37,6 +37,8 @@ mod tests;
 // POSIX-only: the hooks under test are `sh` commands.
 #[cfg(all(test, unix))]
 mod hook_block_tests;
+#[cfg(all(test, unix))]
+mod refusal_tests;
 
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;

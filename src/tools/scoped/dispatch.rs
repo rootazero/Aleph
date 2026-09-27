@@ -11,7 +11,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
-use crate::tools::service::ToolError;
+use crate::tools::service::{RefusedBy, ToolError};
 
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
@@ -127,6 +127,16 @@ impl ConfirmDenial {
     /// nothing of the sort: an unattended run, an unwired requester, a channel
     /// that could not deliver. The model relays that sentence to the person it
     /// is talking to, so a wrong attribution does not stay inside the process.
+    /// Who refused, as the model-facing error records it — the same fact
+    /// [`Self::lead`] words.
+    fn refused_by(&self) -> RefusedBy {
+        if self.reason.is_a_human_decision() {
+            RefusedBy::Person
+        } else {
+            RefusedBy::NobodyAsked
+        }
+    }
+
     fn lead(&self, subject: &str) -> String {
         let outcome = self.outcome;
         if self.reason.is_a_human_decision() {
@@ -621,9 +631,10 @@ impl ScopedToolService {
                     let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                     let said = denial.user_reason_clause();
                     let lead = denial.lead(&format!("running `{name}`"));
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: denial.refused_by(),
+                        reason: format!(
                             "{lead}{said} Do not retry this call, do not rewrite it, and do \
                              not attempt to achieve the same result by other means.{hint} Ask \
                              the user what they would like to do instead."
@@ -642,9 +653,10 @@ impl ScopedToolService {
                     "auto-denied: confirmation required and no approval channel is available",
                 )
                 .await;
-                Err(ToolError::Execution {
+                Err(ToolError::Refused {
                     name: name.to_string(),
-                    cause: format!(
+                    by: RefusedBy::NobodyAsked,
+                    reason: format!(
                         "{} No approval channel is available, so it cannot be \
                          authorized here. Do not retry.",
                         rule.reason(name)
@@ -1286,8 +1298,9 @@ impl ScopedToolService {
         let (_ctx, hook_result) = executor
             .execute_interceptors(HookEvent::BeforeToolCall, ctx)
             .await
-            .map_err(|e| ToolError::HookBlocked {
+            .map_err(|e| ToolError::Refused {
                 name: name.to_string(),
+                by: RefusedBy::HookFailed,
                 reason: format!("BeforeToolCall hook executor failed: {e}"),
             })?;
 
@@ -1302,12 +1315,18 @@ impl ScopedToolService {
         }
 
         // Block (exit 2, `decision: "block"`, `block:`, or a hook that failed
-        // and blocked fail-closed) — a policy refusal the model reads with the
-        // hook's reason and no route around it, but not a `PermissionDenied`:
-        // a hook's verdict does not fire the PermissionDenied observers.
+        // and blocked fail-closed — `action_failed` tells the two apart) — a
+        // refusal the model reads with the hook's reason and no route around
+        // it, but not a `PermissionDenied`: a hook's verdict does not fire the
+        // PermissionDenied observers.
         if hook_result.blocked {
-            return Err(ToolError::HookBlocked {
+            return Err(ToolError::Refused {
                 name: name.to_string(),
+                by: if hook_result.action_failed {
+                    RefusedBy::HookFailed
+                } else {
+                    RefusedBy::Hook
+                },
                 reason: hook_result
                     .block_reason
                     .unwrap_or_else(|| "blocked by hook".to_string()),
@@ -1345,7 +1364,7 @@ impl ScopedToolService {
                     {
                         // An expired card is not a refusal — mirror the confirm
                         // gate and return the retryable ApprovalExpired rather
-                        // than a non-retryable Execution error the harness bans.
+                        // than a non-retryable refusal the harness bans.
                         if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                             return Err(ToolError::ApprovalExpired {
                                 name: name.to_string(),
@@ -1355,9 +1374,10 @@ impl ScopedToolService {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         let said = denial.user_reason_clause();
                         let lead = denial.lead(&format!("running `{name}`"));
-                        return Err(ToolError::Execution {
+                        return Err(ToolError::Refused {
                             name: name.to_string(),
-                            cause: format!(
+                            by: denial.refused_by(),
+                            reason: format!(
                                 "A BeforeToolCall hook required confirmation. \
                                  {lead}{said}{hint}"
                             ),
@@ -1383,9 +1403,10 @@ impl ScopedToolService {
                          approval channel is available",
                     )
                     .await;
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: RefusedBy::NobodyAsked,
+                        reason: format!(
                             "Hook requested user confirmation for `{name}` but no \
                              approval channel is available. Do not retry."
                         ),

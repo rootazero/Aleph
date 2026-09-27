@@ -110,19 +110,22 @@ pub enum HookEvent {
     /// - a BeforeToolCall hook said `deny:`.
     ///
     /// NOT fired for these refusals, which reach the model as a different
-    /// error or are decided elsewhere:
+    /// error or are decided elsewhere. The first three are `ToolError::Refused`
+    /// — the model reads each as a refusal (kind `permission`, no route around
+    /// it), but they do not fire this event:
     ///
     /// - a person declining a confirmation card (Ask tier, destructive
-    ///   arguments), that gate refusing because no approval channel exists,
-    ///   or it refusing without asking anyone — an unattended run, or a call
-    ///   the denial ledger remembers being refused — `Execution`;
+    ///   arguments) — `Refused { by: Person }` —, that gate refusing because
+    ///   no approval channel exists, or it refusing without asking anyone — an
+    ///   unattended run, or a call the denial ledger remembers being refused —
+    ///   `Refused { by: NobodyAsked }`;
     /// - a BeforeToolCall hook's `ask:` that the person declined or that
-    ///   could not be raised — `Execution`;
+    ///   could not be raised — `Refused { by: Person | NobodyAsked }`;
     /// - a BeforeToolCall hook's block (`block:`, exit 2, `decision: "block"`)
-    ///   — including a BeforeToolCall hook that failed to run, which blocks
-    ///   fail-closed, and a failure of the hook executor itself —
-    ///   `HookBlocked`: the model reads it as a policy refusal (kind
-    ///   `permission`), but a hook's verdict does not re-fire hooks;
+    ///   — `Refused { by: Hook }` — including a BeforeToolCall hook that
+    ///   failed to run, which blocks fail-closed, and a failure of the hook
+    ///   executor itself — `Refused { by: HookFailed }`; a hook's verdict does
+    ///   not re-fire hooks;
     /// - a card that expired unanswered — `ApprovalExpired`: nobody refused;
     /// - a sub-agent calling a tool outside its allowlist
     ///   (`AllowlistToolService`): decided above the chokepoint, before this

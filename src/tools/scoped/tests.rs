@@ -544,7 +544,7 @@ fn parse_tool_output(value: &Value) -> Value {
 
 #[tokio::test]
 #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
-async fn before_tool_hook_block_returns_hook_blocked() {
+async fn before_tool_hook_block_returns_refused_by_hook() {
     let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
         HookEvent::BeforeToolCall,
         HookKind::Interceptor,
@@ -554,14 +554,18 @@ async fn before_tool_hook_block_returns_hook_blocked() {
         .with_hook_executor(executor, "test-session");
 
     match svc.execute("echo", json!({})).await {
-        Err(ToolError::HookBlocked { name, reason }) => {
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::Hook,
+            reason,
+        }) => {
             assert_eq!(name, "echo");
             assert!(
                 reason.contains("blocked by policy"),
                 "unexpected reason: {reason}"
             );
         }
-        other => panic!("expected HookBlocked from block hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
+        other => panic!("expected Refused by a hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -817,7 +821,16 @@ async fn only_a_permission_denied_fires_the_permission_denied_observer() {
         "test-session",
     );
     let err = blocked.execute("echo", json!({})).await.unwrap_err();
-    assert!(matches!(err, ToolError::HookBlocked { .. }), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::Hook,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
     assert_eq!(
         err.kind(),
         crate::tools::error_kind::ToolErrorKind::Permission,
@@ -1920,7 +1933,11 @@ async fn declared_confirmation_tool_blocked_when_denied() {
         .with_confirmation(StdArc::clone(&requester) as _);
 
     match svc.execute("danger", json!({})).await {
-        Err(ToolError::Execution { name, .. }) => assert_eq!(name, "danger"),
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::Person,
+            ..
+        }) => assert_eq!(name, "danger"),
         other => panic!("denied confirmation must block, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
     assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
@@ -1932,7 +1949,11 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
     // never silently auto-run.
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
     match svc.execute("danger", json!({})).await {
-        Err(ToolError::Execution { name, cause }) => {
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::NobodyAsked,
+            reason: cause,
+        }) => {
             assert_eq!(name, "danger");
             assert!(
                 cause.contains("approval channel is available"),
@@ -1945,7 +1966,7 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
                 "unexpected cause: {cause}"
             );
         }
-        other => panic!("expected fail-closed Execution error, got: {other:?}"), // rust-doctor-disable-line panic-in-library
+        other => panic!("expected a fail-closed refusal, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -2461,7 +2482,13 @@ async fn ask_tool_without_requester_fails_closed() {
         ));
     let err = svc.execute("alpha", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "Ask without approval transport must fail closed, got {err:?}"
     );
 }
@@ -2897,7 +2924,13 @@ async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
     // `agent_delete` is destructive → the Auto tier raises it to `Ask`.
     let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "an unattended confirm-gated call must fail closed, got {err:?}"
     );
     assert_eq!(
@@ -3465,7 +3498,13 @@ async fn a_session_grant_does_not_survive_into_an_unattended_run() {
         .with_unattended(true);
     let err = unattended.execute("danger", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "a remembered grant must not authorize an unattended run, got {err:?}"
     );
     assert_eq!(
@@ -3525,7 +3564,13 @@ async fn a_persistent_grant_does_not_survive_into_an_unattended_run() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "a persistent grant must not authorize an unattended run, got {err:?}"
     );
     assert_eq!(

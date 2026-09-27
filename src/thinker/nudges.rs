@@ -393,8 +393,14 @@ pub fn orphan_tool_result_note(call_id: &str, tool_name: &str, rendered: &str) -
 /// Synthetic `ToolError::Execution` cause emitted when cross-batch dedup
 /// refuses an identical repeat of a previously-failed `(name, args)` call.
 /// Shared by the serial and parallel dispatch paths so the two can never drift.
-pub const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run; \
-     change inputs or try a different tool";
+///
+/// It names no next move: the earlier failure may have been a refusal (a
+/// policy hook, a person), and "try a different tool" is the route around
+/// it. The earlier error — already in the transcript — carries whatever hint
+/// its own kind admits. `tools::error_kind` recognises this cause by equality
+/// (kind `repeated`), so it must stay lowercase.
+pub const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run \
+     and was not run again; the earlier error stands — read it before deciding what to do next";
 
 /// Reason carried by the synthetic "deferred" `ToolResult` emitted for each
 /// tool call the cooperative steer checkpoint skipped. Whether a deferred call
@@ -642,11 +648,15 @@ mod tests {
         );
     }
 
+    /// Pinned text: the memo refusal names no route around the earlier error
+    /// (P4.13a I-1 — it used to say "change inputs or try a different tool",
+    /// which after a hook block is the way around the hook).
     #[test]
-    fn cross_batch_refused_cause_matches_pre_move_text() {
+    fn cross_batch_refused_cause_names_no_route_around() {
         assert_eq!(
             CROSS_BATCH_REFUSED_CAUSE,
-            "this exact call already failed earlier in the run; change inputs or try a different tool"
+            "this exact call already failed earlier in the run and was not run again; the earlier \
+             error stands — read it before deciding what to do next"
         );
     }
 

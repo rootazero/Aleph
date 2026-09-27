@@ -229,6 +229,11 @@ fn failures(errors: &[String]) -> Vec<SessionEventRecord> {
 
 /// The run-level face of the ladder: three blocks by a policy hook are not
 /// three failures to climb away from. Three genuine failures still are.
+///
+/// This pins how the summary reads three block RENDERINGS; it dispatches
+/// straight into the service, three times with the same input — a sequence
+/// the harness memo refuses after the first in production. That production
+/// path is `refusal_tests::repeating_a_hook_blocked_call_is_not_pointed_around_the_hook`.
 #[tokio::test]
 async fn repeated_hook_blocks_do_not_raise_the_run_level_ladder() {
     let dir = tempfile::tempdir().unwrap();

@@ -115,6 +115,11 @@ async def block():
     L.check("the exit-2 hook's stderr reached the model as the tool result", True, blocked[:200])
     L.check("the tool did NOT run (probe content never reached the model)",
             all(PROBE_CONTENT not in t for t in results), f"{len(results)} tool_result(s)")
+    # P4.13a: a hook block is a refusal — no tool_result (the block itself, or
+    # the harness's refusal of an identical repeat) points the model around it.
+    steering = [t for t in results if "switch=" in t or "ladder_must" in t or "try a different tool" in t]
+    L.check("no tool_result routes the model around the block (no switch= / ladder / 'try a different tool')",
+            not steering, steering[0][:200] if steering else f"{len(results)} tool_result(s)")
 
 
 def main():
