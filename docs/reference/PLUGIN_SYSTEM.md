@@ -613,11 +613,19 @@ MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不�
 }
 ```
 
-`type` 默认是 `stdio`，所以现有插件无需修改。`McpServerConfig` 现在是 enum：
-`Stdio { command, args, env } | Remote { url, headers, oauth?, timeout_ms? }`，由
-`mcp_config::read_mcp_json`（`mount` 的 `mcp_server` step 读取）直接路由到对应的 `McpTransportType`。`McpJsonServerEntry`
-解析器对缺失字段（stdio 无 `command` / remote 无 `url` / 未知 `type`）做 hard error，
-不让 spawn 进入半配置状态。
+`type` 默认是 `stdio`，所以现有插件无需修改。**唯一的读者**是
+`mcp_config::parse_declared_servers`（P4.15 / D-1）：六个 manifest adapter 都经它把
+`.mcp.json` / manifest 指定的路径 / 内联 `mcpServers` 对象解析成 `McpManagerConfig`，
+作为 `CapabilityDeclaration::McpServer` 挂在 adapter 输出上——`plugins.list` 的
+`mcp_servers_count` 数的是这张表，`mount` 的 `mcp_server` step spawn 的也是这张表
+（只在 spawn 时叠上运营者的插件配置 env）。`McpJsonServerEntry` 解析器对缺失字段
+（stdio 无 `command` / remote 无 `url` / 未知 `type`）做 hard error，不让 spawn 进入半配置状态。
+
+**stdio `command` 的归属规则**（The one reader of a stdio command）：裸名（`node` / `npx` / `uvx`）
+走 `PATH`；未用 `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` 书写的绝对路径原样接受；
+相对路径或以这两个变量书写的路径必须存在且 canonicalize 后落在插件根内，并被改写为该绝对路径
+（spawn 没有自己的 cwd）。越界或无法解析 ⇒ 整个插件解析失败，行上的错误写明 server 名与原因，
+不计数也不 spawn。参数不经 shell（argv 形式 spawn）。
 
 ### 内联 MCP 工具自动发现
 

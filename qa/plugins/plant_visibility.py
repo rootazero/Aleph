@@ -12,10 +12,10 @@ discovery, not visibility.
 One plugin carries all three components on purpose: the claim is that ONE
 visibility answer governs every face a plugin reaches the model through, so
 the three arms must share an owner. The manifest is `plant_scope.py`'s shape
-(the `scope` stage mounts it today): `aleph.runtime = "mcp"` is what makes the
-`.mcp.json` server mount at all — without it the manifest parses as
-`PluginKind::Static` and the server is only a metadata row. The CC adapter
-resolves `skills/` and `agents/` whatever the runtime.
+(the `scope` stage mounts it today); its `aleph.runtime = "mcp"` is explicit
+but no longer required — the `.mcp.json` beside the manifest already makes it
+`PluginKind::Mcp` (P4.15). The CC adapter resolves `skills/` and `agents/`
+whatever the runtime.
 
 The server id is `plugin:qa-vis/vis`; the name the model sees is that id
 sanitised plus `__qa_echo` (`McpHandler::qualified_name`). The driver reads the

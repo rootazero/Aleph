@@ -1,9 +1,25 @@
-//! MCP plugin configuration reader
+//! The one reader of a plugin's MCP server declarations.
 //!
-//! Reads `.mcp.json` from plugin directories and prepares MCP server configs
-//! for registration with Aleph's MCP client system (`McpManager`).
+//! A plugin's servers have two faces — the count on its `plugins.list` row and
+//! the spawn in `lifecycle.rs::mount_parsed` — and both come from the list
+//! [`parse_declared_servers`] returns: the manifest adapters wrap each entry as
+//! a `CapabilityDeclaration::McpServer` (counted by
+//! `PluginRecord::from_adapter_output`), and the mount spawns exactly those
+//! capabilities. There used to be two readers with two policies: the count
+//! dropped an absolute command outside the plugin root while the spawn ran it,
+//! and the spawn read only `<root>/.mcp.json`, so an inline `mcpServers`
+//! object was counted and never started.
 //!
-//! # .mcp.json Format
+//! Where the JSON lives — `<root>/.mcp.json`, a path the manifest names, or an
+//! object inlined in the manifest — is the adapters' business
+//! (`manifest::component_source::resolve_mcp_servers`,
+//! `manifest::parsers::parse_mcp_config_file`); what it declares is this
+//! module's.
+//!
+//! # Format
+//!
+//! Both the wrapped file shape (`{"mcpServers": {...}}`) and the bare server
+//! map (Claude Code's inline `mcpServers` object) are accepted.
 //!
 //! ## stdio transport (default)
 //!
@@ -48,38 +64,43 @@
 //!
 //! # Variable Substitution
 //!
-//! The following variables are expanded in `command`, `args`, `url`, `env`,
-//! and `headers` values:
-//! - `${CLAUDE_PLUGIN_ROOT}` — absolute path to the plugin directory
-//! - `${ALEPH_PLUGIN_ROOT}` — same as above (Aleph alias)
+//! `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` (the plugin directory) and
+//! `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` (its persistent data
+//! directory, created on first reference) are expanded in `command`, `args`,
+//! `url`, `env` and `headers` — by `PluginVars::expand`, the subsystem's one
+//! expander, once, so the containment check below and the spawn see the same
+//! string.
 //!
-//! - `${CLAUDE_PLUGIN_DATA}` — the plugin's persistent data directory
-//! - `${ALEPH_PLUGIN_DATA}` — same as above (Aleph alias)
+//! # Which program a stdio server runs
 //!
-//! The `_DATA` pair used to carry a comment here claiming they were expanded
-//! "in the higher-level `McpManagerConfig::env` substitution path". No such
-//! path existed anywhere in the repo, so a plugin that used the variable
-//! received the literal `${ALEPH_PLUGIN_DATA}` string — and because that
-//! comment was the only mention of the name, grepping for the wire found the
-//! bug's own alibi. Both aliases are expanded here now, and the directory is
-//! created on first reference.
+//! [`resolve_command`] answers it once for both faces:
+//! - a bare name (`node`, `npx`, `uvx`, `python3`) is kept as written and
+//!   looked up on `PATH` at spawn;
+//! - an absolute path not written with a `_PLUGIN_ROOT` variable is kept as
+//!   written — an absolute interpreter is the normal Claude Code shape;
+//! - a relative path, or one written with `${CLAUDE_PLUGIN_ROOT}` /
+//!   `${ALEPH_PLUGIN_ROOT}`, must name an existing file that canonicalizes
+//!   inside the plugin root, and is rewritten to that absolute path (the
+//!   spawn has no working directory of its own, so an unresolved `./server.js`
+//!   would run against the daemon's). `${PLUGIN_ROOT}` is not a variable here
+//!   and is not expanded; a command using it is a relative path and meets the
+//!   same rule.
+//!
+//! A refused server is a parse error of the plugin, like a stdio server with no
+//! `command`: the plugin's row carries it as its error status, naming the
+//! server, and nothing of the plugin is mounted. Values are never
+//! shell-parsed: `StdioTransport::spawn` is argv-based
+//! (`Command::new(command).args(args)`).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::plugin_vars::PluginVars;
 use crate::mcp::{McpManagerConfig, McpTransportType};
 
-/// Raw .mcp.json file structure
-#[derive(Debug, Deserialize)]
-struct McpJsonFile {
-    #[serde(rename = "mcpServers", default)]
-    mcp_servers: HashMap<String, McpJsonServerEntry>,
-}
-
-/// A single server entry in .mcp.json.
+/// A single server entry.
 ///
 /// Either a stdio entry (`command` + `args` + `env`) or a remote entry
 /// (`url` + `headers`). The `type` discriminator defaults to `stdio` when
@@ -110,37 +131,178 @@ fn default_transport() -> String {
     "stdio".to_string()
 }
 
-/// Read `.mcp.json` from a plugin directory and return MCP manager configs.
+/// The variables that name the plugin root. A command written with one of
+/// them is the plugin's own program and must stay inside the root.
+const ROOT_VARIABLES: [&str; 2] = ["${CLAUDE_PLUGIN_ROOT}", "${ALEPH_PLUGIN_ROOT}"];
+
+/// Parse a plugin's MCP server declarations — the one reader (module doc).
 ///
-/// Each server config has environment variables substituted and is keyed by
-/// [`plugin_server_id`] (`plugin:{plugin_id}/{server_name}`) to avoid
-/// collisions across plugins.
-///
-/// # Arguments
-///
-/// * `plugin_dir` - The plugin root directory containing `.mcp.json`
-/// * `plugin_id` - Plugin identifier used to namespace server IDs
-///
-/// # Returns
-///
-/// Map of `server_id` → `McpManagerConfig` ready for registration.
-/// Returns an empty map if `.mcp.json` does not exist.
-pub fn read_mcp_json(
+/// Returns the servers in name order, each with its id from
+/// [`plugin_server_id`], every variable expanded and every stdio `command`
+/// resolved by [`resolve_command`]. `Err` names the server when one entry is
+/// malformed or refused; the caller fails the whole plugin with it.
+pub(crate) fn parse_declared_servers(
+    content: &str,
     plugin_dir: &Path,
     plugin_id: &str,
-    settings: &serde_json::Value,
-) -> ExtensionResult<HashMap<String, McpManagerConfig>> {
-    let mcp_path = plugin_dir.join(".mcp.json");
-    if !mcp_path.exists() {
-        return Ok(HashMap::new());
+) -> Result<Vec<McpManagerConfig>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
+    let servers = match value.get("mcpServers") {
+        Some(wrapped) => wrapped.clone(),
+        None => value,
+    };
+    let entries: BTreeMap<String, McpJsonServerEntry> =
+        serde_json::from_value(servers).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let vars = PluginVars::new(plugin_id, plugin_dir);
+    // Provision the data directory only when this manifest names it, and
+    // before substitution hands the path to a server about to be spawned.
+    vars.ensure_data_dir_if_referenced(content);
+
+    entries
+        .into_iter()
+        .map(|(name, entry)| declared_server(plugin_id, &name, entry, &vars))
+        .collect()
+}
+
+/// One entry → the config the mount spawns.
+fn declared_server(
+    plugin_id: &str,
+    server_name: &str,
+    entry: McpJsonServerEntry,
+    vars: &PluginVars,
+) -> Result<McpManagerConfig, String> {
+    let server_id = plugin_server_id(plugin_id, server_name);
+    let display_name = format!("{server_name} ({plugin_id})");
+    let expand_map = |map: &HashMap<String, String>| -> HashMap<String, String> {
+        map.iter()
+            .map(|(k, v)| (k.clone(), vars.expand(v)))
+            .collect()
+    };
+
+    let transport = match entry.transport.as_str() {
+        "stdio" => McpTransportType::Stdio,
+        "http" => McpTransportType::Http,
+        "sse" => McpTransportType::Sse,
+        other => {
+            return Err(format!(
+                "unknown MCP transport type '{other}' for server '{server_name}' \
+                 (expected one of: stdio, http, sse)"
+            ))
+        }
+    };
+
+    match transport {
+        McpTransportType::Stdio => {
+            // stdio entries require `command`. Refuse ambiguous configs
+            // rather than spawning a phantom process.
+            let written = entry.command.ok_or_else(|| {
+                format!(
+                    "MCP stdio server '{server_name}' is missing 'command' \
+                     (either add it or set `\"type\": \"http\"` with a `url`)"
+                )
+            })?;
+            let command = resolve_command(&written, vars)
+                .map_err(|why| format!("MCP server '{server_name}' refused: {why}"))?;
+            let args: Vec<String> = entry.args.iter().map(|a| vars.expand(a)).collect();
+            Ok(McpManagerConfig::stdio(&server_id, &display_name, &command)
+                .with_args(args)
+                .with_env(expand_map(&entry.env))
+                .with_auto_start(true))
+        }
+        McpTransportType::Http | McpTransportType::Sse => {
+            // remote entries require `url`. Refuse ambiguous configs.
+            let url = entry.url.ok_or_else(|| {
+                format!(
+                    "MCP remote server '{server_name}' is missing 'url' \
+                     (either add it or set `\"type\": \"stdio\"` with a `command`)"
+                )
+            })?;
+            let url = vars.expand(&url);
+            let mut config = if transport == McpTransportType::Sse {
+                McpManagerConfig::sse(&server_id, &display_name, &url)
+            } else {
+                McpManagerConfig::http(&server_id, &display_name, &url)
+            };
+            config.headers = expand_map(&entry.headers);
+            config.auto_start = true;
+            Ok(config)
+        }
     }
+}
 
-    let content = std::fs::read_to_string(&mcp_path).map_err(|e| {
-        ExtensionError::config_parse(&mcp_path, format!("Failed to read .mcp.json: {e}"))
+/// Which program a stdio server runs — one answer for the containment check
+/// and the spawn, so the two can never see different paths (module doc).
+fn resolve_command(written: &str, vars: &PluginVars) -> Result<String, String> {
+    let expanded = vars.expand(written);
+    if expanded.is_empty() {
+        return Err("the command is empty".to_string());
+    }
+    let rooted = ROOT_VARIABLES.iter().any(|v| written.contains(v));
+    if !rooted && (is_bare(&expanded) || Path::new(&expanded).is_absolute()) {
+        return Ok(expanded);
+    }
+    // `join` with an absolute path yields that path: a rooted command is
+    // checked as written, a relative one against the root.
+    let candidate = vars.root_dir().join(&expanded);
+    inside_root(&candidate, vars.root_dir())
+        .map(|resolved| resolved.to_string_lossy().into_owned())
+        .map_err(|why| format!("command {written:?} {why}"))
+}
+
+/// A program name `Command::new` looks up on `PATH`: no separator at all
+/// (a name with a `/` in it is resolved against the working directory).
+fn is_bare(command: &str) -> bool {
+    !command.contains('/') && !command.contains('\\') && command != "." && command != ".."
+}
+
+/// `candidate`, canonicalized, if it stays inside `root`. Fails closed: a path
+/// that does not exist or cannot be resolved is refused — a canonicalize error
+/// is not a verdict, and there is nothing to run there anyway.
+fn inside_root(candidate: &Path, root: &Path) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(root)
+        .map_err(|e| format!("cannot be checked: the plugin root does not resolve ({e})"))?;
+    let resolved = std::fs::canonicalize(candidate).map_err(|e| {
+        format!(
+            "does not resolve to a file inside the plugin root ({}: {e})",
+            candidate.display()
+        )
     })?;
+    if resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        Err(format!(
+            "resolves to {}, outside the plugin root {}",
+            resolved.display(),
+            root.display()
+        ))
+    }
+}
 
-    parse_mcp_json_content(&content, plugin_dir, plugin_id, settings)
-        .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {e}")))
+/// Key the declared servers by server id and layer the operator's plugin
+/// configuration (`plugin_vars::settings_env`) under each stdio server's own
+/// `env` — the author's explicit value wins over a convention. Spawn-time,
+/// because the configuration is the operator's, not the manifest's; the
+/// server list itself is the capability list the row counted.
+pub(crate) fn with_operator_env(
+    servers: Vec<McpManagerConfig>,
+    settings: &serde_json::Value,
+) -> HashMap<String, McpManagerConfig> {
+    let config_env = crate::extension::plugin_vars::settings_env(settings);
+    servers
+        .into_iter()
+        .map(|server| {
+            let server = if server.transport == McpTransportType::Stdio && !config_env.is_empty() {
+                let mut env: HashMap<String, String> = config_env.iter().cloned().collect();
+                env.extend(server.env.clone());
+                server.with_env(env)
+            } else {
+                server
+            };
+            (server.id.clone(), server)
+        })
+        .collect()
 }
 
 /// The transient server id of a plugin-declared MCP server. The plugin id is
@@ -170,140 +332,26 @@ pub(crate) fn owning_plugin_of_server_id(server_id: &str) -> Option<&str> {
     (!plugin_id.is_empty()).then_some(plugin_id)
 }
 
-/// Parse .mcp.json content and return MCP manager configs.
-///
-/// Separated from `read_mcp_json` for testability.
-fn parse_mcp_json_content(
-    content: &str,
-    plugin_dir: &Path,
-    plugin_id: &str,
-    settings: &serde_json::Value,
-) -> Result<HashMap<String, McpManagerConfig>, String> {
-    let file: McpJsonFile =
-        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
-
-    // The operator's configuration, in the one env spelling this subsystem
-    // uses. Injected first so an explicit `env` entry in `.mcp.json` wins:
-    // the author's own value beats a convention.
-    let config_env = crate::extension::plugin_vars::settings_env(settings);
-
-    let plugin_root = plugin_dir.to_string_lossy();
-
-    // Provision the data directory only when this manifest names it, and
-    // before substitution hands the path to a server about to be spawned. A
-    // failure to create is a `warn!`, not a hard error: refusing to load the
-    // whole server over an unwritable data dir is worse than letting it try.
-    let data_path = crate::extension::plugin_data_dir(plugin_id);
-    if references_plugin_data(content) {
-        if let Err(e) = std::fs::create_dir_all(&data_path) {
-            tracing::warn!(
-                plugin_id, path = %data_path.display(), error = %e,
-                "could not create the plugin data directory it asked for"
-            );
-        }
-    }
-    let plugin_data = data_path.to_string_lossy();
-
-    let mut result = HashMap::new();
-
-    for (server_name, entry) in file.mcp_servers {
-        let server_id = plugin_server_id(plugin_id, &server_name);
-        let display_name = format!("{server_name} ({plugin_id})");
-
-        let transport = match entry.transport.as_str() {
-            "stdio" => McpTransportType::Stdio,
-            "http" => McpTransportType::Http,
-            "sse" => McpTransportType::Sse,
-            other => {
-                return Err(format!(
-                    "unknown MCP transport type '{other}' for server '{server_name}' \
-                 (expected one of: stdio, http, sse)"
-                ))
-            }
-        };
-
-        let config = match transport {
-            McpTransportType::Stdio => {
-                // stdio entries require `command`. Refuse ambiguous configs
-                // rather than spawning a phantom process.
-                let command = entry.command.ok_or_else(|| {
-                    format!(
-                        "MCP stdio server '{server_name}' is missing 'command' \
-                         (either add it or set `\"type\": \"http\"` with a `url`)"
-                    )
-                })?;
-                let cmd = substitute_vars(&command, &plugin_root, &plugin_data);
-                let args: Vec<String> = entry
-                    .args
-                    .iter()
-                    .map(|a| substitute_vars(a, &plugin_root, &plugin_data))
-                    .collect();
-                let mut env: HashMap<String, String> = config_env.iter().cloned().collect();
-                env.extend(
-                    entry
-                        .env
-                        .iter()
-                        .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data))),
-                );
-                McpManagerConfig::stdio(&server_id, &display_name, &cmd)
-                    .with_args(args)
-                    .with_env(env)
-                    .with_auto_start(true)
-            }
-            McpTransportType::Http | McpTransportType::Sse => {
-                // remote entries require `url`. Refuse ambiguous configs.
-                let url = entry.url.ok_or_else(|| {
-                    format!(
-                        "MCP remote server '{server_name}' is missing 'url' \
-                         (either add it or set `\"type\": \"stdio\"` with a `command`)"
-                    )
-                })?;
-                let url = substitute_vars(&url, &plugin_root, &plugin_data);
-                let headers: HashMap<String, String> = entry
-                    .headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data)))
-                    .collect();
-                let mut config = if transport == McpTransportType::Sse {
-                    McpManagerConfig::sse(&server_id, &display_name, &url)
-                } else {
-                    McpManagerConfig::http(&server_id, &display_name, &url)
-                };
-                config.headers = headers;
-                config.auto_start = true;
-                config
-            }
-        };
-
-        result.insert(server_id, config);
-    }
-
-    Ok(result)
-}
-
-/// The four documented manifest variables, expanded in one place.
-///
-/// Splitting the `_ROOT` and `_DATA` pairs across two layers is what let the
-/// `_DATA` half go unimplemented while its documentation said otherwise.
-fn substitute_vars(value: &str, plugin_root: &str, plugin_data: &str) -> String {
-    value
-        .replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
-        .replace("${ALEPH_PLUGIN_ROOT}", plugin_root)
-        .replace("${CLAUDE_PLUGIN_DATA}", plugin_data)
-        .replace("${ALEPH_PLUGIN_DATA}", plugin_data)
-}
-
-/// Whether any value in the manifest asks for the data directory.
-///
-/// Delegates to the subsystem's single expander so "which spellings mean the
-/// data directory" has one answer.
-fn references_plugin_data(content: &str) -> bool {
-    crate::extension::plugin_vars::PluginVars::references_data(content)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The parser keyed by server id, for the lookups these tests make.
+    fn parse(
+        content: &str,
+        dir: &Path,
+        plugin_id: &str,
+    ) -> Result<HashMap<String, McpManagerConfig>, String> {
+        parse_declared_servers(content, dir, plugin_id)
+            .map(|servers| servers.into_iter().map(|s| (s.id.clone(), s)).collect())
+    }
+
+    /// The command one stdio server named `srv` resolves to under `root`.
+    fn command_of(written: &str, root: &Path) -> Result<String, String> {
+        let content = serde_json::json!({"mcpServers": {"srv": {"command": written}}});
+        parse(&content.to_string(), root, "p")
+            .map(|m| m["plugin:p/srv"].command.clone().expect("stdio"))
+    }
 
     #[test]
     fn plugin_server_id_round_trips_through_its_decoder() {
@@ -329,11 +377,10 @@ mod tests {
     #[test]
     fn parsed_server_ids_come_from_the_encoder() {
         let dir = tempfile::tempdir().unwrap();
-        let configs = parse_mcp_json_content(
+        let configs = parse(
             r#"{"mcpServers":{"srv":{"command":"true"}}}"#,
             dir.path(),
             "plug",
-            &serde_json::Value::Null,
         )
         .unwrap();
         assert!(configs.contains_key(&plugin_server_id("plug", "srv")));
@@ -354,13 +401,7 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/plugins/test-plugin"),
-            "test-plugin",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
+        let result = parse(content, Path::new("/plugins/test-plugin"), "test-plugin").unwrap();
 
         assert_eq!(result.len(), 1);
 
@@ -393,85 +434,44 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/plugins/multi"),
-            "multi",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
+        let result = parse(content, Path::new("/plugins/multi"), "multi").unwrap();
 
         assert_eq!(result.len(), 2);
         assert!(result.contains_key("plugin:multi/alpha"));
         assert!(result.contains_key("plugin:multi/beta"));
     }
 
+    /// The inline `mcpServers` object is the bare map, and reads the same.
     #[test]
-    fn test_parse_mcp_json_empty_servers() {
-        let content = r#"{ "mcpServers": {} }"#;
-
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/plugins/empty"),
-            "empty",
-            &serde_json::Value::Null,
+    fn the_bare_server_map_and_the_wrapped_file_read_the_same() {
+        let wrapped = parse(
+            r#"{"mcpServers":{"s":{"command":"npx"}}}"#,
+            Path::new("/p/x"),
+            "p",
         )
         .unwrap();
+        let bare = parse(r#"{"s":{"command":"npx"}}"#, Path::new("/p/x"), "p").unwrap();
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(
+            wrapped.keys().collect::<Vec<_>>(),
+            bare.keys().collect::<Vec<_>>()
+        );
+    }
 
+    #[test]
+    fn test_parse_mcp_json_empty_servers() {
+        let result = parse(
+            r#"{ "mcpServers": {} }"#,
+            Path::new("/plugins/empty"),
+            "empty",
+        )
+        .unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_parse_mcp_json_invalid_json() {
-        let content = "not json at all";
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/plugins/bad"),
-            "bad",
-            &serde_json::Value::Null,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_substitute_vars() {
-        assert_eq!(
-            substitute_vars(
-                "${ALEPH_PLUGIN_ROOT}/bin/run",
-                "/home/user/plugins/x",
-                "/data/p"
-            ),
-            "/home/user/plugins/x/bin/run"
-        );
-        assert_eq!(
-            substitute_vars("${CLAUDE_PLUGIN_ROOT}/index.js", "/tmp/p", "/data/p"),
-            "/tmp/p/index.js"
-        );
-        // Both in same string
-        assert_eq!(
-            substitute_vars(
-                "${ALEPH_PLUGIN_ROOT}:${CLAUDE_PLUGIN_ROOT}",
-                "/root",
-                "/data/p"
-            ),
-            "/root:/root"
-        );
-        // No vars
-        assert_eq!(
-            substitute_vars("plain text", "/root", "/data/p"),
-            "plain text"
-        );
-    }
-
-    #[test]
-    fn test_read_mcp_json_missing_file() {
-        let result = read_mcp_json(
-            Path::new("/nonexistent/dir"),
-            "test",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
-        assert!(result.is_empty());
+        assert!(parse("not json at all", Path::new("/plugins/bad"), "bad").is_err());
     }
 
     #[test]
@@ -482,13 +482,7 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/p/a"),
-            "my-plugin",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
+        let result = parse(content, Path::new("/p/a"), "my-plugin").unwrap();
 
         // Server ID should be namespaced with plugin ID
         assert!(result.contains_key("plugin:my-plugin/srv"));
@@ -509,18 +503,11 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "remote-plugin",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
+        let result = parse(content, Path::new("/p/x"), "remote-plugin").unwrap();
 
         let config = result
             .get("plugin:remote-plugin/remote-srv")
             .expect("server must be registered");
-        use crate::mcp::McpTransportType;
         assert_eq!(config.transport, McpTransportType::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.com/api"));
         assert_eq!(
@@ -558,9 +545,7 @@ mod tests {
             }
         }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/p/x"), "p", &serde_json::Value::Null)
-                .unwrap();
+        let result = parse(content, Path::new("/p/x"), "p").unwrap();
         let header = result
             .get("plugin:p/srv")
             .unwrap()
@@ -583,12 +568,15 @@ mod tests {
     /// tree precisely so `plugin update`'s atomic swap cannot take it with it.
     #[test]
     fn root_and_data_are_distinct_substitutions() {
-        let out = substitute_vars(
-            "${ALEPH_PLUGIN_ROOT}|${CLAUDE_PLUGIN_DATA}",
-            "/install/p",
-            "/data/p",
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let vars = PluginVars::new("p", Path::new("/install/p"));
+        assert_eq!(
+            vars.expand("${ALEPH_PLUGIN_ROOT}|${CLAUDE_PLUGIN_DATA}"),
+            format!(
+                "/install/p|{}",
+                crate::extension::plugin_data_dir("p").display()
+            )
         );
-        assert_eq!(out, "/install/p|/data/p");
         assert!(
             !crate::extension::plugin_data_dir("p")
                 .starts_with(crate::extension::default_plugins_dir().join("p")),
@@ -607,10 +595,7 @@ mod tests {
             }
         }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/p/x"), "ev", &serde_json::Value::Null)
-                .unwrap();
-        use crate::mcp::McpTransportType;
+        let result = parse(content, Path::new("/p/x"), "ev").unwrap();
         let config = result.get("plugin:ev/events").unwrap();
         assert_eq!(config.transport, McpTransportType::Sse);
         assert_eq!(
@@ -627,14 +612,7 @@ mod tests {
                 "legacy": { "command": "node", "args": ["server.js"] }
             }
         }"#;
-        let result = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "legacy",
-            &serde_json::Value::Null,
-        )
-        .unwrap();
-        use crate::mcp::McpTransportType;
+        let result = parse(content, Path::new("/p/x"), "legacy").unwrap();
         let config = result.get("plugin:legacy/legacy").unwrap();
         assert_eq!(config.transport, McpTransportType::Stdio);
         assert_eq!(config.command.as_deref(), Some("node"));
@@ -647,13 +625,7 @@ mod tests {
                 "broken": { "args": ["x"] }
             }
         }"#;
-        let err = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "broken",
-            &serde_json::Value::Null,
-        )
-        .unwrap_err();
+        let err = parse(content, Path::new("/p/x"), "broken").unwrap_err();
         assert!(
             err.contains("missing 'command'"),
             "stdio without command must be a hard error: {err}"
@@ -667,13 +639,7 @@ mod tests {
                 "broken": { "type": "http", "headers": {} }
             }
         }"#;
-        let err = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "broken",
-            &serde_json::Value::Null,
-        )
-        .unwrap_err();
+        let err = parse(content, Path::new("/p/x"), "broken").unwrap_err();
         assert!(
             err.contains("missing 'url'"),
             "remote without url must be a hard error: {err}"
@@ -687,13 +653,7 @@ mod tests {
                 "broken": { "type": "telnet" }
             }
         }"#;
-        let err = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "broken",
-            &serde_json::Value::Null,
-        )
-        .unwrap_err();
+        let err = parse(content, Path::new("/p/x"), "broken").unwrap_err();
         assert!(
             err.contains("unknown MCP transport type 'telnet'"),
             "unknown transport must surface a clear error: {err}"
@@ -713,13 +673,7 @@ mod tests {
                 "srv": { "type": "remote", "url": "https://mcp.example.com/api" }
             }
         }"#;
-        let err = parse_mcp_json_content(
-            content,
-            Path::new("/p/x"),
-            "remote-plugin",
-            &serde_json::Value::Null,
-        )
-        .unwrap_err();
+        let err = parse(content, Path::new("/p/x"), "remote-plugin").unwrap_err();
         assert!(
             err.contains("unknown MCP transport type 'remote'"),
             "'remote' must be rejected, not silently coerced: {err}"
@@ -730,5 +684,139 @@ mod tests {
                 "error must point at '{legal}' so the author can fix it: {err}"
             );
         }
+    }
+
+    // ── Which program a stdio server runs ─────────────────────────────────
+
+    /// A plugin root with `bin/srv` inside and `outside` next to it.
+    fn command_fixture() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("plug");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/srv"), "").unwrap();
+        std::fs::write(tmp.path().join("outside"), "").unwrap();
+        (tmp, root)
+    }
+
+    #[test]
+    fn bare_and_absolute_commands_are_kept_as_written() {
+        let (_tmp, root) = command_fixture();
+        assert_eq!(command_of("node", &root).unwrap(), "node");
+        // Absolute anywhere — outside the root, even nonexistent.
+        assert_eq!(
+            command_of("/usr/bin/python3", &root).unwrap(),
+            "/usr/bin/python3"
+        );
+        assert_eq!(
+            command_of("/nonexistent/interp", &root).unwrap(),
+            "/nonexistent/interp"
+        );
+    }
+
+    #[test]
+    fn relative_and_rooted_commands_resolve_to_the_file_inside_the_root() {
+        let (_tmp, root) = command_fixture();
+        let inside = std::fs::canonicalize(root.join("bin/srv"))
+            .unwrap()
+            .display()
+            .to_string();
+        assert_eq!(command_of("./bin/srv", &root).unwrap(), inside);
+        assert_eq!(command_of("bin/srv", &root).unwrap(), inside);
+        assert_eq!(
+            command_of("${CLAUDE_PLUGIN_ROOT}/bin/srv", &root).unwrap(),
+            inside
+        );
+        assert_eq!(
+            command_of("${ALEPH_PLUGIN_ROOT}/bin/../bin/srv", &root).unwrap(),
+            inside
+        );
+    }
+
+    #[test]
+    fn a_command_that_leaves_the_root_is_refused_and_names_the_server() {
+        let (_tmp, root) = command_fixture();
+        for written in [
+            "../outside",
+            "${CLAUDE_PLUGIN_ROOT}/../outside",
+            "${ALEPH_PLUGIN_ROOT}/../outside",
+        ] {
+            let err = command_of(written, &root).unwrap_err();
+            assert!(
+                err.contains("MCP server 'srv' refused") && err.contains("outside the plugin root"),
+                "{written}: {err}"
+            );
+        }
+    }
+
+    /// Canonicalization follows symlinks: a link inside the root that points
+    /// out is outside.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_inside_the_root_that_points_out_is_refused() {
+        let (tmp, root) = command_fixture();
+        std::os::unix::fs::symlink(tmp.path().join("outside"), root.join("link")).unwrap();
+        let err = command_of("./link", &root).unwrap_err();
+        assert!(err.contains("outside the plugin root"), "{err}");
+    }
+
+    /// Fail closed: a contained command that does not resolve is refused,
+    /// and `${PLUGIN_ROOT}` (not a variable here) is just a relative path.
+    #[test]
+    fn a_contained_command_that_does_not_resolve_is_refused() {
+        let (_tmp, root) = command_fixture();
+        for written in ["./missing", "${PLUGIN_ROOT}/../outside", ""] {
+            assert!(
+                command_of(written, &root).is_err(),
+                "{written:?} must be refused"
+            );
+        }
+    }
+
+    /// `${CLAUDE_PLUGIN_DATA}` is absolute and not a root variable: the
+    /// plugin's own data directory, kept as written.
+    #[test]
+    fn a_data_directory_command_is_an_absolute_command() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let (_tmp, root) = command_fixture();
+        let expected = format!(
+            "{}/venv/bin/python",
+            crate::extension::plugin_data_dir("p").display()
+        );
+        assert_eq!(
+            command_of("${CLAUDE_PLUGIN_DATA}/venv/bin/python", &root).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_operator_env_sits_under_the_authors_env_on_stdio_only() {
+        let servers = parse_declared_servers(
+            r#"{"mcpServers":{
+                "s":{"command":"node","env":{"CLAUDE_PLUGIN_OPTION_KEY":"author"}},
+                "r":{"type":"http","url":"https://x"}
+            }}"#,
+            Path::new("/p/x"),
+            "p",
+        )
+        .unwrap();
+        let keyed = with_operator_env(servers, &serde_json::json!({"key": "operator", "other": 1}));
+        let stdio = &keyed["plugin:p/s"];
+        assert_eq!(
+            stdio
+                .env
+                .get("CLAUDE_PLUGIN_OPTION_KEY")
+                .map(String::as_str),
+            Some("author"),
+            "the author's explicit value wins"
+        );
+        assert_eq!(
+            stdio
+                .env
+                .get("CLAUDE_PLUGIN_OPTION_OTHER")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert!(stdio.env.contains_key("ALEPH_PLUGIN_CONFIG"));
+        assert!(keyed["plugin:p/r"].env.is_empty());
     }
 }

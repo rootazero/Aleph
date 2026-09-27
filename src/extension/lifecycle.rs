@@ -587,6 +587,16 @@ impl ExtensionManager {
             .capabilities
             .iter()
             .any(|c| matches!(c, CapabilityDeclaration::Service(_)));
+        // The servers the row counts are the servers step 3 spawns: one list,
+        // parsed once by `mcp_config::parse_declared_servers`.
+        let declared_servers: Vec<crate::mcp::McpManagerConfig> = output
+            .capabilities
+            .iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::McpServer(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
 
         let shell = record.clone();
         let mut scope = EffectScope::new(id.clone());
@@ -617,28 +627,24 @@ impl ExtensionManager {
             }
         }
 
-        // 3. mcp_server — keyed on the manifest's kind. A CC `plugin.json`
-        // that declares `mcpServers` without `"aleph": {"runtime": "mcp"}`
-        // parses as `Static` today (`cc_plugin_json.rs:217`); P4.15 fixes
-        // that in the adapter, not here.
+        // 3. mcp_server — keyed on the manifest's kind (a Claude Code
+        // `plugin.json` that declares `mcpServers` or ships `.mcp.json` is
+        // `Mcp` without an `aleph` block: `cc_plugin_json.rs`). Spawns exactly
+        // the capabilities the adapter parsed — inline, path, or `.mcp.json`
+        // alike — with the operator's configuration layered on at spawn time.
+        // A refused or malformed server never reaches here: it failed the
+        // adapter parse, and the row carries that error.
         let mut first_server: Option<String> = None;
         // Every server this plugin declares, started or not: step 6 lets a
         // command name their tools before they reach the catalog.
         let mut declared_mcp_servers: Vec<String> = Vec::new();
         if kind == PluginKind::Mcp {
             let settings = self.plugin_settings_for_runtime(&id).await;
-            let configs = match mcp_config::read_mcp_json(&root_dir, &id, &settings) {
-                Ok(c) => c,
-                Err(e) => {
-                    return Err(self
-                        .fail_mount(scope, shell, "mcp_server", e.to_string())
-                        .await)
-                }
-            };
+            let configs = mcp_config::with_operator_env(declared_servers, &settings);
             first_server = configs.keys().min().cloned();
             declared_mcp_servers = configs.keys().cloned().collect();
             if configs.is_empty() {
-                tracing::warn!(plugin_id = %id, "MCP plugin has no servers defined in .mcp.json");
+                tracing::warn!(plugin_id = %id, "MCP plugin declares no servers");
             } else {
                 let handle = self
                     .mcp_handle

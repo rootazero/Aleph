@@ -161,8 +161,10 @@ impl AdapterRegistry {
                     }
                 }
                 // Tool parameters are a JSON Schema, services and MCP servers
-                // are handled by their own layers (`mcp_config.rs` expands the
-                // runtime `.mcp.json`), and none of them is prose the model
+                // are handled by their own layers (an MCP server arrives here
+                // already expanded and resolved by `mcp_config.rs`, the one
+                // reader — expanding it twice could only differ from what its
+                // containment check saw), and none of them is prose the model
                 // reads.
                 CapabilityDeclaration::Tool(_)
                 | CapabilityDeclaration::Service(_)

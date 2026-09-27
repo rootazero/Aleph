@@ -43,6 +43,8 @@ mod error;
 pub(crate) mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
+#[cfg(test)]
+mod mcp_plugin_tests;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;

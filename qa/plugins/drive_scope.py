@@ -95,9 +95,12 @@ async def main():
 
         L.log("\n--- boot: the plugin is mounted by load_all ---")
         r = await row(rpc)
-        # Printed, not asserted: the counts come from the manifest parser, a
-        # different reader of `.mcp.json` than the one the mount spawns from.
         L.log("plugins.list row ->", {k: r.get(k) for k in ("status", "kind", "commands_count", "mcp_servers_count")} if r else None)
+        # One reader feeds the count and the spawn (P4.15 / D-1). Before it,
+        # this row said 0 beside a running server: the count's reader dropped
+        # the absolute `sys.executable` command the spawn's reader ran.
+        n = r.get("mcp_servers_count") if r else None
+        L.check("plugins.list counts the one server the mount spawns", n == 1, str(n))
         st = r.get("status") if r else None
         L.check("plugins.list shows qa-scope loaded", st == "loaded", str(st))
         await poll(rpc, True, "slash command AND mock tool are in tools.catalog after boot")

@@ -340,11 +340,7 @@ mod tests {
 
         // McpServer is a no-op
         api.register_capability(CapabilityDeclaration::McpServer(
-            crate::extension::types::McpServerConfig::Stdio {
-                command: "npx".to_string(),
-                args: vec![],
-                env: std::collections::HashMap::new(),
-            },
+            crate::mcp::McpManagerConfig::stdio("plugin:test-plugin/s", "s", "npx"),
         ))
         .unwrap();
 

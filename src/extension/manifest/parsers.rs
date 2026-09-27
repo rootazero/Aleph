@@ -13,7 +13,6 @@ use tracing::{debug, info, warn};
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::registry::{AgentRegistration, SkillRegistration};
-use crate::extension::types::McpServerConfig;
 
 // ============================================================================
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
@@ -230,25 +229,6 @@ struct HookAction {
     /// hooks layer accepts `timeout_secs` — take either.
     #[serde(default, alias = "timeout")]
     timeout_secs: Option<u64>,
-}
-
-// ============================================================================
-// MCP file types (mirrors content_loader::McpFileConfig)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-struct McpFileConfig {
-    #[serde(rename = "mcpServers", default)]
-    mcp_servers: HashMap<String, McpServerEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpServerEntry {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    env: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -906,12 +886,12 @@ pub fn parse_hooks_content(
 /// { "mcpServers": { "server-name": { "command": "...", "args": [...], "env": {...} } } }
 /// ```
 ///
-/// Environment variable substitution is performed for `${ALEPH_PLUGIN_ROOT}`
-/// and `${CLAUDE_PLUGIN_ROOT}`.
+/// Where the file is, and that it stays inside the plugin root, is this
+/// function's; what it declares is [`parse_mcp_config_content`]'s.
 pub fn parse_mcp_config_file(
     base: &Path,
     rel_path: &str,
-    _plugin_id: &str,
+    plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
     let file_path = base.join(rel_path);
     if !file_path.exists() {
@@ -927,58 +907,33 @@ pub fn parse_mcp_config_file(
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read MCP config: {}", file_path.display()))?;
 
-    parse_mcp_config_content(&content, base)
-        .with_context(|| format!("Invalid .mcp.json: {}", file_path.display()))
+    // One message, not `with_context`: the row renders `e.to_string()`, which
+    // prints only the outermost context and would drop the server and reason.
+    parse_mcp_config_content(&content, base, plugin_id)
+        .map_err(|e| anyhow::anyhow!("Invalid MCP config {}: {e}", file_path.display()))
 }
 
 /// Parse MCP-server JSON *content* into capability declarations.
 ///
 /// Split out of [`parse_mcp_config_file`] to give Claude Code's inline
 /// `mcpServers` object a consumer — two of Anthropic's own plugin manifests
-/// use that form. Accepts both the wrapped file shape
-/// (`{"mcpServers": {...}}`) and the bare server map.
-pub fn parse_mcp_config_content(content: &str, base: &Path) -> Result<Vec<CapabilityDeclaration>> {
-    let config: McpFileConfig = match serde_json::from_str::<McpFileConfig>(content) {
-        Ok(c) if !c.mcp_servers.is_empty() => c,
-        _ => McpFileConfig {
-            mcp_servers: serde_json::from_str(content)?,
-        },
-    };
-
-    let plugin_root = base.to_string_lossy();
-    let mut caps = Vec::new();
-
-    for (server_name, entry) in config.mcp_servers {
-        let command = substitute_vars(&entry.command, &plugin_root);
-        let args: Vec<String> = entry
-            .args
-            .iter()
-            .map(|a| substitute_vars(a, &plugin_root))
-            .collect();
-        let env: HashMap<String, String> = entry
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
-            .collect();
-
-        // Security: check if command path (when absolute) is inside plugin root
-        let cmd_path = Path::new(&command);
-        if cmd_path.is_absolute() && !is_path_inside(base, cmd_path) {
-            warn!(
-                "MCP server '{}' command {:?} escapes plugin root {:?}, skipping",
-                server_name, command, base
-            );
-            continue;
-        }
-
-        caps.push(CapabilityDeclaration::McpServer(McpServerConfig::Stdio {
-            command,
-            args,
-            env,
-        }));
-    }
-
-    Ok(caps)
+/// use that form. The parse itself is `mcp_config::parse_declared_servers`,
+/// the one reader: each capability carries the config the mount spawns, so
+/// the row's count and the spawn cannot disagree on a server (see that
+/// module for the command policy; a refused server is an `Err` here).
+pub fn parse_mcp_config_content(
+    content: &str,
+    base: &Path,
+    plugin_id: &str,
+) -> Result<Vec<CapabilityDeclaration>> {
+    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id)
+        .map(|servers| {
+            servers
+                .into_iter()
+                .map(CapabilityDeclaration::McpServer)
+                .collect()
+        })
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 // ============================================================================
@@ -1195,13 +1150,6 @@ fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.starts_with('.'))
-}
-
-/// Substitute `${CLAUDE_PLUGIN_ROOT}` and `${ALEPH_PLUGIN_ROOT}` in a string.
-fn substitute_vars(value: &str, plugin_root: &str) -> String {
-    value
-        .replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
-        .replace("${ALEPH_PLUGIN_ROOT}", plugin_root)
 }
 
 // ============================================================================
@@ -2238,13 +2186,11 @@ mod tests {
 
         match &caps[0] {
             CapabilityDeclaration::McpServer(m) => {
-                assert!(m.is_stdio(), "expected stdio transport");
-                let (command, args, env) = m
-                    .stdio_command()
-                    .expect("stdio accessor must succeed on a stdio entry");
-                assert_eq!(command, "node");
-                assert_eq!(args, &vec![format!("{}/server.js", dir.path().display())]);
-                assert_eq!(env.get("ROOT"), Some(&dir.path().display().to_string()));
+                assert_eq!(m.transport, crate::mcp::McpTransportType::Stdio);
+                assert_eq!(m.id, "plugin:p/my-server");
+                assert_eq!(m.command.as_deref(), Some("node"));
+                assert_eq!(m.args, vec![format!("{}/server.js", dir.path().display())]);
+                assert_eq!(m.env.get("ROOT"), Some(&dir.path().display().to_string()));
             }
             other => panic!("Expected McpServer, got {:?}", other),
         }
@@ -2255,6 +2201,28 @@ mod tests {
         let dir = tempdir().unwrap();
         let caps = parse_mcp_config_file(dir.path(), ".mcp.json", "p").unwrap();
         assert!(caps.is_empty());
+    }
+
+    /// The row renders `e.to_string()`, which prints only an anyhow error's
+    /// outermost context: the server and the reason must be in that message.
+    #[test]
+    fn a_refused_server_is_named_in_the_top_level_error() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("plug");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(dir.path().join("outside.js"), "").unwrap();
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"sneaky":{"command":"${CLAUDE_PLUGIN_ROOT}/../outside.js"}}}"#,
+        )
+        .unwrap();
+        let err = parse_mcp_config_file(&root, ".mcp.json", "p")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'sneaky' refused") && err.contains("outside the plugin root"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2271,16 +2239,6 @@ mod tests {
             parse_frontmatter("---\n---\nBody", Path::new("t")).unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Body");
-    }
-
-    #[test]
-    fn test_substitute_vars() {
-        assert_eq!(
-            substitute_vars("${ALEPH_PLUGIN_ROOT}/bin", "/home/p"),
-            "/home/p/bin"
-        );
-        assert_eq!(substitute_vars("${CLAUDE_PLUGIN_ROOT}/x", "/tmp"), "/tmp/x");
-        assert_eq!(substitute_vars("plain", "/root"), "plain");
     }
 
     #[test]
