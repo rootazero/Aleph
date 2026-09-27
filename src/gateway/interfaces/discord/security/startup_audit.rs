@@ -165,7 +165,7 @@ mod tests {
             .map(|&(flag, name, level)| PermissionCheck {
                 name: name.to_string(),
                 discord_flag: flag,
-                has: !missing.iter().any(|m| *m == name),
+                has: !missing.contains(&name),
                 required: matches!(level, RequirementLevel::Required),
                 recommended: matches!(level, RequirementLevel::Recommended),
                 status: TrafficLight::Green,

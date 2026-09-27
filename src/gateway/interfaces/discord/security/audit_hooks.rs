@@ -161,6 +161,7 @@ mod tests {
     /// installed, and (b) they construct the right event type / severity.
     /// The unit tests below exercise both without standing up a real log.
     #[tokio::test]
+    #[serial_test::serial(global_audit_log)]
     async fn record_requested_does_not_panic_when_no_audit_log() {
         record_approval_requested(
             Some("user-1".into()),
@@ -171,6 +172,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(global_audit_log)]
     async fn record_resolved_does_not_panic_when_no_audit_log() {
         record_approval_resolved(
             Some("user-1".into()),
@@ -182,6 +184,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(global_audit_log)]
     async fn record_blocked_does_not_panic_when_no_audit_log() {
         record_approval_blocked(
             Some("user-1".into()),
@@ -198,6 +201,7 @@ mod tests {
     /// test — "should be rejected but audit recorded it" — at the
     /// audit-hook layer.
     #[tokio::test]
+    #[serial_test::serial(global_audit_log)]
     async fn emits_correct_event_types_against_a_real_log() {
         use crate::security::audit::{AuditEntry, SecurityAuditLog};
 
@@ -234,7 +238,15 @@ mod tests {
 
         let e1 = rx.recv().await.expect("entry 1");
         assert_eq!(e1.event_type, AuditEventType::AuthorityChange);
-        assert!(e1.detail.contains("requested"));
+        // Debug aid: if the install_global returned false the hooks
+        // fired into a different log and we'd see the wrong entries.
+        // Print the actual detail so a future regression points at
+        // the exact mismatch rather than a "contains" assertion.
+        assert!(
+            e1.detail.contains("requested"),
+            "expected detail to contain 'requested', got: {:?}",
+            e1.detail
+        );
         assert!(e1.detail.contains("!ping"));
 
         let e2 = rx.recv().await.expect("entry 2");
