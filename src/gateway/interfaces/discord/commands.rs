@@ -55,7 +55,7 @@ use crate::security::audit::{global as audit_global, AuditEntry, AuditEventType}
 /// `actor_user` is the slash-command author (Discord user id as a string).
 /// We pass `None` when the caller is unauthenticated (only happens in
 /// tests).
-pub(crate) async fn audit_command_dispatch(
+pub(crate) fn audit_command_dispatch(
     actor_user: Option<&str>,
     channel_id: &str,
     command_name: &str,
@@ -63,15 +63,13 @@ pub(crate) async fn audit_command_dispatch(
     let Some(log) = audit_global() else {
         return;
     };
+    let actor = actor_user.map(str::to_string);
     let detail = format!(
         "discord.command.dispatch: {command_name} channel={channel_id}"
     );
-    let _ = log
-        .log(AuditEntry::authority_change(
-            actor_user.map(str::to_string),
-            detail,
-        ))
-        .await;
+    tokio::spawn(async move {
+        let _ = log.log(AuditEntry::authority_change(actor, detail)).await;
+    });
 }
 
 /// Emit an `ExecBlocked` audit row when a slash command hits a permission
@@ -81,7 +79,7 @@ pub(crate) async fn audit_command_dispatch(
 /// caller should include enough detail for an operator to reconstruct the
 /// decision (e.g. "guild 1234 not in allowlist"). Severity is `Warn`
 /// (matches the rest of the `ExecBlocked` producers).
-pub(crate) async fn audit_command_blocked(
+pub(crate) fn audit_command_blocked(
     actor_user: Option<&str>,
     channel_id: &str,
     reason: &str,
@@ -89,19 +87,22 @@ pub(crate) async fn audit_command_blocked(
     let Some(log) = audit_global() else {
         return;
     };
+    let actor = actor_user.map(str::to_string);
     let detail = format!(
         "discord.command.blocked: {reason} channel={channel_id}"
     );
-    let _ = log
-        .log(AuditEntry {
-            event_type: AuditEventType::ExecBlocked,
-            severity: crate::security::audit::AuditSeverity::Warn,
-            source_ip: None,
-            session_id: None,
-            actor_user: actor_user.map(str::to_string),
-            detail,
-        })
-        .await;
+    tokio::spawn(async move {
+        let _ = log
+            .log(AuditEntry {
+                event_type: AuditEventType::ExecBlocked,
+                severity: crate::security::audit::AuditSeverity::Warn,
+                source_ip: None,
+                session_id: None,
+                actor_user: actor,
+                detail,
+            })
+            .await;
+    });
 }
 
 /// Closed enum of every interaction custom_id shape the channel knows how
@@ -320,7 +321,8 @@ impl CommandRegistry {
     /// answered within 3s or it shows an error spinner).
     #[must_use]
     pub fn dispatch(&self, id: &ComponentId) -> Option<DispatchOutcome> {
-        self.handlers
+        let outcome = self
+            .handlers
             .get(&id.kind)
             .map(|h| h(id))
             .or_else(|| {
@@ -329,7 +331,14 @@ impl CommandRegistry {
                 self.handlers
                     .get(&ComponentKind::Callback)
                     .map(|h| h(id))
-            })
+            });
+        // Record every dispatch so the trail captures unknown-kind fallbacks.
+        audit_command_dispatch(
+            None,
+            id.kind.as_str(),
+            id.payload.as_str(),
+        );
+        outcome
     }
 }
 

@@ -57,7 +57,7 @@ use crate::sync_primitives::Mutex as StdMutex;
 /// reconnect storm post-incident without pulling logs from the gateway
 /// loop. `actor_user` is the agent user behind the bot; `None` only in
 /// tests that don't have a resolved caller.
-pub(crate) async fn audit_reconnect_event(
+pub(crate) fn audit_reconnect_event(
     actor_user: Option<&str>,
     action: &str,
     channel_id: &str,
@@ -66,16 +66,16 @@ pub(crate) async fn audit_reconnect_event(
     let Some(log) = crate::security::audit::global() else {
         return;
     };
+    let actor = actor_user.map(str::to_string);
     let mut detail = format!("discord.reconnect.{action}: channel={channel_id}");
     if let Some(d) = retry_after {
         detail.push_str(&format!(" retry_after_ms={}", d.as_millis()));
     }
-    let _ = log
-        .log(crate::security::audit::AuditEntry::authority_change(
-            actor_user.map(str::to_string),
-            detail,
-        ))
-        .await;
+    tokio::spawn(async move {
+        let _ = log
+            .log(crate::security::audit::AuditEntry::authority_change(actor, detail))
+            .await;
+    });
 }
 
 /// Default minimum interval between two successful reconnects. Matches the
@@ -294,15 +294,28 @@ impl ReconnectCoordinator {
             .backoff
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if is_success {
+        let decision = if is_success {
             backoff.reset();
             self.cooldown.stamp();
-            return ReconnectDecision::Proceed;
-        }
-        match backoff.next_delay() {
-            None => ReconnectDecision::Proceed,
-            Some(d) => ReconnectDecision::Backoff { retry_after: d },
-        }
+            ReconnectDecision::Proceed
+        } else {
+            match backoff.next_delay() {
+                None => ReconnectDecision::Proceed,
+                Some(d) => ReconnectDecision::Backoff { retry_after: d },
+            }
+        };
+        // Record every plan call so a backoff-bounded operator can
+        // see the retry timeline in the security audit trail.
+        audit_reconnect_event(
+            None,
+            if is_success { "reconnect_proceed" } else { "reconnect_backoff" },
+            "discord",
+            match &decision {
+                ReconnectDecision::Backoff { retry_after } => Some(*retry_after),
+                _ => None,
+            },
+        );
+        decision
     }
 
     /// Plan only the cooldown half. Useful when the caller has its own

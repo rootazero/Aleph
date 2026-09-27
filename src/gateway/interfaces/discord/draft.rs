@@ -59,7 +59,7 @@ use crate::utils::text_format::truncate_reserving;
 ///
 /// The `actor_user` is the agent user behind the bot for the duration of
 /// the edit; `None` only in tests that don't have a resolved caller.
-pub(crate) async fn audit_draft_event(
+pub(crate) fn audit_draft_event(
     actor_user: Option<&str>,
     action: &str,
     channel_id: &str,
@@ -68,14 +68,14 @@ pub(crate) async fn audit_draft_event(
     let Some(log) = crate::security::audit::global() else {
         return;
     };
+    let actor = actor_user.map(str::to_string);
     let detail =
         format!("discord.draft.{action}: message={message_id} channel={channel_id}");
-    let _ = log
-        .log(crate::security::audit::AuditEntry::authority_change(
-            actor_user.map(str::to_string),
-            detail,
-        ))
-        .await;
+    tokio::spawn(async move {
+        let _ = log
+            .log(crate::security::audit::AuditEntry::authority_change(actor, detail))
+            .await;
+    });
 }
 
 /// Discord's hard limit. We floor on it (never send a message longer than
@@ -176,6 +176,10 @@ impl DraftChunker {
                 is_last: true,
             }];
         }
+        // > max_chars path — audit the split so the trail records every
+        // time a long reply had to be chunked (signal for the model to
+        // keep responses bounded).
+        audit_draft_event(None, "draft_chunk", "discord", "0");
 
         // Step 1: hard-split on `\n\n` so we never carry an unfinished
         // paragraph across chunks. Each piece below the cap is yielded

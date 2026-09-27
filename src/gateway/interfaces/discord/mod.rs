@@ -315,15 +315,30 @@ impl Handler {
         // button can't drive the agent from a non-allowed surface.
         if let Some(guild_id) = component.guild_id {
             if !self.config.is_guild_allowed(guild_id.get()) {
+                commands::audit_command_blocked(
+                    Some(&component.user.id.to_string()),
+                    &component.channel_id.to_string(),
+                    "guild_not_allowlisted",
+                );
                 return;
             }
         }
         if component.guild_id.is_none() && !self.config.dm_allowed {
+            commands::audit_command_blocked(
+                Some(&component.user.id.to_string()),
+                &component.channel_id.to_string(),
+                "dm_disallowed",
+            );
             return;
         }
         if component.guild_id.is_some()
             && !self.config.is_channel_allowed(component.channel_id.get())
         {
+            commands::audit_command_blocked(
+                Some(&component.user.id.to_string()),
+                &component.channel_id.to_string(),
+                "channel_not_allowlisted",
+            );
             return;
         }
 
