@@ -24,6 +24,7 @@ groups, each chosen because a unit test structurally cannot settle it:
   D. Per-plugin configuration is durable. `config_set` then a *server restart*
      then `config_get`. Everything before the restart is in-process state.
 """
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -86,11 +87,23 @@ async def phase_a(rpc):
             json.dumps(pathform)[:200] if pathform else "absent")
 
     if inline is not None:
+        # The inline object's server is started at mount (P4.15). `pending`
+        # means its start has not been answered yet -- not an answer, so wait
+        # (bounded) for one before judging the row: a handshake that fails
+        # later turns it `error`, and a check made while `pending` would miss it.
+        for _ in range(40):
+            if str(inline.get("status", "")).lower() != "pending":
+                break
+            await asyncio.sleep(0.25)
+            again = rows((await rpc.call("plugins.list", {})).get("result", {}))
+            inline = row_for(again, "qa-inline") or inline
         status = str(inline.get("status", "")).lower()
         # THE discriminating assertion. Pre-fix this row existed with
         # status=error; "is it listed" would have passed either way.
         L.check("the inline plugin did not land as an Error row",
-                "error" not in status, f"status={status!r}")
+                status == "loaded", f"status={status!r} detail={inline.get('status_detail')!r}")
+        L.check("the inline object's one server is counted",
+                inline.get("mcp_servers_count") == 1, str(inline.get("mcp_servers_count")))
         # A widened type with no consumer would convert a loud rejection into
         # a quiet zero-capability load -- worse, by this repo's own criteria.
         # So assert the components actually arrived.

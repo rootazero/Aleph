@@ -22,6 +22,12 @@
 //! - LRU eviction (`MAX_ENTRIES` exceeded).
 //! - The key tuple no longer matches the file (size/mtime/ctime/dev/ino
 //!   changed) — the cache returns a miss and the caller re-parses.
+//! - Whether the plugin directory holds a `.mcp.json` changed. The key must
+//!   cover every input of the parse, and one parse reads a file beside the
+//!   manifest: a Claude Code `plugin.json` with no `aleph` block is an MCP
+//!   plugin when that file exists (`cc_plugin_json::KIND_SIDECAR`). Keyed on
+//!   the manifest alone, adding the file left the cached kind `Static` while
+//!   the (uncached) adapter counted the new server — counted, never started.
 //!
 //! There is no manual `invalidate(path)`; the size/mtime/ctime tuple handles
 //! it without ceremony. Tests that need to force a re-parse can call
@@ -77,14 +83,21 @@ pub(crate) struct ManifestCacheKey {
     ctime: SystemTime,
     dev: u64,
     ino: u64,
+    /// `<plugin dir>/.mcp.json` is a file — an input of the kind (module doc).
+    kind_sidecar: bool,
 }
 
 impl ManifestCacheKey {
-    /// Build a key from a `Path` + `std::fs::Metadata`. Returns `None` if the
-    /// path cannot be stat'd — the caller treats that as a cache miss (and
-    /// the underlying parse will surface the real error).
+    /// Build a key from the plugin directory + the manifest's `Path` +
+    /// `std::fs::Metadata`. Returns `None` if the path cannot be stat'd — the
+    /// caller treats that as a cache miss (and the underlying parse will
+    /// surface the real error).
     #[must_use]
-    pub(crate) fn from_path_and_stat(path: &Path, meta: &std::fs::Metadata) -> Option<Self> {
+    pub(crate) fn from_path_and_stat(
+        plugin_dir: &Path,
+        path: &Path,
+        meta: &std::fs::Metadata,
+    ) -> Option<Self> {
         let (dev, ino) = device_and_inode(meta);
         Some(Self {
             path: path.to_path_buf(),
@@ -93,6 +106,9 @@ impl ManifestCacheKey {
             ctime: meta.created().or_else(|_| meta.modified()).ok()?,
             dev,
             ino,
+            kind_sidecar: plugin_dir
+                .join(super::cc_plugin_json::KIND_SIDECAR)
+                .is_file(),
         })
     }
 }
@@ -114,19 +130,31 @@ impl ManifestCache {
         }
     }
 
-    /// Look up a cached manifest. The key is recomputed from `path` +
-    /// `meta`; a hit returns the cloned manifest, a miss returns `None`.
+    /// Look up a cached manifest. The key is recomputed from `plugin_dir` +
+    /// `path` + `meta`; a hit returns the cloned manifest, a miss returns
+    /// `None`.
     #[must_use]
-    pub fn get(&self, path: &Path, meta: &std::fs::Metadata) -> Option<PluginManifest> {
-        let key = ManifestCacheKey::from_path_and_stat(path, meta)?;
+    pub fn get(
+        &self,
+        plugin_dir: &Path,
+        path: &Path,
+        meta: &std::fs::Metadata,
+    ) -> Option<PluginManifest> {
+        let key = ManifestCacheKey::from_path_and_stat(plugin_dir, path, meta)?;
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.get(&key).cloned()
     }
 
     /// Insert a freshly-parsed manifest. Existing entries with the same key
     /// are overwritten; entries are evicted LRU-first when capacity is hit.
-    pub fn put(&self, path: &Path, meta: &std::fs::Metadata, manifest: PluginManifest) {
-        let Some(key) = ManifestCacheKey::from_path_and_stat(path, meta) else {
+    pub fn put(
+        &self,
+        plugin_dir: &Path,
+        path: &Path,
+        meta: &std::fs::Metadata,
+        manifest: PluginManifest,
+    ) {
+        let Some(key) = ManifestCacheKey::from_path_and_stat(plugin_dir, path, meta) else {
             return;
         };
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -173,14 +201,40 @@ mod tests {
         f
     }
 
+    /// The directory a temp manifest sits in, standing in for its plugin dir.
+    fn dir_of(tmp: &tempfile::NamedTempFile) -> &Path {
+        tmp.path().parent().expect("a temp file has a parent")
+    }
+
+    /// A `.mcp.json` appearing beside the manifest changes the parse (the
+    /// kind), so it is a miss even though the manifest bytes are unchanged.
+    #[test]
+    fn a_dot_mcp_json_appearing_in_the_plugin_dir_invalidates_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("plugin.json");
+        std::fs::write(&manifest, "{}").unwrap();
+        let meta = std::fs::metadata(&manifest).unwrap();
+        let cache = ManifestCache::new();
+        cache.put(
+            dir.path(),
+            &manifest,
+            &meta,
+            PluginManifest::default_for_test(),
+        );
+        assert!(cache.get(dir.path(), &manifest, &meta).is_some());
+
+        std::fs::write(dir.path().join(".mcp.json"), "{}").unwrap();
+        assert!(cache.get(dir.path(), &manifest, &meta).is_none());
+    }
+
     fn cache_put_and_get_roundtrip(content: &str) -> Option<PluginManifest> {
         let tmp = write_temp(content);
         let meta = std::fs::metadata(tmp.path()).expect("stat");
         let cache = ManifestCache::new();
         let manifest = PluginManifest::default_for_test();
-        cache.put(tmp.path(), &meta, manifest);
+        cache.put(dir_of(&tmp), tmp.path(), &meta, manifest);
         let meta2 = std::fs::metadata(tmp.path()).expect("stat again");
-        cache.get(tmp.path(), &meta2)
+        cache.get(dir_of(&tmp), tmp.path(), &meta2)
     }
 
     #[test]
@@ -194,7 +248,7 @@ mod tests {
         let tmp = write_temp("dummy");
         let meta = std::fs::metadata(tmp.path()).unwrap();
         let cache = ManifestCache::new();
-        assert!(cache.get(tmp.path(), &meta).is_none());
+        assert!(cache.get(dir_of(&tmp), tmp.path(), &meta).is_none());
     }
 
     #[test]
@@ -202,7 +256,12 @@ mod tests {
         let tmp = write_temp("dummy");
         let meta = std::fs::metadata(tmp.path()).unwrap();
         let cache = ManifestCache::new();
-        cache.put(tmp.path(), &meta, PluginManifest::default_for_test());
+        cache.put(
+            dir_of(&tmp),
+            tmp.path(),
+            &meta,
+            PluginManifest::default_for_test(),
+        );
         assert_eq!(cache.len(), 1);
         cache.clear();
         assert!(cache.is_empty());
@@ -214,7 +273,12 @@ mod tests {
         assert!(cache.is_empty());
         let tmp = write_temp("a");
         let meta = std::fs::metadata(tmp.path()).unwrap();
-        cache.put(tmp.path(), &meta, PluginManifest::default_for_test());
+        cache.put(
+            dir_of(&tmp),
+            tmp.path(),
+            &meta,
+            PluginManifest::default_for_test(),
+        );
         assert_eq!(cache.len(), 1);
     }
 
@@ -226,14 +290,19 @@ mod tests {
         let mut tmp = write_temp("abc");
         let meta = std::fs::metadata(tmp.path()).unwrap();
         let cache = ManifestCache::new();
-        cache.put(tmp.path(), &meta, PluginManifest::default_for_test());
+        cache.put(
+            dir_of(&tmp),
+            tmp.path(),
+            &meta,
+            PluginManifest::default_for_test(),
+        );
         // Force the OS clock to move forward so mtime changes are visible.
         std::thread::sleep(std::time::Duration::from_millis(50));
         tmp.write_all(b"defg").unwrap();
         tmp.flush().unwrap();
         let meta2 = std::fs::metadata(tmp.path()).unwrap();
         // New size → cache miss.
-        assert!(cache.get(tmp.path(), &meta2).is_none());
+        assert!(cache.get(dir_of(&tmp), tmp.path(), &meta2).is_none());
     }
 
     #[test]
@@ -249,22 +318,32 @@ mod tests {
         let meta1 = std::fs::metadata(tmp1.path()).unwrap();
         let m1 = PluginManifest::default_for_test();
         let original_id = m1.id.clone();
-        cache.put(tmp1.path(), &meta1, m1);
+        cache.put(dir_of(&tmp1), tmp1.path(), &meta1, m1);
 
         let tmp2 = write_temp("second");
         let meta2 = std::fs::metadata(tmp2.path()).unwrap();
-        cache.put(tmp2.path(), &meta2, PluginManifest::default_for_test());
+        cache.put(
+            dir_of(&tmp2),
+            tmp2.path(),
+            &meta2,
+            PluginManifest::default_for_test(),
+        );
 
         assert_eq!(cache.len(), 2);
         // Touching tmp2 makes it MRU; tmp1 stays in cache.
-        let _ = cache.get(tmp2.path(), &meta2);
+        let _ = cache.get(dir_of(&tmp2), tmp2.path(), &meta2);
         // Inserting tmp3 should not evict tmp1.
         let tmp3 = write_temp("third");
         let meta3 = std::fs::metadata(tmp3.path()).unwrap();
-        cache.put(tmp3.path(), &meta3, PluginManifest::default_for_test());
+        cache.put(
+            dir_of(&tmp3),
+            tmp3.path(),
+            &meta3,
+            PluginManifest::default_for_test(),
+        );
         assert_eq!(cache.len(), 3);
         let got = cache
-            .get(tmp1.path(), &meta1)
+            .get(dir_of(&tmp1), tmp1.path(), &meta1)
             .expect("tmp1 must still be cached (LRU only evicts when over capacity)");
         assert_eq!(got.id, original_id);
     }

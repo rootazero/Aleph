@@ -3,9 +3,12 @@
 //! A plugin's servers have two faces — the count on its `plugins.list` row and
 //! the spawn in `lifecycle.rs::mount_parsed` — and both come from the list
 //! [`parse_declared_servers`] returns: the manifest adapters wrap each entry as
-//! a `CapabilityDeclaration::McpServer` (counted by
-//! `PluginRecord::from_adapter_output`), and the mount spawns exactly those
-//! capabilities. There used to be two readers with two policies: the count
+//! a `CapabilityDeclaration::McpServer`; the row counts them and the mount
+//! spawns exactly those capabilities — both only when the plugin's kind
+//! `starts_mcp_servers()` (`lifecycle.rs::build_record` applies that one gate
+//! to the count; on any other kind the row counts 0 and its detail says how
+//! many were declared and why they are not started). There used to be two
+//! readers with two policies: the count
 //! dropped an absolute command outside the plugin root while the spawn ran it,
 //! and the spawn read only `<root>/.mcp.json`, so an inline `mcpServers`
 //! object was counted and never started.
@@ -66,7 +69,8 @@
 //!
 //! `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` (the plugin directory) and
 //! `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` (its persistent data
-//! directory, created on first reference) are expanded in `command`, `args`,
+//! directory, created by the mount just before a server that names it is
+//! started — [`provision_data_dir`]) are expanded in `command`, `args`,
 //! `url`, `env` and `headers` — by `PluginVars::expand`, the subsystem's one
 //! expander, once, so the containment check below and the spawn see the same
 //! string.
@@ -79,7 +83,7 @@
 //! - an absolute path not written with a `_PLUGIN_ROOT` variable is kept as
 //!   written — an absolute interpreter is the normal Claude Code shape;
 //! - a relative path, or one written with `${CLAUDE_PLUGIN_ROOT}` /
-//!   `${ALEPH_PLUGIN_ROOT}`, must name an existing file that canonicalizes
+//!   `${ALEPH_PLUGIN_ROOT}`, must name an existing file (not a directory) that canonicalizes
 //!   inside the plugin root, and is rewritten to that absolute path (the
 //!   spawn has no working directory of its own, so an unresolved `./server.js`
 //!   would run against the daemon's). `${PLUGIN_ROOT}` is not a variable here
@@ -155,11 +159,10 @@ pub(crate) fn parse_declared_servers(
     let entries: BTreeMap<String, McpJsonServerEntry> =
         serde_json::from_value(servers).map_err(|e| format!("JSON parse error: {e}"))?;
 
+    // Nothing is provisioned here: this parse runs on every discovery pass,
+    // for rows nobody enabled. The data directory is the spawn's to create
+    // ([`provision_data_dir`]).
     let vars = PluginVars::new(plugin_id, plugin_dir);
-    // Provision the data directory only when this manifest names it, and
-    // before substitution hands the path to a server about to be spawned.
-    vars.ensure_data_dir_if_referenced(content);
-
     entries
         .into_iter()
         .map(|(name, entry)| declared_server(plugin_id, &name, entry, &vars))
@@ -257,9 +260,10 @@ fn is_bare(command: &str) -> bool {
     !command.contains('/') && !command.contains('\\') && command != "." && command != ".."
 }
 
-/// `candidate`, canonicalized, if it stays inside `root`. Fails closed: a path
-/// that does not exist or cannot be resolved is refused — a canonicalize error
-/// is not a verdict, and there is nothing to run there anyway.
+/// `candidate`, canonicalized, if it is a file inside `root`. Fails closed: a
+/// path that does not exist or cannot be resolved is refused — a canonicalize
+/// error is not a verdict, and there is nothing to run there anyway — and so
+/// is a directory, which is not a program.
 fn inside_root(candidate: &Path, root: &Path) -> Result<PathBuf, String> {
     let root = std::fs::canonicalize(root)
         .map_err(|e| format!("cannot be checked: the plugin root does not resolve ({e})"))?;
@@ -269,14 +273,47 @@ fn inside_root(candidate: &Path, root: &Path) -> Result<PathBuf, String> {
             candidate.display()
         )
     })?;
-    if resolved.starts_with(&root) {
-        Ok(resolved)
-    } else {
-        Err(format!(
+    if !resolved.starts_with(&root) {
+        return Err(format!(
             "resolves to {}, outside the plugin root {}",
             resolved.display(),
             root.display()
-        ))
+        ));
+    }
+    if !resolved.is_file() {
+        return Err(format!(
+            "resolves to {}, which is not a file",
+            resolved.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+/// Create the plugin's data directory when a server about to be started names
+/// it (after expansion, in its command, args, env, url or headers). Called by
+/// the mount, not the parse: a row nobody enabled provisions nothing. A
+/// failure to create is a `warn!` — the server is still worth starting, and it
+/// fails loudly at the moment it writes.
+pub(crate) fn provision_data_dir(plugin_id: &str, plugin_dir: &Path, servers: &[McpManagerConfig]) {
+    let vars = PluginVars::new(plugin_id, plugin_dir);
+    let data = vars.data_dir().to_string_lossy().into_owned();
+    let names_data = |s: &McpManagerConfig| {
+        s.command
+            .iter()
+            .chain(s.url.iter())
+            .chain(s.args.iter())
+            .chain(s.env.values())
+            .chain(s.headers.values())
+            .any(|v| v.contains(&data))
+    };
+    if !servers.iter().any(names_data) {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(vars.data_dir()) {
+        tracing::warn!(
+            plugin_id, path = %vars.data_dir().display(), error = %e,
+            "could not create the plugin data directory its MCP server names"
+        );
     }
 }
 
@@ -770,6 +807,57 @@ mod tests {
                 "{written:?} must be refused"
             );
         }
+    }
+
+    /// A directory inside the root is not a program: refused at parse, not
+    /// counted and then failed at spawn.
+    #[test]
+    fn a_directory_inside_the_root_is_not_a_command() {
+        let (_tmp, root) = command_fixture();
+        for written in [".", "./bin", "${CLAUDE_PLUGIN_ROOT}/bin"] {
+            let err = command_of(written, &root).unwrap_err();
+            assert!(err.contains("not a file"), "{written:?}: {err}");
+        }
+    }
+
+    /// The mount creates the data directory only for a server that names it.
+    #[test]
+    fn the_data_directory_is_provisioned_only_for_a_server_that_names_it() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let (_tmp, root) = command_fixture();
+        let plain = parse_declared_servers(
+            r#"{"mcpServers":{"s":{"command":"node"}}}"#,
+            &root,
+            "p415-plain",
+        )
+        .unwrap();
+        provision_data_dir("p415-plain", &root, &plain);
+        assert!(!crate::extension::plugin_data_dir("p415-plain").exists());
+
+        let named = parse_declared_servers(
+            r#"{"mcpServers":{"s":{"command":"node","env":{"DB":"${ALEPH_PLUGIN_DATA}/db"}}}}"#,
+            &root,
+            "p415-named",
+        )
+        .unwrap();
+        provision_data_dir("p415-named", &root, &named);
+        assert!(crate::extension::plugin_data_dir("p415-named").is_dir());
+    }
+
+    /// Parsing runs on every discovery pass, for rows nobody enabled; it
+    /// provisions nothing. The data directory is the spawn's to create.
+    #[test]
+    fn parsing_never_creates_the_data_directory() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let (_tmp, root) = command_fixture();
+        let data = crate::extension::plugin_data_dir("p415-data");
+        parse(
+            r#"{"mcpServers":{"s":{"command":"node","args":["${CLAUDE_PLUGIN_DATA}/db"]}}}"#,
+            &root,
+            "p415-data",
+        )
+        .unwrap();
+        assert!(!data.exists(), "{} was created by a parse", data.display());
     }
 
     /// `${CLAUDE_PLUGIN_DATA}` is absolute and not a root variable: the

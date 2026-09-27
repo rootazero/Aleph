@@ -55,8 +55,17 @@ def rows(payload):
 
 
 async def statuses(rpc):
-    msg = await rpc.call("plugins.list", {})
-    return {r.get("name"): str(r.get("status", "")).lower() for r in rows(msg.get("result", {}))}
+    # `qa-inline` starts a real MCP server (P4.15): until its start is
+    # answered the row is `pending`, which is not an answer yet. Wait for one
+    # (bounded) instead of reading a transient word as the verdict.
+    import asyncio
+    for _ in range(40):
+        msg = await rpc.call("plugins.list", {})
+        st = {r.get("name"): str(r.get("status", "")).lower() for r in rows(msg.get("result", {}))}
+        if "pending" not in st.values():
+            return st
+        await asyncio.sleep(0.25)
+    return st
 
 
 async def phase_baseline(rpc):

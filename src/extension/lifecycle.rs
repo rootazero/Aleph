@@ -398,6 +398,18 @@ impl ExtensionManager {
         if let Ok(m) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
             record.kind = m.kind;
         }
+        // The row counts only servers the mount will start — the same gate as
+        // the `mcp_server` step, on the same `record.kind` — and says why when
+        // it drops some, rather than counting what will never run.
+        if !record.kind.starts_mcp_servers() && record.mcp_server_count > 0 {
+            record.error = Some(format!(
+                "declares {} MCP server(s) that are not started: only an `mcp` runtime starts \
+                 them (this plugin's runtime is `{}`)",
+                record.mcp_server_count,
+                record.kind.as_str()
+            ));
+            record.mcp_server_count = 0;
+        }
         record
     }
 
@@ -570,7 +582,9 @@ impl ExtensionManager {
         let root_dir = record.root_dir.clone();
         let manifest: Option<PluginManifest> =
             manifest::parse_manifest_from_dir_cached_global(&root_dir).ok();
-        let kind = manifest.as_ref().map_or(PluginKind::Static, |m| m.kind);
+        // The kind `build_record` derived — and counted the row's servers by —
+        // not a second derivation that could disagree with it.
+        let kind = record.kind;
 
         // Read what later steps need out of the capabilities BEFORE they move
         // into the registry.
@@ -587,8 +601,9 @@ impl ExtensionManager {
             .capabilities
             .iter()
             .any(|c| matches!(c, CapabilityDeclaration::Service(_)));
-        // The servers the row counts are the servers step 3 spawns: one list,
-        // parsed once by `mcp_config::parse_declared_servers`.
+        // One list, parsed once by `mcp_config::parse_declared_servers`: the
+        // row counts it and step 3 spawns it, both only when
+        // `kind.starts_mcp_servers()` (otherwise the row counts 0 and says why).
         let declared_servers: Vec<crate::mcp::McpManagerConfig> = output
             .capabilities
             .iter()
@@ -638,8 +653,9 @@ impl ExtensionManager {
         // Every server this plugin declares, started or not: step 6 lets a
         // command name their tools before they reach the catalog.
         let mut declared_mcp_servers: Vec<String> = Vec::new();
-        if kind == PluginKind::Mcp {
+        if kind.starts_mcp_servers() {
             let settings = self.plugin_settings_for_runtime(&id).await;
+            mcp_config::provision_data_dir(&id, &root_dir, &declared_servers);
             let configs = mcp_config::with_operator_env(declared_servers, &settings);
             first_server = configs.keys().min().cloned();
             declared_mcp_servers = configs.keys().cloned().collect();

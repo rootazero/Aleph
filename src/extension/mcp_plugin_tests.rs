@@ -232,3 +232,64 @@ async fn a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_sa
         "spawn face mounted a refused server"
     );
 }
+
+/// The kind is derived from `plugin.json` AND the `.mcp.json` beside it, and
+/// the manifest cache is keyed on `plugin.json`. A `.mcp.json` added after the
+/// first load must still make the next load an MCP one — otherwise the row
+/// counts the new server (the adapter parse is uncached) and nothing starts it.
+#[tokio::test]
+async fn a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = write_cc_plugin(tmp.path(), "p415-late", "", None);
+    let manager = attached_manager(tmp.path()).await;
+    manager.load_all().await.unwrap();
+    let before = row(&manager.get_plugin_info().await, "p415-late").clone();
+    assert_eq!(
+        (before.kind.as_str(), before.mcp_servers_count),
+        ("static", 0)
+    );
+
+    std::fs::write(
+        root.join(".mcp.json"),
+        r#"{"mcpServers":{"srv":{"command":"qa-nonexistent-mcp-binary-9f3a"}}}"#,
+    )
+    .unwrap();
+    manager.reload().await.unwrap();
+
+    let row = settled_row(&manager, "p415-late").await;
+    assert_counted_and_spawned(&row, 1, &[("srv", "(qa-nonexistent-mcp-binary-9f3a)")]);
+}
+
+/// An explicit non-`mcp` runtime never starts servers, so the row counts none
+/// of the servers it declares — and says why, instead of counting what will
+/// never run.
+#[tokio::test]
+async fn an_explicit_non_mcp_runtime_counts_no_servers_and_says_why() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    write_cc_plugin(
+        tmp.path(),
+        "p415-static",
+        r#","aleph":{"runtime":"static"}"#,
+        Some(r#"{"mcpServers":{"srv":{"command":"qa-nonexistent-mcp-binary-9f3a"}}}"#),
+    );
+    let manager = attached_manager(tmp.path()).await;
+    manager.load_all().await.unwrap();
+
+    let row = settled_row(&manager, "p415-static").await;
+    assert_eq!(row.kind, "static", "{row:?}");
+    assert_eq!(row.mcp_servers_count, 0, "count face: {row:?}");
+    assert_eq!(row.status, "loaded", "{row:?}");
+    let detail = row.error.clone().unwrap_or_default();
+    assert!(
+        detail.contains("1 MCP server") && detail.contains("`static`"),
+        "the row must say why the declared server is not counted: {row:?}"
+    );
+    assert!(
+        manager
+            .scope_steps("p415-static")
+            .is_some_and(|steps| !steps.contains(&"mcp_server")),
+        "a non-mcp runtime started a server"
+    );
+}

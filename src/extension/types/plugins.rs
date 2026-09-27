@@ -184,6 +184,18 @@ impl PluginKind {
         }
     }
 
+    /// Whether a plugin of this kind has its declared MCP servers started.
+    /// The one gate for both faces of a plugin's servers: the row counts them
+    /// (`lifecycle.rs::build_record`) and the mount spawns them (the
+    /// `mcp_server` step) only when this is true.
+    #[must_use]
+    pub const fn starts_mcp_servers(self) -> bool {
+        match self {
+            Self::Mcp => true,
+            Self::Wasm | Self::Static => false,
+        }
+    }
+
     /// Detect plugin kind from a file path
     ///
     /// Returns `Some(kind)` if the path indicates a known plugin type,

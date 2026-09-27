@@ -21,6 +21,11 @@ use crate::extension::types::PluginKind;
 /// Filename path for CC-format JSON manifest
 pub const CC_PLUGIN_JSON: &str = ".claude-plugin/plugin.json";
 
+/// The one file outside the manifest that this parse reads: a root
+/// `.mcp.json` makes a manifest with no `aleph` block an MCP plugin. The
+/// manifest cache keys on it for that reason (`manifest_cache.rs`).
+pub(crate) const KIND_SIDECAR: &str = ".mcp.json";
+
 // =============================================================================
 // CC plugin.json Types
 // =============================================================================
@@ -179,7 +184,7 @@ pub fn parse_cc_plugin_json_content(
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
     // Read before `json.aleph` is moved out below.
-    let declares_servers = json.mcp_servers.is_some() || plugin_dir.join(".mcp.json").is_file();
+    let declares_servers = json.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
 
     // Parse [aleph] section from raw JSON value
     let mut superset = AlephSuperset::default();

@@ -618,7 +618,10 @@ MCP 插件的 `.mcp.json` server 现已作为 **transient（仅运行时，不�
 `.mcp.json` / manifest 指定的路径 / 内联 `mcpServers` 对象解析成 `McpManagerConfig`，
 作为 `CapabilityDeclaration::McpServer` 挂在 adapter 输出上——`plugins.list` 的
 `mcp_servers_count` 数的是这张表，`mount` 的 `mcp_server` step spawn 的也是这张表
-（只在 spawn 时叠上运营者的插件配置 env）。`McpJsonServerEntry` 解析器对缺失字段
+（只在 spawn 时叠上运营者的插件配置 env）——两边共用一道闸 `PluginKind::starts_mcp_servers`
+（只有 `mcp` kind 为真）：显式 `wasm` / `static` runtime 或无 runtime 概念的格式（Codex / Cursor /
+auto-discover）声明了 server 时，行上计数为 0，`status_detail` 写明声明了几个、为何不启动。
+manifest 缓存的 key 覆盖 kind 的每个输入（含插件根的 `.mcp.json` 是否存在）。`McpJsonServerEntry` 解析器对缺失字段
 （stdio 无 `command` / remote 无 `url` / 未知 `type`）做 hard error，不让 spawn 进入半配置状态。
 
 **stdio `command` 的归属规则**（The one reader of a stdio command）：裸名（`node` / `npx` / `uvx`）

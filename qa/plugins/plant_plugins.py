@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 
 
+MOCK_SERVER = Path(__file__).resolve().parent / "mcp_mock_server.py"
+
+
 def w(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -43,11 +46,15 @@ def plant_inline(root: Path):
         # Inline object, NOT a path string.
         "mcpServers": {
             "qa-echo": {
-                # `command` must exist on PATH or the server logs a spawn
-                # failure; the claim is about parsing + registration, so use
-                # something universally present.
-                "command": "echo",
-                "args": ["qa-inline-server"],
+                # A server that really speaks MCP. Since P4.15 a manifest that
+                # declares `mcpServers` is an MCP plugin and its servers are
+                # STARTED at mount; a server whose handshake fails turns the
+                # whole row `error` (readiness). This used to be `echo`, which
+                # passed only because nothing ever started it -- the claim is
+                # still "the inline form parses, registers and loads", and now
+                # "loads" includes the server the inline object declares.
+                "command": sys.executable,
+                "args": [str(MOCK_SERVER)],
             }
         },
         # The hook command carries a `${CLAUDE_PLUGIN_ROOT}` reference because
