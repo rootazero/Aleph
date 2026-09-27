@@ -522,6 +522,15 @@ impl ExecApprovalManager {
         let cascade = pending
             .get(id)
             .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
+        // R1 audit hook (T1.1): every successful resolution now leaves an
+        // `AuthorityChange` row in the global audit log so the post-incident
+        // question "who allowed what, when" no longer requires a
+        // stdout-grep. We capture the command-shape and session id from
+        // the resolved entry before any cascade clobbers the lock; the
+        // block is best-effort (no audit log installed is not an error).
+        let audit_snapshot = pending
+            .get(id)
+            .map(|e| (e.record.command.clone(), e.record.session_key.clone()));
         if let Some((session_key, grant_key)) = cascade {
             Self::cascade_to_identical_cards(
                 &mut pending,
@@ -532,6 +541,24 @@ impl ExecApprovalManager {
                 resolved_by,
                 deny_reason,
             );
+        }
+        if let Some((command, session_key)) = audit_snapshot {
+            if let Some(log) = crate::security::audit::global() {
+                let detail = format!(
+                    "exec.approval.resolved: {:?} cmd={} session={}",
+                    decision, command, session_key,
+                );
+                // `tokio::spawn` rather than awaiting inline so the lock
+                // is dropped first and the audit dispatch never blocks
+                // the resolve path under load.
+                tokio::spawn(async move {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        None,
+                        detail,
+                    ))
+                    .await;
+                });
+            }
         }
         true
     }
