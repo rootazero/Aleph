@@ -1,5 +1,5 @@
 use crate::gateway::channel::{ChannelResult, MessageId, OutboundMessage};
-use crate::gateway::interfaces::whatsapp::config::WhatsAppAccountConfig;
+use crate::gateway::interfaces::whatsapp::config::WhatsAppConfig;
 use crate::gateway::interfaces::whatsapp::wa_runtime::WaRuntime;
 
 pub struct WaOutbound;
@@ -8,7 +8,7 @@ impl WaOutbound {
     pub async fn send_message(
         runtime: &WaRuntime,
         msg: OutboundMessage,
-        _account: &WhatsAppAccountConfig,
+        _config: &WhatsAppConfig,
     ) -> ChannelResult<MessageId> {
         runtime.send_message(msg).await
     }

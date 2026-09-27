@@ -25,8 +25,6 @@ pub mod config;
 pub mod message;
 pub mod pairing;
 
-pub mod account;
-pub mod account_registry;
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
@@ -37,9 +35,7 @@ pub mod wa_outbound;
 pub mod wa_policy;
 pub mod wa_runtime;
 
-pub use config::{
-    AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppAccountConfig, WhatsAppConfig,
-};
+pub use config::{AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppConfig};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -47,7 +43,7 @@ use crate::gateway::channel::{
     SendResult,
 };
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
-use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
+use crate::gateway::interfaces::whatsapp::wa_runtime::WaRuntime;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
@@ -133,12 +129,16 @@ impl Channel for WhatsAppChannel {
         if self.test_mode {
             return self.channel_state.status();
         }
-        match self.runtime.as_ref().map(|r| r.connection_state()) {
-            Some(ConnectionState::Connected) => ChannelStatus::Connected,
-            Some(ConnectionState::Connecting) => ChannelStatus::Connecting,
-            Some(ConnectionState::Pairing) => ChannelStatus::Pairing,
-            Some(ConnectionState::Error) => ChannelStatus::Error,
-            _ => ChannelStatus::Disconnected,
+        // Route `status()` through `PairingState` (single source of truth per
+        // spec §3.1 D1). `Channel::status()` is sync; the runtime's
+        // `pairing_state` is a tokio `RwLock`, so we use `try_read` to avoid
+        // the panic that `blocking_read` raises from within an async
+        // context. If the lock happens to be held by a writer at this
+        // exact instant we fall back to `Disconnected`, which is
+        // `fail-closed` per CLAUDE.md §8.
+        match self.pairing_state.try_read() {
+            Ok(state) => state.to_channel_status(),
+            Err(_) => ChannelStatus::Disconnected,
         }
     }
 
@@ -507,6 +507,34 @@ mod tests {
             ))
             .await;
         assert!(matches!(*state.read().await, PairingState::Failed { .. }));
+    }
 
-        }
+    /// TDD Task 3: `WhatsAppChannel::status()` must read `PairingState`
+    /// (single source of truth per spec §3.1 D1), not the legacy
+    /// `runtime.connection_state()` path. Without this fix, mutating
+    /// `pairing_state` has no effect on `status()` — which is the bug the
+    /// spec calls out under CLAUDE.md §8 (`fail-closed`).
+    ///
+    /// Deviation from the plan text: the plan asserts `ChannelStatus::Pairing`
+    /// for `QrExpired`, but `PairingState::to_channel_status()` is unchanged
+    /// per spec §5.2 and maps `QrExpired` to `ChannelStatus::Connecting`. We
+    /// assert the actual mapped value.
+    #[tokio::test]
+    async fn status_reads_pairing_state() {
+        use crate::gateway::channel::ChannelStatus;
+        let channel = WhatsAppChannel::new("wa-test", WhatsAppConfig::default());
+        *channel.pairing_state.write().await = PairingState::QrExpired;
+        assert_eq!(channel.status(), ChannelStatus::Connecting);
+
+        *channel.pairing_state.write().await = PairingState::Connected {
+            device_name: "Phone".to_string(),
+            phone_number: "+1234".to_string(),
+        };
+        assert_eq!(channel.status(), ChannelStatus::Connected);
+
+        *channel.pairing_state.write().await = PairingState::Failed {
+            error: "x".to_string(),
+        };
+        assert_eq!(channel.status(), ChannelStatus::Error);
+    }
 }
