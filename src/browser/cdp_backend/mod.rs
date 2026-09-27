@@ -90,6 +90,11 @@ pub struct CdpBackend {
     /// "that target is gone" after a re-attach instead of guessing from a
     /// listing's row order (附录 D.9.19).
     tab_identities: Arc<TabRegistry>,
+    /// The profile-manager-owned mock-route table. Same residency argument as
+    /// `tab_identities` above: this backend is rebuilt per call, so the rules
+    /// — and the per-tab interception loops' kill switches — must live longer
+    /// than any one backend.
+    routes: Arc<routes::RouteRegistry>,
     /// The effect-arrival verdict of the most recent probed verb
     /// (click / type / fill). A latch rather than a return value because the
     /// trait's `Result<(), BrowserError>` shape is fixed across three
@@ -108,6 +113,7 @@ impl CdpBackend {
         ssrf_guard: Arc<BrowserSsrfGuard>,
         command_timeout: Duration,
         tab_identities: Arc<TabRegistry>,
+        routes: Arc<routes::RouteRegistry>,
     ) -> Self {
         // ONE spelling of "which profile this backend drives": `req.profile`.
         // The registry keys on it, and this constructor once ALSO took a
@@ -132,6 +138,7 @@ impl CdpBackend {
             ssrf_guard,
             command_timeout,
             tab_identities,
+            routes,
             effect_verdict: std::sync::Mutex::new(None),
         }
     }
@@ -604,6 +611,7 @@ pub(crate) mod test_support {
             guard,
             TEST_TIMEOUT,
             std::sync::Arc::new(crate::browser::tab_registry::TabRegistry::new()),
+            std::sync::Arc::new(super::routes::RouteRegistry::new()),
         );
         (registry, backend)
     }
@@ -886,7 +894,7 @@ mod tests {
     fn no_verb_is_left_unwired() {
         let marker = concat!("CDP_VERB", "_NOT_WIRED");
         let helper = concat!("not_yet", "_wired");
-        let scanned: [(&str, &str); 11] = [
+        let scanned: [(&str, &str); 12] = [
             ("mod.rs", include_str!("mod.rs")),
             ("actions.rs", include_str!("actions.rs")),
             ("cookies.rs", include_str!("cookies.rs")),
@@ -895,6 +903,7 @@ mod tests {
             ("events.rs", include_str!("events.rs")),
             ("migration.rs", include_str!("migration.rs")),
             ("navigate.rs", include_str!("navigate.rs")),
+            ("routes.rs", include_str!("routes.rs")),
             ("screenshot.rs", include_str!("screenshot.rs")),
             ("snapshot.rs", include_str!("snapshot.rs")),
             ("tabs.rs", include_str!("tabs.rs")),

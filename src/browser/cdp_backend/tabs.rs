@@ -92,6 +92,11 @@ pub(super) async fn close_tab(be: &CdpBackend, tab_id: &str) -> Result<(), Brows
     // without us (the page's own `window.close`, an engine restart) — the
     // registry's doc on `forget` owns the distinction.
     be.forget_tab(tab_id);
+    // The tab's mock routes die with it (spec §4: tab-scope rules are
+    // tab-lifetime), and a loop whose tab is gone can never serve again —
+    // disarm it (spec §2 生命周期: the task dies with the session).
+    be.routes().clear_tab(be.profile_name(), tab_id);
+    be.stop_intercept_loop_if_idle(tab_id).await;
     Ok(())
 }
 
