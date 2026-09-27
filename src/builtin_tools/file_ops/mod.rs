@@ -201,6 +201,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_path_denies_protected() {
+        // `~` in these inputs and in the denylist entries must be the same
+        // home — see `gateway::handlers::fs`'s credential parity test.
+        let _home = crate::runtimes::post_install::HomeEnvGuard::acquire();
         let tool = FileOpsTool::new();
 
         // Test that protected paths are denied — the original SSH/PGP/AWS set

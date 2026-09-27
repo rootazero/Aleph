@@ -100,6 +100,20 @@ pub(crate) struct AlephHomeEnvGuard {
 
 #[cfg(test)]
 impl AlephHomeEnvGuard {
+    /// Lock without changing `$ALEPH_HOME` — for a reader that must see the
+    /// same value twice while a mover waits. When `$HOME` must be held too,
+    /// take both through [`crate::runtimes::post_install::HomeEnvGuards::acquire`],
+    /// which fixes the lock order.
+    pub(crate) fn acquire() -> Self {
+        let lock = ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        Self {
+            _lock: lock,
+            previous: std::env::var_os("ALEPH_HOME"),
+        }
+    }
+
     pub(crate) fn acquire_and_set(value: impl AsRef<std::ffi::OsStr>) -> Self {
         let lock = ALEPH_HOME_TEST_GUARD
             .lock()

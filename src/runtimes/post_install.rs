@@ -289,6 +289,19 @@ pub(crate) struct HomeEnvGuards {
 
 #[cfg(test)]
 impl HomeEnvGuards {
+    /// Lock both and move neither — for a test that reads `~` AND Aleph's
+    /// home (the credential denylist names both) and must see each one the
+    /// same way twice while the movers wait.
+    pub(crate) fn acquire() -> Self {
+        // ALEPH_HOME first — the one and only order.
+        let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire();
+        let home = HomeEnvGuard::acquire();
+        Self {
+            _home: home,
+            _aleph_home: aleph_home,
+        }
+    }
+
     /// Lock both, then point `$ALEPH_HOME` and `$HOME` at the given paths for
     /// the guard's lifetime.
     pub(crate) fn acquire_and_set(

@@ -3,8 +3,8 @@
 //! dispatches them (`call_json`), each tool built under an isolated
 //! `$ALEPH_HOME` so its denylist names that home's files. `$HOME` is left
 //! alone: every gate file hangs off `$ALEPH_HOME`, and a test that moved
-//! `$HOME` would race the unguarded `~/.ssh` denylist tests of this module
-//! (it did, the first time this ran beside them).
+//! `$HOME` raced this module's `~/.ssh` denylist tests the first time it ran
+//! beside them (they took no HOME guard then; they do now).
 
 use crate::builtin_tools::file_ops::{FileOpsTool, FileWriteTool};
 use crate::tools::AlephTool;

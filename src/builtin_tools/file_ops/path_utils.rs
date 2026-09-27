@@ -374,19 +374,45 @@ fn compile_denied_entry(denied: &str) -> DeniedEntry {
     )
 }
 
-/// Memo of the compiled form of each raw denylist entry.
+/// Memo of the compiled form of each denylist entry, keyed by
+/// [`denied_entry_key`] — what the entry names, not how it is spelled.
 static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, Arc<DeniedEntry>>>> = OnceLock::new();
 
-/// The compiled ([`compile_denied_entry`]) form of one raw denylist entry —
-/// computed once per process.
+/// The key an entry is memoised under: a literal's expansion under the
+/// current `$HOME` / environment, a pattern's own text.
+///
+/// Keyed by the raw spelling, `~/.ssh` was compiled once under whatever home
+/// was current at the first lookup and then served under every home after it —
+/// a key coarser than its derivation. Production never sees the difference
+/// (`$HOME` does not move in a running server, so each literal maps to one key
+/// and compiles exactly once, as before); a test binary does, where a fixture
+/// that moves `$HOME` got to compile the entry first and every later test was
+/// judged against that fixture's dead temp directory. Expanding on every
+/// lookup is an env read and a join; the `canonicalize()` / regex work the memo
+/// exists to avoid stays memoised per expanded path.
+///
+/// Patterns are keyed as written because they are never expanded (see
+/// [`compile_denied_entry`]); literals without a `~` or `%…%` token expand to
+/// themselves and borrow.
+fn denied_entry_key(denied: &str) -> std::borrow::Cow<'_, str> {
+    if looks_like_glob(denied) || !(denied.starts_with('~') || denied.contains('%')) {
+        std::borrow::Cow::Borrowed(denied)
+    } else {
+        std::borrow::Cow::Owned(expand_denied_entry(denied))
+    }
+}
+
+/// The compiled ([`compile_denied_entry`]) form of one denylist entry —
+/// computed once per process for each thing it names.
 ///
 /// [`path_is_denied`] runs once per glob match inside the `search` / `stats`
 /// walks, and normalizing every entry on every call meant a `canonicalize()`
 /// syscall per entry per match: `stats` over a few thousand files issued tens of
 /// thousands of blocking syscalls on a tokio worker before returning four
-/// numbers — minutes of round-trips on a network mount. The entries are derived
-/// from the user's home / config dir at process start and do not change for the
-/// process lifetime, which is what makes compiling each one exactly once sound.
+/// numbers — minutes of round-trips on a network mount. Each key names one
+/// location for as long as it exists, which is what makes compiling it exactly
+/// once sound — including when `$HOME` moves, because a moved home is a
+/// different key ([`denied_entry_key`]).
 /// The same argument covers pattern entries: regex compilation is far more
 /// expensive than a `canonicalize()`, and `[sandbox]` is restart-scoped.
 ///
@@ -394,20 +420,23 @@ static DENIED_NORM_CACHE: OnceLock<RwLock<HashMap<String, Arc<DeniedEntry>>>> = 
 /// [`path_is_denied`] and [`contains_denied_descendant`] read an entry's
 /// meaning from here and nowhere else.
 fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
+    let key = denied_entry_key(denied);
     let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
     if let Some(hit) = cache
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(denied)
+        .get(key.as_ref())
         .cloned()
     {
         return hit;
     }
-    let compiled = Arc::new(compile_denied_entry(denied));
+    // Compiled from the key, not the raw entry, so the stored meaning is the
+    // one the key names even if `$HOME` moves between the two expansions.
+    let compiled = Arc::new(compile_denied_entry(&key));
     cache
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(denied.to_string(), Arc::clone(&compiled));
+        .insert(key.into_owned(), Arc::clone(&compiled));
     compiled
 }
 
@@ -1466,6 +1495,35 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         assert_eq!(
             parse_deny_read_globs("[sandbox]\ndeny_read_globs = [\"**/.env\", 7, \"\"]\n"),
             vec!["**/.env".to_string()]
+        );
+    }
+
+    /// A `~` entry compiled under one home must not be served under another.
+    /// Keyed by the raw spelling, step 1 compiled `~/.ssh` as A's and step 2
+    /// judged B's `.ssh` against it: not refused. That was the P4 phase-end
+    /// red of `gateway::handlers::fs`'s credential parity test, where a
+    /// fixture that moves `$HOME` compiled the entry first.
+    #[test]
+    fn a_home_entry_compiled_under_one_home_is_not_served_under_another() {
+        use crate::runtimes::post_install::HomeEnvGuard;
+        let entries = ["~/.ssh".to_string()];
+        let (dir_a, dir_b) = (tempdir().unwrap(), tempdir().unwrap());
+        let a = dir_a.path().canonicalize().unwrap();
+        let b = dir_b.path().canonicalize().unwrap();
+        let under = |home: &Path| home.join(".ssh").join("id_ed25519");
+
+        {
+            let _home = HomeEnvGuard::acquire_and_set(&a);
+            assert!(path_is_denied(&under(&a), &entries));
+        }
+        let _home = HomeEnvGuard::acquire_and_set(&b);
+        assert!(
+            path_is_denied(&under(&b), &entries),
+            "home B's ~/.ssh was judged against home A's compile"
+        );
+        assert!(
+            !path_is_denied(&under(&a), &entries),
+            "home A's ~/.ssh is still refused under home B"
         );
     }
 

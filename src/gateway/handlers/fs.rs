@@ -761,6 +761,11 @@ mod tests {
     #[tokio::test]
     async fn every_credential_denylist_entry_is_refused_by_the_rpc_face() {
         use crate::builtin_tools::file_ops::get_denied_paths;
+        // The denylist is derived twice — here and by the refusal it is
+        // compared with — from `$HOME` (`~` entries) and `$ALEPH_HOME` (the
+        // config-file entries), so a test that moves either in between hands
+        // the two halves different lists.
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire();
 
         let mut checked = 0usize;
         for entry in get_denied_paths() {
