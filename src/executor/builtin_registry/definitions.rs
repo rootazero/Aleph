@@ -3393,7 +3393,21 @@ mod tests {
     /// 2026-09-06 merge: both deltas stack on the 104_302 base, so the
     /// ceiling is 104_302 + 528 + 361 = 105_191; re-measured on macOS after
     /// the merge (the guard prints the total if this drifts).
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_191;
+    ///
+    /// 2026-09-28 (plugin-scope round, P4.18): 105_191 -> 105_123 B (-68),
+    /// all of it `hooks_manage` (2_219 -> 2_151). The round had first grown
+    /// it to 2_304 without anyone running this guard: `3d21be979` +7
+    /// (`aleph hooks test` -> `aleph-server hooks test` in `command`'s doc)
+    /// and `3c111de88` +78 (`matcher`'s subject semantics), measured per
+    /// commit through `schema_for!`; the other two commits that touched the
+    /// file changed no doc on a schema type, so they contribute nothing.
+    /// Paid back by trimming, not by raising: `command` no longer repeats
+    /// the approval spelling the DESCRIPTION already carries (one copy fewer
+    /// to keep in step - the rename had to edit both), `only_unreachable`
+    /// no longer tells the model when to use it, and `action` drops "What to
+    /// do.". The `events` variant now names the `matcher_subject` it reports
+    /// rather than the retired `supports_matcher` (+9 of the -153).
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_123;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3443,7 +3457,7 @@ mod tests {
         ("goal", 4985),
         ("grep", 1545),
         ("heartbeat_report", 764),
-        ("hooks_manage", 2219),
+        ("hooks_manage", 2151),
         ("list_models", 597),
         ("local_voice", 332),
         ("loop", 2998),

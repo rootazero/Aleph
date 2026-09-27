@@ -51,13 +51,12 @@ pub enum HooksAction {
     Add,
     /// Remove matching hooks from the global hooks file.
     Remove,
-    /// List valid event names, and which support `matcher` / `interceptor`.
+    /// List event names with each one's `matcher` subject and `interceptor` support.
     Events,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HooksManageArgs {
-    /// What to do.
     pub action: HooksAction,
 
     /// Event name for `add` / `remove`. Accepts Claude-Code names
@@ -67,8 +66,7 @@ pub struct HooksManageArgs {
     pub event: Option<String>,
 
     /// Shell command to run. Exactly one of command/prompt/agent/url for `add`.
-    /// NOTE: a newly-added shell hook does NOT run until the operator approves
-    /// it at their terminal with `aleph-server hooks test <fingerprint>`.
+    /// Consent-gated: it does not run until the operator approves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
@@ -98,8 +96,7 @@ pub struct HooksManageArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter_event: Option<String>,
 
-    /// For `list`: only show hooks that cannot fire. Use this first when
-    /// diagnosing "my hook doesn't run".
+    /// For `list`: only show hooks that cannot fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only_unreachable: Option<bool>,
 }
