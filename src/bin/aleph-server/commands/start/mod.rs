@@ -3434,7 +3434,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::approval::adapters::FallbackApprovalRequester;
         use alephcore::approval::operator_requester::OperatorApprovalRequester;
 
-        let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
+        // W2 fix: the channel-bridge path now publishes `approval.*` frames
+        // alongside `OperatorApprovalRequester`, so the Panel approval bell
+        // mirrors a Telegram / Discord / Slack / iMessage card just like it
+        // mirrors operator-tier cards. The bridge itself is unchanged for the
+        // user (they still see Telegram buttons, plain-text menus) — the
+        // event is purely a mirror, never a fallback.
+        let bridge = Arc::new(ChannelApprovalBridge::with_event_bus(
+            channel_registry.clone(),
+            event_bus.clone(),
+        ));
         let channel_adapter = Arc::new(ChannelApprovalBridgeAdapter::new(
             bridge,
             exec_approval_manager.clone(),

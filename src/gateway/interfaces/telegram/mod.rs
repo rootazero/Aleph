@@ -31,6 +31,7 @@ mod polling;
 pub mod reaction_handler;
 pub mod sticker;
 pub mod streaming;
+pub mod token_fingerprint;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
@@ -65,8 +66,14 @@ pub struct TelegramChannel {
     bot_instances: Vec<bot_instance::BotInstance>,
     /// `ToolCatalog` for building slash commands at startup
     tool_registry: Option<Arc<crate::tool_metadata::ToolCatalog>>,
-    /// Centralized access controller (pairing, allowlists, policies).
-    access: Arc<AccessController>,
+    /// Per-account access controllers, keyed by `account_id` (SW-1: each
+    /// account needs its own controller because they resolve against
+    /// different parts of the `ConfigResolver`).
+    access_by_account: std::collections::HashMap<String, Arc<AccessController>>,
+    /// Per-account token-fingerprint verdicts from the last `start()`,
+    /// surfaced to the doctor. The doctor reads this without touching the
+    /// vault, so an operator can spot a misroute without restarting.
+    token_fingerprint_verdicts: std::collections::HashMap<String, token_fingerprint::TokenFingerprintVerdict>,
     /// Per-conversation error cooldown and typing circuit breaker.
     error_cooldown: Arc<ErrorCooldown>,
     /// Persistent polling offset tracker (set via `set_offset_tracker`).
@@ -90,47 +97,26 @@ impl TelegramChannel {
             capabilities: Self::capabilities(),
         };
 
-        let resolver = ConfigResolver::from_v2(&config_v2);
-        let access_config = if let Some(first) = config_v2.accounts.first() {
-            resolver
-                .resolve(&first.id, 0, None)
-                .cloned()
-                .unwrap_or_else(|| ResolvedConfig {
-                    account_id: first.id.clone(),
-                    bot_token: first.bot_token.clone(),
-                    bot_username: first.bot_username.clone(),
-                    default_agent: first.default_agent.clone(),
-                    dm_policy: first.dm_policy.clone().unwrap_or_default(),
-                    group_policy: first.group_policy.clone().unwrap_or_default(),
-                    send_typing: first.send_typing.unwrap_or(true),
-                    allowed_users: first.allowed_users.clone().unwrap_or_default(),
-                    allowed_groups: first.allowed_groups.clone().unwrap_or_default(),
-                    streaming: first.streaming.clone().unwrap_or_default(),
-                    error_policy: first.error_policy.clone().unwrap_or_default(),
-                    max_retries: 3,
-                    html_fallback: first.html_fallback.unwrap_or(true),
-                    link_preview: first.link_preview.unwrap_or_default(),
-                })
+        let resolver = std::sync::Arc::new(ConfigResolver::from_v2(&config_v2));
+        // SW-1: each account gets its own controller. Most installs have a
+        // single account; multi-account installs (rare) now resolve
+        // independently.
+        let mut access_by_account = std::collections::HashMap::new();
+        if config_v2.accounts.is_empty() {
+            // No accounts: still build a controller so the channel boots; it
+            // returns Denied for everything.
+            access_by_account.insert(
+                "default".to_string(),
+                Arc::new(AccessController::new(resolver.clone(), "default")),
+            );
         } else {
-            ResolvedConfig {
-                account_id: "default".to_string(),
-                bot_token: String::new(),
-                bot_username: None,
-                default_agent: None,
-                dm_policy: Default::default(),
-                group_policy: Default::default(),
-                send_typing: true,
-                allowed_users: vec![],
-                allowed_groups: vec![],
-                streaming: Default::default(),
-                error_policy: Default::default(),
-                max_retries: 3,
-                html_fallback: true,
-                link_preview:
-                    crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
+            for account in &config_v2.accounts {
+                access_by_account.insert(
+                    account.id.clone(),
+                    Arc::new(AccessController::new(resolver.clone(), &account.id)),
+                );
             }
-        };
-        let access = Arc::new(AccessController::new(access_config));
+        }
 
         Self {
             info,
@@ -138,11 +124,12 @@ impl TelegramChannel {
             channel_state: ChannelState::new(100),
             bot_instances: Vec::new(),
             tool_registry: None,
-            access,
+            access_by_account,
+            token_fingerprint_verdicts: std::collections::HashMap::new(),
             error_cooldown: Arc::new(ErrorCooldown::new()),
             offset_tracker: None,
             state_db: None,
-            config_resolver: resolver,
+            config_resolver: (*resolver).clone(),
         }
     }
 
@@ -239,13 +226,61 @@ impl Channel for TelegramChannel {
                     link_preview: account.link_preview.unwrap_or_default(),
                 });
 
-            let mut instance = BotInstance::new(account, resolved_config);
+            let account_access = self
+                .access_by_account
+                .get(&account.id)
+                .cloned()
+                .expect(
+                    "start() runs after new() which inserts every account's \
+                     controller into access_by_account",
+                );
+            let mut instance = BotInstance::new(account, resolved_config, account_access.clone());
 
             // Group mention gate: only respond to addressed group messages when
             // the account opts in. The bot's live `@username` (authoritative,
             // from `get_me` below) is what the gate matches against.
             let require_mention = account.require_mention.unwrap_or(false);
             let bot_username_resolved: Option<String>;
+
+            // P0-C: token-fingerprint check. Opt-in via the config field; runs
+            // BEFORE `get_me()` so a wrong token is observable in the same
+            // diagnostic block as the connect attempt, not after a flurry of
+            // unrelated warnings. A mismatch is logged + remembered in the
+            // channel-level list for the doctor; the channel still starts so
+            // the operator gets a useful diagnostic, not a refuse-to-start
+            // that hides the actual misroute.
+            let verdict = token_fingerprint::TokenFingerprintVerdict::verify(
+                &account.id,
+                &account.bot_token,
+                account.token_fingerprint.as_deref(),
+            );
+            match &verdict {
+                token_fingerprint::TokenFingerprintVerdict::NotConfigured => {}
+                token_fingerprint::TokenFingerprintVerdict::Match { fingerprint_prefix, .. } => {
+                    tracing::info!(
+                        account_id = %account.id,
+                        fingerprint_prefix = %fingerprint_prefix,
+                        "Telegram token fingerprint matches configured value"
+                    );
+                }
+                token_fingerprint::TokenFingerprintVerdict::Mismatch {
+                    expected_prefix,
+                    actual_prefix,
+                    ..
+                } => {
+                    tracing::warn!(
+                        account_id = %account.id,
+                        expected_prefix = %expected_prefix,
+                        actual_prefix = %actual_prefix,
+                        "Telegram token fingerprint MISMATCH — the running bot_token does \
+                         not match the configured token_fingerprint; outbound messages will \
+                         hit the wrong account. Set/clear token_fingerprint or restore the \
+                         correct bot_token."
+                    );
+                    self.token_fingerprint_verdicts
+                        .insert(account.id.clone(), verdict.clone());
+                }
+            }
 
             // Verify bot token by getting bot info
             match instance.bot.get_me().await {
@@ -406,8 +441,8 @@ impl Channel for TelegramChannel {
             let channel_id = self.info.id.clone();
             let channel_id_for_cb = self.info.id.clone();
 
-            let access_clone = self.access.clone();
-            let access_for_cb = self.access.clone();
+            let access_clone = account_access.clone();
+            let access_for_cb = account_access;
 
             let state_db_for_sticker = self.state_db.clone();
 
@@ -428,6 +463,13 @@ impl Channel for TelegramChannel {
                         let user_id = msg.from.as_ref().map_or(0, |u| u.id.0 as i64);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
                         let chat_id = msg.chat.id.0;
+                        // Forum-topic id (or None for non-topic messages). The
+                        // inbound context already encodes topic into
+                        // conversation_id; we still need the raw thread_id here
+                        // so the access controller's resolver lookup actually
+                        // hits the per-topic override (SW-1).
+                        let thread_id_i32: Option<i32> =
+                            msg.thread_id.map(|t| t.0 .0);
 
                         // Group mention gate (pure, deterministic I/O filter — R4).
                         // Drops ambient group chatter that does not address the
@@ -466,7 +508,7 @@ impl Channel for TelegramChannel {
                             return Ok::<(), std::convert::Infallible>(());
                         }
 
-                        match access.check_message(user_id, chat_id, is_group) {
+                        match access.check_message(user_id, chat_id, thread_id_i32, is_group) {
                             AccessDecision::Allowed => {
                                 if let Some(mut inbound) = handlers::convert_message(
                                     &msg,
@@ -552,7 +594,7 @@ impl Channel for TelegramChannel {
                             let user_id_val = q.from.id.0 as i64;
 
                             let is_group = raw_chat_id < 0;
-                            let decision = access.check_message(user_id_val, raw_chat_id, is_group);
+                            let decision = access.check_message(user_id_val, raw_chat_id, thread_id_val, is_group);
                             if decision == AccessDecision::Allowed {
                                 let inbound = InboundMessage {
                                     id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", q.id)),
@@ -869,10 +911,12 @@ impl Channel for TelegramChannel {
             account_id: first.account_id.clone(),
             bot: first.bot.clone(),
             resolved_config: first.resolved_config.clone(),
+            access: first.access.clone(),
             offset_tracker: first.offset_tracker.clone(),
             shutdown_tx: None,
             is_healthy: first.is_healthy.clone(),
         };
+        let first_access = first.access.clone();
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
                 Arc::new(Self {
@@ -881,13 +925,17 @@ impl Channel for TelegramChannel {
                     channel_state: ChannelState::new(100),
                     bot_instances: vec![instance],
                     tool_registry: self.tool_registry.clone(),
-                    access: self.access.clone(),
+                    access_by_account: std::collections::HashMap::from([(
+                        first.account_id.clone(),
+                        first_access.clone(),
+                    )]),
+                    token_fingerprint_verdicts: self.token_fingerprint_verdicts.clone(),
                     error_cooldown: self.error_cooldown.clone(),
                     offset_tracker: self.offset_tracker.clone(),
                     state_db: self.state_db.clone(),
                     config_resolver: self.config_resolver.clone(),
                 }),
-                self.access.clone(),
+                first_access,
             ),
         ))
     }

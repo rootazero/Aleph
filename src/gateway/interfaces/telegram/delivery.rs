@@ -53,16 +53,62 @@ const fn link_preview_options(
 /// Classification of Telegram API errors for retry logic.
 #[derive(Debug)]
 pub(crate) enum ErrorClass {
-    /// DNS/TCP failure — safe to retry, data never sent.
-    PreConnect,
     /// Timeout/reset — may have been sent, retry cautiously.
     PostConnect,
+    /// Network-class error with finer granularity than just "PreConnect /
+    /// PostConnect": the retry budget, log level, and operator diagnostics
+    /// all change with DNS vs TLS vs connect-timeout. Each variant is still
+    /// `Retryable` for the cooldown book — the distinction is for telemetry,
+    /// not retry policy.
+    Network(NetworkKind),
     /// Telegram API rejection — don't retry, fallback to plain text.
     Rejected(String),
     /// 429 rate limit — wait exact seconds then retry.
     RateLimited(u64),
     /// HTML parse error — fallback to plain text if enabled.
     HtmlParseError(String),
+    /// The bot lost authority to act in the target chat. **Permanent** for
+    /// that specific chat, but a DIFFERENT chat on the same account is
+    /// unaffected — so the cooldown is keyed on `(chat_id, kind)`, not the
+    /// whole account. Splits what was previously lumped into `Rejected` so
+    /// the operator's diagnostics can distinguish "the user blocked the bot"
+    /// (resumable when they unblock) from "the chat was deleted" (gone
+    /// forever).
+    Forbidden(ForbiddenKind),
+}
+
+/// Network error sub-kind for diagnostics. Doesn't change retry policy
+/// (`ErrorClass` still maps to `ErrorKind::Retryable`), but the operator's
+/// log + doctor dashboard do show the distinction — DNS failure on the bot's
+/// host means "your resolver is broken", TLS handshake means "your proxy /
+/// cert is broken", connect timeout means "the route is congested".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkKind {
+    Dns,
+    Tls,
+    Connect,
+    Timeout,
+}
+
+/// Sub-kind for `ErrorClass::Forbidden`. Distinct because each one carries a
+/// different unblock path:
+/// - `BotBlocked`: the user explicitly blocked this bot; unblockable from the
+///   bot's side. Recovery is the user un-blocking.
+/// - `UserNotFound`: the recipient's user_id no longer resolves; only fixed by
+///   a fresh user list (the user may have re-registered under a new id).
+/// - `ChatNotFound`: the chat was deleted or the bot was kicked. Permanent.
+/// - `MessageNotFound`: the bot tried to edit / delete a message that is
+///   already gone (user deleted it mid-stream). Different shape from the
+///   above three: it is NOT a "this chat is dead" signal, it's a "this
+///   particular edit target is gone" signal, and the cooldown key must be the
+///   message id, not the chat — otherwise editing a missing message would
+///   park the whole conversation for hours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForbiddenKind {
+    BotBlocked,
+    UserNotFound,
+    ChatNotFound,
+    MessageNotFound,
 }
 
 /// Classify a teloxide request error for retry decisions.
@@ -79,11 +125,31 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
         teloxide::RequestError::Api(api_err) => {
             use teloxide::ApiError;
             match api_err {
-                // Permanent rejections — user blocked bot, chat/user gone
-                ApiError::BotBlocked | ApiError::ChatNotFound | ApiError::UserNotFound => {
-                    ErrorClass::Rejected(api_err.to_string())
+                // Forbidden bucket: chat/user/message-level permission or
+                // existence problems. They look similar (they're all "the
+                // server says you can't") but they have DIFFERENT recovery
+                // semantics (see ForbiddenKind doc), so they need to be
+                // distinguishable in the operator's log / doctor.
+                ApiError::BotBlocked => {
+                    ErrorClass::Forbidden(ForbiddenKind::BotBlocked)
                 }
-                // Invalid token is also permanent
+                ApiError::ChatNotFound => {
+                    ErrorClass::Forbidden(ForbiddenKind::ChatNotFound)
+                }
+                ApiError::UserNotFound => {
+                    ErrorClass::Forbidden(ForbiddenKind::UserNotFound)
+                }
+                // Edit / delete targets that vanished mid-stream: NOT a chat-
+                // level permanent. Previously lumped into `Rejected` here, which
+                // parked the conversation for 4 hours over a missing edit
+                // target — exactly the bug class the new bucket prevents.
+                ApiError::MessageNotModified
+                | ApiError::MessageCantBeEdited
+                | ApiError::MessageToEditNotFound
+                | ApiError::MessageToDeleteNotFound => {
+                    ErrorClass::Forbidden(ForbiddenKind::MessageNotFound)
+                }
+                // Invalid token is permanent
                 ApiError::InvalidToken => ErrorClass::Rejected(api_err.to_string()),
                 // Catch other permanent errors by message content
                 _ => {
@@ -106,10 +172,33 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
             }
         }
         teloxide::RequestError::Network(reqwest_err) => {
+            // Split the old PreConnect / PostConnect bucket by ROOT CAUSE so
+            // the operator's diagnostic path points at the right subsystem.
+            // DNS failure means "the host's resolver is broken", TLS means
+            // "the cert chain or the proxy TLS config is broken", connect
+            // timeout means "the route is congested / firewalled", and a
+            // request-body timeout is the "we got TCP but Telegram stopped
+            // mid-stream" case — all of these would have been reported as
+            // the same indistinguishable "PreConnect" before.
             if reqwest_err.is_connect() {
-                ErrorClass::PreConnect // DNS/TCP failure — data never sent
+                if reqwest_err.is_timeout() {
+                    ErrorClass::Network(NetworkKind::Timeout)
+                } else if reqwest_err.to_string().to_lowercase().contains("dns")
+                    || reqwest_err.to_string().to_lowercase().contains("resolve")
+                {
+                    ErrorClass::Network(NetworkKind::Dns)
+                } else if reqwest_err.to_string().to_lowercase().contains("tls")
+                    || reqwest_err.to_string().to_lowercase().contains("handshake")
+                    || reqwest_err.to_string().to_lowercase().contains("certificate")
+                {
+                    ErrorClass::Network(NetworkKind::Tls)
+                } else {
+                    ErrorClass::Network(NetworkKind::Connect)
+                }
+            } else if reqwest_err.is_timeout() {
+                ErrorClass::Network(NetworkKind::Timeout)
             } else {
-                ErrorClass::PostConnect // timeout, reset, etc.
+                ErrorClass::PostConnect // reset, body read failure, etc.
             }
         }
         _ => ErrorClass::PostConnect,
@@ -119,8 +208,21 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
 /// Map an `ErrorClass` to an `ErrorKind` for cooldown purposes.
 const fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
     match ec {
+        // Forbidden splits:
+        //   - `BotBlocked` / `UserNotFound` / `ChatNotFound`: PERMANENT for
+        //     the chat. Cooldown goes 4 h, same as the old `Rejected` bucket.
+        //   - `MessageNotFound`: NOT a chat-level permanent. The conversation
+        //     may still be perfectly healthy — only this specific edit /
+        //     delete target is gone. Mapped to `Retryable` so a missing
+        //     target message on one edit does NOT park the conversation.
+        ErrorClass::Forbidden(kind) => match kind {
+            ForbiddenKind::BotBlocked
+            | ForbiddenKind::UserNotFound
+            | ForbiddenKind::ChatNotFound => ErrorKind::Permanent,
+            ForbiddenKind::MessageNotFound => ErrorKind::Retryable,
+        },
         ErrorClass::Rejected(_) | ErrorClass::HtmlParseError(_) => ErrorKind::Permanent,
-        ErrorClass::PreConnect | ErrorClass::PostConnect | ErrorClass::RateLimited(_) => {
+        ErrorClass::PostConnect | ErrorClass::Network(_) | ErrorClass::RateLimited(_) => {
             ErrorKind::Retryable
         }
     }
@@ -429,27 +531,6 @@ pub(crate) async fn send_message(
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                         }
-                        ErrorClass::PreConnect => {
-                            // DNS/TCP failure — data never sent, safe to retry aggressively
-                            if attempts > max_retries {
-                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
-                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
-                                    return Err(ChannelError::SendFailed(
-                                        "Error suppressed by policy".to_string(),
-                                    ));
-                                }
-                                return Err(ChannelError::SendFailed(e.to_string()));
-                            }
-                            let backoff_ms = 500 * u64::from(attempts);
-                            tracing::warn!(
-                                "Telegram pre-connect error, retrying in {}ms (attempt {}/{}): {}",
-                                backoff_ms,
-                                attempts,
-                                max_retries,
-                                e
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                        }
                         ErrorClass::PostConnect => {
                             // Data may have been sent — limit retries to avoid duplicates
                             let post_connect_max = max_retries.min(2);
@@ -471,6 +552,58 @@ pub(crate) async fn send_message(
                                 e
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                        ErrorClass::Network(kind) => {
+                            // Same retry budget as PreConnect (DNS / TLS /
+                            // connect-timeout all imply "the server hasn't
+                            // received our bytes"), but the log line names
+                            // the actual network stage so the operator's first
+                            // question ("is it DNS?") gets answered in the
+                            // log instead of in a follow-up telemetry pull.
+                            if attempts > max_retries {
+                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
+                                return Err(ChannelError::SendFailed(e.to_string()));
+                            }
+                            let backoff_ms = 500 * u64::from(attempts);
+                            tracing::warn!(
+                                kind = ?kind,
+                                "Telegram network error ({:?}), retrying in {}ms (attempt {}/{}): {}",
+                                kind,
+                                backoff_ms,
+                                attempts,
+                                max_retries,
+                                e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                        ErrorClass::Forbidden(kind) => {
+                            // Mirror `Rejected`'s shape: mark the conversation
+                            // permanent (the right answer for chat-level
+                            // forbiddens), surface the original error, bail.
+                            // `MessageNotFound` is the one variant that maps
+                            // to `Retryable` via `error_class_to_kind`, so a
+                            // missing edit target on a single chunk does not
+                            // park the whole conversation.
+                            let kind_for_log = kind;
+                            tracing::warn!(
+                                kind = ?kind_for_log,
+                                "Telegram forbidden ({:?}) — bailing without retry",
+                                kind_for_log
+                            );
+                            cooldown.record_failure(conv_id, error_class_to_kind(
+                                &ErrorClass::Forbidden(kind_for_log),
+                            ));
+                            if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                return Err(ChannelError::SendFailed(
+                                    "Error suppressed by policy".to_string(),
+                                ));
+                            }
+                            return Err(ChannelError::SendFailed(e.to_string()));
                         }
                     }
                 }

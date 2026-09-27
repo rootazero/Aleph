@@ -748,8 +748,10 @@ impl InboundMessageRouter {
         let streaming = account.streaming.clone().unwrap_or_default();
 
         // Only use orchestrated emitter when new streaming features are explicitly enabled
-        if !streaming.draft_api_enabled
-            && !streaming.reasoning_lane_enabled
+        // (P1-A: `draft_api_enabled` was CUT — `sendMessageDraft` is not a
+        // generally-available Telegram API, so the orchestrator now lights
+        // up purely on reasoning_lane / status_reactions.)
+        if !streaming.reasoning_lane_enabled
             && streaming.status_reactions.processing.is_none()
             && streaming.status_reactions.tool_active.is_none()
             && streaming.status_reactions.complete.is_none()

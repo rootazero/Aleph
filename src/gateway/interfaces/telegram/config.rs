@@ -191,6 +191,7 @@ impl TelegramConfig {
             accounts: vec![TelegramAccountConfig {
                 id: "default".to_string(),
                 bot_token: self.bot_token.clone(),
+                token_fingerprint: None,
                 bot_username: self.bot_username.clone(),
                 default_agent: None,
                 // Resolve through the effective_* accessors so the legacy
