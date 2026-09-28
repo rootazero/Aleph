@@ -223,8 +223,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Pass the same cell the boot path fills once the `ToolCatalog` is
     /// populated (`agent_init`'s `command_parser_cell`). Sharing the cell —
     /// rather than each surface constructing its own parser — is what keeps
-    /// `command.execute`, `chat.send`, `agent.run` and this engine's fallback
-    /// answering `/foo` identically.
+    /// `chat.send`, `agent.run` and this engine's fallback answering `/foo`
+    /// identically.
     #[must_use]
     pub fn with_command_parser_cell(mut self, cell: crate::command::CommandParserCell) -> Self {
         self.command_parser = cell;

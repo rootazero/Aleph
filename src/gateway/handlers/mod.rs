@@ -343,13 +343,6 @@ impl HandlerRegistry {
         registry.register("commands.list", |req| async move {
             JsonRpcResponse::success(req.id, serde_json::json!({ "commands": [] }))
         });
-        registry.register("command.execute", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "command.execute requires ToolRegistry — wire in Gateway startup".to_string(),
-            )
-        });
 
         // User-level hooks file admin (`~/.aleph/hooks.json`).
         // No context needed — the handlers reach the extension manager
@@ -1393,6 +1386,19 @@ mod tests {
                 "{kept} has a client and must stay"
             );
         }
+    }
+
+    /// `command.execute` was a second face for what `chat.send` already does
+    /// with the same `CommandParser`, and no client ever called it. The
+    /// ToolCatalog-less base stub and the startup override both go.
+    #[test]
+    fn command_execute_is_not_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(!registry.has_method("command.execute"));
+        assert!(
+            registry.has_method("commands.list"),
+            "commands.list is the surviving face"
+        );
     }
 
     #[test]

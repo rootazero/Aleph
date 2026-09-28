@@ -22,10 +22,10 @@ pub struct ParsedCommand {
     /// `plugin:diag:ping`, `custom:3:translate`).
     ///
     /// `resolve_command` already knows the full id; carrying it here means
-    /// downstream consumers (the `command.execute` RPC, the channel fast-path
-    /// serializer) no longer reconstruct it lossily from `source_type` +
-    /// `command_name` — a reconstruction that silently dropped the MCP server,
-    /// plugin id, and custom rule-index segments.
+    /// the fast-path serializer (`serialize_parsed_command`, shared by
+    /// `chat.send` and the channel router) no longer reconstructs it lossily
+    /// from `source_type` + `command_name` — a reconstruction that silently
+    /// dropped the MCP server, plugin id, and custom rule-index segments.
     pub tool_id: String,
     /// Arguments after the command name
     pub arguments: Option<String>,

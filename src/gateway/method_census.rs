@@ -137,7 +137,6 @@ pub(crate) mod tests {
         ("clarification.resolve", Class::Open),
         ("cluster.deregister", Class::Admin),
         ("cluster.enroll", Class::Admin),
-        ("command.execute", Class::Open),
         ("commands.list", Class::Open),
         ("config.get", Class::Admin),
         ("config.get_tool_permissions", Class::Open),

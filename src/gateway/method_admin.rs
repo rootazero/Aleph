@@ -939,7 +939,6 @@ mod tests {
             "trace.tool_output",
             "gateway.metrics.run_concurrency",
             "session.compact",
-            "command.execute",
             "commands.list",
         ] {
             assert!(!method_requires_admin(m), "{m} must stay open to members");

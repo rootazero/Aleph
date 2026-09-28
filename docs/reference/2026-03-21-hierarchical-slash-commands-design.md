@@ -2,6 +2,7 @@
 
 > 日期: 2026-03-21
 > 状态: Draft
+> ⚠️ 2026-09-20：本文设计的 `command.execute` RPC 已 CUT——从未有客户端调用它；TUI / Panel / 频道一律经 `chat.send`（同一个 `CommandParser`）解析 `/cmd`，经 `commands.list` 枚举。下文对它的描述是历史设计，不是现状。
 
 ## 背景
 
