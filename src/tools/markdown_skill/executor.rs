@@ -687,7 +687,6 @@ mod tests {
                     evolution: None,
                     docker: None,
                 }),
-                openclaw: None,
             },
             markdown_content: String::new(),
         }

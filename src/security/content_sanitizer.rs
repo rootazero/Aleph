@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn scrub_covers_the_openclaw_parity_families() {
+    fn scrub_covers_the_llama_harmony_and_gemma_families() {
         // Llama tool-call / end-of-message, GPT-OSS harmony channels, Gemma
         // turns — the three families the original table lacked.
         for marker in [

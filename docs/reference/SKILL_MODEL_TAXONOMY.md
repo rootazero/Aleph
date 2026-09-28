@@ -11,7 +11,7 @@
 |-----------------|---------------|----------------|
 | Represent a skill the LLM can decide to follow (identity + content + invocation policy) | `SkillManifest` | `crate::domain::skill` |
 | Track which skills are installed on disk and where each one came from | `InstallRegistry` | `crate::bundled::manifest` |
-| Parse an OpenClaw-style Markdown CLI tool from a SKILL.md frontmatter | `AlephSkillSpec` *(deprecated — see below)* | `crate::tools::markdown_skill::spec` |
+| Parse a Markdown CLI tool (SKILL.md frontmatter with `metadata.aleph.input_hints`) | `AlephSkillSpec` *(deprecated — see below)* | `crate::tools::markdown_skill::spec` |
 | Tag a memory fact as "this is about a skill" | `NoteType::Skill` | `crate::memory::context::enums` |
 | Send a flat skill view over RPC / to the panel | `SkillInfo` | `crate::skill::compat` |
 
@@ -62,7 +62,7 @@ Renamed from `SkillManifest` in Phase 1 to eliminate the name collision with Lay
 
 ### Layer 3 — `markdown_skill::AlephSkillSpec` (deprecated)
 
-A second SKILL.md frontmatter parser, originally written for OpenClaw-style Markdown CLI tools. It overlaps with Layer 2's parser at the identity + content level and diverges on metadata (it carries `RequiresSpec`, `AlephExtensions { security, input_hints, docker }`, `OpenClawMetadata`).
+A second SKILL.md frontmatter parser for Markdown CLI tools. It overlaps with Layer 2's parser at the identity + content level and diverges on metadata (it carries `RequiresSpec` and `AlephExtensions { security, input_hints, docker }`; the upstream-dialect DTO it once carried was CUT 2026-09-20 — it had zero readers).
 
 **Status:** Deprecated as of 2026-05-20. New code MUST NOT use `AlephSkillSpec`. The conversion `impl From<&AlephSkillSpec> for SkillManifest` exists in `markdown_skill::spec` as the migration seam; lossy by design until Phase 2 absorbs the CLI-tool-specific fields onto `SkillManifest`.
 
@@ -95,9 +95,8 @@ Layers 0, 1, 2 are permanent. Layer 3 is a deprecated alias for Layer 2's parsin
 impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
     fn from(spec: &AlephSkillSpec) -> Self {
         // Currently lossy: only identity + content + description are mapped.
-        // SkillSource defaults to Global (matches typical clawhub install path).
-        // CLI-tool metadata (requires.bins, security, docker, input_hints,
-        // openclaw.*) is dropped until Phase 2 absorbs those onto SkillManifest.
+        // SkillSource defaults to Global (matches the typical ~/.aleph/skills install path).
+        // CLI-tool metadata (requires.bins, security, docker, input_hints) is dropped until Phase 2 absorbs those onto SkillManifest.
         …
     }
 }

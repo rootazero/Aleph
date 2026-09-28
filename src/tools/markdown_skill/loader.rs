@@ -163,7 +163,7 @@ impl SkillLoader {
             .metadata
             .aleph
             .as_ref()
-            .is_none_or(|a| matches!(a.security.sandbox, SandboxMode::Host)); // Default: OpenClaw style (host execution)
+            .is_none_or(|a| matches!(a.security.sandbox, SandboxMode::Host)); // Default: host execution
 
         if !is_host_mode {
             // Docker/VirtualFs mode: binary is in container, not on host

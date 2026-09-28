@@ -140,7 +140,7 @@ impl MarkdownCliTool {
                 super::spec::ConfirmationMode::Always | super::spec::ConfirmationMode::Write
             )
         } else {
-            false // OpenClaw skills default to no confirmation
+            false // No `metadata.aleph.security` block ⇒ no confirmation gate (default)
         }
     }
 
