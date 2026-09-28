@@ -300,7 +300,7 @@ model. State the fact; let it judge.
 | `connect` | LAN-trust handshake (no auth; always `operator`) |
 | `pairing.*` | `list`, `approve`, `reject` — **channel** sender approval (iMessage/Telegram unknown senders), not device auth |
 | `interface.*` | `status`, `config` |
-| `mcp.*` | `start`, `stop`, `list`, `call` |
+| `mcp.*` | `list`, `list_pending_approvals`, `respond_approval`, `cancel_approval` — persistent server CRUD is `mcp_config.*`; the eleven lifecycle / aggregation verbs (`add`…`restart`, `tools`/`resources`/`prompts`) were cut 2026-09-20 (zero clients) |
 | `plugins.*` | `install`, `uninstall`, `list`, `enable`, `disable` |
 | `skills.*` | `list`, `install`, `activate` |
 | `runs.*` | `list`, `status`, `wait`, `queue` |

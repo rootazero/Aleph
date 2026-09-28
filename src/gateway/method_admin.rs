@@ -228,7 +228,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     "extensions.", // Aleph Hub install surface (catalog/installed/toggle/
     // uninstall/disclosure/install) — replaces the brief's placeholder
     // `hub.`, which no registered method matches.
-    "mcp.",        // MCP server lifecycle (add/update/delete/start/stop/restart/…).
+    "mcp.",        // MCP server inventory (`mcp.list`) + the three approval verbs.
     "mcp_config.", // MCP Settings-page CRUD against the vault.
     "skills.",     // skill install/update/remove (status/update/install_dep/remove).
     "bundled.",    // bundled.sync — re-syncs the official skills/plugins snapshot.
@@ -725,7 +725,7 @@ mod tests {
             "logs.setLevel",
             // extension / capability install
             "extensions.install",
-            "mcp.add",
+            "mcp.list",
             "mcp_config.create",
             "skills.remove",
             "bundled.sync",

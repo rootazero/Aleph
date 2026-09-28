@@ -2,7 +2,7 @@ use super::GatewayServer;
 
 use alephcore::mcp::McpManagerHandle;
 
-/// Register the `mcp.*` server-management JSON-RPC handlers against a live
+/// Register the `mcp.list` JSON-RPC handler against a live
 /// [`McpManagerHandle`].
 ///
 /// `McpManagerHandle` is itself cheap to clone (it wraps channel senders), so
@@ -10,7 +10,7 @@ use alephcore::mcp::McpManagerHandle;
 /// `Arc`-wrapped context and would force a needless double-Arc here.
 ///
 /// Called from `start_server()` only when the MCP manager actor spawned
-/// successfully; if it did not, these methods stay unregistered and the
+/// successfully; if it did not, the method stays unregistered and the
 /// gateway returns a standard method-not-found error.
 pub(in crate::commands::start) fn register_mcp_handlers(
     server: &mut GatewayServer,
@@ -28,21 +28,12 @@ pub(in crate::commands::start) fn register_mcp_handlers(
         }};
     }
 
-    // Lifecycle
+    // `mcp.list` is the only server-management verb with a client (the CLI's
+    // `doctor`). The other eleven (`add/update/delete/status/logs/start/stop/
+    // restart`, `tools/resources/prompts`) were cut 2026-09-20: zero clients;
+    // persistent CRUD lives on `mcp_config.*`, the model already sees prompts /
+    // resources through `mcp_list_*` tools and tools through the catalog.
     reg!("mcp.list", mcp::handle_list);
-    reg!("mcp.add", mcp::handle_add);
-    reg!("mcp.update", mcp::handle_update);
-    reg!("mcp.delete", mcp::handle_delete);
-    reg!("mcp.status", mcp::handle_status);
-    reg!("mcp.logs", mcp::handle_logs);
-    reg!("mcp.start", mcp::handle_start);
-    reg!("mcp.stop", mcp::handle_stop);
-    reg!("mcp.restart", mcp::handle_restart);
-
-    // Capability aggregation
-    reg!("mcp.tools", mcp::handle_list_tools);
-    reg!("mcp.resources", mcp::handle_list_resources);
-    reg!("mcp.prompts", mcp::handle_list_prompts);
 }
 
 /// Register the Settings-page MCP CRUD handlers (`mcp_config.*`) against the
@@ -112,5 +103,35 @@ pub(in crate::commands::start) fn register_mcp_config_handlers(
                 let event_bus = event_bus.clone();
                 async move { mcp_config::handle_delete(req, handle, event_bus).await }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The eleven `mcp.*` management / aggregation RPCs had zero clients
+    /// (user ruling 2026-09-20). Only `mcp.list` — the CLI's `doctor` calls
+    /// it — is registered from this file. Source-level because
+    /// `register_mcp_handlers` needs a live actor to run.
+    #[test]
+    fn only_mcp_list_is_registered_here() {
+        let src = include_str!("mcp.rs");
+        // Production half only: this test's own text names the macro.
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let registered: Vec<&str> = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("reg!("))
+            .collect();
+        assert_eq!(
+            registered.len(),
+            1,
+            "exactly one reg!() line expected (mcp.list); found:\n{}",
+            registered.join("\n")
+        );
+        assert!(
+            registered[0].contains("\"mcp.list\""),
+            "the surviving registration must be mcp.list, got: {}",
+            registered[0]
+        );
     }
 }
