@@ -797,4 +797,36 @@ mod tests {
         );
         assert!(matches!(action, CommandAction::AckOnly));
     }
+
+    #[test]
+    fn dispatch_approval_approve_session_tier_round_trips() {
+        // ApprovalBridge::build_approval_keyboard emits
+        // `approve:<id>:<decision>` for each offered tier (once, session,
+        // always, deny). The round-trip must preserve the tier so the
+        // approval sink sees `Session` instead of the default `Once`.
+        // R2 D4: cover the Session tier explicitly because the typed
+        // format from ApprovalBridge is the wire shape the dispatcher
+        // sees in production — dropping the tier would silently
+        // downgrade operator decisions.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "approve:req-42:session",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(
+                    msg.text,
+                    "approve:req-42:session",
+                    "session tier must round-trip; dispatcher must not default to :once"
+                );
+            }
+            CommandAction::AckOnly => panic!("session-tier approval must Forward"),
+        }
+    }
 }
