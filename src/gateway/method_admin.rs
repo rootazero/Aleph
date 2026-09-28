@@ -232,10 +232,12 @@ const ADMIN_PREFIXES: &[&str] = &[
     "mcp_config.", // MCP Settings-page CRUD against the vault.
     "skills.",     // skill install/update/remove (status/update/install_dep/remove).
     "bundled.",    // bundled.sync — re-syncs the official skills/plugins snapshot.
-    "plugins.",    // plugin lifecycle, legacy plural namespace.
-    "plugin.",     // plugin lifecycle, canonical singular namespace (both registered).
-    "hooks.",      // server-wide hook file admin (~/.aleph/hooks.json).
-    "runtimes.",   // sandbox/runtime capability install (list/refresh/install).
+    "plugins.",    // plugin lifecycle, plural namespace — the one every client calls.
+    "plugin.",     // plugin lifecycle, singular namespace — only the verbs with a
+    // client survive here (install/uninstall/update/reload, marketplace.*); the
+    // rest were cut 2026-09-20 (both prefixes still registered, so both stay Admin).
+    "hooks.",    // server-wide hook file admin (~/.aleph/hooks.json).
+    "runtimes.", // sandbox/runtime capability install (list/refresh/install).
     // --- Agent-persona / shared config (server-global, not per-user) ---
     "identity.", // agent SOUL.md / persona file admin (get/set/clear/list).
     "moa.",      // shared mixture-of-agents presets (save/delete/setDefault/…) —

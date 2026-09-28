@@ -231,6 +231,17 @@ mod tests {
     /// shipped ungated while every `plugin.*` RPC was closed. Each pair names
     /// a method the census pins as registered, so a renamed family goes red in
     /// `method_census` rather than silently making a row here vacuous.
+    ///
+    /// `method_requires_admin` is a prefix match against `ADMIN_PREFIXES`
+    /// (`method_admin.rs`) — it says nothing about whether `rpc` is a method
+    /// anything actually dispatches to. A row can be repointed to a
+    /// never-registered name that merely shares an admin-gated prefix (this
+    /// happened to this exact row: `plugin.enable` stopped being registered
+    /// the day it was cut, and the precondition above stayed green throughout
+    /// because `"plugin."` is still an `ADMIN_PREFIXES` entry). So the first
+    /// assertion below checks the fact the precondition's own doc comment
+    /// claims to guard: `rpc` must be live in the real dispatch table, not
+    /// merely prefix-shaped like one.
     #[test]
     fn every_tool_face_of_an_admin_rpc_family_is_operator_gated() {
         // (builtin tool name, a registered method of the RPC family it duplicates)
@@ -243,7 +254,31 @@ mod tests {
             ("node_manage", "cluster.enroll"),
             ("runtime_manage", "runtimes.install"),
         ];
+        // `HandlerRegistry::new()` only reflects registrations made at
+        // construction time, inside the `alephcore` library crate. A few RPC
+        // methods are wired only at server boot, from the separate
+        // `aleph-server` BINARY crate (`register_core_handlers` and friends
+        // under `src/bin/aleph-server/commands/start/builder/handlers/`) —
+        // the same cross-crate shape `test_identity_handlers_not_registered_
+        // until_boot` documents for `identity.*`. A test running inside
+        // `alephcore` cannot construct that binary crate's server, so it
+        // cannot ask `has_method` about those names; each is named here,
+        // with its registration site, rather than silently skipped.
+        const BOOT_ONLY_RPCS: &[&str] = &[
+            // src/bin/aleph-server/commands/start/builder/handlers/core.rs
+            // (`register_core_handlers`), not `HandlerRegistry::new()`.
+            "cluster.enroll",
+        ];
+        let registry = crate::gateway::handlers::HandlerRegistry::new();
         for (tool, rpc) in TOOL_FACES {
+            if !BOOT_ONLY_RPCS.contains(rpc) {
+                assert!(
+                    registry.has_method(rpc),
+                    "`{rpc}` is not a registered RPC method — the pairing with \
+                     `{tool}` must point at a method the dispatch table actually \
+                     serves, or the admin-gated precondition below proves nothing"
+                );
+            }
             assert!(
                 super::super::method_admin::method_requires_admin(rpc),
                 "precondition: `{rpc}` is supposed to be the admin-gated RPC \
