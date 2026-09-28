@@ -5,7 +5,7 @@
 //! The handle provides a thread-safe interface for:
 //! - Server lifecycle management (add, remove, start, stop, restart)
 //! - Querying server state and capabilities
-//! - Aggregating tools, resources, and prompts across all servers
+//! - Aggregating server-provided instructions across healthy servers
 //! - Subscribing to manager events
 
 use crate::sync_primitives::Arc;
@@ -16,7 +16,7 @@ use super::types::{
     McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo, McpServerStatusDetail,
 };
 use crate::error::{AlephError, Result};
-use crate::mcp::{McpClient, McpPrompt, McpResource, McpTool};
+use crate::mcp::McpClient;
 
 /// Handle for interacting with the MCP Manager actor
 ///
@@ -291,53 +291,7 @@ impl McpManagerHandle {
             .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
-    // ===== Aggregation Methods (P1) =====
-
-    /// Get aggregated tools from all healthy servers
-    ///
-    /// Tools are collected from all running servers and returned as a flat list.
-    /// Each tool name is prefixed with the server ID to avoid conflicts.
-    pub async fn aggregate_tools(&self) -> Result<Vec<McpTool>> {
-        let (respond_to, rx) = oneshot::channel();
-
-        self.tx
-            .send(McpCommand::AggregateTools { respond_to })
-            .await
-            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
-
-        rx.await
-            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
-    }
-
-    /// Get aggregated resources from all healthy servers
-    ///
-    /// Resources are collected from all running servers and returned as a flat list.
-    pub async fn aggregate_resources(&self) -> Result<Vec<McpResource>> {
-        let (respond_to, rx) = oneshot::channel();
-
-        self.tx
-            .send(McpCommand::AggregateResources { respond_to })
-            .await
-            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
-
-        rx.await
-            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
-    }
-
-    /// Get aggregated prompts from all healthy servers
-    ///
-    /// Prompts are collected from all running servers and returned as a flat list.
-    pub async fn aggregate_prompts(&self) -> Result<Vec<McpPrompt>> {
-        let (respond_to, rx) = oneshot::channel();
-
-        self.tx
-            .send(McpCommand::AggregatePrompts { respond_to })
-            .await
-            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
-
-        rx.await
-            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
-    }
+    // ===== Aggregation =====
 
     /// Get aggregated server-provided `instructions` from all healthy servers.
     ///
