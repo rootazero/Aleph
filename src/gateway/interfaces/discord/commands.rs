@@ -42,6 +42,11 @@
 
 use std::fmt;
 
+use chrono::Utc;
+
+use crate::gateway::channel::{
+    ChannelId, ConversationId, InboundMessage, MessageId, UserId, CB_MESSAGE_ID_PREFIX,
+};
 use crate::security::audit::{global as audit_global, AuditEntry, AuditEventType};
 
 /// Emit an `AuthorityChange` audit row for a slash-command dispatch.
@@ -354,6 +359,197 @@ impl Default for CommandRegistry {
     }
 }
 
+/// What [`dispatch_component_click`] decided to do with a Discord
+/// `custom_id`. The serenity handler turns these into channel sends +
+/// ACK calls; the function is exposed as a pure seam so integration
+/// tests don't need to construct a full `ComponentInteraction` (the
+/// serenity type has many private fields and mocking it is brittle).
+///
+/// **D1 rationale:** the previous `handle_component` always forwarded
+/// the raw `custom_id` to `inbound_tx`. This typed enum is the
+/// behaviour-preserving replacement: `Forward` still feeds the inbound
+/// router (which intercepts by `cb_` prefix and routes to the approval
+/// sink), `AckOnly` drops the click silently when the dispatcher said
+/// nothing useful should happen.
+#[derive(Debug, Clone)]
+pub enum CommandAction {
+    /// Forward as an inbound message. The inbound router's `cb_`
+    /// prefix intercept handles approval clicks by routing them to the
+    /// approval sink. The reconstructed `text` is in
+    /// `ApprovalBridge::parse_callback` format so the sink can resolve
+    /// the click. Boxed to keep the enum small relative to `AckOnly`
+    /// (clippy::large_enum_variant).
+    Forward(Box<InboundMessage>),
+    /// ACK the interaction without sending anything to the inbound
+    /// router. Used when the registry returned `AckNoReply` or
+    /// `Rejected` (the latter is a defensive fallback — the parser
+    /// already ran before the registry).
+    AckOnly,
+}
+
+/// Build an `InboundMessage` carrying `text` as the callback data.
+///
+/// Centralises the field shape (id prefix, channel id, no attachments,
+/// fresh timestamp) so the parse-error and unknown-kind fallback paths
+/// stay in lockstep with the typed Forward path. `interaction_id` is
+/// the serenity interaction id (used for the `cb_<id>` prefix that
+/// the inbound router matches on).
+fn legacy_inbound(
+    text: &str,
+    sender_id: &str,
+    sender_name: Option<&str>,
+    interaction_id: u64,
+    conversation_id: ConversationId,
+    is_group: bool,
+) -> InboundMessage {
+    InboundMessage {
+        id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{interaction_id}")),
+        channel_id: ChannelId::new("discord"),
+        conversation_id,
+        sender_id: UserId::new(sender_id),
+        sender_name: sender_name.map(String::from),
+        text: text.to_string(),
+        attachments: vec![],
+        timestamp: Utc::now(),
+        reply_to: None,
+        is_group,
+        raw: None,
+        metadata: vec![],
+    }
+}
+
+/// Decide what the serenity `handle_component` should do with a button
+/// click.
+///
+/// Three layered fallbacks preserve the legacy `handle_component`
+/// behaviour:
+///
+/// 1. **Parse failure** (e.g. empty kind, empty payload) →
+///    `Forward(raw custom_id)`. The raw string is forwarded so an
+///    operator can diagnose the malformed shape.
+///
+/// 2. **Legacy no-colon shape** (codec parsed as
+///    `Unknown(<whole string>)` with empty payload) → `Forward(raw
+///    custom_id)`. Old bots that still emit `cb_<message_id>` style
+///    strings land here; the previous `handle_component` forwarded
+///    these as raw text and the inbound router's `cb_` prefix
+///    intercept did the routing. We can't let the codec's Unknown
+///    catch-all swallow them (Review Focus #3 — legacy `cb_<id>` bots
+///    must keep working).
+///
+/// 3. **Unknown kind, no `Callback` handler** (empty registry) →
+///    `Forward(raw custom_id)`. The agent loop sees the click instead
+///    of it being silently swallowed (mirrors the old behaviour where
+///    every `custom_id` became text).
+///
+/// 4. **Unknown kind, `Callback` handler registered** (the
+///    `with_defaults()` case) → `AckOnly`. The Callback handler
+///    returned `AckNoReply`; nothing useful should happen.
+///
+/// For typed kinds:
+/// - `ApprovalApprove` / `ApprovalDeny` → `Forward(reconstructed callback_data)`.
+///   The reconstruction depends on the payload shape:
+///   - `ComponentKind` payload `<id>:<decision>` (legacy multi-tier
+///     format from `ApprovalBridge::build_approval_keyboard`) →
+///     `to_wire()` round-trips the full `approve:<id>:<decision>`
+///     shape unchanged.
+///   - `ComponentKind` payload `<id>` (the new typed `D4` format)
+///     → append `:once` or `:deny` so `ApprovalBridge::parse_callback`
+///     matches. The decision tier defaults to AllowOnce for Approve
+///     and Deny for Deny.
+///
+/// `sender_id` / `sender_name` propagate into the forwarded inbound so
+/// the inbound router's originator gate and the audit trail have a
+/// real actor. `interaction_id` becomes the `cb_<id>` suffix (the
+/// router matches the prefix, not the suffix).
+#[must_use]
+pub fn dispatch_component_click(
+    registry: &CommandRegistry,
+    custom_id: &str,
+    sender_id: &str,
+    sender_name: Option<&str>,
+    interaction_id: u64,
+    conversation_id: ConversationId,
+    is_group: bool,
+) -> CommandAction {
+    let id = match ComponentId::parse(custom_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return CommandAction::Forward(Box::new(legacy_inbound(
+                custom_id,
+                sender_id,
+                sender_name,
+                interaction_id,
+                conversation_id,
+                is_group,
+            )));
+        }
+    };
+
+    // Legacy `cb_<message_id>` style strings (no `:`) parse as
+    // `Unknown(<whole string>)` with empty payload. The codec
+    // documents this as Discord's "raw callback" pattern, but the
+    // previous handler forwarded them as text. Keep doing that —
+    // routing them through the registry's Callback fallback would
+    // AckOnly-swalllow clicks that bots depend on for approval
+    // resolution (Review Focus #3).
+    let is_legacy_no_colon = matches!(&id.kind, ComponentKind::Unknown(k) if k == custom_id)
+        && id.payload.is_empty();
+    if is_legacy_no_colon {
+        return CommandAction::Forward(Box::new(legacy_inbound(
+            custom_id,
+            sender_id,
+            sender_name,
+            interaction_id,
+            conversation_id,
+            is_group,
+        )));
+    }
+
+    match registry.dispatch(&id) {
+        Some(DispatchOutcome::ForwardToApproval) => {
+            // Reconstruct the callback_data that
+            // `ApprovalBridge::parse_callback` understands. Two
+            // wire-format shapes can reach this branch:
+            //
+            // - Legacy multi-tier: custom_id = `approve:<id>:<decision>`,
+            //   id.payload = `<id>:<decision>` (contains a colon).
+            //   `to_wire()` gives the right shape.
+            // - New typed (D4): custom_id = `approve:<id>`,
+            //   id.payload = `<id>` (no colon). Append `:once` or
+            //   `:deny` so the sink has a parseable tier.
+            let callback_data = match id.kind {
+                ComponentKind::ApprovalApprove if !id.payload.contains(':') => {
+                    format!("approve:{}:once", id.payload)
+                }
+                ComponentKind::ApprovalDeny if !id.payload.contains(':') => {
+                    format!("approve:{}:deny", id.payload)
+                }
+                _ => id.to_wire(),
+            };
+            CommandAction::Forward(Box::new(legacy_inbound(
+                &callback_data,
+                sender_id,
+                sender_name,
+                interaction_id,
+                conversation_id,
+                is_group,
+            )))
+        }
+        Some(DispatchOutcome::AckNoReply) | Some(DispatchOutcome::Rejected(_)) => {
+            CommandAction::AckOnly
+        }
+        None => CommandAction::Forward(Box::new(legacy_inbound(
+            custom_id,
+            sender_id,
+            sender_name,
+            interaction_id,
+            conversation_id,
+            is_group,
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +673,160 @@ mod tests {
         let id = ComponentId::parse("approve:chan:msg-1").unwrap();
         assert_eq!(id.kind, ComponentKind::ApprovalApprove);
         assert_eq!(id.payload, "chan:msg-1");
+    }
+
+    // ----- dispatch_component_click tests (R2 D1) -----
+    //
+    // The legacy `cb_<id>` fallback is the contract Review Focus #3
+    // called out. Without them the dispatcher would happily AckNo-clud-slow
+    // legacy bots' approval resolutions and there would be no test to
+    // catch it.
+
+    fn conv() -> ConversationId {
+        ConversationId::new("chan-1")
+    }
+
+    #[test]
+    fn dispatch_legacy_cb_id_forwards_raw_custom_id() {
+        // Old bot emits "cb_<message_id>" with no colon. The codec parses
+        // this as Unknown(<whole>) with empty payload; Review Focus #3
+        // requires the dispatcher NOT swallow it as AckNoReply.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "cb_msg-123",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                // The inbound router matches on the cb_ prefix; the
+                // raw custom_id must be in `text` for routing to work.
+                assert_eq!(msg.text, "cb_msg-123");
+                assert!(msg.id.0.starts_with(CB_MESSAGE_ID_PREFIX));
+                assert!(msg.is_group);
+            }
+            CommandAction::AckOnly => panic!("legacy cb_<id> must not AckOnly"),
+        }
+    }
+
+    #[test]
+    fn dispatch_approval_approve_reconstructs_callback_data() {
+        // D4 typed format: "approve:<id>" (no decision tier). The sink
+        // expects `approve:<id>:<decision>`; dispatcher appends :once.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "approve:msg-7",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "approve:msg-7:once");
+            }
+            CommandAction::AckOnly => panic!("approval approve must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_approval_deny_reconstructs_callback_data() {
+        // Same as approve but :deny tier.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "deny:msg-7",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "approve:msg-7:deny");
+            }
+            CommandAction::AckOnly => panic!("approval deny must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_kind_without_callback_handler_forwards_raw() {
+        // Empty registry (no Callback). Unknown kinds fall through to
+        // Forward so the agent loop sees the click instead of a silent
+        // AckOnly — mirrors the legacy handle_component forwarding the raw
+        // custom_id.
+        let r = CommandRegistry::new();
+        let action = dispatch_component_click(
+            &r,
+            "mystery:x",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "mystery:x");
+            }
+            CommandAction::AckOnly => panic!("empty-registry unknown must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_kind_with_callback_handler_acks_only() {
+        // Registry with Callback registered → Unknown kinds defer to
+        // AckNoReply via the dispatcher (via with_defaults path which
+        // also registers Callback).
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "mystery:x",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        assert!(matches!(action, CommandAction::AckOnly));
+    }
+
+    #[test]
+    fn dispatch_approval_approve_session_tier_round_trips() {
+        // ApprovalBridge::build_approval_keyboard emits
+        // `approve:<id>:<decision>` for each offered tier (once, session,
+        // always, deny). The round-trip must preserve the tier so the
+        // approval sink sees `Session` instead of the default `Once`.
+        // R2 D4: cover the Session tier explicitly because the typed
+        // format from ApprovalBridge is the wire shape the dispatcher
+        // sees in production — dropping the tier would silently
+        // downgrade operator decisions.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "approve:req-42:session",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(
+                    msg.text,
+                    "approve:req-42:session",
+                    "session tier must round-trip; dispatcher must not default to :once"
+                );
+            }
+            CommandAction::AckOnly => panic!("session-tier approval must Forward"),
+        }
     }
 }
