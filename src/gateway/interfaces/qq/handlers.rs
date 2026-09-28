@@ -67,9 +67,9 @@ fn convert_attachment(att: &QQAttachment) -> Attachment {
         url: Some(att.url.clone()),
         path: None,
         data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        }
+        is_voice_note: false,
+        is_video_note: false,
+    }
 }
 
 fn strip_mention(content: &str) -> String {

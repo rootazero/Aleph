@@ -7,7 +7,6 @@
 //! retrieval-time reinforcement so frequently-recalled notes float to the top
 //! (hot-surfacing); the dream daemon's co-recall / hit-rate metrics read the same rows.
 
-
 use chrono::Utc;
 use rusqlite::params;
 use sha2::{Digest, Sha256};

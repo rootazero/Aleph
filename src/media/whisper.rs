@@ -156,15 +156,12 @@ impl TranscriptionService for WhisperTranscription {
             {
                 options.custom_flags(libc::O_NOFOLLOW);
             }
-            let mut file = options
-                .open(&audio.local_path)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to open audio file {}: {e}",
-                        audio.local_path.display()
-                    )
-                })?;
+            let mut file = options.open(&audio.local_path).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to open audio file {}: {e}",
+                    audio.local_path.display()
+                )
+            })?;
             let mut bytes = Vec::with_capacity(audio.size as usize);
             file.read_to_end(&mut bytes).await.map_err(|e| {
                 anyhow::anyhow!(

@@ -22,24 +22,22 @@ impl WaOutbound {
         msg_id: &str,
         emoji: &str,
     ) -> ChannelResult<()> {
-        runtime.send_reaction(jid, msg_id, emoji).await.map_err(|e| {
-            crate::gateway::channel::ChannelError::Internal(format!("send_reaction: {e}"))
-        })
+        runtime
+            .send_reaction(jid, msg_id, emoji)
+            .await
+            .map_err(|e| {
+                crate::gateway::channel::ChannelError::Internal(format!("send_reaction: {e}"))
+            })
     }
 
-    pub async fn mark_read(
-        runtime: &Arc<dyn WaRuntime>,
-        msg_id: &str,
-    ) -> ChannelResult<()> {
-        runtime.mark_read(msg_id).await.map_err(|e| {
-            crate::gateway::channel::ChannelError::Internal(format!("mark_read: {e}"))
-        })
+    pub async fn mark_read(runtime: &Arc<dyn WaRuntime>, msg_id: &str) -> ChannelResult<()> {
+        runtime
+            .mark_read(msg_id)
+            .await
+            .map_err(|e| crate::gateway::channel::ChannelError::Internal(format!("mark_read: {e}")))
     }
 
-    pub async fn send_typing(
-        runtime: &Arc<dyn WaRuntime>,
-        jid: &str,
-    ) -> ChannelResult<()> {
+    pub async fn send_typing(runtime: &Arc<dyn WaRuntime>, jid: &str) -> ChannelResult<()> {
         runtime.send_typing(jid).await.map_err(|e| {
             crate::gateway::channel::ChannelError::Internal(format!("send_typing: {e}"))
         })

@@ -140,9 +140,9 @@ async fn test_unknown_type_placeholder() {
         url: None,
         path: None,
         data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        };
+        is_voice_note: false,
+        is_video_note: false,
+    };
     let session_id = "multimodal-probe-unknown-type";
 
     let blocks = processor.process(&[att], true, session_id, "run-4").await;
@@ -214,8 +214,9 @@ async fn test_download_failure_graceful() {
         url: None,
         path: None,
         data: None, // no source at all,
-            is_voice_note: false,
-            is_video_note: false,};
+        is_voice_note: false,
+        is_video_note: false,
+    };
     let session_id = "multimodal-probe-download-fail";
 
     let blocks = processor.process(&[att], true, session_id, "run-6").await;

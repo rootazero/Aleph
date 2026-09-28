@@ -202,7 +202,9 @@ impl FakeWaRuntime {
     pub async fn emit_disconnected(&self, _reason: impl Into<String>) -> Result<(), ()> {
         self.inner
             .event_tx
-            .send(WaEvent::Disconnected(whatsapp_rust::types::events::Disconnected))
+            .send(WaEvent::Disconnected(
+                whatsapp_rust::types::events::Disconnected,
+            ))
             .await
             .map_err(|_| ())
     }
@@ -289,7 +291,10 @@ impl FakeWaRuntime {
         // `take_event_receiver` is in flight we report the previous
         // state — tests that care about exact timing call
         // `wait_for_pairing_state` instead.
-        self.event_rx.try_lock().map(|g| g.is_none()).unwrap_or(false)
+        self.event_rx
+            .try_lock()
+            .map(|g| g.is_none())
+            .unwrap_or(false)
     }
 }
 

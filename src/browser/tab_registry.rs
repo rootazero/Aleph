@@ -689,7 +689,12 @@ mod tests {
     #[test]
     fn tab_gone_is_structured_not_a_last_row_guess() {
         let reg = TabRegistry::new();
-        reg.record_identity("p", "t1", Some("TARGET-1".into()), Some("https://a/".into()));
+        reg.record_identity(
+            "p",
+            "t1",
+            Some("TARGET-1".into()),
+            Some("https://a/".into()),
+        );
         // After re-attach the target is gone; the registry must NOT fall back to
         // "last listed row".
         let err = reg.resolve_identity("p", "t1", &[]).unwrap_err();
@@ -715,7 +720,9 @@ mod tests {
     #[test]
     fn unknown_tab_id_says_so_instead_of_tab_gone() {
         let reg = TabRegistry::new();
-        let err = reg.resolve_identity("p", "t9", &["TARGET-2".to_string()]).unwrap_err();
+        let err = reg
+            .resolve_identity("p", "t9", &["TARGET-2".to_string()])
+            .unwrap_err();
         assert!(matches!(err, BrowserError::TabNotFound(_)));
     }
 
@@ -724,7 +731,12 @@ mod tests {
     #[test]
     fn a_live_target_resolves_to_what_was_recorded() {
         let reg = TabRegistry::new();
-        reg.record_identity("p", "t1", Some("TARGET-1".into()), Some("https://a/".into()));
+        reg.record_identity(
+            "p",
+            "t1",
+            Some("TARGET-1".into()),
+            Some("https://a/".into()),
+        );
         let id = reg
             .resolve_identity("p", "t1", &["TARGET-1".to_string(), "TARGET-2".to_string()])
             .expect("the target is live");
@@ -761,7 +773,12 @@ mod tests {
         assert_eq!(id.target_id.as_deref(), Some("TARGET-1"));
         assert_eq!(id.last_url.as_deref(), Some("https://a/"));
         // …and a fresh observation of either half DOES overwrite that half.
-        reg.record_identity("p", "t1", Some("TARGET-1".into()), Some("https://b/".into()));
+        reg.record_identity(
+            "p",
+            "t1",
+            Some("TARGET-1".into()),
+            Some("https://b/".into()),
+        );
         assert_eq!(reg.last_url("p", "t1").as_deref(), Some("https://b/"));
     }
 
@@ -784,7 +801,12 @@ mod tests {
     #[test]
     fn a_deliberately_closed_tab_is_forgotten_not_reported_gone() {
         let reg = TabRegistry::new();
-        reg.record_identity("p", "t1", Some("TARGET-1".into()), Some("https://a/".into()));
+        reg.record_identity(
+            "p",
+            "t1",
+            Some("TARGET-1".into()),
+            Some("https://a/".into()),
+        );
         reg.forget("p", "t1");
         let err = reg.resolve_identity("p", "t1", &[]).unwrap_err();
         assert!(matches!(err, BrowserError::TabNotFound(_)));

@@ -180,7 +180,8 @@ mod tests {
                 link_preview: None,
                 proxy_url: None,
                 groups: vec![],
-            token_fingerprint: None,}],
+                token_fingerprint: None,
+            }],
         };
         let resolver = ConfigResolver::from_v2(&v2);
         let resolved = resolver.resolve("main", 0, None).unwrap();
@@ -242,7 +243,8 @@ mod tests {
                         allowed_users: None,
                     }],
                 }],
-            token_fingerprint: None,}],
+                token_fingerprint: None,
+            }],
         };
         let resolver = ConfigResolver::from_v2(&v2);
         let topic = resolver.resolve("main", -1001, Some(42)).unwrap();

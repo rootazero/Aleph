@@ -281,7 +281,9 @@ impl AgentRuntime {
                 cheap_summary_provider: None,
                 verifier_chain: None,
             },
-            routing_experience: RoutingExperience { routing_store: None },
+            routing_experience: RoutingExperience {
+                routing_store: None,
+            },
             trace: TraceContext {
                 trace_sink: None,
                 accounting_sink: None,
@@ -628,11 +630,11 @@ impl AgentRuntime {
         // The effective model is `model` then `model_hint` — the same order the
         // spawner resolves — so a role whose frontmatter carries the qualified
         // form routes too.
-        let effective_model = config
-            .spawn_override
-            .model
-            .as_deref()
-            .or(config.identity.agent_def.model_hint.as_deref());
+        let effective_model = config.spawn_override.model.as_deref().or(config
+            .identity
+            .agent_def
+            .model_hint
+            .as_deref());
         let (provider, routed_model) = resolve_spawn_route(
             &self.provider_routing.provider,
             &self.provider_routing.provider_overrides,
@@ -685,7 +687,9 @@ impl AgentRuntime {
             // A rewritten (de-qualified) id wins; otherwise pass the caller's
             // model through untouched and let the spawner apply its own
             // `model_hint` fallback.
-            model: routed_model.as_deref().or(config.spawn_override.model.as_deref()),
+            model: routed_model
+                .as_deref()
+                .or(config.spawn_override.model.as_deref()),
             timeout_secs: config.lifecycle.timeout_secs,
             cancel: self.cancel_token.clone(),
             spawn_context: config.spawn_override.spawn_context,

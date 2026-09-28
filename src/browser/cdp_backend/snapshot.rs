@@ -128,7 +128,12 @@ pub(super) async fn snapshot(
     tab_id: &str,
 ) -> Result<SnapshotOutput, BrowserError> {
     let (state, url, title) = capture(be, tab_id).await?;
-    Ok(output_from_state(&state, page_state::render_text(&state), url, title))
+    Ok(output_from_state(
+        &state,
+        page_state::render_text(&state),
+        url,
+        title,
+    ))
 }
 
 /// `snapshot` under a char budget — the trait contract is on
@@ -424,8 +429,7 @@ mod tests {
     /// (FL §3.12 ⑮ — `browser_snapshot`'s truncation must not be
     /// irreversible).
     #[tokio::test]
-    async fn a_presented_snapshot_over_budget_names_omitted_controls_and_carries_the_full_text()
-     {
+    async fn a_presented_snapshot_over_budget_names_omitted_controls_and_carries_the_full_text() {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         wire_session(&server, "S1");
         wire_capture(&server, &fixture_main_frame());
@@ -466,13 +470,9 @@ mod tests {
         let at = presented
             .text
             .find("# Omitted high-value controls:")
-            .unwrap_or_else(|| {
-                panic!("the cut must name what it took:\n{}", presented.text)
-            });
+            .unwrap_or_else(|| panic!("the cut must name what it took:\n{}", presented.text));
         let section = &presented.text[at..];
-        let named = section
-            .matches(crate::browser::types::REF_TOKEN)
-            .count();
+        let named = section.matches(crate::browser::types::REF_TOKEN).count();
         assert!(named > 0, "the section names at least one control");
         // Every ref the section names is live — minted in the full render.
         for (start, _) in section.match_indices(crate::browser::types::REF_TOKEN) {

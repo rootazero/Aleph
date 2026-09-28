@@ -7,9 +7,9 @@ use crate::config::types::{
     FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
     GuardrailsToml, McpConfig, MemoryConfig, PersonaConfig, PoliciesConfig, PrivacyConfig,
     ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig, SearchConfigInternal,
-    SecretsConfig, ShellSecurityConfig, StabilityToml, StopHookConfig,
-    TeamBroadcastConfigToml, TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig,
-    ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
+    SecretsConfig, ShellSecurityConfig, StabilityToml, StopHookConfig, TeamBroadcastConfigToml,
+    TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
+    UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;

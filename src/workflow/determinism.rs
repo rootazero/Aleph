@@ -39,8 +39,6 @@
 //! `random` alone — the audit is a tool for the user, not a parser they
 //! have to keep apologising to.
 
-
-
 /// What one finding of [`audit_step_prompt`] is about.
 ///
 /// The kind carries **just enough** information for a UI to render an icon
@@ -115,12 +113,22 @@ pub fn audit_step_prompt(prompt: &str) -> Vec<DeterminismFinding> {
     // templating engine would expand if it had a `now` helper. Single-brace
     // means: the `{` is followed by exactly one identifier word, then `}`.
     for keyword in ["now", "time", "timestamp"] {
-        scan_single_brace_keyword(prompt, keyword, &mut findings, DeterminismFindingKind::WallClock);
+        scan_single_brace_keyword(
+            prompt,
+            keyword,
+            &mut findings,
+            DeterminismFindingKind::WallClock,
+        );
     }
     // Random-id family: {uuid}, {guid}. Same shape, different domain — the
     // value is a freshly-minted identifier rather than a wall-clock sample.
     for keyword in ["uuid", "guid"] {
-        scan_single_brace_keyword(prompt, keyword, &mut findings, DeterminismFindingKind::RandomId);
+        scan_single_brace_keyword(
+            prompt,
+            keyword,
+            &mut findings,
+            DeterminismFindingKind::RandomId,
+        );
     }
     // Random-value family: {random}, {rand}, and the suffixed forms
     // {random:N} / {rand:8}. The optional `:N` is a length hint, NOT an
@@ -162,11 +170,7 @@ fn scan_single_brace_keyword(
         // intent is ambiguous (the audit errs on the side of catching it,
         // and the user can decide; matching only the bare `{now}` form would
         // miss `prefix{now}` entirely, which is the worse failure mode).
-        let left_ok = at == 0
-            || !prompt[..at]
-                .chars()
-                .next_back()
-                .is_some_and(is_word_char);
+        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
         // `{{keyword}}` (named-arg) guard: the byte before `{` must not be
         // another `{`. Without it, `{{now}}` matches the `{now}` substring
         // starting at byte 1.
@@ -218,15 +222,15 @@ fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFind
                 // Collect digits after the colon. An empty `:}` is a malformed
                 // placeholder — skip it; the prompt author intended a length
                 // and got the parser, not the model.
-                let digits_end = rest
-                    .iter()
-                    .take_while(|&&b| b.is_ascii_digit())
-                    .count();
+                let digits_end = rest.iter().take_while(|&&b| b.is_ascii_digit()).count();
                 if digits_end == 0 || rest.get(digits_end) != Some(&b'}') {
                     idx = at + 1;
                     continue;
                 }
-                (suffix_start + 1 + digits_end + 1, suffix_start + 1 + digits_end)
+                (
+                    suffix_start + 1 + digits_end + 1,
+                    suffix_start + 1 + digits_end,
+                )
             }
             _ => {
                 idx = at + 1;
@@ -235,14 +239,10 @@ fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFind
         };
         // Word-boundary checks identical to the keyword case, plus the
         // `{{keyword}}` guard (the byte before `{` must not be another `{`).
-        let left_ok = at == 0
-            || !prompt[..at]
-                .chars()
-                .next_back()
-                .is_some_and(is_word_char);
+        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
         let not_double_brace = at == 0 || prompt.as_bytes()[at - 1] != b'{';
-        let right_ok = placeholder_end >= prompt.len()
-            || !is_word_char_in_str_at(prompt, placeholder_end);
+        let right_ok =
+            placeholder_end >= prompt.len() || !is_word_char_in_str_at(prompt, placeholder_end);
         if left_ok && not_double_brace && right_ok {
             let snippet = prompt[at..placeholder_end].to_string();
             out.push(DeterminismFinding {
@@ -301,7 +301,10 @@ mod tests {
         let findings = audit_step_prompt("at {now} write {timestamp}");
         assert_eq!(
             kinds("at {now} write {timestamp}"),
-            vec![DeterminismFindingKind::WallClock, DeterminismFindingKind::WallClock],
+            vec![
+                DeterminismFindingKind::WallClock,
+                DeterminismFindingKind::WallClock
+            ],
         );
         // Snippet + column are carried so the audit consumer does not have
         // to re-slice the prompt.
@@ -315,7 +318,10 @@ mod tests {
     fn detects_random_id_placeholders() {
         assert_eq!(
             kinds("name: {uuid}, alt: {guid}"),
-            vec![DeterminismFindingKind::RandomId, DeterminismFindingKind::RandomId],
+            vec![
+                DeterminismFindingKind::RandomId,
+                DeterminismFindingKind::RandomId
+            ],
         );
     }
 
@@ -326,13 +332,18 @@ mod tests {
         // to whatever would expand it.
         let findings = audit_step_prompt("token={random}, id={rand}, salt={random:16}");
         assert_eq!(findings.len(), 3);
-        assert!(findings.iter().all(|f| f.kind == DeterminismFindingKind::RandomValue));
+        assert!(findings
+            .iter()
+            .all(|f| f.kind == DeterminismFindingKind::RandomValue));
         assert_eq!(findings[0].snippet, "{random}");
         assert_eq!(findings[0].len, 8);
         assert_eq!(findings[1].snippet, "{rand}");
         assert_eq!(findings[1].len, 6);
         assert_eq!(findings[2].snippet, "{random:16}");
-        assert_eq!(findings[2].len, 11, "{{random:16}} is 11 chars including braces");
+        assert_eq!(
+            findings[2].len, 11,
+            "{{random:16}} is 11 chars including braces"
+        );
     }
 
     #[test]
@@ -345,10 +356,14 @@ mod tests {
         assert!(audit_step_prompt("{nowhere").is_empty());
         assert!(audit_step_prompt("the variable is random").is_empty());
         assert!(audit_step_prompt("{now}s elapsed").is_empty());
-        assert!(audit_step_prompt("prefix{now}").is_empty(),
-            "word-boundary on the left: `{{now}}` after a word char is part of a larger identifier");
-        assert!(audit_step_prompt("{random_5}").is_empty(),
-            "underscore-suffixed keyword is not the base form");
+        assert!(
+            audit_step_prompt("prefix{now}").is_empty(),
+            "word-boundary on the left: `{{now}}` after a word char is part of a larger identifier"
+        );
+        assert!(
+            audit_step_prompt("{random_5}").is_empty(),
+            "underscore-suffixed keyword is not the base form"
+        );
     }
 
     #[test]
@@ -367,8 +382,7 @@ mod tests {
     fn mixed_finds_are_returned_in_left_to_right_order() {
         // Multiple findings must come back in scan order so a UI can render
         // them inline without re-sorting.
-        let findings =
-            audit_step_prompt("start {now} middle {uuid} end {random:4} done {guid}");
+        let findings = audit_step_prompt("start {now} middle {uuid} end {random:4} done {guid}");
         assert_eq!(findings.len(), 4);
         assert_eq!(findings[0].column, 6);
         assert_eq!(findings[1].column, 19);
@@ -438,8 +452,14 @@ mod tests {
         // The kind enum's `Debug` output is the surface every log line
         // renders — assert the names are stable so log greps do not break
         // when someone adds a variant.
-        assert_eq!(format!("{:?}", DeterminismFindingKind::WallClock), "WallClock");
-        assert_eq!(format!("{:?}", DeterminismFindingKind::RandomId), "RandomId");
+        assert_eq!(
+            format!("{:?}", DeterminismFindingKind::WallClock),
+            "WallClock"
+        );
+        assert_eq!(
+            format!("{:?}", DeterminismFindingKind::RandomId),
+            "RandomId"
+        );
         assert_eq!(
             format!("{:?}", DeterminismFindingKind::RandomValue),
             "RandomValue"

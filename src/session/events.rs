@@ -1064,7 +1064,10 @@ mod tests {
                 assert_eq!(env.memory_mode.as_deref(), Some("off"));
                 assert_eq!(env.model.as_deref(), Some("m-old"));
                 assert_eq!(env.model_provider.as_deref(), Some("p-old"));
-                assert_eq!(env.allowed_tools.as_deref(), Some(&["grep".to_string()][..]));
+                assert_eq!(
+                    env.allowed_tools.as_deref(),
+                    Some(&["grep".to_string()][..])
+                );
                 assert_eq!(env.btw.as_deref(), Some("is it green?"));
                 assert!(!env.is_empty());
             }
@@ -1188,7 +1191,12 @@ mod tests {
         assert_eq!(snap.think_level.as_deref(), Some(ThinkLevel::High.id()));
         assert_eq!(snap.memory_mode.as_deref(), Some(MemoryMode::Off.id()));
         assert_eq!(
-            (snap.model, snap.model_provider, snap.allowed_tools, snap.btw),
+            (
+                snap.model,
+                snap.model_provider,
+                snap.allowed_tools,
+                snap.btw
+            ),
             (None, None, None, None)
         );
         assert!(RunEnvelopeSnapshot::from_knobs(None, None, None, None).is_empty());

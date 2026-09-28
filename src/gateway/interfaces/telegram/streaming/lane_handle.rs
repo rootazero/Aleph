@@ -167,9 +167,7 @@ impl LaneHandle {
 
         drop(tracker);
         let text = self.lane_marked_text(final_text);
-        self.delivery
-            .edit_text_message(message_id, &text)
-            .await?;
+        self.delivery.edit_text_message(message_id, &text).await?;
 
         let mut tracker = self.tracker.lock().await;
         let state = tracker

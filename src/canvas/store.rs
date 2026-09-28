@@ -584,10 +584,7 @@ mod tests {
         assert!(oversize_d.len() > MAX_PATH_D_BYTES);
 
         let cases: Vec<(&str, CanvasOp)> = vec![
-            (
-                "bad color",
-                CanvasOp::UpsertShape { shape: bad_color },
-            ),
+            ("bad color", CanvasOp::UpsertShape { shape: bad_color }),
             (
                 "bad path d",
                 CanvasOp::UpsertShape {
@@ -636,7 +633,12 @@ mod tests {
         ];
         for (why, op) in cases {
             let err = store
-                .apply(&doc.id, doc.revision, vec![upsert_note("n-sibling"), op], None)
+                .apply(
+                    &doc.id,
+                    doc.revision,
+                    vec![upsert_note("n-sibling"), op],
+                    None,
+                )
                 .await
                 .unwrap_err();
             assert!(matches!(err, CanvasError::Invalid(_)), "{why}: {err:?}");

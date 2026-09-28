@@ -371,11 +371,11 @@ impl SqliteMessageStore {
             .map_err(db_err)?;
 
         // Dedup "once-only within a thread" — the function comment's intent.
-// The predicate used to also filter on `from_agent`, but the only caller
-// hardcodes `from_agent = "system"`, so the filter was a no-op that hid
-// the real risk: a future caller using a different from_agent would
-// silently pass the dedup and double-send (TEAMS-006, high). Match the
-// documented intent.
+        // The predicate used to also filter on `from_agent`, but the only caller
+        // hardcodes `from_agent = "system"`, so the filter was a no-op that hid
+        // the real risk: a future caller using a different from_agent would
+        // silently pass the dedup and double-send (TEAMS-006, high). Match the
+        // documented intent.
         let exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM team_messages \

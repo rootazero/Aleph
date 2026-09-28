@@ -147,7 +147,9 @@ mod tests {
         let buffer = GroupHistoryBuffer::new(HistoryBufferConfig::default());
         let conv = ConversationId::new("chat-1@g.us");
 
-        buffer.add(&make_group_message(conv.as_str(), "hello")).await;
+        buffer
+            .add(&make_group_message(conv.as_str(), "hello"))
+            .await;
         buffer
             .add(&make_group_message(conv.as_str(), "world"))
             .await;

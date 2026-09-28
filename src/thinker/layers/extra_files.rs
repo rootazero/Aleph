@@ -10,9 +10,9 @@
 //! `sanitize_identity_content` (prompt-injection patterns + invisible
 //! Unicode) before injection.
 
+use crate::security::unicode_guard::{is_invisible_char, strip_invisible_chars};
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
-use crate::security::unicode_guard::{is_invisible_char, strip_invisible_chars};
 
 use super::identity_files::sanitize_identity_content;
 

@@ -84,7 +84,6 @@ pub(crate) trait WithRequestTimeout: Sized {
     }
 }
 
-
 /// Retry a fallible generation operation on transient errors with backoff.
 ///
 /// `is_retryable()` decides whether an attempt is retried (rate limits,

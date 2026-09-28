@@ -1081,16 +1081,31 @@ mod tests {
         let gated = crate::tools::adapters::registry_adapter::CONFIRMATION_REQUIRED_TOOLS[0];
 
         let unknown = ToolFacts::for_tool("never-heard-of-it", None);
-        assert!(!unknown.idempotent && !unknown.requires_approval, "unknown is fail-closed");
+        assert!(
+            !unknown.idempotent && !unknown.requires_approval,
+            "unknown is fail-closed"
+        );
 
-        assert!(ToolFacts::for_tool(read_only, None).idempotent, "builtin read-only list");
-        assert!(ToolFacts::for_tool(gated, None).requires_approval, "builtin confirmation list");
+        assert!(
+            ToolFacts::for_tool(read_only, None).idempotent,
+            "builtin read-only list"
+        );
+        assert!(
+            ToolFacts::for_tool(gated, None).requires_approval,
+            "builtin confirmation list"
+        );
 
         let declared = ToolFacts::for_tool(
             "mcp_tool",
-            Some(DeclaredFacts { idempotent: true, requires_confirmation: true }),
+            Some(DeclaredFacts {
+                idempotent: true,
+                requires_confirmation: true,
+            }),
         );
-        assert!(declared.idempotent && declared.requires_approval, "the registry's declaration");
+        assert!(
+            declared.idempotent && declared.requires_approval,
+            "the registry's declaration"
+        );
     }
 
     /// D8 census: `ToolFacts` has ONE production constructor. The slash fast

@@ -488,9 +488,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
-        parallel_group: None,
-        collect_from: Vec::new(),
-        reduce: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 
@@ -519,9 +519,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
-        parallel_group: None,
-        collect_from: Vec::new(),
-        reduce: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 

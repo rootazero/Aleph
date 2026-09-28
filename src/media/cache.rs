@@ -366,9 +366,9 @@ impl MediaCache {
                     url: None,
                     path: None,
                     data: Some(bytes),
-            is_voice_note: false,
-            is_video_note: false,
-        }
+                    is_voice_note: false,
+                    is_video_note: false,
+                }
             } else if is_local_media_path(&item.url) {
                 // Local file path. A `media_send` path is model-supplied and
                 // untrusted: only accept one that resolves inside the OS temp dir —
@@ -399,9 +399,9 @@ impl MediaCache {
                     url: None,
                     path: Some(safe),
                     data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        }
+                    is_voice_note: false,
+                    is_video_note: false,
+                }
             } else {
                 // HTTP/HTTPS URL
                 Attachment {
@@ -420,9 +420,9 @@ impl MediaCache {
                     url: Some(item.url.clone()),
                     path: None,
                     data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        }
+                    is_voice_note: false,
+                    is_video_note: false,
+                }
             };
 
         let cached = self

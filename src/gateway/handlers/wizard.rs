@@ -268,10 +268,7 @@ pub async fn handle_start(
 }
 
 /// Handle wizard.answer
-async fn handle_answer(
-    req: JsonRpcRequest,
-    manager: Arc<WizardSessionManager>,
-) -> JsonRpcResponse {
+async fn handle_answer(req: JsonRpcRequest, manager: Arc<WizardSessionManager>) -> JsonRpcResponse {
     let params: WizardAnswerParams = match req.params {
         Some(p) => match serde_json::from_value(p) {
             Ok(p) => p,
@@ -311,10 +308,7 @@ async fn handle_answer(
 }
 
 /// Handle wizard.next (get next step without answering)
-async fn handle_next(
-    req: JsonRpcRequest,
-    manager: Arc<WizardSessionManager>,
-) -> JsonRpcResponse {
+async fn handle_next(req: JsonRpcRequest, manager: Arc<WizardSessionManager>) -> JsonRpcResponse {
     let params: WizardNextParams = match req.params {
         Some(p) => match serde_json::from_value(p) {
             Ok(p) => p,

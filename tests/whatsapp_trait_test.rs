@@ -84,11 +84,9 @@ fn _wa_event_is_compatible(_event: WaEvent) {}
 async fn _shared_via_arc(runtime: Arc<dyn WaRuntime>) {
     let r1 = Arc::clone(&runtime);
     let r2 = Arc::clone(&runtime);
-    let _: Result<MessageId, WaRuntimeError> = r1.send_message(OutboundMessage::text(
-        "jid@s.whatsapp.net",
-        "hello",
-    ))
-    .await;
+    let _: Result<MessageId, WaRuntimeError> = r1
+        .send_message(OutboundMessage::text("jid@s.whatsapp.net", "hello"))
+        .await;
     let _: Result<(), WaRuntimeError> = r2.send_reaction("jid", "msg", "👍").await;
     let _: Result<(), WaRuntimeError> = r2.send_typing("jid").await;
     let _: Result<(), WaRuntimeError> = r2.mark_read("msg").await;

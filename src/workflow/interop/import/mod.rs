@@ -103,8 +103,10 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
             // here and surface an actionable hint before the raw error.
             let raw = e.to_string();
             let json_lower = json.to_lowercase();
-            let hint = if json.contains("*/") && !raw.to_lowercase().contains("string")
-                && json_lower.contains("use") || json_lower.contains("glob")
+            let hint = if json.contains("*/")
+                && !raw.to_lowercase().contains("string")
+                && json_lower.contains("use")
+                || json_lower.contains("glob")
             {
                 "\n  hint: the embed block was closed early by a literal `*/` \
                  inside a string value. escape it as `*\\/` or move the comment \
@@ -112,9 +114,7 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
             } else {
                 ""
             };
-            AlephError::invalid_input(format!(
-                "embedded @aleph-workflow parse failed: {e}{hint}"
-            ))
+            AlephError::invalid_input(format!("embedded @aleph-workflow parse failed: {e}{hint}"))
         })?;
         return Ok(ImportOutcome {
             manifest,
@@ -1478,9 +1478,9 @@ await agent('fix more')
             tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
-        parallel_group: None,
-        collect_from: Vec::new(),
-        reduce: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 

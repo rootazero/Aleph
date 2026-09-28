@@ -87,10 +87,7 @@ fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn query_entries(
-    conn: &Connection,
-    f: &CatalogFilter,
-) -> rusqlite::Result<Vec<ExtensionEntry>> {
+fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<Vec<ExtensionEntry>> {
     let mut sql = String::from("SELECT data FROM catalog WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if let Some(id) = &f.id {

@@ -607,10 +607,7 @@ fn plan_action(
 /// A repeat/if condition into its [`WaitCondition`]. Exactly one of the four
 /// fields must be set — the same mutual-exclusion contract as
 /// `browser_wait_for`'s five-way mutex, and the same error wording style.
-fn resolve_condition(
-    c: &ExecCondition,
-    what: &str,
-) -> std::result::Result<WaitCondition, String> {
+fn resolve_condition(c: &ExecCondition, what: &str) -> std::result::Result<WaitCondition, String> {
     let set = [
         c.text.as_ref().map(|t| ("text", t)),
         c.text_gone.as_ref().map(|t| ("text_gone", t)),
@@ -1114,74 +1111,73 @@ impl ExecRunner<'_> {
         Box<dyn std::future::Future<Output = std::result::Result<StepResult, String>> + Send + 'a>,
     > {
         Box::pin(async move {
-        if self.started.elapsed().as_millis() as u64 >= MAX_EXEC_BUDGET_MS {
-            return Err(format!(
-                "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {} actions",
-                self.steps_run
-            ));
-        }
-        if self.refs_stale && carries_ref(action) {
-            // The message ENDS with the resnapshot hint — pinned by test.
-            return Err(format!(
-                "{} targets a snapshot ref, but an earlier step in this procedure \
-                 navigated; refs may be stale; take a fresh snapshot",
-                action_label(action)
-            ));
-        }
-        if let Some((action_type, verb, target)) = approval_surface(action) {
-            if let Some(message) =
-                super::check_browser_approval(self.approval_policy, action_type, verb, &target)
-                    .await
-            {
-                return Err(message);
+            if self.started.elapsed().as_millis() as u64 >= MAX_EXEC_BUDGET_MS {
+                return Err(format!(
+                    "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {} actions",
+                    self.steps_run
+                ));
             }
-        }
-        let label = action_label(action);
-        let (outcome, mut nested) = self.dispatch(action).await?;
-        self.steps_run += 1 + nested.len();
-        // The latch moves only on SUCCESS: a failed navigation changed
-        // nothing the refs point at.
-        match action {
-            PlannedAction::Navigate(_) => self.refs_stale = true,
-            // An ACCEPTED dialog can be a `beforeunload` letting the page
-            // leave — and the answer does not say whether it was one, so
-            // the fail-closed reading is that refs captured before it may
-            // be stale. A DISMISS cannot navigate and does not latch.
-            PlannedAction::Dialog {
-                action: DialogAction::Accept,
-                ..
-            } => self.refs_stale = true,
-            // The remedy the latch message names: a fresh snapshot mints
-            // refs that postdate the navigation.
-            PlannedAction::Snapshot { .. } => self.refs_stale = false,
-            _ => {}
-        }
-        // The effect-arrival verdict, when the backend probes (the cdp
-        // one) — read AFTER the verb, per the latch contract on
-        // `last_effect_verification`. `None` on a non-probing backend
-        // serializes as absence, never as a claim.
-        let effect_verification = match action {
-            PlannedAction::Click(_) | PlannedAction::Type(..) | PlannedAction::Fill(..) => self
-                .backend
-                .last_effect_verification()
-                .map(|v| v.as_wire()),
-            _ => None,
-        };
-        let has_image = outcome.image_base64.is_some();
-        // Number the nested results within their parent.
-        for (i, r) in nested.iter_mut().enumerate() {
-            r.step = i + 1;
-        }
-        Ok(StepResult {
-            step: 0,
-            action: label,
-            status: outcome.status,
-            output: outcome.output,
-            image_base64: outcome.image_base64,
-            format: has_image.then(|| "png".into()),
-            effect_verification,
-            steps: nested,
-        })
+            if self.refs_stale && carries_ref(action) {
+                // The message ENDS with the resnapshot hint — pinned by test.
+                return Err(format!(
+                    "{} targets a snapshot ref, but an earlier step in this procedure \
+                 navigated; refs may be stale; take a fresh snapshot",
+                    action_label(action)
+                ));
+            }
+            if let Some((action_type, verb, target)) = approval_surface(action) {
+                if let Some(message) =
+                    super::check_browser_approval(self.approval_policy, action_type, verb, &target)
+                        .await
+                {
+                    return Err(message);
+                }
+            }
+            let label = action_label(action);
+            let (outcome, mut nested) = self.dispatch(action).await?;
+            self.steps_run += 1 + nested.len();
+            // The latch moves only on SUCCESS: a failed navigation changed
+            // nothing the refs point at.
+            match action {
+                PlannedAction::Navigate(_) => self.refs_stale = true,
+                // An ACCEPTED dialog can be a `beforeunload` letting the page
+                // leave — and the answer does not say whether it was one, so
+                // the fail-closed reading is that refs captured before it may
+                // be stale. A DISMISS cannot navigate and does not latch.
+                PlannedAction::Dialog {
+                    action: DialogAction::Accept,
+                    ..
+                } => self.refs_stale = true,
+                // The remedy the latch message names: a fresh snapshot mints
+                // refs that postdate the navigation.
+                PlannedAction::Snapshot { .. } => self.refs_stale = false,
+                _ => {}
+            }
+            // The effect-arrival verdict, when the backend probes (the cdp
+            // one) — read AFTER the verb, per the latch contract on
+            // `last_effect_verification`. `None` on a non-probing backend
+            // serializes as absence, never as a claim.
+            let effect_verification = match action {
+                PlannedAction::Click(_) | PlannedAction::Type(..) | PlannedAction::Fill(..) => {
+                    self.backend.last_effect_verification().map(|v| v.as_wire())
+                }
+                _ => None,
+            };
+            let has_image = outcome.image_base64.is_some();
+            // Number the nested results within their parent.
+            for (i, r) in nested.iter_mut().enumerate() {
+                r.step = i + 1;
+            }
+            Ok(StepResult {
+                step: 0,
+                action: label,
+                status: outcome.status,
+                output: outcome.output,
+                image_base64: outcome.image_base64,
+                format: has_image.then(|| "png".into()),
+                effect_verification,
+                steps: nested,
+            })
         })
     }
 
@@ -1207,8 +1203,7 @@ impl ExecRunner<'_> {
                     // evaluation ERROR aborts the whole procedure: a
                     // condition that cannot be read is neither true nor
                     // false (判据 §8), so it must never be spent as either.
-                    match eval_condition_once(self.manager, self.backend, self.tab_id, until)
-                        .await
+                    match eval_condition_once(self.manager, self.backend, self.tab_id, until).await
                     {
                         Ok(true) => {
                             held = true;
@@ -1290,9 +1285,7 @@ impl ExecRunner<'_> {
                         "the condition did not hold; the otherwise-arm ran ({} step(s))",
                         nested.len()
                     ),
-                    (false, None) => {
-                        "the condition did not hold; there is no otherwise-arm".into()
-                    }
+                    (false, None) => "the condition did not hold; there is no otherwise-arm".into(),
                 };
                 Ok((StepOutcome::read(summary), nested))
             }
@@ -1387,10 +1380,7 @@ async fn run_one(
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
             Ok(StepOutcome::read(snapshot_presented_output(
-                manager,
-                &presented,
-                *max_chars,
-                step,
+                manager, &presented, *max_chars, step,
             )))
         }
         PlannedAction::Evaluate(js) => {
@@ -1461,9 +1451,9 @@ async fn run_one(
         ),
         // Compound steps never arrive here — `dispatch` intercepts them and
         // recurses through `run_step`. An internal error, not a panic path.
-        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => Err(
-            "internal: repeat/if steps are executed by ExecRunner::dispatch".into(),
-        ),
+        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => {
+            Err("internal: repeat/if steps are executed by ExecRunner::dispatch".into())
+        }
     }
 }
 
@@ -2189,7 +2179,9 @@ mod tests {
         // honest controls-named variant.
         assert!(
             fenced.suffix.contains("snapshot truncated to")
-                && fenced.suffix.contains("omitted interactive controls are named above"),
+                && fenced
+                    .suffix
+                    .contains("omitted interactive controls are named above"),
             "the note must name what the model already has: {}",
             fenced.suffix
         );
@@ -2793,7 +2785,10 @@ mod tests {
             "one condition probe and nothing else: {calls:?}"
         );
         assert!(calls[0].starts_with("evaluate:"), "got: {calls:?}");
-        let out = results[0].output.as_deref().expect("the repeat step reports");
+        let out = results[0]
+            .output
+            .as_deref()
+            .expect("the repeat step reports");
         assert!(out.contains("0 iteration"), "got: {out}");
         assert!(out.contains("held"), "got: {out}");
     }
@@ -2887,11 +2882,15 @@ mod tests {
         assert!(failure.is_none(), "unexpected failure: {failure:?}");
         let calls = backend.calls();
         assert!(
-            calls.iter().any(|c| c == "press_key:Tab") && !calls.iter().any(|c| c == "press_key:Enter"),
+            calls.iter().any(|c| c == "press_key:Tab")
+                && !calls.iter().any(|c| c == "press_key:Enter"),
             "the then-arm and only the then-arm: {calls:?}"
         );
         assert!(
-            results[0].output.as_deref().is_some_and(|o| o.contains("then-arm")),
+            results[0]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("then-arm")),
             "{:?}",
             results[0].output
         );
@@ -2908,11 +2907,15 @@ mod tests {
         assert!(failure.is_none(), "unexpected failure: {failure:?}");
         let calls = backend.calls();
         assert!(
-            calls.iter().any(|c| c == "press_key:Enter") && !calls.iter().any(|c| c == "press_key:Tab"),
+            calls.iter().any(|c| c == "press_key:Enter")
+                && !calls.iter().any(|c| c == "press_key:Tab"),
             "the otherwise-arm and only the otherwise-arm: {calls:?}"
         );
         assert!(
-            results[0].output.as_deref().is_some_and(|o| o.contains("otherwise-arm")),
+            results[0]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("otherwise-arm")),
             "{:?}",
             results[0].output
         );
@@ -3015,7 +3018,10 @@ mod tests {
         let (_r, failure) = run(&manager, &backend, &planned).await;
         let (ordinal, err) = failure.expect("an accepted dialog may have navigated");
         assert_eq!(ordinal, 2);
-        assert!(err.ends_with("refs may be stale; take a fresh snapshot"), "{err}");
+        assert!(
+            err.ends_with("refs may be stale; take a fresh snapshot"),
+            "{err}"
+        );
         assert!(
             backend.calls().iter().all(|c| !c.starts_with("click:")),
             "{:?}",
@@ -3032,10 +3038,7 @@ mod tests {
         ])
         .unwrap();
         let (_r, failure) = run(&manager, &backend, &planned).await;
-        assert!(
-            failure.is_none(),
-            "a dismiss cannot navigate: {failure:?}"
-        );
+        assert!(failure.is_none(), "a dismiss cannot navigate: {failure:?}");
     }
 
     /// Zero new approval knobs: a click nested inside a repeat is judged as
@@ -3087,7 +3090,10 @@ mod tests {
             execute_actions(&manager, Some(&policy_dyn), &backend, "1", &planned).await;
         let (ordinal, err) = failure.expect("a denied nested click must abort");
         assert_eq!(ordinal, 1, "the repeat is the top-level failing step");
-        assert!(err.contains("iteration 1"), "the nested context is named: {err}");
+        assert!(
+            err.contains("iteration 1"),
+            "the nested context is named: {err}"
+        );
         assert!(err.contains("denied by approval policy"), "{err}");
         assert_eq!(
             *policy.seen.lock().unwrap_or_else(|e| e.into_inner()),

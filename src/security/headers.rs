@@ -361,9 +361,7 @@ mod tests {
         assert!(csp_contains_wildcard_source(
             "default-src 'self' *;script-src 'self'"
         ));
-        assert!(csp_contains_wildcard_source(
-            "default-src 'self' *"
-        ));
+        assert!(csp_contains_wildcard_source("default-src 'self' *"));
         // Strict policies must NOT trip.
         assert!(!csp_contains_wildcard_source(
             "default-src 'self';script-src 'self';frame-ancestors 'none'"

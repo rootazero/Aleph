@@ -263,8 +263,7 @@ impl BrowserSnapshotTool {
                 // through the one pipeline — same bound, same redaction,
                 // same offload — rather than the JSON arm growing a second
                 // copy of it (判据 §1).
-                let (body, text, truncated) = match present_body(&presented, format, max_chars)
-                {
+                let (body, text, truncated) = match present_body(&presented, format, max_chars) {
                     Ok(parts) => parts,
                     Err(message) => {
                         return BrowserSnapshotOutput {
@@ -300,9 +299,7 @@ impl BrowserSnapshotTool {
                 // and a truncated one does not parse at all, so none of them
                 // are usable.
                 let ref_count = match format {
-                    SnapshotFormat::Text => {
-                        text.matches(crate::browser::types::REF_TOKEN).count()
-                    }
+                    SnapshotFormat::Text => text.matches(crate::browser::types::REF_TOKEN).count(),
                     SnapshotFormat::Json if truncated => 0,
                     SnapshotFormat::Json => snap.ref_count,
                 };
@@ -349,11 +346,7 @@ impl BrowserSnapshotTool {
                     page_url: snap.page_url.clone(),
                     page_title: snap.page_title.clone(),
                     message: Some(render_snapshot_message(
-                        profile,
-                        snap,
-                        ref_count,
-                        truncated,
-                        format,
+                        profile, snap, ref_count, truncated, format,
                     )),
                 }
             }
@@ -848,8 +841,7 @@ mod tests {
     /// the offload is fed the FULL text (FL §3.12 ⑮ — a cut the model cannot
     /// recover from is data loss, not a budget).
     #[tokio::test]
-    async fn a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded()
-     {
+    async fn a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded() {
         let _store = crate::tools::result_store::install_test_tool_result_store();
         let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
         let tool = BrowserSnapshotTool::new(manager);
@@ -892,9 +884,9 @@ mod tests {
         assert!(snapshot.contains("# Omitted high-value controls:"));
         // The offload ran and was fed the FULL text, so the dropped tail is
         // recoverable through the blob the footer names.
-        let footer_at = snapshot.find("[Full output persisted: ").unwrap_or_else(|| {
-            panic!("the truncated arm must run the offload: {snapshot}")
-        });
+        let footer_at = snapshot
+            .find("[Full output persisted: ")
+            .unwrap_or_else(|| panic!("the truncated arm must run the offload: {snapshot}"));
         let path = crate::tools::result_store::extract_persisted_path(&snapshot[footer_at..])
             .expect("the footer names a blob");
         let blob = std::fs::read_to_string(path).expect("the blob exists on disk");

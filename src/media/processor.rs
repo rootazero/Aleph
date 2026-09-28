@@ -708,9 +708,9 @@ mod tests {
                 url: None,
                 path: None,
                 data: Some(vec![1, 2, 3]),
-            is_voice_note: false,
-            is_video_note: false,
-        },
+                is_voice_note: false,
+                is_video_note: false,
+            },
             Attachment {
                 id: "doc".into(),
                 mime_type: "application/pdf".into(),
@@ -719,9 +719,9 @@ mod tests {
                 url: None,
                 path: None,
                 data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        },
+                is_voice_note: false,
+                is_video_note: false,
+            },
             // This one has no source — should still produce a block
             Attachment {
                 id: "bad".into(),
@@ -731,9 +731,9 @@ mod tests {
                 url: None,
                 path: None,
                 data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        },
+                is_voice_note: false,
+                is_video_note: false,
+            },
         ];
         let session_id = "test-multi";
         let blocks = processor

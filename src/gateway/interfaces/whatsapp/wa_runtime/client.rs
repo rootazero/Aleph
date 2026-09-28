@@ -5,7 +5,9 @@ use crate::gateway::interfaces::whatsapp::wa_runtime::http_client::ReqwestHttpCl
 use crate::gateway::interfaces::whatsapp::wa_runtime::state::{
     AtomicConnectionState, ConnectionState,
 };
-use crate::gateway::interfaces::whatsapp::wa_runtime::traits::{WaEvent, WaRuntime, WaRuntimeError};
+use crate::gateway::interfaces::whatsapp::wa_runtime::traits::{
+    WaEvent, WaRuntime, WaRuntimeError,
+};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -56,10 +58,7 @@ impl Clone for RealWaRuntime {
 }
 
 impl RealWaRuntime {
-    pub async fn new(
-        auth: WaAuthManager,
-        event_tx: mpsc::Sender<WaEvent>,
-    ) -> ChannelResult<Self> {
+    pub async fn new(auth: WaAuthManager, event_tx: mpsc::Sender<WaEvent>) -> ChannelResult<Self> {
         Ok(Self {
             state: Arc::new(AtomicConnectionState::new(ConnectionState::Disconnected)),
             auth,
@@ -383,13 +382,11 @@ impl WaRuntime for RealWaRuntime {
     }
 
     async fn send_message(&self, msg: OutboundMessage) -> Result<MessageId, WaRuntimeError> {
-        Self::send_message(self, msg)
-            .await
-            .map_err(|e| match e {
-                ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
-                ChannelError::SendFailed(m) => WaRuntimeError::SendFailed(m),
-                other => WaRuntimeError::Internal(other.to_string()),
-            })
+        Self::send_message(self, msg).await.map_err(|e| match e {
+            ChannelError::NotConnected(m) => WaRuntimeError::NotConnected(m),
+            ChannelError::SendFailed(m) => WaRuntimeError::SendFailed(m),
+            other => WaRuntimeError::Internal(other.to_string()),
+        })
     }
 
     async fn send_typing(&self, conversation_id: &str) -> Result<(), WaRuntimeError> {

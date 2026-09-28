@@ -1,5 +1,6 @@
 //! Factory function for creating generation providers from configuration.
 
+use super::http::WithRequestTimeout;
 use super::url_normalize::resolve_base_url;
 use super::{
     AzureSpeechProvider, BflProvider, CartesiaProvider, DeepgramSttProvider, DeepgramTtsProvider,
@@ -8,7 +9,6 @@ use super::{
     OpenAiTtsProvider, OpenAiWhisperProvider, ReplicateProvider, StabilityImageProvider,
     SunoProvider, VolcengineTtsProvider,
 };
-use super::http::WithRequestTimeout;
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;

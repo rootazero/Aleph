@@ -29,10 +29,7 @@ pub use traces::AgentUsageTotal;
 /// Centralising the helper keeps every caller consistent: a future call
 /// site that needs `i64 -> u64` conversion must use this rather than the
 /// bare `as u64` cast.
-pub(crate) fn i64_to_u64_count(
-    value: i64,
-    column: &str,
-) -> Result<u64, crate::error::AlephError> {
+pub(crate) fn i64_to_u64_count(value: i64, column: &str) -> Result<u64, crate::error::AlephError> {
     if value < 0 {
         return Err(crate::error::AlephError::config(format!(
             "{column} must be non-negative, got {value}"

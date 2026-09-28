@@ -264,11 +264,7 @@ impl TeamDispatcher {
                 // rule (cancel vs settle vs unknown); see its doc comment for
                 // why each provenance takes the path it does.
                 if !all_settled
-                    && should_rearm_on_reopen(
-                        anchor,
-                        Self::now_epoch(),
-                        REOPEN_REARM_GRACE_SECS,
-                    )
+                    && should_rearm_on_reopen(anchor, Self::now_epoch(), REOPEN_REARM_GRACE_SECS)
                 {
                     let cleared = merge_metadata_patch(
                         &anchor.metadata,
@@ -550,48 +546,36 @@ mod tests {
     /// A notified anchor carrying only the stamp (no `_by` key, no
     /// provenance) — the "unknown provenance" branch.
     fn stamped_anchor(stamp: u64) -> CoordTask {
-        task(
-            "t-anchor",
-            "step",
-            CoordTaskStatus::InProgress,
-            None,
+        task("t-anchor", "step", CoordTaskStatus::InProgress, None).with_metadata(
+            serde_json::json!({
+                WORKFLOW_STEP_KEY: "step",
+                WORKFLOW_NOTIFIED_KEY: stamp,
+            }),
         )
-        .with_metadata(serde_json::json!({
-            WORKFLOW_STEP_KEY: "step",
-            WORKFLOW_NOTIFIED_KEY: stamp,
-        }))
     }
 
     /// A notified anchor with cancel provenance (stamped by the `cancel`
     /// action before its status writes land).
     fn cancel_stamped_anchor(stamp: u64) -> CoordTask {
-        task(
-            "t-anchor",
-            "step",
-            CoordTaskStatus::InProgress,
-            None,
+        task("t-anchor", "step", CoordTaskStatus::InProgress, None).with_metadata(
+            serde_json::json!({
+                WORKFLOW_STEP_KEY: "step",
+                WORKFLOW_NOTIFIED_KEY: stamp,
+                WORKFLOW_NOTIFIED_BY_KEY: NOTIFIED_BY_CANCEL,
+            }),
         )
-        .with_metadata(serde_json::json!({
-            WORKFLOW_STEP_KEY: "step",
-            WORKFLOW_NOTIFIED_KEY: stamp,
-            WORKFLOW_NOTIFIED_BY_KEY: NOTIFIED_BY_CANCEL,
-        }))
     }
 
     /// A notified anchor with settle provenance (stamped by the settle sweep
     /// after observing the run fully settled).
     fn settle_stamped_anchor(stamp: u64) -> CoordTask {
-        task(
-            "t-anchor",
-            "step",
-            CoordTaskStatus::InProgress,
-            None,
+        task("t-anchor", "step", CoordTaskStatus::InProgress, None).with_metadata(
+            serde_json::json!({
+                WORKFLOW_STEP_KEY: "step",
+                WORKFLOW_NOTIFIED_KEY: stamp,
+                WORKFLOW_NOTIFIED_BY_KEY: crate::workflow::NOTIFIED_BY_SETTLE,
+            }),
         )
-        .with_metadata(serde_json::json!({
-            WORKFLOW_STEP_KEY: "step",
-            WORKFLOW_NOTIFIED_KEY: stamp,
-            WORKFLOW_NOTIFIED_BY_KEY: crate::workflow::NOTIFIED_BY_SETTLE,
-        }))
     }
 
     #[test]
@@ -603,7 +587,11 @@ mod tests {
         let stamped_at = 1_000u64;
         let anchor = cancel_stamped_anchor(stamped_at);
         // 5 seconds after stamp → well within REOPEN_REARM_GRACE_SECS (120).
-        assert!(!should_rearm_on_reopen(&anchor, stamped_at + 5, REOPEN_REARM_GRACE_SECS));
+        assert!(!should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 5,
+            REOPEN_REARM_GRACE_SECS
+        ));
         // 119 seconds after stamp → still within grace.
         assert!(!should_rearm_on_reopen(
             &anchor,
@@ -626,7 +614,11 @@ mod tests {
             REOPEN_REARM_GRACE_SECS
         ));
         // Well past grace → re-arm.
-        assert!(should_rearm_on_reopen(&anchor, stamped_at + 130, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 130,
+            REOPEN_REARM_GRACE_SECS
+        ));
     }
 
     #[test]
@@ -638,10 +630,18 @@ mod tests {
         // grace must not blind the sweep to it.
         let stamped_at = 1_000u64;
         let anchor = settle_stamped_anchor(stamped_at);
-        assert!(should_rearm_on_reopen(&anchor, stamped_at + 1, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 1,
+            REOPEN_REARM_GRACE_SECS
+        ));
         // Even an immediate re-check (now == stamp) re-arms, since there is
         // no grace for settle provenance.
-        assert!(should_rearm_on_reopen(&anchor, stamped_at, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at,
+            REOPEN_REARM_GRACE_SECS
+        ));
     }
 
     #[test]
@@ -651,13 +651,21 @@ mod tests {
         // preserved exactly. Within grace → no re-arm; past grace → re-arm.
         let stamped_at = 1_000u64;
         let anchor = stamped_anchor(stamped_at);
-        assert!(!should_rearm_on_reopen(&anchor, stamped_at + 5, REOPEN_REARM_GRACE_SECS));
+        assert!(!should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 5,
+            REOPEN_REARM_GRACE_SECS
+        ));
         assert!(should_rearm_on_reopen(
             &anchor,
             stamped_at + REOPEN_REARM_GRACE_SECS,
             REOPEN_REARM_GRACE_SECS
         ));
-        assert!(should_rearm_on_reopen(&anchor, stamped_at + 200, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &anchor,
+            stamped_at + 200,
+            REOPEN_REARM_GRACE_SECS
+        ));
     }
 
     #[test]
@@ -667,7 +675,11 @@ mod tests {
         // already have the stamp. A no-stamp task returns false here so
         // the function is total over its input domain.
         let anchor = task("t-no-stamp", "step", CoordTaskStatus::InProgress, None);
-        assert!(!should_rearm_on_reopen(&anchor, 1_000, REOPEN_REARM_GRACE_SECS));
+        assert!(!should_rearm_on_reopen(
+            &anchor,
+            1_000,
+            REOPEN_REARM_GRACE_SECS
+        ));
     }
 
     #[test]
@@ -682,20 +694,22 @@ mod tests {
         assert!(!is_cancel_provenance(&unknown));
         // Typo / wrong-case provenance is NOT cancel provenance — guards
         // against drift if the constant is ever reworded.
-        let typo = task("t-typo", "step", CoordTaskStatus::InProgress, None)
-            .with_metadata(serde_json::json!({
+        let typo = task("t-typo", "step", CoordTaskStatus::InProgress, None).with_metadata(
+            serde_json::json!({
                 WORKFLOW_STEP_KEY: "step",
                 WORKFLOW_NOTIFIED_KEY: 1_000u64,
                 WORKFLOW_NOTIFIED_BY_KEY: "Cancel", // capital C
-            }));
+            }),
+        );
         assert!(!is_cancel_provenance(&typo));
         // A non-string _by (e.g. accidental null) is not cancel provenance.
-        let wrong_shape = task("t-shape", "step", CoordTaskStatus::InProgress, None)
-            .with_metadata(serde_json::json!({
+        let wrong_shape = task("t-shape", "step", CoordTaskStatus::InProgress, None).with_metadata(
+            serde_json::json!({
                 WORKFLOW_STEP_KEY: "step",
                 WORKFLOW_NOTIFIED_KEY: 1_000u64,
                 WORKFLOW_NOTIFIED_BY_KEY: serde_json::Value::Null,
-            }));
+            }),
+        );
         assert!(!is_cancel_provenance(&wrong_shape));
     }
 
@@ -708,9 +722,17 @@ mod tests {
         assert!(!is_cancel_provenance(&settle));
         // And the full rearm path confirms it: a settle-stamped anchor at
         // stamp_age == 1 re-arms, where a cancel-stamped one would not.
-        assert!(should_rearm_on_reopen(&settle, 1_001, REOPEN_REARM_GRACE_SECS));
+        assert!(should_rearm_on_reopen(
+            &settle,
+            1_001,
+            REOPEN_REARM_GRACE_SECS
+        ));
         let cancel = cancel_stamped_anchor(1_000);
-        assert!(!should_rearm_on_reopen(&cancel, 1_001, REOPEN_REARM_GRACE_SECS));
+        assert!(!should_rearm_on_reopen(
+            &cancel,
+            1_001,
+            REOPEN_REARM_GRACE_SECS
+        ));
     }
 
     // Helper for building a task with arbitrary metadata. Lives below the

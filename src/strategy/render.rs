@@ -233,10 +233,8 @@ mod tests {
                     i += 1;
                 }
                 if (10..=13).contains(&(i - start)) {
-                    let left_ok = start == 0
-                        || !bytes[start - 1].is_ascii_alphanumeric();
-                    let right_ok =
-                        i == bytes.len() || !bytes[i].is_ascii_alphanumeric();
+                    let left_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+                    let right_ok = i == bytes.len() || !bytes[i].is_ascii_alphanumeric();
                     if left_ok && right_ok {
                         return true;
                     }

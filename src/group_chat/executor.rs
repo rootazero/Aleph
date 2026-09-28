@@ -1272,8 +1272,7 @@ mod tests {
     #[tokio::test]
     async fn test_successful_commit_resets_no_commit_counter() {
         // Three calls: empty plan → empty plan → real plan with a respondent.
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
         let provider = Arc::new(SequentialMockProvider::new(vec![
             r#"{"respondents":[],"need_summary":false}"#.to_string(),
             r#"{"respondents":[],"need_summary":false}"#.to_string(),
@@ -1287,13 +1286,25 @@ mod tests {
         let mut session = make_session();
 
         // Two empty plans: counter goes to 2.
-        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
-        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
+        let _ = executor
+            .execute_round(&mut session, "ping", &[])
+            .await
+            .unwrap();
+        let _ = executor
+            .execute_round(&mut session, "ping", &[])
+            .await
+            .unwrap();
         assert_eq!(session.no_commit_attempts, 2);
 
         // Real plan: counter resets to 0.
-        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
-        assert_eq!(session.no_commit_attempts, 0, "successful commit resets the counter");
+        let _ = executor
+            .execute_round(&mut session, "ping", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            session.no_commit_attempts, 0,
+            "successful commit resets the counter"
+        );
         assert_eq!(session.current_round, 1, "real plan advances current_round");
     }
 }

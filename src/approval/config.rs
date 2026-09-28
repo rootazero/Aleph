@@ -199,8 +199,7 @@ fn compile_rules_grouped(
                     // then the process is already in trouble. `expect`
                     // rather than `unwrap` so the failure mode is named.
                     let match_anything = MATCH_ANYTHING.get_or_init(|| {
-                        regex::Regex::new("(?s).*")
-                            .expect("static regex pattern `(?s).*`")
+                        regex::Regex::new("(?s).*").expect("static regex pattern `(?s).*`")
                     });
                     error!(
                         pattern = %rule.pattern,

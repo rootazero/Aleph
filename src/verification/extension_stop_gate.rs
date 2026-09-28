@@ -202,7 +202,11 @@ impl ExtensionStopHookVerifier {
             .with_env("TOOL_CALLS_MADE", ctx.tool_calls_made.to_string())
             .with_env(
                 "STOP_HOOK_ACTIVE",
-                if prior.consecutive > 0 { "true" } else { "false" },
+                if prior.consecutive > 0 {
+                    "true"
+                } else {
+                    "false"
+                },
             );
         if let Some(text) = ctx.final_text {
             hctx = hctx.with_env(

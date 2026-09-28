@@ -864,7 +864,8 @@ impl GoalStore {
             .map_err(|e| AlephError::other(format!("goal count_owned_by query: {e}")))?;
         let mut count = 0usize;
         for row in rows {
-            let json = row.map_err(|e| AlephError::other(format!("goal count_owned_by row: {e}")))?;
+            let json =
+                row.map_err(|e| AlephError::other(format!("goal count_owned_by row: {e}")))?;
             if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
                 if aleph_protocol::users::owned_by(goal.owner_user_id.as_deref(), user_id) {
                     count += 1;

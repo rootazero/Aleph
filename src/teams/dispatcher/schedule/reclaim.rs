@@ -678,9 +678,7 @@ pub(super) async fn repair_crashed_attempt(
 #[cfg(test)]
 mod unanswered_clarify_tests {
     use super::should_fail_unanswered_clarify;
-    use crate::workflow::clarify::{
-        CLARIFY_DELIVERED_AT_KEY, CLARIFY_DELIVERY_PENDING_KEY,
-    };
+    use crate::workflow::clarify::{CLARIFY_DELIVERED_AT_KEY, CLARIFY_DELIVERY_PENDING_KEY};
 
     /// A row with no `clarify_delivered_at` stamp is not "delivered and
     /// unanswered" — either delivery never confirmed (owned by the
@@ -743,11 +741,7 @@ mod unanswered_clarify_tests {
             "past grace: fail"
         );
         assert!(
-            should_fail_unanswered_clarify(
-                &metadata,
-                delivered_at + 24 * 60 * 60,
-                grace,
-            ),
+            should_fail_unanswered_clarify(&metadata, delivered_at + 24 * 60 * 60, grace,),
             "24 h past delivery (the actual default grace): fail"
         );
     }

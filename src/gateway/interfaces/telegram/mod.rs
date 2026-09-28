@@ -16,8 +16,8 @@
 //! - Smart retry with error classification
 
 pub mod access;
-pub mod audit;
 pub mod approval;
+pub mod audit;
 pub mod bot_instance;
 pub mod chunking;
 pub mod config;
@@ -74,7 +74,8 @@ pub struct TelegramChannel {
     /// Per-account token-fingerprint verdicts from the last `start()`,
     /// surfaced to the doctor. The doctor reads this without touching the
     /// vault, so an operator can spot a misroute without restarting.
-    token_fingerprint_verdicts: std::collections::HashMap<String, token_fingerprint::TokenFingerprintVerdict>,
+    token_fingerprint_verdicts:
+        std::collections::HashMap<String, token_fingerprint::TokenFingerprintVerdict>,
     /// Channel-wide audit log (P2-C): one ring buffer per channel instance,
     /// consulted by the doctor to answer "what did this channel actually
     /// do in chat X". Restart clears it — the audit log is a debugging
@@ -246,14 +247,10 @@ impl Channel for TelegramChannel {
                     link_preview: account.link_preview.unwrap_or_default(),
                 });
 
-            let account_access = self
-                .access_by_account
-                .get(&account.id)
-                .cloned()
-                .expect(
-                    "start() runs after new() which inserts every account's \
+            let account_access = self.access_by_account.get(&account.id).cloned().expect(
+                "start() runs after new() which inserts every account's \
                      controller into access_by_account",
-                );
+            );
             let mut instance = BotInstance::new(account, resolved_config, account_access.clone());
 
             // Group mention gate: only respond to addressed group messages when
@@ -276,7 +273,9 @@ impl Channel for TelegramChannel {
             );
             match &verdict {
                 token_fingerprint::TokenFingerprintVerdict::NotConfigured => {}
-                token_fingerprint::TokenFingerprintVerdict::Match { fingerprint_prefix, .. } => {
+                token_fingerprint::TokenFingerprintVerdict::Match {
+                    fingerprint_prefix, ..
+                } => {
                     tracing::info!(
                         account_id = %account.id,
                         fingerprint_prefix = %fingerprint_prefix,
@@ -488,8 +487,7 @@ impl Channel for TelegramChannel {
                         // conversation_id; we still need the raw thread_id here
                         // so the access controller's resolver lookup actually
                         // hits the per-topic override (SW-1).
-                        let thread_id_i32: Option<i32> =
-                            msg.thread_id.map(|t| t.0 .0);
+                        let thread_id_i32: Option<i32> = msg.thread_id.map(|t| t.0 .0);
 
                         // Group mention gate (pure, deterministic I/O filter — R4).
                         // Drops ambient group chatter that does not address the
@@ -614,7 +612,12 @@ impl Channel for TelegramChannel {
                             let user_id_val = q.from.id.0 as i64;
 
                             let is_group = raw_chat_id < 0;
-                            let decision = access.check_message(user_id_val, raw_chat_id, thread_id_val, is_group);
+                            let decision = access.check_message(
+                                user_id_val,
+                                raw_chat_id,
+                                thread_id_val,
+                                is_group,
+                            );
                             if decision == AccessDecision::Allowed {
                                 let inbound = InboundMessage {
                                     id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", q.id)),

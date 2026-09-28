@@ -303,7 +303,8 @@ impl AlephError {
         Self::RequestRejected {
             message: msg.into(),
             suggestion: Some(
-                "The service refused the request itself; check the parameters being sent".to_string(),
+                "The service refused the request itself; check the parameters being sent"
+                    .to_string(),
             ),
         }
     }

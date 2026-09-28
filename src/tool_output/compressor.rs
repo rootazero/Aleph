@@ -900,7 +900,11 @@ mod tests {
         let fenced = wrap_external_content(&lines.join("\n"), ContentSource::BrowserContent);
 
         let mut value = serde_json::json!({ "text": fenced });
-        assert!(compress_result_value("chrome_devtools__take_snapshot", &mut value, None));
+        assert!(compress_result_value(
+            "chrome_devtools__take_snapshot",
+            &mut value,
+            None
+        ));
 
         let text = value["text"].as_str().expect("stays a string");
         let split = crate::security::content_sanitizer::split_external_fence(text)

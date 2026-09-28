@@ -399,10 +399,7 @@ impl LoopState {
             if let Some(wake) = self.pending_tick_wake_ms {
                 if now_ms != 0 {
                     if wake > now_ms {
-                        parts.push(format!(
-                            "next tick: in {}",
-                            fmt_duration_ms(wake - now_ms)
-                        ));
+                        parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
                     } else {
                         parts.push("next tick: due now".to_string());
                     }
@@ -486,10 +483,7 @@ impl LoopState {
             if let Some(wake) = self.pending_tick_wake_ms {
                 if now_ms != 0 {
                     if wake > now_ms {
-                        parts.push(format!(
-                            "next tick: in {}",
-                            fmt_duration_ms(wake - now_ms)
-                        ));
+                        parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
                     } else {
                         parts.push("next tick: due now".to_string());
                     }

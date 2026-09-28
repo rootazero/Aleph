@@ -107,7 +107,9 @@ impl DreamStage for SkillDistillStage {
             } else {
                 let entries: Vec<String> = candidates
                     .iter()
-                    .map(|(path, sim)| format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}"))
+                    .map(|(path, sim)| {
+                        format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}")
+                    })
                     .collect();
                 format!("[\n{}\n]", entries.join(",\n"))
             };

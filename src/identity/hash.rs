@@ -62,8 +62,7 @@ fn lp(hasher: &mut Sha256, bytes: &[u8]) {
     // below would silently collapse any two inputs that agree on the first
     // u32::MAX bytes to the same digest. Real-world fields are short; the
     // panic surfaces the framing-invariant break instead of hiding it.
-    let len = u32::try_from(bytes.len())
-        .expect("preimage field exceeds u32 length");
+    let len = u32::try_from(bytes.len()).expect("preimage field exceeds u32 length");
     hasher.update(len.to_be_bytes());
     hasher.update(bytes);
 }

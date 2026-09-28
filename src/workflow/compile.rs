@@ -427,10 +427,7 @@ fn compute_parallel_assignments(
         let counter = counters.entry(label.to_string()).or_insert(0);
         let index = *counter;
         *counter += 1;
-        out.insert(
-            step.id.clone(),
-            (label.to_string(), index, size),
-        );
+        out.insert(step.id.clone(), (label.to_string(), index, size));
     }
     out
 }
@@ -570,17 +567,15 @@ pub async fn materialize(
             // a parallel group (a synth over a labelled fan-out is a real
             // shape), so the same labelling applies. `None` for an
             // ungrouped collect → byte-identical row.
-            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned() {
+            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned()
+            {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
                     obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
                     obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
                 }
             }
-            (
-                crate::workflow::collect::COLLECT_OWNER.to_string(),
-                meta,
-            )
+            (crate::workflow::collect::COLLECT_OWNER.to_string(), meta)
         } else {
             let mut meta = json!({
                 MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
@@ -633,7 +628,8 @@ pub async fn materialize(
             // their row shape is different (clarify has CLARIFY_META_KEY,
             // collect is handled in the collect branch below), and parallel
             // grouping is meaningless on a step that does not run an agent.
-            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned() {
+            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned()
+            {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
                     obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
@@ -1728,17 +1724,23 @@ mod tests {
         let b = store.get_task(&mat.task_ids[2]).await.unwrap().unwrap();
         for (task, expected_idx) in [(&a, 0usize), (&b, 1usize)] {
             assert_eq!(
-                task.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+                task.metadata
+                    .get(WORKFLOW_PARALLEL_GROUP_KEY)
+                    .and_then(|v| v.as_str()),
                 Some("scan"),
                 "group label rides with the member"
             );
             assert_eq!(
-                task.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+                task.metadata
+                    .get(WORKFLOW_PARALLEL_INDEX_KEY)
+                    .and_then(|v| v.as_u64()),
                 Some(expected_idx as u64),
                 "zero-based index matches position"
             );
             assert_eq!(
-                task.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+                task.metadata
+                    .get(WORKFLOW_PARALLEL_SIZE_KEY)
+                    .and_then(|v| v.as_u64()),
                 Some(2),
                 "size is the SAME on every member (no per-step recomputation)"
             );
@@ -1755,14 +1757,11 @@ mod tests {
         let def = WorkflowDef {
             name: "solo".into(),
             description: String::new(),
-            steps: vec![
-                step("a", "w", &[]),
-                {
-                    let mut s = step("solo", "w", &["a"]);
-                    s.parallel_group = Some("scan".into());
-                    s
-                },
-            ],
+            steps: vec![step("a", "w", &[]), {
+                let mut s = step("solo", "w", &["a"]);
+                s.parallel_group = Some("scan".into());
+                s
+            }],
         };
         let mat = materialize(
             &def,
@@ -1778,15 +1777,21 @@ mod tests {
         .unwrap();
         let solo = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
         assert_eq!(
-            solo.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+            solo.metadata
+                .get(WORKFLOW_PARALLEL_GROUP_KEY)
+                .and_then(|v| v.as_str()),
             Some("scan")
         );
         assert_eq!(
-            solo.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+            solo.metadata
+                .get(WORKFLOW_PARALLEL_INDEX_KEY)
+                .and_then(|v| v.as_u64()),
             Some(0)
         );
         assert_eq!(
-            solo.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+            solo.metadata
+                .get(WORKFLOW_PARALLEL_SIZE_KEY)
+                .and_then(|v| v.as_u64()),
             Some(1),
             "a solo group has size 1"
         );
@@ -1838,7 +1843,9 @@ mod tests {
         for (i, id) in scan_members.iter().enumerate() {
             let t = store.get_task(id).await.unwrap().unwrap();
             assert_eq!(
-                t.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+                t.metadata
+                    .get(WORKFLOW_PARALLEL_INDEX_KEY)
+                    .and_then(|v| v.as_u64()),
                 Some(i as u64),
                 "scan group member {} has index {}",
                 i,
@@ -1847,16 +1854,25 @@ mod tests {
         }
         let review = store.get_task(review_member).await.unwrap().unwrap();
         assert_eq!(
-            review.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+            review
+                .metadata
+                .get(WORKFLOW_PARALLEL_INDEX_KEY)
+                .and_then(|v| v.as_u64()),
             Some(0),
             "review group starts its own index counter at 0"
         );
         assert_eq!(
-            review.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+            review
+                .metadata
+                .get(WORKFLOW_PARALLEL_GROUP_KEY)
+                .and_then(|v| v.as_str()),
             Some("review")
         );
         assert_eq!(
-            review.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+            review
+                .metadata
+                .get(WORKFLOW_PARALLEL_SIZE_KEY)
+                .and_then(|v| v.as_u64()),
             Some(1)
         );
     }
@@ -1924,9 +1940,7 @@ mod tests {
     /// meta the same way they read a clarify step's awaiting record.
     #[tokio::test]
     async fn materialize_stamps_collect_step_owner_and_meta() {
-        use crate::workflow::collect::{
-            collect_task_meta, COLLECT_META_KEY, COLLECT_OWNER,
-        };
+        use crate::workflow::collect::{collect_task_meta, COLLECT_META_KEY, COLLECT_OWNER};
         use crate::workflow::def::CollectReduce;
         let store = setup_store().await;
         let def = WorkflowDef {
@@ -1963,7 +1977,12 @@ mod tests {
         let mut synth_id = None;
         for id in &mat.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
-            if task.metadata.get(WORKFLOW_STEP_KEY).and_then(|v| v.as_str()) == Some("synth") {
+            if task
+                .metadata
+                .get(WORKFLOW_STEP_KEY)
+                .and_then(|v| v.as_str())
+                == Some("synth")
+            {
                 synth_id = Some(id.clone());
                 break;
             }
@@ -2020,7 +2039,12 @@ mod tests {
         let mut synth_id = None;
         for id in &mat.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
-            if task.metadata.get(WORKFLOW_STEP_KEY).and_then(|v| v.as_str()) == Some("synth") {
+            if task
+                .metadata
+                .get(WORKFLOW_STEP_KEY)
+                .and_then(|v| v.as_str())
+                == Some("synth")
+            {
                 synth_id = Some(id.clone());
                 break;
             }
@@ -2047,10 +2071,7 @@ mod tests {
         let def = WorkflowDef {
             name: "wf".into(),
             description: String::new(),
-            steps: vec![
-                step("a", "w", &[]),
-                collect_step("synth", &["a", "ghost"]),
-            ],
+            steps: vec![step("a", "w", &[]), collect_step("synth", &["a", "ghost"])],
         };
         assert!(materialize(
             &def,

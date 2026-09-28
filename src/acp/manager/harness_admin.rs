@@ -364,10 +364,7 @@ impl AcpAdapterManager {
     /// method acquires the per-session mutex (which may block on a long prompt)
     /// and must NOT run under the sessions/adapters/configs map locks. See
     /// `unregister_harness` / `update_harness` for the lock-release pattern.
-    async fn kill_and_emit_removed(
-        &self,
-        removed: Vec<(SessionKey, SessionEntry)>,
-    ) {
+    async fn kill_and_emit_removed(&self, removed: Vec<(SessionKey, SessionEntry)>) {
         for (_, entry) in &removed {
             let mut session = entry.session.lock().await;
             session.kill().await;

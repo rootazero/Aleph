@@ -252,9 +252,7 @@ impl VisionProvider for PlatformOcrProvider {
             }
         }
         .map_err(|e| {
-            VisionError::ProviderError(format!(
-                "Platform OCR failed ({image_ctx}): {e}"
-            ))
+            VisionError::ProviderError(format!("Platform OCR failed ({image_ctx}): {e}"))
         })?;
 
         Ok(convert_platform_ocr_result(result))
@@ -291,14 +289,14 @@ fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
             .into_iter()
             .map(|line| crate::vision::types::OcrLine {
                 text: line.text,
-                bounding_box: line.bounding_box.map(|bb| {
-                    crate::vision::types::BoundingBox {
+                bounding_box: line
+                    .bounding_box
+                    .map(|bb| crate::vision::types::BoundingBox {
                         x: bb.x,
                         y: bb.y,
                         w: bb.w,
                         h: bb.h,
-                    }
-                }),
+                    }),
                 confidence: line.confidence,
             })
             .collect(),

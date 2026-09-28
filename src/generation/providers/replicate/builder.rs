@@ -146,9 +146,7 @@ impl ReplicateProviderBuilder {
             .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
             .map_err(|e| {
-                GenerationError::network(format!(
-                    "replicate: failed to build HTTP client: {e}"
-                ))
+                GenerationError::network(format!("replicate: failed to build HTTP client: {e}"))
             })?;
 
         Ok(ReplicateProvider {

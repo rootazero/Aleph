@@ -138,12 +138,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ReactionSender for MockReactionSender {
-        async fn send_reaction(
-            &self,
-            jid: &str,
-            msg_id: &str,
-            emoji: &str,
-        ) -> Result<(), String> {
+        async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> Result<(), String> {
             self.calls
                 .lock()
                 .await

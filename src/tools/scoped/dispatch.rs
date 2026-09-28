@@ -1616,7 +1616,9 @@ impl ScopedToolService {
         // A result carrying its own call's offload marker skips the rewrite: a
         // cut that dropped the marker line would hide the offload from Layer 2,
         // which would then persist this result over the blob the marker names.
-        let outcome = self.run_ingress(name, &mut out.value, budget, &call_id).await;
+        let outcome = self
+            .run_ingress(name, &mut out.value, budget, &call_id)
+            .await;
 
         if outcome.compressed {
             tracing::debug!(tool = name, "ingress compressed a tool-result field");
@@ -1642,7 +1644,9 @@ impl ScopedToolService {
             // Narrowed by any wrapper around this dispatch (a subagent's
             // allowlist scopes its set around the delegation).
             crate::tools::result_processing::dispatch_recovery_tools()
-                .map_or(self.recovery_tools(), |outer| outer.intersect(self.recovery_tools())),
+                .map_or(self.recovery_tools(), |outer| {
+                    outer.intersect(self.recovery_tools())
+                }),
         );
 
         // What this result cost on its way in: the tokens the tool produced
@@ -1896,7 +1900,9 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
 /// tokens, because the only safe signal is the adapter's own report, and
 /// a misclassification would silently re-route a genuine tool failure.
 fn looks_like_cancellation(cause: &str) -> bool {
-    let trimmed = cause.trim_end().trim_end_matches(|c: char| !c.is_alphanumeric());
+    let trimmed = cause
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_alphanumeric());
     // Strip the trailing "by upstream" / "by client" / "by caller" style
     // participle so "... cancelled by upstream" still matches.
     let core = trimmed

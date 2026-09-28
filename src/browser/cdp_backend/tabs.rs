@@ -429,7 +429,10 @@ mod tests {
             .await
             .expect_err("the engine refused the load");
         assert!(
-            matches!(err, crate::browser::error::BrowserError::NavigationFailed(_)),
+            matches!(
+                err,
+                crate::browser::error::BrowserError::NavigationFailed(_)
+            ),
             "got {err:?}"
         );
         let reg = backend.tab_identities.clone();

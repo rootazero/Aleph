@@ -57,13 +57,10 @@ impl AccessController {
     /// for many accounts; the controller only ever resolves THIS one.
     #[must_use]
     pub fn new(resolver: Arc<ConfigResolver>, account_id: &str) -> Self {
-        let account_default = resolver
-            .resolve(account_id, 0, None)
-            .cloned()
-            .expect(
-                "ConfigResolver built without an account-level entry for this account \
+        let account_default = resolver.resolve(account_id, 0, None).cloned().expect(
+            "ConfigResolver built without an account-level entry for this account \
                  — the bot construction path must always insert one",
-            );
+        );
         Self {
             resolver,
             account_id: account_id.to_string(),
@@ -118,11 +115,7 @@ impl AccessController {
     /// streaming toggles, error policy) — wiring this is what makes a group's
     /// `error_policy = silent` actually silent.
     #[must_use]
-    pub fn config_for(
-        &self,
-        chat_id: i64,
-        thread_id: Option<i32>,
-    ) -> &ResolvedConfig {
+    pub fn config_for(&self, chat_id: i64, thread_id: Option<i32>) -> &ResolvedConfig {
         self.resolver
             .resolve(&self.account_id, chat_id, thread_id)
             .unwrap_or(&self.account_default)
@@ -130,12 +123,7 @@ impl AccessController {
 
     // --- Private helpers ---
 
-    fn decide(
-        cfg: &ResolvedConfig,
-        user_id: i64,
-        chat_id: i64,
-        is_group: bool,
-    ) -> AccessDecision {
+    fn decide(cfg: &ResolvedConfig, user_id: i64, chat_id: i64, is_group: bool) -> AccessDecision {
         if is_group {
             Self::decide_group(cfg, chat_id)
         } else {
@@ -186,8 +174,8 @@ impl AccessController {
 mod tests {
     use super::*;
     use crate::gateway::interfaces::telegram::config_v2::{
-        ErrorPolicy, ErrorPolicyMode,
-        TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
+        ErrorPolicy, ErrorPolicyMode, TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig,
+        TelegramTopicConfig,
     };
 
     fn account_only_v2(dm: DmPolicy, group: GroupPolicy, users: Vec<i64>) -> TelegramConfigV2 {
@@ -214,7 +202,8 @@ mod tests {
                 link_preview: None,
                 proxy_url: None,
                 groups: vec![],
-            token_fingerprint: None,}],
+                token_fingerprint: None,
+            }],
         }
     }
 
@@ -238,8 +227,11 @@ mod tests {
 
     #[test]
     fn test_dm_open() {
-        let ctrl =
-            controller(&account_only_v2(DmPolicy::Open, GroupPolicy::default(), vec![]));
+        let ctrl = controller(&account_only_v2(
+            DmPolicy::Open,
+            GroupPolicy::default(),
+            vec![],
+        ));
         assert_eq!(
             ctrl.check_message(111, 111, None, false),
             AccessDecision::Allowed
@@ -315,8 +307,11 @@ mod tests {
 
     #[test]
     fn test_group_open() {
-        let ctrl =
-            controller(&account_only_v2(DmPolicy::default(), GroupPolicy::Open, vec![]));
+        let ctrl = controller(&account_only_v2(
+            DmPolicy::default(),
+            GroupPolicy::Open,
+            vec![],
+        ));
         assert_eq!(
             ctrl.check_message(111, -100123, None, true),
             AccessDecision::Allowed,

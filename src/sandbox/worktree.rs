@@ -560,7 +560,8 @@ mod tests {
             ..Default::default()
         });
 
-        let sandbox_for_spawn: Arc<dyn Sandbox> = Arc::new(WorktreeSandbox::new(worktree_path.clone()));
+        let sandbox_for_spawn: Arc<dyn Sandbox> =
+            Arc::new(WorktreeSandbox::new(worktree_path.clone()));
 
         let session = crate::routing::session_key::SessionKey::ephemeral("task7-e2e-override");
         let out = SESSION_ID
@@ -580,7 +581,9 @@ mod tests {
                     // assertion in the layer under test (the sandbox cwd
                     // and env), not in the shell-invocation glue.
                     let cmd = crate::sandbox::SandboxCommand {
-                        session_id: crate::session::service::SessionId::main("task7-e2e-override-test"),
+                        session_id: crate::session::service::SessionId::main(
+                            "task7-e2e-override-test",
+                        ),
                         tool_name: "bash".into(),
                         program: "pwd".into(),
                         args: vec![],
@@ -590,8 +593,10 @@ mod tests {
                         capabilities: crate::sandbox::SandboxCapabilities::default(),
                         timeout: None,
                     };
-                    sandbox_for_spawn.execute(cmd).await.expect("sandbox execute")
-
+                    sandbox_for_spawn
+                        .execute(cmd)
+                        .await
+                        .expect("sandbox execute")
                 }),
             )
             .await;
@@ -602,7 +607,13 @@ mod tests {
             0,
             "worktree override must bypass the construction-time sandbox"
         );
-        assert_eq!(out.exit_code, Some(0), "isolated command failed (exit={:?}, stderr={})", out.exit_code, String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            out.exit_code,
+            Some(0),
+            "isolated command failed (exit={:?}, stderr={})",
+            out.exit_code,
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         let basename = worktree_path.file_name().unwrap().to_str().unwrap();
         let actual = String::from_utf8_lossy(&out.stdout).trim().to_string();

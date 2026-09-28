@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::SubagentTool;
 use crate::agents::background_tracker::{CompletedOutcome, SpawnMeta};
-use crate::agents::runtime::{AgentIdentity, AgentRuntime, AgentRuntimeConfig, Lifecycle, SpawnOverride};
+use crate::agents::runtime::{
+    AgentIdentity, AgentRuntime, AgentRuntimeConfig, Lifecycle, SpawnOverride,
+};
 use crate::agents::subagent_tree_events::{emit_tree_event, now_ms};
 use crate::agents::AgentDef;
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEvent};
@@ -46,7 +48,8 @@ impl SubagentTool {
     /// when the parent is). Falls back to a standalone token for tests / direct
     /// callers with no parent token wired.
     pub(super) fn cancel_for_child(&self) -> CancellationToken {
-        self.background.parent_cancel
+        self.background
+            .parent_cancel
             .as_ref()
             .map(|t| t.child_token())
             .unwrap_or_default()
@@ -492,8 +495,10 @@ impl SubagentTool {
             runtime = runtime.with_context_budget_config(cfg.clone());
         }
         if let Some(refiner) = self.budget_inheritance.context_budget_refiner.as_ref() {
-            runtime = runtime
-                .with_context_budget_refinement(refiner.clone(), self.budget_inheritance.primary_context_window);
+            runtime = runtime.with_context_budget_refinement(
+                refiner.clone(),
+                self.budget_inheritance.primary_context_window,
+            );
         }
         if let Some(cheap) = self.budget_inheritance.cheap_summary_provider.clone() {
             runtime = runtime.with_cheap_summary_provider(cheap);

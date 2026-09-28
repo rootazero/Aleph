@@ -162,13 +162,10 @@ impl WhatsAppChannel {
     /// and the runtime adapter from the fake itself rather than the
     /// `RealWaRuntime`/`WaAuthManager` plumbing that the production path
     /// uses.
-    async fn run_fake_event_loop(
-        &mut self,
-        fake: Arc<FakeWaRuntime>,
-    ) -> ChannelResult<()> {
-        let mut event_rx = fake.take_event_receiver().ok_or_else(|| {
-            ChannelError::Internal("fake runtime receiver already taken".into())
-        })?;
+    async fn run_fake_event_loop(&mut self, fake: Arc<FakeWaRuntime>) -> ChannelResult<()> {
+        let mut event_rx = fake
+            .take_event_receiver()
+            .ok_or_else(|| ChannelError::Internal("fake runtime receiver already taken".into()))?;
 
         // Replace the no-op reaction handler with one wired to the
         // fake's `send_reaction`. Without this, ack reactions on
@@ -583,12 +580,7 @@ struct NoopReactionSender;
 
 #[async_trait]
 impl ReactionSender for NoopReactionSender {
-    async fn send_reaction(
-        &self,
-        _jid: &str,
-        _msg_id: &str,
-        _emoji: &str,
-    ) -> Result<(), String> {
+    async fn send_reaction(&self, _jid: &str, _msg_id: &str, _emoji: &str) -> Result<(), String> {
         Ok(())
     }
 }
@@ -603,12 +595,7 @@ struct WaRuntimeReactionAdapter {
 
 #[async_trait]
 impl ReactionSender for WaRuntimeReactionAdapter {
-    async fn send_reaction(
-        &self,
-        jid: &str,
-        msg_id: &str,
-        emoji: &str,
-    ) -> Result<(), String> {
+    async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> Result<(), String> {
         self.runtime
             .send_reaction(jid, msg_id, emoji)
             .await

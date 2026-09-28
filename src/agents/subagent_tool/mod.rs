@@ -245,7 +245,9 @@ impl SubagentTool {
                 cheap_summary_provider: None,
                 verifier_chain: None,
             },
-            routing: RoutingExperience { routing_store: None },
+            routing: RoutingExperience {
+                routing_store: None,
+            },
             trace: TraceContext {
                 trace_sink: None,
                 accounting_sink: None,

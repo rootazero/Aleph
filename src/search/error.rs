@@ -114,7 +114,10 @@ mod tests {
     #[test]
     fn aleph_error_variants_map_to_the_kind_whose_lever_fits() {
         let cases: &[(AlephError, SearchErrorKind)] = &[
-            (AlephError::network("dns failure"), SearchErrorKind::Transient),
+            (
+                AlephError::network("dns failure"),
+                SearchErrorKind::Transient,
+            ),
             (
                 AlephError::Timeout { suggestion: None },
                 SearchErrorKind::Transient,
@@ -145,17 +148,10 @@ mod tests {
                 SearchErrorKind::RequestRejected,
             ),
             (AlephError::Cancelled, SearchErrorKind::Cancelled),
-            (
-                AlephError::other("something odd"),
-                SearchErrorKind::Other,
-            ),
+            (AlephError::other("something odd"), SearchErrorKind::Other),
         ];
         for (err, expected) in cases {
-            assert_eq!(
-                SearchErrorKind::of(err),
-                *expected,
-                "wrong kind for: {err}",
-            );
+            assert_eq!(SearchErrorKind::of(err), *expected, "wrong kind for: {err}",);
         }
     }
 

@@ -284,7 +284,7 @@ pub(crate) async fn extract_attachments(
         url,
         path: None,
         data: None,
-            is_voice_note: false,
-            is_video_note: false,
-        }]
+        is_voice_note: false,
+        is_video_note: false,
+    }]
 }

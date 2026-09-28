@@ -157,7 +157,9 @@ fn strip_code_fence(s: &str) -> &str {
     // must be on the same line; consume to the first newline if present so
     // we do not nibble the document body.
     let rest = match rest.find('\n') {
-        Some(i) if rest[..i].chars().all(|c| c != '`') && rest[..i].trim().len() < 32 => &rest[i + 1..],
+        Some(i) if rest[..i].chars().all(|c| c != '`') && rest[..i].trim().len() < 32 => {
+            &rest[i + 1..]
+        }
         _ => rest,
     };
     rest.strip_suffix("```").unwrap_or(rest).trim()
@@ -252,8 +254,14 @@ mod tests {
         let reply = r#"{"decision": "no"}"#;
         match validate_step_output(&task, reply) {
             SchemaOutcome::SchemaMismatch { reason } => {
-                assert!(reason.contains("verdict"), "reason names the missing field: {reason}");
-                assert!(reason.contains("at "), "reason includes instance path: {reason}");
+                assert!(
+                    reason.contains("verdict"),
+                    "reason names the missing field: {reason}"
+                );
+                assert!(
+                    reason.contains("at "),
+                    "reason includes instance path: {reason}"
+                );
             }
             other => panic!("expected SchemaMismatch, got {other:?}"),
         }
@@ -275,7 +283,9 @@ mod tests {
         let reply = r#"{"x": "not int", "y": "also not"}"#;
         match validate_step_output(&task, reply) {
             SchemaOutcome::SchemaMismatch { reason } => {
-                assert!(reason.contains("(more errors omitted)") || reason.matches(';').count() < 6);
+                assert!(
+                    reason.contains("(more errors omitted)") || reason.matches(';').count() < 6
+                );
             }
             other => panic!("expected SchemaMismatch, got {other:?}"),
         }
@@ -326,10 +336,7 @@ mod tests {
         // schema" so an authoring typo does not silently turn every step
         // of the template into a hard error.
         let task = task_with_schema(Some(json!("this is not a schema")));
-        assert_eq!(
-            validate_step_output(&task, "{}"),
-            SchemaOutcome::NoSchema,
-        );
+        assert_eq!(validate_step_output(&task, "{}"), SchemaOutcome::NoSchema,);
     }
 
     #[test]

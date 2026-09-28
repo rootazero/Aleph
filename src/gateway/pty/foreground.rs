@@ -467,14 +467,17 @@ pub fn foreground_fact_for_shell(shell_pid: u32) -> Option<ForegroundFact> {
 /// derivations of "is this an agent" (判据 §1 / §9).
 #[must_use]
 fn pick_foreground(facts: &[(usize, u64, ForegroundFact)]) -> Option<ForegroundFact> {
-    let is_agent = |f: &ForegroundFact| {
-        agent_detect::identify_agent_from_process(&f.name, &f.argv).is_some()
-    };
+    let is_agent =
+        |f: &ForegroundFact| agent_detect::identify_agent_from_process(&f.name, &f.argv).is_some();
     facts
         .iter()
         .filter(|(_, _, f)| is_agent(f))
         .min_by_key(|(depth, start, f)| (*depth, *start, f.pid))
-        .or_else(|| facts.iter().max_by_key(|(depth, start, f)| (*depth, *start, f.pid)))
+        .or_else(|| {
+            facts
+                .iter()
+                .max_by_key(|(depth, start, f)| (*depth, *start, f.pid))
+        })
         .map(|(_, _, f)| f.clone())
 }
 
@@ -638,7 +641,13 @@ mod tests {
         }
     }
 
-    fn candidate(depth: usize, start: u64, pid: u32, name: &str, argv: &[&str]) -> (usize, u64, ForegroundFact) {
+    fn candidate(
+        depth: usize,
+        start: u64,
+        pid: u32,
+        name: &str,
+        argv: &[&str],
+    ) -> (usize, u64, ForegroundFact) {
         (
             depth,
             start,
@@ -688,7 +697,11 @@ mod tests {
         // The gate is one-directional: give 900 a start time AFTER 200 and it
         // is an ordinary grandchild again. Without this row the test would
         // pass just as well against a walk that dropped every depth-2 node.
-        let rows = [row(100, 0, 1_000), row(200, 100, 1_100), row(900, 200, 1_200)];
+        let rows = [
+            row(100, 0, 1_000),
+            row(200, 100, 1_100),
+            row(900, 200, 1_200),
+        ];
         assert_eq!(
             deepest_newest(&descendants_of(&rows, 100)),
             Some(900),
@@ -710,8 +723,16 @@ mod tests {
     fn an_agent_outranks_the_tool_it_spawned_and_only_an_agent_does() {
         // cmd.exe -> node (claude) -> rg. Deepest-and-newest says `rg`.
         let tree = [
-            candidate(1, 10, 200, "node.exe", &["C:\\Program Files\\nodejs\\node.exe",
-                "C:\\p\\node_modules\\@anthropic-ai\\claude-code\\cli.js"]),
+            candidate(
+                1,
+                10,
+                200,
+                "node.exe",
+                &[
+                    "C:\\Program Files\\nodejs\\node.exe",
+                    "C:\\p\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
+                ],
+            ),
             candidate(2, 20, 300, "rg.exe", &["rg", "--json", "TODO"]),
         ];
         assert_eq!(
@@ -723,7 +744,13 @@ mod tests {
         // Two agents (`claude` launched under `npx`): the SHALLOWEST wins,
         // because the launcher's own command line already names its operand.
         let chain = [
-            candidate(1, 10, 200, "node.exe", &["npm exec claude", "TERM_PROGRAM=x"]),
+            candidate(
+                1,
+                10,
+                200,
+                "node.exe",
+                &["npm exec claude", "TERM_PROGRAM=x"],
+            ),
             candidate(2, 20, 300, "node.exe", &["claude"]),
         ];
         assert_eq!(pick_foreground(&chain).map(|f| f.pid), Some(200));

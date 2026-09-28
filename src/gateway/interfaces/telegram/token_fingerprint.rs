@@ -144,7 +144,9 @@ mod tests {
         assert!(v.is_match());
         assert!(v.is_configured());
         match v {
-            TokenFingerprintVerdict::Match { fingerprint_prefix, .. } => {
+            TokenFingerprintVerdict::Match {
+                fingerprint_prefix, ..
+            } => {
                 assert_eq!(fingerprint_prefix.len(), 8);
             }
             _ => unreachable!(),
@@ -153,7 +155,11 @@ mod tests {
 
     #[test]
     fn mismatch_carries_both_prefixes() {
-        let v = TokenFingerprintVerdict::verify("acct", "real-token", Some("deadbeef" /* short, intentionally wrong */));
+        let v = TokenFingerprintVerdict::verify(
+            "acct",
+            "real-token",
+            Some("deadbeef" /* short, intentionally wrong */),
+        );
         match v {
             TokenFingerprintVerdict::Mismatch {
                 expected_prefix,

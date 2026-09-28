@@ -691,7 +691,9 @@ mod tests {
     /// `queries` array is only a mistake when `query` is empty as well.
     #[test]
     fn neither_query_nor_queries_is_rejected() {
-        let err = resolve_queries(&SearchArgs::default()).unwrap_err().to_string();
+        let err = resolve_queries(&SearchArgs::default())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("query"), "{err}");
         assert!(err.contains("queries"), "{err}");
 
@@ -785,7 +787,11 @@ mod tests {
         let wire = serde_json::to_value(&output).unwrap();
         assert!(wire.get("queries").is_none(), "{wire}");
         assert!(
-            wire["results"].as_array().unwrap().iter().all(|r| r.get("query_index").is_none()),
+            wire["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.get("query_index").is_none()),
             "{wire}"
         );
     }
@@ -823,7 +829,10 @@ mod tests {
         assert_eq!(by_url["https://stub.test/alpha"], Some(0));
         assert_eq!(by_url["https://stub.test/beta"], Some(1));
         assert!(
-            output.notes.iter().any(|n| n.contains("more than one query")),
+            output
+                .notes
+                .iter()
+                .any(|n| n.contains("more than one query")),
             "{:?}",
             output.notes
         );

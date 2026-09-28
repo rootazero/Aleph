@@ -21,19 +21,15 @@
 use std::time::Duration;
 
 use alephcore::gateway::channel::{Channel, ChannelStatus};
-use alephcore::gateway::interfaces::whatsapp::WhatsAppChannel;
 use alephcore::gateway::interfaces::whatsapp::pairing::PairingState;
 use alephcore::gateway::interfaces::whatsapp::wa_runtime::fake::FakeWaRuntime;
+use alephcore::gateway::interfaces::whatsapp::WhatsAppChannel;
 
 /// Poll `Channel::status()` until it equals `expected` or `timeout`
 /// elapses. Polling is the only safe alternative to fixed `sleep(...)`
 /// calls: a `sleep` that is too short flakes on slow CI, and a `sleep`
 /// that is too long wastes seconds in the hot path.
-async fn wait_for_status(
-    channel: &WhatsAppChannel,
-    expected: ChannelStatus,
-    timeout: Duration,
-) {
+async fn wait_for_status(channel: &WhatsAppChannel, expected: ChannelStatus, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
         if channel.status() == expected {
@@ -57,7 +53,9 @@ async fn wait_for_status(
 /// observations to be meaningful.
 async fn reset_pairing_state(channel: &WhatsAppChannel, fake: &FakeWaRuntime) {
     fake.set_pairing_state(PairingState::Idle).await;
-    channel.reset_pairing_state_for_test(PairingState::Idle).await;
+    channel
+        .reset_pairing_state_for_test(PairingState::Idle)
+        .await;
 }
 
 /// Scenario 1 — `PairingQrCode` drives PairingState to `WaitingQr`, and
@@ -71,11 +69,13 @@ async fn reset_pairing_state(channel: &WhatsAppChannel, fake: &FakeWaRuntime) {
 /// machine without any network I/O.
 #[tokio::test]
 async fn scenario_qr_emitted_drives_pairing_state() {
-    let (mut channel, fake) =
-        WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
+    let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
     reset_pairing_state(&channel, &fake).await;
 
-    channel.start().await.expect("start should succeed in fake mode");
+    channel
+        .start()
+        .await
+        .expect("start should succeed in fake mode");
 
     // Drive a QR code: channel.pairing_state Idle → WaitingQr.
     fake.emit_qr("qr-data-1234").await.expect("emit_qr");
@@ -94,11 +94,13 @@ async fn scenario_qr_emitted_drives_pairing_state() {
 /// shape the production transport drives it through.
 #[tokio::test]
 async fn scenario_pair_success_marks_connected() {
-    let (mut channel, fake) =
-        WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
+    let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
     reset_pairing_state(&channel, &fake).await;
 
-    channel.start().await.expect("start should succeed in fake mode");
+    channel
+        .start()
+        .await
+        .expect("start should succeed in fake mode");
 
     fake.emit_pair_success().await.expect("emit_pair_success");
     wait_for_status(&channel, ChannelStatus::Connected, Duration::from_secs(2)).await;
@@ -121,10 +123,12 @@ async fn scenario_pair_success_marks_connected() {
 /// → event loop → mapper → inbound broadcast → subscriber.
 #[tokio::test]
 async fn scenario_inbound_message_propagates_to_channel() {
-    let (mut channel, fake) =
-        WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
+    let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
 
-    channel.start().await.expect("start should succeed in fake mode");
+    channel
+        .start()
+        .await
+        .expect("start should succeed in fake mode");
 
     let mut rx = channel.inbound_subscribe();
     fake.emit_text_message("1234@s.whatsapp.net", "alice", "hello from fake")
@@ -157,10 +161,12 @@ async fn scenario_inbound_message_propagates_to_channel() {
 /// reconnect.
 #[tokio::test]
 async fn scenario_reconnect_after_disconnect() {
-    let (mut channel, fake) =
-        WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
+    let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", Default::default());
 
-    channel.start().await.expect("start should succeed in fake mode");
+    channel
+        .start()
+        .await
+        .expect("start should succeed in fake mode");
 
     // Baseline: Connected (FakeWaRuntime defaults to Connected).
     assert_eq!(channel.status(), ChannelStatus::Connected);

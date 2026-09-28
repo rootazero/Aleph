@@ -49,10 +49,7 @@ pub struct AuditEntry {
 pub enum AuditKind {
     /// An inbound update (message / edited message / callback query / ...)
     /// was received and forwarded to the inbound router.
-    UpdateReceived {
-        update_id: i64,
-        kind_label: String,
-    },
+    UpdateReceived { update_id: i64, kind_label: String },
     /// An outbound send was attempted. `outcome` is "succeeded" or
     /// "failed: <reason>".
     SendAttempted {
@@ -115,19 +112,12 @@ impl AuditLog {
     /// Snapshot filtered to one conversation. Useful for the doctor's
     /// "what happened in chat -100123?" answer.
     #[must_use]
-    pub fn snapshot_for_conversation(
-        &self,
-        account_id: &str,
-        chat_id: i64,
-    ) -> Vec<AuditEntry> {
+    pub fn snapshot_for_conversation(&self, account_id: &str, chat_id: i64) -> Vec<AuditEntry> {
         self.inner
             .lock()
             .map(|r| {
                 r.iter()
-                    .filter(|e| {
-                        e.account_id == account_id
-                            && e.chat_id == Some(chat_id)
-                    })
+                    .filter(|e| e.account_id == account_id && e.chat_id == Some(chat_id))
                     .cloned()
                     .collect()
             })
@@ -211,15 +201,33 @@ mod tests {
     #[test]
     fn snapshot_for_conversation_filters_by_chat() {
         let log = AuditLog::new();
-        log.push(entry("acct", Some(1), None, AuditKind::UpdateReceived {
-            update_id: 1, kind_label: "msg".to_string(),
-        }));
-        log.push(entry("acct", Some(2), None, AuditKind::UpdateReceived {
-            update_id: 2, kind_label: "msg".to_string(),
-        }));
-        log.push(entry("other", Some(1), None, AuditKind::UpdateReceived {
-            update_id: 3, kind_label: "msg".to_string(),
-        }));
+        log.push(entry(
+            "acct",
+            Some(1),
+            None,
+            AuditKind::UpdateReceived {
+                update_id: 1,
+                kind_label: "msg".to_string(),
+            },
+        ));
+        log.push(entry(
+            "acct",
+            Some(2),
+            None,
+            AuditKind::UpdateReceived {
+                update_id: 2,
+                kind_label: "msg".to_string(),
+            },
+        ));
+        log.push(entry(
+            "other",
+            Some(1),
+            None,
+            AuditKind::UpdateReceived {
+                update_id: 3,
+                kind_label: "msg".to_string(),
+            },
+        ));
         let s = log.snapshot_for_conversation("acct", 1);
         assert_eq!(s.len(), 1, "filter by account AND chat");
     }

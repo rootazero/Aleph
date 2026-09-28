@@ -16,8 +16,8 @@ mod tests;
 
 // Re-export all public types
 pub use types::{
-    OutputMode, RunSummary, StreamEvent, ToolErrorItem,
-    ToolResult, ToolSummaryItem, UncertaintyAction,
+    OutputMode, RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem,
+    UncertaintyAction,
 };
 
 pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};

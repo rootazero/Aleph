@@ -1132,7 +1132,8 @@ async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
     // Starve the fan-out: every concurrency permit is held for the whole call.
     let permits = u32::try_from(tool.background.subagent_semaphore.available_permits()).unwrap();
     let _held = tool
-        .background.subagent_semaphore
+        .background
+        .subagent_semaphore
         .clone()
         .acquire_many_owned(permits)
         .await

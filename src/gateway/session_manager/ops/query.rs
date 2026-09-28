@@ -352,7 +352,12 @@ fn collect_rows_lossy<T>(
         }
     }
     if dropped > 0 {
-        tracing::warn!(query = what, dropped, kept = out.len(), "display-only read dropped undecodable rows");
+        tracing::warn!(
+            query = what,
+            dropped,
+            kept = out.len(),
+            "display-only read dropped undecodable rows"
+        );
     }
     out
 }

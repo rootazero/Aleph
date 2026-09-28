@@ -46,24 +46,24 @@ use super::per_client_buffer::PerClientBuffer;
 use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
 
-pub mod upgrade;
 pub mod auth;
+pub mod cleanup;
 pub mod dispatch;
 pub mod forward;
-pub mod cleanup;
+pub mod upgrade;
 
 // Bring every helper used by the orchestrator into this module's scope.
 // (The test module in `handler.rs` reaches them via the re-exports
 // declared at the bottom of this file.)
+pub use auth::{
+    connect_verdict, node_connect_claim, resolve_stamped_identity, wall_admits, NodeConnectClaim,
+};
+pub use dispatch::{dispatch_with_caller_context, process_request};
 pub use forward::{
     device_revoked_id, device_revoked_should_close, event_wire_form, extract_topic_and_data,
     forward_bus_to_client, is_token_rotated_frame, overflow_warning_frame,
     rotated_should_close_remote, DEVICE_REVOKED_TOPIC, TOKEN_ROTATED_TOPIC,
 };
-pub use auth::{
-    connect_verdict, node_connect_claim, resolve_stamped_identity, wall_admits, NodeConnectClaim,
-};
-pub use dispatch::{dispatch_with_caller_context, process_request};
 pub use upgrade::{parse_trusted_ips, refuse_insecure_remote, ws_upgrade_handler};
 
 // `cleanup::run_cleanup` is invoked by name only, no import needed.
@@ -147,7 +147,6 @@ pub struct ConnectionContext {
     /// See `crate::gateway::event_visibility`.
     event_visibility: Arc<crate::gateway::event_visibility::EventVisibilityIndex>,
 }
-
 
 pub async fn handle_connection(
     socket: WebSocket,
@@ -1458,7 +1457,6 @@ pub async fn handle_connection(
             }
         }
     }
-
 
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
