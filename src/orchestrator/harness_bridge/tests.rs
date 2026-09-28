@@ -1251,6 +1251,7 @@ async fn run_measures_its_messages(agent_id: &str, config: &crate::config::Confi
             None,
             crate::thinker::TurnEnvelope::default(),
             None,
+            "budget-probe-run".to_string(),
         )
         .await;
     assert!(
@@ -1321,6 +1322,7 @@ fn a_default_install_sizes_and_gates_the_system_prompt() {
         "no token gate when switched off"
     );
     assert_eq!(off.max_total_chars, TokenBudget::default().max_total_chars);
+}
 
 /// G1b. Program order — thinking, then the turn boundary, then text —
 /// survives into seq order through the one drain, with every frame produced
