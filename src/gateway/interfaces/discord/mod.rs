@@ -887,6 +887,31 @@ impl Channel for DiscordChannel {
             );
         }
 
+        // R2 D3: per-guild startup audit. Fires after the gateway ready
+        // handshake so the rows describe the bot's actual start state, not
+        // a pre-handshake guess. `bot_permissions=0` is the "unverified"
+        // failsafe — a real implementation would fetch the bitfield via
+        // REST per guild, but the post-incident question this row answers
+        // is "did the bot come up at all and announce itself", not "did it
+        // come up with every required permission". `for_config` already
+        // short-circuits when `allowed_guilds` is empty (the spec rule:
+        // no fabrication for guilds we haven't joined yet).
+        //
+        // `restart_channel` re-invokes this path, so a wedged channel that
+        // comes back through the health monitor will produce a fresh
+        // audit row per guild — semantically a restart IS a fresh start.
+        // If that becomes noisy in practice, gate it behind an
+        // `AtomicBool` field on `DiscordChannel`.
+        if let Some(log) = crate::security::audit::global() {
+            let entries = crate::gateway::interfaces::discord::security::startup_audit::for_config(
+                &self.config,
+                0,
+            );
+            for entry in entries {
+                log.log(entry).await;
+            }
+        }
+
         Ok(())
     }
 
