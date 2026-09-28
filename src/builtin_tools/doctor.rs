@@ -120,7 +120,10 @@ impl DoctorTool {
             .with_projection_holes_check()
             // Same two handles, the other question: does the log contradict
             // itself. `aleph resume` names this check to the operator by id.
-            .with_session_log_check())
+            .with_session_log_check()
+            // The doctor face of the boot activation gate: which mounted
+            // plugins never reached a terminal status.
+            .with_plugins_activated_check())
     }
 }
 
@@ -192,9 +195,10 @@ mod tests {
     /// `None`) `inspect_args()`'s tests use — rather than a literal restated
     /// by hand. A literal needed a manual edit, in the SAME commit, every time
     /// a check was added to either half of the sum it names (`default_
-    /// registry()`, or one of the four `with_*` calls `build_engine()` always
+    /// registry()`, or one of the five `with_*` calls `build_engine()` always
     /// chains: `ext/idle-extensions`, `core/capability-wiring`, `core/
-    /// projection-holes`, `core/session-log`); it went red for a reason
+    /// projection-holes`, `core/session-log`, `extension/plugins-activated`);
+    /// it went red for a reason
     /// unrelated to what these tests check the moment either side moved and
     /// the literal did not move with it — twice, once per side, before this
     /// derivation (a Task 7 fix-round regression: `browser/chromium-missing`
@@ -206,7 +210,7 @@ mod tests {
     /// something else, coincidentally the same size, appeared". Identity is
     /// asserted directly instead, by
     /// [`the_daemon_path_still_reports_capability_wiring`] and
-    /// [`the_daemon_path_still_reports_the_two_log_backed_checks`]; this
+    /// [`the_daemon_path_still_reports_the_three_handle_backed_checks`]; this
     /// function only holds the total, so that a check dropping out of the
     /// battery is still a red — the derivation removes the "did I remember to
     /// bump the literal" failure mode, not the identity gap those two cover.
@@ -280,15 +284,16 @@ mod tests {
     /// distinguish from "the builder call was deleted", and the state the
     /// operator must never be shown as a complete transcript.
     #[tokio::test]
-    async fn the_daemon_path_still_reports_the_two_log_backed_checks() {
+    async fn the_daemon_path_still_reports_the_three_handle_backed_checks() {
         use crate::diagnostics::check::HealthCheck;
         let _home = IsolatedAlephHome::new();
         let holes = crate::diagnostics::checks::ProjectionHolesCheck::new(None, None).id();
         let log = crate::diagnostics::checks::SessionLogCheck::new(None, None).id();
+        let activated = crate::diagnostics::checks::PluginsActivatedCheck::from_records(None).id();
 
         let out = DoctorTool::default().call(inspect_args()).await.unwrap();
         let seen: Vec<&str> = out.report.findings.iter().map(|f| f.check_id).collect();
-        for id in [holes, log] {
+        for id in [holes, log, activated] {
             assert!(
                 seen.contains(&id),
                 "`{id}` is appended by the doctor builtin's own engine build, \

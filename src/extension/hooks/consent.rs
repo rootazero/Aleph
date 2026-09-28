@@ -4,13 +4,114 @@
 //! agent's environment. Hermes-inspired: before such a hook runs, its command
 //! must be explicitly approved by the operator. Un-approved shell hooks are
 //! skipped (fail-safe) and recorded as `pending` so the operator can review
-//! them via `aleph hooks list` / `aleph hooks test`.
+//! them via `aleph-server hooks list` / `aleph-server hooks test`.
 //!
 //! Registry file: `~/.aleph/shell-hooks-allowlist.json`. The file's
 //! `(mtime, len)` pair is the cache fingerprint — `is_approved` re-reads the
 //! registry whenever the file changes on disk, so an approval made via the
-//! `aleph hooks` CLI is picked up by a running server without a restart.
+//! `aleph-server hooks` CLI is picked up by a running server without a restart.
+//!
+//! # What an approval is bound to
+//!
+//! An entry is keyed by `(owner, project, command)` — see
+//! [`ShellHookConsent::fingerprint`]. `project` is the canonical root of the
+//! project the hook is bound to: its `ScopeKey::Project`, the same field the
+//! executor's fire-time gate (`project_scope_allows`) reads.
+//!
+//! - A hook that fires everywhere (`ScopeKey::Global`: `~/.aleph/hooks.json`,
+//!   a globally installed plugin) has no project and keeps the key it has
+//!   always had. Its code lives under its root, and the approval is bound
+//!   to that root (below), so the same plugin id installed elsewhere is not
+//!   approved by it.
+//! - A project hook (a project's `.aleph/hooks{,.local}.json`, a plugin found
+//!   under a project) is keyed by its project as well. Every project's files
+//!   load under the same `user:project` label, and a byte-identical template
+//!   in another repo resolves `${CLAUDE_PLUGIN_ROOT}` to THAT repo's
+//!   directory: approving `"${CLAUDE_PLUGIN_ROOT}"/hooks/lint.sh` in repo A
+//!   must not run repo B's `lint.sh`. A project-scoped plugin is the same
+//!   case — another repo can ship a plugin with the same id.
+//!
+//! Within its key, an approval also attests to what `aleph-server hooks test`
+//! reviewed: the hook's root directory ([`ConsentEntry::plugin_root`]) and
+//! the content of ONE script file — the first word of the command with a
+//! script extension, else the first path — when that word is an absolute or
+//! `~/` path, a path variable (`${CLAUDE_PLUGIN_ROOT}` and its spellings, a
+//! plugin's `_DATA` pair), `$CLAUDE_PROJECT_DIR` in a project-bound hook, or
+//! a path relative to the hook's root. Only the named file is hashed — what
+//! it sources, imports or reads is not. `$CLAUDE_PROJECT_DIR` is bound only
+//! in a session bound to that project: a run with no project of its own
+//! still fires the hooks of the project the daemon was started in, and
+//! there the child's `$CLAUDE_PROJECT_DIR` names another directory than the
+//! one hashed (the run's workspace), or none. Anything else is not
+//! content-bound, and the approval is of the command
+//! string alone — among it a script reached through `PATH` (`npx`, `uvx`, a
+//! bare name) or through any other variable, through command substitution
+//! or re-parsing (`$(…)`, backticks, `eval`, `sh -c "…"`), `python3 -m`, a
+//! quoted path containing a space (the words split: it binds nothing, or
+//! the wrong file), and a script over 1 MiB. So is `$CLAUDE_PROJECT_DIR` in
+//! a hook that fires everywhere: every project a session opens supplies its
+//! own script to that one approval, and it runs unreviewed. The same key
+//! from another root, or an edited bound script, is refused until it is
+//! revoked and reviewed again ([`ShellHookConsent::is_approved`]). A pending
+//! entry is refreshed by every fire, so what the review runs is what
+//! production runs. No approval is ever minted without a root
+//! ([`ShellHookConsent::approve`]).
+//!
+//! **Migration.** An entry recorded before the project binding carries no
+//! project. It is kept on disk as it is — never rewritten, never deleted —
+//! but a project hook is never looked up under it, so it authorises
+//! nothing: each project's hooks come back as `pending` once and are
+//! approved again, per project. An unapproved hook does not run, and a
+//! skipped interceptor decides nothing — so every approved project GUARD
+//! (a `PreToolUse` hook that denies edits to `.env`, blocks `rm -rf` …)
+//! stops blocking from the upgrade on: the tool calls it stopped go through
+//! until its project's pending entry is approved. `aleph doctor` reports the
+//! old approvals from project hook files (`core/hooks-consent`, "Project-hook
+//! approvals no longer apply"); an old approval of a plugin installed inside
+//! a project cannot be told apart and is not counted — it shows as pending
+//! once the hook fires. `aleph-server hooks list` / `test` mark such a
+//! `user:project*` entry ([`ConsentEntry::predates_project_binding`]). An
+//! approval of a hook that fires everywhere, recorded before roots were
+//! recorded, keeps working from any root until it is revoked, fires once
+//! (which records its root) and is approved again — unless the script it
+//! runs can now be hashed and it recorded none: that approval attests to no
+//! content, so its next fire withdraws it to `pending` for review
+//! ([`ConsentEntry::script_fingerprint`]). That second migration reaches
+//! every hook written the Claude Code way and approved before its script
+//! could be bound (`${CLAUDE_PLUGIN_ROOT}/…`, a relative script, a project
+//! hook's `$CLAUDE_PROJECT_DIR`), globally installed plugins included: from
+//! its first fire after the upgrade until it is approved again it does not
+//! run, so a guard among them stops blocking. The doctor does not count
+//! these; the hook shows as pending once it has fired.
+//!
+//! A third re-key (2026-09-27): a plugin's `hooks.json` command and a
+//! command body's `` !`cmd` `` are recorded as the plugin wrote them
+//! (`${CLAUDE_PLUGIN_ROOT}/…`). Until then the manifest adapter had already
+//! spliced the install path into both, so their key hashed — and `hooks
+//! list` showed — the expanded path. Every approval of such a text that
+//! names a path variable is keyed differently now and authorises nothing:
+//! it comes back as `pending` once, and a guard among them stops blocking
+//! until it is approved again. A text that names no path variable — or only
+//! `${PLUGIN_ROOT}`, which the adapter never expanded — keeps its key. The
+//! old entry is kept on disk; once the hook has fired and recorded its text
+//! as written, `aleph-server hooks list` shows the old one as `superseded`
+//! (naming the entry that replaces it) and `aleph doctor` counts it apart
+//! ([`ConsentEntry::superseded_in`] — exact: an entry with no such sibling
+//! is left unmarked, never guessed).
+//!
+//! **A skill's inline command** ([`SKILL_INLINE_EVENT`], 2026-09-28) is keyed
+//! `(<owner>/<skill>, project, text)` ([`ShellHookConsent::skill_owner`]) and
+//! bound to the skill's own directory — where it runs, and what
+//! `$ALEPH_SKILL_DIR` names. A script word is resolved against that
+//! directory (relative, or through `$ALEPH_SKILL_DIR`) and content-bound
+//! like a hook's. A command whose script word goes through any other
+//! variable (a plugin path variable, `$CLAUDE_PROJECT_DIR`, `$HOME`) names a
+//! file consent cannot find: it is never filed or run
+//! ([`ShellHookConsent::unbindable_script_word`]). Skills ran their inline
+//! commands with no entry until then: each one comes back `pending` once and
+//! runs from its approval on.
 
+use crate::extension::visibility::{canonical_root, ScopeKey};
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,6 +126,31 @@ use tracing::warn;
 
 /// On-disk registry schema version.
 const REGISTRY_VERSION: u32 = 1;
+
+/// The [`ConsentEntry::event`] of a plugin command's inline shell command
+/// (`` !`cmd` `` in `commands/<name>.md`), which is reviewed and approved
+/// here like a `hooks.json` command. Written by the gateway's slash-command
+/// runner; read by `aleph-server hooks list` / `test` to tell the two apart.
+pub const INLINE_COMMAND_EVENT: &str = "SlashCommand";
+
+/// The [`ConsentEntry::event`] of a skill's inline shell command (`` !`cmd` ``
+/// in a `SKILL.md` that sets `allow-inline-shell: true`), which runs when the
+/// model reads the skill. Named for that face — `skill_read` — as
+/// [`INLINE_COMMAND_EVENT`] is for `/command`, and spelled like no hook event,
+/// so an approval given on one face never covers another. Written by
+/// `skill::preprocess::SkillShell`; read by `aleph-server hooks list` / `test`.
+/// Its owner label is [`ShellHookConsent::skill_owner`]'s.
+pub const SKILL_INLINE_EVENT: &str = "SkillRead";
+
+/// The owner of a skill no plugin ships ([`ShellHookConsent::skill_owner`]):
+/// a user's, a project's or an agent's skills directory, keyed by that
+/// directory.
+pub const USER_SKILL_OWNER: &str = "user";
+
+/// What separates a skill label's owner from its skill
+/// ([`ShellHookConsent::skill_owner`]). No plugin id contains it
+/// (`manifest::validate_plugin_id`), nor does any hook-file label.
+const SKILL_LABEL_SEPARATOR: char = '/';
 
 /// Cheap change-detection fingerprint for the registry file: `(mtime, len)`.
 /// Length is included because some filesystems have coarse mtime resolution —
@@ -41,19 +167,57 @@ pub enum ConsentStatus {
     Approved,
 }
 
+/// Why an entry authorises nothing ([`ConsentEntry::superseded_in`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Superseded {
+    /// A `user:project*` entry recorded before approvals were bound to a
+    /// project ([`ConsentEntry::predates_project_binding`]).
+    PredatesProjectBinding,
+    /// A plugin entry recorded with the install path spliced into its
+    /// command; `literal` is the fingerprint of the entry holding the text
+    /// as the plugin wrote it ([`ConsentEntry::is_spliced_form_of`]).
+    SplicedText { literal: String },
+}
+
 /// A single shell-hook consent record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsentEntry {
-    /// Stable id: `sha256(plugin_name \0 command)` truncated to 16 hex chars.
+    /// Stable id: the `sha256` of `(plugin_name, project_root, command)`
+    /// ([`ShellHookConsent::fingerprint`]) truncated to 16 hex chars.
     /// Changes when the command text changes — editing a hook revokes consent.
     pub fingerprint: String,
     /// Plugin that registered the hook.
     pub plugin_name: String,
+    /// The project this entry is bound to: the canonical root of a hook that
+    /// fires only inside one project. Part of the fingerprint, so approving
+    /// a template in one project never approves it in another. `None` for a
+    /// hook that fires everywhere — and for every entry recorded before
+    /// approvals were bound to a project (see the module doc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
     /// The exact shell command string.
     pub command: String,
-    /// Hook event the command is bound to (display-only, best-effort).
+    /// The event name the hook is dispatched with — its registered spelling
+    /// (`PreToolUse`, `before_tool_call`), exactly what its payload's
+    /// `hook_event_name` carries — so `aleph-server hooks test` can hand it the same
+    /// value. Best-effort: one entry per `(plugin, project, command)`, so a
+    /// command bound to two events carries whichever fired last while it is
+    /// pending ([`ShellHookConsent::record_pending`] refreshes it), and the
+    /// one it was approved with afterwards. An entry recorded before this
+    /// field held the spelling carries the enum's Rust name
+    /// (`BeforeToolCall`) until it next fires while pending. A plugin
+    /// command's inline shell command is not a hook and carries
+    /// [`INLINE_COMMAND_EVENT`].
     #[serde(default)]
     pub event: String,
+    /// The hook's plugin root, which its path variables
+    /// (`${CLAUDE_PLUGIN_ROOT}` …) resolve to, so `aleph-server hooks test` runs the
+    /// command as production does. Once approved, it is the directory the
+    /// approval is bound to: the same key from another root is refused
+    /// ([`ShellHookConsent::is_approved`]). While pending, the latest fire's.
+    /// `None` for entries recorded before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<PathBuf>,
     /// Consent status.
     pub status: ConsentStatus,
     /// Unix seconds when the record was first created.
@@ -61,21 +225,163 @@ pub struct ConsentEntry {
     /// Unix seconds when approved (absent while pending).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_at: Option<u64>,
-    /// `sha256` of the script file the command invokes, captured when the
-    /// entry was recorded / approved.
+    /// `sha256` of the ONE script file the command invokes — the first word
+    /// with a script extension, else the first path, resolved as the module
+    /// doc lists — captured when the entry was recorded / approved.
     ///
     /// The command STRING alone is a weak thing to consent to: approving
     /// `sh scripts/deploy.sh` once approves whatever that file contains
     /// forever, so an attacker who can write the script (or a `git pull`)
-    /// silently inherits the approval. Binding the content closes that
+    /// silently inherits the approval. Binding the content narrows that
     /// time-of-check/time-of-use window — [`ShellHookConsent::is_approved`]
-    /// re-hashes and refuses on drift.
+    /// re-hashes and refuses on drift — for that one file: only the named
+    /// file is hashed, and what it sources, imports or reads is not. A
+    /// command whose script cannot be resolved binds nothing: command
+    /// substitution, `python3 -m`, a quoted path containing a space, a
+    /// script over 1 MiB, anything reached through `PATH` or another
+    /// variable (the module doc has the full rule).
     ///
     /// `None` for commands with no resolvable script (`echo hi`), for
-    /// unreadable files, and for entries written before this field existed —
-    /// all of which keep the previous command-string-only semantics.
+    /// unreadable files and ones over 1 MiB, and for entries written before
+    /// this field existed.
+    /// An approval with `None` keeps the command-string-only semantics only
+    /// while the command still names no hashable script; once it does (the
+    /// file appears, or it was a `${…}` / relative script approved before
+    /// those were resolved), the approval is refused and withdrawn for
+    /// re-review ([`ShellHookConsent::is_approved`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_fingerprint: Option<String>,
+}
+
+impl ConsentEntry {
+    /// The fingerprint this entry's own key derives — what `fingerprint`
+    /// must equal unless the registry was edited by hand.
+    #[must_use]
+    pub fn expected_fingerprint(&self) -> String {
+        ShellHookConsent::fingerprint(
+            &self.plugin_name,
+            self.project_root.as_deref(),
+            &self.command,
+        )
+    }
+
+    /// Whether this is a project-settings entry recorded before approvals
+    /// were bound to a project: a `user:project*` owner with no project. It
+    /// authorises nothing — no project hook is looked up without its
+    /// project. A project-scoped plugin's entry from that time cannot be
+    /// told apart from a global plugin's, so it is not marked (it is just as
+    /// inert).
+    #[must_use]
+    pub fn predates_project_binding(&self) -> bool {
+        self.project_root.is_none()
+            && super::user_settings::PROJECT_LABELS.contains(&self.plugin_name.as_str())
+    }
+
+    /// Whether this entry is `literal`'s text as the manifest adapter used to
+    /// record it (before 2026-09-27): the same plugin and project, a
+    /// different command, and `literal`'s command with the plugin variables
+    /// expanded by the derivation that did the splice
+    /// ([`PluginVars::expand`](crate::extension::plugin_vars::PluginVars::expand),
+    /// against this entry's recorded root) is exactly this entry's command.
+    ///
+    /// Exact, not a guess: a text the author wrote with an absolute path —
+    /// or one naming a sibling directory that shares a prefix with the root
+    /// — has no differing sibling that expands to it. The cost is silence,
+    /// not a false label: an old entry whose hook has not fired since the
+    /// upgrade (so no literal sibling is recorded yet) is not recognised,
+    /// nor is one recorded before roots were kept.
+    #[must_use]
+    pub fn is_spliced_form_of(&self, literal: &Self) -> bool {
+        let Some(root) = self.plugin_root.as_deref() else {
+            return false;
+        };
+        crate::extension::manifest::validate_plugin_id(&self.plugin_name).is_ok()
+            && literal.plugin_name == self.plugin_name
+            && literal.project_root == self.project_root
+            && literal.command != self.command
+            && crate::extension::plugin_vars::PluginVars::new(&self.plugin_name, root)
+                .expand(&literal.command)
+                == self.command
+    }
+
+    /// Every entry in `entries` that authorises nothing and never fires
+    /// again, keyed by fingerprint, with why — the two re-keys the module
+    /// doc's Migration section describes. The one derivation `aleph-server
+    /// hooks list` / `hooks doctor` and `core/hooks-consent` read.
+    #[must_use]
+    pub fn superseded_in(entries: &[Self]) -> BTreeMap<String, Superseded> {
+        entries
+            .iter()
+            .filter_map(|e| {
+                let why = if e.predates_project_binding() {
+                    Superseded::PredatesProjectBinding
+                } else {
+                    let literal = entries.iter().find(|n| e.is_spliced_form_of(n))?;
+                    Superseded::SplicedText {
+                        literal: literal.fingerprint.clone(),
+                    }
+                };
+                Some((e.fingerprint.clone(), why))
+            })
+            .collect()
+    }
+
+    /// What an approval of an inline command also approves, for the review
+    /// surfaces to print; `None` for a hook.
+    ///
+    /// Every inline command receives the arguments of whoever sends its
+    /// `/command` — as `$1 … $N`, `$@` and `$ARGUMENTS` — not only one whose
+    /// text spells them (a script it runs can read `$ARGUMENTS` from its
+    /// environment). Channel senders can send one. A shell never parses an
+    /// argument as code, but a command that passes one to a program hands
+    /// the sender that program's options (`git log $1` with `--output=…`).
+    #[must_use]
+    pub fn invoker_arguments_note(&self) -> Option<&'static str> {
+        (self.event == INLINE_COMMAND_EVENT).then_some(
+            "inline command of a plugin's slash command: it runs with the arguments of \
+             whoever sends that command ($1 … $N, $@, $ARGUMENTS), channel senders \
+             included. They arrive as data, never as code, but a program it hands them \
+             to takes them as its options.",
+        )
+    }
+
+    /// What the review surfaces call this entry's [`Self::project_root`]:
+    /// `skills dir` for a skill no plugin ships — its key is the skills
+    /// directory it sits in, not a project ([`ShellHookConsent::skill_owner`])
+    /// — `project` otherwise.
+    #[must_use]
+    pub fn scope_label(&self) -> &'static str {
+        match ShellHookConsent::skill_owner_of(&self.plugin_name) {
+            Some(USER_SKILL_OWNER) => "skills dir",
+            _ => "project",
+        }
+    }
+
+    /// What an approval of a skill's inline command approves, for the review
+    /// surfaces to print; `None` for anything else.
+    #[must_use]
+    pub fn skill_read_note(&self) -> Option<&'static str> {
+        (self.event == SKILL_INLINE_EVENT).then_some(
+            "inline command of a skill (allow-inline-shell): it runs in the skill's directory \
+             (the root) each time the model reads the skill with skill_read, on an operator's \
+             turn whose permissions do not deny bash. $ALEPH_SKILL_DIR names that directory.",
+        )
+    }
+}
+
+/// The project a consent key names: the root of a hook bound to one project,
+/// `None` for a hook that fires everywhere.
+fn bound_project(scope: &ScopeKey) -> Option<&Path> {
+    match scope {
+        ScopeKey::Global => None,
+        ScopeKey::Project(root) => Some(root),
+    }
+}
+
+/// Whether two spellings name one directory: equal as written, or once
+/// canonicalised (`/var` → `/private/var`) the way the scope key is.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || canonical_root(a) == canonical_root(b)
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -99,14 +405,123 @@ pub struct ShellHookConsent {
 }
 
 impl ShellHookConsent {
-    /// Compute the stable fingerprint for a `(plugin_name, command)` pair.
+    /// Compute the stable fingerprint for a `(plugin_name, project_root,
+    /// command)` key. `project_root` is the canonical root of a hook bound to
+    /// one project, `None` for a hook that fires everywhere.
+    ///
+    /// Without a project the hashed bytes are `plugin_name \0 command` — the
+    /// key every entry had before approvals were bound to a project, so a
+    /// global hook's approval survives. With one, a `0xFF` tag and the
+    /// length-prefixed root come first: no global key starts with `0xFF` (a
+    /// plugin name is UTF-8), so a project key can never equal a global one,
+    /// and the prefix keeps one root from running into the name after it.
     #[must_use]
-    pub fn fingerprint(plugin_name: &str, command: &str) -> String {
+    pub fn fingerprint(plugin_name: &str, project_root: Option<&Path>, command: &str) -> String {
         let mut hasher = Sha256::new();
+        if let Some(root) = project_root {
+            let root = root.as_os_str().as_encoded_bytes();
+            hasher.update([0xFFu8]);
+            hasher.update((root.len() as u64).to_le_bytes());
+            hasher.update(root);
+        }
         hasher.update(plugin_name.as_bytes());
         hasher.update([0u8]);
         hasher.update(command.as_bytes());
         hex16(&hasher.finalize())
+    }
+
+    /// The owner label a skill's inline commands are filed under
+    /// ([`SKILL_INLINE_EVENT`]): `<owner>/<skill>`, so the key is `(owner,
+    /// skill, text)` — two skills of one owner with the same text are two
+    /// entries. `owner` is the plugin id for a plugin's skill, `user`
+    /// otherwise; `skill` is the skill's directory name.
+    #[must_use]
+    pub fn skill_owner(owner: &str, skill: &str) -> String {
+        format!("{owner}{SKILL_LABEL_SEPARATOR}{skill}")
+    }
+
+    /// Whether `owner` is a [`Self::skill_owner`] label.
+    fn is_skill_owner(owner: &str) -> bool {
+        owner.contains(SKILL_LABEL_SEPARATOR)
+    }
+
+    /// The owner part of a [`Self::skill_owner`] label (`None` for any other
+    /// label): a plugin id, or [`USER_SKILL_OWNER`].
+    #[must_use]
+    pub fn skill_owner_of(label: &str) -> Option<&str> {
+        label
+            .split_once(SKILL_LABEL_SEPARATOR)
+            .map(|(owner, _)| owner)
+    }
+
+    /// The script word of an INLINE command that consent cannot bind to what
+    /// runs, if any — the one refusal both inline faces apply before a
+    /// command is filed or run: such a command is never approved as a string
+    /// while its script could change under the approval. Which words consent
+    /// cannot bind follows from where the command runs, read from its owner
+    /// label (a [`Self::skill_owner`] label is a skill's):
+    ///
+    /// - **A plugin command's** (`` !`cmd` `` in `commands/<name>.md`,
+    ///   [`INLINE_COMMAND_EVENT`]) runs in the session's directory, not in its
+    ///   root. Consent resolves a relative word against the root, so a
+    ///   relative script word would be reviewed and hashed as the plugin's
+    ///   copy (or, when the plugin ships none, bound to nothing) while the
+    ///   session's copy runs. `${CLAUDE_PLUGIN_ROOT}/…` is expanded first, so
+    ///   a plugin's own script stays content-bound and allowed. A word
+    ///   through a variable consent does not know is not looked at here: it
+    ///   binds nothing, as for a hook (the module doc).
+    /// - **A skill's** (`allow-inline-shell: true`, [`SKILL_INLINE_EVENT`])
+    ///   runs in its root, the skill's directory, where consent resolves
+    ///   relative words and `$ALEPH_SKILL_DIR` and nothing else. A word
+    ///   through any other variable — `${CLAUDE_PLUGIN_ROOT}`,
+    ///   `$CLAUDE_PROJECT_DIR`, `$HOME` — names a file consent cannot find:
+    ///   it is refused. The skill ships the script in its directory and
+    ///   names it relative to it or through `$ALEPH_SKILL_DIR`.
+    ///
+    /// Candidates are consent's, in its order: the first word that names
+    /// itself a script, then every path-shaped word. The first one consent
+    /// cannot bind decides (`Some(word)`); one that is an existing file
+    /// consent binds ends the scan. A path-shaped ARGUMENT to a program
+    /// (`git diff src/app.ts`) met before that point counts too: consent
+    /// cannot tell it from a script, and binds whichever comes first. What the
+    /// command writes to (`2>/dev/null`, `> out/log`) and a URL are no
+    /// candidate (`script_words`); what it reads from (`sh <x.sh`) is.
+    ///
+    /// The scan stops where consent's binding stops, which keeps the refusal
+    /// its exact dual: a word AFTER the bound script is not looked at.
+    /// `sh ${CLAUDE_PLUGIN_ROOT}/setup.sh && ./scripts/build.sh` runs the
+    /// session's `build.sh` unbound, under an approval whose content binding
+    /// covers `setup.sh` only — the text the operator approved says so.
+    #[must_use]
+    pub fn unbindable_script_word(
+        plugin_name: &str,
+        project_root: Option<&Path>,
+        plugin_root: Option<&Path>,
+        command: &str,
+    ) -> Option<String> {
+        let context = ScriptContext::new(plugin_name, project_root, plugin_root);
+        let bound = |path: &str| candidate_path(path, &context).is_some_and(|p| p.is_file());
+        if context.skill {
+            let words = script_words(command, &context);
+            for word in consent_order(&words, ScriptWord::judged) {
+                if word.names_unknown_variable {
+                    return Some(word.written.clone());
+                }
+                if word.path.as_deref().is_some_and(bound) {
+                    return None;
+                }
+            }
+            return None;
+        }
+        for token in script_candidates(command, &context) {
+            if !token.starts_with("~/") && !Path::new(&token).is_absolute() {
+                return Some(token);
+            }
+            if bound(&token) {
+                return None;
+            }
+        }
+        None
     }
 
     /// Default registry path: `<config_dir>/shell-hooks-allowlist.json`.
@@ -147,52 +562,124 @@ impl ShellHookConsent {
         &self.path
     }
 
-    /// Whether a `(plugin_name, command)` shell hook is approved to run.
+    /// Whether a shell hook is approved to run: `command`, owned by
+    /// `plugin_name`, from a hook whose visibility key is `scope` — the
+    /// hook's own `scope_key`, so a project hook is looked up under its
+    /// project and nowhere else (module doc).
     ///
     /// Re-reads the registry first if the file changed on disk, so approvals
-    /// made via the `aleph hooks` CLI are honored without a server restart.
+    /// made via the `aleph-server hooks` CLI are honored without a server restart.
     ///
-    /// Two conditions, both required:
+    /// Three conditions, all required:
     ///
-    /// 1. an `Approved` entry exists for the command string, and
-    /// 2. if that entry recorded a [`script_fingerprint`](ConsentEntry::script_fingerprint),
-    ///    the script on disk still hashes to it.
+    /// 1. an `Approved` entry exists for that key,
+    /// 2. if that entry recorded a [`plugin_root`](ConsentEntry::plugin_root),
+    ///    it is the directory this hook runs from (`plugin_root`), and
+    /// 3. the script the command names — found from this hook's root, see
+    ///    `script_path_from_command` — still hashes to the recorded
+    ///    [`script_fingerprint`](ConsentEntry::script_fingerprint); and when
+    ///    none was recorded, the command still names no script that can be
+    ///    hashed.
     ///
-    /// (2) is the TOCTOU guard: `sh scripts/deploy.sh` approved in March must
-    /// not keep running after the script is rewritten in April. Drift fails
+    /// (2) binds the approval to the root `aleph-server hooks test` reviewed: the
+    /// same key from another directory — a plugin id installed again
+    /// elsewhere — runs other code behind `${CLAUDE_PLUGIN_ROOT}`. (3) is the
+    /// TOCTOU guard: `sh scripts/deploy.sh` approved in March must not keep
+    /// running after the script is rewritten in April. Either drift fails
     /// SAFE (the hook is skipped, exactly like an un-approved one) and is
-    /// logged loudly, because the alternative — running edited-since-approval
-    /// code — is the whole thing consent exists to prevent.
-    pub fn is_approved(&self, plugin_name: &str, command: &str) -> bool {
+    /// logged loudly, because the alternative — running code nobody reviewed
+    /// — is the whole thing consent exists to prevent. The way back is
+    /// `aleph-server hooks revoke`: the entry turns pending, the next fire records
+    /// what it runs now ([`Self::record_pending`]), and `aleph-server hooks test`
+    /// reviews and approves that.
+    ///
+    /// An entry with no recorded root predates root recording and keeps the
+    /// older, looser meaning for (2). An approval that recorded no script
+    /// fingerprint keeps the command-string-only meaning only while there is
+    /// still nothing to hash: once its script can be hashed, it is refused,
+    /// and withdrawn to `pending` by the fire ([`Self::record_pending`]).
+    pub fn is_approved(
+        &self,
+        plugin_name: &str,
+        scope: &ScopeKey,
+        plugin_root: &Path,
+        command: &str,
+    ) -> bool {
+        self.approved_entry(plugin_name, scope, plugin_root, command)
+            .is_some()
+    }
+
+    /// [`Self::is_approved`], answered with the entry that approves — from
+    /// ONE read of the registry. A caller that must also judge what the
+    /// approval was given to (its [`event`](ConsentEntry::event)) judges the
+    /// very entry that approved, never a second lookup that a revoke could
+    /// land between.
+    pub fn approved_entry(
+        &self,
+        plugin_name: &str,
+        scope: &ScopeKey,
+        plugin_root: &Path,
+        command: &str,
+    ) -> Option<ConsentEntry> {
         self.reload_if_stale();
-        let fp = Self::fingerprint(plugin_name, command);
-        let recorded = {
+        let fp = Self::fingerprint(plugin_name, bound_project(scope), command);
+        let entry = {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
             match cache.entries.get(&fp) {
-                Some(e) if e.status == ConsentStatus::Approved => e.script_fingerprint.clone(),
+                Some(e) if e.status == ConsentStatus::Approved => e.clone(),
                 // Missing or still pending — not approved either way.
-                _ => return false,
+                _ => return None,
             }
         };
 
-        // Entry predates content binding, or its command has no resolvable
-        // script: keep the historical command-string-only semantics.
-        let Some(approved_hash) = recorded else {
-            return true;
-        };
+        if let Some(approved_root) = &entry.plugin_root {
+            if !same_dir(approved_root, plugin_root) {
+                warn!(
+                    plugin = plugin_name,
+                    command,
+                    approved_root = %approved_root.display(),
+                    root = %plugin_root.display(),
+                    "Hook was approved for another directory — refusing to run. \
+                     `aleph-server hooks revoke <fingerprint>`, then review it again with \
+                     `aleph-server hooks test <fingerprint>` after it next fires."
+                );
+                return None;
+            }
+        }
 
-        match script_fingerprint(command) {
-            Some(current) if current == approved_hash => true,
-            Some(_) => {
+        let context = ScriptContext::new(plugin_name, bound_project(scope), Some(plugin_root));
+        let bound = match (
+            entry.script_fingerprint.as_deref(),
+            script_fingerprint(command, &context),
+        ) {
+            // No script to bind, then or now (`echo hi`): the approval is of
+            // the command string alone.
+            (None, None) => true,
+            (None, Some(_)) => {
+                // Approved while its script could not be hashed — before the
+                // script was resolvable, or before `${…}` / relative scripts
+                // were bound at all — so the approval attests to no content.
+                // The fire's `record_pending` withdraws it for re-review.
+                warn!(
+                    plugin = plugin_name,
+                    command,
+                    "Hook was approved before its script could be content-bound — refusing \
+                     to run. Review it again with `aleph-server hooks test <fingerprint>`."
+                );
+                false
+            }
+            (Some(approved), Some(current)) if approved == current.as_str() => true,
+            (Some(_), Some(_)) => {
                 warn!(
                     plugin = plugin_name,
                     command,
                     "Hook script changed since it was approved — refusing to run. \
-                     Re-review with `aleph-server hooks test <fingerprint>`."
+                     `aleph-server hooks revoke <fingerprint>`, then review it again with \
+                     `aleph-server hooks test <fingerprint>`."
                 );
                 false
             }
-            None => {
+            (Some(_), None) => {
                 // The script hashed cleanly at approval time and cannot be
                 // read now (deleted, renamed, permissions). Something moved
                 // under us; fail safe rather than assume it's benign.
@@ -202,64 +689,151 @@ impl ShellHookConsent {
                 );
                 false
             }
-        }
+        };
+        bound.then_some(entry)
     }
 
     /// Record an un-approved shell hook as `pending` so the operator can
-    /// review it. No-op when the fingerprint is already known. Best-effort:
-    /// a write failure is logged, not propagated.
-    pub fn record_pending(&self, plugin_name: &str, command: &str, event: &str) {
-        let fp = Self::fingerprint(plugin_name, command);
+    /// review it. Best-effort: a write failure is logged, not propagated.
+    ///
+    /// `scope` is the hook's `scope_key`, keyed exactly as in
+    /// [`Self::is_approved`]. `event` is the name the hook is dispatched with
+    /// (`HookConfig::event_name`) and `plugin_root` the root its path
+    /// variables resolve to — what `aleph-server hooks test` rebuilds the run from.
+    ///
+    /// A key already on file is refreshed while it is still `pending`: its
+    /// `event` and `plugin_root` become this fire's, so a review runs what
+    /// production just ran — not an entry's first-seen root that has since
+    /// been deleted or moved, nor a spelling recorded before the spelling
+    /// was kept. An `Approved` entry is never rebound: its root and script
+    /// are what the approval attests to ([`Self::is_approved`]). The one
+    /// thing a fire does to an approved entry is withdraw an approval that
+    /// attests to no script content once this fire's script can be hashed
+    /// — it turns `pending`, refreshed, for `aleph-server hooks test` to review —
+    /// and only from the root it was approved at (or when it recorded none),
+    /// so another install's fire cannot withdraw it.
+    pub fn record_pending(
+        &self,
+        plugin_name: &str,
+        scope: &ScopeKey,
+        command: &str,
+        event: &str,
+        plugin_root: &Path,
+    ) {
+        let project_root = bound_project(scope);
+        let fp = Self::fingerprint(plugin_name, project_root, command);
+        let script = script_fingerprint(
+            command,
+            &ScriptContext::new(plugin_name, project_root, Some(plugin_root)),
+        );
+        // Whether `entry` should be rewritten to this fire; `false` for an
+        // approved entry that attests to content and for a pending one that
+        // already says what this fire says.
+        let stale = |entry: &ConsentEntry| match entry.status {
+            ConsentStatus::Pending => {
+                entry.event != event || entry.plugin_root.as_deref() != Some(plugin_root)
+            }
+            ConsentStatus::Approved => {
+                script.is_some()
+                    && entry.script_fingerprint.is_none()
+                    && entry
+                        .plugin_root
+                        .as_deref()
+                        .is_none_or(|approved_at| same_dir(approved_at, plugin_root))
+            }
+        };
         {
             let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
-            if cache.entries.contains_key(&fp) {
+            if cache.entries.get(&fp).is_some_and(|e| !stale(e)) {
                 return;
             }
         }
         let entry = ConsentEntry {
             fingerprint: fp.clone(),
             plugin_name: plugin_name.to_string(),
+            project_root: project_root.map(Path::to_path_buf),
             command: command.to_string(),
             event: event.to_string(),
+            plugin_root: Some(plugin_root.to_path_buf()),
             status: ConsentStatus::Pending,
             first_seen: now_secs(),
             approved_at: None,
-            script_fingerprint: script_fingerprint(command),
+            script_fingerprint: script.clone(),
         };
-        if let Err(e) = self.mutate(|entries| {
-            if entries.contains_key(&fp) {
-                false
-            } else {
+        if let Err(e) = self.mutate(|entries| match entries.get_mut(&fp) {
+            None => {
                 entries.insert(fp.clone(), entry);
                 true
             }
+            Some(known) if stale(known) => {
+                known.status = ConsentStatus::Pending;
+                known.approved_at = None;
+                known.event = event.to_string();
+                known.plugin_root = Some(plugin_root.to_path_buf());
+                known.script_fingerprint = script.clone();
+                true
+            }
+            Some(_) => false,
         }) {
             warn!(error = %e, "Failed to record pending shell-hook consent");
         }
     }
 
     /// Approve a hook by fingerprint (or unique prefix). Returns the approved
-    /// entry, or `None` when no entry matches the prefix.
-    pub fn approve(&self, fingerprint_prefix: &str) -> io::Result<Option<ConsentEntry>> {
+    /// entry, or `None` when no entry matches the prefix, when the entry's
+    /// root is no longer `reviewed_root` — or when there is no root at all.
+    ///
+    /// `reviewed_root` is the [`plugin_root`](ConsentEntry::plugin_root) the
+    /// operator's review ran against (`aleph-server hooks test` reads it from the
+    /// entry). A pending entry follows the hook's latest fire
+    /// ([`Self::record_pending`]), so it can move to another root between
+    /// that review and this call; approving it anyway would bind the
+    /// approval to a directory nobody reviewed. Checked under the registry
+    /// lock, with the write.
+    ///
+    /// No approval is minted without a root: it would bind no directory, and
+    /// follow its key to wherever that plugin id is installed next. An entry
+    /// without one (recorded before roots were kept) gets its root from its
+    /// next fire, and can be approved after that. This is where the line is
+    /// drawn for root-less approvals: one that already exists keeps working
+    /// ([`Self::is_approved`], module doc — only a hook that fires
+    /// everywhere can still be looked up under one), and none is ever added.
+    pub fn approve(
+        &self,
+        fingerprint_prefix: &str,
+        reviewed_root: Option<&Path>,
+    ) -> io::Result<Option<ConsentEntry>> {
         let mut approved: Option<ConsentEntry> = None;
         self.mutate(|entries| {
             let Some(key) = match_prefix(entries, fingerprint_prefix) else {
                 return false;
             };
             match entries.get_mut(&key) {
-                Some(entry) => {
-                    entry.status = ConsentStatus::Approved;
-                    entry.approved_at = Some(now_secs());
+                Some(entry)
+                    if reviewed_root.is_some() && entry.plugin_root.as_deref() == reviewed_root =>
+                {
                     // Re-hash at approval time, not record time: the operator
-                    // just reviewed (and `aleph hooks test` just RAN) the
+                    // just reviewed (and `aleph-server hooks test` just RAN) the
                     // script as it exists NOW, so that content is what the
                     // approval attests to. A stale record-time hash would
-                    // refuse the very version the operator green-lit.
-                    entry.script_fingerprint = script_fingerprint(&entry.command);
+                    // refuse the very version the operator green-lit. The
+                    // script is found from the root that review ran in.
+                    let script = script_fingerprint(
+                        &entry.command,
+                        &ScriptContext::new(
+                            &entry.plugin_name,
+                            entry.project_root.as_deref(),
+                            entry.plugin_root.as_deref(),
+                        ),
+                    );
+                    entry.status = ConsentStatus::Approved;
+                    entry.approved_at = Some(now_secs());
+                    entry.script_fingerprint = script;
                     approved = Some(entry.clone());
                     true
                 }
-                None => false,
+                // No such entry, no root, or it moved to a root nobody reviewed.
+                _ => false,
             }
         })?;
         Ok(approved)
@@ -422,7 +996,7 @@ fn match_prefix(entries: &BTreeMap<String, ConsentEntry>, prefix: &str) -> Optio
     // is 16 hex chars (see `fingerprint`), so 4 hex chars still has ~65k
     // possible prefixes per entry and stops a one-character prefix from
     // resolving to whichever entry happens to sort first alphabetically.
-    // Without this, `aleph hooks approve a` would approve the first entry
+    // Without this, `aleph-server hooks test a` would approve the first entry
     // starting with `a` and silently skip the matching-by-prefix step.
     if prefix.len() < 4 {
         return None;
@@ -467,10 +1041,140 @@ const MAX_SCRIPT_HASH_BYTES: u64 = 1024 * 1024;
 /// File extensions that positively identify the script token in a command.
 const SCRIPT_EXTENSIONS: [&str; 7] = [".sh", ".bash", ".zsh", ".py", ".js", ".ts", ".rb"];
 
+/// The directories a hook's command can name its script through, as far as
+/// consent can know them — the same values `command_hook_invocation` hands
+/// that hook's child.
+struct ScriptContext<'a> {
+    /// The hook's root: its root path variables' value, and the directory
+    /// a hook's command runs in (so what a relative path is relative to).
+    /// A plugin command's inline command runs in the session's directory
+    /// instead, which is why a relative word ahead of the script consent
+    /// binds refuses it ([`ShellHookConsent::unbindable_script_word`]); a
+    /// skill's runs here, in its skill directory.
+    root: Option<&'a Path>,
+    /// A plugin hook's data directory (`${CLAUDE_PLUGIN_DATA}` …).
+    data: Option<PathBuf>,
+    /// The project a project-bound hook fires in: `$CLAUDE_PROJECT_DIR`
+    /// whenever that hook can fire. `None` for a hook that fires everywhere,
+    /// where that variable names a different directory per session.
+    project: Option<&'a Path>,
+    /// A skill's inline command ([`ShellHookConsent::skill_owner`]): its root
+    /// is the skill's directory — where it runs and what `$ALEPH_SKILL_DIR`
+    /// names — and nothing else. A plugin skill's child gets the plugin's
+    /// path variables, whose values are not this root, and
+    /// `$CLAUDE_PROJECT_DIR` is the run's directory: a word through them is
+    /// left unresolved — never bound to another file — and refused
+    /// ([`ShellHookConsent::unbindable_script_word`]).
+    skill: bool,
+}
+
+impl<'a> ScriptContext<'a> {
+    fn new(owner: &str, project: Option<&'a Path>, root: Option<&'a Path>) -> Self {
+        let skill = ShellHookConsent::is_skill_owner(owner);
+        let data = root
+            .filter(|_| crate::extension::manifest::validate_plugin_id(owner).is_ok())
+            .map(|root| {
+                crate::extension::plugin_vars::PluginVars::new(owner, root)
+                    .data_dir()
+                    .to_path_buf()
+            });
+        Self {
+            root,
+            data,
+            project: project.filter(|_| !skill),
+            skill,
+        }
+    }
+
+    /// Every variable this context can resolve, with its value.
+    fn variables(&self) -> Vec<(&'static str, &Path)> {
+        let mut out = Vec::new();
+        if self.skill {
+            out.extend(
+                self.root
+                    .map(|root| (crate::extension::SKILL_DIR_VARIABLE, root)),
+            );
+            return out;
+        }
+        if let Some(root) = self.root {
+            out.extend(super::PLUGIN_ROOT_VARIABLES.map(|name| (name, root)));
+        }
+        if let Some(data) = &self.data {
+            out.extend(super::PLUGIN_DATA_VARIABLES.map(|name| (name, data.as_path())));
+        }
+        if let Some(project) = self.project {
+            out.push(("CLAUDE_PROJECT_DIR", project));
+        }
+        out
+    }
+
+    /// One whitespace-separated word of a command as the path it names, or
+    /// `None` when it cannot be a stable path. The quotes a shell removes go,
+    /// wherever they sit in the word (`"${CLAUDE_PLUGIN_ROOT}"/hooks/x.sh`),
+    /// and each known variable becomes its value. What is judged for `$` and
+    /// `*` is the word as written minus the known variables — not their
+    /// values: a root named `a$b` is still one path.
+    fn expand(&self, raw: &str) -> Option<String> {
+        let (expanded, rest) = self.substitute(raw);
+        let stable = !expanded.is_empty() && !rest.contains('$') && !rest.contains('*');
+        stable.then_some(expanded)
+    }
+
+    /// Whether `raw` still refers to a variable once the known ones are set
+    /// aside — a word whose path this context cannot know.
+    fn names_unknown_variable(&self, raw: &str) -> bool {
+        self.substitute(raw).1.contains('$')
+    }
+
+    /// `raw` without its quotes: with the known variables expanded, and with
+    /// them removed (what is left to judge).
+    fn substitute(&self, raw: &str) -> (String, String) {
+        let unquoted: String = raw.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+        let (mut expanded, mut rest) = (unquoted.clone(), unquoted);
+        for (name, value) in self.variables() {
+            let Some(value) = value.to_str() else {
+                continue;
+            };
+            expanded = replace_variable(&expanded, name, value);
+            rest = replace_variable(&rest, name, "");
+        }
+        (expanded, rest)
+    }
+}
+
+/// `text` with every `${name}`, and every `$name` not followed by an
+/// identifier character, replaced by `value`.
+fn replace_variable(text: &str, name: &str, value: &str) -> String {
+    let text = text.replace(&format!("${{{name}}}"), value);
+    let bare = format!("${name}");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find(bare.as_str()) {
+        let (before, from) = rest.split_at(at);
+        let after = from.get(bare.len()..).unwrap_or_default();
+        let continues = after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        out.push_str(before);
+        out.push_str(if continues { &bare } else { value });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Extract the script file a shell command invokes, if any.
 ///
 /// Handles the three shapes that cover essentially every hook in practice:
-/// `./hook.sh`, `python3 /path/hook.py`, `/usr/bin/env bash hook.sh`.
+/// `./hook.sh`, `python3 /path/hook.py`, `/usr/bin/env bash hook.sh` — each
+/// also written through a path variable (`"${CLAUDE_PLUGIN_ROOT}"/hooks/x.sh`,
+/// `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh` for a project-bound hook) or
+/// relative to the hook's root, which is where the command runs. Until
+/// 2026-09-25 a word holding any `$` was dropped and a relative one was
+/// resolved against THIS process's directory, so every hook written the
+/// Claude Code way was never content-bound: a `git pull` rewriting its
+/// script kept its approval.
 ///
 /// **Two passes, and the order matters.** A known script extension wins over a
 /// merely path-shaped token, because a single pass binds to whichever comes
@@ -486,48 +1190,167 @@ const SCRIPT_EXTENSIONS: [&str; 7] = [".sh", ".bash", ".zsh", ".py", ".js", ".ts
 /// Only the first match is used; a command chaining two scripts binds to the
 /// first, and hashing every token would make the common case pay for a shape
 /// nobody writes.
-fn script_path_from_command(command: &str) -> Option<PathBuf> {
-    let tokens: Vec<&str> = command
-        .split_whitespace()
-        // Strip the quoting a shell would remove; anything with a glob or a
-        // variable is not a stable path, so drop it entirely.
-        .map(|raw| raw.trim_matches(|c| c == '"' || c == '\''))
-        .filter(|t| !t.is_empty() && !t.contains('$') && !t.contains('*'))
-        .collect();
+fn script_path_from_command(command: &str, context: &ScriptContext<'_>) -> Option<PathBuf> {
+    script_candidates(command, context)
+        .iter()
+        .filter_map(|token| candidate_path(token, context))
+        .find(|path| path.is_file())
+}
 
-    // Pass 1: a token that names itself a script.
-    let by_extension = tokens.iter().find(|t| {
-        let lower = t.to_ascii_lowercase();
+/// The words a command's script is looked for among, in consent's order
+/// ([`consent_order`]): the stable paths among [`script_words`], each with
+/// the context's known variables expanded ([`ScriptContext::expand`]).
+fn script_candidates(command: &str, context: &ScriptContext<'_>) -> Vec<String> {
+    // Anything with a glob or a variable nobody here can resolve is not a
+    // stable path, so it is dropped entirely — and so is the empty source of
+    // a `<` written apart from its target.
+    let tokens: Vec<String> = script_words(command, context)
+        .into_iter()
+        .filter_map(|word| word.path)
+        .collect();
+    consent_order(&tokens, String::as_str)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// One word of a command that can name its script ([`script_words`]).
+struct ScriptWord {
+    /// The word with the quotes a shell removes gone, variables as written.
+    written: String,
+    /// The path it names, when it is a stable one ([`ScriptContext::expand`]).
+    path: Option<String>,
+    /// It refers to a variable the context does not know.
+    names_unknown_variable: bool,
+}
+
+impl ScriptWord {
+    /// What consent's order judges the word by: the path it names, else the
+    /// word as written.
+    fn judged(&self) -> &str {
+        self.path.as_deref().unwrap_or(&self.written)
+    }
+}
+
+/// Every word of `command` that can name its script, in command order: what
+/// it writes to (an output redirection's target) and a URL are not words a
+/// script can be — `2>/dev/null`, `> out/log` and `https://…` name nothing
+/// that runs. What it reads from (`<x.sh`) can be, and is judged by its
+/// target ([`redirection`]). A redirection is recognised on the word as
+/// written, before quotes are removed: a quoted `'>'` or `"2>"` is an
+/// argument the shell passes on, and the word after it is judged.
+fn script_words(command: &str, context: &ScriptContext<'_>) -> Vec<ScriptWord> {
+    let mut words = Vec::new();
+    let mut writes_to_next = false;
+    for raw in command.split_whitespace() {
+        // The target of an output operator written apart (`> out/log`).
+        if std::mem::take(&mut writes_to_next) {
+            continue;
+        }
+        let word = match redirection(raw) {
+            Redirection::Writes { target_follows } => {
+                writes_to_next = target_follows;
+                continue;
+            }
+            Redirection::Reads(source) => source,
+            Redirection::Not => raw,
+        };
+        let written: String = word.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+        if written.is_empty() {
+            continue;
+        }
+        let path = context.expand(word);
+        if is_url(path.as_deref().unwrap_or(&written)) {
+            continue;
+        }
+        words.push(ScriptWord {
+            names_unknown_variable: context.names_unknown_variable(word),
+            written,
+            path,
+        });
+    }
+    words
+}
+
+/// Consent's order over candidate words, each judged by `text`: first the
+/// word that names itself a script, then every path-shaped word (a bare
+/// `./hook`, no extension).
+fn consent_order<T>(words: &[T], text: impl Fn(&T) -> &str) -> Vec<&T> {
+    // Pass 1: a word that names itself a script.
+    let by_extension = words.iter().find(|w| {
+        let lower = text(w).to_ascii_lowercase();
         SCRIPT_EXTENSIONS.iter().any(|e| lower.ends_with(e))
     });
-    // Pass 2: fall back to anything path-shaped (a bare `./hook`, no extension).
-    let candidates = by_extension.into_iter().chain(
-        tokens
-            .iter()
-            .filter(|t| t.contains('/') || t.contains('\\')),
-    );
+    // Pass 2: fall back to anything path-shaped.
+    let path_shaped = words
+        .iter()
+        .filter(|w| text(w).contains('/') || text(w).contains('\\'));
+    by_extension.into_iter().chain(path_shaped).collect()
+}
 
-    for token in candidates {
-        let expanded = match token.strip_prefix("~/") {
-            Some(rest) => match dirs::home_dir() {
-                Some(h) => h.join(rest),
-                None => continue,
-            },
-            None => PathBuf::from(*token),
+/// What a command word is as a shell redirection ([`redirection`]).
+enum Redirection<'a> {
+    /// An OUTPUT redirection (`>`, `>>`, `2>`, `&>`, `>&2`, `2>&1`, `>|`):
+    /// its target is written, never run — and binding an approval to a file
+    /// the command writes would break the approval on its next run.
+    /// `target_follows`: the operator is written apart from its target, which
+    /// is the next word.
+    Writes { target_follows: bool },
+    /// An INPUT redirection (`<`, `<<`, `<>`, `0<`): the target it reads,
+    /// which can be the very script (`sh <x.sh`). Empty when the target is
+    /// written apart: the next word, judged like any other.
+    Reads(&'a str),
+    /// Not a redirection.
+    Not,
+}
+
+/// A command word as a shell redirection ([`Redirection`]).
+fn redirection(word: &str) -> Redirection<'_> {
+    let operator = match word.strip_prefix('&') {
+        Some(rest) => rest,
+        None => word.trim_start_matches(|c: char| c.is_ascii_digit()),
+    };
+    if let Some(target) = operator.strip_prefix('>') {
+        return Redirection::Writes {
+            target_follows: target.trim_start_matches(['>', '|', '&']).is_empty(),
         };
-        if expanded.is_file() {
-            return Some(expanded);
-        }
     }
-    None
+    match operator.strip_prefix('<') {
+        Some(source) => Redirection::Reads(source.trim_start_matches(['<', '>'])),
+        None => Redirection::Not,
+    }
+}
+
+/// Whether a command word is a URL (`scheme://…`, the scheme a letter then
+/// letters, digits, `+`, `.` or `-`): an address, never a file the command
+/// runs or reads from its directory.
+fn is_url(word: &str) -> bool {
+    word.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    })
+}
+
+/// The file a candidate word names: `~/` from the home directory, an
+/// absolute path as written, a relative one from where a hook runs — its
+/// root — never from wherever this process happens to be. `None` when that
+/// base is unknown.
+fn candidate_path(token: &str, context: &ScriptContext<'_>) -> Option<PathBuf> {
+    match token.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().map(|home| home.join(rest)),
+        None if Path::new(token).is_absolute() => Some(PathBuf::from(token)),
+        None => context.root.map(|root| root.join(token)),
+    }
 }
 
 /// `sha256` (16 hex chars) of the script `command` invokes, or `None` when
 /// there is no resolvable/readable script. Never propagates an I/O error: an
 /// unreadable file simply has no fingerprint, and the caller decides what that
 /// means (record time: no binding; check time: fail safe).
-fn script_fingerprint(command: &str) -> Option<String> {
-    let path = script_path_from_command(command)?;
+fn script_fingerprint(command: &str, context: &ScriptContext<'_>) -> Option<String> {
+    let path = script_path_from_command(command, context)?;
     let meta = fs::metadata(&path).ok()?;
     if meta.len() > MAX_SCRIPT_HASH_BYTES {
         return None;
@@ -551,20 +1374,452 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_and_command_sensitive() {
-        let a = ShellHookConsent::fingerprint("plug", "echo hi");
-        let b = ShellHookConsent::fingerprint("plug", "echo hi");
-        let c = ShellHookConsent::fingerprint("plug", "echo HI");
-        let d = ShellHookConsent::fingerprint("other", "echo hi");
+        let a = ShellHookConsent::fingerprint("plug", None, "echo hi");
+        let b = ShellHookConsent::fingerprint("plug", None, "echo hi");
+        let c = ShellHookConsent::fingerprint("plug", None, "echo HI");
+        let d = ShellHookConsent::fingerprint("other", None, "echo hi");
         assert_eq!(a, b);
         assert_ne!(a, c, "command change must change the fingerprint");
         assert_ne!(a, d, "plugin change must change the fingerprint");
         assert_eq!(a.len(), 16);
     }
 
+    /// A global key is the pre-binding key, byte for byte, so every approval
+    /// of a hook that fires everywhere survives the change. Pinned value:
+    /// `sha256("plug\0echo hi")`, what `286ccf533` computed.
+    #[test]
+    fn a_global_key_is_the_key_it_always_was() {
+        assert_eq!(
+            ShellHookConsent::fingerprint("plug", None, "echo hi"),
+            "c64b0e5b341bfa92"
+        );
+    }
+
+    #[test]
+    fn a_project_key_names_its_project() {
+        let key = |root: Option<&str>| {
+            ShellHookConsent::fingerprint("user:project", root.map(Path::new), "lint")
+        };
+        assert_ne!(
+            key(Some("/repo/a")),
+            key(Some("/repo/b")),
+            "one template in two projects is two keys"
+        );
+        assert_ne!(
+            key(Some("/repo/a")),
+            key(None),
+            "a project key is never the shared-label key"
+        );
+    }
+
+    /// The doctor's drift check recomputes each entry's key from its own
+    /// fields; a project entry must round-trip through the file, or every
+    /// one of them reads as hand-edited.
+    #[test]
+    fn a_recorded_project_entry_derives_its_own_fingerprint() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        let scope = ScopeKey::project(root.path());
+        consent.record_pending("user:project", &scope, "lint", "PreToolUse", root.path());
+
+        let entry = consent.entries().remove(0);
+        assert_eq!(
+            entry.project_root,
+            Some(crate::extension::visibility::canonical_root(root.path()))
+        );
+        assert_eq!(entry.expected_fingerprint(), entry.fingerprint);
+        assert!(!entry.predates_project_binding());
+        let reopened = ShellHookConsent::with_path(consent.path());
+        assert_eq!(
+            reopened.entries()[0].expected_fingerprint(),
+            entry.fingerprint
+        );
+    }
+
+    /// The review surfaces say who picks an inline command's arguments — for
+    /// every inline command, whatever its text spells — and say nothing of
+    /// the kind for a hook.
+    #[test]
+    fn only_an_inline_command_entry_carries_the_invoker_arguments_note() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        consent.record_pending(
+            "plug",
+            &ScopeKey::Global,
+            "git status",
+            INLINE_COMMAND_EVENT,
+            root.path(),
+        );
+        consent.record_pending("plug", &ScopeKey::Global, "lint", "PreToolUse", root.path());
+        let notes: Vec<(String, bool)> = consent
+            .entries()
+            .iter()
+            .map(|e| (e.command.clone(), e.invoker_arguments_note().is_some()))
+            .collect();
+        assert!(
+            notes.contains(&("git status".to_string(), true)),
+            "{notes:?}"
+        );
+        assert!(notes.contains(&("lint".to_string(), false)), "{notes:?}");
+    }
+
+    /// Each face's entry carries its own note and only its own.
+    #[test]
+    fn only_a_skill_entry_carries_the_skill_read_note() {
+        let (_d, consent) = tmp_consent();
+        let root = tempfile::tempdir().expect("tempdir");
+        let skill = ShellHookConsent::skill_owner("user", "demo");
+        consent.record_pending(
+            &skill,
+            &ScopeKey::Global,
+            "date",
+            SKILL_INLINE_EVENT,
+            root.path(),
+        );
+        consent.record_pending(
+            "plug",
+            &ScopeKey::Global,
+            "git status",
+            INLINE_COMMAND_EVENT,
+            root.path(),
+        );
+        let notes: Vec<(String, bool, bool)> = consent
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    e.command.clone(),
+                    e.skill_read_note().is_some(),
+                    e.invoker_arguments_note().is_some(),
+                )
+            })
+            .collect();
+        assert!(
+            notes.contains(&("date".to_string(), true, false)),
+            "{notes:?}"
+        );
+        assert!(
+            notes.contains(&("git status".to_string(), false, true)),
+            "{notes:?}"
+        );
+    }
+
+    /// Which inline commands name a script consent would resolve in the wrong
+    /// directory: a relative script word is refused, the plugin's own
+    /// `${CLAUDE_PLUGIN_ROOT}/…` script is not, nor is a command with no
+    /// path at all; an existing absolute script binds, and a relative
+    /// argument after it is data to that script.
+    #[test]
+    fn a_relative_script_word_is_named_and_a_plugin_root_script_is_not() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(root.path().join("check.sh"), "true").unwrap();
+        let abs = root.path().join("check.sh").display().to_string();
+        let relative = |command: &str| {
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
+        };
+        assert_eq!(
+            relative("sh scripts/check.sh"),
+            Some("scripts/check.sh".into())
+        );
+        assert_eq!(relative("./run"), Some("./run".into()));
+        assert_eq!(relative("git diff src/app.ts"), Some("src/app.ts".into()));
+        assert_eq!(relative("sh ${CLAUDE_PLUGIN_ROOT}/check.sh"), None);
+        assert_eq!(relative("git status --short"), None);
+        assert_eq!(relative("gh pr view $1"), None);
+        assert_eq!(relative(&format!("sh {abs} src/app.ts")), None);
+    }
+
+    /// A redirection's target is judged by direction: what a command writes
+    /// to is never its script, glued (`2>/dev/null`) or apart (`> out/log`);
+    /// what it reads from can be (`sh <scripts/x.sh`). A URL names no file.
+    /// The inline refusal and consent's binding share the candidates, so each
+    /// case holds for both.
+    #[test]
+    fn a_redirection_is_judged_by_what_it_reads_and_a_url_is_no_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(root.path().join("x.sh"), "true").unwrap();
+        std::fs::write(root.path().join("last-run"), "then").unwrap();
+        let relative = |command: &str| {
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
+        };
+        for writes in [
+            "git status 2>/dev/null",
+            "git rev-parse --git-dir 2>/dev/null",
+            "git log >out/log.txt",
+            "git log > out/log.txt",
+            "make 2>&1 >>build/log",
+            "make &> build/log",
+        ] {
+            assert_eq!(relative(writes), None, "{writes}");
+        }
+        assert_eq!(relative("curl -s https://example.com/x"), None);
+        assert_eq!(relative("curl -s \"HTTPS://example.com/a/b\""), None);
+        assert_eq!(
+            relative("sh scripts/x.sh 2>&1"),
+            Some("scripts/x.sh".into())
+        );
+        assert_eq!(relative("sh <scripts/x.sh"), Some("scripts/x.sh".into()));
+        assert_eq!(relative("sh < scripts/x.sh"), Some("scripts/x.sh".into()));
+
+        // Consent's binding, on the same candidates: an input redirection
+        // binds the script it feeds; an output target is never bound.
+        let context = ScriptContext::new("plug", None, Some(root.path()));
+        let fed = format!("sh <{}/x.sh", root.path().display());
+        assert_eq!(
+            script_path_from_command(&fed, &context),
+            Some(root.path().join("x.sh"))
+        );
+        let written = format!("date >{}/last-run", root.path().display());
+        assert_eq!(script_path_from_command(&written, &context), None);
+    }
+
+    /// A redirection is recognised on the word as written: a quoted `'>'` or
+    /// `"2>"` is an argument the shell passes on, so the word after it is
+    /// judged — here a relative script, refused — instead of being skipped as
+    /// a write target. Unquoted, the operator still writes.
+    #[test]
+    fn a_quoted_redirection_operator_is_an_argument() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let relative = |command: &str| {
+            ShellHookConsent::unbindable_script_word("plug", None, Some(root.path()), command)
+        };
+        assert_eq!(
+            relative(r#"bash -c 'sh "$1"' '>' ./x.sh"#),
+            Some("./x.sh".into())
+        );
+        assert_eq!(relative(r#"echo "2>" ./x.sh"#), Some("./x.sh".into()));
+        assert_eq!(relative("echo hi > ./x.sh"), None);
+    }
+
+    /// Recording under `Global` is exactly how every entry looked before the
+    /// binding. Only the project-settings labels can be told apart.
+    #[test]
+    fn only_an_unbound_project_label_entry_predates_the_binding() {
+        let (_d, consent) = tmp_consent();
+        for (owner, command) in [
+            ("user:project", "a"),
+            ("user:project-local", "b"),
+            ("user:global", "c"),
+            ("some-plugin", "d"),
+        ] {
+            consent.record_pending(owner, &ScopeKey::Global, command, "e", Path::new("/p"));
+        }
+        let mut marked: Vec<String> = consent
+            .entries()
+            .into_iter()
+            .filter(ConsentEntry::predates_project_binding)
+            .map(|e| e.command)
+            .collect();
+        marked.sort();
+        assert_eq!(marked, ["a", "b"]);
+    }
+
+    /// P4.16 review M-4 / N-1: an entry recorded while the adapter still
+    /// spliced the install path into a plugin's command is superseded ONLY
+    /// when the entry holding the text as written sits beside it — the same
+    /// plugin and project, and `PluginVars::expand` of that text is exactly
+    /// the old one. The two false-positive shapes of a `contains` test stay
+    /// live: a path under a sibling directory sharing the root's prefix,
+    /// and an absolute path the author wrote. An old entry with no such
+    /// sibling is not guessed at, nor is a pair split across projects.
+    #[test]
+    fn only_a_spliced_text_beside_its_literal_sibling_is_superseded() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let (_d, consent) = tmp_consent();
+        let project = tempfile::tempdir().expect("project");
+        let data = crate::extension::plugin_data_dir("fmt");
+        let data_cmd = format!("cat {}/state", data.display());
+        let root = Path::new("/inst/fmt");
+        let global = ScopeKey::Global;
+        let in_project = ScopeKey::project(project.path());
+        for (owner, scope, command) in [
+            ("fmt", &global, "sh ${CLAUDE_PLUGIN_ROOT}/x.sh"),
+            ("fmt", &global, "sh /inst/fmt/x.sh"),
+            ("fmt", &global, "cat ${CLAUDE_PLUGIN_DATA}/state"),
+            ("fmt", &global, data_cmd.as_str()),
+            ("fmt", &global, "sh /inst/fmt2/x.sh"),
+            ("fmt", &global, "sh /inst/fmt/guard.sh"),
+            ("fmt", &global, "sh /inst/fmt/old.sh"),
+            ("user:global", &global, "sh /inst/fmt/x.sh"),
+            ("fmt", &global, "sh ${CLAUDE_PLUGIN_ROOT}/y.sh"),
+            ("fmt", &in_project, "sh /inst/fmt/y.sh"),
+        ] {
+            consent.record_pending(owner, scope, command, "e", root);
+        }
+        let entries = consent.entries();
+        let command_of = |fp: &str| {
+            entries
+                .iter()
+                .find(|e| e.fingerprint == fp)
+                .map(|e| e.command.clone())
+                .unwrap_or_default()
+        };
+        let mut marked: Vec<(String, String)> = ConsentEntry::superseded_in(&entries)
+            .into_iter()
+            .map(|(fp, why)| match why {
+                Superseded::SplicedText { literal } => (command_of(&fp), command_of(&literal)),
+                Superseded::PredatesProjectBinding => (command_of(&fp), String::new()),
+            })
+            .collect();
+        marked.sort();
+        let mut want = vec![
+            (
+                data_cmd.clone(),
+                "cat ${CLAUDE_PLUGIN_DATA}/state".to_string(),
+            ),
+            (
+                "sh /inst/fmt/x.sh".to_string(),
+                "sh ${CLAUDE_PLUGIN_ROOT}/x.sh".to_string(),
+            ),
+        ];
+        want.sort();
+        assert_eq!(marked, want);
+    }
+
+    // -- the root an approval attests to ------------------------------------
+
+    fn key_of(consent: &ShellHookConsent) -> String {
+        consent.entries()[0].fingerprint.clone()
+    }
+
+    #[test]
+    fn an_approval_does_not_follow_its_key_to_another_root() {
+        let (_d, consent) = tmp_consent();
+        let global = ScopeKey::Global;
+        consent.record_pending("fmt", &global, "lint", "PreToolUse", Path::new("/a"));
+        consent
+            .approve(&key_of(&consent), Some(Path::new("/a")))
+            .unwrap();
+
+        assert!(consent.is_approved("fmt", &global, Path::new("/a"), "lint"));
+        assert!(
+            !consent.is_approved("fmt", &global, Path::new("/b"), "lint"),
+            "approved for /a, run from /b"
+        );
+    }
+
+    /// While pending, an entry says what the latest fire ran; once
+    /// approved, it keeps what was approved.
+    #[test]
+    fn a_pending_entry_follows_the_latest_fire_and_an_approved_one_does_not() {
+        let (_d, consent) = tmp_consent();
+        let global = ScopeKey::Global;
+        consent.record_pending("fmt", &global, "lint", "PreToolUse", Path::new("/a"));
+        consent.record_pending("fmt", &global, "lint", "before_tool_call", Path::new("/b"));
+        let entry = consent.entries().remove(0);
+        assert_eq!(
+            (entry.event.as_str(), entry.plugin_root.as_deref()),
+            ("before_tool_call", Some(Path::new("/b")))
+        );
+
+        consent
+            .approve(&entry.fingerprint, Some(Path::new("/b")))
+            .unwrap();
+        consent.record_pending("fmt", &global, "lint", "PreToolUse", Path::new("/c"));
+        let entry = consent.entries().remove(0);
+        assert_eq!(entry.status, ConsentStatus::Approved);
+        assert_eq!(entry.plugin_root.as_deref(), Some(Path::new("/b")));
+    }
+
+    /// An entry recorded before the spelling and the root were kept — the
+    /// shape every entry on an upgraded install has — is repaired by its
+    /// next fire while pending, so it can be reviewed as production runs it.
+    #[test]
+    fn a_pending_entry_from_before_roots_were_kept_is_filled_in_by_its_next_fire() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shell-hooks-allowlist.json");
+        let fp = ShellHookConsent::fingerprint("fmt", None, "lint");
+        let legacy = serde_json::json!({ "version": 1, "entries": [{
+            "fingerprint": fp, "plugin_name": "fmt", "command": "lint",
+            "event": "BeforeToolCall", "status": "pending", "first_seen": 1
+        }] });
+        std::fs::write(&path, legacy.to_string()).expect("seed legacy registry");
+        let consent = ShellHookConsent::with_path(&path);
+
+        consent.record_pending(
+            "fmt",
+            &ScopeKey::Global,
+            "lint",
+            "PreToolUse",
+            Path::new("/a"),
+        );
+
+        let entry = consent.entries().remove(0);
+        assert_eq!(entry.event, "PreToolUse");
+        assert_eq!(entry.plugin_root.as_deref(), Some(Path::new("/a")));
+        assert_eq!(entry.status, ConsentStatus::Pending);
+    }
+
+    /// The review ran against `/a`; a fire moved the pending entry to `/b`
+    /// before the operator said yes. Approving now would bind `/b`, which
+    /// nobody reviewed.
+    #[test]
+    fn approval_is_refused_when_the_entry_moved_since_it_was_reviewed() {
+        let (_d, consent) = tmp_consent();
+        let global = ScopeKey::Global;
+        consent.record_pending("fmt", &global, "lint", "PreToolUse", Path::new("/a"));
+        let reviewed = consent.entries().remove(0);
+        consent.record_pending("fmt", &global, "lint", "PreToolUse", Path::new("/b"));
+
+        let outcome = consent
+            .approve(&reviewed.fingerprint, reviewed.plugin_root.as_deref())
+            .unwrap();
+        assert!(outcome.is_none(), "approved a root nobody reviewed");
+        assert_eq!(consent.entries()[0].status, ConsentStatus::Pending);
+    }
+
+    /// A pending entry recorded before roots were kept cannot be approved as
+    /// it is: the approval would bind no directory. Its next fire records the
+    /// root, and then it can.
+    #[test]
+    fn a_pending_entry_without_a_root_cannot_be_approved_until_it_fires() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shell-hooks-allowlist.json");
+        let fp = ShellHookConsent::fingerprint("fmt", None, "lint");
+        let legacy = serde_json::json!({ "version": 1, "entries": [{
+            "fingerprint": fp, "plugin_name": "fmt", "command": "lint",
+            "status": "pending", "first_seen": 1
+        }] });
+        std::fs::write(&path, legacy.to_string()).expect("seed legacy registry");
+        let consent = ShellHookConsent::with_path(&path);
+
+        assert!(
+            consent.approve(&fp, None).unwrap().is_none(),
+            "minted an approval bound to no root"
+        );
+        assert_eq!(consent.entries()[0].status, ConsentStatus::Pending);
+
+        consent.record_pending(
+            "fmt",
+            &ScopeKey::Global,
+            "lint",
+            "PreToolUse",
+            Path::new("/a"),
+        );
+        let entry = consent.approve(&fp, Some(Path::new("/a"))).unwrap();
+        assert_eq!(entry.and_then(|e| e.plugin_root), Some(PathBuf::from("/a")));
+    }
+
+    /// An approval recorded before roots were kept attests to no root; like
+    /// one with no script fingerprint it keeps its older meaning.
+    #[test]
+    fn an_approval_from_before_roots_were_kept_is_not_bound_to_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shell-hooks-allowlist.json");
+        let fp = ShellHookConsent::fingerprint("fmt", None, "lint");
+        let legacy = serde_json::json!({ "version": 1, "entries": [{
+            "fingerprint": fp, "plugin_name": "fmt", "command": "lint",
+            "status": "approved", "first_seen": 1, "approved_at": 2
+        }] });
+        std::fs::write(&path, legacy.to_string()).expect("seed legacy registry");
+        let consent = ShellHookConsent::with_path(&path);
+        assert!(consent.is_approved("fmt", &ScopeKey::Global, Path::new("/any"), "lint"));
+    }
+
     #[test]
     fn unknown_hook_is_not_approved() {
         let (_d, consent) = tmp_consent();
-        assert!(!consent.is_approved("p", "rm -rf /"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "rm -rf /"));
     }
 
     // -- script-content binding (TOCTOU guard) -----------------------------
@@ -586,38 +1841,57 @@ mod tests {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo safe\n");
 
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
-        assert!(consent.is_approved("p", &command), "freshly approved");
+        consent
+            .approve(&fp, Some(Path::new("/p")))
+            .expect("approve");
+        assert!(
+            consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), &command),
+            "freshly approved"
+        );
 
         std::fs::write(&script, "rm -rf /\n").expect("rewrite script");
         assert!(
-            !consent.is_approved("p", &command),
+            !consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), &command),
             "edited script must lose its approval"
         );
 
         // Restoring the exact approved bytes restores the approval — the
         // guard keys on content, not on an mtime that any touch would bump.
         std::fs::write(&script, "echo safe\n").expect("restore script");
-        assert!(consent.is_approved("p", &command));
+        assert!(consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), &command));
     }
 
     #[test]
     fn approving_records_the_content_reviewed_at_approval_time() {
-        // `aleph hooks test` runs the script, THEN asks to approve. If the
+        // `aleph-server hooks test` runs the script, THEN asks to approve. If the
         // fingerprint were frozen at record time, editing between the two
         // steps would make the just-approved version fail on first fire.
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo v1\n");
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
 
         std::fs::write(&script, "echo v2\n").expect("edit before approving");
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
+        consent
+            .approve(&fp, Some(Path::new("/p")))
+            .expect("approve");
 
         assert!(
-            consent.is_approved("p", &command),
+            consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), &command),
             "approval must attest to the content present when approving"
         );
     }
@@ -626,12 +1900,20 @@ mod tests {
     fn deleting_an_approved_script_fails_safe() {
         let (_d, consent) = tmp_consent();
         let (_sd, script, command) = script_hook("echo hi\n");
-        consent.record_pending("p", &command, "before_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            &command,
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
+        consent
+            .approve(&fp, Some(Path::new("/p")))
+            .expect("approve");
 
         std::fs::remove_file(&script).expect("delete script");
-        assert!(!consent.is_approved("p", &command));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), &command));
     }
 
     #[test]
@@ -639,11 +1921,19 @@ mod tests {
         // `echo hi` has nothing to bind to; it must still approve normally
         // rather than being permanently refused for lack of a fingerprint.
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "before_tool_call",
+            Path::new("/p"),
+        );
         assert!(consent.entries()[0].script_fingerprint.is_none());
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
-        assert!(consent.is_approved("p", "echo hi"));
+        consent
+            .approve(&fp, Some(Path::new("/p")))
+            .expect("approve");
+        assert!(consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"));
     }
 
     #[test]
@@ -667,7 +1957,7 @@ mod tests {
         assert!(entry.script_fingerprint.is_none());
         // The seeded fingerprint is synthetic, so look it up the way the
         // executor does: by (plugin, command).
-        let real_fp = ShellHookConsent::fingerprint("p", "sh /nonexistent/legacy.sh");
+        let real_fp = ShellHookConsent::fingerprint("p", None, "sh /nonexistent/legacy.sh");
         assert_ne!(real_fp, entry.fingerprint, "seeded id is deliberately fake");
         // The stored entry is keyed by its recorded fingerprint and stays
         // approved — no forced re-consent for pre-existing registries.
@@ -681,27 +1971,24 @@ mod tests {
         std::fs::write(&script, "print(1)").expect("write");
         let p = script.display().to_string();
 
+        let resolve = |command: &str| script_path_from_command(command, &NO_CONTEXT);
         assert_eq!(
-            script_path_from_command(&format!("python3 {p}")).as_ref(),
+            resolve(&format!("python3 {p}")).as_ref(),
             Some(&script),
             "interpreter-prefixed"
         );
         assert_eq!(
-            script_path_from_command(&format!("/usr/bin/env python3 \"{p}\"")).as_ref(),
+            resolve(&format!("/usr/bin/env python3 \"{p}\"")).as_ref(),
             Some(&script),
             "env-prefixed and quoted"
         );
-        assert_eq!(
-            script_path_from_command(&p).as_ref(),
-            Some(&script),
-            "bare path"
-        );
+        assert_eq!(resolve(&p).as_ref(), Some(&script), "bare path");
         // Nothing resolvable → no binding (not a wrong binding).
-        assert!(script_path_from_command("echo hi").is_none());
-        assert!(script_path_from_command("sh /does/not/exist.sh").is_none());
-        // Variables and globs are not stable paths.
-        assert!(script_path_from_command("sh $HOME/hook.sh").is_none());
-        assert!(script_path_from_command("sh ./hooks/*.sh").is_none());
+        assert!(resolve("echo hi").is_none());
+        assert!(resolve("sh /does/not/exist.sh").is_none());
+        // Variables nobody here can resolve, and globs, are not stable paths.
+        assert!(resolve("sh $HOME/hook.sh").is_none());
+        assert!(resolve("sh ./hooks/*.sh").is_none());
     }
 
     #[test]
@@ -717,7 +2004,7 @@ mod tests {
 
         let command = format!("sh --rcfile {} {}", config.display(), script.display());
         assert_eq!(
-            script_path_from_command(&command).as_ref(),
+            script_path_from_command(&command, &NO_CONTEXT).as_ref(),
             Some(&script),
             "must bind to the executed script, not an earlier path argument"
         );
@@ -729,55 +2016,252 @@ mod tests {
         let script = dir.path().join("hook");
         std::fs::write(&script, "echo hi").expect("write");
         assert_eq!(
-            script_path_from_command(&script.display().to_string()).as_ref(),
+            script_path_from_command(&script.display().to_string(), &NO_CONTEXT).as_ref(),
             Some(&script)
+        );
+    }
+
+    /// No root, data directory or project: only literal absolute and `~/`
+    /// paths can be found.
+    const NO_CONTEXT: ScriptContext<'static> = ScriptContext {
+        root: None,
+        data: None,
+        project: None,
+        skill: false,
+    };
+
+    /// A skill's entry binds the script it names relative to its directory
+    /// or through `$ALEPH_SKILL_DIR` — where it runs — and nothing through a
+    /// plugin path variable or `$CLAUDE_PROJECT_DIR`, whose values in its
+    /// child are not that directory. A hook with the same root still
+    /// resolves the plugin variable (the control).
+    #[test]
+    fn a_skill_entry_binds_its_own_dir_and_no_other_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let go = dir.path().join("go.sh");
+        std::fs::write(&go, "echo hi").unwrap();
+        let skill = ShellHookConsent::skill_owner("plug", "demo");
+        let ctx = ScriptContext::new(&skill, Some(dir.path()), Some(dir.path()));
+        let found = |cmd: &str| script_path_from_command(cmd, &ctx);
+        assert_eq!(found(r#"sh "$ALEPH_SKILL_DIR/go.sh""#), Some(go.clone()));
+        assert_eq!(found(r#"sh "${ALEPH_SKILL_DIR}"/go.sh"#), Some(go.clone()));
+        assert_eq!(found("sh go.sh"), Some(go.clone()));
+        assert_eq!(found(r#"sh "${CLAUDE_PLUGIN_ROOT}/go.sh""#), None);
+        assert_eq!(found(r#"sh "$CLAUDE_PROJECT_DIR/go.sh""#), None);
+        let hook = ScriptContext::new("plug", None, Some(dir.path()));
+        assert_eq!(
+            script_path_from_command(r#"sh "${CLAUDE_PLUGIN_ROOT}/go.sh""#, &hook),
+            Some(go)
+        );
+    }
+
+    /// The refusal both inline faces share, per face. A skill's command is
+    /// refused at the first script candidate that goes through a variable
+    /// other than `$ALEPH_SKILL_DIR` (consent could not find its file); one
+    /// consent binds, a relative one (the skill runs in its directory), and a
+    /// variable that is no script word pass. A plugin command's keeps its
+    /// rule: a relative word is refused, an unknown variable is not looked at.
+    #[test]
+    fn a_skill_refuses_a_script_it_cannot_bind_and_a_command_keeps_its_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x.sh"), "echo hi").unwrap();
+        let skill = ShellHookConsent::skill_owner(USER_SKILL_OWNER, "demo");
+        let as_skill = |cmd: &str| {
+            ShellHookConsent::unbindable_script_word(
+                &skill,
+                Some(dir.path()),
+                Some(dir.path()),
+                cmd,
+            )
+        };
+        let word = |w: &str| Some(w.to_string());
+        assert_eq!(
+            as_skill(r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh""#),
+            word("${CLAUDE_PLUGIN_ROOT}/x.sh")
+        );
+        assert_eq!(
+            as_skill(r#"sh "$CLAUDE_PROJECT_DIR/x.sh""#),
+            word("$CLAUDE_PROJECT_DIR/x.sh")
+        );
+        assert_eq!(as_skill("cat $HOME/notes"), word("$HOME/notes"));
+        assert_eq!(
+            as_skill(r#"sh x.sh "$HOME/notes""#),
+            None,
+            "the bound script ends the scan"
+        );
+        assert_eq!(as_skill(r#"sh "$ALEPH_SKILL_DIR/x.sh""#), None);
+        assert_eq!(as_skill("sh x.sh"), None);
+        assert_eq!(as_skill(r#"printf '%s' "$CLAUDE_PLUGIN_ROOT""#), None);
+        assert_eq!(as_skill("git status"), None);
+
+        let as_command = |cmd: &str| {
+            ShellHookConsent::unbindable_script_word("plug", None, Some(dir.path()), cmd)
+        };
+        assert_eq!(as_command("sh x.sh"), word("x.sh"));
+        assert_eq!(as_command(r#"sh "$HOME/y.sh""#), None);
+        assert_eq!(as_command(r#"sh "${CLAUDE_PLUGIN_ROOT}/x.sh""#), None);
+    }
+
+    /// A skill no plugin ships is keyed by its skills directory, and the
+    /// review surfaces say so; anything else names a project.
+    #[test]
+    fn a_user_skill_entry_is_labelled_by_its_skills_dir() {
+        let entry = |owner: &str| ConsentEntry {
+            fingerprint: String::new(),
+            plugin_name: owner.to_string(),
+            project_root: Some(PathBuf::from("/p")),
+            command: "date".into(),
+            event: SKILL_INLINE_EVENT.into(),
+            plugin_root: None,
+            status: ConsentStatus::Pending,
+            first_seen: 0,
+            approved_at: None,
+            script_fingerprint: None,
+        };
+        let user = ShellHookConsent::skill_owner(USER_SKILL_OWNER, "demo");
+        assert_eq!(entry(&user).scope_label(), "skills dir");
+        let plugin = ShellHookConsent::skill_owner("plug", "demo");
+        assert_eq!(entry(&plugin).scope_label(), "project");
+        assert_eq!(entry("user:project").scope_label(), "project");
+    }
+
+    /// The shapes a hook written the Claude Code way names its script with —
+    /// each resolved from the hook's root (or project), whatever directory
+    /// this process runs in.
+    #[test]
+    fn a_script_named_through_a_path_variable_or_relative_to_the_root_is_found() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let script = root.path().join("hooks/lint.sh");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "echo hi").unwrap();
+        let hook = ScriptContext::new("user:project", None, Some(root.path()));
+        let project = ScriptContext::new("user:project", Some(root.path()), None);
+
+        for (command, context) in [
+            (r#"sh "${CLAUDE_PLUGIN_ROOT}/hooks/lint.sh""#, &hook),
+            (r#"sh "${CLAUDE_PLUGIN_ROOT}"/hooks/lint.sh"#, &hook),
+            ("sh $ALEPH_PLUGIN_ROOT/hooks/lint.sh", &hook),
+            ("sh ${PLUGIN_ROOT}/hooks/lint.sh", &hook),
+            ("sh hooks/lint.sh", &hook),
+            ("sh ./hooks/lint.sh", &hook),
+            (r#""$CLAUDE_PROJECT_DIR"/hooks/lint.sh"#, &project),
+        ] {
+            assert_eq!(
+                script_path_from_command(command, context).as_ref(),
+                Some(&script),
+                "{command}"
+            );
+        }
+
+        // What cannot be resolved stays unbound, not bound to a guess: a
+        // variable with no known value, another variable, a relative path
+        // with no root, and `$CLAUDE_PROJECT_DIR` for a hook that fires
+        // everywhere.
+        for (command, context) in [
+            ("sh ${CLAUDE_PLUGIN_ROOT}/hooks/lint.sh", &NO_CONTEXT),
+            ("sh $CLAUDE_PLUGIN_ROOTX/hooks/lint.sh", &hook),
+            ("sh hooks/lint.sh", &NO_CONTEXT),
+            ("sh $CLAUDE_PROJECT_DIR/hooks/lint.sh", &hook),
+        ] {
+            assert!(
+                script_path_from_command(command, context).is_none(),
+                "{command}"
+            );
+        }
+    }
+
+    /// The template is judged for `$`, not the root: a directory named with
+    /// one is still one path.
+    #[test]
+    fn a_root_named_with_a_dollar_is_still_resolved() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let root = base.path().join("repo$x");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("lint.sh"), "echo hi").unwrap();
+        let context = ScriptContext::new("user:project", None, Some(root.as_path()));
+        assert_eq!(
+            script_path_from_command("sh ${CLAUDE_PLUGIN_ROOT}/lint.sh", &context),
+            Some(root.join("lint.sh"))
         );
     }
 
     #[test]
     fn record_pending_then_approve_round_trip() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call");
-        assert!(!consent.is_approved("p", "echo hi"), "pending != approved");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
+        assert!(
+            !consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"),
+            "pending != approved"
+        );
 
         let entries = consent.entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].status, ConsentStatus::Pending);
         let fp = entries[0].fingerprint.clone();
 
-        let approved = consent.approve(&fp).expect("approve").expect("entry");
+        let approved = consent
+            .approve(&fp, Some(Path::new("/p")))
+            .expect("approve")
+            .expect("entry");
         assert_eq!(approved.status, ConsentStatus::Approved);
-        assert!(consent.is_approved("p", "echo hi"), "approved hook runs");
+        assert!(
+            consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"),
+            "approved hook runs"
+        );
     }
 
     #[test]
     fn record_pending_is_idempotent() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "after_tool_call");
-        consent.record_pending("p", "echo hi", "after_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "after_tool_call",
+            Path::new("/p"),
+        );
         assert_eq!(consent.entries().len(), 1);
     }
 
     #[test]
     fn revoke_sends_approved_hook_back_to_pending() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "before_tool_call");
+        consent.record_pending(
+            "p",
+            &ScopeKey::Global,
+            "echo hi",
+            "before_tool_call",
+            Path::new("/p"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).unwrap();
-        assert!(consent.is_approved("p", "echo hi"));
+        consent.approve(&fp, Some(Path::new("/p"))).unwrap();
+        assert!(consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"));
 
         let revoked = consent.revoke(&fp).expect("revoke").expect("entry");
         assert_eq!(revoked.status, ConsentStatus::Pending);
-        assert!(!consent.is_approved("p", "echo hi"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"));
     }
 
     #[test]
     fn approve_by_prefix_resolves_unique_match() {
         let (_d, consent) = tmp_consent();
-        consent.record_pending("p", "echo hi", "e");
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
         let approved = consent
-            .approve(fp.get(..6).unwrap_or(&fp))
+            .approve(fp.get(..6).unwrap_or(&fp), Some(Path::new("/p")))
             .expect("approve")
             .expect("entry");
         assert_eq!(approved.fingerprint, fp);
@@ -786,37 +2270,40 @@ mod tests {
     #[test]
     fn approve_unknown_prefix_returns_none() {
         let (_d, consent) = tmp_consent();
-        assert!(consent.approve("ffffffff").expect("approve").is_none());
+        assert!(consent
+            .approve("ffffffff", None)
+            .expect("approve")
+            .is_none());
     }
 
     #[test]
     fn changes_persist_across_reload() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e");
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).unwrap();
+        consent.approve(&fp, Some(Path::new("/p"))).unwrap();
 
         // A fresh instance reads the same file from disk.
         let reopened = ShellHookConsent::with_path(path);
-        assert!(reopened.is_approved("p", "echo hi"));
+        assert!(reopened.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"));
     }
 
     #[test]
     fn external_file_change_is_picked_up_via_stamp() {
         let (_d, consent) = tmp_consent();
         let path = consent.path().to_path_buf();
-        consent.record_pending("p", "echo hi", "e");
-        assert!(!consent.is_approved("p", "echo hi"));
+        consent.record_pending("p", &ScopeKey::Global, "echo hi", "e", Path::new("/p"));
+        assert!(!consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"));
 
         // A second process approves the hook by writing the file directly;
         // the approval grows the file, so the `(mtime, len)` stamp differs.
         let writer = ShellHookConsent::with_path(&path);
         let fp = writer.entries()[0].fingerprint.clone();
-        writer.approve(&fp).unwrap();
+        writer.approve(&fp, Some(Path::new("/p"))).unwrap();
 
         assert!(
-            consent.is_approved("p", "echo hi"),
+            consent.is_approved("p", &ScopeKey::Global, Path::new("/p"), "echo hi"),
             "is_approved must reload after the registry file changes"
         );
     }

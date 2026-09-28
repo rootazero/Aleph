@@ -136,6 +136,45 @@ impl PluginManageTool {
         Self
     }
 
+    /// Whether THIS face — the model — may turn `name` on. Disabling needs no
+    /// such check: it is the fail-safe direction.
+    ///
+    /// - An id no load lists is refused: recording `enabled = true` for it
+    ///   would let the model pre-approve a Claude Code plugin that is not
+    ///   listed yet (or whose index could not be read this load).
+    /// - A `claude_cache` row is refused (D-A, provisional ruling pending
+    ///   the user's decision): enabling it runs code another tool installed
+    ///   — and Claude Code does not let its model enable plugins either. The
+    ///   refusal names the human faces that can.
+    async fn may_enable(manager: &crate::extension::ExtensionManager, name: &str) -> Result<()> {
+        use crate::extension::PluginOrigin;
+        let origin = manager.get_plugin_record(name).await.map(|r| r.origin);
+        match origin {
+            None => Err(AlephError::config(format!(
+                "No plugin '{name}'. Call action='list' to see what is installed."
+            ))),
+            // A deliberate refusal, so the policy label — not `config`, whose
+            // "Configuration/Database error:" reads as something broken.
+            Some(PluginOrigin::ClaudeCache) => Err(AlephError::PermissionDenied {
+                message: format!(
+                    "'{name}' was installed by Claude Code (origin claude_cache). Enabling it \
+                     runs code another tool installed, so the operator turns it on: \
+                     `aleph plugin enable {name}`, or the Panel's plugin settings. Tell them \
+                     that; you may still disable it."
+                ),
+                suggestion: None,
+            }),
+            // Named, no wildcard: a new origin decides whether the model may
+            // turn it on.
+            Some(
+                PluginOrigin::Config
+                | PluginOrigin::Workspace
+                | PluginOrigin::Global
+                | PluginOrigin::Bundled,
+            ) => Ok(()),
+        }
+    }
+
     fn require_name(args: &PluginManageArgs) -> Result<&str> {
         args.name
             .as_deref()
@@ -153,17 +192,17 @@ impl AlephTool for PluginManageTool {
         "Inspect, enable/disable, reload and configure installed plugins. \
          Use action='list' to see every installed plugin with its runtime kind (wasm/mcp/static), \
          status, and how many skills/commands/agents/hooks/tools it contributes — a plugin whose \
-         status is not 'loaded' carries the reason in status_detail, which is the answer to \
-         'why isn't my plugin working?'. \
+         status is not 'loaded' carries the reason in 'error'. \
          action='config_get' returns the plugin's stored configuration together with the JSON \
-         Schema its manifest declares, so you can see which fields exist and what they accept \
-         before setting anything; action='config_set' REPLACES the whole configuration object, \
+         Schema its manifest declares; action='config_set' REPLACES the whole configuration object, \
          so read it first and send the merged result. Configuration changes take effect on the \
          next reload — call action='reload' afterwards and say so. \
          action='trust_status' reports the owner trust policy; when it is enforced, plugins from \
-         workspace/global directories load only if action='trust' vouched for them, and the rest \
-         are listed with status 'blocked'. trust/untrust and trust_enforce are LOAD gates: they \
-         do not stop a plugin that is already running — action='disable' does. \
+         workspace/global directories or Claude Code's cache load only if action='trust' vouched \
+         for them, and the rest are listed with status 'blocked'. trust/untrust and trust_enforce \
+         are LOAD gates: they do not stop a plugin that is already running — action='disable' does. \
+         A 'claude_cache' row is Claude Code's install: you may disable it, never enable it -- \
+         the operator does. \
          This tool cannot install or uninstall plugins: installing runs third-party code, so it \
          stays with the operator (or the consent-gated hub_install_run). Do not claim you \
          installed or removed a plugin. \
@@ -184,6 +223,17 @@ impl AlephTool for PluginManageTool {
         let manager = crate::extension::try_extension_manager().ok_or_else(|| {
             AlephError::config("The extension manager is not running in this process")
         })?;
+        Self::call_on(manager, args).await
+    }
+}
+
+impl PluginManageTool {
+    /// The tool's body against a given manager — `call` passes the process
+    /// global; tests pass an isolated one.
+    pub(crate) async fn call_on(
+        manager: &crate::extension::ExtensionManager,
+        args: PluginManageArgs,
+    ) -> Result<PluginManageOutput> {
         if let Err(e) = manager.ensure_loaded().await {
             tracing::warn!(error = %e, "plugin_manage: failed to load extensions");
         }
@@ -218,6 +268,9 @@ impl AlephTool for PluginManageTool {
             PluginAction::Enable | PluginAction::Disable => {
                 let name = Self::require_name(&args)?;
                 let enable = matches!(args.action, PluginAction::Enable);
+                if enable {
+                    Self::may_enable(manager, name).await?;
+                }
                 let changed = manager.set_plugin_enabled(name, enable).await;
                 let verb = if enable { "enabled" } else { "disabled" };
                 Ok(PluginManageOutput {
@@ -231,13 +284,13 @@ impl AlephTool for PluginManageTool {
             }
             PluginAction::Reload => {
                 let name = Self::require_name(&args)?;
-                manager
+                let status = manager
                     .reload_plugin(name)
                     .await
                     .map_err(|e| AlephError::config(format!("Reload failed: {e}")))?;
                 Ok(PluginManageOutput {
                     summary: format!("Plugin '{name}' reloaded"),
-                    data: serde_json::json!({ "name": name }),
+                    data: serde_json::json!({ "name": name, "status": status.label() }),
                 })
             }
             PluginAction::ConfigGet => {

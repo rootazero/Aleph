@@ -446,6 +446,22 @@ pub(super) async fn ensure_session_under_request_scope(
     .await;
 }
 
+/// The directory this run works in: the request's `workspace_override`
+/// (project mode), else the agent's own workspace.
+///
+/// The one derivation behind the run's `FsScope` / exec-workspace task-locals
+/// ([`ExecutionEngine::run_agent_loop`]) and its `effective_workspace` (which
+/// adds the vanished-override check) — and, through the latter, the directory
+/// a `/command`'s inline shell commands run in
+/// (`slash_command_body::render_admitted`). Not validated: a caller that needs
+/// an existing directory checks it.
+pub(super) fn run_workspace(request: &RunRequest, agent: &AgentInstance) -> std::path::PathBuf {
+    request
+        .workspace_override
+        .clone()
+        .unwrap_or_else(|| agent.workspace().to_path_buf())
+}
+
 /// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
 /// a receipt, so a reload shows "this turn was stopped by a hook" and the
 /// reducer reads `Clean` rather than `Unanswered` (which would retrigger a
@@ -620,7 +636,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // BeforeAgentStart — interceptor-kind hooks may abort the run before
         // any provider call; observer-kind hooks just witness the start.
         if let Some(executor) = hook_executor.as_ref() {
-            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent, None);
             match executor
                 .execute_interceptors(HookEvent::BeforeAgentStart, ctx)
                 .await
@@ -689,14 +705,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // value `ToolContext::from_workspace` derives). File tools prefer the
         // task-local over the shared `ToolContextHandle`, so a concurrent run
         // rewriting the handle mid-run no longer redirects THIS run's
-        // relative-path writes into the other run's workspace. Mirrors the
-        // `effective_workspace` fallback inside `run_agent_loop_inner`
-        // (override > agent workspace); validation of the override stays in
-        // the inner fn — a vanished dir still fails the run there.
-        let scope_workspace = request
-            .workspace_override
-            .clone()
-            .unwrap_or_else(|| agent.workspace().to_path_buf());
+        // relative-path writes into the other run's workspace. The same
+        // derivation as `run_agent_loop_inner`'s `effective_workspace`
+        // ([`run_workspace`]); validation of the override stays in the inner
+        // fn — a vanished dir still fails the run there.
+        let scope_workspace = run_workspace(request, &agent);
         // Team-worktree runs (dispatcher members) carry the parent repo root
         // in metadata: build a rebasing worktree scope so the member's file
         // tools anchor at the worktree root AND parent-repo absolute paths
@@ -791,7 +804,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // seam already honored on the AfterToolCall path — no new protocol.
         // block / deny are meaningless post-hoc (the run is over) and ignored.
         if let Some(executor) = hook_executor.as_ref() {
-            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent, None);
             ctx = ctx.with_env("AGENT_OUTCOME", if result.is_ok() { "ok" } else { "error" });
             match &result {
                 Ok(text) => ctx = ctx.with_tool_output(text.clone()),

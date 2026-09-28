@@ -36,7 +36,7 @@ pub struct PluginRegistry {
 
     /// Registered skills by name. Plugin `commands/` markdown also lives here,
     /// as entries tagged `skill_type = SkillType::Command` — see
-    /// [`crate::extension::ExtensionManager::get_all_commands`].
+    /// `extension/slash_effect.rs`.
     skills: HashMap<String, SkillRegistration>,
 
     /// Registered agents by name
@@ -44,6 +44,13 @@ pub struct PluginRegistry {
 
     /// Accumulated diagnostics from plugins
     diagnostics: Vec<PluginDiagnostic>,
+
+    /// Plugin sources the load that built these rows could not read
+    /// (`discovery::PluginDiscovery::unreadable`). Non-empty means the rows
+    /// are INCOMPLETE: a plugin missing from them may be unknown rather than
+    /// uninstalled. Held here, beside the rows, so a reader gets both from
+    /// one guard and they are cleared together.
+    unreadable_sources: Vec<std::path::PathBuf>,
 }
 
 impl PluginRegistry {
@@ -64,6 +71,19 @@ impl PluginRegistry {
         self.skills.clear();
         self.agents.clear();
         self.diagnostics.clear();
+        self.unreadable_sources.clear();
+    }
+
+    /// Record the sources the current load could not read (see the field).
+    pub fn set_unreadable_sources(&mut self, sources: Vec<std::path::PathBuf>) {
+        self.unreadable_sources = sources;
+    }
+
+    /// The sources the load behind these rows could not read. Non-empty ⇒
+    /// the plugin list is incomplete, not authoritative.
+    #[must_use]
+    pub fn unreadable_sources(&self) -> &[std::path::PathBuf] {
+        &self.unreadable_sources
     }
 
     // =========================================================================
@@ -109,6 +129,8 @@ impl PluginRegistry {
     /// Disable a plugin by ID.
     ///
     /// Returns `true` if the plugin was found and disabled, `false` otherwise.
+    /// There is no `enable_plugin` twin: re-enabling is a `mount`, which
+    /// writes `Loaded` through `register_plugin_row`.
     pub fn disable_plugin(&mut self, id: &str) -> bool {
         if let Some(plugin) = self.plugins.get_mut(id) {
             plugin.status = PluginStatus::Disabled;
@@ -116,20 +138,6 @@ impl PluginRegistry {
         } else {
             false
         }
-    }
-
-    /// Enable a previously disabled plugin by ID.
-    ///
-    /// Returns `true` if the plugin was found and enabled, `false` otherwise.
-    /// Note: This does not re-run plugin initialization; it only changes the status.
-    pub fn enable_plugin(&mut self, id: &str) -> bool {
-        if let Some(plugin) = self.plugins.get_mut(id) {
-            if matches!(plugin.status, PluginStatus::Disabled) {
-                plugin.status = PluginStatus::Loaded;
-                return true;
-            }
-        }
-        false
     }
 
     // =========================================================================

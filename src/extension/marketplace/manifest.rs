@@ -251,4 +251,50 @@ source = "owner/world-plugin"
             );
         }
     }
+
+    /// The shipping marketplace (`claude-plugins-official`, 2026-09-20) spells
+    /// the discriminator `source`; the live docs spell it `type`. Both must
+    /// answer `external_kind`, or a docs-shaped entry refuses with `'object'`
+    /// instead of naming its kind. A non-string `source` value must not mask
+    /// a string `type` (each key is coerced to `&str` independently before
+    /// falling through), and when both are strings the on-disk spelling wins.
+    #[test]
+    fn both_discriminator_spellings_name_the_source_kind() {
+        let manifest = parse_marketplace_json_content(
+            r#"{
+              "name": "official-shaped",
+              "plugins": [
+                {"name": "disk-form", "source": {"source": "git-subdir", "url": "https://github.com/x/y.git", "path": "plugins/z", "ref": "v1", "sha": "30287f5e3f122a646d1ac5ca3ab96e130c52a3ad"}},
+                {"name": "docs-form", "source": {"type": "git-subdir", "url": "https://github.com/x/y.git", "path": "plugins/z"}},
+                {"name": "url-form", "source": {"source": "url", "url": "https://github.com/x/y.git", "sha": "09bf1539d41f9ff355ba3eb5d05d4a75813423bb"}},
+                {"name": "npm-docs", "source": {"type": "npm", "package": "@scope/name", "version": "^1"}},
+                {"name": "path-form", "source": "./plugins/agent-sdk-dev"},
+                {"name": "non-string-source-form", "source": {"source": {"x": 1}, "type": "npm", "package": "@scope/name"}},
+                {"name": "both-spellings-form", "source": {"source": "git-subdir", "type": "npm", "url": "https://github.com/x/y.git"}}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let kinds: Vec<Option<&str>> = manifest
+            .plugins
+            .iter()
+            .map(|p| p.source.external_kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Some("git-subdir"), // disk-form: source.source
+                Some("git-subdir"), // docs-form: source.type
+                Some("url"),        // url-form: source.source
+                Some("npm"),        // npm-docs: source.type
+                None,               // path-form: not an object at all
+                Some("npm"), // non-string-source-form: source.source is an object, falls through to source.type
+                Some("git-subdir"), // both-spellings-form: both strings, on-disk source.source wins
+            ]
+        );
+        assert_eq!(
+            manifest.plugins[4].source.as_relative_path(),
+            Some("./plugins/agent-sdk-dev")
+        );
+    }
 }

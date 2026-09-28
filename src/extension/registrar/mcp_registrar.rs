@@ -1,11 +1,13 @@
-//! MCP Registrar — per-agent MCP server scope (P3 Stage I)
+//! MCP Registrar — plugin-owned transient servers as a disposable effect, and
+//! the per-agent MCP server scope (P3 Stage I).
 //!
 //! Historical note: this file used to host a `McpRegistrar` struct for a
-//! two-phase `batch_register` write path. That API was superseded by
-//! `McpManager::add_transient_server` driven by
-//! `ExtensionManager::sync_mcp_plugin_servers`, so the struct has been
-//! removed; the per-agent `McpScope` machinery below is the only remaining
-//! production surface.
+//! two-phase `batch_register` write path, then nothing plugin-shaped at all
+//! while a boot-time sync on `ExtensionManager` did the registration inline
+//! from the loader's `.mcp.json` mirror. [`register_transient_servers`] is the plugin path now: it is the
+//! `mcp_server` effect `lifecycle.rs::mount` records, and its disposer is what
+//! `unmount` runs. `McpScope` below is the per-agent (sub-agent) scope and is
+//! unrelated to plugin mounting.
 
 // -- P3 Stage I — per-agent MCP scope ----------------------------------------
 
@@ -376,6 +378,78 @@ async fn spawn_inline(
     })
 }
 
+use crate::extension::effects::{async_disposer, Disposer};
+use crate::mcp::{McpManagerConfig, McpManagerHandle};
+use std::collections::HashMap;
+use tokio::sync::oneshot;
+
+/// The actor's answer to one enqueued transient-server start.
+pub type ServerStartReceiver = oneshot::Receiver<Result<(), String>>;
+
+/// Mount-time effect: hand every server a plugin's `.mcp.json` declares to
+/// the MCP manager as a **transient** server, and return the disposer that
+/// removes them all plus one receiver per server for the actor's verdict.
+///
+/// Each add is *enqueued*, not awaited (see
+/// `McpManagerHandle::add_transient_server_detached`). The receivers are
+/// returned to the caller — `lifecycle.rs::watch_server_starts` awaits them
+/// on one task per plugin, logs each outcome and writes the plugin's
+/// readiness from them via `readiness::write_readiness` (`Pending` while a
+/// start is unanswered, `Error` if one failed, else `Loaded`). A failed start
+/// is therefore NOT a mount failure — the plugin stays mounted and its row
+/// says why — but a closed command channel is, because then nothing can
+/// ever start.
+///
+/// Partial failure is all-or-none at this step's granularity: if the k-th
+/// enqueue fails, the k−1 already enqueued are removed before returning
+/// `Err`, so the caller never has to dispose a half-registered step.
+pub(crate) async fn register_transient_servers(
+    handle: McpManagerHandle,
+    configs: HashMap<String, McpManagerConfig>,
+) -> Result<(Disposer, Vec<(String, ServerStartReceiver)>), String> {
+    let mut server_ids: Vec<String> = configs.keys().cloned().collect();
+    server_ids.sort();
+    let mut enqueued: Vec<String> = Vec::with_capacity(server_ids.len());
+    let mut receivers: Vec<(String, ServerStartReceiver)> = Vec::with_capacity(server_ids.len());
+    for server_id in &server_ids {
+        let config = configs
+            .get(server_id)
+            .cloned()
+            .expect("id came from this map");
+        match handle.add_transient_server_detached(config).await {
+            Ok(rx) => {
+                enqueued.push(server_id.clone());
+                receivers.push((server_id.clone(), rx));
+            }
+            Err(e) => {
+                for already in &enqueued {
+                    if let Err(re) = handle.remove_transient_server(already.clone()).await {
+                        tracing::warn!(server_id = %already, error = %re, "rollback remove failed");
+                    }
+                }
+                return Err(format!("cannot enqueue MCP server '{server_id}': {e}"));
+            }
+        }
+    }
+    let disposer = async_disposer(move || async move {
+        let mut failures = Vec::new();
+        for server_id in enqueued {
+            if let Err(e) = handle.remove_transient_server(server_id.clone()).await {
+                failures.push(format!("{server_id}: {e}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "remove_transient_server failed for {}",
+                failures.join("; ")
+            ))
+        }
+    });
+    Ok((disposer, receivers))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +667,101 @@ mod tests {
             matches!(err, McpScopeError::InlineStartup { ref name, .. } if name == "broken"),
             "got {err:?}"
         );
+    }
+
+    /// Drives a real actor. The server command does not exist, so the add
+    /// FAILS inside the actor — that is the point: the producer must return
+    /// before the actor answers, the failure must be observable on the
+    /// receiver, and the disposer must still send the remove (a no-op for a
+    /// server that never started, `actor.rs:624-641`).
+    #[tokio::test]
+    async fn register_transient_servers_enqueues_without_waiting_and_disposer_removes() {
+        use crate::mcp::manager::{McpManagerActor, McpManagerConfig, McpManagerEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
+            .await
+            .unwrap();
+        tokio::spawn(actor.run());
+        let mut events = handle.subscribe();
+
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "plugin:qa/never".to_string(),
+            McpManagerConfig::stdio(
+                "plugin:qa/never",
+                "never (qa)",
+                "qa-nonexistent-mcp-binary-9f3a",
+            ),
+        );
+
+        let started = std::time::Instant::now();
+        let (disposer, receivers) = register_transient_servers(handle.clone(), configs)
+            .await
+            .expect("enqueue succeeds while the actor is alive");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "producer must not wait for the handshake ({:?})",
+            started.elapsed()
+        );
+        assert_eq!(receivers.len(), 1);
+        assert_eq!(
+            receivers[0].0, "plugin:qa/never",
+            "one receiver per server, keyed by id"
+        );
+
+        // The disposer is a remove for the same id; it must be accepted even
+        // though the add is still in flight / has failed.
+        disposer()
+            .await
+            .expect("remove_transient_server is a no-op for an unknown id");
+
+        // The actor's verdict arrives on the receiver the caller was handed.
+        let (_, rx) = receivers.into_iter().next().unwrap();
+        let verdict = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+            .await
+            .expect("actor answers")
+            .expect("sender not dropped");
+        assert!(
+            verdict.is_err(),
+            "a nonexistent binary fails to start: {verdict:?}"
+        );
+
+        // No ServerStarted for a binary that does not exist; and nothing panicked.
+        let got_started = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match events.recv().await {
+                    Ok(McpManagerEvent::ServerStarted { server_id, .. })
+                        if server_id == "plugin:qa/never" =>
+                    {
+                        break true
+                    }
+                    Ok(_) => continue,
+                    Err(_) => break false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        assert!(!got_started, "a nonexistent binary cannot have started");
+    }
+
+    #[tokio::test]
+    async fn register_transient_servers_fails_when_the_actor_is_gone() {
+        use crate::mcp::manager::{McpManagerActor, McpManagerConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
+            .await
+            .unwrap();
+        drop(actor); // never run: the command channel's receiver is dropped
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "plugin:qa/x".to_string(),
+            McpManagerConfig::stdio("plugin:qa/x", "x", "true"),
+        );
+        let err = register_transient_servers(handle, configs)
+            .await
+            .err()
+            .expect("a closed channel is a step failure, not a silent skip");
+        assert!(err.contains("plugin:qa/x"), "names the server: {err}");
     }
 }

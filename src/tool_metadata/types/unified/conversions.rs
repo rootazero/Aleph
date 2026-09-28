@@ -16,7 +16,7 @@ impl UnifiedTool {
             ToolSource::Native => " [Native - Preferred]".to_string(),
             ToolSource::Builtin => " [Builtin - Preferred]".to_string(),
             ToolSource::Mcp { server } => format!(" [MCP:{server}]"),
-            ToolSource::Skill { id } => format!(" [Skill:{id}]"),
+            ToolSource::Skill { id, .. } => format!(" [Skill:{id}]"),
             ToolSource::Custom { .. } => " [Custom]".to_string(),
             ToolSource::Plugin { plugin_id } => format!(" [Plugin:{plugin_id}]"),
         };

@@ -439,7 +439,7 @@ impl ScopedToolService {
     /// than asking. `None` when the tool is not denied.
     ///
     /// Separate from [`Self::confirmation_rule`] because it answers a different
-    /// question at a different point in `execute_inner`, and collapsing the two
+    /// question at a different point in `execute_gated`, and collapsing the two
     /// would make every ask-path caller pattern-match a variant it can never
     /// see.
     pub(super) fn deny_rule<'a>(&'a self, name: &str) -> Option<GateRule<'a>> {

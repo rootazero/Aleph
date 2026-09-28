@@ -263,6 +263,17 @@ impl DiagnosticEngine {
         self
     }
 
+    /// Append `extension/plugins-activated`, the doctor face of the boot
+    /// activation gate. Daemon faces only, same reason and same
+    /// UNKNOWN-when-absent rule as [`Self::with_extension_usage_check`]: the
+    /// cold `aleph-server doctor` has no extension manager.
+    #[must_use]
+    pub fn with_plugins_activated_check(mut self) -> Self {
+        self.checks
+            .push(Arc::new(checks::PluginsActivatedCheck::live()));
+        self
+    }
+
     /// Run every check concurrently and collect a report.
     pub async fn run(&self, posture: Posture) -> DiagnosticReport {
         self.run_with_filter(posture, None, &[]).await

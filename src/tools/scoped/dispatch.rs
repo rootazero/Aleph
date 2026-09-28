@@ -11,7 +11,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
-use crate::tools::service::ToolError;
+use crate::tools::service::{RefusedBy, ToolError};
 
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
@@ -127,6 +127,16 @@ impl ConfirmDenial {
     /// nothing of the sort: an unattended run, an unwired requester, a channel
     /// that could not deliver. The model relays that sentence to the person it
     /// is talking to, so a wrong attribution does not stay inside the process.
+    /// Who refused, as the model-facing error records it — the same fact
+    /// [`Self::lead`] words.
+    fn refused_by(&self) -> RefusedBy {
+        if self.reason.is_a_human_decision() {
+            RefusedBy::Person
+        } else {
+            RefusedBy::NobodyAsked
+        }
+    }
+
     fn lead(&self, subject: &str) -> String {
         let outcome = self.outcome;
         if self.reason.is_a_human_decision() {
@@ -137,7 +147,7 @@ impl ConfirmDenial {
     }
 }
 
-/// Which dispatch branch `execute_inner` is routing into. Kept as a
+/// Which dispatch branch `execute_gated` is routing into. Kept as a
 /// fieldless enum so the retry closure can capture it by value.
 #[derive(Copy, Clone)]
 enum RoutingTarget {
@@ -153,7 +163,48 @@ impl ScopedToolService {
     /// the inner [`crate::tools::runtime::LoopToolRegistry::execute`] /
     /// [`crate::agents::subagent_tool::SubagentTool::execute`] so subprocess
     /// `kill_on_drop`, reqwest abort, etc. propagate naturally.
+    ///
+    /// The gated dispatch ([`Self::execute_gated`]), plus the one observation
+    /// no gate could make: a `PermissionDenied` leaving here fires the
+    /// `PermissionDenied` hook observers. Placed on the way OUT rather than
+    /// at each deny arm (tier / policy rule, operator gate ×2, hook `deny:`)
+    /// so a new arm is covered without knowing this seam exists. Which
+    /// refusals that is — and which it is not — is the variant's doc
+    /// (`HookEvent::PermissionDenied`). The input is cloned only when a
+    /// `PermissionDenied` hook is registered: a Write call's whole body is
+    /// not copied on every dispatch for an event nobody listens to.
     pub(super) async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let for_hook = self
+            .hook_executor
+            .as_ref()
+            .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
+            .map(|e| (e.clone(), input.clone()));
+        let result = self.execute_gated(name, input, cancel).await;
+        if let (
+            Err(ToolError::PermissionDenied {
+                name: denied,
+                reason,
+            }),
+            Some((executor, input)),
+        ) = (&result, for_hook)
+        {
+            let ctx = self
+                .build_hook_context(denied, &input, None, None)
+                .with_env("DENY_REASON", reason.clone());
+            executor
+                .execute_observers(HookEvent::PermissionDenied, &ctx)
+                .await;
+        }
+        result
+    }
+
+    /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
+    async fn execute_gated(
         &self,
         name: &str,
         input: Value,
@@ -535,7 +586,7 @@ impl ScopedToolService {
     /// Returns `true` when this call was authorized by a person (or by a
     /// standing grant of theirs), `false` when no gate applied and nobody was
     /// asked. The caller threads that on to the `BeforeToolCall` hook seam so
-    /// one dispatch raises at most one card — see `execute_inner`.
+    /// one dispatch raises at most one card — see `execute_gated`.
     ///
     /// Which rule gated the call comes from [`Self::confirmation_rule`], and its
     /// prose goes to the human card and the model's refusal from that one
@@ -580,9 +631,10 @@ impl ScopedToolService {
                     let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                     let said = denial.user_reason_clause();
                     let lead = denial.lead(&format!("running `{name}`"));
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: denial.refused_by(),
+                        reason: format!(
                             "{lead}{said} Do not retry this call, do not rewrite it, and do \
                              not attempt to achieve the same result by other means.{hint} Ask \
                              the user what they would like to do instead."
@@ -601,9 +653,10 @@ impl ScopedToolService {
                     "auto-denied: confirmation required and no approval channel is available",
                 )
                 .await;
-                Err(ToolError::Execution {
+                Err(ToolError::Refused {
                     name: name.to_string(),
-                    cause: format!(
+                    by: RefusedBy::NobodyAsked,
+                    reason: format!(
                         "{} No approval channel is available, so it cannot be \
                          authorized here. Do not retry.",
                         rule.reason(name)
@@ -616,7 +669,7 @@ impl ScopedToolService {
     /// Run the call: route it to the subagent tool or the inner registry, through
     /// the one-shot retry helper and the Layer-2 result budget.
     ///
-    /// Split out of [`Self::execute_inner`] so the wall clock can wrap exactly
+    /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
     async fn route_and_execute(
         &self,
@@ -1252,9 +1305,10 @@ impl ScopedToolService {
         let (_ctx, hook_result) = executor
             .execute_interceptors(HookEvent::BeforeToolCall, ctx)
             .await
-            .map_err(|e| ToolError::Execution {
+            .map_err(|e| ToolError::Refused {
                 name: name.to_string(),
-                cause: format!("BeforeToolCall hook executor failed: {e}"),
+                by: RefusedBy::HookFailed,
+                reason: format!("BeforeToolCall hook executor failed: {e}"),
             })?;
 
         // Hard deny — not retryable.
@@ -1267,11 +1321,20 @@ impl ScopedToolService {
             });
         }
 
-        // Soft block — surfaces as an execution error so the LLM can react.
+        // Block (exit 2, `decision: "block"`, `block:`, or a hook that failed
+        // and blocked fail-closed — `action_failed` tells the two apart) — a
+        // refusal the model reads with the hook's reason and no route around
+        // it, but not a `PermissionDenied`: a hook's verdict does not fire the
+        // PermissionDenied observers.
         if hook_result.blocked {
-            return Err(ToolError::Execution {
+            return Err(ToolError::Refused {
                 name: name.to_string(),
-                cause: hook_result
+                by: if hook_result.action_failed {
+                    RefusedBy::HookFailed
+                } else {
+                    RefusedBy::Hook
+                },
+                reason: hook_result
                     .block_reason
                     .unwrap_or_else(|| "blocked by hook".to_string()),
             });
@@ -1308,7 +1371,7 @@ impl ScopedToolService {
                     {
                         // An expired card is not a refusal — mirror the confirm
                         // gate and return the retryable ApprovalExpired rather
-                        // than a non-retryable Execution error the harness bans.
+                        // than a non-retryable refusal the harness bans.
                         if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                             return Err(ToolError::ApprovalExpired {
                                 name: name.to_string(),
@@ -1318,9 +1381,10 @@ impl ScopedToolService {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         let said = denial.user_reason_clause();
                         let lead = denial.lead(&format!("running `{name}`"));
-                        return Err(ToolError::Execution {
+                        return Err(ToolError::Refused {
                             name: name.to_string(),
-                            cause: format!(
+                            by: denial.refused_by(),
+                            reason: format!(
                                 "A BeforeToolCall hook required confirmation. \
                                  {lead}{said}{hint}"
                             ),
@@ -1346,9 +1410,10 @@ impl ScopedToolService {
                          approval channel is available",
                     )
                     .await;
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: RefusedBy::NobodyAsked,
+                        reason: format!(
                             "Hook requested user confirmation for `{name}` but no \
                              approval channel is available. Do not retry."
                         ),
@@ -1456,6 +1521,13 @@ impl ScopedToolService {
             .with_tool_name(name.to_string())
             .with_arguments(input.to_string())
             .with_tool_input(input.to_string());
+        // The one Claude Code envelope fact only this seam can answer: the
+        // tier the gate below will enforce, read from the same method the
+        // gate reads (`effective_exec_tier`, so a released PlanGate shows).
+        // `transcript_path` / `cwd` are the executor's (`session_facts`).
+        if let Some(tier) = self.effective_exec_tier() {
+            ctx = ctx.with_permission_mode(tier.cc_permission_mode());
+        }
         if let Some(out) = tool_output {
             ctx = ctx.with_tool_output(out.to_string());
         }

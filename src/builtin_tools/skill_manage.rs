@@ -324,6 +324,48 @@ impl SkillManageTool {
         Ok(path)
     }
 
+    /// Refuse an authoring write that ADDS to a skill's `allowed-tools:`.
+    ///
+    /// When a person types `/<id>`, the skill's `allowed-tools` run without
+    /// the tier's confirmation for that turn
+    /// (`gateway::execution_engine::slash_skill_pregrant`). This tool is the
+    /// model's, and it writes into `~/.aleph/skills` — an operator-owned root
+    /// the pre-grant trusts — so a model edit that added `bash` would become a
+    /// standing approval bypass on every later `/<id>`. The model may keep or
+    /// narrow the list; adding to it is the operator's to do, by hand, in the
+    /// file this names. Compared as declared (`before` is the file's current
+    /// text; an unreadable one declares nothing). No tier opens this: it is a
+    /// refusal, not a card, because telling "adds" from "keeps" needs the file
+    /// on disk, which the tool gate's argument rules do not read.
+    fn refuse_added_grants(
+        id: &SkillId,
+        before: Option<&str>,
+        after: &crate::domain::skill::SkillManifest,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let declared: Vec<String> = before
+            .and_then(|text| parse_skill_content(text, SkillSource::Global).ok())
+            .and_then(|manifest| manifest.allowed_tools().map(<[String]>::to_vec))
+            .unwrap_or_default();
+        let added: Vec<&String> = after
+            .allowed_tools()
+            .unwrap_or_default()
+            .iter()
+            .filter(|name| !declared.contains(name))
+            .collect();
+        if added.is_empty() {
+            return Ok(());
+        }
+        Err(AlephError::tool(format!(
+            "Refused: this would add {added:?} to skill '{id}''s `allowed-tools`. When a person \
+             types `/{id}`, those tools run without a confirmation, so skill_manage may keep or \
+             narrow that list but never add to it. If the skill needs them, ask the operator to \
+             edit {} by hand.",
+            path.display(),
+            id = id.as_str(),
+        )))
+    }
+
     async fn persist_skill_md(
         &self,
         path: &std::path::Path,
@@ -445,6 +487,7 @@ impl SkillManageTool {
         let root = self.authoring_root()?;
         let skill_dir = root.join(id.as_str());
         let path = skill_dir.join("SKILL.md");
+        Self::refuse_added_grants(&id, None, &manifest, &path)?;
         if path.exists() {
             return Err(AlephError::tool(format!(
                 "A SKILL.md already exists on disk at {}",
@@ -493,6 +536,8 @@ impl SkillManageTool {
         let caution = Self::vet_skill_md(full)?;
 
         let path = self.mutable_skill_file(&skill_id, "edit").await?;
+        let current = tokio::fs::read_to_string(&path).await.ok();
+        Self::refuse_added_grants(&skill_id, current.as_deref(), &manifest, &path)?;
         self.persist_skill_md(&path, full, &skill_id).await?;
 
         Ok(SkillManageOutput::ok(
@@ -528,8 +573,9 @@ impl SkillManageTool {
         }
 
         let updated = current.replacen(find, replace, 1);
-        parse_skill_content(&updated, SkillSource::Global)
+        let patched = parse_skill_content(&updated, SkillSource::Global)
             .map_err(|e| AlephError::tool(format!("Patched content failed validation: {e}")))?;
+        Self::refuse_added_grants(&skill_id, Some(&current), &patched, &path)?;
         let caution = Self::vet_skill_md(&updated)?;
 
         self.persist_skill_md(&path, &updated, &skill_id).await?;

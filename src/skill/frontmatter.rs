@@ -20,15 +20,21 @@
 //! * `skill::manifest` iterated *lines* and required the delimiter to be alone
 //!   on its line. That one is correct, so it is the one that survives here.
 //!
-//! [`split`] is that implementation, extracted so there is one answer.
+//! [`split`] is that implementation, extracted so there is one answer. The
+//! YAML call after it is shared the same way: [`parse_frontmatter_yaml`] is
+//! what `skill::manifest` and `extension::manifest::parsers` both parse the
+//! block with, so neither drops a file over YAML syntax the other retries.
+//! (Their field types still differ: a typed field one of them has can still
+//! cost that one the file.)
 //!
 //! # `allowed-tools:`
 //!
-//! [`normalize_allowed_tools`] is the single normaliser for the
-//! [`ALLOWED_TOOLS_KEY`] frontmatter block. It lives here rather than in
-//! `manifest.rs` so the key's spelling and the lenient shape-handling that
-//! spelling requires cannot drift apart, and so a fourth ingestion path finds
-//! them together instead of writing a fourth `Option<Vec<String>>`.
+//! [`read_allowed_tools`] is the single reader of the [`ALLOWED_TOOLS_KEY`]
+//! frontmatter block's shapes, and [`normalize_allowed_tools`] is the skill
+//! policy on top of it. They live here rather than in `manifest.rs` so the
+//! key's spelling and the lenient shape-handling that spelling requires cannot
+//! drift apart, and so a fourth ingestion path finds them together instead of
+//! writing a fourth `Option<Vec<String>>`.
 //!
 //! The census in this module's tests is the guard that keeps that true.
 
@@ -133,6 +139,74 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
     Ok((yaml_normalized, body_normalized))
 }
 
+/// Deserialise a frontmatter block: the one YAML call of both readers of a
+/// SKILL.md / command file (`extension::manifest::parsers` and
+/// `skill::manifest`), so they cannot answer the same file two ways.
+///
+/// One narrow retry. Claude Code's own authoring guidance gives
+/// `argument-hint: [arg1] [arg2] [optional-arg]` as the format, which is not
+/// YAML (a flow sequence followed by more text), and a YAML error drops the
+/// whole file. So on an error — and only then — a bare bracketed
+/// `argument-hint:` line is quoted as the literal text it is
+/// ([`quote_bare_argument_hint`]) and the same parser runs once more; nothing
+/// else in the block is touched. `origin` names the file in the warn that
+/// says so. If the retry fails too, the error returned is the ORIGINAL one:
+/// it points at what the author wrote, not at the rewrite.
+pub(crate) fn parse_frontmatter_yaml<T: serde::de::DeserializeOwned>(
+    yaml: &str,
+    origin: &dyn std::fmt::Display,
+) -> Result<T, crate::yaml::Error> {
+    let original = match crate::yaml::from_str(yaml) {
+        Ok(parsed) => return Ok(parsed),
+        Err(e) => e,
+    };
+    let Some(quoted) = quote_bare_argument_hint(yaml) else {
+        return Err(original);
+    };
+    match crate::yaml::from_str(&quoted) {
+        Ok(parsed) => {
+            tracing::warn!(
+                origin = %origin,
+                "`argument-hint:` is not valid YAML; read as literal text"
+            );
+            Ok(parsed)
+        }
+        Err(_) => Err(original),
+    }
+}
+
+/// `yaml` with each bare bracketed `argument-hint:` line's value quoted as a
+/// YAML double-quoted string, or `None` if no line qualifies. A line
+/// qualifies only if it starts at column 0 with the key, its value is on that
+/// one line and starts with `[` (so never `"`, `'`, `|`, `>` or empty), and
+/// no indented line continues it. Everything after the key is taken as
+/// written, a trailing `# comment` included.
+fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
+    const KEY: &str = "argument-hint:";
+    let lines: Vec<&str> = yaml.split_inclusive('\n').collect();
+    let rewritten: String = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let Some(rest) = line.strip_prefix(KEY) else {
+                return (*line).to_string();
+            };
+            let value = rest.trim_end_matches(['\n', '\r']);
+            let eol = rest.get(value.len()..).unwrap_or_default();
+            let value = value.trim();
+            let continued = lines
+                .get(i + 1)
+                .is_some_and(|next| next.starts_with([' ', '\t']) && !next.trim().is_empty());
+            if !value.starts_with('[') || continued {
+                return (*line).to_string();
+            }
+            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("{KEY} \"{escaped}\"{eol}")
+        })
+        .collect();
+    (rewritten != yaml).then_some(rewritten)
+}
+
 /// Normalise the [`ALLOWED_TOOLS_KEY`] frontmatter block into a name list.
 ///
 /// Two shapes exist in the wild and both must work. Aleph's own convention is
@@ -145,12 +219,16 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// the field is taken as raw YAML — the same leniency `automation:` uses, and
 /// for the same reason.
 ///
-/// The *shape* is lenient; the *names* are strict. An unusable name is caught
-/// at registration, where a real tool registry can say so, and costs the
-/// author their slash command rather than their whole skill.
+/// The *shape* is lenient, and so, for a skill, are the *names*: registration,
+/// where a real tool registry can say which names exist, maps each entry
+/// through [`pregrant_tool_name`] and drops, with a warn, what grants nothing
+/// (`tool_metadata::registry::registration`). The skill keeps its slash
+/// command; only a plugin command's list is refused over an unknown name.
 ///
-/// Returns `None` when the key is absent or null (no declaration → allow-all),
-/// and `Some(names)` otherwise, possibly empty (explicit deny-all).
+/// Returns `None` when the key is absent or null (no declaration), and
+/// `Some(names)` otherwise, possibly empty. For a skill both pre-grant nothing;
+/// the two are kept apart because the same shapes on a plugin command mean
+/// allow-all and deny-all.
 ///
 /// A shape that is neither a sequence nor a scalar (a mapping, say) warns and
 /// resolves to `None`. That is the one fail-open in this chain and it is
@@ -162,17 +240,21 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// # Deny-all has exactly one spelling, and it is a sequence
 ///
 /// A **sequence** that comes out empty — `allowed-tools: []` — is a
-/// declaration: `Some(vec![])`, which
-/// [`crate::gateway::execution_engine::slash_skill_scope`] enforces as
-/// deny-all, so the slash command can call zero tools.
+/// declaration: `Some(vec![])`. On a plugin command
+/// [`crate::gateway::execution_engine::slash_skill_scope`] enforces it as
+/// deny-all: the slash command can call no tool except what the run attaches
+/// itself (`subagent`, and the disclosure / deferral meta-tools
+/// `get_tool_schema` / `tool_search` when those are on).
+/// On a skill it pre-grants nothing (and restricts only on the stale-row arm
+/// `slash_skill_pregrant::split` describes).
 ///
 /// A **scalar** that names no tool is not. `allowed-tools: ,` /
 /// `allowed-tools: ""` / `allowed-tools: "   "` warn and resolve to `None`,
 /// the same fail-open as the unusable shape above and for the same reasons,
 /// one of which is specific to this arm: the harshest outcome on the whole
-/// chain would arrive **silently**, because `register_skills` rejects a skill
-/// whose declaration names *unresolvable tools* and an empty set has no names
-/// to fail on. Dropping a trailing comma (the leniency below) and then letting
+/// chain would arrive **silently**, because registration warns per entry it
+/// drops and an empty set has no entries to warn about. Dropping a trailing
+/// comma (the leniency below) and then letting
 /// a comma with nothing on either side of it cost the author every tool would
 /// be the same typo answered two opposite ways.
 ///
@@ -182,70 +264,188 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// carry this meaning: `""` "reads identically to a key that was never
 /// written". An author who means deny-all has `[]`, which is unambiguous in
 /// every reader.
+///
+/// # This is the *skill* policy
+///
+/// The shapes are read by [`read_allowed_tools`]; this function is what a
+/// skill makes of the two it cannot use. A plugin command's `allowed-tools`
+/// and a plugin agent's `tools` read the same shapes and answer those two
+/// with deny-all instead (`extension::manifest::parsers::restrict_tool_list`):
+/// their lists only narrow, and they have no second reader to fall back on.
 #[must_use]
 pub fn normalize_allowed_tools(
     raw: Option<&crate::yaml::Value>,
     skill_name: &str,
 ) -> Option<Vec<String>> {
-    let value = raw?;
-    let names: Vec<String> = match value {
-        crate::yaml::Value::Null => return None,
-        crate::yaml::Value::Sequence(items) => items
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect(),
-        crate::yaml::Value::String(s) => {
-            // Empty entries are dropped rather than forwarded as unknown
-            // names: a trailing comma is a typo, and costing the author their
-            // slash command over one would be a worse answer than they asked
-            // for.
-            let names: Vec<String> = s
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if names.is_empty() {
-                // Same typo, one step further — and `Some(vec![])` here would
-                // be deny-all, arriving silently. Deny-all is spelled `[]`.
-                tracing::warn!(
-                    skill = %skill_name,
-                    value = %s,
-                    key = ALLOWED_TOOLS_KEY,
-                    "skill declares `allowed-tools:` as a scalar that names no tool — read as \
-                     no declaration, the skill keeps the full tool surface. Write \
-                     `allowed-tools: []` if you meant to allow nothing"
-                );
-                return None;
-            }
-            return Some(names);
-        }
-        other => {
+    match read_allowed_tools(raw) {
+        Ok(names) => names,
+        // Same typo as a trailing comma, one step further. A skill's list
+        // pre-grants (it never narrows the surface), so `None` and
+        // `Some(vec![])` grant the same nothing; the warn names the typo.
+        Err(UnusableAllowedTools::NamesNothing) => {
             tracing::warn!(
                 skill = %skill_name,
-                shape = ?other,
+                value = ?raw,
+                key = ALLOWED_TOOLS_KEY,
+                "skill declares `allowed-tools:` as a scalar that names no tool — read as \
+                 no declaration: `/<skill>` pre-grants nothing"
+            );
+            None
+        }
+        Err(UnusableAllowedTools::Shape) => {
+            tracing::warn!(
+                skill = %skill_name,
+                shape = ?raw,
                 key = ALLOWED_TOOLS_KEY,
                 "skill declares `allowed-tools:` in a shape that is neither a list nor a \
-                 comma-separated string — ignored, the skill keeps the full tool surface"
+                 comma-separated string — ignored: `/<skill>` pre-grants nothing"
             );
-            return None;
+            None
         }
+    }
+}
+
+/// The Aleph tool one entry of a SKILL's `allowed-tools` may pre-grant, or
+/// `None` when the entry can grant nothing whatever tools exist.
+///
+/// Claude Code names map to Aleph names
+/// (`extension::hooks::normalize_cc_tool_entry`: `Read` → `file_read`,
+/// `mcp__s__t` → `s__t`); `None` for a CC tool with no counterpart, a bare
+/// `mcp__<server>`, a scoped `Bash(git *)` (pre-granting all of `bash` for a
+/// grant scoped to one command widens an approval skip), and anything
+/// [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
+/// accepts — a pre-grant folds exact entries, and the policy reads such a key
+/// back as a glob. An unknown name passes through; whether it exists is the
+/// caller's question.
+///
+/// The ONE mapping of a skill's list: registration validates its result
+/// against the tools that exist, and the turn's pre-grant
+/// (`slash_skill_scope::stamp_pregrant_from_names`) maps the loaded file with
+/// it before intersecting with that validated list — two spellings of one
+/// name must meet in the intersection.
+pub(crate) fn pregrant_tool_name(entry: &str) -> Option<String> {
+    crate::extension::hooks::normalize_cc_tool_entry(entry, false)
+        .filter(|tool| !crate::config::types::policies::is_glob_pattern(tool))
+}
+
+/// Why a present [`ALLOWED_TOOLS_KEY`] value gives no list to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnusableAllowedTools {
+    /// A scalar with no tool in it: `,`, `""`, `"   "`.
+    NamesNothing,
+    /// Neither a sequence nor a string: a mapping, a number, a bool.
+    Shape,
+}
+
+/// The shapes of the [`ALLOWED_TOOLS_KEY`] block, with no policy and no log:
+/// the one reader both a skill ([`normalize_allowed_tools`]) and a plugin
+/// command build on, each deciding for itself what an unusable value means.
+///
+/// `Ok(None)` — absent or null, no declaration. `Ok(Some(names))` — a YAML
+/// sequence or a comma-separated string; a sequence that comes out empty is
+/// `allowed-tools: []`, the explicit deny-all. `Err(why)` — present, and
+/// unusable.
+///
+/// Blank entries are dropped rather than forwarded as unknown names: a
+/// trailing comma is a typo, and costing the author their slash command over
+/// one would be a worse answer than they asked for.
+pub(crate) fn read_allowed_tools(
+    raw: Option<&crate::yaml::Value>,
+) -> Result<Option<Vec<String>>, UnusableAllowedTools> {
+    let Some(value) = raw else {
+        return Ok(None);
     };
-    // Sequence arm only — the scalar arm returned above. Blank entries are
-    // dropped rather than forwarded as unknown names, but the *result* is
-    // still `Some`: a sequence that comes out empty is `allowed-tools: []`,
-    // which is a declaration and must stay deny-all.
-    Some(
-        names
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-    )
+    match value {
+        crate::yaml::Value::Null => Ok(None),
+        crate::yaml::Value::Sequence(items) => Ok(Some(
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )),
+        crate::yaml::Value::String(s) => {
+            let names: Vec<String> = s
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect();
+            if names.is_empty() {
+                Err(UnusableAllowedTools::NamesNothing)
+            } else {
+                Ok(Some(names))
+            }
+        }
+        _ => Err(UnusableAllowedTools::Shape),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Claude Code's authoring guidance gives `argument-hint: [arg1] [arg2]
+    /// [optional-arg]` as the format. That is not YAML; retried once with the
+    /// line quoted, it is the text the author wrote and the rest of the block
+    /// is untouched.
+    #[test]
+    fn a_multi_bracket_argument_hint_is_read_as_text() {
+        let yaml = "name: n\nargument-hint: [arg1] [arg2] [optional-arg]\ndescription: d\n";
+        assert!(
+            crate::yaml::from_str::<crate::yaml::Value>(yaml).is_err(),
+            "premise: this is not YAML"
+        );
+        let v: crate::yaml::Value = parse_frontmatter_yaml(yaml, &"t").unwrap();
+        assert_eq!(
+            v["argument-hint"].as_str(),
+            Some("[arg1] [arg2] [optional-arg]")
+        );
+        assert_eq!(v["description"].as_str(), Some("d"));
+    }
+
+    /// The retry is for that one line. A block broken elsewhere still fails,
+    /// and with the error the author's own text produced — not the rewrite's.
+    #[test]
+    fn an_unrelated_yaml_error_reports_the_original_error() {
+        let yaml = "argument-hint: [a] [b]\ndescription: a: b\n";
+        let original = crate::yaml::from_str::<crate::yaml::Value>(yaml)
+            .unwrap_err()
+            .to_string();
+        let rewritten = quote_bare_argument_hint(yaml).expect("premise: the hint line qualifies");
+        let retried = crate::yaml::from_str::<crate::yaml::Value>(&rewritten)
+            .unwrap_err()
+            .to_string();
+        assert_ne!(
+            retried, original,
+            "premise: the two errors are distinguishable"
+        );
+        let err = parse_frontmatter_yaml::<crate::yaml::Value>(yaml, &"t")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, original);
+    }
+
+    #[test]
+    fn only_a_bare_bracketed_hint_line_is_rewritten() {
+        for untouched in [
+            "argument-hint: \"[a] [b]\"\n",
+            "argument-hint: '[a] [b]'\n",
+            "argument-hint: pr-number\n",
+            "argument-hint:\n",
+            "description: [a] [b]\n",
+            "  argument-hint: [a] [b]\n",
+            "argument-hint: [a,\n  b]\n",
+        ] {
+            assert_eq!(quote_bare_argument_hint(untouched), None, "{untouched:?}");
+        }
+        assert_eq!(
+            quote_bare_argument_hint("argument-hint: [a] [\"b\\c\"]\nx: 1\n").as_deref(),
+            Some("argument-hint: \"[a] [\\\"b\\\\c\\\"]\"\nx: 1\n")
+        );
+    }
 
     #[test]
     fn splits_a_plain_document() {
@@ -361,9 +561,11 @@ mod tests {
     /// A scalar that names no tool at all is the same typo one step further —
     /// and resolving it to `Some(empty)` would hand the author the *harshest*
     /// outcome on the whole chain (`slash_skill_scope`'s explicit deny-all, so
-    /// the slash command can call zero tools) for a pure-punctuation slip,
-    /// silently: `register_skills` rejects unresolvable *names*, and an empty
-    /// set has no names to fail on.
+    /// the slash command can call no tool except what the run attaches
+    /// itself: `subagent`, and `tool_search` / `get_tool_schema` when on) for
+    /// a pure-punctuation slip,
+    /// silently: registration warns about each entry it drops, and an empty
+    /// set has no entries to warn about.
     ///
     /// So it reads as no declaration. The contrast case is asserted in the
     /// same test so the two can never be conflated: an empty **sequence** is
@@ -512,7 +714,8 @@ mod tests {
             offenders.is_empty(),
             "`{ALLOWED_TOOLS_KEY}` is hand-written in a serde attribute at {offenders:?}. \
              Use `rename_all = \"kebab-case\"` + a field named `allowed_tools`, route the \
-             value through `skill::frontmatter::normalize_allowed_tools`, and make sure the \
+             value through `skill::frontmatter::read_allowed_tools` (a skill: \
+             `normalize_allowed_tools`), and make sure the \
              new path actually reaches an enforcement point before honouring the key at all."
         );
     }
@@ -525,18 +728,32 @@ mod tests {
     /// So: any file that both deserialises YAML *and* names `allowed_tools`
     /// is a frontmatter reader of this key and must be on this list.
     ///
-    /// The two entries are not "the files that happen to match today" — each
-    /// is here for a stated reason, and a third one is a decision, not a
-    /// merge conflict:
+    /// The entries are not "the files that happen to match today" — each is
+    /// here for a stated reason, and a new one is a decision, not a merge
+    /// conflict:
     /// * `skill/manifest.rs` — the SKILL.md reader; it delegates the shape
     ///   handling to [`normalize_allowed_tools`] above.
     /// * `agents/loader.rs` — a **different concept**: agent `.md`
     ///   frontmatter, snake-cased `allowed_tools`, feeding `AgentDef`. It is
     ///   listed so the scan's blindness to it is a recorded decision rather
     ///   than an accident.
+    /// * `extension/manifest/parsers.rs` — a plugin's `commands/*.md`; it
+    ///   delegates the shape to [`read_allowed_tools`] and maps the names
+    ///   through the CC alias table. It reaches an enforcement point for
+    ///   commands only (`slash_effect::plugin_command_skill_info` →
+    ///   `register_plugin_commands` → `slash_skill_scope`; the file → catalog-row half
+    ///   is pinned by
+    ///   `lifecycle::tests::a_mounted_commands_frontmatter_reaches_its_catalog_row`,
+    ///   the row → run-loop half by `slash_skill_scope`'s wire tests), and
+    ///   leaves a skill's declaration uncarried — `skill/manifest.rs` reads the
+    ///   same SKILL.md.
     #[test]
     fn yaml_frontmatter_readers_of_allowed_tools_are_an_enumerated_set() {
-        const ALLOWED: [&str; 2] = ["skill/manifest.rs", "agents/loader.rs"];
+        const ALLOWED: [&str; 3] = [
+            "skill/manifest.rs",
+            "agents/loader.rs",
+            "extension/manifest/parsers.rs",
+        ];
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
@@ -552,7 +769,12 @@ mod tests {
                 continue;
             };
             let code = code_lines(&path, &content);
-            if !(code.contains("crate::yaml::from_str") || code.contains("crate::yaml::from_value"))
+            // Every way into the YAML parser — including this module's own
+            // frontmatter entry point, which is how the two SKILL.md readers
+            // reach it; a census blind to it would miss the next reader too.
+            if !(code.contains("crate::yaml::from_str")
+                || code.contains("crate::yaml::from_value")
+                || code.contains("parse_frontmatter_yaml"))
             {
                 continue;
             }
@@ -567,7 +789,7 @@ mod tests {
             );
         }
 
-        // Positive control first: if the predicate stopped matching the two
+        // Positive control first: if the predicate stopped matching the
         // files it is *supposed* to match, an empty offender list means the
         // scan broke, not that the tree is clean.
         for expected in ALLOWED {

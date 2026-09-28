@@ -9,45 +9,77 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::registry::{AgentRegistration, SkillRegistration};
-use crate::extension::types::{HookEvent, McpServerConfig};
 
 // ============================================================================
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
 // ============================================================================
 
-/// Frontmatter for SKILL.md files, targeting `SkillRegistration` output.
+/// Frontmatter for SKILL.md and `commands/*.md` files, targeting
+/// `SkillRegistration` output. One container for both flavours
+/// ([`parse_skill_registration`]), and they read `allowed-tools` differently.
 ///
-/// # Why there is no `allowed-tools` field here
+/// # `allowed-tools` is honoured for commands, and only for commands
 ///
-/// There used to be: `#[serde(rename = "allowed-tools")] Option<Vec<String>>`,
-/// `unwrap_or_default()`ed into `SkillRegistration.allowed_tools`, which had
-/// zero readers outside two test literals. It was cut on 2026-09-05, for two
-/// reasons that reinforce each other:
+/// For a [`SkillType::Command`] the key is mapped to Aleph names here
+/// ([`restrict_tool_list`]) and carried on the registration;
+/// `slash_effect::plugin_command_skill_info` projects it onto the command's
+/// `SkillInfo`, `register_plugin_commands` validates it into
+/// `UnifiedTool::routing_capabilities`, and `slash_skill_scope` narrows the
+/// run with it. That chain is the only enforcement a plugin command has.
 ///
-/// 1. **It could not be enforced from here.** A plugin skill parsed on this
-///    path becomes a `SkillRegistration`. The `allowed-tools` declaration is
-///    enforced at `tool_metadata::registry::registration::register_skills`,
+/// For a [`SkillType::Skill`] the key is deserialised (the container is
+/// shared) and then dropped: the registration's `allowed_tools` stays `None`
+/// and nothing on this path reads it. The two reasons this container had no
+/// `allowed-tools` field at all from 2026-09-05 until commands needed one
+/// are still the whole story for skills:
+///
+/// 1. **It could not be honoured from here.** A plugin skill parsed on this
+///    path becomes a `SkillRegistration`. A skill's `allowed-tools` is
+///    validated at `tool_metadata::registry::registration::register_skills`,
 ///    which is fed from `SkillInfo` — i.e. from `SkillManifest`, i.e. from
-///    `skill::manifest`. Nothing on this path reaches that gate. Honouring the
-///    key here would have been a parse that reports success and changes
-///    nothing.
+///    `skill::manifest` — and PRE-GRANTS (never restricts) through
+///    `gateway::execution_engine::slash_skill_pregrant`, which parses the
+///    skill file with `skill::manifest` too. Nothing on this path reaches
+///    either for a skill.
 /// 2. **The same file is already parsed by the path that can enforce it.**
-///    `ExtensionManager::republish_plugin_projections` feeds every active
-///    plugin's `<root>/skills` into `SkillSystem::init`, so
+///    `projection.rs::republish_plugin_projections` publishes every active
+///    plugin's `<root>/skills`, which the `SkillSystem` scan reads
+///    (`SkillSystem::scan_roots`), so
 ///    `{plugin_dir}/skills/*/SKILL.md` is scanned by `skill::manifest` too —
 ///    and *that* reading honours `allowed-tools`, including the comma-scalar
 ///    shape.
 ///
-/// The strict `Vec<String>` was also actively harmful: an upstream skill
-/// writing `allowed-tools: Read, Grep, Bash(cargo *)` made the YAML parser
-/// reject the whole frontmatter, so the skill was dropped from the plugin over a key
-/// this path never read. Removing the field removes that failure mode outright
-/// — the container has no `deny_unknown_fields`, so the key is now ignored.
+/// # The Claude Code extension keys are raw YAML
+///
+/// Before the cut `allowed-tools` was a strict `Option<Vec<String>>`, and that
+/// was actively harmful: an upstream skill writing `allowed-tools: Read, Grep,
+/// Bash(cargo *)` made the YAML parser reject the whole frontmatter, so the
+/// skill was dropped from the plugin over a key this path never read. A typed
+/// field fails the file, not the key. So the four Claude Code extension keys —
+/// `argument-hint`, `allowed-tools`, `model`, `disable-model-invocation` — are
+/// taken as `crate::yaml::Value` and read leniently: `allowed-tools` by
+/// `skill::frontmatter::read_allowed_tools` (the shape reader
+/// `skill::manifest` also builds on), the others by [`hint_text`],
+/// [`model_text`] and [`model_invocation_disabled`]. Upstream's own reference
+/// writes `argument-hint: [pr-number]` unquoted — a YAML flow sequence — which
+/// is exactly the shape a `String` field would reject. An unusable value of
+/// one of these four warns and costs its key, not the file.
+///
+/// That holds only while the block is valid YAML. `name`, `description`,
+/// `triggers` and `category` are still typed (`description: [x]` costs the
+/// file), and a block the YAML parser cannot read is dropped with the file —
+/// with one exception: the multi-bracket `argument-hint: [a] [b]` Claude
+/// Code's authoring guidance teaches, which
+/// `skill::frontmatter::parse_frontmatter_yaml` retries once as literal text.
+///
+/// [`SkillType::Command`]: crate::extension::types::SkillType::Command
+/// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 struct SkillFm {
     #[serde(default)]
     name: Option<String>,
@@ -57,9 +89,100 @@ struct SkillFm {
     triggers: Option<Vec<String>>,
     #[serde(default)]
     category: Option<String>,
+    /// Claude Code command frontmatter. `argument-hint`, `model` and
+    /// `disable-model-invocation` are carried for both flavours.
+    #[serde(default)]
+    argument_hint: Option<crate::yaml::Value>,
+    #[serde(default)]
+    allowed_tools: Option<crate::yaml::Value>,
+    #[serde(default)]
+    model: Option<crate::yaml::Value>,
+    #[serde(default)]
+    disable_model_invocation: Option<crate::yaml::Value>,
 }
 
-/// Frontmatter for agent .md files, targeting `AgentRegistration` output
+/// A YAML scalar as text: a string as written, a number or bool as its
+/// literal. `None` for anything else.
+fn scalar_text(value: &crate::yaml::Value) -> Option<String> {
+    match value {
+        crate::yaml::Value::String(s) => Some(s.clone()),
+        crate::yaml::Value::Number(n) => Some(n.to_string()),
+        crate::yaml::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// `argument-hint:` in the form Claude Code documents: space-separated
+/// bracketed words, `[arg1] [arg2] [optional-arg]`. A scalar is that text as
+/// written (the multi-bracket form arrives here as one, through
+/// `skill::frontmatter::parse_frontmatter_yaml`). An unquoted single
+/// `argument-hint: [pr-number]` is YAML's flow sequence; a sequence of
+/// scalars is rendered item by item, each as `[item]` unless it is already a
+/// hint (starts with `[` or `<`), joined with one space — so `[pr-number]`
+/// stays `[pr-number]`, `[a, b]` becomes `[a] [b]`, and a one-item sequence
+/// holding a complete hint is that hint. Any other shape warns and gives no
+/// hint.
+fn hint_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String> {
+    let value = raw.filter(|v| !v.is_null())?;
+    if let Some(text) = scalar_text(value) {
+        return Some(text);
+    }
+    let words = value
+        .as_sequence()
+        .and_then(|items| items.iter().map(scalar_text).collect::<Option<Vec<_>>>());
+    if words.is_none() {
+        warn!(path = %md_path.display(), value = ?value, "`argument-hint:` is neither text nor a list of words; ignored");
+    }
+    words.map(|words| {
+        words
+            .iter()
+            .map(|word| {
+                if word.starts_with(['[', '<']) {
+                    word.clone()
+                } else {
+                    format!("[{word}]")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+/// `model:` as text; any non-scalar shape warns and names no model.
+fn model_text(raw: Option<&crate::yaml::Value>, md_path: &Path) -> Option<String> {
+    let value = raw.filter(|v| !v.is_null())?;
+    let text = scalar_text(value);
+    if text.is_none() {
+        warn!(path = %md_path.display(), value = ?value, "`model:` is not text; ignored");
+    }
+    text
+}
+
+/// `disable-model-invocation:` — a bool; anything else warns and reads as
+/// `false`, the key's own default.
+fn model_invocation_disabled(raw: Option<&crate::yaml::Value>, md_path: &Path) -> bool {
+    match raw {
+        None | Some(crate::yaml::Value::Null) => false,
+        Some(crate::yaml::Value::Bool(b)) => *b,
+        Some(other) => {
+            warn!(path = %md_path.display(), value = ?other, "`disable-model-invocation:` is not a bool; read as false");
+            false
+        }
+    }
+}
+
+/// Frontmatter for agent .md files, targeting `AgentRegistration` output.
+///
+/// Claude Code's agent keys beyond `name` / `description` / `model`:
+/// * `tools` — raw YAML, read by `skill::frontmatter::read_allowed_tools` (a
+///   list, or the comma-separated scalar most upstream agents write) and
+///   narrowed by the restrict-list policy a command's `allowed-tools` uses
+///   ([`restrict_tool_list`]). A typed `Vec<String>` would fail every
+///   comma-scalar file outright.
+/// * `permissionMode` — raw YAML, logged with the tier it would map to and
+///   never applied ([`log_unapplied_permission_mode`]).
+/// * `color` — UI-only upstream. Not a field: serde ignores it, and nothing
+///   would read it (`AgentRegistration.color` has no reader).
 #[derive(Debug, Default, Deserialize)]
 struct AgentFm {
     #[serde(default)]
@@ -68,6 +191,10 @@ struct AgentFm {
     description: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    tools: Option<crate::yaml::Value>,
+    #[serde(default, rename = "permissionMode")]
+    permission_mode: Option<crate::yaml::Value>,
 }
 
 // ============================================================================
@@ -76,8 +203,12 @@ struct AgentFm {
 
 #[derive(Debug, Deserialize)]
 struct HooksFileConfig {
+    /// Keyed by the event name AS WRITTEN. A `HashMap<HookEvent, _>` key
+    /// would parse the alias and forget the spelling the payload must echo —
+    /// and one unknown key (a Claude Code event Aleph has no moment for)
+    /// failed the whole map, rejecting every hook in the file.
     #[serde(default)]
-    hooks: HashMap<HookEvent, Vec<HookMatcher>>,
+    hooks: HashMap<String, Vec<HookMatcher>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,34 +220,20 @@ struct HookMatcher {
 
 /// Hook action wire shape inside a plugin's `hooks.json` (Claude-Code
 /// format). Only `command` actions are supported from plugin manifests;
-/// other `type` values parse (command stays `None`) and are skipped.
+/// other `type` values parse (command stays `None`) and are skipped, each
+/// with a warning that names it.
 #[derive(Debug, Deserialize)]
 struct HookAction {
+    /// `command` / `prompt` / `http` / `agent`, as written — read only to
+    /// name a dropped action.
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
     #[serde(default)]
     command: Option<String>,
     /// Per-action timeout. Claude Code spells it `timeout`; Aleph's user
     /// hooks layer accepts `timeout_secs` — take either.
     #[serde(default, alias = "timeout")]
     timeout_secs: Option<u64>,
-}
-
-// ============================================================================
-// MCP file types (mirrors content_loader::McpFileConfig)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-struct McpFileConfig {
-    #[serde(rename = "mcpServers", default)]
-    mcp_servers: HashMap<String, McpServerEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct McpServerEntry {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    env: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -139,6 +256,7 @@ struct McpServerEntry {
 /// the skill with it.
 fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
+    origin: &Path,
 ) -> Result<(T, String)> {
     let content = content.trim();
     let Ok((fm_raw, body_raw)) = crate::skill::frontmatter::split(content) else {
@@ -152,7 +270,7 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
         return Ok((T::default(), body));
     }
 
-    let fm: T = crate::yaml::from_str(fm_str)
+    let fm: T = crate::skill::frontmatter::parse_frontmatter_yaml(fm_str, &origin.display())
         .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
     Ok((fm, body))
 }
@@ -326,10 +444,17 @@ fn parse_skill_registration(
 ) -> Result<CapabilityDeclaration> {
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
-    let (fm, body): (SkillFm, String) = parse_frontmatter(&content)?;
+    let (fm, body): (SkillFm, String) = parse_frontmatter(&content, md_path)?;
+    let name = fm.name.unwrap_or_else(|| default_name.to_string());
+    // Commands only; `SkillFm`'s doc says why a skill's copy is not carried.
+    let allowed_tools = if skill_type == crate::extension::types::SkillType::Command {
+        restrict_tool_list(fm.allowed_tools.as_ref(), COMMAND_FACE, &name)
+    } else {
+        None
+    };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {
-        name: fm.name.unwrap_or_else(|| default_name.to_string()),
+        name,
         description: fm.description.unwrap_or_default(),
         content: body,
         triggers: fm.triggers.unwrap_or_default(),
@@ -341,8 +466,212 @@ fn parse_skill_registration(
         // files. Dropping it (the old `..Default::default()`) left plugin skills
         // with an empty base dir, forcing the model to guess paths / `cat`.
         source_path: md_path.to_path_buf(),
+        argument_hint: hint_text(fm.argument_hint.as_ref(), md_path),
+        allowed_tools,
+        model: model_text(fm.model.as_ref(), md_path),
+        disable_model_invocation: model_invocation_disabled(
+            fm.disable_model_invocation.as_ref(),
+            md_path,
+        ),
         ..Default::default()
     }))
+}
+
+/// Who declared a restrict list, for its log lines. The policy is one — every
+/// face gets the same list back — and only what is said differs: a plugin
+/// command writes `allowed-tools:`, a plugin agent writes `tools:`.
+#[derive(Debug, Clone, Copy)]
+struct RestrictFace {
+    /// `command` / `agent` — who is narrowed.
+    kind: &'static str,
+    /// The frontmatter key as the author spells it.
+    key: &'static str,
+    /// Whether the parse warns about a forwarded name that is not spelled like
+    /// an Aleph tool. Only where nothing downstream speaks for it: a command's
+    /// `register_plugin_commands` refuses the whole `/cmd` over such a name and names
+    /// it, so a parse-time line too would be a second, weaker voice; an
+    /// agent's allowlist just never matches it, silently.
+    warns_unknown: bool,
+}
+
+const COMMAND_FACE: RestrictFace = RestrictFace {
+    kind: "command",
+    key: "allowed-tools",
+    warns_unknown: false,
+};
+
+const AGENT_FACE: RestrictFace = RestrictFace {
+    kind: "agent",
+    key: "tools",
+    warns_unknown: true,
+};
+
+/// A restrict list — a command's `allowed-tools:`, an agent's `tools:` — as
+/// Aleph tool names: the list narrows what `name` may call. `None` only when
+/// the key is absent or null — the one reading that keeps the full surface.
+///
+/// * A scoped entry is coarsened: `Bash(git *)` folds to bare `bash`, so the
+///   argument scope is not enforced (the tier gate still governs every call).
+///   Logged at `info`.
+/// * An entry with no Aleph tool is dropped with a warn rather than forwarded —
+///   `register_plugin_commands` refuses the whole command over one unknown name, and
+///   losing the slash command over `TodoWrite` is the worse answer.
+/// * An entry in neither alias table is forwarded as written. When it is not
+///   spelled like an Aleph tool ([`aleph_tool_shaped`]) it is most likely a
+///   Claude Code tool Aleph has no row for, and it names nothing unless a
+///   tool is registered under exactly that name — which cannot be known here,
+///   before plugin and MCP tools are registered. The agent face warns; the
+///   command face leaves it to `register_plugin_commands`
+///   ([`RestrictFace::warns_unknown`]).
+/// * A list item that is not a tool name at all (a number, a map, a blank)
+///   is dropped with a warn too.
+/// * Dropping only narrows: a declaration whose every entry drops is
+///   `Some(vec![])`, deny-all, and says so.
+/// * So is a present value in a shape that names no tool (a number, a map, a
+///   bool, `","`). It is still a declaration — the author tried to restrict
+///   `name` — and reading it as absent would hand back the full surface. (A
+///   skill answers the same shapes the other way; see
+///   `skill::frontmatter::normalize_allowed_tools`.)
+fn restrict_tool_list(
+    raw: Option<&crate::yaml::Value>,
+    face: RestrictFace,
+    name: &str,
+) -> Option<Vec<String>> {
+    let RestrictFace {
+        kind,
+        key,
+        warns_unknown,
+    } = face;
+    let declared = match crate::skill::frontmatter::read_allowed_tools(raw) {
+        Ok(declared) => declared?,
+        Err(why) => {
+            warn!(
+                kind,
+                name,
+                value = ?raw,
+                why = ?why,
+                "{kind} declares `{key}:` in a shape that names no tool; read as deny-all, the \
+                 {kind} can call no tools. Write a list or a comma-separated string of tool names"
+            );
+            return Some(Vec::new());
+        }
+    };
+    // Items of a YAML list that are not tool names (a number, a map, a blank)
+    // are dropped by the reader; say so, as every other drop does.
+    let unreadable = raw
+        .and_then(crate::yaml::Value::as_sequence)
+        .map_or(0, |items| items.len().saturating_sub(declared.len()));
+    if unreadable > 0 {
+        warn!(
+            kind,
+            name, unreadable, "{key} list items that are not tool names were dropped"
+        );
+    }
+    let mapped: Vec<String> = declared
+        .iter()
+        .filter_map(|entry| {
+            let aleph = crate::extension::hooks::normalize_cc_tool_entry(entry, true);
+            match &aleph {
+                None => {
+                    warn!(kind, name, entry = %entry, "{key} entry has no Aleph tool; dropped");
+                }
+                Some(tool) if crate::extension::hooks::scoped_tool_head(entry).is_some() => {
+                    info!(
+                        kind,
+                        name,
+                        entry = %entry,
+                        tool = %tool,
+                        "scoped {key} entry coarsened to the whole tool; its argument scope is \
+                         not enforced"
+                    );
+                }
+                Some(tool)
+                    if warns_unknown
+                        && tool.as_str() == entry.trim()
+                        && !aleph_tool_shaped(tool) =>
+                {
+                    warn!(
+                        kind,
+                        name,
+                        entry = %entry,
+                        "{key} entry is neither a Claude Code tool Aleph knows nor spelled like \
+                         an Aleph tool; forwarded as written, it names no tool unless one is \
+                         registered under exactly that name"
+                    );
+                }
+                Some(_) => {}
+            }
+            aleph
+        })
+        .collect();
+    if mapped.is_empty() && (!declared.is_empty() || unreadable > 0) {
+        warn!(
+            kind,
+            name,
+            declared = ?declared,
+            "every {key} entry was dropped; the {kind} can call no tools"
+        );
+    }
+    Some(mapped)
+}
+
+/// Spelled like an Aleph tool name: the `*` wildcard, an MCP `server__tool`
+/// key (its tool half is the server's own spelling), or lowercase ASCII,
+/// digits, `_` and `-`. Claude Code tool names are `PascalCase`, so a
+/// forwarded entry that fails this is almost certainly one of them.
+///
+/// A shape test, not membership: which names are registered is not known at
+/// parse time (plugin and MCP tools register later, per session). So it has
+/// a blind side — a lowercase spelling that is no Aleph tool (`glob`,
+/// `read`, `read_file`, `webfetch`) passes and is forwarded silently, and
+/// for an agent it then matches nothing.
+fn aleph_tool_shaped(name: &str) -> bool {
+    name == "*"
+        || name.contains("__")
+        || (!name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'))
+}
+
+/// Claude Code's agent `permissionMode`, logged with the Aleph tier it would
+/// map to 1:1 and never applied: a sub-agent has no tier of its own. It runs
+/// on its parent's `ScopedToolService`, and `agents::allowlist_tool_service`
+/// narrows WHICH tools a child may call, never whether a call pauses. An
+/// `AgentDef` tier field would have no consumer.
+///
+/// | `permissionMode` | 1:1 tier |
+/// |---|---|
+/// | `plan` | `Plan` |
+/// | `default` | `Ask` |
+/// | `auto` | `Auto` |
+/// | `bypassPermissions` | `Full` |
+/// | `acceptEdits`, `dontAsk`, anything else | none |
+fn log_unapplied_permission_mode(raw: Option<&crate::yaml::Value>, agent: &str) {
+    let Some(value) = raw.filter(|v| !v.is_null()) else {
+        return;
+    };
+    let would_be = scalar_text(value).as_deref().and_then(permission_mode_tier);
+    debug!(
+        agent,
+        permission_mode = ?value,
+        would_be = ?would_be,
+        "agent permissionMode is not applied: a sub-agent runs on its parent's tier"
+    );
+}
+
+/// The table [`log_unapplied_permission_mode`] reports: a Claude Code
+/// `permissionMode` → the tier it would map to 1:1, `None` when Aleph has no
+/// such tier. Case-sensitive, as Claude Code is.
+fn permission_mode_tier(mode: &str) -> Option<crate::config::types::policies::ExecTier> {
+    use crate::config::types::policies::ExecTier;
+    match mode {
+        "plan" => Some(ExecTier::Plan),
+        "default" => Some(ExecTier::Ask),
+        "auto" => Some(ExecTier::Auto),
+        "bypassPermissions" => Some(ExecTier::Full),
+        _ => None,
+    }
 }
 
 /// Parse a single skill markdown file (`skills/`) into a `Skill` capability.
@@ -425,15 +754,27 @@ fn parse_single_agent(
 ) -> Result<CapabilityDeclaration> {
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
-    let (fm, body): (AgentFm, String) = parse_frontmatter(&content)?;
+    let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
+    let name = fm.name.unwrap_or_else(|| default_name.to_string());
+    log_unapplied_permission_mode(fm.permission_mode.as_ref(), &name);
+    // An agent's `tools:` only narrows, like a command's `allowed-tools:`:
+    // the same policy, and every entry an allow. An empty map is deny-all
+    // (`plugin_agent_to_def`).
+    let tools = restrict_tool_list(fm.tools.as_ref(), AGENT_FACE, &name).map(|names| {
+        names
+            .into_iter()
+            .map(|tool| (tool, true))
+            .collect::<HashMap<String, bool>>()
+    });
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
-        name: fm.name.unwrap_or_else(|| default_name.to_string()),
+        name,
         description: fm
             .description
             .and_then(|d| if d.is_empty() { None } else { Some(d) }),
         content: body,
         model: fm.model,
+        tools,
         plugin_id: plugin_id.to_string(),
         ..Default::default()
     }))
@@ -493,8 +834,21 @@ pub fn parse_hooks_content(
     };
 
     let mut caps = Vec::new();
-    for (event, matchers) in config.hooks {
+    for (event_str, matchers) in config.hooks {
+        // The same parser as the user-hooks loader: an unknown name is
+        // skipped with a warn, never fatal to the rest of the file.
+        let Some(event) = crate::extension::hooks::parse_event(&event_str) else {
+            warn!(plugin = plugin_id, event = %event_str, "Unknown hook event in hooks.json; skipping");
+            continue;
+        };
         for (idx, matcher) in matchers.into_iter().enumerate() {
+            // The notice `~/.aleph/hooks.json` gives for the same matcher.
+            crate::extension::hooks::warn_on_matcher(
+                plugin_id,
+                &event_str,
+                event,
+                matcher.matcher.as_deref(),
+            );
             // Emit ONE registration per command action so the executor can
             // actually run each when the event fires, with ITS OWN timeout.
             // (These previously collapsed into a semicolon-joined
@@ -507,6 +861,16 @@ pub fn parse_hooks_content(
             // through the operator consent gate before first execution.
             for a in &matcher.hooks {
                 let Some(command) = a.command.as_ref().filter(|c| !c.is_empty()) else {
+                    // The user layer runs `prompt` / `http` / `agent`
+                    // actions from the same shape; a plugin's are not run,
+                    // and a drop is said, never silent.
+                    warn!(
+                        plugin = plugin_id,
+                        event = %event_str,
+                        action = a.kind.as_deref().unwrap_or("(no type)"),
+                        "plugin hooks.json action dropped: only `command` actions with a \
+                         command run from a plugin"
+                    );
                     continue;
                 };
                 caps.push(CapabilityDeclaration::Hook(
@@ -527,6 +891,7 @@ pub fn parse_hooks_content(
                         }],
                         plugin_root: Some(base.to_path_buf()),
                         timeout_secs: a.timeout_secs,
+                        declared_event: Some(event_str.clone()),
                     },
                 ));
             }
@@ -543,12 +908,12 @@ pub fn parse_hooks_content(
 /// { "mcpServers": { "server-name": { "command": "...", "args": [...], "env": {...} } } }
 /// ```
 ///
-/// Environment variable substitution is performed for `${ALEPH_PLUGIN_ROOT}`
-/// and `${CLAUDE_PLUGIN_ROOT}`.
+/// Where the file is, and that it stays inside the plugin root, is this
+/// function's; what it declares is [`parse_mcp_config_content`]'s.
 pub fn parse_mcp_config_file(
     base: &Path,
     rel_path: &str,
-    _plugin_id: &str,
+    plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
     let file_path = base.join(rel_path);
     if !file_path.exists() {
@@ -564,58 +929,33 @@ pub fn parse_mcp_config_file(
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read MCP config: {}", file_path.display()))?;
 
-    parse_mcp_config_content(&content, base)
-        .with_context(|| format!("Invalid .mcp.json: {}", file_path.display()))
+    // One message, not `with_context`: the row renders `e.to_string()`, which
+    // prints only the outermost context and would drop the server and reason.
+    parse_mcp_config_content(&content, base, plugin_id)
+        .map_err(|e| anyhow::anyhow!("Invalid MCP config {}: {e}", file_path.display()))
 }
 
 /// Parse MCP-server JSON *content* into capability declarations.
 ///
 /// Split out of [`parse_mcp_config_file`] to give Claude Code's inline
 /// `mcpServers` object a consumer — two of Anthropic's own plugin manifests
-/// use that form. Accepts both the wrapped file shape
-/// (`{"mcpServers": {...}}`) and the bare server map.
-pub fn parse_mcp_config_content(content: &str, base: &Path) -> Result<Vec<CapabilityDeclaration>> {
-    let config: McpFileConfig = match serde_json::from_str::<McpFileConfig>(content) {
-        Ok(c) if !c.mcp_servers.is_empty() => c,
-        _ => McpFileConfig {
-            mcp_servers: serde_json::from_str(content)?,
-        },
-    };
-
-    let plugin_root = base.to_string_lossy();
-    let mut caps = Vec::new();
-
-    for (server_name, entry) in config.mcp_servers {
-        let command = substitute_vars(&entry.command, &plugin_root);
-        let args: Vec<String> = entry
-            .args
-            .iter()
-            .map(|a| substitute_vars(a, &plugin_root))
-            .collect();
-        let env: HashMap<String, String> = entry
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
-            .collect();
-
-        // Security: check if command path (when absolute) is inside plugin root
-        let cmd_path = Path::new(&command);
-        if cmd_path.is_absolute() && !is_path_inside(base, cmd_path) {
-            warn!(
-                "MCP server '{}' command {:?} escapes plugin root {:?}, skipping",
-                server_name, command, base
-            );
-            continue;
-        }
-
-        caps.push(CapabilityDeclaration::McpServer(McpServerConfig::Stdio {
-            command,
-            args,
-            env,
-        }));
-    }
-
-    Ok(caps)
+/// use that form. The parse itself is `mcp_config::parse_declared_servers`,
+/// the one reader: each capability carries the config the mount spawns, so
+/// the row's count and the spawn cannot disagree on a server (see that
+/// module for the command policy; a refused server is an `Err` here).
+pub fn parse_mcp_config_content(
+    content: &str,
+    base: &Path,
+    plugin_id: &str,
+) -> Result<Vec<CapabilityDeclaration>> {
+    crate::extension::mcp_config::parse_declared_servers(content, base, plugin_id)
+        .map(|servers| {
+            servers
+                .into_iter()
+                .map(CapabilityDeclaration::McpServer)
+                .collect()
+        })
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 // ============================================================================
@@ -742,18 +1082,17 @@ pub fn parse_v2_hooks(
             continue;
         };
         // Accept both snake_case (`before_tool_call`) and Claude-Code
-        // PascalCase aliases (`PreToolUse`) — same tolerance as the user
-        // hooks.json loader.
-        let event = [h.event.clone(), h.event.to_lowercase().replace('-', "_")]
-            .iter()
-            .find_map(|s| serde_json::from_str::<HookEvent>(&format!("\"{s}\"")).ok());
-        let Some(event) = event else {
+        // PascalCase aliases (`PreToolUse`) — the user hooks.json loader's
+        // own parser, so the two cannot drift.
+        let Some(event) = crate::extension::hooks::parse_event(&h.event) else {
             warn!(
                 "[[hooks]] entry in plugin '{}' names unknown event '{}' — skipped",
                 plugin_id, h.event
             );
             continue;
         };
+        // The third reader of a matcher: the same notice as both hook files.
+        crate::extension::hooks::warn_on_matcher(plugin_id, &h.event, event, h.filter.as_deref());
         caps.push(CapabilityDeclaration::Hook(HookRegistration {
             event,
             priority: HookPriority::from_str_or_default(&h.priority).as_i32(),
@@ -775,6 +1114,11 @@ pub fn parse_v2_hooks(
             actions: Vec::new(),
             plugin_root: None,
             timeout_secs: None,
+            // The author did write a spelling (`h.event`), but these
+            // dispatch to a WASM handler, which has always been handed the
+            // canonical serde name; echoing the spelling would change what
+            // an existing handler receives.
+            declared_event: None,
         }));
     }
     caps
@@ -832,13 +1176,6 @@ fn is_hidden(path: &Path) -> bool {
         .is_some_and(|n| n.starts_with('.'))
 }
 
-/// Substitute `${CLAUDE_PLUGIN_ROOT}` and `${ALEPH_PLUGIN_ROOT}` in a string.
-fn substitute_vars(value: &str, plugin_root: &str) -> String {
-    value
-        .replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
-        .replace("${ALEPH_PLUGIN_ROOT}", plugin_root)
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -846,6 +1183,7 @@ fn substitute_vars(value: &str, plugin_root: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::types::HookEvent;
     use std::fs;
     use tempfile::tempdir;
 
@@ -936,10 +1274,12 @@ mod tests {
     /// directory was unaffected, which is precisely what made it invisible:
     /// the plugin still loaded, just one skill lighter.
     ///
-    /// The assertion that matters is that BOTH skills arrive. `allowed-tools`
-    /// is not asserted because this path no longer carries it — the same file
-    /// is scanned by `skill::manifest` (plugin skill dirs are published into
-    /// `SkillSystem`), which is where the declaration is honoured.
+    /// The assertion that matters is that BOTH skills arrive. The second one
+    /// is that the skill's registration carries NO `allowed-tools`: `SkillFm`
+    /// reads the key again (commands honour it), but a skill's declaration is
+    /// honoured by `skill::manifest`'s scan of the same file (plugin skill dirs
+    /// are published into `SkillSystem`), and the restrict-mode fold done here
+    /// for commands is not a skill's reading of it.
     #[test]
     fn an_upstream_comma_scalar_allowed_tools_does_not_delete_the_skill() {
         let dir = tempdir().unwrap();
@@ -979,6 +1319,15 @@ mod tests {
             names.contains(&"plain"),
             "the sibling must survive too; got {names:?}"
         );
+        for cap in &caps {
+            if let CapabilityDeclaration::Skill(s) = cap {
+                assert!(
+                    s.allowed_tools.is_none(),
+                    "a skill's `allowed-tools` is not projected on this path: {:?}",
+                    s.allowed_tools
+                );
+            }
+        }
     }
 
     /// Census: a scan result is a fail-closed answer ("I could not read this
@@ -1100,6 +1449,166 @@ mod tests {
         }
     }
 
+    /// The one agent in `<dir>/agents`, parsed by the production scan.
+    fn only_agent(dir: &Path) -> AgentRegistration {
+        let caps = parse_agents_dir(dir, "agents", "plug").unwrap();
+        assert_eq!(caps.len(), 1, "exactly one agent file must survive");
+        match caps.into_iter().next() {
+            Some(CapabilityDeclaration::Agent(reg)) => reg,
+            other => panic!("Expected Agent, got {other:?}"),
+        }
+    }
+
+    fn write_agent(dir: &Path, file: &str, text: &str) {
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(agents.join(file), text).unwrap();
+    }
+
+    #[test]
+    fn cc_agent_frontmatter_tools_are_mapped_and_permission_mode_is_tolerated() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "validator.md",
+            "---\nname: validator\ndescription: Validates plugins\nmodel: inherit\ncolor: yellow\n\
+             permissionMode: plan\ntools: [\"Read\", \"Grep\", \"Bash\", \"NotebookEdit\"]\n---\n\
+             You are an expert plugin validator.\n",
+        );
+        let reg = only_agent(dir.path());
+        assert_eq!(reg.content, "You are an expert plugin validator.");
+        let tools = reg.tools.as_ref().expect("tools mapped");
+        // Right-hand sides of `CC_TOOL_ALIASES`: Read → file_read,
+        // Grep → grep, Bash → bash.
+        assert_eq!(tools.get("file_read"), Some(&true));
+        assert_eq!(tools.get("grep"), Some(&true));
+        assert_eq!(tools.get("bash"), Some(&true));
+        assert!(
+            !tools.contains_key("NotebookEdit"),
+            "no Aleph counterpart → dropped, not forwarded"
+        );
+        assert_eq!(tools.len(), 3);
+        assert_eq!(reg.model.as_deref(), Some("inherit"));
+    }
+
+    /// 24 of 28 marketplace agents write `tools: Read, Grep, Bash` — the comma
+    /// scalar. A `Vec<String>` field would have failed those files outright.
+    /// `Skill` maps to `skill_read` here as it does for a command.
+    #[test]
+    fn cc_agent_comma_scalar_tools_are_mapped() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "reviewer.md",
+            "---\nname: reviewer\ndescription: Reviews\ntools: Read, Grep, Bash(git diff:*), Skill\n---\n\
+             You review.\n",
+        );
+        let reg = only_agent(dir.path());
+        let mut tools: Vec<(String, bool)> = reg.tools.expect("tools mapped").into_iter().collect();
+        tools.sort();
+        assert_eq!(
+            tools,
+            vec![
+                ("bash".to_string(), true),
+                ("file_read".to_string(), true),
+                ("grep".to_string(), true),
+                ("skill_read".to_string(), true),
+            ]
+        );
+    }
+
+    /// A name that is neither a Claude Code tool Aleph knows nor spelled like
+    /// an Aleph tool is forwarded as written — and says so. Aleph-shaped names
+    /// (a builtin, an MCP `server__tool`) stay quiet: they may be registered
+    /// later and cannot be checked at parse time.
+    #[test]
+    fn an_unknown_cc_tool_name_in_agent_tools_warns() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "odd.md",
+            "---\nname: odd\ntools: Read, NotebookRead, srv__lookup, file_ops\n---\nbody\n",
+        );
+        let (reg, warnings) = warnings_during(|| only_agent(dir.path()));
+        let tools = reg.tools.expect("tools mapped");
+        assert_eq!(
+            tools.get("NotebookRead"),
+            Some(&true),
+            "forwarded as written"
+        );
+        assert!(
+            warnings.contains("NotebookRead"),
+            "the unknown name is named: {warnings}"
+        );
+        for quiet in ["srv__lookup", "file_ops", "Read"] {
+            assert!(
+                !warnings.contains(&format!("entry={quiet}")),
+                "`{quiet}` must not warn: {warnings}"
+            );
+        }
+    }
+
+    /// One voice: a command's unknown name is forwarded as written and left
+    /// to `register_plugin_commands`, which refuses the whole `/cmd` and names the
+    /// tool. A parse-time warning as well would be a second, weaker account
+    /// of the same outcome.
+    #[test]
+    fn a_commands_unknown_name_is_left_to_registration() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("c.md"),
+            "---\nallowed-tools: Read, NotebookRead\n---\nbody\n",
+        )
+        .unwrap();
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        assert_eq!(
+            regs["c"].allowed_tools.as_deref(),
+            Some(&["file_read".to_string(), "NotebookRead".to_string()][..]),
+            "forwarded as written, for registration to judge"
+        );
+        assert!(
+            !warnings.contains("NotebookRead"),
+            "registration speaks for a command, not the parser: {warnings}"
+        );
+    }
+
+    /// The table `log_unapplied_permission_mode` reports, as the real tier
+    /// type: Claude Code's `permissionMode` → the Aleph tier it would be.
+    #[test]
+    fn permission_mode_maps_to_the_tier_it_would_be() {
+        use crate::config::types::policies::ExecTier;
+        for (mode, tier) in [
+            ("plan", Some(ExecTier::Plan)),
+            ("default", Some(ExecTier::Ask)),
+            ("auto", Some(ExecTier::Auto)),
+            ("bypassPermissions", Some(ExecTier::Full)),
+            ("acceptEdits", None),
+            ("dontAsk", None),
+            ("Plan", None),
+            ("", None),
+        ] {
+            assert_eq!(permission_mode_tier(mode), tier, "{mode:?}");
+        }
+    }
+
+    /// `permissionMode` and `color` are Claude Code keys Aleph does not apply.
+    /// An odd shape of either costs nothing — never the file.
+    #[test]
+    fn odd_permission_mode_and_color_shapes_keep_the_agent() {
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "odd.md",
+            "---\nname: odd\npermissionMode: [plan]\ncolor: {r: 1}\n---\nYou are odd.\n",
+        );
+        let reg = only_agent(dir.path());
+        assert_eq!(reg.content, "You are odd.");
+        assert!(reg.tools.is_none(), "absent `tools:` declares nothing");
+        assert!(reg.color.is_none(), "Claude Code's colour is not carried");
+    }
+
     #[test]
     fn test_parse_commands_dir() {
         let dir = tempdir().unwrap();
@@ -1128,6 +1637,341 @@ mod tests {
             }
             other => panic!("Expected Command-typed Skill, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn command_frontmatter_fields_reach_the_registration() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("review.md"),
+            "---\n\
+             description: Code review a pull request\n\
+             argument-hint: \"[pr-number] [priority]\"\n\
+             allowed-tools: Bash(gh pr view:*), Read, Grep\n\
+             model: sonnet\n\
+             disable-model-invocation: true\n\
+             ---\n\
+             Review PR $1.\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert_eq!(reg.skill_type, crate::extension::types::SkillType::Command);
+        assert_eq!(reg.argument_hint.as_deref(), Some("[pr-number] [priority]"));
+        // Normalised through the CC alias table in RESTRICT mode: scoped Bash
+        // folds to bare `bash`; CC names become Aleph names.
+        assert_eq!(
+            reg.allowed_tools.as_deref(),
+            Some(
+                &[
+                    "bash".to_string(),
+                    "file_read".to_string(),
+                    "grep".to_string()
+                ][..]
+            )
+        );
+        assert_eq!(reg.model.as_deref(), Some("sonnet"));
+        assert!(reg.disable_model_invocation);
+        assert_eq!(reg.content, "Review PR $1.");
+    }
+
+    #[test]
+    fn a_command_with_no_extra_frontmatter_declares_nothing() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(cmds.join("hi.md"), "Say hi to $ARGUMENTS.\n").unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert!(reg.argument_hint.is_none() && reg.allowed_tools.is_none() && reg.model.is_none());
+        assert!(!reg.disable_model_invocation);
+    }
+
+    #[test]
+    fn allowed_tools_array_form_parses_too() {
+        // `create-plugin.md` (plugin-dev) uses the YAML array form.
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("c.md"),
+            "---\nallowed-tools:\n  [\"Read\",\"Write\",\"Bash\",\"TodoWrite\"]\n---\nbody\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        // `TodoWrite` has no Aleph counterpart and is dropped, never passed
+        // through as a name the registry would refuse the whole command over.
+        assert_eq!(
+            reg.allowed_tools.as_deref(),
+            Some(
+                &[
+                    "file_read".to_string(),
+                    "file_write".to_string(),
+                    "bash".to_string()
+                ][..]
+            )
+        );
+    }
+
+    /// Dropping only narrows. A declaration whose every entry drops is the
+    /// explicit deny-all, not "no declaration": reading it as `None` would
+    /// hand the command the full tool surface its author tried to shrink.
+    #[test]
+    fn a_command_whose_every_allowed_tool_drops_is_deny_all() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("t.md"),
+            "---\nallowed-tools: TodoWrite\n---\nbody\n",
+        )
+        .unwrap();
+        let caps = parse_commands_dir(dir.path(), "commands", "plug").unwrap();
+        let CapabilityDeclaration::Skill(reg) = &caps[0] else {
+            panic!("skill")
+        };
+        assert_eq!(reg.allowed_tools.as_deref(), Some(&[][..]));
+    }
+
+    /// Runs `f` and returns what it logged at WARN or above, as text. The
+    /// warn is the only observable effect of a parse that keeps going.
+    fn warnings_during<T>(f: impl FnOnce() -> T) -> (T, String) {
+        #[derive(Clone, Default)]
+        struct Sink(crate::sync_primitives::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, f);
+        let text =
+            String::from_utf8_lossy(&sink.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
+        (out, text)
+    }
+
+    /// Claude Code's own authoring guidance gives `argument-hint: [arg1]
+    /// [arg2] [optional-arg]` as the format. That is a YAML syntax error, and
+    /// a YAML error used to drop the whole command.
+    #[test]
+    fn multi_bracket_argument_hints_keep_the_command() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        let hints = [
+            ("generic", "[arg1] [arg2] [optional-arg]"),
+            ("deploy", "[environment] [version]"),
+            ("lint", "[file-path] [options]"),
+        ];
+        for (name, hint) in hints {
+            fs::write(
+                cmds.join(format!("{name}.md")),
+                format!("---\ndescription: d\nargument-hint: {hint}\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        // Negative control: broken somewhere else, the file still drops.
+        fs::write(
+            cmds.join("broken.md"),
+            "---\nargument-hint: [a] [b]\ndescription: a: b\n---\nbody\n",
+        )
+        .unwrap();
+
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        for (name, hint) in hints {
+            assert_eq!(regs[name].argument_hint.as_deref(), Some(hint), "{name}");
+        }
+        assert!(
+            !regs.contains_key("broken"),
+            "a YAML error elsewhere still drops the file"
+        );
+        assert!(
+            warnings.contains("read as literal text"),
+            "the fallback says so: {warnings}"
+        );
+    }
+
+    /// A sequence none of whose items is a tool name is deny-all — and says
+    /// so, like every other path to deny-all.
+    #[test]
+    fn a_sequence_of_non_names_is_deny_all_and_says_so() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("n.md"),
+            "---\nallowed-tools: [42, {Bash: git}]\n---\nbody\n",
+        )
+        .unwrap();
+        let (regs, warnings) = warnings_during(|| commands_by_name(dir.path()));
+        assert_eq!(regs["n"].allowed_tools.as_deref(), Some(&[][..]));
+        assert!(
+            warnings.contains("can call no tools"),
+            "deny-all must be announced: {warnings}"
+        );
+    }
+
+    /// Every command in `dir/commands`, by name.
+    fn commands_by_name(dir: &Path) -> HashMap<String, SkillRegistration> {
+        parse_commands_dir(dir, "commands", "plug")
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Skill(s) => Some((s.name.clone(), s)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A present `allowed-tools` this path cannot read is a declaration all
+    /// the same: the author tried to restrict the command. Reading it as
+    /// "no declaration" would hand back the full surface, so it is deny-all.
+    #[test]
+    fn a_command_with_an_unusable_allowed_tools_is_deny_all() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        for (name, value) in [
+            ("number", "42"),
+            ("map", "{Bash: git}"),
+            ("boolean", "true"),
+            ("comma", "\",\""),
+        ] {
+            fs::write(
+                cmds.join(format!("{name}.md")),
+                format!("---\nallowed-tools: {value}\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        let regs = commands_by_name(dir.path());
+        for name in ["number", "map", "boolean", "comma"] {
+            assert_eq!(
+                regs[name].allowed_tools.as_deref(),
+                Some(&[][..]),
+                "`{name}` must be deny-all, never the full surface"
+            );
+        }
+    }
+
+    /// Claude Code documents `argument-hint: [pr-number]` unquoted — a YAML
+    /// flow sequence. A strict string field rejected the whole frontmatter
+    /// and the command vanished; the hint is re-rendered as the text the
+    /// author wrote.
+    #[test]
+    fn an_unquoted_bracket_argument_hint_keeps_the_command() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("new-sdk-app.md"),
+            "---\ndescription: new app\nargument-hint: [project-name]\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            cmds.join("two.md"),
+            "---\nargument-hint: [pr-number, priority]\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(
+            cmds.join("angled.md"),
+            "---\nargument-hint: [<file>, extra]\n---\nbody\n",
+        )
+        .unwrap();
+        let regs = commands_by_name(dir.path());
+        assert_eq!(
+            regs["new-sdk-app"].argument_hint.as_deref(),
+            Some("[project-name]")
+        );
+        // Each item becomes one bracketed word, space-joined — the form CC
+        // documents (`[arg1] [arg2]`), not YAML's `[a, b]`.
+        assert_eq!(
+            regs["two"].argument_hint.as_deref(),
+            Some("[pr-number] [priority]")
+        );
+        // An item that is already a hint (`<file>`, `[x]`) is kept as written.
+        assert_eq!(
+            regs["angled"].argument_hint.as_deref(),
+            Some("<file> [extra]")
+        );
+    }
+
+    /// The same leniency for the other Claude Code keys: an odd shape costs
+    /// the key, never the file.
+    #[test]
+    fn odd_model_and_disable_model_invocation_shapes_keep_the_file() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("odd.md"),
+            "---\nmodel: [sonnet]\ndisable-model-invocation: \"yes\"\n---\nbody\n",
+        )
+        .unwrap();
+        let skill = dir.path().join("skills").join("understand");
+        fs::create_dir_all(&skill).unwrap();
+        // understand-anything 2.9.4's `skills/understand/SKILL.md`, verbatim:
+        // a one-item sequence whose item is already a complete hint.
+        let understand_hint = "[path] [--full|--auto-update|--no-auto-update|--review|--language \
+                               <lang>|--exclude <patterns>]";
+        fs::write(
+            skill.join("SKILL.md"),
+            format!(
+                "---\nname: understand\ndescription: d\nargument-hint: [\"{understand_hint}\"]\n---\nBody."
+            ),
+        )
+        .unwrap();
+
+        let regs = commands_by_name(dir.path());
+        let odd = &regs["odd"];
+        assert!(odd.model.is_none(), "a sequence names no model");
+        assert!(!odd.disable_model_invocation, "a non-bool reads as false");
+        let skills = parse_skills_dir(dir.path(), "skills", "plug").unwrap();
+        let CapabilityDeclaration::Skill(understand) = &skills[0] else {
+            panic!("the skill must survive its `argument-hint`")
+        };
+        assert_eq!(understand.argument_hint.as_deref(), Some(understand_hint));
+    }
+
+    /// Claude Code's `Skill` is how a command uses a skill; Aleph's
+    /// `skill_read` loads one. Dropping it left commands whose body says
+    /// "load skill X first" with no way to do so.
+    #[test]
+    fn a_command_declaring_skill_keeps_skill_read() {
+        let dir = tempdir().unwrap();
+        let cmds = dir.path().join("commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(
+            cmds.join("health.md"),
+            "---\nallowed-tools: Skill, Read\n---\nLoad the skill first.\n",
+        )
+        .unwrap();
+        let regs = commands_by_name(dir.path());
+        assert_eq!(
+            regs["health"].allowed_tools.as_deref(),
+            Some(&["skill_read".to_string(), "file_read".to_string()][..])
+        );
     }
 
     #[test]
@@ -1221,6 +2065,210 @@ mod tests {
         assert!(caps.is_empty());
     }
 
+    fn declared_hooks(caps: &[CapabilityDeclaration]) -> Vec<(HookEvent, Option<String>)> {
+        caps.iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Hook(h) => Some((h.event, h.declared_event.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hooks_json_keeps_the_event_spelling_the_author_wrote() {
+        let caps = parse_hooks_content(
+            r#"{"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "a"}]}],
+                          "after_tool_call": [{"hooks": [{"type": "command", "command": "b"}]}]}}"#,
+            std::path::Path::new("/p"),
+            "plug",
+        )
+        .unwrap();
+        let regs = declared_hooks(&caps);
+        assert!(regs.contains(&(HookEvent::BeforeToolCall, Some("PreToolUse".into()))));
+        assert!(regs.contains(&(HookEvent::AfterToolCall, Some("after_tool_call".into()))));
+    }
+
+    /// A Claude Code event Aleph has no moment for (`Setup`) used to fail the
+    /// enum-keyed map and with it every hook in the file. It is now the one
+    /// key skipped; its neighbours still register.
+    #[test]
+    fn an_unknown_event_in_a_plugin_hooks_json_skips_only_that_key() {
+        let caps = parse_hooks_content(
+            r#"{"hooks": {"Setup": [{"hooks": [{"type": "command", "command": "x"}]}],
+                          "PostCompact": [{"hooks": [{"type": "command", "command": "y"}]}]}}"#,
+            std::path::Path::new("/p"),
+            "plug",
+        )
+        .unwrap();
+        assert_eq!(
+            declared_hooks(&caps),
+            vec![(HookEvent::AfterCompaction, Some("PostCompact".into()))]
+        );
+    }
+
+    /// P4.14 F-5: a plugin's `prompt` / `http` / `agent` actions are not run
+    /// (the user layer runs all three), and each drop is named — plugin,
+    /// event, action type — instead of vanishing.
+    #[test]
+    fn every_dropped_plugin_hook_action_is_named() {
+        let (caps, logged) = warnings_during(|| {
+            parse_hooks_content(
+                r#"{"hooks": {
+                    "Stop": [{"hooks": [{"type": "prompt", "prompt": "ok?"}]}],
+                    "PreToolUse": [{"hooks": [
+                        {"type": "http", "url": "http://127.0.0.1:9/h"},
+                        {"type": "agent", "agent": "reviewer"},
+                        {"type": "command", "command": "echo ok"}
+                    ]}]}}"#,
+                std::path::Path::new("/p"),
+                "f5plug",
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            declared_hooks(&caps),
+            vec![(HookEvent::BeforeToolCall, Some("PreToolUse".into()))]
+        );
+        let dropped: Vec<&str> = logged
+            .lines()
+            .filter(|l| l.contains("action dropped"))
+            .collect();
+        assert_eq!(dropped.len(), 3, "{logged}");
+        for (kind, event) in [
+            ("prompt", "Stop"),
+            ("http", "PreToolUse"),
+            ("agent", "PreToolUse"),
+        ] {
+            assert!(
+                dropped
+                    .iter()
+                    .any(|l| l.contains(kind) && l.contains(event) && l.contains("f5plug")),
+                "no warning names the {kind} action on {event}: {logged}"
+            );
+        }
+    }
+
+    /// The twin of `~/.aleph/hooks.json`'s load-time notice: a plugin's
+    /// matcher that never fires, or that its event ignores, is said too — and
+    /// superpowers' real SessionStart matcher is not flagged.
+    #[test]
+    fn a_plugin_hook_matcher_gets_the_user_layers_notice() {
+        let (_, logged) = warnings_during(|| {
+            parse_hooks_content(
+                r#"{"hooks": {
+                    "SessionStart": [
+                        {"matcher": "resume", "hooks": [{"type": "command", "command": "a"}]},
+                        {"matcher": "startup|clear|compact", "hooks": [{"type": "command", "command": "b"}]}
+                    ],
+                    "UserPromptSubmit": [{"matcher": "x", "hooks": [{"type": "command", "command": "c"}]}]
+                }}"#,
+                std::path::Path::new("/p"),
+                "twin",
+            )
+            .unwrap()
+        });
+        let notices: Vec<&str> = logged
+            .lines()
+            .filter(|l| l.contains("hook matcher"))
+            .collect();
+        assert_eq!(notices.len(), 2, "{logged}");
+        assert!(notices
+            .iter()
+            .any(|l| l.contains("`resume`") && l.contains("never fires")));
+        assert!(notices
+            .iter()
+            .any(|l| l.contains("`x`") && l.contains("ignored")));
+    }
+
+    /// The third reader of a matcher, `aleph.plugin.toml`'s `[[hooks]]
+    /// filter`, gives the same notice.
+    #[test]
+    fn an_aleph_toml_hook_filter_gets_the_same_notice() {
+        use crate::extension::manifest::HookSection;
+        let (caps, logged) = warnings_during(|| {
+            parse_v2_hooks(
+                &[HookSection {
+                    event: "before_tool_call".into(),
+                    kind: None,
+                    handler: Some("onTool".into()),
+                    priority: "normal".into(),
+                    filter: Some("((".into()),
+                }],
+                "tomlplug",
+            )
+        });
+        assert_eq!(caps.len(), 1, "the hook still loads");
+        assert!(
+            logged.contains("hook matcher") && logged.contains("not a valid regex"),
+            "{logged}"
+        );
+    }
+
+    /// Parses `hooks_json` as plugin `p`'s file, fires `event` through the
+    /// production executor (observers, then interceptors, as the lifecycle
+    /// seams do) and says whether its command ran.
+    #[cfg(unix)]
+    async fn fires(
+        hooks_json: &str,
+        event: HookEvent,
+        ctx: crate::extension::hooks::HookContext,
+    ) -> bool {
+        use crate::extension::hooks::HookExecutor;
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("fired");
+        let json = hooks_json.replace("MARK", &marker.display().to_string());
+        let hooks = parse_hooks_content(&json, dir.path(), "p")
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Hook(h) => {
+                    Some(crate::extension::hook_config_from_registration(
+                        h,
+                        crate::extension::visibility::ScopeKey::Global,
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let executor = HookExecutor::new(hooks);
+        executor.execute_observers(event, &ctx).await;
+        executor
+            .execute_interceptors(event, ctx)
+            .await
+            .expect("the hooks run");
+        marker.exists()
+    }
+
+    /// P4.14 F-2: Claude Code's `"*"` is a wildcard, not an invalid regex.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_star_matcher_fires_for_every_tool() {
+        let ctx = crate::extension::hooks::HookContext::new("s").with_tool_name("bash");
+        let json = r#"{"hooks": {"PreToolUse": [{"matcher": "*",
+            "hooks": [{"type": "command", "command": "touch 'MARK'"}]}]}}"#;
+        assert!(fires(json, HookEvent::BeforeToolCall, ctx).await);
+    }
+
+    /// P4.14 F-2: on an event with nothing to match (Claude Code ignores the
+    /// matcher there), a matcher never stops the hook.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_matcher_on_an_event_that_ignores_it_still_fires() {
+        for (name, event) in [
+            ("UserPromptSubmit", HookEvent::UserPromptSubmit),
+            ("Stop", HookEvent::Stop),
+            ("PreCompact", HookEvent::BeforeCompaction),
+            ("SubagentStop", HookEvent::SubagentStop),
+        ] {
+            let json = format!(
+                r#"{{"hooks": {{"{name}": [{{"matcher": "manual",
+                    "hooks": [{{"type": "command", "command": "touch 'MARK'"}}]}}]}}}}"#
+            );
+            let ctx = crate::extension::hooks::HookContext::new("s");
+            assert!(fires(&json, event, ctx).await, "{name}");
+        }
+    }
+
     #[test]
     fn test_parse_v2_hooks_registers_declared_hooks() {
         use crate::extension::manifest::HookSection;
@@ -1284,6 +2332,9 @@ mod tests {
             CapabilityDeclaration::Hook(h) => {
                 assert_eq!(h.event, HookEvent::AfterToolCall);
                 assert_eq!(h.kind, Some(HookKind::Observer));
+                // Written `PostToolUse`, but a WASM handler keeps receiving
+                // the canonical name (see `parse_v2_hooks`).
+                assert_eq!(h.declared_event, None);
             }
             other => panic!("Expected Hook, got {:?}", other),
         }
@@ -1322,13 +2373,11 @@ mod tests {
 
         match &caps[0] {
             CapabilityDeclaration::McpServer(m) => {
-                assert!(m.is_stdio(), "expected stdio transport");
-                let (command, args, env) = m
-                    .stdio_command()
-                    .expect("stdio accessor must succeed on a stdio entry");
-                assert_eq!(command, "node");
-                assert_eq!(args, &vec![format!("{}/server.js", dir.path().display())]);
-                assert_eq!(env.get("ROOT"), Some(&dir.path().display().to_string()));
+                assert_eq!(m.transport, crate::mcp::McpTransportType::Stdio);
+                assert_eq!(m.id, "plugin:p/my-server");
+                assert_eq!(m.command.as_deref(), Some("node"));
+                assert_eq!(m.args, vec![format!("{}/server.js", dir.path().display())]);
+                assert_eq!(m.env.get("ROOT"), Some(&dir.path().display().to_string()));
             }
             other => panic!("Expected McpServer, got {:?}", other),
         }
@@ -1341,28 +2390,42 @@ mod tests {
         assert!(caps.is_empty());
     }
 
+    /// The row renders `e.to_string()`, which prints only an anyhow error's
+    /// outermost context: the server and the reason must be in that message.
+    #[test]
+    fn a_refused_server_is_named_in_the_top_level_error() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("plug");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(dir.path().join("outside.js"), "").unwrap();
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"sneaky":{"command":"${CLAUDE_PLUGIN_ROOT}/../outside.js"}}}"#,
+        )
+        .unwrap();
+        let err = parse_mcp_config_file(&root, ".mcp.json", "p")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'sneaky' refused") && err.contains("outside the plugin root"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn test_parse_frontmatter_no_delimiters() {
-        let (fm, body): (SkillFm, String) = parse_frontmatter("Just content").unwrap();
+        let (fm, body): (SkillFm, String) =
+            parse_frontmatter("Just content", Path::new("t")).unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Just content");
     }
 
     #[test]
     fn test_parse_frontmatter_empty_fm() {
-        let (fm, body): (SkillFm, String) = parse_frontmatter("---\n---\nBody").unwrap();
+        let (fm, body): (SkillFm, String) =
+            parse_frontmatter("---\n---\nBody", Path::new("t")).unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Body");
-    }
-
-    #[test]
-    fn test_substitute_vars() {
-        assert_eq!(
-            substitute_vars("${ALEPH_PLUGIN_ROOT}/bin", "/home/p"),
-            "/home/p/bin"
-        );
-        assert_eq!(substitute_vars("${CLAUDE_PLUGIN_ROOT}/x", "/tmp"), "/tmp/x");
-        assert_eq!(substitute_vars("plain", "/root"), "plain");
     }
 
     #[test]

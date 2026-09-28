@@ -644,6 +644,17 @@ name = "whatsapp_fixture_test"
 [[test]]
 name = "whatsapp_protocol_test"
 
+# Self-re-executing: the test binary doubles as the stdio MCP mock server
+# (`ALEPH_QA_MCP_MOCK=1`), so it owns `main`. See the file header.
+# `required-features`: it reads `MemoryExtensionRegistry::mcp_bindings_snapshot`,
+# which is `cfg(any(test, feature = "test-helpers"))` — same reason as the
+# `memory_modes_integration` entry above, cargo must SKIP it without the
+# feature rather than fail to compile it.
+[[test]]
+name = "plugin_lifecycle_roundtrip"
+harness = false
+required-features = ["test-helpers"]
+
 # Release profile
 [profile.release]
 strip = true

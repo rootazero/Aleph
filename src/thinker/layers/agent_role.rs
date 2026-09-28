@@ -1,4 +1,5 @@
-//! `AgentRoleLayer` — sub-agent role header and protocol constraints (priority 55)
+//! `AgentRoleLayer` — sub-agent role header, the agent file's own prompt, and
+//! protocol constraints (priority 55)
 
 use crate::agents::AgentMode;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -86,9 +87,10 @@ impl PromptLayer for AgentRoleLayer {
         // Cached path or its role header + protocol constraints silently vanish
         // (same class of bug the Soul / Profile / Role / Citation layers were
         // fixed for). For a primary agent the layer no-ops (mode != SubAgent,
-        // no `prompt_sections`), so this is a no-op on the main path and stays
-        // cache-safe (Stable, byte-stable per agent). `Basic` is kept for the
-        // inline `subagent_spawner` prompt build.
+        // no `system_prompt`, no `prompt_sections`), so this is a no-op on the
+        // main path and stays cache-safe (Stable, byte-stable per agent: the
+        // body is the agent file's text, fixed for the def's lifetime).
+        // `Basic` is kept for the inline `subagent_spawner` prompt build.
         &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
@@ -110,6 +112,12 @@ impl PromptLayer for AgentRoleLayer {
         if agent.mode == AgentMode::SubAgent {
             let header = Self::render_role_header(&agent.id);
             output.push_str(&header);
+            output.push_str("\n\n---\n\n");
+        }
+
+        // The author's own prompt (the agent file's body), verbatim.
+        if let Some(prompt) = agent.system_prompt.as_deref() {
+            output.push_str(prompt);
             output.push_str("\n\n---\n\n");
         }
 
@@ -213,6 +221,65 @@ mod tests {
             out.contains("pass/fail verdict"),
             "Should retain the verdict expectation"
         );
+    }
+
+    #[test]
+    fn a_system_prompt_body_is_injected_after_the_role_header() {
+        let layer = AgentRoleLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let agent = AgentDef::new("plugin-validator", AgentMode::SubAgent)
+            .with_system_prompt("You are an expert plugin validator.");
+        let input = LayerInput::basic(&config, &tools).with_agent_def(&agent);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        let header = out.find("Sub-Agent Role").expect("role header");
+        let body = out
+            .find("You are an expert plugin validator.")
+            .expect("body injected");
+        assert!(header < body, "header first, then the author's prompt");
+    }
+
+    #[test]
+    fn no_system_prompt_keeps_the_previous_bytes() {
+        let layer = AgentRoleLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let agent = AgentDef::new("explore", AgentMode::SubAgent);
+        let input = LayerInput::basic(&config, &tools).with_agent_def(&agent);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert_eq!(
+            out,
+            format!(
+                "{}\n\n---\n\n",
+                AgentRoleLayer::render_role_header("explore")
+            ),
+            "exactly the header and its separator, nothing appended"
+        );
+    }
+
+    /// The body is byte-stable per agent, so it belongs in the cached stable
+    /// part of a split prompt, never the per-turn dynamic one. (Whether the
+    /// spawner hands its def to the builder at all is pinned by the spawner's
+    /// own `spawn_request_agent_body_reaches_inline_system_prompt`.)
+    #[test]
+    fn the_body_lands_in_the_stable_cached_part() {
+        use crate::thinker::prompt_builder::PromptBuilder;
+        let body = "You are an expert plugin validator. MARKER-7f3a";
+        let agent = AgentDef::new("plugin-validator", AgentMode::SubAgent).with_system_prompt(body);
+        let parts = PromptBuilder::new(PromptConfig::default())
+            .with_agent(agent)
+            .build_system_prompt_parts(&[]);
+        let stable = parts.first().expect("a stable part");
+        assert!(stable.cache, "the first part is the cached stable prefix");
+        assert_eq!(
+            stable.content.matches(body).count(),
+            1,
+            "{}",
+            stable.content
+        );
+        assert!(parts.iter().skip(1).all(|p| !p.content.contains(body)));
     }
 
     #[test]

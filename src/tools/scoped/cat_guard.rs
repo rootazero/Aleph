@@ -1,7 +1,8 @@
 //! Cat-guard: a non-blocking read-steer that nudges the model away from a raw
 //! `file_read` / shell `cat` of an *installed skill* file and toward
-//! `skill_read`, which expands `${ALEPH_SKILL_DIR}` / runs inline shell and
-//! records skill usage that a raw read skips.
+//! `skill_read`, which expands `${ALEPH_SKILL_DIR}` / runs the skill's
+//! operator-approved inline shell and records skill usage that a raw read
+//! skips.
 //!
 //! Defense-in-depth, **not** a security boundary: the shell runs as the same OS
 //! user and can always read the file. The guard only *surfaces* the fact and
@@ -126,7 +127,8 @@ fn shell_skill_read(cmd: &str) -> Option<(SkillKind, String)> {
 /// Classify a candidate path as living inside a known skill root. Reuses the
 /// existing skill-dir enumerators (SSOT): [`get_all_skills_dirs`] already lists
 /// agent/project/global/plugin roots in precedence order, and
-/// [`get_plugin_skills_dirs`] is the subset used to tag a plugin-shipped skill.
+/// [`get_plugin_skills_dirs`] (the on-disk plugin roots under the well-known
+/// locations, no status check) is what tags a plugin-shipped skill.
 ///
 /// [`get_all_skills_dirs`]: crate::utils::paths::get_all_skills_dirs
 /// [`get_plugin_skills_dirs`]: crate::utils::paths::get_plugin_skills_dirs
@@ -241,8 +243,8 @@ fn build_steer(kind: SkillKind, id: &str, via_shell: bool) -> String {
     format!(
         "{how} inside {shipped} `{id}`. Prefer `skill_read(skill_id=\"{id}\")` for its \
          instructions, or `skill_read(skill_id=\"{id}\", file_name=\"<relative file>\")` for a \
-         supporting file — skill_read expands `${{ALEPH_SKILL_DIR}}`, runs inline shell, and \
-         records skill usage that a raw read skips. Use `skill_list` to see available skills. \
+         supporting file — skill_read expands `${{ALEPH_SKILL_DIR}}`, runs the skill's \
+         operator-approved inline shell, and records skill usage that a raw read skips. Use `skill_list` to see available skills. \
          (Advisory only — the read still ran; this is defense-in-depth, not a block.)"
     )
 }

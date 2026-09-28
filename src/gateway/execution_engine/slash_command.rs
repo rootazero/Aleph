@@ -95,19 +95,47 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// every slash command silently swallowed whenever a run is already in
     /// flight: the text lands in the transcript, the loop reads it as an
     /// interjection, and the client gets no events and no error.
+    ///
+    /// **This is the human-facing stamp** — the `chat.send` / `agent.run`
+    /// handlers' — so a mode it stamps is marked as typed by a person
+    /// (`slash_skill_scope::mark_typed`), which a `/skill`'s pre-grant
+    /// requires. `execute()`'s safety net, which stamps text other producers
+    /// put in a request, calls [`Self::stamp_slash_mode_unattested`] instead.
     pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
+        if self.stamp_mode(input, metadata).await {
+            super::slash_skill_scope::mark_typed(metadata);
+        }
+    }
+
+    /// [`Self::stamp_slash_mode`] without the typed marker: `execute()`'s
+    /// safety net, for producers that never pass through a handler — cron,
+    /// heartbeat, team dispatch, `sessions_send`, A2A, the OpenAI shim,
+    /// goal/loop continuations. None of their text is a person typing `/foo`.
+    pub(super) async fn stamp_slash_mode_unattested(
+        &self,
+        input: &str,
+        metadata: &mut HashMap<String, String>,
+    ) {
+        self.stamp_mode(input, metadata).await;
+    }
+
+    /// Stamp `/btw` and the slash mode; `true` when this call stamped the
+    /// mode (an already-stamped request is left alone).
+    async fn stamp_mode(&self, input: &str, metadata: &mut HashMap<String, String>) -> bool {
         // Side questions first: they are resolved without the command parser,
         // and they must be stamped even when the parser cell is empty.
         stamp_btw(input, metadata);
         if metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
-            return;
+            return false;
         }
-        if let Some(mode_json) = self.try_resolve_slash_command(input).await {
-            metadata.insert(
-                crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
-                mode_json,
-            );
-        }
+        let Some(mode_json) = self.try_resolve_slash_command(input).await else {
+            return false;
+        };
+        metadata.insert(
+            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+            mode_json,
+        );
+        true
     }
 
     /// Resolve a `/command args` input to the slash-command mode JSON.
@@ -183,6 +211,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // be a redundant cross-run mutation of a shared anchor.
         let mode: serde_json::Value = serde_json::from_str(mode_json)
             .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {e}")))?;
+
+        // Face ④ of `extension::visibility`: whichever surface stamped this
+        // mode (Panel/CLI resolver, channel router, TUI), the owner it names
+        // is judged here, once, against the request's own project. No
+        // installed extension manager ⇒ unknown owner ⇒ refused.
+        let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(
+            request.workspace_override.clone(),
+        );
+        crate::extension::visibility::slash_owner_admits(
+            &mode,
+            &visibility,
+            crate::extension::visibility::manager_backed_owner_visible(),
+        )
+        .map_err(ExecutionError::Failed)?;
 
         let mode_type = mode["type"].as_str().unwrap_or("");
 
@@ -263,16 +305,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
                 // Fall through to the full agent loop: there is no
-                // deterministic "run the skill" step to take here, and nothing
-                // on this path injects skill text into the prompt. The skill's
+                // deterministic "run the skill" step to take here. A SKILL's
                 // *description* is already in front of the model via the
                 // `<available_skills>` block
                 // (`thinker::layers::skill_instructions`); its *body* is
                 // reachable only through the always-resident `skill_read`
-                // tool, which the model calls itself. What this arm does
-                // contribute to the run is the `allowed_tools` scope carried
-                // on the mode JSON, which `execute.rs` lifts into
-                // `slash_skill_allowed_tools` for the loop to intersect.
+                // tool, which the model calls itself. A plugin COMMAND is
+                // admitted by `execute.rs` on this `Fallthrough`
+                // (`slash_command_body::admit`, after the owner gate above);
+                // its body is rendered by the run loop, after the turn-start
+                // hooks, into its transient blocks. The mode JSON's
+                // `allowed_tools` was already lifted by `execute.rs`
+                // (`slash_skill_pregrant::split`): a command's into the
+                // restriction the loop intersects, a skill's into this
+                // turn's pre-grant.
                 Err(ExecutionError::Fallthrough {
                     reason: format!("skill '{skill_name}'"),
                 })
@@ -521,7 +567,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         agent: &AgentInstance,
     ) -> Result<crate::session::events::RunEnvelopeSnapshot, String> {
-        use crate::config::types::policies::{effective_permission, ToolFacts};
+        use crate::config::types::policies::effective_permission;
         use crate::extension::PermissionAction;
 
         // `plan_gate` and `side_question` are both deliberately dropped: the
@@ -559,13 +605,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
-        // The same constructor `ScopedToolService` uses. No registry
-        // declaration is at hand here (the fast path dispatches through the
-        // executor's `ToolRegistry`), so `for_tool` answers from the builtin
-        // lists — which cover every tool this path can reach: MCP and skill
-        // modes fall through above.
-        let facts = ToolFacts::for_tool(name, None);
-        let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
+        // The same facts `ScopedToolService` builds: the fast path can only
+        // reach builtin and plugin tools (MCP and skill modes fall through
+        // above), so the name-keyed facts are the tier's real input, not a
+        // fail-closed stand-in that would make every command fall through.
+        let facts = super::turn_permissions::builtin_tool_facts(name);
+        let permission = effective_permission(
+            tool_permissions.as_ref().map(|explicit| &explicit.policy),
+            Some(exec_tier),
+            facts,
+        );
 
         if permission != PermissionAction::Allow {
             return Err(format!(
@@ -619,7 +668,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // `allowed_tools` stays `None` and that is the truth: the `skill`
             // arm of the dispatcher above always falls through to the full
             // loop, and a `direct_tool` mode JSON carries no `allowed_tools`,
-            // so no fast-path run ever executes under a skill scope. `model`
+            // so no fast-path run ever executes under a command's tool
+            // restriction. `model`
             // / `model_provider` stay `None` too: no LLM call on this path,
             // so the run served on no model — the reading `plan_resume`'s
             // "recorded no model" sentence names.

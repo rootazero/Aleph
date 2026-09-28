@@ -31,6 +31,12 @@ pub struct ParsedCommand {
     pub arguments: Option<String>,
     /// Command-specific context
     pub context: CommandContext,
+    /// The plugin that owns the resolved entry, as
+    /// `extension::visibility::catalog_owner` derives it (`ToolSource::Plugin`,
+    /// a plugin-registered `ToolSource::Skill`, or a plugin-declared MCP
+    /// server), for the visibility gate at the mode consumer. `None` = not
+    /// plugin-owned.
+    pub owning_plugin: Option<String>,
 }
 
 /// Command-specific context based on source type.
@@ -61,10 +67,12 @@ pub enum CommandContext {
         skill_id: String,
         /// Skill name for display
         display_name: String,
-        /// The skill's declared tool scope, validated at registration.
-        /// `None` = the skill declared nothing (allow-all, the behaviour every
-        /// skill shipped with); `Some(vec![])` = explicit deny-all. Do not
-        /// flatten: an empty allow-set means allow-all downstream.
+        /// The row's declared `allowed-tools:`, validated at registration. A
+        /// plugin command's is its tool RESTRICTION: `None` = declared nothing
+        /// (allow-all); `Some(vec![])` = explicit deny-all. Do not flatten: an
+        /// empty allow-set means allow-all downstream. A skill's pre-grants
+        /// rather than restricts, and is read from the skill file
+        /// (`gateway::execution_engine::slash_skill_pregrant`).
         allowed_tools: Option<Vec<String>>,
     },
     /// Custom command context
@@ -105,6 +113,10 @@ impl CommandParser {
         // the tool, so those two fields are cloned once; every other field
         // moves into the `CommandContext` without cloning.
         let source_type = ToolSourceType::from(&resolved.tool.source);
+        // The list faces filter on the same derivation, so what `/help`
+        // offers and what the fast path admits cannot disagree.
+        let owning_plugin =
+            crate::extension::visibility::catalog_owner(&resolved.tool).map(str::to_owned);
         let command_name = resolved.tool.name.clone();
         let tool_id = resolved.tool.id.clone();
         let context = tool_to_command_context(resolved.tool);
@@ -115,6 +127,7 @@ impl CommandParser {
             tool_id,
             arguments: resolved.arguments,
             context,
+            owning_plugin,
         })
     }
 
@@ -141,7 +154,7 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
         // `routing_system_prompt` unset. The skill's description reaches the
         // model through the `<available_skills>` block and its body only
         // through `skill_read`; carrying a third copy here had no reader.
-        ToolSource::Skill { id } => CommandContext::Skill {
+        ToolSource::Skill { id, .. } => CommandContext::Skill {
             skill_id: id,
             display_name: tool.display_name,
             allowed_tools: tool.routing_capabilities,
@@ -244,5 +257,98 @@ mod tests {
             }
             other => panic!("expected Builtin (direct-tool) context, got {other:?}"),
         }
+    }
+
+    /// Face ④ of `extension::visibility`: the catalog row is the one object
+    /// every slash surface shares, so the owner recorded on it (`Plugin`, a
+    /// plugin-registered `Skill`, or a plugin-declared MCP server) must
+    /// survive resolution onto the
+    /// `ParsedCommand` the mode serializer reads. A skill nobody owns says so
+    /// with `None`, never with an empty string.
+    #[tokio::test]
+    async fn parse_async_records_the_owning_plugin_for_plugin_owned_entries() {
+        use crate::tool_metadata::{ToolSource, UnifiedTool};
+        let catalog = Arc::new(ToolCatalog::new());
+        for (id, name, source) in [
+            (
+                "skill:proj:cmd",
+                "proj:cmd",
+                ToolSource::Skill {
+                    id: "proj:cmd".into(),
+                    plugin_id: Some("proj".into()),
+                },
+            ),
+            (
+                "plugin:diag:ping",
+                "ping",
+                ToolSource::Plugin {
+                    plugin_id: "diag".into(),
+                },
+            ),
+            (
+                "skill:plain",
+                "plain",
+                ToolSource::Skill {
+                    id: "plain".into(),
+                    plugin_id: None,
+                },
+            ),
+            (
+                "mcp:plugin:proj/srv:srv__t",
+                "srv__t",
+                ToolSource::Mcp {
+                    server: "plugin:proj/srv".into(),
+                },
+            ),
+            (
+                "mcp:github:gh__t",
+                "gh__t",
+                ToolSource::Mcp {
+                    server: "github".into(),
+                },
+            ),
+        ] {
+            catalog
+                .register_with_conflict_resolution(UnifiedTool::new(id, name, "d", source))
+                .await;
+        }
+        let parser = CommandParser::new(Arc::clone(&catalog));
+        assert_eq!(
+            parser
+                .parse_async("/proj:cmd x")
+                .await
+                .unwrap()
+                .owning_plugin
+                .as_deref(),
+            Some("proj")
+        );
+        assert_eq!(
+            parser
+                .parse_async("/ping")
+                .await
+                .unwrap()
+                .owning_plugin
+                .as_deref(),
+            Some("diag")
+        );
+        assert_eq!(
+            parser.parse_async("/plain").await.unwrap().owning_plugin,
+            None
+        );
+        // A plugin-declared MCP server's tool carries its plugin onto the
+        // mode JSON, so the fast path's `slash_owner_admits` judges it.
+        assert_eq!(
+            parser
+                .parse_async("/srv__t")
+                .await
+                .unwrap()
+                .owning_plugin
+                .as_deref(),
+            Some("proj")
+        );
+        assert_eq!(
+            parser.parse_async("/gh__t").await.unwrap().owning_plugin,
+            None
+        );
     }
 }

@@ -12,6 +12,8 @@ use super::super::error::ToolError;
 use super::super::{notify_tool_result, notify_tool_start};
 use super::list_skill_files;
 use crate::error::Result;
+use crate::extension::hooks::ShellHookConsent;
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 /// Arguments for `read_skill` tool
@@ -90,6 +92,10 @@ pub struct ReadSkillTool {
 
     /// Maximum file size to read (5MB default)
     max_file_size: u64,
+
+    /// The consent registry a skill's inline commands answer to; `None`: the
+    /// process-wide one (`ShellHookConsent::shared`), resolved at use.
+    consent: Option<Arc<ShellHookConsent>>,
 }
 
 impl ReadSkillTool {
@@ -99,6 +105,7 @@ impl ReadSkillTool {
         Self {
             skills_dirs: vec![skills_dir],
             max_file_size: 5 * 1024 * 1024, // 5MB
+            consent: None,
         }
     }
 
@@ -108,6 +115,7 @@ impl ReadSkillTool {
         Self {
             skills_dirs,
             max_file_size: 5 * 1024 * 1024,
+            consent: None,
         }
     }
 
@@ -124,11 +132,13 @@ impl ReadSkillTool {
             Self {
                 skills_dirs: vec![default_dir],
                 max_file_size: 5 * 1024 * 1024,
+                consent: None,
             }
         } else {
             Self {
                 skills_dirs,
                 max_file_size: 5 * 1024 * 1024,
+                consent: None,
             }
         }
     }
@@ -138,6 +148,25 @@ impl ReadSkillTool {
     pub const fn with_max_size(mut self, max_size: u64) -> Self {
         self.max_file_size = max_size;
         self
+    }
+
+    /// Check a skill's inline commands against `consent` instead of the
+    /// process-wide registry (a test's own file).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+        self.consent = Some(consent);
+        self
+    }
+
+    /// Where `skill_read` would load `skill_id` from, in a run whose project
+    /// is `project_dir` (and whose agent id task-local is in scope): every
+    /// candidate directory, the one it reads first. Named so the `/<skill>`
+    /// pre-grant (`gateway::execution_engine::slash_skill_pregrant`) judges
+    /// the body the model will actually follow, by this resolution rather
+    /// than a second one.
+    pub(crate) fn load_candidates(project_dir: Option<&Path>, skill_id: &str) -> Vec<PathBuf> {
+        Self::with_auto_discover(project_dir).find_skill_dirs(skill_id)
     }
 
     /// Collect every *distinct* directory that contains skill `skill_id`
@@ -367,17 +396,24 @@ impl ReadSkillTool {
         let raw_content = fs::read_to_string(&file_path)
             .map_err(|e| ToolError::Execution(format!("Failed to read file: {e}")))?;
 
-        // Preprocess Markdown instruction files: expand `${ALEPH_SKILL_DIR}` /
-        // `${ALEPH_SESSION_ID}` template variables and, when the skill opts in
-        // via `allow-inline-shell: true`, splice in bounded inline-shell output.
-        // The expanded body is re-scanned by the content guard post-splice, so
-        // a snippet whose stdout trips the guard fails the read rather than
-        // reaching the model unexamined. Non-Markdown resources (scripts, data)
-        // are returned verbatim so their bytes are never altered. Content with
-        // no template token and no opt-in is returned unchanged — existing
+        // Preprocess Markdown instruction files: expand `${ALEPH_SKILL_DIR}`
+        // in the prose and, when the skill opts in via `allow-inline-shell:
+        // true`, splice in the output of its inline commands — each one only
+        // on an operator's call whose tool gate would not deny `bash`, and
+        // only once approved (`aleph-server hooks test`), else a placeholder
+        // naming why (`skill::preprocess` has the rules). The expanded body
+        // is re-scanned by the content guard post-splice, so a snippet whose
+        // stdout trips the guard fails the read rather than reaching the
+        // model unexamined. Non-Markdown resources (scripts, data) are
+        // returned verbatim so their bytes are never altered. Content with no
+        // template token and no opt-in is returned unchanged — existing
         // skills render identically.
         let content = if file_name.to_ascii_lowercase().ends_with(".md") {
-            let ctx = crate::skill::SkillPreprocessContext::new(skill_dir.clone());
+            let consent = self
+                .consent
+                .clone()
+                .unwrap_or_else(ShellHookConsent::shared);
+            let ctx = crate::skill::SkillPreprocessContext::for_read(skill_dir.clone(), consent);
             crate::skill::preprocess_skill_content(&raw_content, &ctx)
                 .await
                 .map_err(|e| ToolError::Execution(format!("skill preprocessing refused: {e}")))?
@@ -457,6 +493,7 @@ impl Clone for ReadSkillTool {
         Self {
             skills_dirs: self.skills_dirs.clone(),
             max_file_size: self.max_file_size,
+            consent: self.consent.clone(),
         }
     }
 }

@@ -25,7 +25,9 @@
 //! - `hooks.list` → `{ events: { EventName: [Group] }, path, exists }`
 //! - `hooks.registry` → `{ hooks: [HookInventoryEntry], total, unreachable }`
 //! - `hooks.add` (params: `{ event, command|prompt|agent|http, matcher?, timeout_secs? }`)
-//!   → appends one entry; returns the same shape as `hooks.list`
+//!   → appends one entry; returns the same shape as `hooks.list`, plus
+//!   `matcher_warning` when the matcher never fires or its event ignores it
+//!   (`hooks::matcher_notice`, the text `hooks_manage add` gives too)
 //! - `hooks.remove` (params: `{ event, command? | index? }`)
 //!   → filters out matching entries; returns the new view
 //! - `hooks.reload` → forces a full extension-manager reload from disk;
@@ -232,26 +234,40 @@ pub(crate) fn append_user_hook(
     Ok(())
 }
 
-/// Drop entries from `event`. `needle` filters by substring across the
-/// group's action fields; `None` removes every entry for the event. Returns
-/// how many groups were removed.
+/// Drop entries from `event`, under EVERY key of the file that names the
+/// same event: keys are written as given (`PreToolUse` and
+/// `before_tool_call` can both exist), so an exact-key lookup would miss
+/// the groups filed under the other spelling. `needle` filters by
+/// substring across the group's action fields; `None` removes every entry
+/// for the event. Returns how many groups were removed.
 pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    let target = crate::extension::hooks::parse_event(event)
+        .ok_or_else(|| format!("unknown event: {event}"))?;
     let (path, _exists, mut events) = read_hooks_file()?;
-    let arr = events
-        .get_mut(event)
-        .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| format!("no entries for event {event}"))?;
-
-    let before = arr.len();
-    match needle {
-        Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
-        None => arr.clear(),
+    let keys: Vec<String> = events
+        .keys()
+        .filter(|key| crate::extension::hooks::parse_event(key) == Some(target))
+        .cloned()
+        .collect();
+    if keys.is_empty() {
+        return Err(format!("no entries for event {event}"));
     }
-    let removed = before - arr.len();
 
-    // Don't leave empty arrays cluttering the file.
-    if arr.is_empty() {
-        events.remove(event);
+    let mut removed = 0;
+    for key in keys {
+        let Some(arr) = events.get_mut(&key).and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        let before = arr.len();
+        match needle {
+            Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
+            None => arr.clear(),
+        }
+        removed += before - arr.len();
+        // Don't leave empty arrays cluttering the file.
+        if arr.is_empty() {
+            events.remove(&key);
+        }
     }
     write_hooks_file(&path, &events)?;
     trigger_reload();
@@ -299,10 +315,19 @@ pub async fn handle_hooks_add(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(e) = append_user_hook(&params.event, action, params.matcher.as_deref()) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
     }
+    // A matcher that never fires, or one its event ignores, is said — the
+    // same notice the tool twin (`hooks_manage add`) and every loader give.
+    let matcher_warning = crate::extension::hooks::parse_event(&params.event).and_then(|event| {
+        crate::extension::hooks::matcher_notice(event, params.matcher.as_deref())
+    });
 
     match read_hooks_file() {
         Ok((path, exists, events)) => {
-            JsonRpcResponse::success(request.id, list_response(path, exists, events))
+            let mut body = list_response(path, exists, events);
+            if let Some(warning) = matcher_warning {
+                body["matcher_warning"] = Value::String(warning);
+            }
+            JsonRpcResponse::success(request.id, body)
         }
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     }
@@ -426,8 +451,8 @@ pub async fn handle_hooks_reload(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
     match mgr.reload().await {
-        Ok(summary) => {
-            let count = summary.plugins_loaded;
+        Ok(report) => {
+            let count = report.mounted.len();
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -444,20 +469,12 @@ pub async fn handle_hooks_reload(request: JsonRpcRequest) -> JsonRpcResponse {
 }
 
 pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
-    // Round-trip each canonical name through serde so the wire surface
-    // exactly matches what user_settings.rs accepts. The event list itself
+    // Each event's canonical name (`HookEvent::canonical_name`, serde's
+    // rename), which the loader's parser accepts. The event list itself
     // comes from `HookEvent::ALL` — previously this handler kept its own
     // hand-maintained copy, which is how a new variant ends up missing from
     // one surface but not another.
-    let events: Vec<String> = HookEvent::ALL
-        .iter()
-        .map(|e| {
-            serde_json::to_string(e)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string()
-        })
-        .collect();
+    let events: Vec<String> = HookEvent::ALL.iter().map(|e| e.canonical_name()).collect();
     JsonRpcResponse::success(request.id, json!({ "events": events }))
 }
 
@@ -492,17 +509,12 @@ pub async fn handle_hooks_registry(request: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
-/// Cheap check: try to parse the event name via the same serde path that
-/// `user_settings` uses. Accepts both `snake_case` (`before_tool_call`) and
-/// `PascalCase` aliases (`PreToolUse`).
+/// Whether `name` is an event the loader accepts — asked of the loader's own
+/// parser (`hooks::parse_event`), so this face and the file cannot disagree.
+/// Accepts both `snake_case` (`before_tool_call`) and `PascalCase` aliases
+/// (`PreToolUse`).
 fn is_known_event(name: &str) -> bool {
-    let attempts = [
-        format!("\"{name}\""),
-        format!("\"{}\"", name.to_lowercase().replace('-', "_")),
-    ];
-    attempts
-        .iter()
-        .any(|s| serde_json::from_str::<HookEvent>(s).is_ok())
+    crate::extension::hooks::parse_event(name).is_some()
 }
 
 /// Best-effort: schedule a reload on the global manager if it exists.
@@ -594,6 +606,29 @@ mod tests {
             written.display(),
             read.display()
         );
+    }
+
+    /// P4.16 review M-5: the RPC face of `hooks_manage add` says what the
+    /// tool face says about a matcher — from the same `matcher_notice` —
+    /// and says nothing about one that simply works.
+    #[tokio::test]
+    async fn hooks_add_warns_about_a_matcher_the_way_its_tool_twin_does() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        async fn add(params: Value) -> Value {
+            handle_hooks_add(JsonRpcRequest::with_id("hooks.add", Some(params), json!(1)))
+                .await
+                .result
+                .expect("hooks.add succeeds")
+        }
+        let ignored =
+            add(json!({"event": "UserPromptSubmit", "command": "true", "matcher": "x"})).await;
+        let warning = ignored["matcher_warning"].as_str().unwrap_or_default();
+        assert!(warning.contains("ignored"), "{ignored}");
+        let broken = add(json!({"event": "PreToolUse", "command": "true", "matcher": "(("})).await;
+        let warning = broken["matcher_warning"].as_str().unwrap_or_default();
+        assert!(warning.contains("not a valid regex"), "{broken}");
+        let fine = add(json!({"event": "PreToolUse", "command": "true", "matcher": "Bash"})).await;
+        assert!(fine.get("matcher_warning").is_none(), "{fine}");
     }
 
     #[test]

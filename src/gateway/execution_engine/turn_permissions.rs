@@ -30,7 +30,7 @@ pub(super) struct TurnPermissions {
     pub(super) tier: ExecTier,
     /// The merged EXPLICIT policy, or `None` when everything is all-default
     /// (so the `ScopedToolService` hot path stays a no-op).
-    pub(super) explicit: Option<ToolPermissionsConfig>,
+    pub(super) explicit: Option<TurnToolPolicy>,
     /// The plan → build handoff cell — `Some` when `tier` is
     /// [`ExecTier::Plan`] **and this is not a `/btw` side question**. Rides the
     /// turn context into both tool services the run builds, so one human
@@ -103,6 +103,120 @@ impl TurnPermissions {
             side_question: self.side_question,
         }
     }
+
+    /// What the run's tool gate answers for the builtin `name` on this turn:
+    /// [`effective_permission`](crate::config::types::policies::effective_permission)
+    /// over this turn's merged policy (global, agent, channel) and its tier —
+    /// the derivation `ScopedToolService::permission_for` makes for every
+    /// call. A tier that refuses (`Plan`, and so every `/btw` side question)
+    /// denies whatever the policy says.
+    pub(super) fn builtin_permission(&self, name: &str) -> crate::extension::PermissionAction {
+        crate::config::types::policies::effective_permission(
+            self.explicit.as_ref().map(|explicit| &explicit.policy),
+            Some(self.tier),
+            builtin_tool_facts(name),
+        )
+    }
+}
+
+/// A turn's merged explicit policy together with the provenance of its
+/// entries: which exact `allow` entries a `/<skill>`'s `allowed-tools:`
+/// pre-granted ([`apply_pregrant`]) rather than a person wrote.
+///
+/// One value, not two fields, because the two halves must never travel
+/// apart: the entry lifts the tier's name-level `Ask` wherever the policy is
+/// read, and the provenance is what keeps the tool gate from reading that same
+/// entry as the operator's decision about the tool
+/// (`ScopedToolService::explicitly_named`), which would stand down its
+/// argument-level cards. A policy handed on without its provenance would do
+/// exactly that.
+#[derive(Debug, Clone)]
+pub(crate) struct TurnToolPolicy {
+    /// Global, agent and channel layers merged, most restrictive wins, with
+    /// the pre-granted `allow` entries folded in.
+    pub(crate) policy: ToolPermissionsConfig,
+    /// The names [`apply_pregrant`] folded into [`Self::policy`].
+    pub(crate) pregranted: std::collections::BTreeSet<String>,
+}
+
+impl TurnToolPolicy {
+    /// The policy a subagent this turn spawns runs under: this one without the
+    /// pre-granted entries. A person typed `/<skill>` for THIS turn; a child's
+    /// task is model-written, so it gets the tier's cards back for those
+    /// tools. The entries were folded only where nothing bound the name
+    /// ([`apply_pregrant`]), so removing them restores the policy the layers
+    /// wrote. `None` when that policy is all-default — the same "no policy"
+    /// the resolution hands over.
+    pub(crate) fn for_children(&self) -> Option<Self> {
+        let mut policy = self.policy.clone();
+        for name in &self.pregranted {
+            policy.overrides.remove(name);
+        }
+        let all_default = policy.default == crate::extension::PermissionAction::Allow
+            && policy.overrides.is_empty();
+        (!all_default).then(|| Self {
+            policy,
+            pregranted: std::collections::BTreeSet::new(),
+        })
+    }
+}
+
+/// The facts the tier reads for a builtin or plugin tool known by name — the
+/// ones `ScopedToolService::tool_facts` answers for those tools, and what the
+/// name-keyed callers of `effective_permission` (the slash-command fast path,
+/// [`TurnPermissions::builtin_permission`]) share. `requires_approval` is the
+/// adapter's own declaration list, not a guess: builtin and plugin tools are
+/// exactly the tools that list covers.
+pub(super) fn builtin_tool_facts(name: &str) -> crate::config::types::policies::ToolFacts<'_> {
+    crate::config::types::policies::ToolFacts {
+        name,
+        idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+        requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
+    }
+}
+
+/// Fold a `/<skill>` turn's pre-granted names into the merged explicit
+/// policy as exact-name `Allow` entries, and return the names folded.
+///
+/// What this lifts is the tier's NAME-level `Ask` for those names and nothing
+/// else — Claude Code's "your permission settings still govern tools that
+/// are not listed", and govern the listed ones wherever they say something:
+///
+/// - an explicit entry (exact or glob) that already binds the name wins, so
+///   an operator's or a channel's `deny` / `ask` stands;
+/// - a policy whose `default` is not `allow` gets nothing: an exact `allow`
+///   would outrank that default, and the operator's default is not the tier;
+/// - a tool the gate-removal floor covers
+///   ([`ExecTier::has_argument_floor`]) gets nothing, not even the
+///   name-level lift: a skill author's list is not the operator's decision
+///   about the tool that retires the gates;
+/// - the `Plan` floor (`effective_permission` rung 0) and a tool's own
+///   `requires_confirmation` gate are read independently of any entry.
+///
+/// The argument-level cards stay: the returned names ride with the policy
+/// ([`TurnToolPolicy::pregranted`]) so the tool gate does not read a folded
+/// entry as the operator's decision about the tool
+/// (`ScopedToolService::explicitly_named`) — a skill's author wrote it, not a
+/// person at this install.
+pub(super) fn apply_pregrant(
+    merged: &mut ToolPermissionsConfig,
+    pregrant: &[String],
+) -> Vec<String> {
+    use crate::extension::PermissionAction;
+    if merged.default != PermissionAction::Allow {
+        return Vec::new();
+    }
+    let mut folded = Vec::new();
+    for name in pregrant {
+        if ExecTier::has_argument_floor(name) || merged.resolve_explicit(name).is_some() {
+            continue;
+        }
+        merged
+            .overrides
+            .insert(name.clone(), PermissionAction::Allow);
+        folded.push(name.clone());
+    }
+    folded
 }
 
 /// Resolve this turn's execution tier.
@@ -264,8 +378,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Explicit policy: global `[policies.tool_permissions]` merged with the
     /// agent's override and the originating channel's override (stamped into
     /// metadata by the inbound router — absent for Panel / CLI / cron turns);
-    /// most restrictive wins at both layers. `None` when everything is
-    /// all-default, so the `ScopedToolService` hot path stays a no-op.
+    /// most restrictive wins at both layers. Then a `/<skill>` turn's
+    /// pre-granted names, which lift only the tier's `Ask`
+    /// ([`apply_pregrant`]). `None` when everything is all-default, so the
+    /// `ScopedToolService` hot path stays a no-op.
     pub(super) async fn resolve_turn_permissions(
         &self,
         request: &RunRequest,
@@ -315,6 +431,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     "Malformed channel tool_permissions metadata — channel layer skipped"
                 ),
             }
+        }
+        // A `/<skill>`'s pre-grant (`slash_skill_pregrant::split`), folded into
+        // THIS merge — the one value the tool gate, the fast path and a plugin
+        // command's inline shell all read — after every layer that may
+        // restrict it.
+        let pregrant = super::slash_skill_scope::pregrant_from_metadata(&request.metadata);
+        let mut pregranted = std::collections::BTreeSet::new();
+        if !pregrant.is_empty() {
+            let folded = apply_pregrant(&mut merged, &pregrant);
+            info!(
+                run_id = %request.run_id,
+                pregrant = ?pregrant,
+                folded = ?folded,
+                "Skill allowed-tools pre-granted for this turn"
+            );
+            pregranted.extend(folded);
         }
         let is_all_default = merged.default == crate::extension::PermissionAction::Allow
             && merged.overrides.is_empty();
@@ -391,7 +523,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         );
         TurnPermissions {
             tier,
-            explicit: (!is_all_default).then_some(merged),
+            explicit: (!is_all_default).then_some(TurnToolPolicy {
+                policy: merged,
+                pregranted,
+            }),
             plan_gate,
             side_question,
         }
@@ -820,6 +955,88 @@ mod tests {
                 assert_eq!(resolve_exec_tier(global, None, None, role), global);
             }
         }
+    }
+
+    // -------------------------------------------------------------------
+    // A skill's `allowed-tools` pre-grant: the tier's Ask, and nothing else.
+    // -------------------------------------------------------------------
+
+    fn mutating(name: &str) -> crate::config::types::policies::ToolFacts<'_> {
+        crate::config::types::policies::ToolFacts {
+            name,
+            idempotent: false,
+            requires_approval: false,
+        }
+    }
+
+    #[test]
+    fn a_pregrant_lifts_the_tier_ask_but_never_an_explicit_deny() {
+        use crate::config::types::policies::{effective_permission, ToolPermissionsConfig};
+        use crate::extension::PermissionAction;
+        let mut merged = ToolPermissionsConfig::default();
+        merged
+            .overrides
+            .insert("bash".into(), PermissionAction::Deny);
+        merged
+            .overrides
+            .insert("net_*".into(), PermissionAction::Ask);
+        let folded = super::apply_pregrant(
+            &mut merged,
+            &[
+                "bash".to_string(),
+                "net_fetch".to_string(),
+                "file_write".to_string(),
+            ],
+        );
+        assert_eq!(folded, vec!["file_write".to_string()]);
+        let at = |tier, name| effective_permission(Some(&merged), Some(tier), mutating(name));
+        // Explicit deny and a glob survive the pre-grant.
+        assert_eq!(at(ExecTier::Ask, "bash"), PermissionAction::Deny);
+        assert_eq!(at(ExecTier::Ask, "net_fetch"), PermissionAction::Ask);
+        // The tier's Ask is lifted for the pre-granted mutating tool …
+        assert_eq!(at(ExecTier::Ask, "file_write"), PermissionAction::Allow);
+        // … and not for an unlisted one.
+        assert_eq!(at(ExecTier::Ask, "file_edit"), PermissionAction::Ask);
+        // Plan's refusal is a floor, not an Ask: still denied.
+        assert_eq!(at(ExecTier::Plan, "file_write"), PermissionAction::Deny);
+    }
+
+    /// An exact `allow` outranks the policy's `default`, and a `default` the
+    /// operator (or a channel) set to `deny` / `ask` is not the tier's Ask —
+    /// so a policy that does not default to `allow` takes no pre-grant.
+    #[test]
+    fn a_pregrant_never_outranks_a_default_that_is_not_allow() {
+        use crate::config::types::policies::{effective_permission, ToolPermissionsConfig};
+        use crate::extension::PermissionAction;
+        for default in [PermissionAction::Deny, PermissionAction::Ask] {
+            let mut merged = ToolPermissionsConfig {
+                default,
+                ..Default::default()
+            };
+            let folded = super::apply_pregrant(&mut merged, &["bash".to_string()]);
+            assert!(folded.is_empty(), "default {default:?}: folded {folded:?}");
+            assert_eq!(
+                effective_permission(Some(&merged), Some(ExecTier::Full), mutating("bash")),
+                default,
+                "default {default:?} must still govern a pre-granted tool"
+            );
+        }
+    }
+
+    /// The gate-removal floor stands down for an exact entry — "a decision a
+    /// person wrote". A skill author's list is not one, so a tool that floor
+    /// covers is never folded.
+    #[test]
+    fn a_pregrant_never_names_a_tool_the_gate_removal_floor_covers() {
+        use crate::config::types::policies::ToolPermissionsConfig;
+        assert!(ExecTier::has_argument_floor("self_config"));
+        let mut merged = ToolPermissionsConfig::default();
+        let folded = super::apply_pregrant(
+            &mut merged,
+            &["self_config".to_string(), "bash".to_string()],
+        );
+        assert_eq!(folded, vec!["bash".to_string()]);
+        assert!(!merged.overrides.contains_key("self_config"));
     }
 
     // -------------------------------------------------------------------

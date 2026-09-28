@@ -206,7 +206,7 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
 
     // Parse scope (default: user)
     let scope_str = params.scope.as_deref().unwrap_or("user");
-    let scope = match crate::extension::scope::parse_scope(scope_str) {
+    let scope = match crate::extension::visibility::parse_scope(scope_str) {
         Ok(s) => s,
         Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };
@@ -259,7 +259,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
         };
 
     let scope_str = params.scope.as_deref().unwrap_or("user");
-    let scope = match crate::extension::scope::parse_scope(scope_str) {
+    let scope = match crate::extension::visibility::parse_scope(scope_str) {
         Ok(s) => s,
         Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };

@@ -115,7 +115,9 @@ pub enum AlephError {
         suggestion: Option<String>,
     },
 
-    /// Permission denied error (for Accessibility and Input Monitoring)
+    /// Permission denied: a missing OS grant (Accessibility / Input
+    /// Monitoring — [`Self::permission_denied`] carries that suggestion), an
+    /// upstream 403, or a deliberate policy refusal.
     #[error("Permission denied: {message}")]
     PermissionDenied {
         message: String,

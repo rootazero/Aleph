@@ -125,18 +125,30 @@ impl SkillSystem {
         }
     }
 
-    /// Initialize the skill system by scanning the given directories.
+    /// Register the BASE skill directories and rescan.
     ///
-    /// Each directory is scanned for SKILL.md files. The source is guessed
-    /// from the path. After scanning, a snapshot is built.
+    /// `dirs` is the base set only — `~/.aleph/skills`, a project's
+    /// `.aleph/skills` / `.claude/skills`, whatever an RPC registers. Plugin
+    /// skill dirs are NOT passed here: every scan reads them from the list
+    /// `extension::projection` publishes (`utils::paths::plugin_skill_dirs`),
+    /// see [`Self::scan_roots`]. Each directory is scanned for SKILL.md files,
+    /// the source is guessed from the path, and a snapshot is built.
     ///
     /// **Merge semantics, not replace.** Under startup contention
     /// (`ExtensionManager` and a gateway RPC race calling `init` with
     /// disjoint dir sets) the previous wholesale replacement let the second
     /// writer silently drop the first's skill directories — the next rebuild
     /// would then miss those skills entirely. Widening the set instead of
-    /// replacing it preserves every caller's contributions.
-    /// `ensure_dir_registered` is the idempotent single-dir variant.
+    /// replacing it preserves every caller's contributions. That is also why
+    /// plugin dirs must not enter this set: nothing ever removes a dir from
+    /// it, so a disabled plugin's `<root>/skills` would be rescanned for the
+    /// life of the process (D-5). `ensure_dir_registered` is the idempotent
+    /// single-dir variant.
+    ///
+    /// The merge dedups only against the dirs already held — `existing` is
+    /// snapshotted before the loop — so a caller that passes the same dir
+    /// twice in ONE `dirs` batch gets it twice. Callers that union several
+    /// sources dedup their own batch.
     pub async fn init(&self, dirs: Vec<PathBuf>) {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
@@ -169,12 +181,36 @@ impl SkillSystem {
     ///
     /// Used by the authoring path so a freshly created `~/.aleph/skills/`
     /// is picked up by subsequent `rebuild()` calls even when it did not
-    /// exist at `init()` time.
+    /// exist at `init()` time. Base dirs only, like `init`.
     pub async fn ensure_dir_registered(&self, dir: PathBuf) {
         let mut dirs = self.inner.skill_dirs.write().await;
         if !dirs.iter().any(|d| d == &dir) {
             dirs.push(dir);
         }
+    }
+
+    /// The roots one scan or sidecar walk covers: the base dirs `init` /
+    /// `ensure_dir_registered` accumulated, then the plugin skill dirs
+    /// CURRENTLY published by `extension::projection`. Base first, deduped,
+    /// so the priority and first-occurrence rules are unchanged.
+    ///
+    /// The plugin half is read at use time and never stored:
+    /// `publish_plugin_skill_dirs` is replace-semantics (refreshed at every
+    /// lifecycle transition), so a plugin that stopped being active is simply
+    /// absent from the next read. Storing it in `skill_dirs` would subject it
+    /// to the base set's merge semantics, under which nothing is ever removed
+    /// — a disabled plugin's skills stayed indexed until restart (D-5).
+    /// Every reader of `skill_dirs` goes through here, so the usage sidecars
+    /// (`record_use` / `set_pinned` / `full_status`) see an active plugin's
+    /// skills exactly as the scan does.
+    async fn scan_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.inner.skill_dirs.read().await.clone();
+        for published in crate::utils::paths::plugin_skill_dirs() {
+            if !roots.contains(&published.dir) {
+                roots.push(published.dir);
+            }
+        }
+        roots
     }
 
     /// Get a clone of the current snapshot.
@@ -261,9 +297,9 @@ impl SkillSystem {
     /// Test-only helper: seed pre-built manifests straight into the registry.
     ///
     /// Production plugin/markdown skills are NOT registered this way — they flow
-    /// through the dir-based path (`extension/mod.rs::load_all` ->
-    /// `skill_system.init` skill_dirs + `publish_plugin_skill_dirs` ->
-    /// `get_all_skills_dirs`), which `rescan_dirs` rebuilds from scratch (and
+    /// through the dir-based path (`extension::projection` ->
+    /// `skill_system.init` base dirs + `publish_plugin_skill_dirs`, both read
+    /// by `scan_roots`), which `rescan_dirs` rebuilds from scratch (and
     /// would therefore wipe any manifest inserted here). This helper exists only
     /// to seed unit tests that exercise `full_status` / `remove_skill`
     /// without touching the filesystem; it is compiled out of production builds.
@@ -309,7 +345,7 @@ impl SkillSystem {
     /// rare same-id collision (the registry would normally have already
     /// deduped at load time).
     async fn collect_usage_snapshot(&self) -> std::collections::HashMap<String, UsageStats> {
-        let dirs = self.inner.skill_dirs.read().await.clone();
+        let dirs = self.scan_roots().await;
         let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
         for dir in &dirs {
             let store = UsageStore::new(dir);
@@ -333,7 +369,7 @@ impl SkillSystem {
     /// registration time — so no defensive traversal check is needed here.
     async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        let dirs = self.inner.skill_dirs.read().await.clone();
+        let dirs = self.scan_roots().await;
         let owned_id = id_str.to_string();
         match tokio::task::spawn_blocking(move || {
             for dir in &dirs {
@@ -368,7 +404,7 @@ impl SkillSystem {
     /// defensive traversal check is needed.
     async fn skill_dir_for_id(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        let dirs = self.inner.skill_dirs.read().await.clone();
+        let dirs = self.scan_roots().await;
         let owned_id = id_str.to_string();
         match tokio::task::spawn_blocking(move || {
             for root in &dirs {
@@ -572,7 +608,7 @@ impl SkillSystem {
                     }
                 }
             }
-            let dirs = self.inner.skill_dirs.read().await.clone();
+            let dirs = self.scan_roots().await;
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
                 // Paired with the .usage.json cleanup above: `.cooccur.json`
@@ -590,14 +626,15 @@ impl SkillSystem {
 
     // --- Private helpers ---
 
-    /// Scan all registered directories, atomically replace the registry, and rebuild the snapshot.
+    /// Scan every root (`scan_roots`: the registered base dirs, then the
+    /// currently published plugin dirs), atomically replace the registry, and
+    /// rebuild the snapshot.
     ///
     /// `pub(crate)` so `super::shared::ensure_shared_skill_system_initialized`
-    /// can widen the dir set without going through `init` (which replaces the
-    /// whole dir set and would clobber the dirs the `ExtensionManager` already
-    /// pushed in).
+    /// can widen the base set with `ensure_dir_registered` and rescan without
+    /// going through `init`.
     pub(crate) async fn rescan_dirs(&self) {
-        let dirs = self.inner.skill_dirs.read().await.clone();
+        let dirs = self.scan_roots().await;
 
         // Build a fresh registry so we can swap atomically — never expose an empty registry.
         let mut new_registry = SkillRegistry::new();
@@ -764,14 +801,62 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Extract the owning plugin id from a plugin-bundled skill path.
+/// The owner of a skill under a PUBLISHED plugin skill dir — the primary
+/// derivation of "which plugin owns this skill".
 ///
-/// Plugin skills live at `<…>/plugins/<plugin_id>/skills/<skill>/SKILL.md`, and
+/// `extension::projection` publishes every active plugin's `<root>/skills`
+/// together with the plugin's REGISTRY id (`PublishedPluginSkillDir`), copied
+/// from the same `PluginRecord` as its `ScopeKey`. Among the published dirs
+/// that are an ancestor of (or equal to) `path`, the longest wins. Both
+/// spellings are compared — the literal `starts_with` first, then both sides
+/// canonicalised. `SkillSystem::scan_roots` and `get_all_skills_dirs` both
+/// hand out the published dirs verbatim (the published list is their one
+/// plugin source), so the literal comparison is the common case. The
+/// canonical branch fires for a caller that arrives with a path of its own
+/// rather than one derived from the published list: today that is
+/// [`SkillSystem::reload_file`], which classifies the exact `SKILL.md` path
+/// its caller wrote (`builtin_tools::skill_manage` — an authoring root
+/// resolved through `ALEPH_HOME` / the project dir, so `/var` vs
+/// `/private/var` or a literal `$HOME` vs a canonicalised root are both
+/// reachable). `None` = no published dir covers `path`.
+fn plugin_id_from_published_dirs(path: &Path) -> Option<String> {
+    let published = crate::utils::paths::plugin_skill_dirs();
+    if published.is_empty() {
+        return None;
+    }
+    let longest_covering = |covers: &dyn Fn(&Path) -> bool| {
+        published
+            .iter()
+            .filter(|d| covers(&d.dir))
+            .max_by_key(|d| d.dir.components().count())
+            .map(|d| d.plugin_id.clone())
+    };
+    longest_covering(&|dir| path.starts_with(dir)).or_else(|| {
+        let canonical = crate::extension::visibility::canonical_root(path);
+        longest_covering(&|dir| {
+            canonical.starts_with(crate::extension::visibility::canonical_root(dir))
+        })
+    })
+}
+
+/// FALLBACK owner for a plugin skill path that no published dir covers:
+/// the directory component immediately before `skills/`.
+///
+/// Plugin skills live at `<…>/plugins/<dir>/skills/<skill>/SKILL.md`, and
 /// bundled ones nest a marketplace layer
-/// (`<…>/plugins/cache/<market>/<plugin_id>/skills/…`). Rather than assume the
+/// (`<…>/plugins/cache/<market>/<dir>/skills/…`). Rather than assume the
 /// component right after `plugins`, take the component immediately *before* the
 /// `skills` segment — robust to both layouts. Returns `None` for non-plugin
 /// paths (no `plugins` ancestor before a `skills` segment).
+///
+/// The directory name is NOT the registry id (`My_Plugin` registers as
+/// `my-plugin`), so this only runs when [`plugin_id_from_published_dirs`]
+/// found nothing — a plugin that is not loaded, errored, or not yet
+/// republished. Its result is an id the registry may not name, which every
+/// visibility face reads as "not visible": that is the correct fail-closed
+/// answer for an unloaded plugin's skill. It must stay `Plugin(_)` rather
+/// than falling through to `Workspace` / `Global` / `Bundled`, which would be
+/// fail-open (unscoped visibility for a skill nobody vouched for).
 fn plugin_id_from_path(path: &Path) -> Option<String> {
     let comps: Vec<String> = path
         .components()
@@ -793,7 +878,10 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 
 /// Guess the `SkillSource` from a file path.
 ///
-/// - Under `<…>/plugins/<id>/skills/` (any root) → Plugin(id)
+/// - Under a published plugin skill dir (`extension::projection`) →
+///   Plugin(<registry id published with that dir>)
+/// - Under `<…>/plugins/<dir>/skills/` that no published dir covers →
+///   Plugin(<dir>) — the fail-closed fallback for an unloaded plugin
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled
 /// - Under `~/.aleph/skills/` otherwise → Global
 /// - Contains `.aleph/skills` but not under home → Workspace
@@ -801,12 +889,16 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 pub fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
-    // Plugin-bundled skills take precedence: they live under a `plugins/<id>/
+    // Plugin-bundled skills take precedence: they live under a `plugins/<dir>/
     // skills` tree (never matching the `.aleph/skills` check below) and must be
     // classed `Plugin` so they outrank Global/Bundled in the prompt index and
     // `skill_read` collision resolution. Before this branch every plugin skill
-    // fell through to `Bundled`, mis-ranking it as lowest priority.
-    if let Some(plugin_id) = plugin_id_from_path(path) {
+    // fell through to `Bundled`, mis-ranking it as lowest priority. The owner
+    // is the registry id published with the covering dir; the path parse is
+    // only the fallback for a dir nothing published (see both fns' docs).
+    if let Some(plugin_id) =
+        plugin_id_from_published_dirs(path).or_else(|| plugin_id_from_path(path))
+    {
         return SkillSource::Plugin(crate::domain::skill::PluginId::new(plugin_id));
     }
 
@@ -1093,6 +1185,18 @@ Content two."#,
             None
         );
         assert_eq!(plugin_id_from_path(Path::new("/tmp/whatever")), None);
+    }
+
+    /// The fallback for a plugin path no published dir covers keeps the
+    /// path-derived id: an id the registry may not name, which every face
+    /// reads as "not visible" — the right answer for an unloaded plugin.
+    #[test]
+    fn guess_source_falls_back_to_the_path_for_an_unpublished_plugin_dir() {
+        let p = Path::new("/somewhere/.aleph/plugins/Loose_Dir/skills/x/SKILL.md");
+        assert_eq!(
+            guess_source(p),
+            SkillSource::Plugin(crate::domain::skill::PluginId::new("Loose_Dir"))
+        );
     }
 
     #[test]

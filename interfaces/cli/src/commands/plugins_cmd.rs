@@ -85,7 +85,14 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     // Decoded through the shared contract, not by fishing keys out of a
     // `Value`. The `Type` column used to read a `type` key the server has
     // never sent, so it printed a dash on every row for as long as it existed.
-    let listing: PluginListResult = serde_json::from_value(result.clone()).unwrap_or_default();
+    //
+    // `?`, not `.unwrap_or_default()`: a decode failure is not "no plugins
+    // installed" (判据 §8) — it used to silently render an empty table, which
+    // reads exactly like a healthy, empty install. Surfacing it the same way
+    // an RPC error already propagates (`client.call(...).await?` above) means
+    // a version-mismatched server (e.g. one sending a status word this CLI's
+    // build does not recognise) is reported, not hidden.
+    let listing: PluginListResult = serde_json::from_value(result.clone())?;
     let rows: Vec<Vec<String>> = listing
         .plugins
         .iter()
@@ -397,7 +404,11 @@ pub async fn info(server_url: &str, config: &CliConfig, name: &str, json: bool) 
     // always sent as `{"plugins": [...]}` — so it resolved to `None` and
     // reported *every* plugin as "not found". Two functions in this one file
     // disagreed about the envelope; now neither of them names it.
-    let listing: PluginListResult = serde_json::from_value(result).unwrap_or_default();
+    //
+    // `?`, not `.unwrap_or_default()`: on a decode failure this used to fall
+    // through to the `None` arm below and print "Plugin '<name>' not found" —
+    // indistinguishable from the plugin genuinely not existing (判据 §8).
+    let listing: PluginListResult = serde_json::from_value(result)?;
     let plugin = listing.plugins.into_iter().find(|p| p.name == name);
 
     match plugin {
@@ -492,7 +503,7 @@ mod tests {
     }
 
     /// A non-`loaded` status must reach the operator with its reason attached —
-    /// "overridden" alone names a problem and no remedy.
+    /// "blocked" alone names a problem and no remedy.
     #[test]
     fn a_blocked_row_renders_its_reason() {
         let row = PluginRow {

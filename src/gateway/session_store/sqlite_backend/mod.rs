@@ -49,6 +49,13 @@ fn search_result_to_hit(r: crate::gateway::session_manager::SessionSearchResult)
 
 #[async_trait]
 impl SessionStore for SessionManager {
+    /// Messages live in rows, not a file — there is nothing a hook could open.
+    /// A `transcript.jsonl` left by an earlier file-backend install is not
+    /// this session's transcript, so it is not an answer.
+    fn transcript_file(&self, _key: &SessionKey) -> Option<std::path::PathBuf> {
+        None
+    }
+
     async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         self.get_or_create(key).await.map_err(map_err)
     }

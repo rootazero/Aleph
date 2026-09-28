@@ -64,7 +64,7 @@
 //! Moving the resolution here bought visibility at the cost of spending the
 //! fetch *inside* the tool call rather than after the loop — and the fetch is
 //! up to [`MAX_MEDIA_PER_RUN`] items of 60 s each. That is not merely slow: the
-//! chokepoint runs inside `ScopedToolService::execute_inner`'s
+//! chokepoint runs inside `ScopedToolService::execute_gated`'s
 //! `tokio::time::timeout(budget, …)`, so a harvest that overruns turns the
 //! whole call into a `ToolError::Timeout` — discarding every item that *did*
 //! resolve (the lanes are filled only after the loop finishes) and, for a

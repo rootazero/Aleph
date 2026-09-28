@@ -125,14 +125,21 @@ struct RawFrontmatter {
     homepage: Option<String>,
     #[serde(default)]
     emoji: Option<String>,
+    /// Aleph spells it `when-to-use` (the container's kebab-case) …
     #[serde(default)]
     when_to_use: Option<String>,
+    /// … and Claude Code `when_to_use`. Both are read; Aleph's wins when a
+    /// file has both. A second field rather than a serde `alias`: an alias
+    /// makes a file with both spellings a `duplicate field` error, which
+    /// fails the whole frontmatter and drops the skill.
+    #[serde(default, rename = "when_to_use")]
+    when_to_use_snake: Option<String>,
     #[serde(default)]
     version: Option<String>,
-    /// Frontmatter `allowed-tools:` — the tool names this skill declares it
-    /// needs. `None` (key absent) means no declaration; an empty list means
-    /// the author wants nothing. Both reach the run loop distinctly — see
-    /// `SkillManifest::allowed_tools`. Taken as raw YAML and normalised by
+    /// Frontmatter `allowed-tools:` — the tool names this skill declares, which
+    /// a `/<skill>` turn pre-grants (see `SkillManifest::allowed_tools`).
+    /// `None` (key absent) means no declaration; an empty list is kept
+    /// distinct for the registration validator. Taken as raw YAML and normalised by
     /// [`crate::skill::frontmatter::normalize_allowed_tools`] — a strict
     /// `Vec<String>` here would make serde reject the whole frontmatter for
     /// the comma-scalar form upstream skills actually ship, and a rejected
@@ -406,7 +413,7 @@ pub fn parse_skill_file(
     let content = String::from_utf8(content_bytes).map_err(|e| {
         SkillParseError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     })?;
-    parse_skill_content(&content, source)
+    parse_skill_content_from(&content, source, &path_ref.display())
 }
 
 /// Parse a SKILL.md content string.
@@ -414,8 +421,18 @@ pub fn parse_skill_content(
     content_str: &str,
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
+    parse_skill_content_from(content_str, source, &"<SKILL.md content>")
+}
+
+/// [`parse_skill_content`], naming where the content came from (`origin`) in
+/// what the frontmatter reader logs.
+fn parse_skill_content_from(
+    content_str: &str,
+    source: SkillSource,
+    origin: &dyn std::fmt::Display,
+) -> Result<SkillManifest, SkillParseError> {
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
-    let raw: RawFrontmatter = crate::yaml::from_str(&yaml_str)?;
+    let raw: RawFrontmatter = crate::skill::frontmatter::parse_frontmatter_yaml(&yaml_str, origin)?;
 
     // Build the id from the name with a strict charset transform: any
     // non-alphanumeric character collapses to a hyphen, runs collapse, and
@@ -584,7 +601,11 @@ fn apply_metadata(manifest: &mut SkillManifest, raw: &RawFrontmatter) {
     if let Some(emoji) = raw.emoji.clone() {
         manifest.set_emoji(emoji);
     }
-    if let Some(when) = raw.when_to_use.clone() {
+    if let Some(when) = raw
+        .when_to_use
+        .clone()
+        .or_else(|| raw.when_to_use_snake.clone())
+    {
         manifest.set_when_to_use(when);
     }
     if let Some(version) = raw.version.clone() {
@@ -699,6 +720,18 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
 mod tests {
     use super::*;
     use crate::domain::Entity;
+
+    /// The twin of `extension::manifest::parsers`' reader of the same
+    /// SKILL.md: Claude Code's documented `argument-hint: [a] [b]` is not
+    /// YAML, and without the shared retry this scan dropped the whole skill.
+    #[test]
+    fn a_multi_bracket_argument_hint_keeps_the_skill() {
+        let content =
+            "---\nname: Deploy\ndescription: d\nargument-hint: [environment] [version]\n---\nBody.";
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("the skill must survive its `argument-hint`");
+        assert_eq!(manifest.name(), "Deploy");
+    }
 
     #[test]
     fn parse_minimal_frontmatter() {
@@ -1030,6 +1063,51 @@ Review instructions."#;
             manifest.when_to_use(),
             Some("When code has been written or modified and needs quality review")
         );
+    }
+
+    /// A Claude Code SKILL.md parses with every key only Claude Code reads,
+    /// and its snake-case `when_to_use` is read as Aleph's `when-to-use`.
+    #[test]
+    fn claude_code_only_frontmatter_parses_and_when_to_use_is_read_under_both_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("cc-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: cc-skill\ndescription: Does things\nwhen_to_use: when asked\n\
+             argument-hint: \"[thing]\"\narguments: [thing]\ndisable-model-invocation: false\n\
+             user-invocable: true\nallowed-tools: Read, Grep\ndisallowed-tools: [Write]\nmodel: sonnet\n\
+             effort: high\ncontext: fork\nagent: general-purpose\nbackground: false\n\
+             hooks:\n  PreToolUse:\n    - matcher: Write\n      hooks: [{type: command, command: echo}]\n\
+             paths: [\"src/**\"]\nshell: bash\nmetadata: {author: x}\nlicense: MIT\ncompatibility: \">=1\"\n---\n\
+             Body.\n",
+        )
+        .unwrap();
+        let manifest = parse_skill_file(skill.join("SKILL.md"), SkillSource::Global)
+            .expect("every CC-only key is tolerated");
+        assert_eq!(manifest.name(), "cc-skill");
+        assert_eq!(
+            manifest.when_to_use(),
+            Some("when asked"),
+            "snake_case `when_to_use` is Claude Code's spelling"
+        );
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(&["Read".to_string(), "Grep".to_string()][..])
+        );
+    }
+
+    /// Both spellings in one file are two keys, not a duplicate of one: a
+    /// serde `alias` would make this a `duplicate field` error, and a failed
+    /// frontmatter is a SKILL.md the directory scan drops. Aleph's own
+    /// spelling wins.
+    #[test]
+    fn a_file_spelling_when_to_use_both_ways_still_parses() {
+        let content = "---\nname: n\ndescription: d\nwhen_to_use: cc says\n\
+                       when-to-use: aleph says\n---\nBody.";
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("both spellings must not fail the record");
+        assert_eq!(manifest.when_to_use(), Some("aleph says"));
     }
 
     /// `allowed-tools:` reaches the manifest at all. Before this it was
@@ -1439,10 +1517,11 @@ Content."#;
         //
         // * 1.2 resolution (today): `String("no")` takes the comma-scalar arm
         //   and yields `Some(["no"])` — a declaration naming one tool called
-        //   `no`. `register_skills` cannot resolve that name, so the skill
-        //   loses its slash command; it stays visible and `skill_read`-able.
+        //   `no`. Registration names no tool `no`, drops the entry with a
+        //   warn and registers the skill with `Some([])`: nothing to
+        //   pre-grant.
         // * 1.1 resolution: `Bool(false)` takes the `other` arm, warns, and
-        //   yields `None` — no declaration, full tool surface.
+        //   yields `None` — no declaration, nothing to pre-grant.
         //
         // Different, and deliberately not equalised: `allowed-tools: no` is a
         // nonsense declaration under either reading, both degradations are

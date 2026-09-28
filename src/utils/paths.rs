@@ -635,10 +635,11 @@ fn collect_project_skills_dirs(
     dirs
 }
 
-/// Process-global set of installed-plugin skill base directories
-/// (`<plugin_root>/skills`), published once by the extension manager after it
-/// parses every plugin (`ExtensionManager::load_all`).
+/// Process-global set of the ACTIVE plugins' skill base directories
+/// (`<plugin_root>/skills`), published by the extension manager after every
+/// lifecycle transition (`extension::projection`), replace-semantics.
 ///
+/// This is the ONE source of plugin skill dirs for every skill face (D-5).
 /// `get_all_skills_dirs` — the single source both the `skill_read` tool and the
 /// per-run skill discovery consult — appends these so a plugin's bundled skills
 /// are `skill_read`-able by their bare directory name, exactly like a native
@@ -648,21 +649,57 @@ fn collect_project_skills_dirs(
 /// threading the list through every call site (mirrors the `CHANNEL_CONFIG_
 /// SNAPSHOT` pattern). Empty until the first `load_all`, which is fine: plugins
 /// aren't loaded before then and `skill_read` only runs per-request afterwards.
-static PLUGIN_SKILL_DIRS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+///
+/// Each entry carries the owning plugin's REGISTRY id and its `ScopeKey`
+/// alongside the dir (see [`PublishedPluginSkillDir`]). Readers:
+/// `get_all_skills_dirs` filters by `visible_to(key, ctx)` before appending, so
+/// a Project(p) plugin's skills are only searchable from p — the `skill_read`
+/// face of the same predicate that narrows the `<available_skills>` prompt
+/// index (`extension::visibility::retain_visible_plugin_skills`);
+/// `skill::SkillSystem::scan_roots` unions the dirs (any key — the index is
+/// filtered per request) into every scan and usage-sidecar walk, so a plugin
+/// that is no longer active leaves the index on the next rescan; and
+/// `skill::guess_source` reads the `plugin_id` published with the dir that
+/// covers a skill path, so the owner every visibility face keys on is the id
+/// the registry actually names, not a re-derivation from the directory name.
+static PLUGIN_SKILL_DIRS: RwLock<Vec<PublishedPluginSkillDir>> = RwLock::new(Vec::new());
 
-/// Publish the installed plugins' skill base directories for skill discovery.
+/// One published plugin skill base directory (`<plugin_root>/skills`) with
+/// the facts about its owner that the readers need.
+///
+/// `plugin_id` is the REGISTRY id (`manifest::sanitize_plugin_id` of the
+/// declared id or of the directory name), copied from the same `PluginRecord`
+/// as `scope_key` in one loop (`extension::projection`). It is published
+/// here because the directory name is not the id — `My_Plugin` registers as
+/// `my-plugin` — and every visibility face looks the owner up by the registry
+/// id; a skill classified under the directory name is a skill whose owner no
+/// registry names, which fail-closed reads as "not visible" everywhere (D-4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishedPluginSkillDir {
+    pub dir: PathBuf,
+    pub plugin_id: String,
+    pub scope_key: crate::extension::visibility::ScopeKey,
+    /// The owning plugin's install root (`record.root_dir`, the same record):
+    /// what its path variables name to a skill's inline commands
+    /// (`skill::preprocess::SkillShell`).
+    pub plugin_root: PathBuf,
+}
+
+/// Publish the installed plugins' skill base directories, each with the
+/// owning plugin's registry id and visibility key, for skill discovery.
 /// Called by the extension manager after every (re)load so the set stays in
 /// sync with what is actually installed. Replaces the previous set wholesale.
-pub fn publish_plugin_skill_dirs(dirs: Vec<PathBuf>) {
-    let mut guard: RwLockWriteGuard<'_, Vec<PathBuf>> = PLUGIN_SKILL_DIRS
+pub fn publish_plugin_skill_dirs(dirs: Vec<PublishedPluginSkillDir>) {
+    let mut guard: RwLockWriteGuard<'_, Vec<PublishedPluginSkillDir>> = PLUGIN_SKILL_DIRS
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = dirs;
 }
 
-/// Snapshot the currently-published plugin skill base directories.
+/// Snapshot the currently-published plugin skill base directories with their
+/// owners' ids and keys.
 #[must_use]
-pub fn plugin_skill_dirs() -> Vec<PathBuf> {
+pub fn plugin_skill_dirs() -> Vec<PublishedPluginSkillDir> {
     PLUGIN_SKILL_DIRS
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -802,16 +839,16 @@ fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>)
     }
 }
 
-/// Return each installed / project plugin's `skills` subdirectory.
+/// Return each on-disk plugin's `skills` subdirectory under the well-known
+/// roots, with NO status check.
 ///
-/// Plugin skills live at `<plugins_root>/<plugin>/skills`. Surfacing these to the
-/// `skill_read` / `skill_list` tools (which resolve skills by directory name)
-/// lets the model read a plugin-shipped skill through the skill mechanism instead
-/// of falling back to a raw `cat` on the plugin's files. Ordered global-then-project
-/// so callers can treat them as the lowest-precedence tier (a user/project skill of
-/// the same id shadows the plugin one by first occurrence in `get_all_skills_dirs`;
-/// `guess_source` separately classes these paths `SkillSource::Plugin` for the
-/// prompt index).
+/// Plugin skills live at `<plugins_root>/<plugin>/skills`. This is a static
+/// filesystem enumeration — it does not know whether a plugin is loaded,
+/// disabled, or errored — so it is NOT a source for the `skill_read` search
+/// set (`get_all_skills_dirs` reads the published, status-aware list; D-5).
+/// Its consumer is `tools::scoped::cat_guard`, a read-only guard that tags a
+/// plugin-shipped skill path and must work without the extension manager.
+/// Ordered global-then-project.
 #[must_use]
 pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -851,17 +888,54 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
     }
 }
 
+/// The user-level skills roots, whether or not they exist: `~/.aleph/skills`
+/// and — when a home directory is known — `~/.claude/skills`.
+///
+/// One derivation for two questions: where [`get_all_skills_dirs`] looks at
+/// user level ([`user_skills_dirs`]), and whether a directory `skill_read`
+/// loads from IS user level — the origin a `/<skill>`'s `allowed-tools:`
+/// pre-grant requires (`gateway::execution_engine::slash_skill_pregrant`).
+/// A project's upward walk can reach these same directories when no git root
+/// bounds it, so "which tier found it" cannot answer the second question.
+pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>)> {
+    let global_claude = get_home_dir()
+        .ok()
+        .map(|home| home.join(".claude").join("skills"));
+    Ok((get_skills_dir()?, global_claude))
+}
+
+/// Every directory a typed `/<skill>` may pre-grant its `allowed-tools:`
+/// from (`gateway::execution_engine::slash_skill_pregrant`): the two
+/// [`user_skills_roots`], and the parents of every `Global` plugin — Aleph's
+/// own `<config>/plugins` and Claude Code's `~/.claude/plugins` (the only two
+/// plugin parents discovery stamps `Global`).
+///
+/// One list, two readers: the pre-grant (a skill dir outside the file tools'
+/// denylist never pre-grants) and `file_ops::get_denied_paths`, which denies
+/// each of these to the model's file tools — a model that could write one
+/// could add a name to a skill's `allowed-tools:` that registration then
+/// validates at the next boot.
+pub(crate) fn pregrant_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok((aleph, claude)) = user_skills_roots() {
+        roots.push(aleph);
+        roots.extend(claude);
+    }
+    roots.extend(crate::discovery::aleph_plugins_dir().ok());
+    roots.extend(crate::discovery::claude_plugins_dir().ok());
+    roots
+}
+
 /// Append global user-level skills directories to `dirs`.
 fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
-    let global_aleph = get_skills_dir()?;
+    let (global_aleph, global_claude) = user_skills_roots()?;
     if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
         info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
         dirs.push(global_aleph);
     }
 
-    if let Ok(home) = get_home_dir() {
-        info!(home = %home.display(), "Checking global directories");
-        let global_claude = home.join(".claude").join("skills");
+    if let Some(global_claude) = global_claude {
+        info!(path = %global_claude.display(), "Checking global directories");
         if global_claude.is_dir() && !dirs.contains(&global_claude) {
             info!(path = %global_claude.display(), "Found global ~/.claude/skills");
             dirs.push(global_claude);
@@ -917,23 +991,33 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     // 2. User level: global directories
     user_skills_dirs(&mut dirs)?;
 
-    // 3. Plugin-shipped skills (lowest precedence). Two sources, unioned and
-    //    deduped, appended last so a same-id user/project skill (scanned
-    //    earlier) shadows a plugin's — `skill_read`/`skill_list` win by first
-    //    occurrence. Without this, `skill_read(<plugin skill>)` returned
-    //    NotFound and the model fell back to `cat` on the raw plugin files.
-    //    a) Static scan of the well-known roots: ~/.aleph/plugins/<p>/skills
-    //       and project .aleph/plugins/<p>/skills — works before the extension
-    //       manager has loaded anything.
-    for d in get_plugin_skills_dirs(project_dir) {
-        push_if_new_skills_dir(&mut dirs, &d, "plugin skills dir");
-    }
-    //    b) Base dirs published by the extension manager (`<plugin_root>/skills`)
-    //       via `publish_plugin_skill_dirs` — covers plugin roots outside the
-    //       well-known locations (e.g. `plugins/cache/<market>/<id>/skills`).
-    //       Empty until the first `ExtensionManager::load_all`.
-    for plugin_dir in plugin_skill_dirs() {
-        push_if_new_skills_dir(&mut dirs, &plugin_dir, "plugin skills dir");
+    // 3. Plugin-shipped skills (lowest precedence), appended last so a
+    //    same-id user/project skill (scanned earlier) shadows a plugin's —
+    //    `skill_read`/`skill_list` win by first occurrence. Without this,
+    //    `skill_read(<plugin skill>)` returned NotFound and the model fell
+    //    back to `cat` on the raw plugin files.
+    //    ONE source: the dirs the extension manager publishes
+    //    (`<plugin_root>/skills` of every ACTIVE plugin, via
+    //    `publish_plugin_skill_dirs`, refreshed at every lifecycle
+    //    transition). The static scan of the well-known roots that used to be
+    //    unioned in here (`get_plugin_skills_dirs`) had no status check, and
+    //    every dir it found is auto-discovered and published when active —
+    //    so all it ever ADDED were the skills of plugins that are disabled,
+    //    errored, or not loaded (D-5, fail-open). Consequences, by design:
+    //    a plugin's skills are unreadable until `ExtensionManager::load_all`
+    //    has mounted it (fail-closed), and a plugin root outside the
+    //    well-known locations (e.g. `plugins/cache/<market>/<id>/skills`) is
+    //    readable like any other. Each dir carries its plugin's visibility
+    //    key: `project_dir` here is the same fact
+    //    `VisibilityCtx::from_project_root` reads (the run's
+    //    `workspace_override`, else CWD — see `start_dir` above), so this is
+    //    the `skill_read` face of the one predicate.
+    let visibility =
+        crate::extension::visibility::VisibilityCtx::from_project_root(Some(start_dir.clone()));
+    for published in plugin_skill_dirs() {
+        if crate::extension::visibility::visible_to(&published.scope_key, &visibility) {
+            push_if_new_skills_dir(&mut dirs, &published.dir, "plugin skills dir");
+        }
     }
 
     info!(
@@ -1924,6 +2008,66 @@ mod tests {
         assert!(aleph_idx < claude_idx);
     }
 
+    /// The `skill_read` search set honours the published plugin dirs' keys:
+    /// a Project(p) plugin's `skills/` dir is searched from p and not from
+    /// another project. Mirrors the prompt-index filter one layer up; the two
+    /// are the read and the list of one verb.
+    #[test]
+    fn get_all_skills_dirs_drops_plugin_dirs_invisible_to_the_project() {
+        use crate::extension::visibility::ScopeKey;
+        let _home = IsolatedAlephHome::new();
+        let proj_a = tempfile::tempdir().unwrap();
+        let proj_b = tempfile::tempdir().unwrap();
+        let a_plugin_skills = proj_a.path().join("plugin-a/skills");
+        let global_plugin_skills = proj_a.path().join("plugin-g/skills");
+        std::fs::create_dir_all(&a_plugin_skills).unwrap();
+        std::fs::create_dir_all(&global_plugin_skills).unwrap();
+        publish_plugin_skill_dirs(vec![
+            PublishedPluginSkillDir {
+                dir: a_plugin_skills.clone(),
+                plugin_id: "plugin-a".into(),
+                scope_key: ScopeKey::project(proj_a.path()),
+                plugin_root: proj_a.path().join("plugin-a"),
+            },
+            PublishedPluginSkillDir {
+                dir: global_plugin_skills.clone(),
+                plugin_id: "plugin-g".into(),
+                scope_key: ScopeKey::Global,
+                plugin_root: proj_a.path().join("plugin-g"),
+            },
+        ]);
+
+        let from_a = get_all_skills_dirs(Some(proj_a.path())).unwrap();
+        assert!(from_a.contains(&a_plugin_skills));
+        assert!(from_a.contains(&global_plugin_skills));
+
+        let from_b = get_all_skills_dirs(Some(proj_b.path())).unwrap();
+        assert!(
+            !from_b.contains(&a_plugin_skills),
+            "project A's plugin skills leaked into B"
+        );
+        assert!(from_b.contains(&global_plugin_skills));
+
+        publish_plugin_skill_dirs(Vec::new());
+    }
+
+    /// The `skill_read` search set has ONE plugin source: the published list.
+    /// A `plugins/<p>/skills` dir that exists on disk but is not published
+    /// (not loaded, errored, disabled) is not searchable — fail-closed.
+    #[test]
+    fn get_all_skills_dirs_ignores_unpublished_plugin_dirs_on_disk() {
+        let _home = IsolatedAlephHome::new();
+        let project = tempfile::tempdir().unwrap();
+        let on_disk = project.path().join(".aleph/plugins/ghost/skills");
+        std::fs::create_dir_all(&on_disk).unwrap();
+        publish_plugin_skill_dirs(vec![]);
+        let dirs = get_all_skills_dirs(Some(project.path())).unwrap();
+        assert!(
+            !dirs.iter().any(|d| d.ends_with("plugins/ghost/skills")),
+            "an unpublished plugin dir must not be searchable: {dirs:?}"
+        );
+    }
+
     #[test]
     fn aleph_home_is_authoritative_for_skill_resolver() {
         let temp_dir = TempDir::new().unwrap();
@@ -2023,34 +2167,6 @@ mod tests {
         ] {
             assert!(is_safe_agent_id(id), "{id:?} is an ordinary name");
         }
-    }
-
-    #[test]
-    fn get_all_skills_dirs_includes_plugin_skills_last() {
-        let temp_dir = TempDir::new().unwrap();
-        let project = temp_dir.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        std::fs::create_dir(project.join(".git")).unwrap();
-
-        // A regular project skills dir and a plugin skills dir.
-        let aleph_skills = project.join(".aleph").join("skills");
-        std::fs::create_dir_all(&aleph_skills).unwrap();
-        let plugin_skills = project
-            .join(".aleph")
-            .join("plugins")
-            .join("p")
-            .join("skills");
-        std::fs::create_dir_all(&plugin_skills).unwrap();
-
-        let dirs = get_all_skills_dirs(Some(&project)).unwrap();
-
-        let aleph_idx = dirs.iter().position(|d| d == &aleph_skills);
-        let plugin_idx = dirs.iter().position(|d| d == &plugin_skills);
-        assert!(plugin_idx.is_some(), "plugin skills dir must be included");
-        assert!(
-            aleph_idx < plugin_idx,
-            "plugin skills must be lowest precedence (appended last): {dirs:?}"
-        );
     }
 
     #[test]
@@ -2162,8 +2278,15 @@ mod tests {
         assert!(!dirs.iter().any(|d| d.starts_with(&project_plugins)));
     }
 
+    /// A PUBLISHED plugin skills dir is in the search set, after every
+    /// project / user dir. (Until D-5 this test planted the dir on disk and
+    /// relied on the static scan finding it; the published list is now the
+    /// one source, so the dir is published the way the extension manager
+    /// does it.)
     #[test]
     fn test_get_all_skills_dirs_appends_plugin_skills_last() {
+        use crate::extension::visibility::ScopeKey;
+        let _home = IsolatedAlephHome::new();
         let temp_dir = TempDir::new().unwrap();
         let project = temp_dir.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2176,11 +2299,17 @@ mod tests {
             .join("alpha")
             .join("skills");
         std::fs::create_dir_all(&plugin_skills).unwrap();
+        publish_plugin_skill_dirs(vec![PublishedPluginSkillDir {
+            dir: plugin_skills.clone(),
+            plugin_id: "alpha".into(),
+            scope_key: ScopeKey::Global,
+            plugin_root: plugin_skills.parent().unwrap().to_path_buf(),
+        }]);
 
         let dirs = get_all_skills_dirs(Some(&project)).unwrap();
         assert!(
             dirs.iter().any(|d| d == &plugin_skills),
-            "plugin skills dir must be discovered by get_all_skills_dirs"
+            "a published plugin skills dir must be in the search set: {dirs:?}"
         );
         // Plugin skills are lowest precedence — appended after project skills, so
         // a same-id user/project skill (scanned earlier) shadows a plugin's.
@@ -2190,6 +2319,8 @@ mod tests {
             skills_idx < plugin_idx,
             "plugin skills must be appended last (lowest precedence)"
         );
+
+        publish_plugin_skill_dirs(Vec::new());
     }
 
     #[test]

@@ -2385,3 +2385,357 @@ fn layer_4_discriminates_the_answer_and_only_the_answer() {
          block is measuring a room upgrade that never happened"
     );
 }
+
+/// A handler whose only observable is the server id its definition names —
+/// the one field `mcp_handler_admitted` reads.
+struct McpHandlerOf(&'static str);
+
+/// A registry holding a project-keyed plugin `proj` (rooted at `proj`), as
+/// the extension manager publishes it after a load.
+async fn manager_with_project_plugin(
+    proj: &std::path::Path,
+) -> Arc<crate::extension::ExtensionManager> {
+    use crate::extension::visibility::ScopeKey;
+    use crate::extension::{ExtensionManager, PluginKind, PluginOrigin, PluginRecord};
+    let manager = ExtensionManager::with_defaults().await.unwrap();
+    {
+        let mut registry = manager.get_plugin_registry_mut().await;
+        let mut record = PluginRecord::new(
+            "proj".into(),
+            "P".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Workspace,
+        );
+        record.scope_key = ScopeKey::project(proj);
+        registry.register_plugin(record);
+    }
+    manager.sync_runtime_snapshots().await;
+    Arc::new(manager)
+}
+
+#[async_trait::async_trait]
+impl crate::tools::handlers::ToolHandler for McpHandlerOf {
+    async fn invoke(
+        &self,
+        _: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        unreachable!("the join gate never invokes a handler")
+    }
+    fn definition(&self) -> crate::tools::service::ToolDefinition {
+        crate::tools::service::ToolDefinition {
+            name: "t".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            source: crate::tools::service::ToolSource::Mcp {
+                server_id: self.0.into(),
+            },
+            metadata: Default::default(),
+        }
+    }
+}
+
+/// Face ⑤, refuse arm: a non-plugin server passes; with no extension
+/// manager an owned server is refused (fail-closed).
+#[test]
+fn mcp_handler_admitted_gates_plugin_owned_servers_only() {
+    let nowhere = crate::extension::visibility::VisibilityCtx { project_root: None };
+    let visible = visible_mcp_servers(nowhere, None);
+    assert!(
+        mcp_handler_admitted(&McpHandlerOf("github"), &visible),
+        "non-plugin server passes"
+    );
+    assert!(
+        !mcp_handler_admitted(&McpHandlerOf("plugin:proj/srv"), &visible),
+        "owned + no manager ⇒ refused"
+    );
+}
+
+/// Face ⑤, both arms through a real manager: a project-keyed plugin's
+/// server is admitted in its project and refused elsewhere, and a
+/// non-plugin server is admitted in both.
+#[tokio::test]
+async fn mcp_handler_admitted_asks_the_manager_for_the_owners_visibility() {
+    use crate::extension::visibility::{canonical_root, VisibilityCtx};
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let proj = tempdir().unwrap();
+    let manager = manager_with_project_plugin(proj.path()).await;
+
+    let here = visible_mcp_servers(
+        VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        },
+        Some(Arc::clone(&manager)),
+    );
+    let elsewhere = visible_mcp_servers(
+        VisibilityCtx { project_root: None },
+        Some(Arc::clone(&manager)),
+    );
+    let owned = McpHandlerOf("plugin:proj/srv");
+    assert!(
+        mcp_handler_admitted(&owned, &here),
+        "owner visible from its project ⇒ admitted"
+    );
+    assert!(
+        !mcp_handler_admitted(&owned, &elsewhere),
+        "owner invisible outside its project ⇒ refused"
+    );
+    assert!(
+        mcp_handler_admitted(&McpHandlerOf("github"), &elsewhere),
+        "a server no plugin declared is not gated"
+    );
+}
+
+/// Face ⑤ at its fire site: the MCP join itself, over a registry the REAL
+/// bridge populated — one plugin-owned tool, one user tool, and the
+/// capability builtins the bridge switched on because both servers advertise
+/// resources — with the predicate built from a real extension manager.
+///
+/// Outside the plugin's project its tool is absent from the loop registry AND
+/// from the allow-set, while the user tool and the builtin join; and the
+/// joined `mcp_list_resources` never asks the manager about the plugin's
+/// server (the builtin is bound to this run's servers, not the registered
+/// see-nothing form, nor every server). Inside the project, all of it. And an
+/// empty (allow-all) allow-set stays empty while the tools still join.
+#[tokio::test]
+async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run() {
+    use crate::extension::visibility::{canonical_root, VisibilityCtx};
+    use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
+    use crate::mcp::tool_bridge::{spawn_tool_bridge, RESOURCE_LIST_TOOL, RESOURCE_TOOL};
+    const OWNED: &str = "plugin:proj/srv";
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let proj = tempdir().unwrap();
+    let manager = manager_with_project_plugin(proj.path()).await;
+
+    let fake = fake_manager(vec![capable_server(OWNED), capable_server("github")]);
+    let bridged = Arc::new(crate::tools::ToolHandlerRegistry::new());
+    let bridge = spawn_tool_bridge(fake.handle.clone(), Arc::clone(&bridged), None);
+    // RESOURCE_TOOL is the last of the resource cluster the reconcile installs.
+    let mut settled = false;
+    for _ in 0..100 {
+        if bridged.snapshot().contains_key(RESOURCE_TOOL) {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    bridge.abort();
+    assert!(
+        settled,
+        "premise: the bridge switched the resource builtins on"
+    );
+    for (name, server) in [("plugin_proj_srv__t", OWNED), ("github__t", "github")] {
+        bridged
+            .register(name.into(), Arc::new(McpHandlerOf(server)))
+            .unwrap();
+    }
+
+    let here = VisibilityCtx {
+        project_root: Some(canonical_root(proj.path())),
+    };
+    let elsewhere = VisibilityCtx { project_root: None };
+    for (ctx, in_project) in [(elsewhere, false), (here, true)] {
+        let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+        let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
+        let joined = join_mcp_tools(
+            &bridged.snapshot(),
+            &mut registry,
+            |_| true,
+            &visible_mcp_servers(ctx, Some(Arc::clone(&manager))),
+            &mut allowed,
+        );
+
+        let owned_joined = registry.get("plugin_proj_srv__t").is_some();
+        assert_eq!(owned_joined, in_project, "plugin tool in the loop registry");
+        assert_eq!(
+            allowed.contains("plugin_proj_srv__t"),
+            in_project,
+            "plugin tool in the allow-set"
+        );
+        assert_eq!(joined.contains("plugin_proj_srv__t"), in_project);
+        for name in ["github__t", RESOURCE_LIST_TOOL] {
+            assert!(
+                registry.get(name).is_some(),
+                "{name} joins in every project"
+            );
+            assert!(allowed.contains(name), "{name} widens the allow-set");
+        }
+
+        fake.forget_asked();
+        let listed = registry
+            .get(RESOURCE_LIST_TOOL)
+            .unwrap()
+            .execute(serde_json::json!({}), CancellationToken::new())
+            .await;
+        assert!(
+            matches!(listed, crate::tools::runtime::ToolResult::Success { .. }),
+            "the joined lister runs: {listed:?}"
+        );
+        let asked = fake.asked();
+        assert!(
+            asked.iter().any(|id| id == "github"),
+            "the lister reaches the user server: {asked:?}"
+        );
+        assert_eq!(
+            asked.iter().any(|id| id == OWNED),
+            in_project,
+            "the lister reaches the plugin's server only from its project: {asked:?}"
+        );
+    }
+
+    // An empty allow-set means allow-all in `ScopedToolService`: the join must
+    // leave it empty (one inserted name would flip the whole surface
+    // restrictive) while every admitted tool still joins the loop registry.
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    let mut allowed = std::collections::BTreeSet::new();
+    let here = VisibilityCtx {
+        project_root: Some(canonical_root(proj.path())),
+    };
+    let joined = join_mcp_tools(
+        &bridged.snapshot(),
+        &mut registry,
+        |_| true,
+        &visible_mcp_servers(here, Some(Arc::clone(&manager))),
+        &mut allowed,
+    );
+    assert!(
+        allowed.is_empty(),
+        "an empty allow-set stays empty: {allowed:?}"
+    );
+    for name in ["plugin_proj_srv__t", "github__t", RESOURCE_LIST_TOOL] {
+        assert!(
+            registry.get(name).is_some() && joined.contains(name),
+            "{name} still joins under an allow-all set"
+        );
+    }
+}
+
+/// The two turn-start producers of `permission_mode` (`SessionStart`,
+/// `UserPromptSubmit` in `run_agent_loop_inner`) are the only hook faces
+/// besides tool dispatch that know the tier. Driven through the real run:
+/// a `SessionStart` observer and a `UserPromptSubmit` interceptor each
+/// capture their stdin, and the interceptor denies — so the run returns
+/// before any provider call. Each payload must name the tier the turn
+/// resolved, in Claude Code's spelling.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
+    use crate::extension::{HookAction, HookConfig, HookKind, HookPriority};
+
+    let temp = tempdir().unwrap();
+    let sessions: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
+        crate::gateway::session_manager::SessionManager::new(
+            crate::gateway::session_manager::SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            },
+        )
+        .expect("session manager"),
+    );
+    let agent = Arc::new(
+        AgentInstance::new(
+            crate::gateway::agent_instance::AgentInstanceConfig {
+                agent_id: "test-agent".to_string(),
+                workspace: temp.path().join("workspace"),
+                agent_dir: temp.path().join("agents/test-agent"),
+                ..Default::default()
+            },
+            sessions,
+        )
+        .expect("agent instance"),
+    );
+    let engine = ExecutionEngine::new(
+        Default::default(),
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        Arc::new(super::super::tests::EmptyToolRegistry),
+        Vec::new(),
+        None,
+    );
+
+    let hook = |event: HookEvent, kind: HookKind, command: String| HookConfig {
+        event,
+        kind,
+        priority: HookPriority::Normal,
+        matcher: None,
+        actions: vec![HookAction::Command { command }],
+        plugin_name: "turn-start-test".to_string(),
+        plugin_root: temp.path().to_path_buf(),
+        handler: None,
+        timeout_secs: None,
+        declared_event: None,
+        scope_key: crate::extension::visibility::ScopeKey::Global,
+    };
+    let start = temp.path().join("session_start.json");
+    let prompt = temp.path().join("user_prompt_submit.json");
+    let executor = HookExecutor::new(vec![
+        hook(
+            HookEvent::SessionStart,
+            HookKind::Observer,
+            format!("cat > '{}'", start.display()),
+        ),
+        hook(
+            HookEvent::UserPromptSubmit,
+            HookKind::Interceptor,
+            format!(
+                "cat > '{}'; echo 'deny: stopped by the test'",
+                prompt.display()
+            ),
+        ),
+    ]);
+
+    // A tier the turn must resolve from the request, not the default one: a
+    // producer that wrote `ExecTier::default()` (or a literal `"auto"`) in
+    // place of the resolved tier would still match a default-tier fixture.
+    let mut request = minimal_request(std::collections::HashMap::from([(
+        crate::config::types::policies::EXEC_TIER_SESSION_KEY.to_string(),
+        crate::config::types::policies::ExecTier::Ask
+            .id()
+            .to_string(),
+    )]));
+    request.input = "hello".to_string();
+    request.session_key =
+        crate::routing::session_key::SessionKey::main("turn-start-permission-mode");
+    let expected = engine
+        .resolve_turn_permissions(&request, &agent)
+        .await
+        .tier
+        .cc_permission_mode();
+    assert_ne!(
+        expected,
+        crate::config::types::policies::ExecTier::default().cc_permission_mode(),
+        "the fixture must resolve a non-default tier, or this test cannot tell the two apart"
+    );
+
+    let result = engine
+        .run_agent_loop_inner(
+            "run-turn-start",
+            &request,
+            Arc::clone(&agent),
+            Arc::new(crate::gateway::event_emitter::NoOpEventEmitter::new()),
+            Arc::new(tokio::sync::Mutex::new(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            )),
+            None,
+            CancellationToken::new(),
+            None,
+            Some(Arc::new(executor)),
+            "turn-start-permission-mode".to_string(),
+            Arc::new(std::sync::Mutex::new(None)),
+        )
+        .await;
+    assert!(
+        matches!(&result, Err(ExecutionError::Failed(m)) if m.contains("stopped by the test")),
+        "the UserPromptSubmit deny ends the run before any provider call: {result:?}"
+    );
+
+    let read = |path: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("the hook ran")).unwrap()
+    };
+    assert_eq!(read(&start)["permission_mode"], expected, "SessionStart");
+    assert_eq!(
+        read(&prompt)["permission_mode"],
+        expected,
+        "UserPromptSubmit"
+    );
+}

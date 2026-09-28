@@ -75,6 +75,27 @@ pub fn is_extension_manager_initialized() -> bool {
     EXTENSION_MANAGER.get().is_some()
 }
 
+/// A manager for a lib test to install in this slot.
+///
+/// The slot is process-global and first-wins, so what a test installs
+/// outlives it: a later test that reaches `ensure_loaded()` through the slot
+/// (any run through `run_agent_loop`) runs a full `load_all` on it. Built by
+/// `with_defaults()` it would scan the real `~/.claude` — its skills,
+/// commands and agents, and Claude Code's plugin cache. The Claude root is
+/// off here.
+#[cfg(test)]
+pub(crate) async fn test_manager_without_claude_root() -> ExtensionManager {
+    ExtensionManager::new(super::ExtensionConfig {
+        discovery: crate::discovery::DiscoveryConfig {
+            scan_claude_dirs: false,
+            ..crate::discovery::DiscoveryConfig::default()
+        },
+        ..super::ExtensionConfig::default()
+    })
+    .await
+    .expect("extension manager with the Claude root off")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

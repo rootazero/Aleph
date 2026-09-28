@@ -210,7 +210,12 @@ impl ToolPermissionsConfig {
 /// Mirrors the metacharacters honored by [`crate::approval::matches_glob`]
 /// (`*`, `?`). Real tool names never contain these, so any key carrying one is
 /// unambiguously a pattern.
-fn is_glob_pattern(key: &str) -> bool {
+///
+/// Also the filter a `/<skill>`'s pre-grant runs its names through
+/// (`slash_skill_scope::stamp_pregrant_from_names`): a pre-grant folds exact
+/// entries, and a string this function accepts would be read back here as a
+/// glob — `?*` as "every tool".
+pub(crate) fn is_glob_pattern(key: &str) -> bool {
     key.contains('*') || key.contains('?')
 }
 

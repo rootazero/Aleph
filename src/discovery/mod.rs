@@ -3,6 +3,7 @@
 //! Unified discovery for configuration files, skills, commands, agents, and
 //! plugins across multiple directories.
 
+mod claude_cache;
 mod paths;
 mod scanner;
 mod types;
@@ -41,6 +42,17 @@ pub struct DiscoveryConfig {
 
     /// Maximum depth for upward directory traversal
     pub max_upward_depth: usize,
+
+    /// Replaces `~/.claude` — the whole Claude root: its `skills` /
+    /// `commands` / `agents` and Claude Code's plugin cache — **test-only**.
+    ///
+    /// `$HOME` is process-global, so without this a test that needs a Claude
+    /// root of its own either fights every sibling for the environment or
+    /// reads the real one. Gated on `cfg(test)` like
+    /// `ExtensionConfig::extra_plugin_parents`: production has one Claude
+    /// root, and a knob no production code sets is not a feature (R10).
+    #[cfg(test)]
+    pub claude_home_override: Option<PathBuf>,
 }
 
 impl Default for DiscoveryConfig {
@@ -50,6 +62,8 @@ impl Default for DiscoveryConfig {
             scan_claude_dirs: true,
             scan_project_dirs: true,
             max_upward_depth: 10,
+            #[cfg(test)]
+            claude_home_override: None,
         }
     }
 }
@@ -87,23 +101,17 @@ impl DiscoveryManager {
         self.scanner.discover_component("skills")
     }
 
-    /// Discover all command directories
-    pub fn discover_command_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_component("commands")
-    }
-
-    /// Discover all agent directories
-    pub fn discover_agent_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_component("agents")
-    }
-
     /// Discover plugins from `~/.aleph/plugins/` plus each supplied extra
     /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
     /// so project-local installs are discovered alongside the global ones.
+    /// Each extra parent names the project it belongs to; every plugin found
+    /// under it carries that root as its [`DiscoveryScope`]. Claude Code's
+    /// installs come too when the Claude root is on; a source that could not
+    /// be read is named in [`PluginDiscovery::unreadable`].
     pub fn discover_plugins_with_extra(
         &self,
-        extra_parents: &[PathBuf],
-    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        extra_parents: &[ProjectPluginParent],
+    ) -> DiscoveryResult<PluginDiscovery> {
         self.scanner.discover_plugins_with_extra(extra_parents)
     }
 }

@@ -11,10 +11,71 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::mcp::manager::McpManagerHandle;
+use crate::mcp::manager::{McpManagerHandle, McpServerInfo, McpServerStatusDetail};
 use crate::mcp::{McpClient, ResourceContent};
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
+use crate::tools::handlers::McpServerFilter;
 use crate::tools::AlephToolDyn;
+
+/// The MCP manager as one run may see it (face ⑤ of `extension::visibility`).
+///
+/// Every capability builtin — the resource and prompt readers and listers,
+/// and `mcp_login` — reaches servers only through this, so the run's
+/// predicate is applied here, once, for all six. A server the predicate
+/// refuses is indistinguishable from one the manager never had: it is
+/// missing from [`Self::list_servers`], and [`Self::get_client`] /
+/// [`Self::get_status`] answer `None` for it, so every "no such server"
+/// message a tool prints is the one it prints for a typo — never "exists but
+/// hidden", which would name another project's plugin.
+#[derive(Clone)]
+pub(crate) struct VisibleServers {
+    handle: McpManagerHandle,
+    visible: McpServerFilter,
+}
+
+impl VisibleServers {
+    pub(crate) fn new(handle: McpManagerHandle, visible: McpServerFilter) -> Self {
+        Self { handle, visible }
+    }
+
+    /// Every server the manager holds that this run may see.
+    pub(crate) async fn list_servers(&self) -> Result<Vec<McpServerInfo>> {
+        let mut servers = self.handle.list_servers().await?;
+        servers.retain(|s| (self.visible)(&s.id));
+        Ok(servers)
+    }
+
+    /// The client for `server_id`; `None` when it is absent OR invisible.
+    pub(crate) async fn get_client(&self, server_id: &str) -> Result<Option<Arc<McpClient>>> {
+        if !(self.visible)(server_id) {
+            return Ok(None);
+        }
+        self.handle.get_client(server_id).await
+    }
+
+    /// The status of `server_id`; `None` when it is absent OR invisible.
+    pub(crate) async fn get_status(
+        &self,
+        server_id: &str,
+    ) -> Result<Option<McpServerStatusDetail>> {
+        if !(self.visible)(server_id) {
+            return Ok(None);
+        }
+        self.handle.get_status(server_id).await
+    }
+
+    /// Restart `server_id`, refused when it is invisible. Its only caller
+    /// (`mcp_login`'s background task) logs the result and never shows it to
+    /// the model, so the refusal may say plainly what happened.
+    pub(crate) async fn restart_server(&self, server_id: &str) -> Result<()> {
+        if !(self.visible)(server_id) {
+            return Err(crate::error::AlephError::NotFound(format!(
+                "MCP server '{server_id}' is not visible to this run; not restarting"
+            )));
+        }
+        self.handle.restart_server(server_id).await
+    }
+}
 
 /// Arguments for `mcp_read_resource` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -36,14 +97,14 @@ pub struct McpReadResourceOutput {
 
 /// Tool for reading MCP resources
 pub struct McpReadResourceTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpReadResourceTool {
-    /// Create a new MCP read resource tool
+    /// Create a new MCP read resource tool over the servers one run may see
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -103,7 +164,7 @@ impl AlephToolDyn for McpReadResourceTool {
             // (see `resolve_server_qualified` for why shortest-match mis-routed
             // when one server id is a colon-prefix of another).
             let uri = &args.uri;
-            let Some((client, resource_uri)) = resolve_server_qualified(&self.handle, uri).await
+            let Some((client, resource_uri)) = resolve_server_qualified(&self.servers, uri).await
             else {
                 return Err(crate::error::AlephError::NotFound(format!(
                     "No MCP server found for URI: {uri}"
@@ -162,13 +223,14 @@ fn server_prefix_candidates(qualified: &str) -> Vec<(&str, &str)> {
 /// stripped the wrong layer. Iterating colon positions right-to-left tries the
 /// longest candidate first; `get_client` returns `None` for any non-server
 /// prefix (e.g. the `file://` inside a `file:///…` uri), so the first hit is the
-/// longest *registered* server id. Shared by both MCP read tools.
+/// longest *registered* server id. Shared by both MCP read tools; resolves
+/// through [`VisibleServers`], so an invisible server is never a candidate.
 pub(crate) async fn resolve_server_qualified<'a>(
-    handle: &McpManagerHandle,
+    servers: &VisibleServers,
     qualified: &'a str,
 ) -> Option<(Arc<McpClient>, &'a str)> {
     for (candidate, remainder) in server_prefix_candidates(qualified) {
-        if let Ok(Some(client)) = handle.get_client(candidate).await {
+        if let Ok(Some(client)) = servers.get_client(candidate).await {
             return Some((client, remainder));
         }
     }
@@ -230,20 +292,20 @@ pub struct McpListResourcesOutput {
 }
 
 /// Discovery counterpart to [`McpReadResourceTool`]: lists the resources every
-/// connected server advertises so the model knows what it can read. Each entry's
+/// server this run may see advertises, so the model knows what it can read. Each entry's
 /// `uri` is an opaque, server-qualified id built by [`qualified_id`] — the exact
 /// form [`McpReadResourceTool`] parses — so the model copies it verbatim into
 /// `mcp_read_resource` with no path guessing (the gap that used to push it to a
 /// raw `cat`). Capability-gated by the MCP tool bridge alongside the read tool.
 pub struct McpListResourcesTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpListResourcesTool {
-    /// Create a new MCP list-resources tool.
+    /// Create a new MCP list-resources tool over the servers one run may see.
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -296,7 +358,7 @@ impl AlephToolDyn for McpListResourcesTool {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         Box::pin(async move {
             let args: McpListResourcesArgs = serde_json::from_value(args)?;
-            let servers = self.handle.list_servers().await?;
+            let servers = self.servers.list_servers().await?;
 
             let mut entries = Vec::new();
             let mut truncated = false;
@@ -309,7 +371,7 @@ impl AlephToolDyn for McpListResourcesTool {
                         continue;
                     }
                 }
-                let Some(client) = self.handle.get_client(&info.id).await? else {
+                let Some(client) = self.servers.get_client(&info.id).await? else {
                     continue;
                 };
                 for r in client.list_resources().await {
@@ -396,14 +458,15 @@ pub struct McpListResourceTemplatesOutput {
 /// `list_mcp_resource_templates`. Capability-gated by the MCP tool bridge
 /// alongside the resource read/list tools.
 pub struct McpListResourceTemplatesTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpListResourceTemplatesTool {
-    /// Create a new MCP list-resource-templates tool.
+    /// Create a new MCP list-resource-templates tool over the servers one run
+    /// may see.
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -459,7 +522,7 @@ impl AlephToolDyn for McpListResourceTemplatesTool {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         Box::pin(async move {
             let args: McpListResourceTemplatesArgs = serde_json::from_value(args)?;
-            let servers = self.handle.list_servers().await?;
+            let servers = self.servers.list_servers().await?;
 
             let mut entries = Vec::new();
             let mut truncated = false;
@@ -472,7 +535,7 @@ impl AlephToolDyn for McpListResourceTemplatesTool {
                         continue;
                     }
                 }
-                let Some(client) = self.handle.get_client(&info.id).await? else {
+                let Some(client) = self.servers.get_client(&info.id).await? else {
                     continue;
                 };
                 for t in client.list_resource_templates().await {
@@ -586,6 +649,36 @@ mod tests {
         let args: McpListResourceTemplatesArgs =
             serde_json::from_value(json!({"server": "fs"})).unwrap();
         assert_eq!(args.server.as_deref(), Some("fs"));
+    }
+
+    /// The ONE place the capability builtins' visibility is applied. An
+    /// invisible server is missing from the list and answers `None` for a
+    /// client and a status — the unknown-server answer — and the manager is
+    /// never even asked about it, so nothing downstream can tell it exists.
+    #[tokio::test]
+    async fn visible_servers_answer_for_an_invisible_server_as_for_an_absent_one() {
+        use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
+        const HIDDEN: &str = "plugin:proj/srv";
+        let fake = fake_manager(vec![capable_server(HIDDEN), capable_server("github")]);
+        let servers = VisibleServers::new(fake.handle.clone(), Arc::new(|id| id != HIDDEN));
+
+        let listed: Vec<String> = servers
+            .list_servers()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(listed, ["github"]);
+        assert!(servers.get_client(HIDDEN).await.unwrap().is_none());
+        assert!(servers.get_status(HIDDEN).await.unwrap().is_none());
+        assert!(servers.restart_server(HIDDEN).await.is_err());
+        assert!(fake.asked().is_empty(), "asked about: {:?}", fake.asked());
+
+        // The positive arm: a visible server is resolved as before.
+        assert!(servers.get_client("github").await.unwrap().is_some());
+        assert!(servers.get_status("github").await.unwrap().is_some());
+        assert_eq!(fake.asked(), ["github", "github"]);
     }
 
     #[test]

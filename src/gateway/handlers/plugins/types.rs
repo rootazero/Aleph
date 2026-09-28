@@ -39,6 +39,7 @@ pub fn plugin_row(info: PluginInfo) -> PluginRow {
         enabled: info.enabled,
         path: info.path,
         kind: info.kind,
+        origin: info.origin,
         status: parse_status(&info.status),
         status_detail: info.error,
         skills_count: info.skills_count as u32,
@@ -62,8 +63,8 @@ fn parse_status(label: &str) -> PluginRuntimeStatus {
     match label {
         "loaded" => PluginRuntimeStatus::Loaded,
         "disabled" => PluginRuntimeStatus::Disabled,
-        "overridden" => PluginRuntimeStatus::Overridden,
         "blocked" => PluginRuntimeStatus::Blocked,
+        "pending" => PluginRuntimeStatus::Pending,
         _ => PluginRuntimeStatus::Error,
     }
 }
@@ -90,26 +91,6 @@ pub struct InstallFromZipParams {
 // ============================================================================
 // Call Tool Parameters
 // ============================================================================
-
-// ============================================================================
-// Load/Unload Parameters
-// ============================================================================
-
-/// Parameters for plugins.load
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadPluginParams {
-    /// Path to the plugin directory (containing aleph.plugin.json or package.json with aleph field)
-    pub path: String,
-}
-
-/// Parameters for plugins.unload
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnloadPluginParams {
-    /// ID of the plugin to unload
-    pub plugin_id: String,
-}
 
 // ============================================================================
 // Marketplace Parameters — shapes live in `aleph_protocol::plugins`
@@ -170,19 +151,54 @@ pub use aleph_protocol::plugins::MarketplaceRemoveParams;
 pub use aleph_protocol::plugins::MarketplaceUpdateParams;
 pub use aleph_protocol::plugins::PluginUpdateParams as UpdatePluginParams;
 
-// ============================================================================
-// Execute Command Parameters
-// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Parameters for plugins.executeCommand
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteCommandParams {
-    /// ID of the plugin providing the command
-    pub plugin_id: String,
-    /// Name of the command to execute
-    pub command_name: String,
-    /// Arguments to pass to the command handler
-    #[serde(default)]
-    pub args: serde_json::Value,
+    /// Every core label maps onto a wire variant of the SAME name, and an
+    /// unknown label still lands on `Error`, never `Loaded`.
+    #[test]
+    fn parse_status_covers_every_core_label() {
+        use crate::extension::PluginStatus;
+        let core = [
+            PluginStatus::Loaded,
+            PluginStatus::Disabled,
+            PluginStatus::Error("e".into()),
+            PluginStatus::Blocked("b".into()),
+            PluginStatus::Pending {
+                waiting_on: vec!["mcp:manager".into()],
+            },
+        ];
+        for s in core {
+            assert_eq!(parse_status(s.label()).label(), s.label(), "{s:?}");
+        }
+        assert_eq!(parse_status("overridden"), PluginRuntimeStatus::Error);
+        assert_eq!(parse_status("garbage"), PluginRuntimeStatus::Error);
+    }
+
+    /// The row is the only place a `PluginInfo` becomes wire; the origin
+    /// label must cross it, or every client reads `""` for a Claude Code
+    /// install and cannot say why the row is off.
+    #[test]
+    fn the_row_carries_the_origin_label() {
+        let info = PluginInfo {
+            name: "cc".into(),
+            version: None,
+            description: None,
+            enabled: false,
+            path: "/x".into(),
+            skills_count: 0,
+            commands_count: 0,
+            agents_count: 0,
+            hooks_count: 0,
+            mcp_servers_count: 0,
+            tools_count: 0,
+            kind: "static".into(),
+            origin: crate::extension::PluginOrigin::ClaudeCache.label().into(),
+            status: "disabled".into(),
+            error: None,
+        };
+        let wire = serde_json::to_value(plugin_row(info)).unwrap();
+        assert_eq!(wire["origin"], "claude_cache");
+    }
 }

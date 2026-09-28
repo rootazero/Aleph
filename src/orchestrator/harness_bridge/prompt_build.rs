@@ -304,8 +304,28 @@ impl AgentHarnessRunner {
         let prompt_build_start = Instant::now();
 
         // Phase 1 — fetch the eligible-skill snapshot once; reused below.
+        // Narrowed HERE, before `has_skills` and `eligible_skills` read it,
+        // to the plugins this session may see (face ② of
+        // `extension::visibility`): a project-scoped plugin's skills must not
+        // reach a session in another project. Non-plugin skills pass through.
+        // No extension manager (cold tests, simulated boot) ⇒ no plugin skill
+        // is shown, which is the fail-closed answer — the manager is the only
+        // authority on where a plugin came from.
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
         let skill_snapshot = match self.skill_system.as_ref() {
-            Some(sys) => Some(sys.current_snapshot().await),
+            Some(sys) => {
+                let mut snap = sys.current_snapshot().await;
+                snap.eligible_manifests =
+                    crate::extension::visibility::retain_visible_plugin_skills(
+                        std::mem::take(&mut snap.eligible_manifests),
+                        &visibility,
+                        |id| {
+                            crate::extension::try_extension_manager()
+                                .and_then(|m| m.plugin_scope_key(id))
+                        },
+                    );
+                Some(snap)
+            }
             None => None,
         };
 
@@ -551,9 +571,11 @@ impl AgentHarnessRunner {
             for a in self.agent_registry.list_subagents() {
                 by_id.insert(a.id.clone(), a);
             }
-            // Plugin sub-agents last, insert-if-absent (lowest precedence).
-            for a in crate::agents::plugin_subagents().iter() {
-                by_id.entry(a.id.clone()).or_insert_with(|| a.clone());
+            // Plugin sub-agents last, insert-if-absent (lowest precedence),
+            // and only those this session may see — `visibility` was derived
+            // above for the skill snapshot; same value, same run.
+            for a in crate::agents::visible_plugin_subagents(&visibility) {
+                by_id.entry(a.id.clone()).or_insert(a);
             }
             (!by_id.is_empty()).then(|| {
                 by_id

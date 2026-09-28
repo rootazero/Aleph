@@ -34,6 +34,14 @@ pub(crate) use ledger::record_allowlist_refusal;
 
 #[cfg(test)]
 mod tests;
+// POSIX-only: the hooks under test are `sh` commands.
+#[cfg(all(test, unix))]
+mod hook_block_tests;
+#[cfg(all(test, unix))]
+mod refusal_tests;
+// POSIX-only: the skills' inline commands under test run through `sh`.
+#[cfg(all(test, unix))]
+mod skill_inline_tests;
 
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
@@ -132,6 +140,13 @@ pub struct ScopedToolService {
     /// `confirm_tools`. `None` = no policy configured (allow-all default,
     /// byte-identical to pre-wiring behavior).
     pub(super) tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    /// The names whose exact `allow` entry in [`Self::tool_permissions`] is a
+    /// `/<skill>`'s `allowed-tools:` pre-grant rather than an entry a person
+    /// wrote. The entry lifts the tier's name-level `Ask` like any other; it
+    /// does NOT count as the operator's decision about the tool
+    /// ([`Self::explicitly_named`]), so the argument-level cards stay. Empty
+    /// on every turn that is not a skill's.
+    pub(super) pregranted: BTreeSet<String>,
     /// Effective execution tier for this turn (global → session → channel
     /// clamp, resolved by the run loop). Consulted by `permission_for` only
     /// for tools no explicit override names, and it reads the tool's DECLARED
@@ -428,6 +443,14 @@ impl ToolService for ScopedToolService {
             }
         };
 
+        // Publish whether this call may run a skill's inline shell commands
+        // (`TURN_INLINE_SHELL`, consumed by `skill_read`): the one rule every
+        // inline face applies, over this turn's caller role and what this
+        // gate itself answers for `bash` on this call — not a second reading
+        // of the policy layers.
+        let inline_shell_refusal = self.inline_shell_refusal();
+        let fut = crate::tools::turn_context::TURN_INLINE_SHELL.scope(inline_shell_refusal, fut);
+
         // Contain a panic raised anywhere below this seam — gate chain, hook
         // stages, tool body — to the call that raised it. The Act phase polls
         // tool futures inline (`stream::iter(..).buffer_unordered`), with no
@@ -479,7 +502,7 @@ impl ToolService for ScopedToolService {
         input: &Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
         use crate::tools::concurrency::ConcurrencyClaim;
-        // Canonicalize the emitted name first, mirroring `execute_inner`:
+        // Canonicalize the emitted name first, mirroring `execute_gated`:
         // the gates below and the inner claim lookup must judge the SAME
         // spelling the registry will actually execute. Without this the two
         // sides diverge on alias forms (`file.ops` vs `file_ops`) — the

@@ -133,11 +133,25 @@ pub fn resolve_mcp_servers(
         return parsers::parse_mcp_config_file(plugin_dir, ".mcp.json", plugin_id);
     };
     if let Some(inline) = field.inline() {
-        return parsers::parse_mcp_config_content(&inline.to_string(), plugin_dir);
+        return parsers::parse_mcp_config_content(&inline.to_string(), plugin_dir, plugin_id);
     }
     let mut caps = Vec::new();
     for rel in field.paths() {
         caps.extend(parsers::parse_mcp_config_file(plugin_dir, rel, plugin_id)?);
+    }
+    // Two files may not declare one server: the row counts capabilities and
+    // the mount keys them by server id, so a repeat would be counted twice
+    // and started once.
+    let mut seen = std::collections::HashSet::new();
+    for cap in &caps {
+        if let CapabilityDeclaration::McpServer(server) = cap {
+            if !seen.insert(server.id.as_str()) {
+                anyhow::bail!(
+                    "MCP server '{}' is declared by more than one mcpServers file",
+                    server.id
+                );
+            }
+        }
     }
     Ok(caps)
 }
@@ -173,6 +187,21 @@ mod tests {
             1,
             "inline mcpServers must reach parse_mcp_config_content"
         );
+    }
+
+    #[test]
+    fn one_server_declared_by_two_files_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["a.json", "b.json"] {
+            std::fs::write(
+                dir.path().join(file),
+                r#"{"mcpServers":{"srv":{"command":"npx"}}}"#,
+            )
+            .unwrap();
+        }
+        let field: ComponentSource = serde_json::from_str(r#"["a.json", "b.json"]"#).unwrap();
+        let err = resolve_mcp_servers(Some(&field), dir.path(), "p").unwrap_err();
+        assert!(err.to_string().contains("plugin:p/srv"), "{err}");
     }
 
     /// An unsupported inline form must not look like "the author declared

@@ -1,7 +1,9 @@
 //! Service management operations for `ExtensionManager`
 
+use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::types::ServiceInfo;
+use crate::extension::registry::ServiceRegistration;
+use crate::extension::types::{ServiceInfo, ServiceState};
 
 use super::ExtensionManager;
 
@@ -15,15 +17,12 @@ impl ExtensionManager {
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
-        // Manifest-declared services can exist before their plugin runtime is
-        // loaded — load it on demand (no-op when already loaded). A failure
-        // still flows into start_service, which records the Failed state.
-        if let Err(e) = self.ensure_plugin_loaded(plugin_id).await {
-            tracing::warn!(
-                plugin = %plugin_id,
-                error = %e,
-                "start_service: failed to load plugin runtime"
-            );
+        // The service's start handler is guest code in the plugin's module,
+        // which loads at mount (`wasm_module` step) — never on demand here.
+        if !self.plugin_loader.read().await.is_loaded(plugin_id) {
+            return Err(ExtensionError::Runtime(format!(
+                "Plugin '{plugin_id}' has no runtime mounted; enable it first"
+            )));
         }
         let service_manager = self.service_manager.clone().write_owned().await;
         let loader = self.plugin_loader.clone().read_owned().await;
@@ -56,104 +55,88 @@ impl ExtensionManager {
         .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
-    /// Start the `auto_start` services declared by a single (already-loaded)
-    /// plugin. Idempotent — services already Running are left alone.
+    /// The `service` effect for one mounted plugin.
     ///
-    /// Returns the number of services that are Running afterwards.
-    pub(crate) async fn start_autostart_services(&self, plugin_id: &str) -> usize {
-        let pending: Vec<crate::extension::registry::ServiceRegistration> = {
+    /// Starts every `auto_start` service the registry holds for `plugin_id`
+    /// (the plugin's runtime must already be loaded — `wasm_module` is the
+    /// step before this one). The returned disposer stops EVERY registered
+    /// service of the plugin, autostarted or started later through
+    /// `services.start`, then forgets their rows — so a manual start never
+    /// outlives the mount (G1 exempts `start_service` on exactly this ground).
+    ///
+    /// Start failures are recorded on the `ServiceInfo` row (`Failed`) and do
+    /// not fail the mount; the disposer reports a stop failure by service id.
+    pub(crate) async fn start_services_effect(&self, plugin_id: &str) -> Disposer {
+        let registrations: Vec<ServiceRegistration> = {
             let registry = self.plugin_registry.read().await;
             registry
                 .list_services()
                 .into_iter()
-                .filter(|s| s.plugin_id == plugin_id && s.auto_start)
+                .filter(|s| s.plugin_id == plugin_id)
                 .cloned()
                 .collect()
         };
-        if pending.is_empty() {
-            return 0;
-        }
-
-        let service_manager = self.service_manager.clone().write_owned().await;
-        let loader = self.plugin_loader.clone().read_owned().await;
-        let plugin_id = plugin_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            let mut service_manager = service_manager;
-            let mut running = 0;
-            for registration in &pending {
-                match service_manager.start_service(registration, &loader) {
-                    Ok(info) if info.state == crate::extension::types::ServiceState::Running => {
-                        running += 1;
-                    }
-                    Ok(info) => {
-                        tracing::warn!(
-                            plugin = %plugin_id,
-                            service = %registration.id,
-                            state = ?info.state,
-                            error = ?info.error,
-                            "autostart service did not reach Running state"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            plugin = %plugin_id,
-                            service = %registration.id,
-                            error = %e,
+        let pending: Vec<ServiceRegistration> = registrations
+            .iter()
+            .filter(|s| s.auto_start)
+            .cloned()
+            .collect();
+        if !pending.is_empty() {
+            let service_manager = self.service_manager.clone().write_owned().await;
+            let loader = self.plugin_loader.clone().read_owned().await;
+            let id = plugin_id.to_string();
+            // The start handler is untrusted guest code — off the async pool.
+            let join = tokio::task::spawn_blocking(move || {
+                let mut service_manager = service_manager;
+                for registration in &pending {
+                    match service_manager.start_service(registration, &loader) {
+                        Ok(info) if info.state == ServiceState::Running => {}
+                        Ok(info) => tracing::warn!(
+                            plugin = %id, service = %registration.id, state = ?info.state,
+                            error = ?info.error, "autostart service did not reach Running state"
+                        ),
+                        Err(e) => tracing::warn!(
+                            plugin = %id, service = %registration.id, error = %e,
                             "failed to autostart service"
-                        );
+                        ),
                     }
                 }
+            })
+            .await;
+            if let Err(e) = join {
+                tracing::warn!(error = %e, "autostart services task join failed");
             }
-            running
-        })
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "autostart services task join failed");
-            0
-        })
-    }
-
-    /// Load active plugins that declare `auto_start` services and start those
-    /// services. Idempotent; called at daemon boot and after hot-reloads —
-    /// mirrors the MCP transient-server auto-registration in
-    /// [`Self::sync_mcp_plugin_servers`].
-    ///
-    /// Returns the number of services Running afterwards.
-    pub async fn sync_plugin_services(&self) -> usize {
-        let plugin_ids: Vec<String> = {
-            let registry = self.plugin_registry.read().await;
-            let mut ids: Vec<String> = registry
-                .list_services()
-                .into_iter()
-                .filter(|s| s.auto_start)
-                .filter(|s| {
-                    registry
-                        .get_plugin(&s.plugin_id)
-                        .is_some_and(|r| r.status.is_active())
-                })
-                .map(|s| s.plugin_id.clone())
-                .collect();
-            ids.sort();
-            ids.dedup();
-            ids
-        };
-
-        let mut running = 0;
-        for plugin_id in &plugin_ids {
-            // No-op when the plugin is already loaded; needs the loader write
-            // lock, so it must run before start_autostart_services takes the
-            // read lock.
-            if let Err(e) = self.ensure_plugin_loaded(plugin_id).await {
-                tracing::warn!(
-                    plugin = %plugin_id,
-                    error = %e,
-                    "sync_plugin_services: failed to load plugin for autostart services"
-                );
-                continue;
-            }
-            running += self.start_autostart_services(plugin_id).await;
         }
-        running
+
+        let service_manager = self.service_manager.clone();
+        let loader = self.plugin_loader.clone();
+        let id = plugin_id.to_string();
+        async_disposer(move || async move {
+            let sm = service_manager.write_owned().await;
+            let ld = loader.read_owned().await;
+            let plugin = id.clone();
+            let results = tokio::task::spawn_blocking(move || {
+                let mut sm = sm;
+                let results = sm.stop_plugin_services(&plugin, &registrations, &ld);
+                sm.forget_plugin(&plugin);
+                results
+            })
+            .await
+            .map_err(|e| format!("stop_plugin_services task join failed: {e}"))?;
+            let failed: Vec<String> = results
+                .iter()
+                .filter(|i| i.state == ServiceState::Failed)
+                .map(|i| crate::extension::namespaced_component_key(&i.plugin_id, &i.id))
+                .collect();
+            if failed.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "services failed to stop cleanly: {}",
+                    failed.join(", ")
+                ))
+            }
+        })
     }
 
     /// Stop every running plugin service (best-effort). Called at daemon
@@ -168,33 +151,6 @@ impl ExtensionManager {
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, "stop_all_services task join failed");
-            0
-        })
-    }
-
-    /// Stop running services whose plugin is no longer active (removed or
-    /// disabled on disk). Called after hot-reloads rebuild the registry.
-    pub async fn stop_orphaned_services(&self) -> usize {
-        let active: std::collections::HashSet<String> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_plugins()
-                .into_iter()
-                .filter(|r| r.status.is_active())
-                .map(|r| r.id.clone())
-                .collect()
-        };
-        let service_manager = self.service_manager.clone().write_owned().await;
-        let loader = self.plugin_loader.clone().read_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let mut service_manager = service_manager;
-            service_manager
-                .stop_orphaned(|id| active.contains(id), &loader)
-                .len()
-        })
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "stop_orphaned_services task join failed");
             0
         })
     }
@@ -259,5 +215,111 @@ impl ExtensionManager {
                     plugin_id, service_id,
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::discovery::DiscoveryConfig;
+    use crate::extension::types::ServiceState;
+    use crate::extension::{ExtensionConfig, ExtensionManager, ServiceRegistration};
+
+    /// A manager whose registry holds one WASM plugin with one autostart
+    /// service, backed by the empty module fixture (`loader.rs::EMPTY_WASM_MODULE`):
+    /// the module links, the `start_ticker` export does not exist, so the
+    /// start is recorded as `Failed` — which is the interesting row for a
+    /// disposer to have to clean up.
+    async fn manager_with_one_service(
+        tmp: &std::path::Path,
+    ) -> (ExtensionManager, crate::utils::paths::IsolatedAlephHome) {
+        // Held by the caller for the whole test: `Config::load()` writes a
+        // default config under the Aleph home when none exists (see the
+        // `IsolatedAlephHome` doc) and the manager may touch it after `new`.
+        let home = crate::utils::paths::IsolatedAlephHome::new();
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: tmp.to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(tmp.join("plugins.toml")),
+            extra_plugin_parents: vec![],
+        })
+        .await
+        .unwrap();
+        std::fs::write(
+            tmp.join("plugin.wasm"),
+            crate::extension::loader::EMPTY_WASM_MODULE,
+        )
+        .unwrap();
+        let mut manifest = crate::extension::PluginManifest::new(
+            "qa-wasm".into(),
+            "QA WASM".into(),
+            crate::extension::PluginKind::Wasm,
+            std::path::PathBuf::from("plugin.wasm"),
+        );
+        manifest.root_dir = tmp.to_path_buf();
+        manager
+            .get_plugin_loader_for_test()
+            .write()
+            .await
+            .load_plugin(&manifest)
+            .unwrap();
+        {
+            let mut reg = manager.get_plugin_registry_mut().await;
+            reg.register_plugin(crate::extension::PluginRecord::new(
+                "qa-wasm".into(),
+                "QA WASM".into(),
+                crate::extension::PluginKind::Wasm,
+                crate::extension::PluginOrigin::Global,
+            ));
+            reg.register_service(ServiceRegistration {
+                id: "ticker".into(),
+                name: "ticker".into(),
+                start_handler: "start_ticker".into(),
+                stop_handler: "stop_ticker".into(),
+                plugin_id: "qa-wasm".into(),
+                auto_start: true,
+            });
+        }
+        (manager, home)
+    }
+
+    #[tokio::test]
+    async fn start_services_effect_starts_autostart_rows_and_its_disposer_forgets_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _home) = manager_with_one_service(tmp.path()).await;
+
+        let disposer = manager.start_services_effect("qa-wasm").await;
+        let rows = manager.list_services().await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].id, "ticker");
+        assert_eq!(
+            rows[0].state,
+            ServiceState::Failed,
+            "empty module has no start_ticker export"
+        );
+
+        let outcome = disposer().await;
+        // The stop handler does not exist either, so the stop is reported —
+        // honestly — as a failure with the service named...
+        assert!(
+            outcome.as_ref().is_err_and(|e| e.contains("ticker")),
+            "{outcome:?}"
+        );
+        // ...and the rows are gone regardless: a disposer that leaves state
+        // behind is not an inverse.
+        assert!(manager.list_services().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_services_effect_with_no_registrations_is_an_empty_disposer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _home) = manager_with_one_service(tmp.path()).await;
+        let disposer = manager.start_services_effect("someone-else").await;
+        assert!(manager.list_services().await.is_empty());
+        disposer().await.unwrap();
     }
 }

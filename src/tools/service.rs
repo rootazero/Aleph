@@ -24,6 +24,22 @@ pub enum ToolError {
     #[error("tool {name} execution failed: {cause}")]
     Execution { name: String, cause: String },
 
+    /// The call was refused before it ran — by a hook, a person, or because
+    /// nobody could be asked ([`RefusedBy`]). A verdict, not a failure: its
+    /// kind is `Permission` whatever `reason` says (a hook's prose, the user's
+    /// own words), so the model gets no route to another tool.
+    ///
+    /// Distinct from `PermissionDenied` for one reason: these refusals do not
+    /// fire the `PermissionDenied` observers (`HookEvent::PermissionDenied`
+    /// documents which refusals do). The rendering's head comes from
+    /// [`RefusedBy::head`], which `error_kind::classify_error_str` reads too.
+    #[error("tool {name} {}: {reason}", .by.head())]
+    Refused {
+        name: String,
+        by: RefusedBy,
+        reason: String,
+    },
+
     #[error("tool {name} timed out after {elapsed_ms}ms")]
     Timeout { name: String, elapsed_ms: u64 },
 
@@ -102,6 +118,46 @@ impl ToolError {
     #[must_use]
     pub fn kind(&self) -> crate::tools::error_kind::ToolErrorKind {
         crate::tools::error_kind::classify_tool_error(self)
+    }
+}
+
+/// Who refused a [`ToolError::Refused`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedBy {
+    /// A BeforeToolCall hook blocked the call (exit 2, `decision: "block"`,
+    /// `block:`).
+    Hook,
+    /// A BeforeToolCall hook — or the hook executor — failed to run, so the
+    /// call was blocked fail-closed. Not a policy verdict: the guard broke.
+    HookFailed,
+    /// A person declined the approval card (a confirmation gate's, or the one
+    /// a hook's `ask:` raised).
+    Person,
+    /// Nobody could be asked: no approval channel, an unattended run, or the
+    /// denial ledger's standing refusal of this exact call.
+    NobodyAsked,
+}
+
+impl RefusedBy {
+    /// Every variant — `error_kind::classify_error_str` recognises a
+    /// rendering by trying each head.
+    pub const ALL: [Self; 4] = [
+        Self::Hook,
+        Self::HookFailed,
+        Self::Person,
+        Self::NobodyAsked,
+    ];
+
+    /// What follows `tool <name> ` in the rendering. The one place a head is
+    /// written; the classifier reads it from here.
+    #[must_use]
+    pub const fn head(self) -> &'static str {
+        match self {
+            Self::Hook => "was refused by a policy hook",
+            Self::HookFailed => "was blocked because a policy hook failed to run (fail-closed)",
+            Self::Person => "was declined",
+            Self::NobodyAsked => "was not authorized",
+        }
     }
 }
 

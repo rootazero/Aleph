@@ -1673,6 +1673,37 @@ async fn guest_slash_command_for_a_dangerous_tool_never_reaches_the_registry() {
     );
 }
 
+/// Face ④ dispatch: a `/cmd` owned by a plugin the session cannot see is
+/// refused at the one consumer of the mode JSON, whichever surface stamped
+/// it. The process is shared with sibling tests, some of which install a
+/// process-global extension manager; the assertion relies only on
+/// `plugin_visible("proj", …)` being false either way — no registry row
+/// named `proj` exists, and an unknown id is the fail-closed branch.
+#[tokio::test]
+async fn a_slash_command_owned_by_an_invisible_plugin_is_refused_before_dispatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-owner").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-owner");
+    let request = slash_request(&session, Some("operator"));
+    let mode = serde_json::json!({
+        "type": "direct_tool", "tool_id": "plugin:proj:ping", "args": "",
+        "owning_plugin": "proj"
+    })
+    .to_string();
+    let err = engine
+        .execute_slash_command_fast_path("slash-run", &mode, &request, agent, emitter)
+        .await
+        .expect_err("an invisible owner must be refused");
+    match err {
+        ExecutionError::Failed(msg) => assert!(msg.contains("proj"), "{msg}"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert_eq!(registry.calls(), 0);
+}
+
 /// The operator gate (`method_authz`): a chat-tier channel cannot reconfigure
 /// Aleph through a slash command either. `agent_delete` also declares
 /// `requires_confirmation`, so it is gated for EVERY caller — see below.

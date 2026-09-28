@@ -349,7 +349,7 @@ impl MarketplaceManager {
     ///
     /// Searches all marketplaces for `plugin_name`, optionally filtering to
     /// `marketplace_name`, then copies it into the directory resolved by
-    /// [`crate::extension::scope::scope_install_dir`].
+    /// [`crate::extension::visibility::scope_install_dir`].
     pub fn install_to_scope(
         &self,
         plugin_name: &str,
@@ -385,7 +385,8 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
-                let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+                let install_dir =
+                    crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
                 // boundary, mirroring the gateway install handler. Without
                 // this the marketplace path would skip the pre-planted
@@ -442,7 +443,7 @@ impl MarketplaceManager {
         project_dir: Option<&std::path::Path>,
         force: bool,
     ) -> Result<UpdateOutcome, String> {
-        let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+        let install_dir = crate::extension::visibility::scope_install_dir(scope, project_dir)?;
         let installed_path = install_dir.join(plugin_name);
         if !installed_path.exists() {
             return Err(format!(

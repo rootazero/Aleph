@@ -218,7 +218,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the MCP tool bridge below WRITES it as external servers advertise /
     // drop tools, and `run_loop` READS its snapshot per request (via
     // `set_mcp_tool_registry` just below) so every connected server's
-    // tools join the agent's LoopToolRegistry and become LLM-callable.
+    // tools, minus plugin servers invisible to the run (face ⑤,
+    // `join_mcp_tools`), join the agent's LoopToolRegistry and become
+    // LLM-callable.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolHandlerRegistry::new());
 
     // Consumer-side install: hand the registry to the execution engine's
@@ -1452,32 +1454,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.tool_catalog.clone(),
         ));
 
-        // Wire MCP-type plugins into the live manager: hand each plugin's
-        // `.mcp.json` servers to the manager as transient (runtime-only)
-        // servers. Their `ServerStarted` events flow through the tool bridge
-        // just spawned above, registering the plugin's tools. Done on a
-        // background task — starting MCP server subprocesses must never block
-        // boot. No-op if no plugins declare MCP servers.
-        if let Some(em) = alephcore::extension::try_extension_manager() {
-            let handle = h.clone();
-            tokio::spawn(async move {
-                em.set_mcp_handle(handle);
-                let n = em.sync_mcp_plugin_servers().await;
-                // X1: now that both the MCP handle and (from agent_init) the
-                // memory registry are set and plugins are loaded, bind every
-                // MCP-backed memory extension's caller to the live manager.
-                em.bind_memory_callers().await;
-                if n > 0 {
-                    tracing::info!(count = n, "plugin MCP servers registered at boot");
-                }
-                // Autostart manifest-declared plugin services now that the
-                // runtime is wired (idempotent; no-op without [[services]]).
-                let running = em.sync_plugin_services().await;
-                if running > 0 {
-                    tracing::info!(count = running, "plugin services autostarted at boot");
-                }
-            });
-        }
+        // Plugin MCP servers, memory extensions and services are mounted by
+        // `load_all` itself (the handles were installed in `agent_init` before the
+        // first load — `boot_order_tests`), so there is no catch-up task here any
+        // more. Servers a mount enqueued before this bridge subscribed are picked
+        // up by its reconcile pass.
         // Sibling publisher: subscribe to the same manager event stream and
         // emit `tools.changed` whenever an MCP server announces a catalog
         // mutation (start / stop / crash / list_changed). Lives next to the

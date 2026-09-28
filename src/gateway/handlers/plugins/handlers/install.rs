@@ -108,6 +108,9 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                         enabled: true,
                         path: dest_path.to_string_lossy().to_string(),
                         kind: kind.as_str().to_string(),
+                        // `default_plugins_dir()` is `~/.aleph/plugins/installed`:
+                        // the scanner classifies what it finds there as Global.
+                        origin: crate::extension::PluginOrigin::Global.label().to_string(),
                         status: PluginRuntimeStatus::Loaded,
                         status_detail: None,
                         skills_count: count_kind("skill"),

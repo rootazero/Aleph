@@ -93,7 +93,8 @@ pub fn configs_from_entries(
 ///
 /// Claude Code's `PluginSourceSchema` is a six-arm union: a path string
 /// relative to the marketplace root, or an object tagged by a `source`
-/// discriminator (`npm` / `pip` / `url` / `github` / `git-subdir`). Aleph
+/// (on-disk) or `type` (docs) discriminator (`npm` / `pip` / `url` /
+/// `github` / `git-subdir`). Aleph
 /// modelled this as a bare `String` until 2026-08-19, and because serde fails
 /// the *whole* struct on a type mismatch, a single object-form entry made the
 /// entire `marketplace.json` unparseable — every plugin in that marketplace
@@ -109,10 +110,10 @@ pub fn configs_from_entries(
 pub enum MarketplacePluginSource {
     /// A path relative to the marketplace root.
     Path(String),
-    /// One of the object forms, kept verbatim. The `source` discriminator is
-    /// read back out for the refusal message rather than re-modelled here:
-    /// Aleph installs none of them, so modelling their fields would be five
-    /// structs with no consumer (R10).
+    /// One of the object forms, kept verbatim. The `source` (or `type`)
+    /// discriminator is read back out for the refusal message rather than
+    /// re-modelled here: Aleph installs none of them, so modelling their
+    /// fields would be five structs with no consumer (R10).
     External(serde_json::Value),
 }
 
@@ -127,13 +128,25 @@ impl MarketplacePluginSource {
         }
     }
 
-    /// The `source` discriminator of an object form (`"github"`, `"npm"`, …),
-    /// for error messages. Returns `None` for the path form.
+    /// The discriminator of an object form (`"github"`, `"npm"`, `"git-subdir"`, …),
+    /// for error messages. `None` for the path form.
+    ///
+    /// Two spellings, both real: the shipping `claude-plugins-official`
+    /// marketplace (2026-09-20) writes `{"source": "git-subdir", …}` — the
+    /// key name reused one level down — while the live docs write
+    /// `{"type": "git-subdir", …}`. Disk first, since that is what is
+    /// installed today; a document carrying both agrees with itself or the
+    /// on-disk spelling wins. Each key is coerced to `&str` independently
+    /// before falling through, so a non-string `source` value (malformed or
+    /// from a future arm) does not mask a string `type`.
     #[must_use]
     pub fn external_kind(&self) -> Option<&str> {
         match self {
             Self::Path(_) => None,
-            Self::External(v) => v.get("source").and_then(serde_json::Value::as_str),
+            Self::External(v) => v
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| v.get("type").and_then(serde_json::Value::as_str)),
         }
     }
 }

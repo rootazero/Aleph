@@ -3056,7 +3056,10 @@ async fn a_primary_mode_agent_cannot_be_spawned_as_a_subagent() {
         "a real sub-agent must stay spawnable"
     );
     assert!(
-        !registry.spawnable_agent_ids().iter().any(|id| id == "main"),
+        !registry
+            .spawnable_agent_ids(None)
+            .iter()
+            .any(|id| id == "main"),
         "the id list printed back to the model must not advertise `main`"
     );
 

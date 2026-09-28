@@ -33,6 +33,8 @@ mod session_run_registry;
 mod settle;
 mod simple;
 mod slash_command;
+mod slash_command_body;
+mod slash_skill_pregrant;
 pub(crate) mod slash_skill_scope;
 mod steering;
 mod tool_refresh;
@@ -238,6 +240,13 @@ pub const CHANNEL_TOOL_PERMISSIONS_KEY: &str = "channel_tool_permissions";
 /// cron, a team member run resolving to the Panel operator) must NOT carry it —
 /// the marker would auto-deny a working human-in-the-loop path.
 pub const UNATTENDED_KEY: &str = "unattended";
+
+/// Whether `metadata` marks the run unattended ([`UNATTENDED_KEY`] is
+/// `"true"`). The one reading: the run loop's (turn context, confirm gate,
+/// redacting sink) and a `/<skill>`'s pre-grant (`slash_skill_pregrant`).
+pub(crate) fn is_unattended(metadata: &std::collections::HashMap<String, String>) -> bool {
+    metadata.get(UNATTENDED_KEY).map(String::as_str) == Some("true")
+}
 
 impl BusyInputMode {
     /// Wire string stored in run metadata. Inverse of [`BusyInputMode::from_wire`].

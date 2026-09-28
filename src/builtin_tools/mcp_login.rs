@@ -24,10 +24,12 @@ use serde_json::Value;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::auth::{CallbackServer, OAuthProvider, OAuthStorage};
-use crate::mcp::manager::{McpManagerHandle, McpTransportType};
+use crate::mcp::manager::McpTransportType;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
+
+use super::mcp_resource::VisibleServers;
 
 /// BT-D-R4-23: per-server in-flight OAuth tracker. Without this, two
 /// concurrent `mcp_login` calls for the same `server_id` would each return
@@ -88,14 +90,14 @@ pub struct McpLoginOutput {
 
 /// Tool that authorizes a remote MCP server via OAuth
 pub struct McpLoginTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpLoginTool {
-    /// Create a new MCP login tool
+    /// Create a new MCP login tool over the servers one run may see
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -150,6 +152,14 @@ impl AlephToolDyn for McpLoginTool {
             let args: McpLoginArgs = serde_json::from_value(args)?;
             let server_id = args.server;
 
+            // Resolve the server's URL from its managed configuration —
+            // BEFORE the in-flight check below: that check names the server,
+            // so running it first would tell a run that may not see this
+            // server that a login for it is in progress.
+            let detail = self.servers.get_status(&server_id).await?.ok_or_else(|| {
+                AlephError::NotFound(format!("MCP server not found: {server_id}"))
+            })?;
+
             // BT-D-R4-23: acquire the per-server in-flight permit. The
             // permit is held until the spawned background task completes
             // (the guard is moved into the task), so a second concurrent
@@ -171,11 +181,6 @@ impl AlephToolDyn for McpLoginTool {
                     permit,
                 }
             };
-
-            // Resolve the server's URL from its managed configuration.
-            let detail = self.handle.get_status(&server_id).await?.ok_or_else(|| {
-                AlephError::NotFound(format!("MCP server not found: {server_id}"))
-            })?;
 
             if matches!(detail.config.transport, McpTransportType::Stdio) {
                 return Err(AlephError::IoError(format!(
@@ -210,7 +215,7 @@ impl AlephToolDyn for McpLoginTool {
             // BT-D-R4-23: move the in-flight guard into the task so the
             // permit is held for the full flow lifetime. Drop happens on
             // task exit (success, error, panic — all paths).
-            let handle = self.handle.clone();
+            let servers = self.servers.clone();
             let task_server = server_id.clone();
             tokio::spawn(async move {
                 let _guard = _guard;
@@ -231,7 +236,7 @@ impl AlephToolDyn for McpLoginTool {
                                     server = %task_server,
                                     "MCP OAuth authorization complete; restarting server"
                                 );
-                                if let Err(e) = handle.restart_server(&task_server).await {
+                                if let Err(e) = servers.restart_server(&task_server).await {
                                     tracing::warn!(
                                         server = %task_server,
                                         error = %e,
@@ -281,6 +286,45 @@ mod tests {
         let json = serde_json::to_string_pretty(&schema).unwrap();
         assert!(json.contains("server"));
         assert!(json.contains("scope"));
+    }
+
+    /// An in-flight login names its server, so the visibility-resolving status
+    /// lookup runs first: a run that may not see the server gets the
+    /// unknown-server answer, never "already in progress for '<server>'".
+    #[tokio::test]
+    async fn an_invisible_server_with_a_login_in_flight_answers_as_unknown() {
+        use crate::mcp::tool_bridge::test_support::{capable_server, fake_manager};
+        // Unique to this test: `IN_FLIGHT` is process-wide.
+        const HIDDEN: &str = "plugin:inflight-probe/srv";
+        let args = serde_json::json!({ "server": HIDDEN });
+
+        let has_it = fake_manager(vec![capable_server(HIDDEN)]);
+        let hidden_to_this_run = McpLoginTool::new(VisibleServers::new(
+            has_it.handle.clone(),
+            Arc::new(|id| id != HIDDEN),
+        ));
+        IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(HIDDEN.to_string(), Arc::new(()));
+        let hidden = hidden_to_this_run.call(args.clone()).await;
+        IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(HIDDEN);
+
+        let never_had_it = fake_manager(Vec::new());
+        let unknown = McpLoginTool::new(VisibleServers::new(
+            never_had_it.handle.clone(),
+            Arc::new(|_| true),
+        ))
+        .call(args)
+        .await;
+
+        assert_eq!(
+            hidden.expect_err("hidden").to_string(),
+            unknown.expect_err("unknown").to_string()
+        );
     }
 
     #[test]

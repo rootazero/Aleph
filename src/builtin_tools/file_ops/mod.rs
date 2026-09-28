@@ -8,6 +8,8 @@ mod batch;
 pub(crate) mod diff;
 pub(crate) mod edit;
 mod edit_match;
+#[cfg(test)]
+mod gate_state_tests;
 mod image_read;
 mod ops;
 mod path_utils;

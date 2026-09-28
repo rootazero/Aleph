@@ -27,7 +27,7 @@ use super::super::tool_refresh::active_plugin_tools_for_agent;
 
 // Free helpers carved into the sibling project_context module.
 use super::project_context::{
-    collect_project_skill_block, lifecycle_hook_context, workspace_directive,
+    collect_project_skill_block, fire_session_start, lifecycle_hook_context, workspace_directive,
 };
 // The pre-seed hook-stop receipt (§5.4), shared with `BeforeAgentStart`.
 use super::journal_hook_stop;
@@ -64,25 +64,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // directory can be unmounted, deleted by another process, or replaced
         // by a non-directory. Re-verify and fail the run cleanly with a
         // user-facing reason rather than discovering the disappearance
-        // mid-tool-call.
-        let effective_workspace: std::path::PathBuf = match &request.workspace_override {
-            Some(p) => {
-                if !p.is_dir() {
-                    error!(
-                        run_id = run_id,
-                        project_root = %p.display(),
-                        "project_root vanished between request and execution"
-                    );
-                    return Err(ExecutionError::Failed(format!(
-                        "project folder no longer exists: {} — pick another folder \
-                         or re-create it before retrying",
-                        p.display()
-                    )));
-                }
-                p.clone()
-            }
-            None => agent.workspace().to_path_buf(),
-        };
+        // mid-tool-call. The value itself is `super::run_workspace`, the one
+        // derivation every other reader of "where does this run work" uses.
+        if let Some(p) = request.workspace_override.as_ref().filter(|p| !p.is_dir()) {
+            error!(
+                run_id = run_id,
+                project_root = %p.display(),
+                "project_root vanished between request and execution"
+            );
+            return Err(ExecutionError::Failed(format!(
+                "project folder no longer exists: {} — pick another folder \
+                 or re-create it before retrying",
+                p.display()
+            )));
+        }
+        let effective_workspace: std::path::PathBuf = super::run_workspace(request, &agent);
 
         // Bump `last_used_at` in the project catalogue so the Panel picker
         // can sort by recency without each entry point (CLI, OpenAI-compat,
@@ -211,6 +207,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // `AfterToolCall` / compaction hooks) and `hook_session_id` are
         // resolved once by `run_agent_loop` and threaded in as parameters.
 
+        // Who may see what, for this run: derived once here from the
+        // run-loop task-local (`run_agent_loop` published `workspace_override`
+        // just above this frame) and handed to every face built below —
+        // the plugin tool index here, the MCP join further down. One value
+        // per run, not one read per face.
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
+
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::tool_metadata::UnifiedTool> = self
             .tools
@@ -221,7 +224,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .collect();
         let mut allowed_tools = base_allowed_tools.clone();
         if let Some(ext_manager) = extension_manager.as_ref() {
-            allowed_tools.extend(active_plugin_tools_for_agent(ext_manager, &agent));
+            allowed_tools.extend(active_plugin_tools_for_agent(
+                ext_manager,
+                &agent,
+                &visibility,
+            ));
         } else {
             allowed_tools.extend(
                 self.tools
@@ -232,11 +239,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
-        // When a Skill slash command kicks off this run, restrict the tool
-        // surface to the skill's declared `allowed-tools` (written by
-        // `execute.rs` from the parsed `CommandContext::Skill`). Without this
-        // the LLM sees the agent's full toolset and the skill's intent to
-        // scope tool use is silently ignored.
+        // When a plugin COMMAND kicks off this run, restrict the tool surface
+        // to its declared `allowed-tools` (written by `execute.rs`'s
+        // `slash_skill_pregrant::split` from the slash mode). Without this the
+        // LLM sees the agent's full toolset and the command's intent to scope
+        // tool use is silently ignored. A SKILL's `allowed-tools` never
+        // narrows — it pre-grants (`turn_permissions::apply_pregrant`).
         //
         // Derived ONCE, here, and shared by every tool source joined below —
         // the builtin/plugin retain immediately after this, the MCP join, and
@@ -331,8 +339,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             *deadline.lock().await += compress_elapsed;
         }
 
-        // SessionStart — the first turn of a brand-new session has no prior
-        // history. Firing here (not inside `src/harness/`) keeps the dumb
+        // SessionStart — the first turn of a brand-new session (or of one
+        // emptied by `reset_session`) has no prior history. Firing here (not inside `src/harness/`) keeps the dumb
         // loop free of lifecycle logic (R10). Observers run fire-and-forget;
         // interceptor-kind hooks are harvested for context (Claude Code /
         // codex parity: a SessionStart hook's stdout is injected into the
@@ -341,30 +349,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mut session_start_blocks: Vec<String> = Vec::new();
         if history.is_empty() {
             if let Some(executor) = hook_executor.as_ref() {
-                let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
-                executor
-                    .execute_observers(HookEvent::SessionStart, &ctx)
-                    .await;
-                match executor
-                    .execute_interceptors(HookEvent::SessionStart, ctx)
-                    .await
-                {
-                    Ok((_ctx, hr)) => {
-                        // Claude-Code convention: `context:` lines / JSON
-                        // additionalContext AND plain stdout lines both count
-                        // as injected context on this event. Everything this
-                        // seam injects rides in the session context for the
-                        // REST OF THE SESSION, so it goes through the shared
-                        // hook-context budget — over-budget blocks spill to
-                        // disk and are replaced by a recoverable preview.
-                        let mut blocks = hr.additional_contexts;
-                        blocks.extend(join_messages(&hr.messages));
-                        session_start_blocks
-                            .extend(budget_hook_contexts(&hook_session_id, blocks).await);
-                    }
-                    Err(e) => {
-                        warn!(run_id = run_id, error = %e, "SessionStart hook failed")
-                    }
+                // Context build + both dispatches live in one function, so
+                // the test that drives superpowers' real hook through it
+                // drives this seam.
+                let blocks = fire_session_start(
+                    executor,
+                    &hook_session_id,
+                    run_id,
+                    &agent,
+                    exec_tier.cc_permission_mode(),
+                )
+                .await;
+                // Everything this seam injects rides in the session context
+                // for the REST OF THE SESSION, so it goes through the shared
+                // hook-context budget — over-budget blocks spill to disk and
+                // are replaced by a recoverable preview.
+                if !blocks.is_empty() {
+                    session_start_blocks
+                        .extend(budget_hook_contexts(&hook_session_id, blocks).await);
                 }
             }
         }
@@ -402,7 +404,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ));
         }
         if let Some(executor) = hook_executor.as_ref() {
-            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            let mut ctx = lifecycle_hook_context(
+                &hook_session_id,
+                run_id,
+                &agent,
+                Some(exec_tier.cc_permission_mode()),
+            );
             ctx = ctx.with_tool_input(request.input.clone());
             match executor
                 .execute_interceptors(HookEvent::UserPromptSubmit, ctx)
@@ -463,6 +470,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
             }
+        }
+
+        // A `/command` turn: the command's body renders HERE — after both
+        // turn-start seams (`BeforeAgentStart` in `run_agent_loop`, the
+        // `UserPromptSubmit` above) let the turn go ahead, so a hook that
+        // stops the turn stops its inline commands too — and goes FIRST: it is
+        // this turn's instruction, every reminder annotates it. It rides the
+        // transient channel, so the persisted user turn stays the raw
+        // `/command args` (`slash_command_body` module doc). Its inline
+        // commands answer to the permissions this turn's tool gate is built
+        // from.
+        if let Some(block) = super::super::slash_command_body::render_admitted(
+            request,
+            &effective_workspace,
+            &turn_permissions,
+            extension_manager.as_deref(),
+            Arc::clone(&self.inline_consent),
+            &cancel_token,
+        )
+        .await?
+        {
+            transient_blocks.insert(0, block);
         }
 
         // Project-mode context: advertise the project's own skills so the model
@@ -641,12 +670,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Whether this run is unattended (autonomous continuation / headless
         // producer). One read, three consumers: the turn context below (so
         // delegation tools can propagate it), `ScopedToolService`'s fail-closed
-        // confirm gate, and the redacting trace sink.
-        let unattended = request
-            .metadata
-            .get(crate::gateway::execution_engine::UNATTENDED_KEY)
-            .map(String::as_str)
-            == Some("true");
+        // confirm gate, and the redacting trace sink. The same predicate
+        // (`is_unattended`) withholds a `/<skill>`'s pre-grant.
+        let unattended = crate::gateway::execution_engine::is_unattended(&request.metadata);
 
         // Unattended security tax, emitter leg. `UnattendedRedactingSink` below
         // covers the TraceSink leg only — persistence, the scratchpad channel
@@ -779,56 +805,42 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
-            // Collector for MCP tool names joined this request — used below to
-            // build the deferred exposure tier when `defer_mcp_tools` is on.
-            let mut mcp_tool_names: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
-
             // External MCP tools: snapshot the bridge-maintained registry
             // (boot installs it via `set_mcp_tool_registry`) and join each
-            // entry into this request's LoopToolRegistry. This is the
-            // consumer side of `mcp::spawn_tool_bridge` — the bridge keeps
-            // the ToolHandlerRegistry in sync with every connected server's
-            // tools/list; here those handlers become LLM-visible LoopTools.
-            // Gating mirrors the builtin path above: per-agent allowlist, plus
+            // entry into this request's LoopToolRegistry (`join_mcp_tools`).
+            // The allow-set is the builtin path's: per-agent allowlist plus
             // `slash_skill_scope` — the SAME set the builtin retain used, not a
-            // second parse of the same metadata key.
-            // Existing names are never overwritten (builtins win collisions).
-            if let Some(mcp_registry) = super::super::tool_service_builder::mcp_tool_registry() {
-                let mut joined = 0usize;
-                for (name, handler) in mcp_registry.snapshot().iter() {
-                    if !agent.is_tool_allowed(name) {
-                        continue;
-                    }
-                    if !super::super::slash_skill_scope::admits(slash_skill_scope.as_ref(), name) {
-                        continue;
-                    }
-                    if loop_registry_inner.get(name).is_some() {
-                        continue;
-                    }
-                    loop_registry_inner.register(Box::new(
-                        crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                            name,
-                            Arc::clone(handler),
-                        ),
-                    ));
-                    mcp_tool_names.insert(name.clone());
-                    // Only widen a non-empty allow-set; an empty set already
-                    // means allow-all in ScopedToolService and inserting
-                    // names would flip it to restrictive.
-                    if !allowed_names.is_empty() {
-                        allowed_names.insert(name.clone());
-                    }
-                    joined += 1;
-                }
-                if joined > 0 {
-                    info!(
-                        run_id = run_id,
-                        count = joined,
-                        "MCP tools joined tool surface"
+            // second parse of the same metadata key. Face ⑤ is this run's
+            // visible servers, built from `visibility` — the value derived once
+            // near the top of this function for the plugin tool index. The
+            // joined names feed the deferred exposure tier below when
+            // `defer_mcp_tools` is on.
+            let mcp_tool_names = match super::super::tool_service_builder::mcp_tool_registry() {
+                Some(mcp_registry) => {
+                    let joined = join_mcp_tools(
+                        &mcp_registry.snapshot(),
+                        &mut loop_registry_inner,
+                        |name| {
+                            agent.is_tool_allowed(name)
+                                && super::super::slash_skill_scope::admits(
+                                    slash_skill_scope.as_ref(),
+                                    name,
+                                )
+                        },
+                        &visible_mcp_servers(visibility.clone(), extension_manager.clone()),
+                        &mut allowed_names,
                     );
+                    if !joined.is_empty() {
+                        info!(
+                            run_id = run_id,
+                            count = joined.len(),
+                            "MCP tools joined tool surface"
+                        );
+                    }
+                    joined
                 }
-            }
+                None => std::collections::BTreeSet::new(),
+            };
 
             // Markdown CLI skills join at the same seam, for the same reason:
             // the registry is rebuilt per request, so an install that landed
@@ -958,7 +970,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let loop_registry = Arc::new(loop_registry_inner);
 
-            // Build parent view ToolService WITHOUT the subagent tool
+            // Build parent view ToolService WITHOUT the subagent tool — and
+            // without a `/<skill>`'s pre-grant: a person typed that for this
+            // turn, and a child's task is model-written
+            // (`TurnToolPolicy::for_children`).
             let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =
                 super::super::build_request_tool_service(
                     loop_registry.clone(),
@@ -967,7 +982,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
-                    turn_permissions.explicit.clone(),
+                    turn_permissions
+                        .explicit
+                        .as_ref()
+                        .and_then(|explicit| explicit.for_children()),
                     exec_tier,
                     unattended,
                     &mode_core_tools,
@@ -1747,6 +1765,87 @@ fn publish_artifact_invalidation(
 ) {
     let Some(bus) = event_bus else { return };
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
+}
+
+/// The consumer side of `mcp::spawn_tool_bridge`: every entry of the
+/// bridge-maintained registry `snapshot` (kept in sync with every connected
+/// server's `tools/list`) becomes an LLM-visible `LoopTool` in `registry`.
+/// Its own function so a test can drive it against a real
+/// `ToolHandlerRegistry`: inline, deleting a gate here reddened nothing.
+///
+/// Gates, in order: `is_allowed` (the run's allow-set); face ⑤ of
+/// `extension::visibility` — a server a plugin declared joins only when
+/// `visible` admits it (the server PROCESS stays global, one manager, one
+/// spawn; only its tools' presence on this run's surface is per-project); then
+/// builtins win collisions (an existing name is never overwritten). A
+/// capability builtin joins bound to `visible` (`bind_visible_servers`): it
+/// enumerates or resolves servers at call time, so the same predicate decides
+/// what it sees. `allowed_names` is only widened when already non-empty — an
+/// empty set means allow-all in `ScopedToolService`, and inserting names would
+/// flip it restrictive. Returns the joined names.
+pub(super) fn join_mcp_tools(
+    snapshot: &std::collections::HashMap<String, Arc<dyn crate::tools::handlers::ToolHandler>>,
+    registry: &mut crate::tools::runtime::LoopToolRegistry,
+    is_allowed: impl Fn(&str) -> bool,
+    visible: &crate::tools::handlers::McpServerFilter,
+    allowed_names: &mut std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut joined = std::collections::BTreeSet::new();
+    for (name, handler) in snapshot {
+        if !is_allowed(name) {
+            continue;
+        }
+        if !mcp_handler_admitted(handler.as_ref(), visible) {
+            continue;
+        }
+        if registry.get(name).is_some() {
+            continue;
+        }
+        let handler = handler
+            .bind_visible_servers(visible)
+            .unwrap_or_else(|| Arc::clone(handler));
+        registry.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(name, handler),
+        ));
+        if !allowed_names.is_empty() {
+            allowed_names.insert(name.clone());
+        }
+        joined.insert(name.clone());
+    }
+    joined
+}
+
+/// Face ⑤ gate. A per-server MCP tool passes iff `visible` admits its server;
+/// every other handler passes (a capability builtin is bound to `visible`
+/// instead of being gated whole — see [`join_mcp_tools`]).
+pub(super) fn mcp_handler_admitted(
+    handler: &dyn crate::tools::handlers::ToolHandler,
+    visible: &crate::tools::handlers::McpServerFilter,
+) -> bool {
+    match &handler.definition().source {
+        crate::tools::service::ToolSource::Mcp { server_id } => visible(server_id),
+        _ => true,
+    }
+}
+
+/// Face ⑤, the one derivation of "may this run see MCP server `server_id`",
+/// built once per run: the join's gate and every capability builtin read this
+/// one value. A server no plugin declared is visible; a plugin-owned one iff
+/// the extension manager can see its owner from `visibility`. No manager ⇒ an
+/// owned server is refused: the manager is the only authority on where a
+/// plugin came from, and "I cannot tell" is not "yes".
+pub(super) fn visible_mcp_servers(
+    visibility: crate::extension::visibility::VisibilityCtx,
+    ext: Option<Arc<crate::extension::ExtensionManager>>,
+) -> crate::tools::handlers::McpServerFilter {
+    Arc::new(move |server_id| {
+        match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
+            None => true,
+            Some(owner) => {
+                crate::extension::visibility::owner_visible_via(ext.as_deref(), owner, &visibility)
+            }
+        }
+    })
 }
 
 /// RAII guard for the per-session media cache.

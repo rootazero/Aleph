@@ -302,6 +302,8 @@ mod tests {
             plugin_root: std::env::temp_dir(),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
         }
     }
 
@@ -360,6 +362,8 @@ mod tests {
             plugin_root: std::env::temp_dir(),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
         };
         let executor = HookExecutor::new(vec![hook]);
         let pinned = fire_before_compaction(Some(&executor), "s", vec![]).await;

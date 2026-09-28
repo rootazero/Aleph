@@ -10,7 +10,8 @@ use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
     AgentRegistration, HookRegistration, ServiceRegistration, SkillRegistration, ToolRegistration,
 };
-use crate::extension::types::{McpServerConfig, PluginOrigin};
+use crate::extension::types::PluginOrigin;
+use crate::mcp::McpManagerConfig;
 
 // ============================================================================
 // Type Aliases (Declaration → Registration mapping)
@@ -26,8 +27,9 @@ pub type ServiceDeclaration = ServiceRegistration;
 pub type SkillDeclaration = SkillRegistration;
 /// An agent declaration is an `AgentRegistration`
 pub type AgentDeclaration = AgentRegistration;
-/// An MCP server declaration is a `McpServerConfig`
-pub type McpServerDeclaration = McpServerConfig;
+/// An MCP server declaration is the `McpManagerConfig` the mount spawns — the
+/// one list both the row's count and the spawn read (`mcp_config.rs`).
+pub type McpServerDeclaration = McpManagerConfig;
 
 // ============================================================================
 // CapabilityDeclaration
@@ -272,6 +274,7 @@ mod tests {
                 actions: Vec::new(),
                 plugin_root: None,
                 timeout_secs: None,
+                declared_event: None,
             }),
             CapabilityDeclaration::Service(ServiceRegistration {
                 id: "s".to_string(),
@@ -283,11 +286,7 @@ mod tests {
             }),
             CapabilityDeclaration::Skill(make_skill()),
             CapabilityDeclaration::Agent(make_agent()),
-            CapabilityDeclaration::McpServer(McpServerConfig::Stdio {
-                command: "npx".to_string(),
-                args: vec![],
-                env: std::collections::HashMap::new(),
-            }),
+            CapabilityDeclaration::McpServer(McpManagerConfig::stdio("plugin:p/s", "s", "npx")),
         ];
 
         assert_eq!(capabilities.len(), 6);

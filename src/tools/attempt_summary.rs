@@ -75,7 +75,14 @@ pub struct ToolFailureGroup {
 }
 
 /// Walk `events` and tally `ToolError` records grouped by
-/// `(tool_name, error_kind)`. Returns rows sorted by `count` descending,
+/// `(tool_name, error_kind)`, leaving out the kinds that admit no ladder
+/// ([`ToolErrorKind::admits_ladder`] — a refusal is a verdict, and a summary
+/// that counts it tells the model to route around it). The harness's refusal
+/// of an identical repeat (kind `repeated`) is counted as what it repeats:
+/// the kind of the latest earlier failure of the same tool with the same
+/// input — so a repeated hook block stays a refusal and a repeated 404 stays a
+/// 404. A repeat whose original is outside `events` is not counted. Returns
+/// rows sorted by `count` descending,
 /// then `(tool, kind.label())` ascending so the output is deterministic
 /// for snapshot tests.
 ///
@@ -97,10 +104,21 @@ pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup
         let SessionEvent::ToolError { call_id, error, .. } = &record.event else {
             continue;
         };
-        let Some(tool) = resolve_tool_name(events, idx, call_id) else {
+        let Some((tool, input)) = resolve_request(events, idx, call_id) else {
             continue;
         };
-        let kind = classify_error_str(error);
+        let kind = match classify_error_str(error) {
+            ToolErrorKind::Repeated => match repeated_kind(events, idx, tool, input) {
+                Some(kind) => kind,
+                None => continue,
+            },
+            kind => kind,
+        };
+        // A refusal is not a failure to climb away from — the same rule the
+        // per-call hint applies (`ToolErrorKind::admits_ladder`).
+        if !kind.admits_ladder() {
+            continue;
+        }
         *counts.entry((tool.to_string(), kind)).or_insert(0) += 1;
     }
 
@@ -170,18 +188,45 @@ fn push_usize(out: &mut String, n: usize) {
 /// `ToolCallRequested` whose `call_id` matches. O(n) per error but n is
 /// the tail-slice length (≲ harness `max_iterations` × ~2), not the full
 /// session log.
-fn resolve_tool_name<'a>(
+fn resolve_request<'a>(
     events: &'a [SessionEventRecord],
     error_idx: usize,
     call_id: &str,
-) -> Option<&'a str> {
+) -> Option<(&'a str, &'a serde_json::Value)> {
     let upper = error_idx.min(events.len());
     events[..upper].iter().rev().find_map(|r| match &r.event {
         SessionEvent::ToolCallRequested {
-            call_id: id, name, ..
-        } if id == call_id => Some(name.as_str()),
+            call_id: id,
+            name,
+            input,
+            ..
+        } if id == call_id => Some((name.as_str(), input)),
         _ => None,
     })
+}
+
+/// The kind of the failure a `repeated` row at `repeat_idx` repeats: the
+/// latest earlier `ToolError` of `tool` whose request had the same `input`
+/// and that is not itself a repeat.
+fn repeated_kind(
+    events: &[SessionEventRecord],
+    repeat_idx: usize,
+    tool: &str,
+    input: &serde_json::Value,
+) -> Option<ToolErrorKind> {
+    events[..repeat_idx]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, r)| {
+            let SessionEvent::ToolError { call_id, error, .. } = &r.event else {
+                return None;
+            };
+            let kind = classify_error_str(error);
+            (kind != ToolErrorKind::Repeated
+                && resolve_request(events, idx, call_id) == Some((tool, input)))
+            .then_some(kind)
+        })
 }
 
 #[cfg(test)]

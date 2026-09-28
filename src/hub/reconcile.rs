@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::extension::{PluginRecord, PluginStatus};
+use crate::extension::PluginRecord;
 use crate::hub::install::mcp_server_id;
 use crate::hub::origin::{local_ref_addresses, InstallOrigin};
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
@@ -49,7 +49,7 @@ pub(crate) fn plugin_to_entry(p: &PluginRecord) -> ExtensionEntry {
     let mut e = base_entry(ExtensionKind::Plugin, &p.id, p.name.clone());
     e.description = p.description.clone().unwrap_or_default();
     e.version = p.version.clone();
-    e.enabled = matches!(p.status, PluginStatus::Loaded);
+    e.enabled = p.status.is_active();
     e
 }
 

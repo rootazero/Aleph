@@ -210,15 +210,15 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
     // gone its service stop handlers can no longer run, which would orphan
     // background services and transient MCP servers for the process lifetime.
     if let Ok(manager) = get_extension_manager() {
-        match manager.unload_runtime_plugin(&params.name).await {
-            Ok(()) => {}
-            // Never loaded into the runtime — nothing to tear down.
-            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
-            Err(e) => tracing::warn!(
-                plugin = %params.name,
-                error = %e,
-                "Failed to unload plugin runtime before uninstall"
+        match manager.unmount(&params.name).await {
+            Ok(report) if !report.all_ok() => tracing::warn!(
+                plugin = %params.name, ?report,
+                "some effects did not dispose cleanly before uninstall"
             ),
+            Ok(_) => {}
+            // Never mounted (disabled / errored / unknown) — nothing to tear down.
+            Err(crate::extension::UnmountError::NotMounted(_))
+            | Err(crate::extension::UnmountError::NotFound(_)) => {}
         }
     }
 
@@ -243,45 +243,9 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 /// Enable a plugin
 ///
 /// Records `enabled = true` in `<data_dir>/plugins.toml` (via
-/// `set_plugin_enabled`, the single durable writer) and brings declared
-/// autostart services up.
+/// `set_plugin_enabled`, the single durable writer), which mounts the plugin.
 pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ToggleParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    if !is_safe_plugin_name(&params.name) {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Invalid plugin name: {}", params.name),
-        );
-    }
-
-    let plugins_dir = crate::extension::default_plugins_dir();
-    let plugin_path = plugins_dir.join(&params.name);
-
-    if !plugin_path.exists() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Plugin not found: {}", params.name),
-        );
-    }
-
-    // Persist the preference and sync the live registry, then bring declared
-    // autostart services up (no-op for plugins without services; idempotent
-    // otherwise). `set_plugin_enabled` owns the durable write — this handler
-    // deliberately touches no marker file, because the marker it used to write
-    // was never read by anything.
-    if let Ok(manager) = get_extension_manager() {
-        manager.set_plugin_enabled(&params.name, true).await;
-        manager.sync_plugin_services().await;
-    }
-
-    tracing::info!(plugin = %params.name, "Plugin enabled");
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+    handle_toggle(request, true).await
 }
 
 /// Disable a plugin
@@ -292,6 +256,10 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 /// The preference survives a restart *and* a `plugin update` — the marker file
 /// this replaced could survive neither, and in fact was never read at all.
 pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
+    handle_toggle(request, false).await
+}
+
+async fn handle_toggle(request: JsonRpcRequest, enabled: bool) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -305,34 +273,41 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    let plugins_dir = crate::extension::default_plugins_dir();
-    let plugin_path = plugins_dir.join(&params.name);
+    // No manager, no toggle: answering `ok` here used to report a write that
+    // never happened.
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+    set_enabled_via_registry(manager, request.id, &params.name, enabled).await
+}
 
-    if !plugin_path.exists() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Plugin not found: {}", params.name),
-        );
+/// The body of `plugins.enable` / `plugins.disable` once a manager is in
+/// hand: the id is resolved in the REGISTRY — every origin a load lists,
+/// Claude Code's installs and project plugins included, error rows too —
+/// not by probing `default_plugins_dir()`, which only ever held one origin.
+///
+/// `set_plugin_enabled` owns the durable write and the mount/unmount: on
+/// enable, MCP servers, services, memory extension and slash entries come up
+/// inside the mount; on disable, the scope's disposers stop services and
+/// remove transient MCP servers. This handler touches no marker file — the
+/// marker it used to write was never read by anything.
+pub async fn set_enabled_via_registry(
+    manager: &crate::extension::ExtensionManager,
+    id: Option<serde_json::Value>,
+    name: &str,
+    enabled: bool,
+) -> JsonRpcResponse {
+    if let Err(e) = manager.ensure_loaded().await {
+        tracing::warn!("Failed to load extensions: {}", e);
+    }
+    if manager.get_plugin_record(name).await.is_none() {
+        return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Plugin not found: {name}"));
     }
 
-    // Persist the preference and sync the registry, then tear down the runtime
-    // — a disabled plugin must not keep background services or transient MCP
-    // servers running for the rest of the process lifetime.
-    if let Ok(manager) = get_extension_manager() {
-        manager.set_plugin_enabled(&params.name, false).await;
-        match manager.unload_runtime_plugin(&params.name).await {
-            Ok(()) => {}
-            // Never loaded into the runtime — nothing to tear down.
-            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
-            Err(e) => tracing::warn!(
-                plugin = %params.name,
-                error = %e,
-                "Failed to unload plugin runtime on disable"
-            ),
-        }
-    }
+    manager.set_plugin_enabled(name, enabled).await;
 
-    tracing::info!(plugin = %params.name, "Plugin disabled");
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+    let verb = if enabled { "enabled" } else { "disabled" };
+    tracing::info!(plugin = %name, "Plugin {verb}");
+    JsonRpcResponse::success(id, json!({ "ok": true }))
 }

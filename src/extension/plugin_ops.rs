@@ -1,9 +1,8 @@
 //! Plugin execution operations for `ExtensionManager`
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest;
 use crate::extension::registry::PluginRegistry;
-use crate::extension::types::{DirectCommandResult, PluginInfo, PluginRecord};
+use crate::extension::types::{PluginInfo, PluginRecord};
 use crate::sync_primitives::Arc;
 
 use super::ExtensionManager;
@@ -11,7 +10,8 @@ use super::ExtensionManager;
 impl ExtensionManager {
     /// Call a tool on a runtime plugin (Node.js or WASM).
     ///
-    /// Auto-loads the plugin if not already loaded (lazy initialization).
+    /// The plugin's module must already be mounted (see
+    /// [`Self::ensure_runtime_mounted`]).
     /// Acquires a write lock on the plugin loader for IPC. The guest call is
     /// CPU-bound untrusted code, so it runs on the blocking pool (bounded by
     /// the Extism manifest timeout) rather than on an async worker thread.
@@ -21,15 +21,7 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
-        self.ensure_plugin_active(plugin_id).await?;
-        // Auto-load plugin if not already loaded
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
+        self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().write_owned().await;
         let plugin_id = plugin_id.to_string();
@@ -50,110 +42,37 @@ impl ExtensionManager {
         }
     }
 
-    /// Ensure a plugin is loaded into the runtime.
-    pub(crate) async fn ensure_plugin_loaded(&self, plugin_id: &str) -> ExtensionResult<()> {
+    /// A runtime call needs the plugin's module in the loader. Modules load
+    /// at mount (`lifecycle.rs`, `wasm_module` step), never lazily here: a
+    /// lazily created effect would sit outside the scope's dispose order.
+    async fn ensure_runtime_mounted(&self, plugin_id: &str) -> ExtensionResult<()> {
         self.ensure_plugin_active(plugin_id).await?;
-        let registry = self.plugin_registry.read().await;
-        let record = registry
-            .get_plugin(plugin_id)
-            .filter(|record| record.status.is_active())
-            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
-        let root_dir = record.root_dir.clone();
-        drop(registry);
-
-        let manifest = manifest::parse_manifest_from_dir_sync(&root_dir)?;
-
-        let mut loader = self.plugin_loader.write().await;
-        if loader.is_loaded(plugin_id) {
-            return Ok(()); // another task loaded it while we waited
-        }
-        // Re-check status under the loader write lock: a concurrent disable
-        // between the read-lock check above and this point must not be
-        // raced past. Without this re-check, a plugin disabled mid-call is
-        // still loaded into the runtime and stays reachable from MCP / tool
-        // dispatch until the next disable-flush sweep.
-        {
-            let registry = self.plugin_registry.read().await;
-            match registry.get_plugin(plugin_id) {
-                Some(record) if record.status.is_active() => {}
-                _ => {
-                    return Err(ExtensionError::Runtime(format!(
-                        "Plugin '{plugin_id}' was disabled while loading"
-                    )));
-                }
-            }
-        }
-        let mem_reg_snapshot = self
-            .memory_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(&manifest, mem_reg)?;
+        if self.plugin_loader.read().await.is_loaded(plugin_id) {
+            Ok(())
         } else {
-            loader.load_plugin(&manifest)?;
+            Err(ExtensionError::Runtime(format!(
+                "Plugin '{plugin_id}' has no runtime mounted (WASM modules load at mount; \
+                 MCP plugin tools are called through McpManager, not the plugin loader)"
+            )))
         }
-        tracing::info!(
-            plugin_id = plugin_id,
-            "Auto-loaded plugin for tool execution"
-        );
-        drop(loader);
-
-        // X1: bind the just-loaded plugin's memory caller if the MCP handle is
-        // already live (idempotent for already-bound extensions).
-        self.bind_memory_callers().await;
-        Ok(())
     }
 
     /// Execute a hook handler on a runtime plugin.
     ///
-    /// Auto-loads the plugin if not already loaded (mirrors
-    /// [`Self::call_plugin_tool`]), so a hook can fire on the first event
-    /// without a prior explicit load.
+    /// The plugin's module must already be mounted (mirrors
+    /// [`Self::call_plugin_tool`]): a hook fires only for a mounted plugin.
     pub async fn execute_plugin_hook(
         &self,
         plugin_id: &str,
         handler: &str,
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
-        self.ensure_plugin_active(plugin_id).await?;
-        // Auto-load plugin if not already loaded
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
+        self.ensure_runtime_mounted(plugin_id).await?;
 
         let loader = self.plugin_loader.clone().read_owned().await;
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
         tokio::task::spawn_blocking(move || loader.execute_hook(&plugin_id, &handler, event_data))
-            .await
-            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
-    }
-
-    /// Execute a direct command on a runtime plugin.
-    pub async fn execute_plugin_command(
-        &self,
-        plugin_id: &str,
-        handler: &str,
-        args: serde_json::Value,
-    ) -> ExtensionResult<DirectCommandResult> {
-        self.ensure_plugin_active(plugin_id).await?;
-        {
-            let loader = self.plugin_loader.read().await;
-            if !loader.is_loaded(plugin_id) {
-                drop(loader);
-                self.ensure_plugin_loaded(plugin_id).await?;
-            }
-        }
-
-        let loader = self.plugin_loader.clone().read_owned().await;
-        let plugin_id = plugin_id.to_string();
-        let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || loader.execute_command(&plugin_id, &handler, args))
             .await
             .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
@@ -185,109 +104,12 @@ impl ExtensionManager {
         self.plugin_loader.read().await
     }
 
-    /// Load a runtime plugin from a manifest.
-    pub async fn load_runtime_plugin(
+    /// Test-only: the loader handle itself, so a fixture can pre-load a module.
+    #[cfg(test)]
+    pub(crate) fn get_plugin_loader_for_test(
         &self,
-        manifest: &super::PluginManifest,
-    ) -> ExtensionResult<()> {
-        let mut loader = self.plugin_loader.write().await;
-        let mem_reg_snapshot = self
-            .memory_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let result = if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(manifest, mem_reg)
-        } else {
-            loader.load_plugin(manifest)
-        };
-        drop(loader);
-
-        if result.is_ok() {
-            self.sync_runtime_snapshots().await;
-        }
-
-        // X1: bind memory caller for the hot-loaded plugin (idempotent).
-        self.bind_memory_callers().await;
-
-        // Autostart any background services this plugin declared, now that
-        // its runtime is loaded (mirrors MCP servers' auto_start behavior).
-        if result.is_ok() {
-            self.start_autostart_services(&manifest.id).await;
-        }
-
-        result
-    }
-
-    /// Unload a runtime plugin.
-    ///
-    /// For MCP plugins, the loader drops the in-memory `.mcp.json` configs on
-    /// unload, so we capture the server IDs *first* and then ask the MCP manager
-    /// to tear down those transient servers — otherwise they would keep running
-    /// (and their tools stay registered) after the plugin is gone.
-    pub async fn unload_runtime_plugin(&self, plugin_id: &str) -> ExtensionResult<()> {
-        let server_ids: Vec<String> = {
-            let loader = self.plugin_loader.read().await;
-            loader
-                .get_mcp_configs(plugin_id)
-                .map(|servers| servers.keys().cloned().collect())
-                .unwrap_or_default()
-        };
-
-        // Stop any background services this plugin registered *before* unloading
-        // it — once the plugin is gone the stop handlers can no longer run, which
-        // would leave their background tasks orphaned (and their tooling still
-        // active) for the lifetime of the process.
-        let service_registrations: Vec<crate::extension::registry::ServiceRegistration> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_services()
-                .into_iter()
-                .filter(|s| s.plugin_id == plugin_id)
-                .cloned()
-                .collect()
-        };
-        if !service_registrations.is_empty() {
-            let service_manager = self.service_manager.clone().write_owned().await;
-            let loader = self.plugin_loader.clone().read_owned().await;
-            let plugin_id_owned = plugin_id.to_string();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let mut service_manager = service_manager;
-                service_manager.stop_plugin_services(
-                    &plugin_id_owned,
-                    &service_registrations,
-                    &loader,
-                );
-            })
-            .await
-            {
-                tracing::warn!(error = %e, "stop_plugin_services task join failed");
-            }
-        }
-
-        let result = self.plugin_loader.write().await.unload_plugin(plugin_id);
-
-        if result.is_ok() && !server_ids.is_empty() {
-            let handle = self
-                .mcp_handle
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            if let Some(handle) = handle {
-                for server_id in server_ids {
-                    if let Err(e) = handle.remove_transient_server(&server_id).await {
-                        tracing::warn!(
-                            plugin_id = plugin_id,
-                            server_id = %server_id,
-                            error = %e,
-                            "failed to remove transient MCP server on plugin unload"
-                        );
-                    }
-                }
-            }
-        }
-
-        result
+    ) -> Arc<tokio::sync::RwLock<super::PluginLoader>> {
+        self.plugin_loader.clone()
     }
 
     /// Get all plugin info from `PluginRegistry`.
@@ -310,6 +132,7 @@ impl ExtensionManager {
                 mcp_servers_count: record.mcp_server_count,
                 tools_count: record.tool_names.len(),
                 kind: record.kind.as_str().to_string(),
+                origin: record.origin.label().to_string(),
                 status: record.status.label().to_string(),
                 error: record.error.clone(),
             })
@@ -384,6 +207,29 @@ impl ExtensionManager {
             plugin_id,
         )
         .await
+    }
+
+    /// This plugin's configuration as a child process's environment
+    /// (`plugin_vars::settings_env`), in `form` — the one derivation behind a
+    /// plugin hook's environment and a plugin command's inline shell
+    /// environment. Plugin-owned only: a settings-source label such as
+    /// `user:project` is not a plugin id and gets nothing.
+    pub(crate) async fn plugin_settings_env(
+        &self,
+        plugin_id: &str,
+        form: crate::extension::plugin_secrets::SettingsForm,
+    ) -> Vec<(String, String)> {
+        use crate::extension::plugin_secrets::{without_secret_references, SettingsForm};
+        if crate::extension::manifest::validate_plugin_id(plugin_id).is_err() {
+            return Vec::new();
+        }
+        let settings = match form {
+            SettingsForm::Runtime => self.plugin_settings_for_runtime(plugin_id).await,
+            SettingsForm::WithoutSecrets => {
+                without_secret_references(&self.plugin_settings(plugin_id).await)
+            }
+        };
+        crate::extension::plugin_vars::settings_env(&settings)
     }
 
     /// Replace a plugin's configuration, validating it against the schema the
@@ -599,43 +445,33 @@ impl ExtensionManager {
             changed
         };
 
-        let changed = {
-            let mut registry = self.plugin_registry.write().await;
-            if enabled {
-                registry.enable_plugin(plugin_id)
-            } else {
-                registry.disable_plugin(plugin_id)
-            }
-        };
-
-        if changed {
-            if !enabled {
-                if let Err(e) = self.unload_runtime_plugin(plugin_id).await {
-                    // Non-fatal: the next reload attempt or process restart will
-                    // reap the orphaned runtime. Log so the operator can see
-                    // stale state without grepping logs at debug level.
-                    tracing::warn!(plugin_id = %plugin_id, error = %e, "failed to unload plugin runtime on disable");
+        let changed = if enabled {
+            match self.mount(plugin_id).await {
+                Ok(_) => true,
+                Err(super::MountError::AlreadyMounted(_)) => false,
+                Err(e) => {
+                    // The row already says why (Blocked / Error / Disabled);
+                    // the preference is recorded regardless.
+                    tracing::warn!(plugin_id = %plugin_id, error = %e, "enable: mount failed");
+                    false
                 }
             }
-            *self.hook_executor.write().await = crate::extension::hooks::HookExecutor::empty()
-                .with_consent(crate::extension::hooks::ShellHookConsent::shared());
-            self.sync_hooks_from_registry().await;
-            self.sync_user_hooks().await;
-
-            // One derivation for every plugin-owned process-global surface.
-            // This also refreshes the active-tool index, which is why the
-            // `sync_runtime_snapshots()` call that used to sit above is gone
-            // rather than merely moved — see `projection.rs` for why the
-            // derivation may not be written twice.
-            self.republish_plugin_projections().await;
-            // Re-mirror the durable plugin store into the loader. Without
-            // this, the loader's `plugin_settings` map carries the pre-toggle
-            // view: a plugin disabled via `set_plugin_enabled(_, false)` is
-            // hidden from the active-tool index but its config snapshot
-            // remains in the loader until the next `load_all` or `reload`
-            // re-publishes it.
-            self.publish_plugin_settings().await;
-        }
+        } else {
+            match self.unmount(plugin_id).await {
+                Ok(report) => {
+                    if !report.all_ok() {
+                        tracing::warn!(plugin_id = %plugin_id, ?report, "disable: some effects did not dispose cleanly");
+                    }
+                    true
+                }
+                // A row that was never mounted (Error / Blocked) still takes
+                // the operator's verdict on its status.
+                Err(super::UnmountError::NotMounted(_)) => {
+                    self.plugin_registry.write().await.disable_plugin(plugin_id)
+                }
+                Err(super::UnmountError::NotFound(_)) => false,
+            }
+        };
 
         changed || preference_changed
     }

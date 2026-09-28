@@ -15,6 +15,7 @@ mod run_context;
 mod types;
 
 pub mod loader;
+pub(crate) mod system_prompt;
 pub(crate) mod tool_sets;
 
 pub mod allowlist_tool_service;
@@ -38,7 +39,10 @@ pub mod sub_agents;
 pub mod swarm;
 
 pub use forwarding_trace_sink::ForwardingTraceSink;
-pub use registry::{builtin_agents, plugin_subagents, publish_plugin_subagents, AgentRegistry};
+pub use registry::{
+    builtin_agents, plugin_subagents, publish_plugin_subagents, visible_plugin_subagents,
+    AgentRegistry, PluginSubagent,
+};
 pub use run_context::{current_agent_id, with_agent_id};
 pub use runtime::{
     AgentIdentity, AgentRuntime, AgentRuntimeConfig, Lifecycle, SpawnOverride, SubagentTranscript,

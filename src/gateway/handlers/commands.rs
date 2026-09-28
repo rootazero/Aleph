@@ -192,14 +192,27 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
 /// carries a curated `usage` hint (builtins / skills / plugins / custom
 /// commands) or a friendly alias seeded from `tool_metadata::aliases`
 /// (`/model`→select_model, …). `channel` scopes visibility when known.
+///
+/// This is the channel-side list face of the verb `commands.list` serves:
+/// rows a plugin owns are listed only when `owner_visible(plugin_id, ctx)`
+/// says so, with the same daemon-CWD ctx `handle_list_from_registry` derives
+/// (its rationale comment applies here verbatim) — otherwise a channel user
+/// is offered `/proj:cmd` and then refused by the slash fast path.
 pub(crate) async fn render_command_help(
     catalog: &ToolCatalog,
     channel: Option<ChannelType>,
+    owner_visible: &(dyn Fn(&str, &crate::extension::visibility::VisibilityCtx) -> bool + Sync),
 ) -> String {
     let tools = match channel {
         Some(ch) => catalog.list_for_channel(ch).await,
         None => catalog.list_all_for_ui().await,
     };
+    let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(None);
+    let tools = crate::extension::visibility::retain_visible_owned_commands(
+        tools,
+        &visibility,
+        owner_visible,
+    );
 
     let mut curated: Vec<&UnifiedTool> = tools
         .iter()
@@ -250,7 +263,9 @@ fn capitalize(s: &str) -> String {
 /// List all registered commands from `ToolCatalog` (tree structure)
 ///
 /// Returns a hierarchical command tree where dotted tool names
-/// are grouped under their namespace prefix.
+/// are grouped under their namespace prefix. Rows a plugin owns are
+/// listed only when `owner_visible(plugin_id, ctx)` says the daemon's own
+/// project may see that plugin (`extension::visibility`, face ④).
 ///
 /// # Example Response
 ///
@@ -277,6 +292,7 @@ fn capitalize(s: &str) -> String {
 pub async fn handle_list_from_registry(
     request: JsonRpcRequest,
     tool_registry: &ToolCatalog,
+    owner_visible: &(dyn Fn(&str, &crate::extension::visibility::VisibilityCtx) -> bool + Sync),
 ) -> JsonRpcResponse {
     // Honor the optional `interface` hint that clients (TUI, Panel, …) already
     // send: when it maps to a known channel, list only the commands visible to
@@ -291,10 +307,22 @@ pub async fn handle_list_from_registry(
         .and_then(|v| v.as_str())
         .and_then(channel_from_interface);
 
+    // Face ④ of `extension::visibility`, the list half. No project parameter
+    // (R2.3: no client sends one). The ctx is the one a project-less run gets
+    // — `from_project_root(None)` = daemon CWD — so the list the TUI/CLI see
+    // agrees with what a run started from them can use. `owner_visible` is
+    // `ExtensionManager::plugin_visible` in production; a closure in tests.
+    let visibility = crate::extension::visibility::VisibilityCtx::from_project_root(None);
+
     let tools: Vec<UnifiedTool> = match channel {
         Some(ch) => tool_registry.list_for_channel(ch).await,
         None => tool_registry.list_root_commands().await,
     };
+    let tools = crate::extension::visibility::retain_visible_owned_commands(
+        tools,
+        &visibility,
+        owner_visible,
+    );
     let tree = build_command_tree(tools);
 
     JsonRpcResponse::success(
@@ -552,7 +580,7 @@ mod tests {
             Some(json!({"interface": "telegram"})),
             json!(1),
         );
-        let resp = handle_list_from_registry(req, &registry).await;
+        let resp = handle_list_from_registry(req, &registry, &|_, _| true).await;
         let names: Vec<String> = resp.result.unwrap()["commands"]
             .as_array()
             .unwrap()
@@ -564,7 +592,7 @@ mod tests {
 
         // No hint → no filter → both commands present.
         let req_all = JsonRpcRequest::with_id("commands.list", None, json!(1));
-        let resp_all = handle_list_from_registry(req_all, &registry).await;
+        let resp_all = handle_list_from_registry(req_all, &registry, &|_, _| true).await;
         let names_all: Vec<String> = resp_all.result.unwrap()["commands"]
             .as_array()
             .unwrap()
@@ -573,6 +601,61 @@ mod tests {
             .collect();
         assert!(names_all.contains(&"ping".to_string()));
         assert!(names_all.contains(&"danger".to_string()));
+    }
+
+    /// Face ④ of `extension::visibility`, the list half: a `commands/*.md`
+    /// entry whose owning plugin the daemon's own project cannot see is not
+    /// listed. The handler takes no project parameter (R2.3: no client sends
+    /// one), so the tempdir plugin is the "other project" case by construction.
+    #[tokio::test]
+    async fn list_from_registry_hides_commands_of_plugins_the_daemon_cannot_see() {
+        use crate::tool_metadata::ToolSource;
+        let p = tempfile::tempdir().unwrap();
+        let registry = ToolCatalog::new();
+        for (id, name, source) in [
+            (
+                "skill:proj:cmd",
+                "proj:cmd",
+                ToolSource::Skill {
+                    id: "proj:cmd".into(),
+                    plugin_id: Some("proj".into()),
+                },
+            ),
+            (
+                "skill:glob:cmd",
+                "glob:cmd",
+                ToolSource::Skill {
+                    id: "glob:cmd".into(),
+                    plugin_id: Some("glob".into()),
+                },
+            ),
+            ("builtin:help", "help", ToolSource::Builtin),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(id, name, "d", source))
+                .await;
+        }
+        // `proj` is scoped to a tempdir — never the daemon CWD the handler
+        // derives its ctx from — while `glob` is visible everywhere.
+        let visible = |id: &str, ctx: &crate::extension::visibility::VisibilityCtx| match id {
+            "glob" => true,
+            "proj" => crate::extension::visibility::visible_to(
+                &crate::extension::visibility::ScopeKey::project(p.path()),
+                ctx,
+            ),
+            _ => false,
+        };
+        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
+        let resp = handle_list_from_registry(request, &registry, &visible).await;
+        let got: Vec<String> = resp.result.unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!got.contains(&"proj:cmd".to_string()), "{got:?}");
+        assert!(got.contains(&"glob:cmd".to_string()), "{got:?}");
+        assert!(got.contains(&"help".to_string()), "{got:?}");
     }
 
     #[tokio::test]
@@ -589,7 +672,7 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
-        let response = handle_list_from_registry(request, &registry).await;
+        let response = handle_list_from_registry(request, &registry, &|_, _| true).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();
@@ -623,7 +706,7 @@ mod tests {
         }
 
         let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
-        let response = handle_list_from_registry(request, &registry).await;
+        let response = handle_list_from_registry(request, &registry, &|_, _| true).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();
@@ -686,7 +769,7 @@ mod tests {
         }
 
         let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
-        let response = handle_list_from_registry(request, &registry).await;
+        let response = handle_list_from_registry(request, &registry, &|_, _| true).await;
         let result = response.result.expect("commands.list must succeed");
 
         let parsed: aleph_protocol::commands::CommandListResponse = serde_json::from_value(result)
@@ -1137,7 +1220,7 @@ mod tests {
             ))
             .await;
 
-        let help = render_command_help(&registry, None).await;
+        let help = render_command_help(&registry, None, &|_, _| true).await;
 
         assert!(help.contains("/help"), "curated /help must appear:\n{help}");
         assert!(
@@ -1157,5 +1240,40 @@ mod tests {
             help.contains("namespace"),
             "fold hint line missing:\n{help}"
         );
+    }
+
+    /// `/help` is the channel-side list face of the same verb `commands.list`
+    /// serves: a plugin-owned row the daemon cannot see must not be offered.
+    #[tokio::test]
+    async fn render_command_help_hides_commands_of_plugins_the_daemon_cannot_see() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = ToolCatalog::new();
+        registry.register_builtin_tools().await;
+        // A plugin-owned skill row, carrying the usage hint `register_skills`
+        // gives every skill row (that hint is what makes it a curated line).
+        registry
+            .register_with_conflict_resolution(
+                UnifiedTool::new(
+                    "skill:proj:cmd",
+                    "proj:cmd",
+                    "a plugin command",
+                    ToolSource::Skill {
+                        id: "proj:cmd".into(),
+                        plugin_id: Some("proj".into()),
+                    },
+                )
+                .with_usage("/proj:cmd [input]"),
+            )
+            .await;
+
+        let hidden = render_command_help(&registry, None, &|_, _| false).await;
+        assert!(!hidden.contains("proj:cmd"), "{hidden}");
+        assert!(
+            hidden.contains("/help"),
+            "unowned rows still listed:\n{hidden}"
+        );
+        let shown = render_command_help(&registry, None, &|_, _| true).await;
+        assert!(shown.contains("proj:cmd"), "{shown}");
     }
 }

@@ -610,7 +610,8 @@ pub(crate) struct ResumePlan {
     /// Request metadata the resumed run carries: the three replayable knobs
     /// plus the tier CEILING (never the tier request rung — see
     /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]), plus
-    /// the two per-run facts (skill scope, `/btw` stamp) under the keys their
+    /// the two per-run facts (a plugin command's tool restriction, `/btw`
+    /// stamp) under the keys their
     /// owning modules spell.
     pub(crate) knobs: HashMap<String, String>,
     /// What the model is told it lost, if anything.
@@ -625,8 +626,10 @@ pub(crate) struct ResumePlan {
 /// The per-run FACTS a `RunStarted` envelope freezes alongside the knobs —
 /// the marker's own field names, spelled so the two facts cannot drift from
 /// the metadata keys they are copied from and replayed to: the `/btw` stamp's
-/// field IS the stamp's key (`btw::BTW_METADATA_KEY`), and the skill scope is
-/// named literally because its request-metadata spelling belongs to
+/// field IS the stamp's key (`btw::BTW_METADATA_KEY`), and the tool
+/// restriction (a plugin command's `allowed-tools`; a skill's pre-grant is
+/// per turn and never frozen) is named literally because its request-metadata
+/// spelling belongs to
 /// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
 /// not the marker's word.
 ///
@@ -2985,7 +2988,8 @@ mod tests {
         );
     }
 
-    /// §6.3 the skill scope is a per-run FACT with one rung: the snapshot.
+    /// §6.3 the tool restriction (a plugin command's) is a per-run FACT with
+    /// one rung: the snapshot.
     /// Present ⇒ it reaches the resumed request under the same key the run
     /// loop decodes; absent ⇒ nothing is stamped (full surface) and nothing
     /// degrades — "declared nothing" is the normal case, not a loss.

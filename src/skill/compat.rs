@@ -27,16 +27,38 @@ pub struct SkillInfo {
     /// (which are registered through this same shape but carry no manifest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The skill's declared `allowed-tools:` list, projected verbatim from the
-    /// manifest. `None` = no declaration (allow-all); `Some(vec![])` = explicit
-    /// deny-all. `register_skills` validates the names against the tool
-    /// registry and carries the result onto `UnifiedTool.routing_capabilities`,
-    /// which is what the slash-command envelope and then the run loop read.
+    /// The declared `allowed-tools:` list. Registration
+    /// (`ToolCatalog::register_skills` / `register_plugin_commands`) validates
+    /// the names against the tool registry and carries the result onto
+    /// `UnifiedTool.routing_capabilities`, which is what the slash-command
+    /// envelope carries.
     ///
-    /// Plugin *commands* are registered through this same shape and carry no
-    /// manifest, so they always project `None`.
+    /// Plugin *commands* are registered through this same shape with no
+    /// manifest behind them; theirs, if any, is the command file's own
+    /// `allowed-tools:`, already mapped to Aleph names at parse time
+    /// (`slash_effect::plugin_command_skill_info`), and it RESTRICTS the turn:
+    /// `None` = no declaration (allow-all); `Some(vec![])` = explicit deny-all.
+    /// A skill's, projected verbatim from its manifest (Claude Code names and
+    /// all), PRE-GRANTS instead: registration maps each entry to an Aleph name
+    /// and keeps the ones that exist, dropping the rest with a warn — a skill
+    /// is never refused — and a typed `/<skill>` grants the loaded file's list
+    /// ∩ that validated list (`gateway::execution_engine::slash_skill_pregrant`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
+    /// Claude Code `argument-hint:` (`"[pr-number]"`): the slash entry's
+    /// usage line and completion hint (`register_skills`). Only plugin
+    /// commands carry one; the skill scan does not read the key, so a
+    /// manifest-backed skill projects `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    /// The plugin that registered this entry (`commands/*.md` of a plugin, or a
+    /// plugin-shipped skill). `None` for user / bundled skills. Carried onto
+    /// `ToolSource::Skill` so the slash list and fast path can ask
+    /// `extension::visibility` whether this session may see the owner. Unmount
+    /// does not read it — the `slash_command` disposer removes the exact ids
+    /// it registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
 }
 
 impl From<SkillManifest> for SkillInfo {
@@ -50,6 +72,11 @@ impl From<SkillManifest> for SkillInfo {
             allowed_tools: manifest
                 .allowed_tools()
                 .map(|tools| tools.iter().map(String::clone).collect()),
+            argument_hint: None,
+            plugin_id: match manifest.source() {
+                crate::domain::skill::SkillSource::Plugin(id) => Some(id.as_str().to_string()),
+                _ => None,
+            },
         }
     }
 }
@@ -96,6 +123,27 @@ mod tests {
         assert_eq!(info.scope, PromptScope::System);
         assert!(info.version.is_none());
         assert!(info.allowed_tools.is_none());
+        assert!(info.plugin_id.is_none(), "a global skill has no owner");
+    }
+
+    /// The boot path (`init_tool_catalog`) projects every user-invocable
+    /// manifest through this `From`, so it is where a plugin-shipped skill's
+    /// owner first reaches the catalog row. Both impls (`SkillManifest` and
+    /// `&SkillManifest`) must agree; the by-ref one delegates.
+    #[test]
+    fn skill_info_names_the_owning_plugin_of_a_plugin_skill() {
+        use crate::domain::skill::PluginId;
+        let manifest = SkillManifest::new(
+            "proj:cmd",
+            "cmd",
+            "Owned",
+            SkillContent::new("c"),
+            SkillSource::Plugin(PluginId::new("proj")),
+        );
+        let by_ref: SkillInfo = (&manifest).into();
+        assert_eq!(by_ref.plugin_id.as_deref(), Some("proj"));
+        let by_value: SkillInfo = manifest.into();
+        assert_eq!(by_value.plugin_id.as_deref(), Some("proj"));
     }
 
     /// The projection must carry the empty-vs-absent distinction, not just the

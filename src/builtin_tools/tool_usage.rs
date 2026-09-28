@@ -126,13 +126,11 @@ impl AlephTool for ToolUsageTool {
             .collect();
 
         let forgotten = if args.forget_orphans && !report.orphans.is_empty() {
-            let orphans = report.orphans.clone();
-            let count = orphans.len();
+            let count = report.orphans.len();
+            let report = report.clone();
             tokio::task::spawn_blocking(move || {
                 if let Some(store) = ToolUsageStore::default_path() {
-                    for key in &orphans {
-                        store.forget(key);
-                    }
+                    crate::tools::usage::report::forget_orphans(&report, &store);
                 }
             })
             .await

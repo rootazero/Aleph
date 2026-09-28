@@ -414,6 +414,18 @@ impl ServiceManager {
         results
     }
 
+    /// Drop every row this plugin has in the state and registration tables.
+    /// Called by the `service` effect's disposer after `stop_plugin_services`,
+    /// so an unmounted plugin leaves no `Stopped`/`Failed` ghosts behind for
+    /// `services.list` to show. Returns how many rows were dropped.
+    pub fn forget_plugin(&mut self, plugin_id: &str) -> usize {
+        let before = self.services.len();
+        self.services.retain(|_, info| info.plugin_id != plugin_id);
+        self.registrations
+            .retain(|_, reg| reg.plugin_id != plugin_id);
+        before - self.services.len()
+    }
+
     /// Stop every service that is currently Running or Starting, using the
     /// registration snapshots captured at start time.
     ///
@@ -435,49 +447,6 @@ impl ServiceManager {
                 Ok(info) => results.push(info),
                 Err(e) => warn!(
                     "Failed to stop service {}:{} during stop_all - {}",
-                    registration.plugin_id, registration.id, e
-                ),
-            }
-        }
-        results
-    }
-
-    /// Stop running services whose plugin is no longer active.
-    ///
-    /// Called after a hot-reload rebuilt the plugin registry: a plugin that
-    /// was removed or disabled on disk leaves its services running with no
-    /// registry entry to stop them. `is_active` reports whether a `plugin_id`
-    /// is still active after the reload.
-    pub fn stop_orphaned(
-        &mut self,
-        is_active: impl Fn(&str) -> bool,
-        loader: &PluginLoader,
-    ) -> Vec<ServiceInfo> {
-        let to_stop: Vec<ServiceRegistration> = self
-            .services
-            .iter()
-            .filter(|(_, info)| {
-                matches!(info.state, ServiceState::Running | ServiceState::Starting)
-                    && !is_active(&info.plugin_id)
-            })
-            .filter_map(|(key, _)| self.registrations.get(key).cloned())
-            .collect();
-
-        let mut results = Vec::new();
-        for registration in &to_stop {
-            info!(
-                "Stopping orphaned service {}:{} (plugin no longer active)",
-                registration.plugin_id, registration.id
-            );
-            match self.stop_service(registration, loader) {
-                Ok(info) => {
-                    let key = Self::make_key(&registration.plugin_id, &registration.id);
-                    self.services.remove(&key);
-                    self.registrations.remove(&key);
-                    results.push(info);
-                }
-                Err(e) => warn!(
-                    "Failed to stop orphaned service {}:{} - {}",
                     registration.plugin_id, registration.id, e
                 ),
             }
@@ -700,26 +669,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stop_orphaned_only_stops_inactive_plugins() {
-        let mut manager = ServiceManager::new();
-        let loader = PluginLoader::new();
-
-        insert_running(&mut manager, "plugin-active", "s1");
-        insert_running(&mut manager, "plugin-removed", "s1");
-
-        let results = manager.stop_orphaned(|id| id == "plugin-active", &loader);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].plugin_id, "plugin-removed");
-
-        // Orphan is removed from tracking; the active service is untouched.
-        assert!(manager.get_service("plugin-removed", "s1").is_none());
-        assert_eq!(
-            manager.get_service("plugin-active", "s1").unwrap().state,
-            ServiceState::Running
-        );
-    }
-
-    #[test]
     fn test_stop_plugin_services_empty() {
         let mut manager = ServiceManager::new();
         let loader = PluginLoader::new();
@@ -749,5 +698,31 @@ mod tests {
         for info in results {
             assert_eq!(info.plugin_id, "plugin-a");
         }
+    }
+
+    #[test]
+    fn forget_plugin_drops_only_that_plugins_rows() {
+        let mut sm = ServiceManager::new();
+        let loader = PluginLoader::new();
+        let a = ServiceRegistration {
+            id: "svc".into(),
+            name: "svc".into(),
+            start_handler: "start".into(),
+            stop_handler: "stop".into(),
+            plugin_id: "a".into(),
+            auto_start: true,
+        };
+        let b = ServiceRegistration {
+            plugin_id: "b".into(),
+            ..a.clone()
+        };
+        // Both fail to start (no runtime loaded) and are recorded as Failed rows.
+        let _ = sm.start_service(&a, &loader);
+        let _ = sm.start_service(&b, &loader);
+        assert_eq!(sm.list_services().len(), 2);
+        assert_eq!(sm.forget_plugin("a"), 1);
+        assert_eq!(sm.list_services().len(), 1);
+        assert_eq!(sm.list_services()[0].plugin_id, "b");
+        assert_eq!(sm.forget_plugin("a"), 0, "idempotent");
     }
 }
