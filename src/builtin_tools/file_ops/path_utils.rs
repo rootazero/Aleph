@@ -58,7 +58,7 @@ pub fn get_denied_paths() -> Vec<DeniedPath> {
         "~/.git-credentials",
     ]
     .into_iter()
-    .map(DeniedPath::literal)
+    .map(DeniedPath::template)
     .collect();
 
     // Add specific Aleph config files (not the entire directory)
@@ -156,19 +156,19 @@ pub fn get_denied_paths() -> Vec<DeniedPath> {
     }
 
     // Add Windows-specific sensitive paths. The `%APPDATA%` / `%LOCALAPPDATA%`
-    // tokens are expanded at match time by [`path_is_denied`] — without that
-    // two of these three rules never fire (a canonical path never literally
-    // contains `%APPDATA%`).
+    // entries are templates: each is expanded once, when it is compiled
+    // (`denied_entry_key` → `expand_denied_entry`) — without that they never
+    // fire (a canonical path never literally contains `%APPDATA%`).
     #[cfg(target_os = "windows")]
     {
         denied_paths.extend(
             [
                 "%APPDATA%\\Microsoft\\Credentials",
                 "%LOCALAPPDATA%\\Microsoft\\Credentials",
-                "C:\\Windows\\System32\\config",
             ]
-            .map(DeniedPath::literal),
+            .map(DeniedPath::template),
         );
+        denied_paths.push(DeniedPath::literal("C:\\Windows\\System32\\config"));
     }
 
     // The operator's `[sandbox] deny_read_globs` floor. Appended last so a
@@ -179,17 +179,27 @@ pub fn get_denied_paths() -> Vec<DeniedPath> {
     denied_paths
 }
 
-/// One denylist entry, carrying its kind: a concrete location or a pattern.
+/// One denylist entry, carrying its kind: what it is, and whether it is
+/// expanded.
 ///
 /// The kind is fixed where the entry is MADE, by who spelled it, and never
-/// re-derived from how it reads. Every entry Aleph's own code builds is a
-/// location ([`DeniedPath::literal`]), even when its text holds `*`, `?` or
-/// `[`: `format!("{}/secrets.vault", config_dir.display())` is an expansion
-/// of `$ALEPH_HOME`, not a spelling anyone chose, and read by shape a home
-/// under `h[1]` turned the vault, `data/`, the human-gate files and the
-/// pre-grant roots into patterns that matched nothing (P4.19). Only an
-/// operator's `[sandbox] deny_read_globs` entry may be a pattern
-/// ([`DeniedPath::operator_spelled`], private to this module).
+/// re-derived from how it reads — neither whether it is a pattern nor whether
+/// it is expanded:
+/// - **A location Aleph's code built** ([`DeniedPath::literal`]) is matched
+///   exactly as built. `format!("{}/secrets.vault", config_dir.display())` is
+///   already an expansion of `$ALEPH_HOME`, not a spelling anyone chose. Read
+///   by shape, a home under `h[1]` turned the vault, `data/`, the human-gate
+///   files and the pre-grant roots into patterns that matched nothing; read
+///   as a template, `ALEPH_HOME=~/x` left unexpanded (systemd, launchd,
+///   `docker -e`) had its `~` expanded to `$HOME/x`, so the entries protected
+///   a file that is not Aleph's while Aleph's own state under `<cwd>/~/x`
+///   went unprotected (P4.19).
+/// - **A template this module spells** ([`DeniedPath::template`], private) —
+///   `~/.ssh`, `%APPDATA%\…` — is expanded once, when it is compiled
+///   ([`expand_denied_entry`]).
+/// - **An operator's `[sandbox] deny_read_globs` entry**
+///   ([`DeniedPath::operator_spelled`], private) is the only one that may be
+///   a pattern; a metacharacter-free one is a template, as it always was.
 ///
 /// Every face that consults the denylist gets its list from
 /// [`get_denied_paths`] and an entry's meaning from [`denied_entry_normalized`],
@@ -203,36 +213,80 @@ pub struct DeniedPath {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeniedKind {
-    Literal,
+    /// Matched exactly as built; never expanded.
+    Location,
+    /// A `~/…` / `%VAR%` template, expanded when it is compiled.
+    Template,
+    /// A glob, compiled by the OS floor's translator; never expanded.
     Pattern,
 }
 
 impl DeniedPath {
-    /// A concrete location: an absolute path, or a `~/…` / `%APPDATA%\…`
-    /// template expanded at match time ([`expand_denied_entry`]). Never a
-    /// pattern, whatever characters it contains.
+    /// A location Aleph's code built from a path it resolved (the config dir,
+    /// a store's `default_path()`, a pre-grant root, a system file). Matched
+    /// exactly as built: never a pattern and never expanded, whatever
+    /// characters it contains — a leading `~` or a `%APPDATA%` in it is part
+    /// of a directory's name, because that is how the store that owns the
+    /// path opens it.
+    ///
+    /// A relative path (a relative `ALEPH_HOME`) is made absolute against the
+    /// working directory here, as the store opening it would, so the memo
+    /// does not depend on what the working directory is when it compiles.
     pub fn literal(spelling: impl Into<String>) -> Self {
+        let spelling = spelling.into();
+        let spelling = if Path::new(&spelling).is_relative() {
+            std::path::absolute(&spelling)
+                .map(|absolute| absolute.to_string_lossy().into_owned())
+                .unwrap_or(spelling)
+        } else {
+            spelling
+        };
         Self {
-            spelling: spelling.into(),
-            kind: DeniedKind::Literal,
+            spelling,
+            kind: DeniedKind::Location,
+        }
+    }
+
+    /// A `~/…` / `%APPDATA%\…` template spelled in this module's source.
+    /// `&'static str`, so a path resolved at runtime cannot be handed to the
+    /// expanding kind.
+    fn template(spelling: &'static str) -> Self {
+        Self {
+            spelling: spelling.to_string(),
+            kind: DeniedKind::Template,
         }
     }
 
     /// An entry as an operator wrote it in `[sandbox] deny_read_globs`: a
     /// pattern if its spelling has a glob metacharacter ([`looks_like_glob`]),
-    /// a location otherwise. The one place the shape of a string decides a
+    /// a template otherwise. The one place the shape of a string decides a
     /// kind. Private so no other producer can mint a pattern.
+    ///
+    /// Says so once, here, when the entry names `~` or a `%VAR%` token: the
+    /// OS sandbox expands neither, so the two faces disagree about it.
     fn operator_spelled(spelling: impl Into<String>) -> Self {
         let spelling = spelling.into();
         let kind = if looks_like_glob(&spelling) {
             DeniedKind::Pattern
         } else {
-            DeniedKind::Literal
+            DeniedKind::Template
         };
+        if names_an_unexpanded_token(&spelling) {
+            let consequence = if kind == DeniedKind::Pattern {
+                "the file tools do not expand a pattern either, so it matches nothing"
+            } else {
+                "the file tools do, so a command run inside the sandbox can still read it"
+            };
+            warn!(
+                entry = %spelling,
+                "file_ops: deny_read_globs entry starts with `~` or holds a `%VAR%` token; \
+                 the OS sandbox does not expand this entry; {consequence}"
+            );
+        }
         Self { spelling, kind }
     }
 
-    /// The entry as spelled (a pattern's text, a literal's unexpanded form).
+    /// The entry as spelled (a pattern's text, a template's unexpanded form).
     pub fn as_str(&self) -> &str {
         &self.spelling
     }
@@ -322,14 +376,14 @@ fn parse_deny_read_globs(toml_text: &str) -> Vec<String> {
     globs
 }
 
-/// Expand a **literal** denylist entry's leading `~` (home) and Windows
+/// Expand a **template** denylist entry's leading `~` (home) and Windows
 /// environment tokens (`%APPDATA%` / `%LOCALAPPDATA%` / `%USERPROFILE%`) to
 /// concrete paths so the prefix comparison below sees the same shape a
-/// canonical path has. Unix entries carry no `%…%` tokens, so the Windows
-/// expansion is a no-op there.
+/// canonical path has. On other targets the `%…%` expansion is a no-op.
 ///
 /// Pattern entries deliberately do NOT come through here — see
-/// [`compile_denied_pattern`].
+/// [`compile_denied_pattern`] — and neither do code-built locations
+/// ([`DeniedPath::literal`]): they are already expanded.
 fn expand_denied_entry(denied: &str) -> String {
     // `mut` is only exercised on Windows (the env-token expansion below); on
     // other targets the binding is written once.
@@ -364,7 +418,8 @@ fn expand_denied_entry(denied: &str) -> String {
 
 /// One denylist entry in the form the matchers consume.
 enum DeniedEntry {
-    /// A concrete location: expanded ([`expand_denied_entry`]) and normalized
+    /// A concrete location (a template expanded by [`expand_denied_entry`], a
+    /// code-built location as built) normalized
     /// ([`safe_normalize`]) the same way an input path is, then matched by
     /// path-component prefix so the entry covers its whole subtree.
     Literal(PathBuf),
@@ -432,16 +487,9 @@ fn glob_shape_subject(entry: &str) -> &str {
 fn compile_denied_pattern(denied: &str) -> DeniedEntry {
     // Deliberately NO `~` / `%APPDATA%` expansion for patterns: the OS
     // floor does not expand either, and a pattern that meant two different
-    // things to the two faces is the very asymmetry this wiring closes.
-    // Said out loud, once per pattern, because nothing else would.
-    if names_an_unexpanded_token(denied) {
-        warn!(
-            entry = %denied,
-            "file_ops: deny_read_globs pattern starts with `~` or holds a `%VAR%` token; \
-             patterns are not expanded (here or by the OS sandbox), so it cannot match \
-             the location it names"
-        );
-    }
+    // things to the two faces is the very asymmetry this wiring closes. A
+    // pattern that names `~` or `%VAR%` is warned about where it is made
+    // ([`DeniedPath::operator_spelled`]).
     let Some(pattern) = crate::sandbox::deny_globs::glob_to_anchored_regex(denied) else {
         warn!(entry = %denied, "file_ops: empty deny_read_globs entry ignored");
         return DeniedEntry::InertGlob;
@@ -460,19 +508,22 @@ fn compile_denied_pattern(denied: &str) -> DeniedEntry {
     }
 }
 
-/// Whether a pattern names a home or environment token that only a LITERAL
-/// entry gets expanded ([`expand_denied_entry`]): a leading `~`, or a
-/// `%NAME%` pair. The regex is anchored at `^` and matched against canonical
-/// absolute paths, so such a pattern is silently dead on both faces.
-fn names_an_unexpanded_token(pattern: &str) -> bool {
-    let env_token = pattern
+/// Whether an operator entry names a home or environment token: a leading
+/// `~`, or a `%NAME%` pair. The OS sandbox expands neither (its regex is
+/// anchored at `^` and matched against canonical absolute paths). On the
+/// file tools a template is expanded ([`expand_denied_entry`]) and a pattern
+/// is not — so such a pattern is dead on both faces, and such a template is
+/// enforced by the file tools alone.
+fn names_an_unexpanded_token(entry: &str) -> bool {
+    let env_token = entry
         .split_once('%')
         .and_then(|(_, rest)| rest.split_once('%'))
         .is_some_and(|(name, _)| !name.is_empty());
-    pattern.starts_with('~') || env_token
+    entry.starts_with('~') || env_token
 }
 
-/// A literal entry, from its already-expanded form ([`expand_denied_entry`]).
+/// A location or template entry, from its key ([`denied_entry_key`]): a
+/// location as built, a template already expanded ([`expand_denied_entry`]).
 ///
 /// Never re-classified: an expansion may contain `*`, `?` or `[` — a home
 /// directory named `a[1]` — and is still the one location the operator's
@@ -508,10 +559,10 @@ impl DeniedMemo {
     }
 }
 
-/// The key an entry is memoised under: a literal's expansion under the
-/// current `$HOME` / environment, a pattern's own text. `pattern` is the
-/// entry's kind ([`DeniedPath::is_pattern`]), fixed where it was made —
-/// never read off the expansion.
+/// The key an entry is memoised under: a template's expansion under the
+/// current `$HOME` / environment; a location's or a pattern's own text. The
+/// kind is the entry's ([`DeniedPath`]), fixed where it was made — never
+/// read off the spelling or the expansion.
 ///
 /// Keyed by the raw spelling, `~/.ssh` was compiled once under whatever home
 /// was current at the first lookup and then served under every home after it —
@@ -526,13 +577,16 @@ impl DeniedMemo {
 /// `canonicalize()` / regex work the memo exists to avoid stays memoised.
 ///
 /// Patterns are keyed as written because they are never expanded (see
-/// [`compile_denied_pattern`]); literals without a `~` or `%…%` token expand
-/// to themselves and borrow.
-fn denied_entry_key(denied: &str, pattern: bool) -> std::borrow::Cow<'_, str> {
-    if pattern || !(denied.starts_with('~') || denied.contains('%')) {
-        std::borrow::Cow::Borrowed(denied)
-    } else {
+/// [`compile_denied_pattern`]); locations because they are already expanded
+/// ([`DeniedPath::literal`]) — re-expanding one read `ALEPH_HOME=~/x` as
+/// `$HOME/x`. Templates without a `~` or `%…%` token expand to themselves
+/// and borrow.
+fn denied_entry_key(denied: &str, kind: DeniedKind) -> std::borrow::Cow<'_, str> {
+    let expands = kind == DeniedKind::Template && (denied.starts_with('~') || denied.contains('%'));
+    if expands {
         std::borrow::Cow::Owned(expand_denied_entry(denied))
+    } else {
+        std::borrow::Cow::Borrowed(denied)
     }
 }
 
@@ -556,7 +610,7 @@ fn denied_entry_key(denied: &str, pattern: bool) -> std::borrow::Cow<'_, str> {
 /// meaning from here and nowhere else.
 fn denied_entry_normalized(entry: &DeniedPath) -> Arc<DeniedEntry> {
     let (denied, pattern) = (entry.as_str(), entry.is_pattern());
-    let key = denied_entry_key(denied, pattern);
+    let key = denied_entry_key(denied, entry.kind);
     let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
     let hit = {
         let memo = cache.read().unwrap_or_else(|e| e.into_inner());
@@ -595,7 +649,8 @@ fn denied_entry_normalized(entry: &DeniedPath) -> Arc<DeniedEntry> {
 /// they discover *after* the initial gate — a symlink or glob match can point
 /// at a denied target the top-level path never named.
 ///
-/// Literal entries are expanded ([`expand_denied_entry`]) and normalized the
+/// Literal entries (templates expanded by [`expand_denied_entry`], locations
+/// as built) are normalized the
 /// SAME way as the input (resolving symlinks in existing ancestors) before the
 /// component-wise prefix compare, so a symlinked ancestor (`/etc` →
 /// `/private/etc` on macOS) cannot defeat it. Pattern entries are matched
@@ -1674,7 +1729,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
     #[test]
     fn a_home_entry_compiled_under_one_home_is_not_served_under_another() {
         use crate::runtimes::post_install::HomeEnvGuard;
-        let entries = [DeniedPath::literal("~/.ssh")];
+        let entries = [DeniedPath::template("~/.ssh")];
         let (dir_a, dir_b) = (tempdir().unwrap(), tempdir().unwrap());
         let a = dir_a.path().canonicalize().unwrap();
         let b = dir_b.path().canonicalize().unwrap();
@@ -1707,7 +1762,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
     #[test]
     fn a_home_with_glob_metacharacters_is_still_a_literal_location() {
         use crate::runtimes::post_install::HomeEnvGuard;
-        let entries = [DeniedPath::literal("~/.ssh")];
+        let entries = [DeniedPath::template("~/.ssh")];
         let parent = tempdir().unwrap();
         let parent_path = parent.path().canonicalize().unwrap();
         let under = |home: &Path| home.join(".ssh").join("id_ed25519");
@@ -1853,6 +1908,95 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         );
     }
 
+    /// A code-built entry is matched as built, never re-expanded.
+    ///
+    /// `ALEPH_HOME=~/<x>` reaches the process unexpanded when systemd,
+    /// launchd or `docker -e` sets it, and Aleph then keeps its state under
+    /// `<cwd>/~/<x>`: the stores open the relative path they are given. The
+    /// denylist re-read the entry's leading `~` as a template and protected
+    /// `$HOME/<x>` instead — a file that is not Aleph's — while the real vault,
+    /// the auth DBs and the human-gate files were not refused.
+    ///
+    /// No file is created under the working directory: the real locations
+    /// are derived from the vault entry itself (absolute, ending in
+    /// `~/<x>/secrets.vault`), and are judged by the production pair.
+    #[test]
+    fn a_code_built_entry_is_never_re_expanded() {
+        use crate::runtimes::post_install::HomeEnvGuards;
+        let home = tempdir().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let tag = format!(
+            "p419f-{}",
+            home_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches('.')
+        );
+        // (the unexpanded `ALEPH_HOME`, what a re-expansion would read its
+        // token as — resolved while the guard holds the environment)
+        let mut cases: Vec<(String, fn() -> Option<PathBuf>)> =
+            vec![(format!("~/{tag}"), dirs::home_dir)];
+        if cfg!(windows) {
+            cases.push((format!("%USERPROFILE%\\{tag}"), || {
+                std::env::var_os("USERPROFILE").map(PathBuf::from)
+            }));
+        }
+
+        let mut wrong = Vec::new();
+        for (spelled, token) in cases {
+            let _env = HomeEnvGuards::acquire_and_set(&spelled, &home_path);
+            let token_target = token().map(|t| t.join(&tag));
+            let denied = get_denied_paths();
+            let vault_entry = denied
+                .iter()
+                .map(DeniedPath::as_str)
+                .find(|d| Path::new(d).ends_with(Path::new(&spelled).join("secrets.vault")))
+                .expect("the vault entry names the configured home")
+                .to_string();
+            let vault_entry = Path::new(&vault_entry);
+            if !vault_entry.is_absolute() {
+                wrong.push(format!(
+                    "{spelled}: the vault entry {} is relative, so the memo matches it against \
+                     whatever the working directory is when it compiles",
+                    vault_entry.display()
+                ));
+            }
+            // Where the stores open: relative to the process's working directory.
+            let real_home = if vault_entry.is_absolute() {
+                vault_entry.parent().unwrap().to_path_buf()
+            } else {
+                std::env::current_dir().unwrap().join(&spelled)
+            };
+            for leaf in [
+                "secrets.vault",
+                "data/x.db",
+                "shell-hooks-allowlist.json",
+                "approval-grants.json",
+                "approval-policy.json",
+                "data/plugins.toml",
+                "skills/s/SKILL.md",
+                "plugins/p/plugin.json",
+            ] {
+                let real = safe_normalize(&real_home.join(leaf)).unwrap();
+                if !path_is_denied(&real, &denied) {
+                    wrong.push(format!("{spelled}: the real {leaf} is not refused"));
+                }
+                let Some(decoy) = token_target.as_ref().map(|t| t.join(leaf)) else {
+                    continue;
+                };
+                if path_is_denied(&decoy, &denied) {
+                    wrong.push(format!(
+                        "{spelled}: {} is refused: the entry was re-expanded to a file that is \
+                         not Aleph's",
+                        decoy.display()
+                    ));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     /// A literal and a pattern whose texts coincide keep separate compiles.
     ///
     /// `~/.ssh` under `HOME=<p>/home[1]` expands to `<p>/home[1]/.ssh`, which
@@ -1874,7 +2018,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             fs::create_dir_all(home.join(".ssh")).unwrap();
             fs::create_dir_all(class_match.join(".ssh")).unwrap();
             let _home = HomeEnvGuard::acquire_and_set(&home);
-            let literal = DeniedPath::literal("~/.ssh");
+            let literal = DeniedPath::template("~/.ssh");
             let pattern = DeniedPath::operator_spelled(expand_denied_entry("~/.ssh"));
             assert!(pattern.is_pattern(), "the operator's `[1]` is a class");
             assert_eq!(pattern.as_str(), home.join(".ssh").to_string_lossy());
@@ -1904,6 +2048,19 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         assert!(DeniedPath::operator_spelled("/data/[archive]").is_pattern());
         assert!(!DeniedPath::operator_spelled("/srv/app/secrets").is_pattern());
         assert!(!DeniedPath::literal("/data/[archive]").is_pattern());
+        // A metacharacter-free operator entry is expanded as it always was;
+        // a code-built location never is, whatever it starts with.
+        assert_eq!(
+            DeniedPath::operator_spelled("~/private").kind,
+            DeniedKind::Template
+        );
+        let built = DeniedPath::literal("~/aleph-home/secrets.vault");
+        assert_eq!(built.kind, DeniedKind::Location);
+        assert!(
+            Path::new(built.as_str()).is_absolute(),
+            "a relative location is made absolute where it is built: {}",
+            built.as_str()
+        );
 
         let root = tempdir().unwrap();
         let key = root.path().join("a").join("b").join("k.pem");
@@ -1915,10 +2072,47 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         ));
     }
 
-    /// A pattern that names `~` or `%VAR%` says so once, at compile: neither
-    /// face expands a pattern, so it cannot match what it names.
+    /// Only a template's key is an expansion; a location's is its spelling.
+    ///
+    /// On unix a built location cannot start with `~` once it is absolute,
+    /// and `%…%` expansion is Windows-only, so no lookup there can tell a
+    /// re-expanded location from one matched as built — only this pin and the
+    /// Windows case of `a_code_built_entry_is_never_re_expanded` can.
     #[test]
-    fn an_unexpandable_pattern_warns_once_at_compile() {
+    fn only_a_template_key_is_an_expansion() {
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire();
+        for spelling in ["~/x/secrets.vault", "%USERPROFILE%\\x\\secrets.vault"] {
+            assert_eq!(
+                denied_entry_key(spelling, DeniedKind::Location),
+                spelling,
+                "a location is keyed as built"
+            );
+            assert_eq!(
+                denied_entry_key(spelling, DeniedKind::Pattern),
+                spelling,
+                "a pattern is keyed as written"
+            );
+        }
+        assert_eq!(
+            denied_entry_key("~/x", DeniedKind::Template),
+            expand_denied_entry("~/x"),
+            "a template is keyed by its expansion"
+        );
+        assert_ne!(
+            denied_entry_key("~/x", DeniedKind::Template),
+            "~/x",
+            "`~` expands wherever a home resolves"
+        );
+    }
+
+    /// An operator entry that names `~` or `%VAR%` says so once, where it is
+    /// made, whichever kind it is: the OS sandbox expands neither, so a
+    /// pattern is dead on both faces and a template binds the file tools
+    /// alone.
+    #[test]
+    fn an_unexpandable_operator_entry_warns_once() {
+        // The template cases expand `~` when they compile.
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire();
         #[derive(Clone, Default)]
         struct Sink(crate::sync_primitives::Arc<std::sync::Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
@@ -1949,7 +2143,8 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             });
             let text = String::from_utf8_lossy(&sink.0.lock().unwrap_or_else(|e| e.into_inner()))
                 .into_owned();
-            text.matches("patterns are not expanded").count()
+            text.matches("the OS sandbox does not expand this entry")
+                .count()
         };
         // Unique texts, so the memo compiles each here and not in another test.
         let tag = tempdir().unwrap();
@@ -1970,9 +2165,24 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             "a `%VAR%` glob must warn once"
         );
         assert_eq!(
+            warned(&format!("~/{tag}-private")),
+            1,
+            "a `~` template must warn once too: the file tools expand it, the OS sandbox does not"
+        );
+        assert_eq!(
+            warned(&format!("%APPDATA%/{tag}-private")),
+            1,
+            "a `%VAR%` template must warn once too"
+        );
+        assert_eq!(
             warned(&format!("**/{tag}/*.pem")),
             0,
             "an ordinary glob must not"
+        );
+        assert_eq!(
+            warned(&format!("/srv/{tag}/secrets")),
+            0,
+            "an ordinary location must not"
         );
 
         assert!(names_an_unexpanded_token("~/.config/**/token"));

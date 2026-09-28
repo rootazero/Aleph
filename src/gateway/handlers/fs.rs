@@ -866,6 +866,49 @@ mod tests {
         );
     }
 
+    /// The RPC face matches a code-built entry as built, never re-expanded.
+    ///
+    /// With `ALEPH_HOME=~/<x>` left unexpanded, Aleph's vault lives under
+    /// `<cwd>/~/<x>`. The denylist used to read the entry's leading `~` as a
+    /// template and protect `$HOME/<x>/secrets.vault` instead — a file that is
+    /// not Aleph's — so the real vault was the unprotected one. Nothing is
+    /// created under the working directory: this arm proves the entry no
+    /// longer names `$HOME/<x>`, and `path_utils`'s
+    /// `a_code_built_entry_is_never_re_expanded` proves it names `<cwd>/~/<x>`.
+    #[tokio::test]
+    async fn the_rpc_face_does_not_re_expand_a_code_built_vault_entry() {
+        let home = TempDir::new().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let tag = format!(
+            "p419f-{}",
+            home_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches('.')
+        );
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
+            format!("~/{tag}"),
+            &home_path,
+        );
+        let decoy_dir = home_path.join(&tag);
+        std::fs::create_dir_all(&decoy_dir).unwrap();
+        let decoy = decoy_dir.join("secrets.vault");
+        std::fs::write(&decoy, "NOT ALEPH'S").unwrap();
+
+        let cfg = cfg_with_roots(vec![decoy_dir.to_string_lossy().to_string()]);
+        let r = req("fs.read_file", json!({ "path": decoy.to_string_lossy() }));
+        let resp = handle_read_file(r, cfg).await;
+        assert_eq!(
+            resp.result.as_ref().map(|r| r["content"].clone()),
+            Some(json!("NOT ALEPH'S")),
+            "fs.* refused $HOME/{tag}/secrets.vault: the vault entry `~/{tag}/secrets.vault` \
+             was re-expanded against $HOME, so it protects this file and not the one Aleph \
+             opens under the working directory (error {:?})",
+            resp.error.map(|e| e.code)
+        );
+    }
+
     /// The chokepoint property, asserted on the source: no handler in this
     /// module may touch the filesystem without going through
     /// `validate_in_scope`, and `validate_in_scope` must consult the
