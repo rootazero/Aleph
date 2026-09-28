@@ -131,7 +131,9 @@ async fn a_case_variant_of_an_absent_gate_file_is_refused() {
 async fn a_case_variant_of_an_absent_credential_leaf_is_refused() {
     let home = tempfile::tempdir().unwrap();
     let netrc = home.path().join(".netrc");
-    let write = FileWriteTool::with_denied_paths(vec![netrc.to_string_lossy().into_owned()]);
+    let write = FileWriteTool::with_denied_paths(vec![
+        crate::builtin_tools::file_ops::DeniedPath::literal(netrc.to_string_lossy()),
+    ]);
 
     for variant in [".NETRC", ".NetRc"] {
         let written = write

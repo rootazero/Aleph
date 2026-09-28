@@ -14,7 +14,7 @@ mod image_read;
 mod ops;
 mod path_utils;
 pub(crate) use path_utils::{
-    check_and_resolve_path, get_denied_paths, is_blocked_proc_path, path_is_denied,
+    check_and_resolve_path, get_denied_paths, is_blocked_proc_path, path_is_denied, DeniedPath,
 };
 pub(crate) mod read;
 mod read_cache;

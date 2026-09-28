@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::notes;
 use super::walk::{display_path, walk, WalkRequest};
 use crate::builtin_tools::error::ToolError;
-use crate::builtin_tools::file_ops::get_denied_paths;
+use crate::builtin_tools::file_ops::{get_denied_paths, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use async_trait::async_trait;
@@ -89,7 +89,7 @@ pub struct FindOutput {
 /// Repository-aware file discovery.
 #[derive(Clone)]
 pub struct FindTool {
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -345,7 +345,9 @@ mod tests {
 
         let canonical = dir.path().canonicalize().unwrap();
         let tool = FindTool {
-            denied_paths: vec![canonical.join("creds").to_string_lossy().to_string()],
+            denied_paths: vec![DeniedPath::literal(
+                canonical.join("creds").to_string_lossy(),
+            )],
             tool_context_handle: None,
         };
         let out = tool.run(args(&dir, "*.txt")).await.unwrap();

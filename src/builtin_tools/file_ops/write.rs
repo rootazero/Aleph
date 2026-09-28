@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::ops::execute_write;
-use super::path_utils::get_denied_paths;
+use super::path_utils::{get_denied_paths, DeniedPath};
 use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::tools::AlephTool;
@@ -74,7 +74,7 @@ pub struct FileWriteOutput {
 
 /// Standalone file-write tool that enforces `content` as a required parameter.
 pub struct FileWriteTool {
-    denied_paths: Vec<String>,
+    denied_paths: Vec<DeniedPath>,
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
@@ -95,7 +95,7 @@ impl FileWriteTool {
     /// A tool that refuses exactly `denied_paths` (a test's own list, so a
     /// `~/…`-shaped entry can live in a tempdir instead of the real home).
     #[cfg(test)]
-    pub(crate) fn with_denied_paths(denied_paths: Vec<String>) -> Self {
+    pub(crate) fn with_denied_paths(denied_paths: Vec<DeniedPath>) -> Self {
         Self {
             denied_paths,
             tool_context_handle: None,

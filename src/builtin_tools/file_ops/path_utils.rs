@@ -22,12 +22,14 @@ use crate::builtin_tools::error::ToolError;
 /// `data/` auth/device-pairing databases), which an agent must never read or
 /// clobber through its file tools.
 ///
-/// The returned list carries TWO kinds of entry, told apart by
-/// [`looks_like_glob`] and compiled by [`denied_entry_normalized`]:
-/// 1. the fixed credential locations above, matched by canonicalizing prefix;
+/// The returned list carries TWO kinds of entry, each [`DeniedPath`] carrying
+/// its own and compiled by [`denied_entry_normalized`]:
+/// 1. the fixed credential locations above, matched by canonicalizing prefix —
+///    every entry this function builds is one, whatever characters its path
+///    contains;
 /// 2. the operator's `[sandbox] deny_read_globs`
 ///    ([`configured_deny_read_globs`]), matched by the same anchored regex the
-///    OS sandbox floor uses.
+///    OS sandbox floor uses — the only entries that can be patterns.
 ///
 /// (2) exists because a file has **two faces that can read it** and the
 /// setting used to bind only one: `deny_read_globs` reached the OS drivers
@@ -36,37 +38,42 @@ use crate::builtin_tools::error::ToolError;
 /// `file_read`, `file_ops search` and `file_ops stats` read the same file in
 /// plain text — with nothing anywhere telling the operator the floor was
 /// half-applied.
-pub fn get_denied_paths() -> Vec<String> {
-    let mut denied_paths = vec![
+pub fn get_denied_paths() -> Vec<DeniedPath> {
+    let mut denied_paths: Vec<DeniedPath> = [
         // SSH / PGP / AWS — the original Unix credential directories.
-        "~/.ssh".to_string(),
-        "~/.gnupg".to_string(),
-        "~/.aws".to_string(),
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.aws",
         // Cloud-provider credential stores.
-        "~/.config/gcloud".to_string(),
-        "~/.kube".to_string(),
-        "~/.azure".to_string(),
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.azure",
         // Container-registry + package-registry credentials.
-        "~/.docker/config.json".to_string(),
-        "~/.npmrc".to_string(),
-        "~/.pypirc".to_string(),
+        "~/.docker/config.json",
+        "~/.npmrc",
+        "~/.pypirc",
         // Generic secret stores and credential leaf files.
-        "~/.password-store".to_string(),
-        "~/.netrc".to_string(),
-        "~/.git-credentials".to_string(),
-    ];
+        "~/.password-store",
+        "~/.netrc",
+        "~/.git-credentials",
+    ]
+    .into_iter()
+    .map(DeniedPath::literal)
+    .collect();
 
     // Add specific Aleph config files (not the entire directory)
     // We allow the output directory but deny sensitive config files
     if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
         info!(config_dir = %config_dir.display(), "FileOpsTool: config_dir for denied_paths");
+        let under_config =
+            |leaf: &str| DeniedPath::literal(format!("{}/{leaf}", config_dir.display()));
         // Deny config files but NOT the output directory
-        denied_paths.push(format!("{}/config.toml", config_dir.display()));
-        denied_paths.push(format!("{}/memory.db", config_dir.display()));
-        denied_paths.push(format!("{}/conversations.db", config_dir.display()));
-        denied_paths.push(format!("{}/skills", config_dir.display()));
-        denied_paths.push(format!("{}/plugins", config_dir.display()));
-        denied_paths.push(format!("{}/mcp", config_dir.display()));
+        denied_paths.push(under_config("config.toml"));
+        denied_paths.push(under_config("memory.db"));
+        denied_paths.push(under_config("conversations.db"));
+        denied_paths.push(under_config("skills"));
+        denied_paths.push(under_config("plugins"));
+        denied_paths.push(under_config("mcp"));
         // Aleph's own credential / auth state — the crown jewels. `secrets.vault`
         // is the encrypted credential store (`VaultStore::default_path()` =
         // `<config_dir>/secrets.vault`); `data/` holds the device-pairing,
@@ -79,9 +86,9 @@ pub fn get_denied_paths() -> Vec<String> {
         // The reverse leg of that asymmetry is closed at the bottom of this
         // function: the operator's `deny_read_globs` are appended here so they
         // bind the file tools too.
-        denied_paths.push(format!("{}/secrets.vault", config_dir.display()));
-        denied_paths.push(format!("{}/secrets.vault.lock", config_dir.display()));
-        denied_paths.push(format!("{}/data", config_dir.display()));
+        denied_paths.push(under_config("secrets.vault"));
+        denied_paths.push(under_config("secrets.vault.lock"));
+        denied_paths.push(under_config("data"));
         // The state of the gates only a HUMAN opens. A model that could write
         // one could open its own gate — on an operator turn it can already
         // write a skill (`skill_manage`, a project's `.aleph/skills`), so one
@@ -105,7 +112,7 @@ pub fn get_denied_paths() -> Vec<String> {
             aleph_protocol::paths::data_dir()
                 .map(|data| data.join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)),
         ) {
-            denied_paths.push(gate.display().to_string());
+            denied_paths.push(DeniedPath::literal(gate.display().to_string()));
         }
         // Note: output directory is intentionally NOT denied
     }
@@ -117,8 +124,8 @@ pub fn get_denied_paths() -> Vec<String> {
     // the next boot. One list (`utils::paths::pregrant_roots`), shared with
     // the pre-grant's own origin check.
     for root in crate::utils::paths::pregrant_roots() {
-        if !denied_paths.iter().any(|d| Path::new(d) == root) {
-            denied_paths.push(root.display().to_string());
+        if !denied_paths.iter().any(|d| Path::new(d.as_str()) == root) {
+            denied_paths.push(DeniedPath::literal(root.display().to_string()));
         }
     }
 
@@ -131,18 +138,21 @@ pub fn get_denied_paths() -> Vec<String> {
     // canonicalizing prefix match below.
     #[cfg(unix)]
     {
-        denied_paths.extend([
-            "/etc/passwd".to_string(),
-            "/etc/shadow".to_string(),
-            "/etc/sudoers".to_string(),
-            "/etc/sudoers.d".to_string(),
-            "/etc/ssh".to_string(),
-            "/etc/pam.d".to_string(),
-            "/etc/crontab".to_string(),
-            "/etc/cron.d".to_string(),
-            "/etc/ld.so.preload".to_string(),
-            "/root/.ssh".to_string(),
-        ]);
+        denied_paths.extend(
+            [
+                "/etc/passwd",
+                "/etc/shadow",
+                "/etc/sudoers",
+                "/etc/sudoers.d",
+                "/etc/ssh",
+                "/etc/pam.d",
+                "/etc/crontab",
+                "/etc/cron.d",
+                "/etc/ld.so.preload",
+                "/root/.ssh",
+            ]
+            .map(DeniedPath::literal),
+        );
     }
 
     // Add Windows-specific sensitive paths. The `%APPDATA%` / `%LOCALAPPDATA%`
@@ -151,11 +161,14 @@ pub fn get_denied_paths() -> Vec<String> {
     // contains `%APPDATA%`).
     #[cfg(target_os = "windows")]
     {
-        denied_paths.extend([
-            "%APPDATA%\\Microsoft\\Credentials".to_string(),
-            "%LOCALAPPDATA%\\Microsoft\\Credentials".to_string(),
-            "C:\\Windows\\System32\\config".to_string(),
-        ]);
+        denied_paths.extend(
+            [
+                "%APPDATA%\\Microsoft\\Credentials",
+                "%LOCALAPPDATA%\\Microsoft\\Credentials",
+                "C:\\Windows\\System32\\config",
+            ]
+            .map(DeniedPath::literal),
+        );
     }
 
     // The operator's `[sandbox] deny_read_globs` floor. Appended last so a
@@ -164,6 +177,70 @@ pub fn get_denied_paths() -> Vec<String> {
     denied_paths.extend_from_slice(configured_deny_read_globs());
 
     denied_paths
+}
+
+/// One denylist entry, carrying its kind: a concrete location or a pattern.
+///
+/// The kind is fixed where the entry is MADE, by who spelled it, and never
+/// re-derived from how it reads. Every entry Aleph's own code builds is a
+/// location ([`DeniedPath::literal`]), even when its text holds `*`, `?` or
+/// `[`: `format!("{}/secrets.vault", config_dir.display())` is an expansion
+/// of `$ALEPH_HOME`, not a spelling anyone chose, and read by shape a home
+/// under `h[1]` turned the vault, `data/`, the human-gate files and the
+/// pre-grant roots into patterns that matched nothing (P4.19). Only an
+/// operator's `[sandbox] deny_read_globs` entry may be a pattern
+/// ([`DeniedPath::operator_spelled`], private to this module).
+///
+/// Every face that consults the denylist gets its list from
+/// [`get_denied_paths`] and an entry's meaning from [`denied_entry_normalized`],
+/// so they all read the kind from here; the OS sandbox reads
+/// `deny_read_globs` itself and never sees a code-built entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeniedPath {
+    spelling: String,
+    kind: DeniedKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeniedKind {
+    Literal,
+    Pattern,
+}
+
+impl DeniedPath {
+    /// A concrete location: an absolute path, or a `~/…` / `%APPDATA%\…`
+    /// template expanded at match time ([`expand_denied_entry`]). Never a
+    /// pattern, whatever characters it contains.
+    pub fn literal(spelling: impl Into<String>) -> Self {
+        Self {
+            spelling: spelling.into(),
+            kind: DeniedKind::Literal,
+        }
+    }
+
+    /// An entry as an operator wrote it in `[sandbox] deny_read_globs`: a
+    /// pattern if its spelling has a glob metacharacter ([`looks_like_glob`]),
+    /// a location otherwise. The one place the shape of a string decides a
+    /// kind. Private so no other producer can mint a pattern.
+    fn operator_spelled(spelling: impl Into<String>) -> Self {
+        let spelling = spelling.into();
+        let kind = if looks_like_glob(&spelling) {
+            DeniedKind::Pattern
+        } else {
+            DeniedKind::Literal
+        };
+        Self { spelling, kind }
+    }
+
+    /// The entry as spelled (a pattern's text, a literal's unexpanded form).
+    pub fn as_str(&self) -> &str {
+        &self.spelling
+    }
+
+    /// Whether this entry is a pattern (only an operator's glob can be).
+    pub fn is_pattern(&self) -> bool {
+        self.kind == DeniedKind::Pattern
+    }
 }
 
 /// The operator's `[sandbox] deny_read_globs`, read once per process.
@@ -182,15 +259,21 @@ pub fn get_denied_paths() -> Vec<String> {
 /// (a pure lookup) and parses nothing but the one array it needs, so an
 /// unrelated malformed section cannot take the credential denylist down with
 /// it.
-fn configured_deny_read_globs() -> &'static [String] {
-    static GLOBS: OnceLock<Vec<String>> = OnceLock::new();
+///
+/// Each entry is classified here, once, as operator-spelled
+/// ([`DeniedPath::operator_spelled`]).
+fn configured_deny_read_globs() -> &'static [DeniedPath] {
+    static GLOBS: OnceLock<Vec<DeniedPath>> = OnceLock::new();
     GLOBS.get_or_init(|| {
         let path = crate::config::Config::effective_path();
         let Ok(text) = std::fs::read_to_string(&path) else {
             // No config file (first boot, or a test/CI home): no floor to apply.
             return Vec::new();
         };
-        let globs = parse_deny_read_globs(&text);
+        let globs: Vec<DeniedPath> = parse_deny_read_globs(&text)
+            .into_iter()
+            .map(DeniedPath::operator_spelled)
+            .collect();
         if !globs.is_empty() {
             info!(
                 count = globs.len(),
@@ -302,18 +385,17 @@ enum DeniedEntry {
     InertGlob,
 }
 
-/// Whether a raw denylist entry is a glob pattern rather than a concrete path.
+/// Whether an OPERATOR-spelled `deny_read_globs` entry is a glob pattern
+/// rather than a concrete path. Called only by
+/// [`DeniedPath::operator_spelled`]; a code-built entry's kind is its
+/// provenance ([`DeniedPath::literal`]) and is never read off its text.
 ///
-/// Provenance would be the better discriminator — "did this come from
-/// `deny_read_globs`" — but the denylist reaches its two matchers as a plain
-/// `&[String]` from seven call sites (`file_ops::{read,write,edit,apply_patch,
-/// tool}`, `builtin_tools::node_file`, `cluster::node_file_cmd`), so shape is
-/// the only channel available without changing a type all seven own. None of
-/// the fixed credential entries contains one of these three characters; a
-/// *user* path that does (a home directory literally named `a[1]`) is misread
-/// as a pattern — `*`/`?` widen the deny, a character class can shift it — and
-/// that is why this stays a documented shape test rather than a silent
-/// heuristic.
+/// It is still a shape test for the operator's own entries, deliberately:
+/// `deny_read_globs = ["/srv/app/secrets"]` has always been a location that
+/// covers its subtree (on both faces — the OS translator adds the subtree
+/// suffix to a metacharacter-free entry), and an operator entry that contains
+/// a literal `[` — `/data/[archive]` — is a pattern, a character class, as it
+/// always was. The operator wrote a glob list; a `[` in it is theirs to mean.
 fn looks_like_glob(entry: &str) -> bool {
     glob_shape_subject(entry).contains(['*', '?', '['])
 }
@@ -345,13 +427,21 @@ fn glob_shape_subject(entry: &str) -> &str {
     entry.strip_prefix(r"\\?\").unwrap_or(entry)
 }
 
-/// A pattern entry, as written. Whether an entry is one is decided on its
-/// raw spelling, in [`denied_entry_normalized`], and nowhere else — see
-/// [`compile_denied_literal`] for why never on an expansion.
+/// A pattern entry, as written. Whether an entry is one is its provenance
+/// ([`DeniedPath`]), never its expansion — see [`compile_denied_literal`].
 fn compile_denied_pattern(denied: &str) -> DeniedEntry {
     // Deliberately NO `~` / `%APPDATA%` expansion for patterns: the OS
     // floor does not expand either, and a pattern that meant two different
     // things to the two faces is the very asymmetry this wiring closes.
+    // Said out loud, once per pattern, because nothing else would.
+    if names_an_unexpanded_token(denied) {
+        warn!(
+            entry = %denied,
+            "file_ops: deny_read_globs pattern starts with `~` or holds a `%VAR%` token; \
+             patterns are not expanded (here or by the OS sandbox), so it cannot match \
+             the location it names"
+        );
+    }
     let Some(pattern) = crate::sandbox::deny_globs::glob_to_anchored_regex(denied) else {
         warn!(entry = %denied, "file_ops: empty deny_read_globs entry ignored");
         return DeniedEntry::InertGlob;
@@ -368,6 +458,18 @@ fn compile_denied_pattern(denied: &str) -> DeniedEntry {
             DeniedEntry::InertGlob
         }
     }
+}
+
+/// Whether a pattern names a home or environment token that only a LITERAL
+/// entry gets expanded ([`expand_denied_entry`]): a leading `~`, or a
+/// `%NAME%` pair. The regex is anchored at `^` and matched against canonical
+/// absolute paths, so such a pattern is silently dead on both faces.
+fn names_an_unexpanded_token(pattern: &str) -> bool {
+    let env_token = pattern
+        .split_once('%')
+        .and_then(|(_, rest)| rest.split_once('%'))
+        .is_some_and(|(name, _)| !name.is_empty());
+    pattern.starts_with('~') || env_token
 }
 
 /// A literal entry, from its already-expanded form ([`expand_denied_entry`]).
@@ -407,9 +509,9 @@ impl DeniedMemo {
 }
 
 /// The key an entry is memoised under: a literal's expansion under the
-/// current `$HOME` / environment, a pattern's own text. `pattern` is the raw
-/// entry's classification ([`looks_like_glob`]), made by the caller before
-/// anything is expanded.
+/// current `$HOME` / environment, a pattern's own text. `pattern` is the
+/// entry's kind ([`DeniedPath::is_pattern`]), fixed where it was made —
+/// never read off the expansion.
 ///
 /// Keyed by the raw spelling, `~/.ssh` was compiled once under whatever home
 /// was current at the first lookup and then served under every home after it —
@@ -418,7 +520,7 @@ impl DeniedMemo {
 /// later test was judged against that fixture's dead temp directory.
 /// **With a constant `$HOME` — every running server — behaviour is the same as
 /// when the key was the raw spelling:** each entry maps to exactly one key,
-/// compiles exactly once, and is classified on its raw spelling (the
+/// compiles exactly once, and keeps the kind it was made with (the
 /// expansion is never re-classified; see [`compile_denied_literal`]).
 /// Expanding on every lookup is an env read and a join; the
 /// `canonicalize()` / regex work the memo exists to avoid stays memoised.
@@ -452,8 +554,8 @@ fn denied_entry_key(denied: &str, pattern: bool) -> std::borrow::Cow<'_, str> {
 /// This is also the reason the two directions cannot disagree: both
 /// [`path_is_denied`] and [`contains_denied_descendant`] read an entry's
 /// meaning from here and nowhere else.
-fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
-    let pattern = looks_like_glob(denied);
+fn denied_entry_normalized(entry: &DeniedPath) -> Arc<DeniedEntry> {
+    let (denied, pattern) = (entry.as_str(), entry.is_pattern());
     let key = denied_entry_key(denied, pattern);
     let cache = DENIED_NORM_CACHE.get_or_init(Default::default);
     let hit = {
@@ -506,7 +608,7 @@ fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
 /// The prefix compare is the file system's, not the string's
 /// ([`names_within`]): where names are compared case-insensitively, a path
 /// that spells a denied entry in another case is that entry.
-pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
+pub fn path_is_denied(canonical: &Path, denied_paths: &[DeniedPath]) -> bool {
     // Computed at most once per call, and only if a pattern entry is present.
     let mut slash_form: Option<String> = None;
     for denied in denied_paths {
@@ -569,7 +671,10 @@ pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
 /// coverage, which is why the match below is on the entry kind and not a bare
 /// `if` — the two directions still read one compiled entry from
 /// [`denied_entry_normalized`] and cannot disagree about what an entry *means*.
-pub fn contains_denied_descendant(candidate: &Path, denied_paths: &[String]) -> Option<PathBuf> {
+pub fn contains_denied_descendant(
+    candidate: &Path,
+    denied_paths: &[DeniedPath],
+) -> Option<PathBuf> {
     denied_paths
         .iter()
         .find_map(|denied| match &*denied_entry_normalized(denied) {
@@ -891,7 +996,7 @@ fn expand_input_path(
 /// `check_and_resolve_path`).
 pub fn resolve_for_removal(
     path: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&Path>,
 ) -> Result<PathBuf, ToolError> {
     // Deny-check the resolved target first (conservative: a link whose target is
@@ -973,7 +1078,7 @@ pub fn resolve_for_removal(
 /// never smuggle a denied location past the gate.
 pub fn check_and_resolve_path(
     path: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&Path>,
 ) -> Result<PathBuf, ToolError> {
     info!(path = %path.display(), "check_path: input path");
@@ -1160,11 +1265,13 @@ mod tests {
     fn denied_paths_cover_aleph_credential_stores() {
         let denied = get_denied_paths();
         assert!(
-            denied.iter().any(|p| p.ends_with("/secrets.vault")),
+            denied
+                .iter()
+                .any(|p| p.as_str().ends_with("/secrets.vault")),
             "secrets.vault missing from denylist: {denied:?}"
         );
         assert!(
-            denied.iter().any(|p| p.ends_with("/data")),
+            denied.iter().any(|p| p.as_str().ends_with("/data")),
             "data/ auth dir missing from denylist: {denied:?}"
         );
     }
@@ -1185,8 +1292,8 @@ mod tests {
         fs::write(&allowed, b"ok").unwrap();
 
         let denied = vec![
-            vault.to_string_lossy().to_string(),
-            data.to_string_lossy().to_string(),
+            DeniedPath::literal(vault.to_string_lossy()),
+            DeniedPath::literal(data.to_string_lossy()),
         ];
 
         // Vault leaf file is denied.
@@ -1251,7 +1358,7 @@ mod tests {
         fs::create_dir(&secret_dir).unwrap();
         let sibling = root.path().join("secret-sibling");
         fs::create_dir(&sibling).unwrap();
-        let denied = vec![secret_dir.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(secret_dir.to_string_lossy())];
         // `path_is_denied` expects an already-canonical input (its contract);
         // canonicalize the dirs so a symlinked tempdir root (macOS
         // `/var` → `/private/var`) does not defeat the prefix compare.
@@ -1276,7 +1383,7 @@ mod tests {
         fs::write(&vault, b"ENCRYPTED").unwrap();
         let sibling = root.path().join("other");
         fs::create_dir(&sibling).unwrap();
-        let denied = vec![vault.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(vault.to_string_lossy())];
 
         let config_c = config.canonicalize().unwrap();
         let vault_c = vault.canonicalize().unwrap();
@@ -1315,7 +1422,7 @@ mod tests {
         symlink(&real, &link).unwrap();
         let real_c = real.canonicalize().unwrap();
 
-        let denied = vec![link.to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(link.to_string_lossy())];
         assert!(
             path_is_denied(&real_c.join("k.pem"), &denied),
             "the entry resolves through the symlink to `real`"
@@ -1350,7 +1457,7 @@ mod tests {
         let denied = get_denied_paths();
         for p in ["/etc/sudoers", "/etc/cron.d", "/etc/pam.d", "/root/.ssh"] {
             assert!(
-                denied.iter().any(|d| d == p),
+                denied.iter().any(|d| d.as_str() == p),
                 "{p} missing from denylist: {denied:?}"
             );
         }
@@ -1371,7 +1478,7 @@ mod tests {
         fs::write(&benign, b"k=1").unwrap();
 
         // Exactly the string an operator puts in `[sandbox] deny_read_globs`.
-        let denied = vec!["**/.env".to_string()];
+        let denied = vec![DeniedPath::operator_spelled("**/.env")];
 
         let err = check_and_resolve_path(&secret, &denied, None)
             .expect_err("a deny_read_globs match must be refused by the file tools too");
@@ -1405,18 +1512,21 @@ mod tests {
         // would emit.
         assert!(path_is_denied(
             &nested_pem.canonicalize().unwrap(),
-            &["**/*.pem".to_string()]
+            &[DeniedPath::operator_spelled("**/*.pem")]
         ));
         // `*` stays inside one component, so it must NOT reach a nested file.
         assert!(!path_is_denied(
             &nested_pem.canonicalize().unwrap(),
-            &[format!("{}/*.pem", root_c.display())]
+            &[DeniedPath::operator_spelled(format!(
+                "{}/*.pem",
+                root_c.display()
+            ))]
         ));
         // A metacharacter-free entry is a literal location covering its subtree
         // (both the glob translator and the literal prefix match agree here).
         assert!(path_is_denied(
             &under_dir.canonicalize().unwrap(),
-            &[sub.to_string_lossy().to_string()]
+            &[DeniedPath::operator_spelled(sub.to_string_lossy())]
         ));
     }
 
@@ -1428,6 +1538,10 @@ mod tests {
     /// reasonable thing to do — used to have that entry read as a glob (the
     /// prefix's literal `?`) and compiled to an `InertGlob` that denies
     /// nothing. The deny evaporated in silence, on Windows only.
+    ///
+    /// A code-built entry is a literal by construction now ([`DeniedPath`]),
+    /// so the shape test only ever reads an operator's `deny_read_globs`
+    /// entry — and an operator may paste a verbatim path there too.
     ///
     /// Runs everywhere: the classification is a pure string test, so this pins
     /// the behaviour on the machine you are reading it on rather than waiting
@@ -1442,7 +1556,7 @@ mod tests {
         );
         assert!(
             matches!(
-                &*denied_entry_normalized(CANONICAL),
+                &*denied_entry_normalized(&DeniedPath::operator_spelled(CANONICAL)),
                 DeniedEntry::Literal(_)
             ),
             "a canonical Windows entry must compile to a literal location, \
@@ -1476,16 +1590,19 @@ mod tests {
         let env_c = env.canonicalize().unwrap();
 
         // Downward: the pattern denies the file itself.
-        assert!(path_is_denied(&env_c, &["**/.env".to_string()]));
+        assert!(path_is_denied(
+            &env_c,
+            &[DeniedPath::operator_spelled("**/.env")]
+        ));
         // Upward: the pattern cannot name a protected location under `proj`.
         assert_eq!(
-            contains_denied_descendant(&proj_c, &["**/.env".to_string()]),
+            contains_denied_descendant(&proj_c, &[DeniedPath::operator_spelled("**/.env")]),
             None,
             "a glob is a predicate, not a location — see the doc comment"
         );
         // A literal entry naming the same file still answers upward.
         assert_eq!(
-            contains_denied_descendant(&proj_c, &[env.to_string_lossy().to_string()]),
+            contains_denied_descendant(&proj_c, &[DeniedPath::literal(env.to_string_lossy())]),
             Some(env_c),
             "literal entries must keep two-direction coverage"
         );
@@ -1505,12 +1622,15 @@ mod tests {
         // `[z-a]` translates to a syntactically valid glob class but an
         // invalid regex range.
         let denied = vec![
-            "[z-a]".to_string(),
-            "**/.env".to_string(),
-            vault.to_string_lossy().to_string(),
+            DeniedPath::operator_spelled("[z-a]"),
+            DeniedPath::operator_spelled("**/.env"),
+            DeniedPath::literal(vault.to_string_lossy()),
         ];
         assert!(
-            matches!(&*denied_entry_normalized("[z-a]"), DeniedEntry::InertGlob),
+            matches!(
+                &*denied_entry_normalized(&DeniedPath::operator_spelled("[z-a]")),
+                DeniedEntry::InertGlob
+            ),
             "an uncompilable pattern must land in the inert state, not silently \
              become a literal"
         );
@@ -1554,7 +1674,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
     #[test]
     fn a_home_entry_compiled_under_one_home_is_not_served_under_another() {
         use crate::runtimes::post_install::HomeEnvGuard;
-        let entries = ["~/.ssh".to_string()];
+        let entries = [DeniedPath::literal("~/.ssh")];
         let (dir_a, dir_b) = (tempdir().unwrap(), tempdir().unwrap());
         let a = dir_a.path().canonicalize().unwrap();
         let b = dir_b.path().canonicalize().unwrap();
@@ -1587,7 +1707,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
     #[test]
     fn a_home_with_glob_metacharacters_is_still_a_literal_location() {
         use crate::runtimes::post_install::HomeEnvGuard;
-        let entries = ["~/.ssh".to_string()];
+        let entries = [DeniedPath::literal("~/.ssh")];
         let parent = tempdir().unwrap();
         let parent_path = parent.path().canonicalize().unwrap();
         let under = |home: &Path| home.join(".ssh").join("id_ed25519");
@@ -1612,6 +1732,254 @@ deny_read_globs = ["**/.env", "**/*.pem"]
                 "HOME {name:?}: {sibling:?}'s .ssh is refused because HOME's name was read as a pattern"
             );
         }
+    }
+
+    /// Code-built entries are literal locations, whatever their path contains.
+    ///
+    /// `format!("{}/secrets.vault", config_dir.display())` is not a spelling
+    /// anyone chose; it is an expansion of `$ALEPH_HOME`. Read by shape, a home
+    /// under `h[1]` made every such entry a pattern whose `[1]` is a character
+    /// class: the vault, `data/`, the human-gate files and the pre-grant roots
+    /// stopped being refused, and an `h1` sibling was refused in their place.
+    /// Every target is judged by the production pair, `get_denied_paths` →
+    /// `path_is_denied`, and every miss is collected so the list is the answer.
+    #[test]
+    fn code_built_entries_are_literal_locations_under_any_home() {
+        use crate::runtimes::post_install::HomeEnvGuards;
+        let parent = tempdir().unwrap();
+        let parent_path = parent.path().canonicalize().unwrap();
+        // (home directory name, a sibling only its metacharacters match)
+        let mut cases = vec![("h[1]", "h1")];
+        if cfg!(unix) {
+            // Not legal in a Windows file name.
+            cases.push(("h*", "h-anything"));
+            cases.push(("h?", "hq"));
+        }
+
+        let mut wrong = Vec::new();
+        for (name, sibling) in cases {
+            let home = parent_path.join(name);
+            // Any directory will do for `ALEPH_HOME`; the real name would trip
+            // `utils::paths::tests::no_hand_rolled_aleph_home_outside_the_allowlist`.
+            let aleph = home.join("aleph-home");
+            fs::create_dir_all(aleph.join("data")).unwrap();
+            let _env = HomeEnvGuards::acquire_and_set(&aleph, &home);
+            // Each gate file from the store that owns it, as production names it.
+            let targets = [
+                ("secrets.vault", aleph.join("secrets.vault")),
+                ("data/x.db", aleph.join("data").join("x.db")),
+                (
+                    "shell-hooks-allowlist.json",
+                    crate::extension::hooks::ShellHookConsent::default_path(),
+                ),
+                (
+                    "approval-grants.json",
+                    crate::sandbox::exec_approval::grants::GrantStore::default_path(),
+                ),
+                (
+                    "approval-policy.json",
+                    crate::approval::ConfigApprovalPolicy::config_path(),
+                ),
+                (
+                    "data/plugins.toml",
+                    aleph
+                        .join("data")
+                        .join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE),
+                ),
+                (
+                    "~/.claude/skills/s/SKILL.md",
+                    home.join(".claude")
+                        .join("skills")
+                        .join("s")
+                        .join("SKILL.md"),
+                ),
+                (
+                    "~/.claude/plugins/p/plugin.json",
+                    home.join(".claude")
+                        .join("plugins")
+                        .join("p")
+                        .join("plugin.json"),
+                ),
+                // Control: a `~` template, already literal before this test.
+                ("~/.ssh/id_ed25519", home.join(".ssh").join("id_ed25519")),
+            ];
+            let denied = get_denied_paths();
+            for (label, target) in targets {
+                if !path_is_denied(&target, &denied) {
+                    wrong.push(format!("HOME {name:?}: {label} is not refused"));
+                }
+                let twin = parent_path.join(sibling).join(
+                    target
+                        .strip_prefix(&home)
+                        .expect("each target lives under HOME"),
+                );
+                if path_is_denied(&twin, &denied) {
+                    wrong.push(format!(
+                        "HOME {name:?}: sibling {sibling:?}'s {label} is refused"
+                    ));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a code-built denylist entry was read as a pattern:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// The kind of every entry `get_denied_paths` builds is Literal, under a
+    /// home whose path is a glob. Only an operator's `deny_read_globs` entry
+    /// may be a pattern — and this test's `ALEPH_HOME` has no config file, so
+    /// the process-wide operator snapshot is either empty or another test's;
+    /// it is excluded by value, not by shape.
+    #[test]
+    fn every_code_built_entry_is_a_literal() {
+        use crate::runtimes::post_install::HomeEnvGuards;
+        let parent = tempdir().unwrap();
+        let home = parent.path().canonicalize().unwrap().join("h[1]");
+        let aleph = home.join("aleph-home");
+        fs::create_dir_all(&aleph).unwrap();
+        let _env = HomeEnvGuards::acquire_and_set(&aleph, &home);
+        let operator = configured_deny_read_globs();
+        let denied = get_denied_paths();
+        let patterns: Vec<&str> = denied
+            .iter()
+            .filter(|e| e.is_pattern() && !operator.contains(*e))
+            .map(DeniedPath::as_str)
+            .collect();
+        assert!(
+            patterns.is_empty(),
+            "code-built entries classified as patterns: {patterns:?}"
+        );
+    }
+
+    /// A literal and a pattern whose texts coincide keep separate compiles.
+    ///
+    /// `~/.ssh` under `HOME=<p>/home[1]` expands to `<p>/home[1]/.ssh`, which
+    /// is also the exact text of an operator glob naming `<p>/home1/.ssh` by
+    /// a character class. One shared memo would serve whichever compiled
+    /// first to both: the literal would stop refusing its own directory, or
+    /// the pattern would stop refusing `home1`. Both entry orders are
+    /// checked, since the first compile wins.
+    #[cfg(unix)]
+    #[test]
+    fn a_literal_and_a_pattern_with_one_text_keep_separate_compiles() {
+        use crate::runtimes::post_install::HomeEnvGuard;
+        let parent = tempdir().unwrap();
+        let parent_path = parent.path().canonicalize().unwrap();
+        for (i, literal_first) in [true, false].into_iter().enumerate() {
+            // A fresh home per order, so neither order inherits the other's memo.
+            let home = parent_path.join(format!("home{i}[1]"));
+            let class_match = parent_path.join(format!("home{i}1"));
+            fs::create_dir_all(home.join(".ssh")).unwrap();
+            fs::create_dir_all(class_match.join(".ssh")).unwrap();
+            let _home = HomeEnvGuard::acquire_and_set(&home);
+            let literal = DeniedPath::literal("~/.ssh");
+            let pattern = DeniedPath::operator_spelled(expand_denied_entry("~/.ssh"));
+            assert!(pattern.is_pattern(), "the operator's `[1]` is a class");
+            assert_eq!(pattern.as_str(), home.join(".ssh").to_string_lossy());
+            let entries = if literal_first {
+                [literal, pattern]
+            } else {
+                [pattern, literal]
+            };
+            assert!(
+                path_is_denied(&home.join(".ssh").join("id_ed25519"), &entries),
+                "literal_first={literal_first}: the literal ~/.ssh lost its own directory"
+            );
+            assert!(
+                path_is_denied(&class_match.join(".ssh"), &entries),
+                "literal_first={literal_first}: the pattern stopped matching its class"
+            );
+        }
+    }
+
+    /// An operator's `deny_read_globs` entry keeps the shape rule: a
+    /// wildcard is a pattern, and so is a literal `[` (a character class —
+    /// the operator wrote a glob list). A metacharacter-free entry stays a
+    /// location. `**/*.pem` still refuses a nested key.
+    #[test]
+    fn operator_entries_keep_the_shape_rule() {
+        assert!(DeniedPath::operator_spelled("**/*.pem").is_pattern());
+        assert!(DeniedPath::operator_spelled("/data/[archive]").is_pattern());
+        assert!(!DeniedPath::operator_spelled("/srv/app/secrets").is_pattern());
+        assert!(!DeniedPath::literal("/data/[archive]").is_pattern());
+
+        let root = tempdir().unwrap();
+        let key = root.path().join("a").join("b").join("k.pem");
+        fs::create_dir_all(key.parent().unwrap()).unwrap();
+        fs::write(&key, b"-----BEGIN-----").unwrap();
+        assert!(path_is_denied(
+            &key.canonicalize().unwrap(),
+            &[DeniedPath::operator_spelled("**/*.pem")]
+        ));
+    }
+
+    /// A pattern that names `~` or `%VAR%` says so once, at compile: neither
+    /// face expands a pattern, so it cannot match what it names.
+    #[test]
+    fn an_unexpandable_pattern_warns_once_at_compile() {
+        #[derive(Clone, Default)]
+        struct Sink(crate::sync_primitives::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let warned = |spelling: &str| {
+            let sink = Sink::default();
+            let writer = sink.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(move || writer.clone())
+                .with_max_level(tracing::Level::WARN)
+                .with_ansi(false)
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                // Through the production memo, twice: the second is a hit.
+                let entry = DeniedPath::operator_spelled(spelling);
+                denied_entry_normalized(&entry);
+                denied_entry_normalized(&entry);
+            });
+            let text = String::from_utf8_lossy(&sink.0.lock().unwrap_or_else(|e| e.into_inner()))
+                .into_owned();
+            text.matches("patterns are not expanded").count()
+        };
+        // Unique texts, so the memo compiles each here and not in another test.
+        let tag = tempdir().unwrap();
+        let tag = tag
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            warned(&format!("~/.{tag}/**")),
+            1,
+            "a `~` glob must warn once"
+        );
+        assert_eq!(
+            warned(&format!("%APPDATA%/{tag}/*")),
+            1,
+            "a `%VAR%` glob must warn once"
+        );
+        assert_eq!(
+            warned(&format!("**/{tag}/*.pem")),
+            0,
+            "an ordinary glob must not"
+        );
+
+        assert!(names_an_unexpanded_token("~/.config/**/token"));
+        assert!(names_an_unexpanded_token("C:/%LOCALAPPDATA%/**"));
+        assert!(!names_an_unexpanded_token("**/100%/*.txt"));
+        assert!(!names_an_unexpanded_token("**/%%/*"));
+        assert!(!names_an_unexpanded_token("/home/x/~backup/*"));
     }
 
     /// The shape test that tells a pattern entry from a concrete location.
@@ -1764,7 +2132,9 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         let wt_c = wt.path().canonicalize().unwrap();
 
         // Deny the REBASED location only.
-        let denied = vec![wt_c.join("secret.txt").to_string_lossy().to_string()];
+        let denied = vec![DeniedPath::literal(
+            wt_c.join("secret.txt").to_string_lossy(),
+        )];
         let scope = crate::tools::fs_scope::FsScope::worktree(wt_c, repo_c.clone());
         let input = repo_c.join("secret.txt");
         let result = crate::tools::fs_scope::with_fs_scope(Some(scope), async move {

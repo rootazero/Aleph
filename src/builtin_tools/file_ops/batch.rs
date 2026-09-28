@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern, DeniedPath};
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 
@@ -50,7 +50,7 @@ pub async fn execute_batch_move(
     pattern: &str,
     dest: &Path,
     create_parents: bool,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
@@ -189,7 +189,7 @@ pub async fn execute_batch_move(
 /// Automatically organizes files by type into categorized folders
 pub async fn execute_organize(
     dir: &Path,
-    denied_paths: &[String],
+    denied_paths: &[DeniedPath],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;

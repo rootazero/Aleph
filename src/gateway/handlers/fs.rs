@@ -771,7 +771,12 @@ mod tests {
         for entry in get_denied_paths() {
             // Pattern entries (`[sandbox] deny_read_globs`) name no single
             // path to materialise; the literal entries are what this asserts.
-            if entry.contains('*') || entry.contains('%') {
+            // A `%APPDATA%` template needs Windows' environment to expand.
+            let entry = match entry.is_pattern() {
+                true => continue,
+                false => entry.as_str().to_string(),
+            };
+            if entry.contains('%') {
                 continue;
             }
             let expanded = match entry.strip_prefix("~/") {
@@ -819,6 +824,45 @@ mod tests {
             checked > 0,
             "this test proved nothing: no denylist entry existed on this \
              machine, so the loop never reached an assertion"
+        );
+    }
+
+    /// The RPC face under a home whose path carries a glob metacharacter.
+    ///
+    /// The config-dir entries are built by formatting `$ALEPH_HOME`; read by
+    /// shape, `h[1]` turned the vault and the human-gate files into patterns
+    /// that match nothing, and `fs.read_file` handed them out. Scope admits
+    /// both targets, so only the denylist can refuse them.
+    #[tokio::test]
+    async fn the_rpc_face_refuses_code_built_entries_under_a_bracketed_home() {
+        let parent = TempDir::new().unwrap();
+        let home = parent.path().canonicalize().unwrap().join("h[1]");
+        let aleph = home.join("aleph-home");
+        std::fs::create_dir_all(&aleph).unwrap();
+        let _env = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph, &home);
+        let vault = aleph.join("secrets.vault");
+        let gate = crate::extension::hooks::ShellHookConsent::default_path();
+        std::fs::write(&vault, "ENCRYPTED").unwrap();
+        std::fs::write(&gate, "{}").unwrap();
+
+        let mut wrong = Vec::new();
+        for target in [&vault, &gate] {
+            let cfg = cfg_with_roots(vec![aleph.to_string_lossy().to_string()]);
+            let r = req("fs.read_file", json!({ "path": target.to_string_lossy() }));
+            let resp = handle_read_file(r, cfg).await;
+            if resp.error.as_ref().map(|e| e.code) != Some(OUT_OF_SCOPE) {
+                wrong.push(format!(
+                    "{}: result {:?}, error {:?}",
+                    target.display(),
+                    resp.result,
+                    resp.error.map(|e| e.code)
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "fs.* served a code-built denylist entry under HOME `h[1]`:\n{}",
+            wrong.join("\n")
         );
     }
 
