@@ -152,7 +152,7 @@ where
 
     // `caller_role` is already ambient here with no new stamping needed:
     // `scope::with_scope`/`CALLER_ROLE`/`CALLER_USER` are scoped around
-    // EVERY dispatched request (`server::handler::dispatch_with_caller_context`,
+    // EVERY dispatched request (`server::connection::dispatch::dispatch_with_caller_context`,
     // P0/Task 3), and `tools.invoke` dispatches through `process_request`
     // like any other RPC. Computed once and shared by the two floors below.
     let caller_role = crate::gateway::caller_identity::current_caller_role();
@@ -660,7 +660,7 @@ mod tests {
     // (`method_authz::tool_requires_operator` +
     // `turn_context::role_is_operator`) against the `caller_role` already
     // ambient here (scoped around every dispatched request by
-    // `server::handler::dispatch_with_caller_context` — P0/Task 3, nothing
+    // `server::connection::dispatch::dispatch_with_caller_context` — P0/Task 3, nothing
     // new to stamp), so `tools.invoke` can be carved open in
     // `method_admin::MEMBER_CARVE_OUTS` without reopening the escalation.
     //

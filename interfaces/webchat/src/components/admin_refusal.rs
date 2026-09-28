@@ -570,7 +570,7 @@ mod tests {
     use super::*;
 
     /// Fed the SERVER's own refusal — `aleph_protocol`'s constant, which
-    /// `gateway::server::handler` emits verbatim — not a local transcription of
+    /// `gateway::server::connection::dispatch::process_request` emits verbatim — not a local transcription of
     /// it. That is what makes this able to fail: if recognition ever drifts
     /// from the words the server actually sends, the refusal falls through.
     #[test]

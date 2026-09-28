@@ -511,47 +511,30 @@ mod tests {
     ///
     /// Source-level, because at runtime "fired by the injector" and "fired by
     /// something else that happens to look the same" are indistinguishable.
+    ///
+    /// Walks all of `src/`. It used to read four named files, and
+    /// `3a9c882ae` split one of them (`gateway/session_projector.rs`) into
+    /// `session_projector/projector_sub/*`, which the list could not see — a
+    /// producer there would have been green. Uses `production_text`, not a
+    /// `#[cfg(test)]` prefix cut: `src/agents/subagent_tool/tests.rs` is a
+    /// whole-file test module holding three `note_steer(` calls, and a
+    /// path-blind cut reads all of it as production. `gateway::source_census`
+    /// is private to `crate::gateway`, which is why this calls
+    /// `utils::source_scan` directly.
     #[test]
     fn note_steer_has_exactly_one_production_call_site() {
-        // Only files that could plausibly hold a producer; the census is over
-        // call sites, so it must not count the definition or its own tests.
-        let sources: &[(&str, &str)] = &[
-            (
-                "gateway/execution_engine/steering.rs",
-                include_str!("../gateway/execution_engine/steering.rs"),
-            ),
-            (
-                "gateway/execution_engine/gate.rs",
-                include_str!("../gateway/execution_engine/gate.rs"),
-            ),
-            (
-                "gateway/execution_engine/execute.rs",
-                include_str!("../gateway/execution_engine/execute.rs"),
-            ),
-            (
-                "gateway/session_projector.rs",
-                include_str!("../gateway/session_projector.rs"),
-            ),
-        ];
+        use crate::utils::source_scan::{
+            code_text, files_whose_production_code_reads, production_text, rust_sources_under,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        // How many CALLS.
         let mut sites: Vec<String> = Vec::new();
-        for (name, src) in sources {
-            // CRLF-safe: this repo checks out with CRLF on Windows, so a
-            // separator anchored with a leading `\n` would match nothing and
-            // the "production prefix" would silently become the whole file.
-            let src = src.replace('\r', "");
-            // Cut at the test **module**, not at every `#[cfg(test)]`: that
-            // attribute also sits on individual test-only items, and
-            // `steering.rs` has one 500 lines ABOVE the producer this census
-            // exists to find. Splitting on the bare attribute made the
-            // production prefix stop there and the census report zero sites —
-            // the "a source-level guard only covers the block shape its
-            // recogniser knows" trap, caught here only because the assertion
-            // below is `== 1` rather than `<= 1`. Keep it that way: an
-            // over-eager splitter must fail loudly, never quietly.
-            let production = src.split("#[cfg(test)]\nmod ").next().unwrap_or(&src);
-            for line in production.lines() {
-                if line.contains("note_steer(") && !line.trim_start().starts_with("//") {
-                    sites.push(format!("{name}: {}", line.trim()));
+        for (rel, text) in rust_sources_under(&root) {
+            let code = code_text(&production_text(std::path::Path::new(&rel), &text));
+            for line in code.lines() {
+                if line.contains("note_steer(") && !line.contains("fn note_steer(") {
+                    sites.push(format!("{rel}: {}", line.trim()));
                 }
             }
         }
@@ -562,9 +545,20 @@ mod tests {
              injector); found: {sites:#?}"
         );
         assert!(
-            sites[0].starts_with("gateway/execution_engine/steering.rs"),
+            sites[0].starts_with("src/gateway/execution_engine/steering.rs"),
             "the sole producer must be the steering injector, found {}",
             sites[0]
+        );
+
+        // Which FILES read it at all — also sees a fn-pointer spelling
+        // (`.map(note_steer)`), which the call count above cannot.
+        let readers = files_whose_production_code_reads(&root, "note_steer");
+        assert_eq!(
+            readers,
+            std::collections::BTreeSet::from([
+                "src/gateway/execution_engine/steering.rs".to_string()
+            ]),
+            "note_steer is read outside the steering injector"
         );
     }
 }

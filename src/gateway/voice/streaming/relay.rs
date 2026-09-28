@@ -94,12 +94,13 @@ impl StreamRegistry {
                 // whoever created the room, not the actual speaker — and
                 // `voice.transcribe.delta` classifies ByUserId from this
                 // stamp, so a member's STT deltas would reach only the
-                // creator. Prefer `ambient_room_author` (which reads the
-                // room author's seeded TURN_CONTEXT value) so a member's
-                // stream lands on their own connection. Falls through to
-                // `ambient_owner` outside a project room, matching the
-                // existing semantics for personal / org sessions.
-                owner: crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner),
+                // creator. `visibility::ambient_principal` — THE "who is the
+                // person" derivation (seeded speaker first, under any scope;
+                // then `ambient_owner`) — puts a member's stream on their own
+                // connection. Not `ambient_room_author`: that is the
+                // transcript byline, which answers only in a `Project` scope,
+                // and routing a stream is not a byline (final review M11).
+                owner: crate::gateway::visibility::ambient_principal(),
             },
         );
         id

@@ -130,6 +130,9 @@ async fn subagent_base_carries_4_p1_fields() {
         consecutive_failure_cap: Some(cap),
         turn_timeout: Some(turn),
         trace_sink: Some(trace_sink.clone()),
+        // Sentinel `None`: where a child's spend is recorded is asserted in
+        // `subagent_spawner::tests`, not by this four-field fixture.
+        accounting_sink: None,
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,

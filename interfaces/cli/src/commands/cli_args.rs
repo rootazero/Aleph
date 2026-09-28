@@ -1090,7 +1090,8 @@ pub enum ChannelAction {
         peer_kind: String,
         /// What to call this conversation in listings. Also the right place
         /// for the operator's original spelling: the key components are
-        /// normalized before storage.
+        /// normalized before storage. Omitted on a re-bind keeps the stored
+        /// label; `--label ""` clears it.
         #[arg(long)]
         label: Option<String>,
     },

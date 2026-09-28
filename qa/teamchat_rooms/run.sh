@@ -27,6 +27,14 @@
 #      the turn a human started; this one is about a prompt built one spawn
 #      later, from a task-local the spawn had to re-establish.
 #
+# Round 11 (N1): this fixture does NOT drive teams.create_task as a member, so
+# it cannot observe the dispatcher authority fix (a member's dispatcher task
+# used to run as operator); that fix is proven by unit/behaviour tests +
+# mutation only. Nothing in qa/teamchat_rooms calls teams.create_task or
+# task_create (grep, 2026-09-24). Observing it needs a member identity that
+# creates a `managed_by: dispatcher` task, ideally against an agent whose
+# `allowed_users` excludes that member. See FEATURE_LOCATOR §5.22 round 11.
+#
 # ## One claim this fixture does NOT make (2026-08-29)
 #
 # Claim 6's memory leg is not coverage of §3.17② (`request_scope_strings`).

@@ -197,12 +197,23 @@ pub enum SettleReason {
     /// having closed at admission — e.g. the gate refused for a non-busy
     /// reason. Belt-and-braces twin of [`SettleReason::Admitted`].
     AttemptConcluded,
+    /// Round 11 (N10): at boot reinjection the person the queued message acts
+    /// for was deactivated or deleted. Tombstoned rather than left queued,
+    /// which would re-ask on every boot forever.
+    AuthorityRefused,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JournalEntry {
     phase: QueuedPhase,
     reason: Option<SettleReason>,
+    /// The sentence behind `reason`, when the closer had one worth keeping —
+    /// today only [`SettleReason::AuthorityRefused`], whose detail names the
+    /// person refused and whether they were deactivated or are gone (a warn
+    /// log alone does not answer "what happened to my message" a day later).
+    /// Absent in entries written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
     payload: QueuedRunPayload,
 }
 
@@ -280,6 +291,7 @@ pub fn record_enqueued(payload: QueuedRunPayload) -> bool {
     let entry = JournalEntry {
         phase: QueuedPhase::Queued,
         reason: None,
+        detail: None,
         payload,
     };
     let run_id = entry.payload.run_id.clone();
@@ -296,6 +308,16 @@ pub fn record_enqueued(payload: QueuedRunPayload) -> bool {
 /// seam both close a record on the normal path), and a no-op for a run_id the
 /// journal never saw (unarmed, cap-skipped, or pre-feature).
 pub fn record_settled(run_id: &str, reason: SettleReason) {
+    settle_entry(run_id, reason, None);
+}
+
+/// [`record_settled`] with the sentence behind the reason kept on the
+/// tombstone (see `JournalEntry::detail`).
+pub fn record_settled_because(run_id: &str, reason: SettleReason, detail: &str) {
+    settle_entry(run_id, reason, Some(detail.to_string()));
+}
+
+fn settle_entry(run_id: &str, reason: SettleReason, detail: Option<String>) {
     let Some(root) = store_dir() else { return };
     let path = entry_dir(&root, run_id).join("state.json");
     let Ok(bytes) = std::fs::read(&path) else {
@@ -313,6 +335,7 @@ pub fn record_settled(run_id: &str, reason: SettleReason) {
     }
     entry.phase = QueuedPhase::Settled;
     entry.reason = Some(reason);
+    entry.detail = detail;
     if let Err(e) = write_entry(&root, &entry) {
         tracing::warn!(run_id = %run_id, error = %e, "busy-queue tombstone write failed");
     }
@@ -371,6 +394,43 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 // Boot reinjection
 // ============================================================================
 
+/// Rebuild a journaled message's `RunRequest` under the fire-time grant for
+/// its session `row` (round 11, N10; ruling b). The request is built FROM the
+/// admitted metadata ([`crate::gateway::fire_gate::admit_session_metadata`]),
+/// and `reinject_survivors` executes exactly the request returned here — there
+/// is no second copy of the payload's metadata a stamp could miss.
+/// `multi_user` is the room floor's mode (`fire_gate::authorize_session_run`).
+pub(crate) fn admit_reinjection<R>(
+    resolve: R,
+    multi_user: impl FnOnce() -> bool,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    payload: &QueuedRunPayload,
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Result<crate::gateway::execution_engine::RunRequest, crate::gateway::fire_gate::FireStop>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    let metadata = crate::gateway::fire_gate::admit_session_metadata(
+        resolve,
+        multi_user,
+        row,
+        payload.metadata.clone(),
+    )?;
+    Ok(crate::gateway::execution_engine::RunRequest {
+        run_id: payload.run_id.clone(),
+        input: payload.input.clone(),
+        session_key: session_key.clone(),
+        timeout_secs: payload.timeout_secs,
+        metadata,
+        attachments: payload.attachments.clone(),
+        pending_media: Default::default(),
+        sandbox_override: None,
+        workspace_override: payload.workspace_override.clone(),
+        max_iterations_override: payload.max_iterations_override,
+        model_override: payload.model_override.clone(),
+    })
+}
+
 /// Re-deliver the journaled survivors `select` admits through the ordinary
 /// arrival path; the rest stay journaled for a later call.
 ///
@@ -392,8 +452,10 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 /// schedulers, and re-delivering their queued input here would double-drive
 /// them; then a survivor `select` declines is left journaled exactly as
 /// found, for the next call (the predicate sees the parsed key — compare it
-/// whole, `to_key_string() ==` or set membership, never by substring). What
-/// remains has its `RunRequest` rebuilt from the journaled payload
+/// whole, `to_key_string() ==` or set membership, never by substring); then
+/// fire-time authority (round 11): refused ⇒ tombstoned
+/// (`SettleReason::AuthorityRefused`), unknown ⇒ left journaled for the next
+/// call. What remains has its `RunRequest` rebuilt from the journaled payload
 /// (`pending_media` starts empty, `sandbox_override` is `None` — neither is
 /// set by the two lane surfaces; see the module doc), emits through the
 /// gateway bus plus the origin-channel fanout when the session has a bound
@@ -443,18 +505,42 @@ pub async fn reinject_survivors(
                 "busy-queue reinject: agent gone; leaving record queued");
             continue;
         };
-        let request = crate::gateway::execution_engine::RunRequest {
-            run_id: payload.run_id.clone(),
-            input: payload.input.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: payload.timeout_secs,
-            metadata: payload.metadata.clone(),
-            attachments: payload.attachments.clone(),
-            pending_media: Default::default(),
-            sandbox_override: None,
-            workspace_override: payload.workspace_override.clone(),
-            max_iterations_override: payload.max_iterations_override,
-            model_override: payload.model_override.clone(),
+        // Fire-time authority (round 11, N10): the journaled payload froze
+        // the role at enqueue time, possibly for a person deactivated or
+        // demoted since. Resolve against the session row owner and the
+        // payload's own author/role. The author is the INITIATOR, not the
+        // room creator: both enqueue paths clone the arriving request's
+        // metadata (`QueuedRunPayload::from_request`), and both human
+        // entrances stamp `AUTHOR_USER_KEY` with the speaker —
+        // `handlers::agent::build_run_request` and the channel router's
+        // `inbound_router::executor` (paired sender). A deactivated member's
+        // queued room message is therefore refused even while the room's
+        // creator is active, and vice versa (R-b / R-d).
+        let admitted = match agent.session_store().get_metadata(&session_key).await {
+            Err(e) => Err(crate::gateway::fire_gate::FireStop::Unknown(format!(
+                "session row unreadable: {e}"
+            ))),
+            Ok(row) => admit_reinjection(
+                |subject| crate::scope::authority::resolve(&subject),
+                crate::gateway::security::store::slot::multi_user,
+                row.as_ref(),
+                &payload,
+                &session_key,
+            ),
+        };
+        let request = match admitted {
+            Ok(request) => request,
+            Err(crate::gateway::fire_gate::FireStop::Refused(reason)) => {
+                tracing::warn!(run_id = %run_id, reason = %reason,
+                    "busy-queue reinject: authority refused; tombstoning the record");
+                record_settled_because(&run_id, SettleReason::AuthorityRefused, &reason);
+                continue;
+            }
+            Err(crate::gateway::fire_gate::FireStop::Unknown(reason)) => {
+                tracing::warn!(run_id = %run_id, reason = %reason,
+                    "busy-queue reinject: authority unknown; leaving record queued");
+                continue;
+            }
         };
         // Live frames go on the bus; the final answer additionally fans out to
         // the bound origin channel when one exists (Panel-only sessions ride
@@ -496,7 +582,7 @@ pub async fn reinject_survivors(
         // dropping the message.
         let ticket = super::register_run(
             &session_key,
-            &payload.metadata,
+            &request.metadata,
             cfg.max_per_session,
             &payload.run_id,
         );
@@ -615,6 +701,133 @@ mod tests {
         assert!(entry_dir(tmp.path(), "r1").join("state.json").exists());
         // Idempotent: a second settle is a no-op, not an error.
         record_settled("r1", SettleReason::Purged);
+    }
+
+    /// T09 fix round 1 (M4): an authority tombstone keeps WHO was refused
+    /// and why, not only the reason word.
+    #[test]
+    fn an_authority_tombstone_keeps_the_refusal_sentence() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _g = arm(tmp.path());
+        assert!(record_enqueued(payload("r-auth")));
+        record_settled_because(
+            "r-auth",
+            SettleReason::AuthorityRefused,
+            "principal gone — author `u-ghost`",
+        );
+        assert!(survivors().is_empty(), "a refused record must not reinject");
+        let bytes = std::fs::read(entry_dir(tmp.path(), "r-auth").join("state.json")).unwrap();
+        let entry: JournalEntry = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(entry.reason, Some(SettleReason::AuthorityRefused));
+        assert_eq!(
+            entry.detail.as_deref(),
+            Some("principal gone — author `u-ghost`")
+        );
+    }
+
+    /// Ruling (b) at the reinjection site: the request `admit_reinjection`
+    /// hands back — the one `reinject_survivors` executes — carries the grant
+    /// resolved for this row. A member's PERSONAL session, so the member
+    /// ceiling (not the room floor) is what supplies `caller_role`.
+    #[test]
+    fn the_reinjected_request_carries_the_resolved_grant() {
+        use crate::gateway::security::store::{SecurityStore, UserRole};
+        use crate::scope::authority::resolve_with;
+
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let key = crate::routing::session_key::SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let queued = payload("r-bob");
+        let request = admit_reinjection(
+            |s| resolve_with(Some(&users), &s),
+            || true,
+            Some(&row),
+            &queued,
+            &key,
+        )
+        .expect("an active member's queued message is admitted");
+        assert_eq!(request.run_id, "r-bob");
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("member")
+        );
+    }
+
+    /// T09 fix round 1 (I4, R-b / R-d): a queued room message is judged by
+    /// the person who sent it — the author its payload carries — not by the
+    /// room's creator whose row owns the session.
+    #[test]
+    fn a_queued_room_message_is_judged_by_its_author_not_the_room_creator() {
+        use crate::gateway::fire_gate::{authorize_session_run, FireVerdict};
+        use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+        use crate::scope::authority::resolve_with;
+
+        let room = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-alice".into()),
+            scope_id: Some(crate::scope::ScopeId::Project("p-room".into()).render()),
+            ..Default::default()
+        };
+        let mut queued = payload("r-room");
+        queued.metadata.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            "u-bob".to_string(),
+        );
+
+        // The creator is gone from the org; the member who spoke is active.
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        users
+            .update_user("u-alice", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let mut metadata = queued.metadata.clone();
+        assert_eq!(
+            authorize_session_run(
+                |s| resolve_with(Some(&users), &s),
+                || true,
+                Some(&room),
+                &mut metadata
+            ),
+            FireVerdict::Proceed,
+            "an active member's message runs although the room's creator was deactivated"
+        );
+        assert_eq!(
+            metadata.get("caller_role").map(String::as_str),
+            Some("member"),
+            "and it runs as the member, not as the creator"
+        );
+
+        // The member who spoke is deactivated; the creator is active.
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .create_user("u-alice", "Alice", UserRole::Admin)
+            .unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        users
+            .update_user("u-bob", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        let mut metadata = queued.metadata.clone();
+        assert_eq!(
+            authorize_session_run(
+                |s| resolve_with(Some(&users), &s),
+                || true,
+                Some(&room),
+                &mut metadata
+            ),
+            FireVerdict::Refused("principal deactivated — author `u-bob`".into()),
+            "a deactivated member's queued message is refused although the creator is active"
+        );
     }
 
     #[test]

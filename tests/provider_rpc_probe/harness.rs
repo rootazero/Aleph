@@ -145,8 +145,8 @@ enabled = true
         // The harness lives in a `static OnceCell`, which never drops — so the
         // `impl Drop` below never runs for the shared instance and this child
         // would outlive the test binary. Register it with the process-exit
-        // reaper, which fires on both a normal return and `process::exit`.
-        #[cfg(unix)]
+        // reaper, which fires on both a normal return and `process::exit` (on
+        // Windows, on every exit including an abort — see `reap_on_exit`).
         alephcore::utils::scratch::reap_on_exit(child.id(), config_dir.path().to_path_buf());
 
         let ws_url = format!("ws://127.0.0.1:{}/ws", port);

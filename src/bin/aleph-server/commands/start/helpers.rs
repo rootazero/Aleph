@@ -816,7 +816,9 @@ mod tests {
         );
     }
 
-    /// Deliberately covers BOTH sites AND both reapers. They are not
+    /// Deliberately covers BOTH exit sites AND every reaper (the list below:
+    /// background jobs, browsers, PTYs — named by the list, not counted
+    /// here). The two sites are not
     /// redundant — `start_server`'s call is the orderly path (and the only one
     /// reached when `run_until_shutdown` returns an error rather than a
     /// signal), while this file's is the wedged path, where the failsafe
@@ -835,7 +837,7 @@ mod tests {
     /// the restart *interrupted*, and the terminal faces then rendered that
     /// verdict to the person who had merely restarted the server.
     #[test]
-    fn both_daemon_exit_paths_reap_background_jobs_and_browsers() {
+    fn both_daemon_exit_paths_run_every_reaper() {
         for reaper in [
             "kill_all_running_background",
             "shutdown_browsers_global",

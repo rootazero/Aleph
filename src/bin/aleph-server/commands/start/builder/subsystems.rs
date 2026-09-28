@@ -32,6 +32,12 @@ use super::register_channel_handlers;
 /// vault (inside the handler context), and the mDNS broadcaster.
 pub(in crate::commands::start) struct VaultBundle {
     pub security_store: Arc<alephcore::gateway::security::SecurityStore>,
+    /// `Some(why)` when `security_store` is the in-memory FALLBACK because the
+    /// on-disk store could not be opened. Its users table holds only the
+    /// bootstrap owner, so boot installs the fire-time users slot DEGRADED
+    /// (`install_degraded_users_store`): a missing member row there is "I do
+    /// not know", never "gone".
+    pub security_store_fallback: Option<String>,
     pub auth_ctx: Arc<auth_handlers::AuthContext>,
     pub mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
 }
@@ -60,12 +66,15 @@ pub(in crate::commands::start) fn initialize_vault(
     // a generic panic. `expect` keeps the diagnostic exact (which fallback
     // failed and why); a wrapped panic would still propagate to the same
     // `start_server` error path.
+    let mut security_store_fallback: Option<String> = None;
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
             .or_else(|e| {
                 eprintln!(
                     "Warning: Failed to load security store from {security_store_path:?}: {e}. Using in-memory."
                 );
+                security_store_fallback =
+                    Some(format!("{} could not be opened: {e}", security_store_path.display()));
                 alephcore::gateway::security::SecurityStore::in_memory()
             })
             .expect(
@@ -145,6 +154,7 @@ pub(in crate::commands::start) fn initialize_vault(
 
     VaultBundle {
         security_store,
+        security_store_fallback,
         auth_ctx,
         mdns_broadcaster,
     }

@@ -103,7 +103,7 @@ pub struct TopicEvent {
 ///
 /// Both of those structs carry a required `jsonrpc: String`. The gateway's
 /// event wire form did not send one: `event_bus.rs::publish_frame` hand-built
-/// `{"method": "stream.X", "params": {…}}` and `handler.rs::event_wire_form`
+/// `{"method": "stream.X", "params": {…}}` and `server/connection/forward.rs::event_wire_form`
 /// forwards those bytes verbatim. So `serde_json::from_str::<JsonRpcRequest>`
 /// failed with `missing field 'jsonrpc'` on **every** frame, and the caller
 /// logged one `debug!` line and moved on. The CLI (`aleph watch`, `aleph ask`)
@@ -293,7 +293,7 @@ impl AlephClient {
     ///
     /// The handshake is not optional and is deliberately not a separate public
     /// step: the gateway enforces that the first frame on a connection is
-    /// `connect` and *closes the socket* otherwise (`server::handler`), so a
+    /// `connect` and *closes the socket* otherwise (`server::connection::handle_connection`), so a
     /// client that skipped it could never issue a single working call. Folding
     /// it in here means a caller cannot hold an un-handshaken `AlephClient` —
     /// twenty of twenty-eight CLI command modules used to skip it because the

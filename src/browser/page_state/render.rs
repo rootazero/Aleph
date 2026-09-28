@@ -12,10 +12,10 @@
 //! print raw into this tree could forge a token in the model's own observation
 //! — a `placeholder` of `] [ref=e99]` used to close the bracket and open a ref
 //! the table never minted. Anything the page controls is data, and data is
-//! quoted: **five R40 sites**, numbered `Site N of 5` below.
+//! quoted: **six R40 sites**, numbered `Site N of 6` below.
 //!
-//! There are **six** `quote` CALL SITES in this file's production code, not
-//! five, and the sixth is deliberately not one of R40's: [`unreached_line`]
+//! There are **seven** `quote` CALL SITES in this file's production code, and
+//! one of them is deliberately not one of R40's: [`unreached_line`]
 //! quotes an unplaceable document's frame id, which the ENGINE mints rather
 //! than the page. It is quoted anyway because it reaches a line the model
 //! parses and quoting costs nothing — but counting it among R40's
@@ -24,10 +24,18 @@
 //! ⚠️ **The predicate is "production call sites", and a bare `grep -c 'quote('`
 //! is NOT that command** — it answers 9 here, because it also counts this very
 //! sentence, the `pub fn quote(` definition, and a call in the tests. An earlier
-//! version of this paragraph named that grep as the way to reproduce "six",
+//! version of this paragraph named that grep as the way to reproduce the count,
 //! which is 判据 §18 in one line: a number handed over with a predicate that
-//! does not produce it. The five R40 sites are numbered `Site N of 5` at each
+//! does not produce it. The six R40 sites are numbered `Site N of 6` at each
 //! call below, so the list is countable at the sites rather than trusted here.
+//!
+//! **The budgeted variant is [`render_text_bounded`]**, which owns the cut
+//! itself rather than leaving it to the tool layer's `bound_content`: when the
+//! budget drops interactive controls, a bounded `Omitted high-value controls`
+//! section names them with their (still live) refs, spending the SAME budget —
+//! the output never exceeds `max_chars` because of the hint. The section's
+//! header and footer are `# ` lines, so the two-shape contract above (header
+//! lines start with `#`, node lines start with `- `) survives it.
 
 use std::collections::HashSet;
 
@@ -45,6 +53,30 @@ const URL_MAX_CHARS: usize = 2000;
 
 /// Indent per level (spec §4.2's example).
 const INDENT: &str = "  ";
+
+/// At most this many omitted controls are NAMED by [`render_text_bounded`]'s
+/// section; the rest are counted in the footer, never silently dropped. A
+/// snapshot tail can hold hundreds of controls; twenty named doors (判据 §14)
+/// plus an honest count is the useful shape.
+pub const OMITTED_ENTRIES_MAX: usize = 20;
+
+/// The omitted-controls section's own byte cap. It shares the snapshot's
+/// budget, so it must not be able to crowd out the body it describes — and a
+/// cap the renderer enforces is a cap a test can check, unlike a convention
+/// (判据 §5).
+pub const OMITTED_SECTION_MAX_BYTES: usize = 2048;
+
+/// The body keeps at least this much of a bounded budget before the section
+/// gets any of it. A hint that eats the whole snapshot inverts the trade it
+/// exists for: the section names doors back into the page, and doors are
+/// useless to a model that can no longer see where it is.
+const OMITTED_MIN_BODY_CHARS: usize = 512;
+
+/// Bound on [`render_text_bounded`]'s reserve loop. The reserve strictly
+/// increases each round and can never exceed `reserve_cap + 1`, so the loop
+/// converges long before this — the bound exists so a future regression in
+/// that argument fails closed (plain cut, no section) instead of spinning.
+const RESERVE_ITER_MAX: usize = 256;
 
 /// The nodes that earn a line, in document order.
 ///
@@ -159,20 +191,219 @@ fn ancestors(state: &PageState, i: usize) -> impl Iterator<Item = usize> + '_ {
 #[must_use]
 pub fn render_text(state: &PageState) -> String {
     let selected = rendered_indices(state);
-    let is_rendered: HashSet<usize> = selected.iter().copied().collect();
-    let mut out = String::with_capacity(96 + selected.len() * 64);
-    out.push_str(&header(state));
-    for &i in &selected {
+    join_lines(&header(state), &node_lines(state, &selected))
+}
+
+/// `header` plus each node line, joined by newlines — the exact shape
+/// [`render_text`] has always produced (no trailing newline).
+fn join_lines(header: &str, lines: &[String]) -> String {
+    let mut out = String::with_capacity(
+        header.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>(),
+    );
+    out.push_str(header);
+    for line in lines {
         out.push('\n');
-        let depth = ancestors(state, i)
-            .filter(|a| is_rendered.contains(a))
-            .count();
-        for _ in 0..depth {
-            out.push_str(INDENT);
-        }
-        out.push_str(&line(&state.nodes[i]));
+        out.push_str(line);
     }
     out
+}
+
+/// One rendered line per selected node, indentation included — the single
+/// derivation of what a node line says, shared by [`render_text`] and
+/// [`render_text_bounded`] so the bounded cut can never disagree with the
+/// full render about a line's content (判据 §1).
+fn node_lines(state: &PageState, selected: &[usize]) -> Vec<String> {
+    let is_rendered: HashSet<usize> = selected.iter().copied().collect();
+    selected
+        .iter()
+        .map(|&i| {
+            let depth = ancestors(state, i)
+                .filter(|a| is_rendered.contains(a))
+                .count();
+            let mut s = String::with_capacity(depth * INDENT.len() + 32);
+            for _ in 0..depth {
+                s.push_str(INDENT);
+            }
+            s.push_str(&line(&state.nodes[i]));
+            s
+        })
+        .collect()
+}
+
+/// [`render_text`] under a char budget. When the tree fits, the two are
+/// byte-identical and the flag says `false`. When it does not, the body is
+/// cut at a line boundary (the `bound_content` contract: a `[ref=eN]` token
+/// is never split) and the cut gets a bounded confession:
+///
+/// ```text
+/// # Omitted high-value controls:
+/// - textbox "Search" [ref=e12]
+/// - button "Sign in" [ref=e13]
+/// # …and 7 more
+/// ```
+///
+/// **"High-value" is derived, not listed** (判据 §5): the predicate is
+/// [`StateNode::interactive`], which `build` computes from
+/// [`super::roles::is_interactive`]'s six signals — the same flag this file
+/// already trusts for anchors, refs and geometry. A hand-written set of
+/// "good roles" here would be a second account of that fact, covering the
+/// roles of the day it was written and drifting from the predicate the tree
+/// was actually built with.
+///
+/// **Every listed ref is live.** Refs are minted at build time for every
+/// rendered interactive node, and the section names only nodes the render
+/// selected — minted, just not printed.
+///
+/// **The section spends the SAME budget**: the result never exceeds
+/// `max_chars` because of the hint. Section size depends on which nodes are
+/// cut, and which nodes are cut depends on the room the section takes, so
+/// the two are iterated to a fixed point — the reserve grows by exactly the
+/// section's measured size each round, the omitted set only grows as the cut
+/// retreats, and the section's own caps bound the growth, so the loop
+/// converges in a handful of rounds ([`RESERVE_ITER_MAX`] is the fail-closed
+/// backstop, not an expectation). The body never drops below
+/// [`OMITTED_MIN_BODY_CHARS`] for the section's sake: below that, a hint
+/// that crowds out the page it describes is a bad trade and the plain cut is
+/// the honest answer.
+///
+/// The name in each entry is page-controlled even here — `Site 6 of 6`, see
+/// the module doc — so it goes through [`quote`] like every other string the
+/// page owns.
+#[must_use]
+pub fn render_text_bounded(state: &PageState, max_chars: usize) -> (String, bool) {
+    let selected = rendered_indices(state);
+    let header = header(state);
+    let lines = node_lines(state, &selected);
+    let total = header.chars().count()
+        + lines.iter().map(|l| 1 + l.chars().count()).sum::<usize>();
+    if total <= max_chars {
+        // Untruncated: no section, and byte-identical to `render_text` — the
+        // same derivation, never a second one.
+        return (join_lines(&header, &lines), false);
+    }
+    let reserve_cap =
+        OMITTED_SECTION_MAX_BYTES.min(max_chars.saturating_sub(OMITTED_MIN_BODY_CHARS));
+    let mut reserve = 0usize;
+    for _ in 0..RESERVE_ITER_MAX {
+        let (prefix, kept) = cut_lines(&header, &lines, max_chars.saturating_sub(reserve));
+        let omitted: Vec<usize> = selected[kept..]
+            .iter()
+            .copied()
+            .filter(|&i| state.nodes[i].interactive && state.nodes[i].r#ref.is_some())
+            .collect();
+        // Nothing high-value was cut, or the budget cannot afford the section
+        // at all: the plain cut, exactly as before this section existed. Both
+        // are reachable only with reserve == 0 — the omitted set only grows
+        // as reserve grows, and reserve_cap is a constant of the budget.
+        if omitted.is_empty() || reserve_cap == 0 {
+            return (prefix, true);
+        }
+        let Some(section) = omitted_section(state, &omitted, reserve_cap) else {
+            return (prefix, true);
+        };
+        let need = 1 + section.chars().count();
+        if need <= reserve {
+            // prefix ≤ max_chars - reserve chars and the join costs need ≤
+            // reserve, so the total never exceeds max_chars.
+            return (format!("{prefix}\n{section}"), true);
+        }
+        reserve = need;
+    }
+    // Unreachable by the convergence argument on [`RESERVE_ITER_MAX`]. Fail
+    // closed to the plain cut: no section, and never over budget.
+    (cut_lines(&header, &lines, max_chars).0, true)
+}
+
+/// Cut `header + lines` to at most `char_budget` chars at a line boundary —
+/// the contract `bound_content` gives the tool layer, so a `[ref=eN]` token
+/// is never split — returning the surviving prefix and how many NODE lines
+/// it kept, which is how the caller learns which nodes the cut took.
+///
+/// Written here rather than borrowed: `bound_content` lives in
+/// `builtin_tools/browser_tools`, which depends on this module, and a core
+/// module calling back up would invert that (R7). The contract is one
+/// sentence and both implementations are pinned by boundary tests.
+fn cut_lines(header: &str, lines: &[String], char_budget: usize) -> (String, usize) {
+    let header_chars = header.chars().count();
+    if header_chars > char_budget {
+        // Even the header does not fit — the pathological case (a multi-KB
+        // URL against a small budget). Char-cut it where `bound_content`
+        // would: back to the last line boundary inside the budget, or
+        // mid-line when there is none.
+        return (cut_chars(header, char_budget), 0);
+    }
+    let mut used = header_chars;
+    let mut kept = 0usize;
+    for line in lines {
+        let cost = 1 + line.chars().count();
+        if used + cost > char_budget {
+            break;
+        }
+        used += cost;
+        kept += 1;
+    }
+    (join_lines(header, &lines[..kept]), kept)
+}
+
+/// At most `budget` chars of `s`, cut back to the last line boundary inside
+/// the budget when one exists. Chars, never bytes (P7).
+fn cut_chars(s: &str, budget: usize) -> String {
+    match s.char_indices().nth(budget) {
+        Some((idx, _)) => {
+            let head = &s[..idx];
+            match head.rfind('\n') {
+                Some(p) => head[..=p].to_string(),
+                None => head.to_string(),
+            }
+        }
+        None => s.to_string(),
+    }
+}
+
+/// The bounded render's confession of what the cut took: at most
+/// [`OMITTED_ENTRIES_MAX`] controls named with their (still live) refs, then
+/// an honest count of the rest. `None` when even the header and the
+/// worst-case footer do not fit `byte_cap` — a section that cannot open
+/// honestly does not open at all.
+fn omitted_section(state: &PageState, omitted: &[usize], byte_cap: usize) -> Option<String> {
+    const HEADER: &str = "# Omitted high-value controls:";
+    // Reserve the WORST footer up front — "…and {omitted.len()} more" has the
+    // most digits N can have, and N only shrinks as entries are listed — so a
+    // late entry can never crowd the counter out and leave a cut list reading
+    // as complete (判据 §17).
+    let footer_worst = format!("\n# …and {} more", omitted.len());
+    if HEADER.len() + footer_worst.len() > byte_cap {
+        return None;
+    }
+    let mut out = String::from(HEADER);
+    let mut listed = 0usize;
+    for &i in omitted {
+        if listed == OMITTED_ENTRIES_MAX {
+            break;
+        }
+        let node = &state.nodes[i];
+        // The caller filtered on interactivity; the ref check here is the
+        // section's own contract — a named control the model cannot address
+        // is a door painted on a wall.
+        let Some(r) = &node.r#ref else { continue };
+        // Site 6 of 6. The name is page-controlled on this line too — the
+        // section is not an exemption from R40.
+        let entry = format!(
+            "\n- {} {} [ref={}]",
+            node.role.as_str(),
+            quote(&capped(&node.name, TEXT_MAX_CHARS)),
+            r.0
+        );
+        if out.len() + entry.len() + footer_worst.len() > byte_cap {
+            break;
+        }
+        out.push_str(&entry);
+        listed += 1;
+    }
+    if listed < omitted.len() {
+        out.push_str(&format!("\n# …and {} more", omitted.len() - listed));
+    }
+    Some(out)
 }
 
 /// The runtime facts, and nothing that is a judgement (R7): which engine
@@ -240,9 +471,9 @@ fn unreached_line(state: &PageState) -> Option<String> {
             UnreachedFrame::NotCaptured(backend_node_id) => {
                 not_captured.push(backend_node_id.to_string());
             }
-            // The sixth `quote` call, and NOT one of R40's five: a frame id is
+            // The non-R40 `quote` call — see the module doc: a frame id is
             // the ENGINE's string, not the page's. Quoted anyway because it
-            // lands on a line the model parses — see the module doc.
+            // lands on a line the model parses.
             UnreachedFrame::Unplaceable(frame_id) => unplaceable.push(quote(frame_id)),
         }
     }
@@ -456,7 +687,9 @@ pub fn to_json(state: &PageState) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{FrameKey, NodeStates, PageState, Rect, RefId, Role, StateNode, Viewport};
+    use super::super::{
+        FrameKey, NodeStates, PageState, Rect, RefId, RefTable, Role, StateNode, Viewport,
+    };
     use super::*;
     use crate::browser::engine::Engine;
 
@@ -1493,5 +1726,269 @@ mod tests {
         assert_eq!(v["no_box"][1], 1);
         let back: PageState = serde_json::from_value(v).expect("PageState round-trips");
         assert_eq!(back.nodes.len(), 1);
+    }
+
+    /// A flat page of `n` labelled buttons under the document, built through
+    /// the REAL path — `PageState::build` mints into the returned table — so a
+    /// ref the section lists can be checked against the very table the build
+    /// used. A table written by hand beside the state would only agree with
+    /// itself (判据 §10). `name_pad` widens the aria-labels so the byte-cap
+    /// test can make the 2048-byte cap bind before the entry cap does.
+    fn button_page(n: usize, name_pad: usize) -> (PageState, RefTable) {
+        use crate::browser::page_state::{Computed, RawDom, RawFrame, RawNode, RawNodeKind, RefTable};
+        use std::time::Duration;
+
+        let mut raw = vec![RawNode {
+            backend_node_id: 1,
+            parent: None,
+            kind: RawNodeKind::Document,
+            tag: None,
+            attrs: vec![],
+            text: None,
+            rect: None,
+            computed: None,
+            clickable_hint: None,
+            focused: None,
+            checked: None,
+            selected: None,
+            value: None,
+        }];
+        for i in 0..n {
+            raw.push(RawNode {
+                backend_node_id: (i + 2) as u64,
+                parent: Some(0),
+                kind: RawNodeKind::Element,
+                tag: Some("button".into()),
+                attrs: vec![("aria-label".to_string(), format!("B{i:0>name_pad$}"))],
+                text: None,
+                rect: Some(Rect {
+                    x: 1,
+                    y: 2,
+                    w: 3,
+                    h: 4,
+                }),
+                computed: Some(Computed {
+                    display_none: false,
+                    visibility_hidden: false,
+                    opacity_zero: false,
+                    cursor_pointer: false,
+                }),
+                clickable_hint: None,
+                focused: None,
+                checked: None,
+                selected: None,
+                value: None,
+            });
+        }
+        let mut refs = RefTable::new();
+        let state = PageState::build(
+            &RawDom {
+                unreached_frames: Vec::new(),
+                engine: Engine::Chromium,
+                viewport: viewport(),
+                frames: vec![RawFrame {
+                    frame_id: "F".into(),
+                    loader_id: "L".into(),
+                    separate_renderer: false,
+                    live_properties_observed: false,
+                    offset: (0, 0),
+                    nodes: raw,
+                }],
+            },
+            &mut refs,
+            1,
+            "https://x.test/",
+            "t",
+            Duration::from_millis(1),
+        );
+        (state, refs)
+    }
+
+    /// Split a bounded render into (body, section). The section header is
+    /// `# `-prefixed like every other non-node line this file prints, so it
+    /// cannot be mistaken for a node the model can address.
+    fn split_omitted_section(rendered: &str) -> (&str, Option<&str>) {
+        match rendered.find("# Omitted high-value controls:") {
+            Some(at) => (&rendered[..at], Some(&rendered[at..])),
+            None => (rendered, None),
+        }
+    }
+
+    /// The entry lines of an omitted-controls section — the `- ` lines, which
+    /// are exactly the named controls (header and footer are `# ` lines).
+    fn omitted_entries(section: &str) -> Vec<&str> {
+        section.lines().filter(|l| l.starts_with("- ")).collect()
+    }
+
+    /// **Plan T7, test 1.** A truncation that cuts interactive controls must
+    /// NAME them — each with the `[ref=eN]` the model needs to act — and every
+    /// listed ref must still resolve in the table this render minted into: the
+    /// list may never name a dead ref. And the hint shares the body's budget,
+    /// so the whole output may never exceed `max_chars` because of it.
+    #[test]
+    fn truncated_snapshot_lists_omitted_interactive_controls_with_live_refs() {
+        let (state, refs) = button_page(30, 2);
+        let max_chars = 1_000;
+        assert!(
+            render_text(&state).chars().count() > max_chars,
+            "the fixture must actually not fit, or nothing below is exercised"
+        );
+
+        let (bounded, truncated) = render_text_bounded(&state, max_chars);
+        assert!(truncated, "the fixture is cut, so the flag must say so");
+        assert!(
+            bounded.chars().count() <= max_chars,
+            "the hint spent more than the budget it shares with the body: \
+             {} chars against {max_chars}",
+            bounded.chars().count()
+        );
+
+        let (body, section) = split_omitted_section(&bounded);
+        let section = section.expect("controls were cut and not one was named");
+        let entries = omitted_entries(section);
+        assert!(
+            !entries.is_empty(),
+            "the section opened but named nothing: {section}"
+        );
+        for entry in entries {
+            let parsed =
+                parse_render_line(entry).expect("a section entry is a complete node line");
+            assert_eq!(parsed.refs.len(), 1, "one entry, one ref: {entry}");
+            let id = &parsed.refs[0];
+            refs.resolve(&RefId(id.clone())).unwrap_or_else(|e| {
+                panic!(
+                    "the section names [ref={id}] but the table this render \
+                     minted into does not hold it: {e}"
+                )
+            });
+            assert!(
+                !body.contains(&format!("[ref={id}]")),
+                "[ref={id}] is printed in the body AND listed as omitted"
+            );
+        }
+    }
+
+    /// **Plan T7, test 2.** More cut controls than the entry cap: exactly
+    /// [`OMITTED_ENTRIES_MAX`] named lines, then a footer whose N is the
+    /// honest count of the rest. A cut list that reads as complete is the
+    /// wrong label, which costs more than a missing one (判据 §17).
+    #[test]
+    fn omitted_section_bounds_itself_and_counts_the_rest() {
+        let (state, _refs) = button_page(45, 2);
+        let max_chars = 1_100;
+        let (bounded, truncated) = render_text_bounded(&state, max_chars);
+        assert!(truncated);
+        assert!(bounded.chars().count() <= max_chars);
+
+        let (body, section) = split_omitted_section(&bounded);
+        let section = section.expect("controls were cut");
+        let entries = omitted_entries(section);
+        assert_eq!(
+            entries.len(),
+            OMITTED_ENTRIES_MAX,
+            "the entry cap is exactly {OMITTED_ENTRIES_MAX}, no more: {section}"
+        );
+
+        // Honest N: omitted = buttons whose line the body cut, and the body
+        // is everything before the section header.
+        let kept = body
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count();
+        let omitted = 45 - kept;
+        assert!(
+            omitted > OMITTED_ENTRIES_MAX,
+            "the fixture must cut MORE than the cap for the footer to mean \
+             anything; it cut {omitted}"
+        );
+        assert!(
+            section.contains(&format!("# …and {} more", omitted - OMITTED_ENTRIES_MAX)),
+            "the footer must count the unnamed honestly: {section}"
+        );
+    }
+
+    /// The section's own byte cap, exercised with names long enough that
+    /// twenty entries would blow past it: the byte cap must bind first, the
+    /// section never exceeds [`OMITTED_SECTION_MAX_BYTES`], and named +
+    /// counted still equals cut.
+    #[test]
+    fn omitted_section_never_exceeds_its_byte_cap() {
+        let (state, _refs) = button_page(30, 190);
+        let max_chars = 2_600;
+        assert!(render_text(&state).chars().count() > max_chars);
+        let (bounded, truncated) = render_text_bounded(&state, max_chars);
+        assert!(truncated);
+        assert!(bounded.chars().count() <= max_chars);
+
+        let (body, section) = split_omitted_section(&bounded);
+        let section = section.expect("controls were cut");
+        assert!(
+            section.len() <= OMITTED_SECTION_MAX_BYTES,
+            "the section is {} bytes against a {}-byte cap",
+            section.len(),
+            OMITTED_SECTION_MAX_BYTES
+        );
+        let listed = omitted_entries(section).len();
+        assert!(
+            listed < OMITTED_ENTRIES_MAX,
+            "with 190-char names the BYTE cap must bind before the entry cap: \
+             {listed} listed"
+        );
+        let kept = body
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count();
+        let omitted = 30 - kept;
+        let footer = section
+            .lines()
+            .find(|l| l.starts_with("# …and "))
+            .unwrap_or_else(|| panic!("a capped list must count the rest: {section}"));
+        let n: usize = footer
+            .trim_start_matches("# …and ")
+            .trim_end_matches(" more")
+            .parse()
+            .expect("the footer carries a number");
+        assert_eq!(listed + n, omitted, "named + counted must equal cut");
+    }
+
+    /// **Plan T7, test 3.** No truncation, no section — absent, not empty.
+    /// And byte-identical to [`render_text`]: the bounded render is the same
+    /// tree with a confession appended when there is something to confess,
+    /// never a second derivation of the tree itself (判据 §1).
+    #[test]
+    fn untruncated_snapshot_has_no_omitted_section() {
+        let (state, _refs) = button_page(3, 2);
+        let (bounded, truncated) = render_text_bounded(&state, 50_000);
+        assert!(!truncated);
+        assert_eq!(bounded, render_text(&state));
+        assert!(!bounded.contains("Omitted"));
+    }
+
+    /// The section exists to name cut CONTROLS. A budget that cuts only text
+    /// leaves truncates exactly as before — no section, because there is
+    /// nothing high-value to name.
+    #[test]
+    fn a_cut_that_drops_no_control_has_no_omitted_section() {
+        let mut spec: Vec<(Option<&str>, &[(&str, &str)], Option<&str>, usize)> = vec![
+            (Some("button"), &[(("aria-label"), ("A"))], None, 0),
+            (Some("button"), &[(("aria-label"), ("B"))], None, 0),
+        ];
+        for _ in 0..40 {
+            spec.push((None, &[], Some("filler line of text that pads the page"), 0));
+        }
+        let state = built(&spec);
+        let max_chars = 600;
+        assert!(render_text(&state).chars().count() > max_chars);
+
+        let (bounded, truncated) = render_text_bounded(&state, max_chars);
+        assert!(truncated);
+        assert!(bounded.chars().count() <= max_chars);
+        assert!(
+            !bounded.contains("Omitted"),
+            "no control was cut, so there is nothing to confess: {bounded}"
+        );
+        // Both buttons come first in document order and survive the cut.
+        assert!(bounded.contains("- button \"A\""), "{bounded}");
+        assert!(bounded.contains("- button \"B\""), "{bounded}");
     }
 }

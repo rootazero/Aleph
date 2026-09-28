@@ -1008,3 +1008,48 @@ async fn get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails() {
     );
     assert_eq!(released[0].status, CoordTaskStatus::Pending);
 }
+
+/// A caller cannot name someone else as a task's author: the authenticated
+/// ambient person always wins over a value in the free-form metadata
+/// (otherwise a member borrows an admin's authority through
+/// `teams.create_task`).
+#[tokio::test]
+async fn create_task_stamps_the_ambient_author_over_a_supplied_one() {
+    let store = setup_store().await;
+    let key = crate::gateway::execution_engine::AUTHOR_USER_KEY;
+    let task = crate::scope::with_scope(
+        Some(crate::scope::ScopeAttribution::personal("u-bob")),
+        store.create_task(NewCoordTask {
+            team_id: None,
+            subject: "s".into(),
+            description: String::new(),
+            owner: Some("worker".into()),
+            priority: Priority::Normal,
+            blocked_by: vec![],
+            metadata: json!({ key: "u-admin", "managed_by": "dispatcher" }),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(task.metadata[key], "u-bob");
+    assert_eq!(task.metadata["managed_by"], "dispatcher");
+}
+
+/// No ambient person (an internal producer): the metadata is left exactly as given.
+#[tokio::test]
+async fn create_task_without_an_ambient_person_leaves_metadata_untouched() {
+    let store = setup_store().await;
+    let task = store
+        .create_task(NewCoordTask {
+            team_id: None,
+            subject: "s".into(),
+            description: String::new(),
+            owner: None,
+            priority: Priority::Normal,
+            blocked_by: vec![],
+            metadata: json!({ "tag": "x" }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(task.metadata, json!({ "tag": "x" }));
+}

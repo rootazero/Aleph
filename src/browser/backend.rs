@@ -4,11 +4,12 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use super::engine::Engine;
 use super::error::BrowserError;
 use super::profile::BrowserDriver;
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, PresentedSnapshot, ScreenshotOpts,
+    ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
 };
 
 #[async_trait]
@@ -59,6 +60,39 @@ pub trait BrowserBackend: Send + Sync {
         opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError>;
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError>;
+
+    /// `snapshot` plus a budgeted *presentation* of its text.
+    ///
+    /// `max_chars` is in CHARS and is already clamped by the caller. The
+    /// contract:
+    ///
+    /// - `truncated == false` ⇒ `text` is the full snapshot text and
+    ///   `full_text` is `None`;
+    /// - `truncated == true` ⇒ `text` is within `max_chars` and carries the
+    ///   omitted high-value-controls section, and `full_text` is `Some` of the
+    ///   FULL text so the tool layer can offload it — a truncation the tool
+    ///   cannot recover from is data loss, not a budget (FL §3.12 ⑮).
+    ///
+    /// **The default is the honest asymmetry.** Only a backend that renders
+    /// its text from a `PageState` can re-render that text under a budget
+    /// with the omitted controls named; the two text drivers pass a driver's
+    /// own rendering through and have nothing to re-render from. So the
+    /// default presents the full text uncut (`truncated: false`) and the tool
+    /// layer's `bound_content` applies the budget exactly as it always has —
+    /// those backends lose the controls section, never the offload.
+    async fn snapshot_presented(
+        &self,
+        tab_id: &str,
+        _max_chars: usize,
+    ) -> Result<PresentedSnapshot, BrowserError> {
+        let snap = self.snapshot(tab_id).await?;
+        Ok(PresentedSnapshot {
+            text: snap.snapshot_text.clone(),
+            truncated: false,
+            full_text: None,
+            snap,
+        })
+    }
     /// Evaluate `js` in the page and return **the value it produced** — not a
     /// transcript of the call.
     ///
@@ -248,6 +282,70 @@ pub trait BrowserBackend: Send + Sync {
             filled += 1;
         }
         Ok(filled)
+    }
+
+    /// The effect-arrival verdict of the most recent PROBED verb
+    /// (click / type / fill) this backend dispatched, when it probes.
+    /// `browser_exec` reads it to stamp a step's `effect_verification`.
+    ///
+    /// The default is a no-op: `None` means "this backend does not say", and
+    /// must never be READ as verified — the two text drivers have no probe,
+    /// so for them every step honestly reports nothing (判据 §8). The cdp
+    /// backend overrides it; its verdict is cleared at the entry of each
+    /// probed verb, so a value read right after a verb belongs to THAT verb.
+    fn last_effect_verification(&self) -> Option<EffectVerification> {
+        None
+    }
+}
+
+/// The effect-arrival verdict of one probed verb (click / type / fill),
+/// stamped onto `browser_exec` step results as `effect_verification`.
+///
+/// The three states are three DIFFERENT facts, and collapsing any two of
+/// them is a lie the model acts on (判据 §8):
+///
+/// * `Verified` — the one-shot listener installed before dispatch observed
+///   the expected event at the target element. Earned by the read-back,
+///   never asserted by a table.
+/// * `Skipped(engine)` — no verdict exists and the label says so: the
+///   engine's capability row holds the probe off, the action named a point
+///   rather than a node, or the probe's own machinery failed. An honest
+///   "I do not know", never a quiet success (「活性≠能干活」).
+/// * `Failed` — the probe ran and the effect did not arrive. The action
+///   itself already failed as [`BrowserError::EffectNotDelivered`]; the
+///   latch records the same verdict as data so a caller that caught the
+///   error can still read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectVerification {
+    Verified,
+    Skipped(Engine),
+    Failed,
+}
+
+impl EffectVerification {
+    /// The verdict a verb reports WITHOUT running the probe: `Some(Skipped)`
+    /// when the engine's capability row holds the probe off, `None` when the
+    /// probe will run and the read-back decides. Never `Some(Verified)` — a
+    /// verification is earned by observing the event, never by looking up a
+    /// table (判据 §8: 「外部引擎可以把编造的值当作成功应答」).
+    #[must_use]
+    pub fn for_engine(engine: Engine) -> Option<Self> {
+        match super::engine::capabilities(engine).effect_probe {
+            super::engine::Cap::Supported => None,
+            // `Partial` is not `Supported`: a caveat row does not run a probe.
+            _ => Some(Self::Skipped(engine)),
+        }
+    }
+
+    /// The wire token carried in `browser_exec` step results:
+    /// `"verified"` / `"skipped(<engine>)"` / `"failed"`.
+    #[must_use]
+    pub fn as_wire(&self) -> String {
+        match self {
+            Self::Verified => "verified".into(),
+            Self::Skipped(engine) => format!("skipped({})", engine.as_str()),
+            Self::Failed => "failed".into(),
+        }
     }
 }
 

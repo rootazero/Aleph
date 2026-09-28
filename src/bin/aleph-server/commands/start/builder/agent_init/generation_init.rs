@@ -1,5 +1,6 @@
 //! Generation-provider registry: initial build + hot-reload subscriber.
 
+use alephcore::gateway::handlers::generation_providers::GENERATION_PROVIDERS_CHANGED_TOPIC;
 use alephcore::generation::{providers as gen_providers, GenerationProviderRegistry};
 use alephcore::sync_primitives::{Arc, RwLock};
 
@@ -88,7 +89,7 @@ pub(super) fn init_generation_registry(
                             .as_str()
                             .map(std::string::ToString::to_string)
                     })
-                    == Some("config.generation.providers.changed".to_string());
+                    == Some(GENERATION_PROVIDERS_CHANGED_TOPIC.to_string());
                 if !is_gen_event {
                     continue;
                 }

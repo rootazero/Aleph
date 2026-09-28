@@ -12,7 +12,7 @@ The runtime topology for Gateway chat is:
 
 ```
 Gateway (chat ingress, protocol adapters)
-   │ FlowRequest { agent_id, input, tool_service, trace_sink, identity, ... }
+   │ FlowRequest { agent_id, input, tool_service, trace_sink, event_tx, envelope, ... }
    ▼
 Orchestrator (resolves AgentDef + FlowSpec, builds HarnessDeps, dispatches)
    │ HarnessRunner::run
@@ -27,6 +27,12 @@ AgentHarness (Think → Act loop, stop-hooks, context budget, compaction)
    ▼
 FlowOutcome → Gateway renders response
 ```
+
+`event_tx` is the run's flow-event channel (`orchestrator::flow_event_channel`):
+the gateway creates it so its `agent_trace` mirror publishes
+`FlowStreamEvent::Trace` on the same channel the harness callback uses, and
+`dispatch` subscribes to it instead of creating its own. The contract lives in
+the field's doc; why one channel → [TRANSCRIPT_RENDERING §7](TRANSCRIPT_RENDERING.md).
 
 > **Note**: SubagentTool (in-tool agent spawning) was migrated to Harness in
 > Phase 7 (2026-04-21). The legacy `AgentLoop` path in `src/agent_loop/` has

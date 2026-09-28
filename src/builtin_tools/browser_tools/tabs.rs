@@ -134,8 +134,10 @@ impl AlephTool for BrowserTabsTool {
     type Output = BrowserTabsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let backend = match super::make_backend(&self.manager, &args.profile) {
-            Ok(b) => b,
+        let resolved = super::resolve_caller_profile(&self.manager, &args.profile)
+            .and_then(|key| super::backend_for_key(&self.manager, &key).map(|b| (key, b)));
+        let (profile, backend) = match resolved {
+            Ok(pair) => pair,
             Err(e) => {
                 return Ok(BrowserTabsOutput {
                     success: false,
@@ -200,7 +202,7 @@ impl AlephTool for BrowserTabsTool {
                     // the Managed-only idle reaper — so a `Cdp` tab the model
                     // explicitly closed kept its entry for the life of the
                     // process.
-                    self.manager.forget_tab(&args.profile, &tab_id);
+                    self.manager.forget_tab(&profile, &tab_id);
                     Ok(BrowserTabsOutput {
                         success: true,
                         tabs: None,

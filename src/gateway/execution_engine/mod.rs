@@ -27,6 +27,7 @@ mod history;
 pub mod markdown_skill_tools;
 mod persistence;
 mod run_loop;
+mod run_trace_sinks;
 mod scratchpad_progress_sink;
 mod session_run_registry;
 mod settle;
@@ -50,23 +51,21 @@ mod btw_wire_tests;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
 pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
+#[cfg(test)]
+pub(crate) use run_trace_sinks::PersistenceProbe;
+pub(crate) use run_trace_sinks::{ChildTraceSinks, RunTraceSinks};
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
 pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias, stamp_btw};
 pub(crate) use steering::wake_lane_if_burst_drained;
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;
 pub use tool_service_builder::set_config_approval_requester;
 pub use tool_service_builder::set_confirmation_requester;
 pub use tool_service_builder::set_mcp_tool_registry;
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use trace_sink_adapter::GatewayTraceSink;
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use unattended_redacting_sink::UnattendedRedactingSink;
 
 use crate::gateway::i18n::{Locale, Msg, ReceiptKind};

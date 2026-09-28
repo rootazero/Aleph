@@ -12,8 +12,11 @@ use crate::agents::swarm::tasks::{
 
 pub(super) async fn create_task(
     store: &SqliteCoordTaskStore,
-    input: NewCoordTask,
+    mut input: NewCoordTask,
 ) -> crate::error::Result<CoordTask> {
+    // Round 11 (N1): the author the dispatcher later resolves fire-time
+    // authority for. Stamped before the lock — it reads task-locals only.
+    crate::agents::swarm::tasks::stamp_task_author(&mut input.metadata);
     // Generate the id before cycle-check so we can pass it as the new node.
     let id = uuid::Uuid::new_v4().to_string();
 

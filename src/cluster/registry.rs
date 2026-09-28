@@ -509,11 +509,11 @@ pub(crate) fn normalize_node_key(value: &str) -> String {
 /// connect→register seam: registers this connection into `NodeRegistry` only
 /// when `role == Some("node")`. `params` is the connect frame's params
 /// (extracts `device_name` + commands). Returns whether registration occurred.
-/// Extracted as a pure function for unit testing and to keep `handler.rs` thin.
+/// Extracted as a pure function for unit testing and to keep `server/connection/mod.rs` thin.
 ///
 /// The `role` gate is currently dead in production: the single live caller —
 /// the `connect` frame's `NodeAdmission::Admitted` arm in
-/// `gateway::server::handler::handle_connection` — passes a hardcoded
+/// `gateway::server::connection::handle_connection` — passes a hardcoded
 /// `Some("node")` after upstream shape detection. The gate is kept so
 /// future call sites cannot register a non-node connection by accident; the
 /// contract is "call this only for `role == Some("node")`", and the unit
@@ -1248,7 +1248,7 @@ mod tests {
 
     /// (B1-03) The same `conn_id` re-announcing under a DIFFERENT `node_id`
     /// orphans the previous session's map entries — but must NOT close its
-    /// channel. `gateway/server/handler.rs` builds exactly one
+    /// channel. `gateway/server/connection/mod.rs` builds exactly one
     /// `with_close(tx, rpc_close.clone())` per connection and stores clones of
     /// it, so every channel reachable through that `conn_id` shares one
     /// `Arc<Notify>`: the "old" session's channel is *this very connection's*.

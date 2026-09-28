@@ -10,39 +10,11 @@ use aleph_protocol::{
     AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind, AgentTraceToolResult,
 };
 
-use super::{Action, AppState, Focus, RowBody, ToolRow, TranscriptEntry};
+// One definition, two consumers: the shared reducer settles its rows through
+// the same join (判据 §1).
+use shared_ui_logic::transcript::trace_result_to_wire;
 
-/// One trace tool-end, as the wire result shape the view model consumes.
-///
-/// The trace event splits what the wire keeps together: the outcome is in
-/// `AgentTraceToolResult`, the `presentation` side-channel is on
-/// `AgentTraceToolCallEnd` beside it. Joining them here — rather than at each
-/// call site — is what stops the diff from being dropped on this path while
-/// the live `tool_end` path carries it (判据 §9: one verb, two faces, one
-/// derivation).
-fn trace_result_to_wire(
-    result: &AgentTraceToolResult,
-    presentation: Option<&aleph_protocol::file_change::Presentation>,
-) -> aleph_protocol::ToolResult {
-    let (success, output, error) = match result {
-        AgentTraceToolResult::Success { output } => (
-            true,
-            match output {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Null => None,
-                other => Some(other.to_string()),
-            },
-            None,
-        ),
-        AgentTraceToolResult::Error { error, .. } => (false, None, Some(error.clone())),
-    };
-    aleph_protocol::ToolResult {
-        success,
-        output,
-        error,
-        presentation: presentation.cloned(),
-    }
-}
+use super::{Action, AppState, Focus, RowBody, ToolRow, TranscriptEntry};
 
 impl AppState {
     /// Append to the trailing reasoning entry, or start one.
@@ -145,8 +117,8 @@ impl AppState {
     /// record.
     ///
     /// The live tool rows are built from `agent_trace`, which the protocol
-    /// itself documents as a *deliberately lossy* mirror (bounded mpsc +
-    /// `try_send`, drop when full) — and says, in the same doc, that
+    /// itself documents as *best-effort* (a lagging receiver drops frames) —
+    /// and says, in the same doc, that
     /// `RunSummary.tool_summaries` exists precisely so consumers can reconcile
     /// against it at `run_complete`. The TUI is the second consumer of that
     /// mirror and had never been wired to the invariant, so one dropped frame
@@ -295,6 +267,12 @@ impl AppState {
                     self.append_assistant_content(fresh);
                 }
             },
+            // Phase S: the per-iteration reasoning record, ignored here until
+            // Phase T folds steps. On a streamed live turn the deltas already
+            // reached the transcript through `StreamEvent::Reasoning`, so this
+            // avoids appending them twice; a replay (`load_trace_replay`) and a
+            // non-streamed turn show no thinking at all until Phase T.
+            AgentTraceEvent::ReasoningEmitted { .. } => {}
             // ToolSummary carries an agent-authored summary sentence — use it
             // verbatim instead of the "Tool summary: " decorated form.
             AgentTraceEvent::ToolSummary { summary, .. } => {

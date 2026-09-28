@@ -36,6 +36,9 @@ impl FastPathJournal {
             svc,
             session,
             turn_id: TurnId::new_v4(),
+            // The one marker id still minted locally: a slash-command turn is not
+            // an engine run — no `execute()`, no `AssistantRunMeta` — so there is
+            // nothing for this bracket's id to join (spec 2026-09-24 §2).
             run_id: format!("slash-{}", uuid::Uuid::new_v4()),
             call_id: format!("slash-{}", uuid::Uuid::new_v4()),
             tool: tool.to_string(),

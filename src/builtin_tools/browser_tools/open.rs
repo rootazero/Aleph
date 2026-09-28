@@ -104,6 +104,22 @@ impl AlephTool for BrowserOpenTool {
             });
         }
 
+        // The caller's own key for this profile (r11 N5): a member drives
+        // `default__u-…`, never the owner's `default`. Every live-state call
+        // below takes THIS key; the success message keeps `args.profile`, the
+        // name the caller typed — the composed key is never echoed.
+        let profile = match super::resolve_caller_profile(&self.manager, &args.profile) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(BrowserOpenOutput {
+                    success: false,
+                    tab_id: None,
+                    message: Some(super::backend_error_text(&self.manager, &e)),
+                    engine: None,
+                });
+            }
+        };
+
         // Resolve (and, for a cold profile, launch) the engine BEFORE the
         // backend: `get_backend` is synchronous and cannot start a process, and
         // an `engine` override against a live handle of the other engine is a
@@ -114,11 +130,7 @@ impl AlephTool for BrowserOpenTool {
         // `None` back from it is not a failure: it is a driver that has no
         // engine at all (`managed`, `existing_session`), whose backend is built
         // by `make_backend` just below.
-        let engine = match self
-            .manager
-            .prepare_engine(&args.profile, args.engine)
-            .await
-        {
+        let engine = match self.manager.prepare_engine(&profile, args.engine).await {
             Ok(e) => e,
             Err(e) => {
                 return Ok(BrowserOpenOutput {
@@ -129,7 +141,7 @@ impl AlephTool for BrowserOpenTool {
                 });
             }
         };
-        let backend = match super::make_backend(&self.manager, &args.profile) {
+        let backend = match super::backend_for_key(&self.manager, &profile) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(BrowserOpenOutput {
@@ -150,7 +162,7 @@ impl AlephTool for BrowserOpenTool {
                 // `browser_open` was therefore invisible to the LRU cap and to
                 // the idle sweep alike: the registry did not know about the one
                 // thing it exists to bound.
-                self.manager.touch_tab(&args.profile, &tab_id);
+                self.manager.touch_tab(&profile, &tab_id);
                 Ok(BrowserOpenOutput {
                     success: true,
                     tab_id: Some(tab_id),

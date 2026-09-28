@@ -712,8 +712,7 @@ async function main() {
   // The CLI parses every response into the contract type, so a field the
   // server stopped sending is a hard parse error rather than a dash. Running
   // it IS the reconciliation; there is no hand-written key list here on
-  // purpose. It runs BEFORE the unlabelled re-bind below, which overwrites the
-  // stored label.
+  // purpose.
   const listOut = cli("projects", "channel", "list", PID);
   check(
     listOut.code === 0 && listOut.out.includes(C1) && listOut.out.includes("QA C1 Group"),
@@ -738,15 +737,14 @@ async function main() {
     "re-binding is idempotent and prints the Moved sentence",
     `exit=${bindHuman.code}\n${bindHuman.out.slice(0, 400)}`,
   );
-  // Observed, not asserted. That second bind carried no `--label` and
-  // `bind_conversation` writes the column unconditionally, so the operator's
-  // label from the first bind is gone. Recorded because a re-bind reads like an
-  // idempotent no-op and this half of it is not.
-  fact(
-    "a re-bind with no --label",
-    /QA C1 Group/.test(cli("projects", "channel", "list", PID).out)
-      ? "keeps the previously stored label"
-      : "CLEARS the previously stored label",
+  // Ruling R-e (round-11 D2): a re-bind with no `--label` keeps the stored
+  // label. This was recorded as an observed fact while it cleared the label;
+  // now that it is the contract, it is asserted.
+  const relisted = cli("projects", "channel", "list", PID);
+  check(
+    relisted.code === 0 && /QA C1 Group/.test(relisted.out),
+    "a re-bind with no --label keeps the previously stored label",
+    relisted.out.slice(0, 600),
   );
 
   const s2a = await sayAndSettle(senders.alice, C1, "m2-alice");

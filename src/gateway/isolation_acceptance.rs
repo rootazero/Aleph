@@ -14,7 +14,7 @@
 //! the exact same one `HandlerRegistry` wires up in production
 //! (`src/bin/aleph-server/commands/start/builder/handlers/*.rs`) — wrapped in
 //! [`as_caller`], which reproduces the task-local nesting
-//! `server::handler::dispatch_with_caller_context` applies around every real
+//! `server::connection::dispatch::dispatch_with_caller_context` applies around every real
 //! dispatch (the P1 `scope::with_scope` attribution AND the P0 `CALLER_USER`
 //! identity, both seeded from the same caller id). This mirrors the pattern
 //! every Task 6-9 visibility test in this branch already established (e.g.
@@ -73,7 +73,7 @@ fn unique(label: &str) -> String {
 /// Reproduce, exactly, the task-local nesting a real dispatch applies around
 /// every handler call: `scope::with_scope`'s P1 ownership attribution
 /// wrapping `CALLER_USER`'s P0 identity task-local, both seeded from the same
-/// caller id — see `server::handler::dispatch_with_caller_context`, whose
+/// caller id — see `server::connection::dispatch::dispatch_with_caller_context`, whose
 /// doc comment this mirrors. Use this for every simulated "caller" boundary
 /// below (a write attributed to a user, or a read gated by one).
 async fn as_caller<F, T>(user: &str, fut: F) -> T

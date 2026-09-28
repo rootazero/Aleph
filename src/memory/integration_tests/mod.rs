@@ -101,15 +101,16 @@ mod event_sourcing {
         assert!(!fact_id.is_empty());
 
         // Verify event stored
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type_tag(), "NoteCreated");
         assert_eq!(events[0].seq, 1);
 
         // Rebuild from events
-        let fact = fold_events_to_note(&events)
-            .unwrap()
-            .unwrap();
+        let fact = fold_events_to_note(&events).unwrap().unwrap();
         assert_eq!(fact.content, "User prefers Rust for systems programming");
 
         // 2. Update content
@@ -124,7 +125,10 @@ mod event_sourcing {
             .await
             .unwrap();
 
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[1].event.event_type_tag(), "NoteContentUpdated");
 
@@ -140,7 +144,10 @@ mod event_sourcing {
             .await
             .unwrap();
 
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 3);
         assert!(!events[2].is_skeleton()); // Pulse event
 
@@ -166,13 +173,14 @@ mod event_sourcing {
             .unwrap();
 
         // Verify full event trail
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 5);
 
         // 6. Verify final state via projector
-        let final_fact = fold_events_to_note(&events)
-            .unwrap()
-            .unwrap();
+        let final_fact = fold_events_to_note(&events).unwrap().unwrap();
         assert_eq!(
             final_fact.content,
             "User strongly prefers Rust for all programming"
@@ -181,11 +189,21 @@ mod event_sourcing {
         assert_eq!(final_fact.access_count, 1);
 
         // 7. The full event timeline is reachable via the event store
-        let timeline = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let timeline = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(timeline.len(), 5);
 
         // 8. Explain fact
-        let explanation = traveler.explain_fact(&fact_id).await.unwrap();
+        let explanation = traveler
+            .explain_fact(
+                &fact_id,
+                &["default".to_string()],
+                UnpartitionedRows::Refuse,
+            )
+            .await
+            .unwrap();
         assert_eq!(explanation.fact_id, fact_id);
         assert_eq!(explanation.events.len(), 5);
         // First event should describe creation
@@ -202,7 +220,10 @@ mod event_sourcing {
             .await
             .unwrap();
 
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        let events = db
+            .get_memory_events_for_fact_unscoped(&fact_id)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 6);
         let deleted = fold_events_to_note(&events).unwrap();
         assert!(deleted.is_none()); // Fact deleted

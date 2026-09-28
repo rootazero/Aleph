@@ -364,7 +364,7 @@ impl SessionManager {
         // an index declared alongside `CREATE TABLE messages` would fail on
         // every legacy install and take the whole store open down with it.
         //
-        // Serves the projector's seq-ranged reads — `stamp_assistant_metadata_in_range`
+        // Serves the projector's seq-ranged reads — `stamp_and_bill_in_range`
         // and `delete_messages_from_seq` both scan `(session_key, source_seq)`.
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_messages_source_seq

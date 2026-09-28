@@ -1,6 +1,6 @@
 use crate::config::types::generation::presets::{generation_metadata, PRESETS};
 use crate::config::Config;
-use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::gateway::handlers::generation_providers::helpers::{
     default_modalities, find_provider_type, get_typed_provider_map, get_typed_provider_map_mut,
     parse_generation_type, provider_exists,
@@ -23,6 +23,14 @@ use aleph_protocol::providers::{
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
+
+/// Topic every generation-provider config change is published on (a
+/// [`TopicEvent`]; `data` = `{action, provider[, generation_type]}`). Read by
+/// boot's registry hot-reload listener (`agent_init/generation_init.rs`,
+/// which matches the top-level `topic` only). Operator-only on the event
+/// plane: `event_visibility::classify` names it, so the raw-producer census
+/// sees every publish site.
+pub const GENERATION_PROVIDERS_CHANGED_TOPIC: &str = "config.generation.providers.changed";
 
 /// List all generation providers
 pub async fn handle_list(
@@ -204,11 +212,13 @@ pub async fn handle_create(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.generation.providers.changed",
-        "action": "created",
-        "provider": params.name,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        GENERATION_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "created",
+            "provider": params.name,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -301,11 +311,13 @@ pub async fn handle_update(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.generation.providers.changed",
-        "action": "updated",
-        "provider": params.name,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        GENERATION_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "updated",
+            "provider": params.name,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -391,11 +403,13 @@ pub async fn handle_delete(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.generation.providers.changed",
-        "action": "deleted",
-        "provider": params.name,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        GENERATION_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "deleted",
+            "provider": params.name,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
@@ -498,12 +512,14 @@ pub async fn handle_set_default(
     }
 
     // Broadcast event
-    let _ = event_bus.publish_json(&serde_json::json!({
-        "topic": "config.generation.providers.changed",
-        "action": "set_default",
-        "provider": params.name,
-        "generation_type": params.generation_type,
-    }));
+    let _ = event_bus.publish_json(&TopicEvent::new(
+        GENERATION_PROVIDERS_CHANGED_TOPIC,
+        serde_json::json!({
+            "action": "set_default",
+            "provider": params.name,
+            "generation_type": params.generation_type,
+        }),
+    ));
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }

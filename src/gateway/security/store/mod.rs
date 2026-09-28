@@ -28,6 +28,7 @@ mod identity;
 mod tokens;
 mod types;
 mod users;
+pub(crate) mod slot;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,7 @@ pub use bootstrap_tickets::{
 };
 pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
+pub use slot::{install_degraded_users_store, install_users_store};
 
 /// Schema version for migrations
 const SCHEMA_VERSION: i32 = 19;

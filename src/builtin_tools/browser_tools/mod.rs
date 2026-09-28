@@ -18,6 +18,7 @@ pub mod open;
 pub mod pdf;
 pub mod press_key;
 pub mod profile_tool;
+pub(crate) mod recovery;
 pub mod resize;
 pub mod screenshot;
 pub mod scroll;
@@ -146,15 +147,20 @@ pub(crate) const MAX_BACKEND_ERROR_CHARS: usize = 2_000;
 /// unbalanced fence is strictly worse than none. `sanitize_external_text` is
 /// documented for exactly this case: the scrubbing without the ~150 bytes of
 /// boundary.
+/// appended after the scrub: its bytes are ours (a closed enum, static text),
+/// so the sanitizer has nothing to catch in them and truncation must not eat
+/// them. See the module doc for why the contract rides the `message` line
+/// rather than a sibling JSON key.
 pub(crate) fn backend_error_text(manager: &ProfileManager, err: &BrowserError) -> String {
     let raw = err.to_string();
     let (bounded, truncated) = bound_content_head_tail(&raw, MAX_BACKEND_ERROR_CHARS);
     let scrubbed = sanitize_external_text(&manager.redact_content(&bounded));
-    if truncated {
+    let text = if truncated {
         format!("{scrubbed} [backend error truncated to {MAX_BACKEND_ERROR_CHARS} chars]")
     } else {
         scrubbed
-    }
+    };
+    recovery::attach(text, err)
 }
 
 /// Deterministic input-side secret gate for the form-input tools
@@ -192,6 +198,100 @@ pub(crate) async fn current_page_block(
     manager.check_url(&url).await.err().map(|v| v.to_string())
 }
 
+/// Pre-dispatch staleness check for snapshot refs (B4).
+///
+/// The cdp backend's `resolve_target` already refuses a stale ref before any
+/// WIRE call; this check refuses it before any SIDE EFFECT at the tool layer
+/// — before the dispatch, before the effect probe's one-shot listener is
+/// installed — and adds one signal the backend does not have: **URL drift**
+/// (`TabRegistry::last_url`, T1) against the tab's currently observed URL. A
+/// ref minted against `last_url` whose tab now shows a different URL is the
+/// `StaleReason::Navigated` case made visible one layer up (an SPA
+/// `pushState` changes the URL without changing the loader, so
+/// `RefTable::resolve` alone answers `Ok` for it).
+///
+/// **Honest asymmetry, stated:** only the cdp backend owns a `RefTable`, so
+/// on the two legacy drivers this check is a no-op and their refs keep the
+/// dispatch-time behaviour they always had. The capability row
+/// `ref_precheck` (`browser::engine::capability`) says the same thing to the
+/// model.
+///
+/// Fail-closed means: refuse when we KNOW the ref is stale. What we do not
+/// know is passed through to the dispatch, which owns the authoritative
+/// error for it (an unknown tab, a non-minted ref string — the backend's own
+/// message for a CSS selector is better than anything this layer could say).
+pub(crate) async fn precheck_ref(
+    manager: &ProfileManager,
+    backend: &Arc<dyn BrowserBackend>,
+    profile: &str,
+    tab_id: &str,
+    ref_id: &str,
+) -> Result<(), BrowserError> {
+    use crate::browser::page_state::refs::is_minted_shape;
+    // Not a ref this table mints — maybe a CSS selector for the other driver.
+    // The backend's own refusal names that distinction; do not pre-empt it.
+    if !is_minted_shape(ref_id) {
+        return Ok(());
+    }
+    let Some(cdp) = backend
+        .as_ref()
+        .as_any()
+        .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+    else {
+        // Legacy drivers own no RefTable: skip, don't fake a verdict (判据 §8).
+        return Ok(());
+    };
+    // `handle()` is deliberately non-launching; after `make_backend_and_tab*`
+    // succeeded, the engine exists, so this cannot become the observer that
+    // creates the browser it was checking on.
+    let handle = cdp.handle().await?;
+    let key = resolve_caller_profile(manager, profile)?;
+    // Read the registry BEFORE locking the tab table: two locks, one order.
+    let last_url = manager.tab_registry().last_url(&key, tab_id);
+    let tabs = handle.tabs.lock().await;
+    let Some(entry) = tabs.entries.get(tab_id) else {
+        // The tab question has its own structured answers (TabGone /
+        // TabNotFound) at dispatch; the precheck speaks only about refs.
+        return Ok(());
+    };
+    precheck_ref_entry(&entry.refs, last_url.as_deref(), &entry.url, ref_id)
+}
+
+/// The pure half of [`precheck_ref`], split out so the verdicts are testable
+/// without a live engine: a hand-built `RefTable` is the whole fixture.
+fn precheck_ref_entry(
+    refs: &crate::browser::page_state::RefTable,
+    last_url: Option<&str>,
+    current_url: &str,
+    ref_id: &str,
+) -> Result<(), BrowserError> {
+    use crate::browser::error::StaleReason;
+    use crate::browser::page_state::refs::RefId;
+    if let Err(reason) = refs.resolve(&RefId(ref_id.to_string())) {
+        // A minted-shape ref this table never issued — e.g. minted by a
+        // DIFFERENT profile's snapshot — resolves to `Unknown`, and that is
+        // the answer it gets: not a panic, not a click on nothing (Review
+        // Focus #3).
+        return Err(BrowserError::StaleRef {
+            ref_id: ref_id.to_string(),
+            reason,
+        });
+    }
+    // The resolve said "live", but the tab's URL moved since the registry
+    // last recorded it — an in-page navigation (pushState/hash) that no new
+    // loader announced. Both URLs must be known to say "drifted"; one
+    // missing is "I do not know", which is not a refusal (判据 §8).
+    if let Some(last) = last_url {
+        if last != current_url {
+            return Err(BrowserError::StaleRef {
+                ref_id: ref_id.to_string(),
+                reason: StaleReason::Navigated,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Get the active tab from the backend, or return an error if none are open.
 ///
 /// "Which tab is active" is answered in exactly one place —
@@ -208,18 +308,95 @@ pub(crate) async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<Strin
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }
 
+/// The person the browser face acts for: `Ok(Some(person))`, or `Ok(None)` on
+/// a single-user server (an actor-less run is the machine owner, unchanged).
+/// A run nobody is attached to on a multi-user server is refused: a managed
+/// profile is per person, and "I do not know who this is" must not resolve
+/// to the owner's browser (判据 §8).
+pub(crate) fn caller_browser_principal() -> Result<Option<String>, BrowserError> {
+    caller_browser_principal_in(crate::gateway::security::store::slot::multi_user())
+}
+
+/// [`caller_browser_principal`] with the server's mode explicit — lib tests
+/// never install the users store, so this is where multi-user is tested.
+///
+/// The verdict is `visibility::run_principal_in`'s, the one every per-person
+/// face shares — including its rule that a project room with no seeded
+/// speaker (work rebuilt from a session row, initiator unknown) has nobody
+/// attached, so a member's work is never handed the room creator's browser.
+/// This function adds only the mode seam.
+pub(crate) fn caller_browser_principal_in(
+    multi_user: bool,
+) -> Result<Option<String>, BrowserError> {
+    browser_principal(crate::gateway::visibility::run_principal_in(multi_user))
+}
+
+/// [`caller_browser_principal`] for an explicit verdict — lib tests never
+/// install the users store, so this is where both modes are tested.
+pub(crate) fn browser_principal(
+    run: crate::gateway::visibility::RunPrincipal,
+) -> Result<Option<String>, BrowserError> {
+    use crate::gateway::visibility::RunPrincipal;
+    match run {
+        RunPrincipal::Person(person) => Ok(Some(person)),
+        RunPrincipal::Legacy => Ok(None),
+        RunPrincipal::Unattached => Err(BrowserError::ActionFailed(
+            "no person is attached to this run; managed browser profiles are per person, \
+             so none can be selected"
+                .into(),
+        )),
+    }
+}
+
+/// The caller's own key for `profile` — the principal boundary of the browser
+/// tool face (r11 N5). Every tool reaches a browser through this or through a
+/// `make_backend*` that calls it; `principal_profile_census` pins the tools
+/// that address live state directly.
+///
+/// The person comes from [`caller_browser_principal`] — `ambient_principal`,
+/// never `ambient_actor`, whose last arm falls back to the turn's agent id and
+/// would mint a `default__main` profile.
+pub(crate) fn resolve_caller_profile(
+    manager: &ProfileManager,
+    profile: &str,
+) -> Result<String, BrowserError> {
+    manager.principal_profile(profile, caller_browser_principal()?.as_deref())
+}
+
+/// The backend for an ALREADY-RESOLVED key (the output of
+/// [`resolve_caller_profile`]). Handing it a raw `args.profile` skips the
+/// principal boundary; `principal_profile_census` refuses that spelling.
+pub(crate) fn backend_for_key(
+    manager: &ProfileManager,
+    key: &str,
+) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
+    manager.record_activity(key);
+    manager.get_backend(key)
+}
+
+/// The caller's key for `profile` and its backend — the one step every
+/// `make_backend*` helper starts with, so the three cannot resolve differently.
+fn resolved_backend(
+    manager: &ProfileManager,
+    profile: &str,
+) -> Result<(String, Arc<dyn BrowserBackend>), BrowserError> {
+    let key = resolve_caller_profile(manager, profile)?;
+    let backend = backend_for_key(manager, &key)?;
+    Ok((key, backend))
+}
+
 /// Create the appropriate backend for the given profile.
 ///
-/// Single routing source: delegates to [`ProfileManager::get_backend`], which
-/// owns the driver→backend mapping and headless resolution. Unknown profiles
-/// yield [`BrowserError::ProfileNotFound`] — no silent fallback to a Managed
-/// backend under a name the user never configured.
+/// Single routing source: resolves the caller's key, then delegates to
+/// [`ProfileManager::get_backend`], which owns the driver→backend mapping and
+/// headless resolution. Unknown profiles yield
+/// [`BrowserError::ProfileNotFound`] — no silent fallback to a Managed backend
+/// under a name the user never configured.
 pub(crate) fn make_backend(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
-    manager.record_activity(profile);
-    manager.get_backend(profile)
+    resolved_backend(manager, profile).map(|(_, backend)| backend)
 }
 
 /// Create the appropriate backend and resolve the active tab ID.
@@ -227,12 +404,12 @@ pub(crate) async fn make_backend_and_tab(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile)?;
+    let (key, backend) = resolved_backend(manager, profile)?;
     let tab_id = get_active_tab(backend.as_ref()).await?;
     // Reset the per-tab idle timer. Tracked for the drivers whose browser
     // Aleph launched (`Managed` and `Cdp`), never for the user's own
     // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
-    manager.touch_tab(profile, &tab_id);
+    manager.touch_tab(&key, &tab_id);
     Ok((backend, tab_id))
 }
 
@@ -253,7 +430,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
     manager: &ProfileManager,
     profile: &str,
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile)?;
+    let (key, backend) = resolved_backend(manager, profile)?;
     let tabs = backend.list_tabs().await?;
     let tab_id = tab_registry::active_tab_id(&tabs).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
@@ -267,7 +444,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
     // Reset the per-tab idle timer. Tracked for the drivers whose browser
     // Aleph launched (`Managed` and `Cdp`), never for the user's own
     // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
-    manager.touch_tab(profile, &tab_id);
+    manager.touch_tab(&key, &tab_id);
     Ok((backend, tab_id))
 }
 
@@ -1010,6 +1187,257 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // The recovery contract (recovery.rs) — registry hygiene and wiring.
+    // ---------------------------------------------------------------
+
+    /// Every tool the recovery registry suggests must be a tool that actually
+    /// exists — a suggestion naming an unregistered tool sends the model into
+    /// a `ToolError::NotFound` it cannot recover from (the `fallback_registry`
+    /// ghost-tool lesson, FEATURE_LOCATOR §3.12: this is the fourth time the
+    /// shape is being pinned).
+    ///
+    /// The name set is DERIVED from `BUILTIN_TOOL_DEFINITIONS` — the same
+    /// table the registry advertises and `groups.rs`'s own censuses read —
+    /// never hand-copied (判据 §5). The registry names only `browser_*`
+    /// tools, all of which are unconditional entries in that table, so the
+    /// config-gated/registry-only tails of the catalogue cannot false-alarm
+    /// here.
+    #[test]
+    fn recovery_registry_entries_name_real_tools() {
+        let names: std::collections::HashSet<&str> = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(!names.is_empty(), "the derivation read an empty table");
+        for entry in recovery::REGISTRY {
+            assert!(
+                names.contains(entry.tool),
+                "recovery suggests `{}`, which is not a registered tool",
+                entry.tool
+            );
+        }
+    }
+
+    /// The trailer is attached at the chokepoint, so a tool failure carries
+    /// the category and the next action with it — and the raw error text
+    /// stays in front (R7: data, never a replacement).
+    #[test]
+    fn backend_error_text_carries_the_recovery_trailer() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let err = BrowserError::StaleRef {
+            ref_id: "e9".into(),
+            reason: crate::browser::error::StaleReason::Navigated,
+        };
+        let out = backend_error_text(&manager, &err);
+        assert!(out.contains("ref e9 is stale"), "error prose first: {out}");
+        let line = out
+            .lines()
+            .find(|l| l.starts_with(recovery::RECOVERY_LINE_PREFIX))
+            .unwrap_or_else(|| panic!("no recovery trailer in: {out}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&line[recovery::RECOVERY_LINE_PREFIX.len()..])
+                .expect("trailer is JSON");
+        assert_eq!(v["category"], "stale_ref");
+        assert!(v["next_actions"][0]["tool"].as_str().is_some());
+    }
+
+    // ---------------------------------------------------------------
+    // Ref pre-dispatch precheck (B4): verdicts, drift, and wiring order.
+    // ---------------------------------------------------------------
+
+    fn ref_table_with_live_and_retired() -> (crate::browser::page_state::RefTable, String, String) {
+        use crate::browser::page_state::refs::RefKey;
+        let mut table = crate::browser::page_state::RefTable::new();
+        let key = |node: u64| RefKey {
+            frame_id: "F".into(),
+            loader_id: "L1".into(),
+            backend_node_id: node,
+        };
+        table.reset_for_document("L1");
+        table.mint(&key(1), 1); // a live ref of the retired document
+        let retired = table.mint(&key(2), 1).0;
+        table.reset_for_document("L2"); // navigation retires `retired`
+        let live2 = table.mint(&key(1), 2).0;
+        (table, retired, live2)
+    }
+
+    /// A stale ref is refused before any page side effect. The dispatch
+    /// itself is the cdp backend's business; what this layer pins is the
+    /// VERDICT — and the wiring-order pin below pins that the verdict is
+    /// consulted before the dispatch call in each ref-taking tool.
+    #[test]
+    fn precheck_refuses_a_retired_ref_as_navigated() {
+        let (table, retired, live) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, Some("https://a/"), "https://a/", &retired)
+            .expect_err("a retired ref must be refused");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Navigated,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        // The live ref of the CURRENT document passes.
+        precheck_ref_entry(&table, Some("https://a/"), "https://a/", &live)
+            .expect("a live ref passes");
+    }
+
+    /// Review Focus #3: a minted-shape ref this profile's table never issued
+    /// (minted by a DIFFERENT profile's snapshot) is `StaleReason::Unknown` —
+    /// not a panic, not a click on nothing.
+    #[test]
+    fn cross_profile_ref_is_unknown_not_a_panic() {
+        let (table, _, _) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, None, "https://a/", "e999")
+            .expect_err("a foreign ref must be refused");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Unknown,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        // …and the recovery contract reads it as a stale ref, naming
+        // browser_snapshot as the next move.
+        let recovery = recovery::recovery_for(&err);
+        assert_eq!(
+            recovery.category,
+            recovery::BrowserFailureCategory::StaleRef
+        );
+        assert!(recovery
+            .next_actions
+            .iter()
+            .any(|a| a.tool == "browser_snapshot"));
+    }
+
+    /// The drift signal: resolve says "live" (same loader — an SPA
+    /// `pushState` changed the URL), but the tab's URL no longer matches what
+    /// the registry recorded, so the ref cannot be trusted to mean what the
+    /// snapshot meant. Refused as `Navigated`, and the recovery message says
+    /// the page navigated and names `browser_snapshot`.
+    #[test]
+    fn url_drift_since_snapshot_is_named() {
+        let (table, _, live) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, Some("https://a/"), "https://b/", &live)
+            .expect_err("a drifted URL must refuse even a resolving ref");
+        assert!(
+            matches!(
+                err,
+                BrowserError::StaleRef {
+                    reason: crate::browser::error::StaleReason::Navigated,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+        let msg = backend_error_text(&ProfileManager::new(BrowserSystemConfig::default()), &err);
+        assert!(
+            msg.contains("navigated"),
+            "message must name the drift: {msg}"
+        );
+        assert!(
+            msg.contains("browser_snapshot"),
+            "message must name the remedy: {msg}"
+        );
+        // One side unknown is "I do not know", not drift (判据 §8).
+        precheck_ref_entry(&table, None, "https://b/", &live).expect("no recorded URL: pass");
+    }
+
+    /// A string that was never a ref of ours is not the precheck's question.
+    /// The pure half answers only what the table knows — `#go` is `Unknown`
+    /// there — and the ASYNC half's shape gate passes it through before the
+    /// table is ever asked, so the backend's own CSS-selector refusal keeps
+    /// its job (the gate is the first line of `precheck_ref`, source-pinned).
+    #[test]
+    fn the_shape_gate_passes_non_minted_strings_before_any_table_lookup() {
+        let (table, _, _) = ref_table_with_live_and_retired();
+        let err = precheck_ref_entry(&table, None, "https://a/", "#go")
+            .expect_err("to the bare table, a non-ref is Unknown");
+        assert!(matches!(
+            err,
+            BrowserError::StaleRef {
+                reason: crate::browser::error::StaleReason::Unknown,
+                ..
+            }
+        ));
+        let src =
+            crate::utils::source_scan::production_prefix(&include_str!("mod.rs").replace('\r', ""));
+        let fn_at = src
+            .find("async fn precheck_ref(")
+            .expect("precheck_ref exists");
+        let body = &src[fn_at..];
+        let gate = body
+            .find("is_minted_shape(ref_id)")
+            .expect("the shape gate");
+        let table = body.find("downcast_ref").expect("the backend downcast");
+        assert!(
+            gate < table,
+            "the shape gate must run before the table is reached"
+        );
+    }
+
+    /// Honest asymmetry: off the cdp backend the precheck is a no-op (legacy
+    /// drivers own no RefTable), so a stale-looking ref on a FakeBackend
+    /// passes through to the dispatch rather than being judged by a table
+    /// that does not exist (判据 §8 — a skipped check must not fabricate a
+    /// verdict in either direction).
+    #[tokio::test]
+    async fn precheck_skips_backends_without_a_ref_table() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let backend: Arc<dyn BrowserBackend> = Arc::new(
+            crate::browser::testkit::FakeBackend::new(None)
+                .with_tabs_text("1: https://a/ [selected]"),
+        );
+        precheck_ref(&manager, &backend, "default", "1", "e999")
+            .await
+            .expect("no RefTable → no verdict, the dispatch owns the answer");
+    }
+
+    /// The five ref-taking tools must consult the precheck AFTER the
+    /// backend+tab resolution and BEFORE the dispatch — a check that runs
+    /// after the side effect is not a check. Source-pinned per tool, in the
+    /// shape `the_guarded_path_lists_tabs_exactly_once` already established:
+    /// a FakeBackend test cannot see the order, because the precheck is a
+    /// deliberate no-op off the cdp backend (honest asymmetry).
+    #[test]
+    fn ref_tools_precheck_before_they_dispatch() {
+        for (tool, src, dispatch) in [
+            ("click", include_str!("click.rs"), ".click(&tab_id"),
+            (
+                "type_text",
+                include_str!("type_text.rs"),
+                ".type_text(&tab_id",
+            ),
+            (
+                "fill_form",
+                include_str!("fill_form.rs"),
+                ".fill_form(&tab_id",
+            ),
+            ("select", include_str!("select.rs"), ".select(&tab_id"),
+            ("hover", include_str!("hover.rs"), ".hover(&tab_id"),
+        ] {
+            let prod = crate::utils::source_scan::production_prefix(&src.replace('\r', ""));
+            let precheck = prod
+                .find("precheck_ref(")
+                .unwrap_or_else(|| panic!("{tool} never calls precheck_ref"));
+            let dispatch_at = prod
+                .find(dispatch)
+                .unwrap_or_else(|| panic!("{tool} no longer dispatches via `{dispatch}`"));
+            assert!(
+                precheck < dispatch_at,
+                "{tool}: precheck_ref runs after the dispatch — the side effect \
+                 would already be spent"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------
     // Approval prompts must not echo the payload back into context.
     // ---------------------------------------------------------------
 
@@ -1322,5 +1750,285 @@ mod driver_claim_census {
                  to name the cdp one: {desc}"
             );
         }
+    }
+}
+
+/// r11 N5: the principal boundary of the browser tool face is
+/// [`resolve_caller_profile`]. A tool that hands `args.profile` straight to a
+/// manager method addressing LIVE browser state (a session, an engine, a tab)
+/// skips it, and on a member's behalf addresses the owner's browser.
+///
+/// Recognises TWO spellings: `.<method>(&args.profile` — how every tool in this
+/// directory names its profile today — and `args.profile` anywhere in the
+/// arguments of a `backend_for_key(…)` call, the free function that takes an
+/// ALREADY-RESOLVED key. A tool that first binds `let p = &args.profile;` and
+/// passes `p` is invisible to it (判据 §3).
+/// `get_driver` / `get_config` are deliberately absent: they read config, and
+/// a principal's copy carries the configured driver unchanged.
+#[cfg(test)]
+mod principal_profile_census {
+    use super::*;
+    use crate::browser::profile::BrowserSystemConfig;
+
+    const LIVE_STATE_METHODS: &[&str] = &[
+        "get_backend",
+        "record_activity",
+        "touch_tab",
+        "forget_tab",
+        "session_active",
+        "prepare_engine",
+        "switch_engine",
+        "engine_handle",
+        "engine_handle_for",
+        "launch_request_for",
+        "launch_request_for_engine",
+        "live_endpoint",
+    ];
+
+    #[test]
+    fn no_browser_tool_addresses_live_state_with_the_raw_profile_argument() {
+        let mut offenders = Vec::new();
+        for (module, src) in super::approval_wiring_census::SOURCES {
+            let code = crate::utils::source_scan::code_text(
+                &crate::utils::source_scan::production_prefix(&src.replace('\r', "")),
+            );
+            for method in LIVE_STATE_METHODS {
+                if code.contains(&format!(".{method}(&args.profile")) {
+                    offenders.push(format!("{module}.rs: .{method}(&args.profile"));
+                }
+            }
+            if raw_keys_handed_to_backend_for_key(&code) > 0 {
+                offenders.push(format!("{module}.rs: backend_for_key(.., args.profile)"));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "resolve the caller's key first (`resolve_caller_profile`) and pass THAT:\n{offenders:#?}"
+        );
+    }
+
+    /// How many `backend_for_key(…)` calls in `code` name `args.profile` among
+    /// their arguments. Whitespace-insensitive and paren-matched, so a call
+    /// rustfmt split over lines, or one whose first argument is itself a call,
+    /// is still seen.
+    fn raw_keys_handed_to_backend_for_key(code: &str) -> usize {
+        let flat: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+        let call = "backend_for_key(";
+        flat.match_indices(call)
+            .filter(|(at, _)| {
+                let rest = flat.get(at + call.len()..).unwrap_or_default();
+                let mut depth = 1usize;
+                let end = rest
+                    .char_indices()
+                    .find_map(|(i, c)| {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    return Some(i);
+                                }
+                            }
+                            _ => {}
+                        }
+                        None
+                    })
+                    .unwrap_or(rest.len());
+                rest.get(..end).unwrap_or_default().contains("args.profile")
+            })
+            .count()
+    }
+
+    /// The `backend_for_key` spelling above must be falsifiable (判据 §3).
+    #[test]
+    fn the_raw_key_scan_sees_a_raw_profile_handed_to_backend_for_key() {
+        assert_eq!(
+            raw_keys_handed_to_backend_for_key(
+                "let b = super::backend_for_key(&self.manager, &args.profile)?;"
+            ),
+            1
+        );
+        assert_eq!(
+            raw_keys_handed_to_backend_for_key(
+                "let b = super::backend_for_key(\n    self.manager.as_ref(),\n    &args.profile,\n)?;"
+            ),
+            1
+        );
+        assert_eq!(
+            raw_keys_handed_to_backend_for_key(
+                "let key = super::resolve_caller_profile(&self.manager, &args.profile)?;\n\
+                 let b = super::backend_for_key(&self.manager, &key)?;"
+            ),
+            0
+        );
+    }
+
+    /// The `make_backend*` helpers are the path 23 of the 26 tools take. A
+    /// member driving `default` must get a backend for the member's OWN copy
+    /// (`default__u-alice`), not the owner's `default` — the backend itself
+    /// is asked which profile it drives.
+    #[tokio::test]
+    async fn the_backend_helpers_drive_the_callers_own_profile() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let mut config = BrowserSystemConfig::default();
+        // Pinned rather than inherited, so the downcast below does not depend
+        // on what the default driver happens to be.
+        config.profiles.insert(
+            "default".into(),
+            crate::browser::profile::ProfileConfig {
+                driver: crate::browser::profile::BrowserDriver::Cdp,
+                engine: Some(crate::browser::engine::Engine::Chromium),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let backend =
+            crate::scope::with_scope(Some(alice), async { make_backend(&manager, "default") })
+                .await
+                .expect("a member may drive a managed profile");
+        let driven = backend
+            .as_ref()
+            .as_any()
+            .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+            .map(|b| b.profile_name().to_string());
+        assert_eq!(driven.as_deref(), Some("default__u-alice"));
+        assert!(manager.get_config("default__u-alice").is_some());
+    }
+
+    /// The two async helpers list tabs, which needs a live browser, so their
+    /// wiring is pinned by source: each starts from
+    /// `resolved_backend(manager, profile)` — the step the test above drives
+    /// through `make_backend` — and none hands the raw name to a backend.
+    #[test]
+    fn every_backend_helper_starts_from_the_callers_resolved_key() {
+        let code =
+            crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(
+                &include_str!("mod.rs").replace('\r', ""),
+            ));
+        for helper in [
+            "fn make_backend(",
+            "fn make_backend_and_tab(",
+            "fn make_backend_and_tab_guarded(",
+        ] {
+            let start = code
+                .find(helper)
+                .unwrap_or_else(|| panic!("the scan is broken: no `{helper}` in mod.rs"));
+            let len = code[start..]
+                .find("\n}")
+                .unwrap_or_else(|| panic!("`{helper}`'s body never closes"));
+            let body = &code[start..start + len];
+            assert!(
+                body.contains("resolved_backend(manager, profile)"),
+                "{helper} must resolve the caller's key through `resolved_backend`"
+            );
+            assert!(
+                !body.contains("backend_for_key(manager, profile)")
+                    && !body.contains(".get_backend(profile)"),
+                "{helper} hands the raw profile name to a backend"
+            );
+        }
+    }
+
+    /// The None-principal ruling (r11) on the browser face: on a single-user
+    /// server an actor-less run keeps the owner's profile, as before; on a
+    /// multi-user server a run nobody is attached to is refused with a reason
+    /// instead of being handed the owner's browser (判据 §8).
+    #[test]
+    fn a_run_with_no_person_selects_no_profile_on_a_server_with_users() {
+        use crate::gateway::visibility::run_principal_with;
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        let legacy = browser_principal(run_principal_with(None, false)).unwrap();
+        assert_eq!(legacy, None);
+        assert_eq!(
+            manager
+                .principal_profile("default", legacy.as_deref())
+                .unwrap(),
+            "default"
+        );
+
+        let refused = browser_principal(run_principal_with(None, true))
+            .expect_err("nobody attached on a server with users selects no profile");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+        assert_eq!(
+            browser_principal(run_principal_with(Some("u-alice".into()), true))
+                .unwrap()
+                .as_deref(),
+            Some("u-alice")
+        );
+    }
+
+    /// A room run rebuilt from a session row carries no speaker, and
+    /// `ambient_principal` then names the room's CREATOR. The browser must not
+    /// compose the creator's key for it: on a multi-user server it is refused
+    /// with the reason; with a speaker seeded it is the speaker's own profile.
+    #[tokio::test]
+    async fn a_room_run_without_a_speaker_gets_no_one_s_browser() {
+        let room = || {
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project("p-room".to_string()),
+            })
+        };
+        let refused = crate::scope::with_scope(room(), async { caller_browser_principal_in(true) })
+            .await
+            .expect_err("no speaker in a room on a multi-user server");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+
+        let spoken = crate::scope::with_scope(
+            room(),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                caller_browser_principal_in(true)
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(spoken.as_deref(), Some("u-bob"));
+
+        // Through the real entry point (single-user in lib tests): the key is
+        // the owner's bare name, never the creator's composed one.
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let key = crate::scope::with_scope(room(), async {
+            resolve_caller_profile(&manager, "default")
+        })
+        .await
+        .unwrap();
+        assert_eq!(key, "default");
+    }
+
+    #[tokio::test]
+    async fn the_tool_face_composes_the_ambient_principal() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let manager_ref = &manager;
+        let as_user = move |user: &str| {
+            let attr = crate::scope::ScopeAttribution::personal(user);
+            crate::scope::with_scope(Some(attr), async move {
+                resolve_caller_profile(manager_ref, "default")
+            })
+        };
+        assert_eq!(as_user("u-alice").await.unwrap(), "default__u-alice");
+        assert_eq!(
+            as_user(crate::gateway::security::store::OWNER_USER_ID)
+                .await
+                .unwrap(),
+            "default"
+        );
+        assert_eq!(
+            resolve_caller_profile(&manager, "default").unwrap(),
+            "default"
+        );
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        let refused = crate::scope::with_scope(Some(bob), async {
+            resolve_caller_profile(&manager, "default__u-alice")
+        })
+        .await;
+        assert!(matches!(refused, Err(BrowserError::ProfileNotFound(_))));
     }
 }

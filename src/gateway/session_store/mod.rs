@@ -17,7 +17,7 @@ use crate::gateway::session_store::types::{
 };
 use async_trait::async_trait;
 
-/// What [`SessionStore::stamp_assistant_metadata_in_range`] did.
+/// What [`SessionStore::stamp_and_bill_in_range`] did.
 ///
 /// Three answers, not two, because the caller bills on exactly one of them.
 /// Folding `NoRowInRange` into `Stamped` bills a run whose row is not in the
@@ -34,6 +34,18 @@ pub enum StampOutcome {
     /// Its row was never materialised (or has not been healed yet), so there is
     /// nothing to stamp and nothing to bill.
     NoRowInRange,
+}
+
+/// One run's spend, accumulated onto the session row in the same operation
+/// that stamps the run's row ([`SessionStore::stamp_and_bill_in_range`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunBill {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// The run's priced cost; 0.0 when it could not be priced.
+    pub cost_usd: f64,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
 }
 
 #[async_trait]
@@ -467,34 +479,59 @@ pub trait SessionStore: Send + Sync {
     /// `AssistantRunMeta` used to walk its numbers onto whatever row happened
     /// to be newest — a LATER run's row — and the session was billed twice for
     /// the first run while the second one's gauge read the first one's tokens.
-    /// `after_seq` is the run's own `RunStarted` seq (0 when the replay window
-    /// opened after it), `before_seq` is the meta's own seq.
+    /// From the projector's meta arm, `after_seq` is the fold's anchor — the
+    /// last `RunStarted` before the meta — or the projector's `run_start` when
+    /// the fold is `Unfoldable` (clamped to 0 when it lies above the meta,
+    /// which only a stale value can); `before_seq` is the meta's own seq. From
+    /// the heal's `synthesize_missing_stamps`, the range is the span's own
+    /// `(RunStarted, RunFinished]` — its fold anchor is the span's own opener
+    /// by construction.
     ///
     /// Rows with no source seq (legacy transcripts, boot-time orphan notices)
     /// are never in any range and are therefore never stamped.
     ///
     /// [`StampOutcome::AlreadyStamped`] is what makes billing idempotent: the
-    /// caller accumulates the run's spend ONLY on [`StampOutcome::Stamped`], so
+    /// bill is applied only on [`StampOutcome::Stamped`], inside this call, so
     /// a replay of the same meta cannot bill twice. Implementors must return
-    /// `AlreadyStamped` when the row in range already carries this metadata's
-    /// `run_id`, and must not overwrite it.
+    /// `AlreadyStamped`, and write nothing, when ANY assistant row in range
+    /// already carries this metadata's `run_id`
+    /// (`sqlite_backend::run_stamped_in_range`), or when the row the stamp
+    /// would land on is not theirs to overwrite
+    /// (`sqlite_backend::already_stamped_by`). Any row, not the target: the
+    /// target is the newest row in range, and a heal that back-fills a hole
+    /// in the range after the stamp landed moves it — asking the target alone
+    /// billed that run twice (2026-09-25 final review, I1). The stamp stays on
+    /// the row it first landed on.
     ///
-    /// Default: [`StampOutcome::NoRowInRange`] — for TEST STUBS only, and true
-    /// of them by construction (a stub with no transcript has no row in any
-    /// range). **Both production backends override it**: SQLite with a
-    /// `source_seq`-ranged `ORDER BY source_seq DESC LIMIT 1`, the file backend
-    /// with a locked `rfind` over the same range. It is deliberately NOT
-    /// `Stamped`: a default that claims the write happened would let the caller
-    /// bill a session against a store that wrote nothing.
-    async fn stamp_assistant_metadata_in_range(
+    /// `bill`, when present, is accumulated onto the session row in the SAME
+    /// operation, and only on [`StampOutcome::Stamped`] — a replay reads
+    /// `AlreadyStamped` and adds nothing. The stamp is the bill's idempotence
+    /// guard, so the two must land together: a stamp that landed without its
+    /// bill could never be billed again (FOLLOW-UP F10). If the bill cannot be
+    /// applied — including a session with no row to add it to — the stamp
+    /// must not land either, and the answer is `Err`, never a silent `Ok`.
+    /// SQLite does both in one transaction; the file backend writes the
+    /// transcript, then `metadata.json`, and rolls the stamp back under the
+    /// same lock if the second write fails (a crash between the two writes
+    /// under-bills once — ruling U3).
+    ///
+    /// Required, with no default body. A default would be taken silently by
+    /// a forwarding decorator that forgot this method: every stamp and every
+    /// bill would be lost, and the projector FINALISES `NoRowInRange` rather
+    /// than retrying it — the severed wire the file backend had before it
+    /// implemented the stamp. SQLite reads the range `ORDER BY source_seq
+    /// DESC`, the file backend takes a locked `rposition` over the same
+    /// range; a decorator forwards; a test double with no transcript answers
+    /// `NoRowInRange`, which is true of it by construction — never `Stamped`,
+    /// which would claim a write that did not happen.
+    async fn stamp_and_bill_in_range(
         &self,
-        _key: &SessionKey,
-        _after_seq: u64,
-        _before_seq: u64,
-        _metadata: &serde_json::Value,
-    ) -> Result<StampOutcome, SessionStoreError> {
-        Ok(StampOutcome::NoRowInRange)
-    }
+        key: &SessionKey,
+        after_seq: u64,
+        before_seq: u64,
+        metadata: &serde_json::Value,
+        bill: Option<&RunBill>,
+    ) -> Result<StampOutcome, SessionStoreError>;
 
     async fn patch_session(
         &self,
@@ -502,8 +539,13 @@ pub trait SessionStore: Send + Sync {
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError>;
     /// Accumulate one run's usage onto the session row. `cost_usd` is that
-    /// run's priced cost (0.0 when it could not be priced). Called by
-    /// `session_projector` on `AssistantRunMeta`.
+    /// run's priced cost (0.0 when it could not be priced).
+    ///
+    /// No production caller today: a run is billed only through
+    /// `stamp_and_bill_in_range`, inside the same operation that lands its
+    /// stamp (F10). Calling this method to bill a run instead bypasses that
+    /// stamp's idempotence guard — nothing here stops a second call from
+    /// billing the same run twice. Parked, not cut (2026-09-24 review, I1).
     async fn update_session_usage(
         &self,
         key: &SessionKey,

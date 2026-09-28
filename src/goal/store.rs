@@ -21,6 +21,10 @@ const PENDING_STALE_GRACE_MS: u64 = 60_000;
 /// never treated as stale before it wakes. Mirrors the loop's busy retry.
 const BUSY_RETRY_DELAY_MS: u64 = 30_000;
 
+// Same invariant as the loop's: a re-armed continuation (busy or
+// authority-unknown) must never read as stale before it wakes.
+const _: () = assert!(BUSY_RETRY_DELAY_MS < PENDING_STALE_GRACE_MS);
+
 /// How long an in-flight objective-gate arbitration suppresses a second one.
 /// The gate is a shell command the caller runs with the session run-slot free,
 /// so a user turn completing inside its window re-enters the hook; the pending
@@ -1129,11 +1133,13 @@ impl GoalStore {
                 // The claiming run's project root is likewise pipeline-owned:
                 // a tool update must never roll it back to the snapshot's.
                 merged.workspace = live.workspace.clone();
-                // Owner/scope attribution (P1 data isolation) is stamped once
-                // at creation and never re-derived from a tool snapshot — same
-                // ownership rule as `workspace`.
+                // Owner/scope/author attribution (P1 data isolation; the
+                // author is round 11's R-b) is stamped once at creation and
+                // never re-derived from a tool snapshot — same ownership rule
+                // as `workspace`.
                 merged.owner_user_id = live.owner_user_id.clone();
                 merged.scope_id = live.scope_id.clone();
+                merged.author_user_id = live.author_user_id.clone();
                 let outcome = if live.status == expected_status {
                     FieldUpdate::Committed
                 } else {
@@ -2022,6 +2028,23 @@ mod tests {
             store.get("s").unwrap().unwrap().workspace.as_deref(),
             Some("/proj/x")
         );
+    }
+
+    #[test]
+    fn commit_field_update_never_clobbers_the_author() {
+        let (store, _d) = temp_store();
+        let owned = pursuing("s-author", 5).with_author(Some("u-bob".into()));
+        store.put(&owned).unwrap();
+        let snapshot = store.get("s-author").unwrap().unwrap();
+        // A tool snapshot rebuilt without the author must not erase it.
+        let edited = snapshot
+            .with_author(None)
+            .with_note(Some("n".into()), 3_000);
+        store
+            .commit_field_update(&edited, GoalStatus::Active)
+            .unwrap();
+        let after = store.get("s-author").unwrap().unwrap();
+        assert_eq!(after.author_user_id.as_deref(), Some("u-bob"));
     }
 
     #[test]

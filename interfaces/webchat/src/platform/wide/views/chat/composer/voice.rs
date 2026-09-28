@@ -32,8 +32,9 @@ use crate::state::sessions::SessionMap;
 
 /// Recording lifecycle. `Idle ↔ Recording`, then a one-shot `Transcribing`
 /// while the audio round-trips through STT and the send.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RecState {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum RecState {
+    #[default]
     Idle,
     /// Mic requested, backend not yet confirmed (on macOS the native TCC
     /// permission dialog is up). Clicks are ignored so a duplicate
@@ -62,6 +63,191 @@ struct Recorder {
 
 type Handle = Rc<RefCell<Recorder>>;
 
+/// Outcome of [`VoiceButtonState::on_pointer_up`]. The component
+/// pattern-matches on this to decide whether to call `finish()`, open
+/// voice mode, or noop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PointerUpAction {
+    /// User released while `Recording` → emit finish (stop capture).
+    Finish,
+    /// Quick tap on the idle mic → open immersive voice mode.
+    OpenVoiceMode,
+    /// Ghost gesture, mid round-trip, or release after finish — noop.
+    Ignored,
+}
+
+/// Pure state-machine core for the voice button. Lives in a
+/// `StoredValue<RefCell<VoiceButtonState>>` inside the component so the
+/// pointer-event closures (which Leptos cannot call from tests) can
+/// drive the same transitions tests pin in `mod tests` below.
+///
+/// The component owns the `RwSignal<RecState>` for UI reactivity; the
+/// helper [`apply_state`] closure keeps it mirrored with `rec_state`
+/// here. The 450 ms long-press timer is owned by the component as a
+/// gloo `TimeoutHandle` (cleared via `h.clear()`); this struct only
+/// tracks whether one *should* be armed — the actual handle lives
+/// alongside because `TimeoutHandle` cannot be constructed in tests.
+///
+/// Invariants pinned by `mod tests`:
+///   - `on_pointer_down` in Idle arms the press-timer slot; the state
+///     itself does not change until the timer fires.
+///   - `fire_long_press_timer` in Idle+armed moves to Starting.
+///   - `on_backend_ready` in Starting moves to Recording.
+///   - `on_pointer_up` in Recording moves to Transcribing and emits
+///     `PointerUpAction::Finish`.
+///   - `on_pointer_up` in Starting emits `Ignored` (no ghost finish).
+///   - `on_pointer_up` always clears the press-timer slot.
+///   - `on_pointer_up` called twice in the same recording cycle emits
+///     `Finish` at most once.
+#[derive(Clone, Default)]
+pub(super) struct VoiceButtonState {
+    rec_state: RecState,
+    press_timer_active: bool,
+    long_press: bool,
+    finish_emitted: bool,
+    finish_calls: u32,
+}
+
+#[allow(
+    dead_code,
+    reason = "methods are exercised by `mod tests`; production paths route transitions through `apply_state`/`set_rec_state` instead."
+)]
+impl VoiceButtonState {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    // Read-only views used by the component and by tests.
+    pub(super) fn rec_state(&self) -> RecState {
+        self.rec_state
+    }
+    pub(super) fn press_timer_active(&self) -> bool {
+        self.press_timer_active
+    }
+    pub(super) fn long_press(&self) -> bool {
+        self.long_press
+    }
+    pub(super) fn finish_emitted(&self) -> bool {
+        self.finish_emitted
+    }
+    pub(super) fn finish_calls(&self) -> u32 {
+        self.finish_calls
+    }
+
+    /// Pointer down. In `Idle`, arm the press-timer slot (state does
+    /// not change yet — the 450 ms timer decides tap-vs-hold). In any
+    /// non-Idle state, do nothing: a press while already recording
+    /// means "stop", not "start a new gesture".
+    pub(super) fn on_pointer_down(&mut self) {
+        self.long_press = false;
+        if self.rec_state == RecState::Idle {
+            self.press_timer_active = true;
+            // New gesture cycle — clear the prior finish guard.
+            self.finish_emitted = false;
+        }
+    }
+
+    /// Long-press timer fired (the 450 ms timeout closure called this).
+    /// Idle + armed → `Starting`, set `long_press` so the matching
+    /// pointer_up knows this was a hold-to-dictate gesture. Returns
+    /// `true` iff the transition happened (callers use this to gate
+    /// `begin()`).
+    pub(super) fn fire_long_press_timer(&mut self) -> bool {
+        if self.rec_state == RecState::Idle && self.press_timer_active {
+            self.long_press = true;
+            self.rec_state = RecState::Starting;
+            self.press_timer_active = false;
+            self.finish_emitted = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Backend (native bridge or browser `MediaRecorder`) reports ready
+    /// to record. `Starting` → `Recording`.
+    pub(super) fn on_backend_ready(&mut self) {
+        if self.rec_state == RecState::Starting {
+            self.rec_state = RecState::Recording;
+            self.finish_emitted = false;
+        }
+    }
+
+    /// Backend reports failure (mic permission denied, decoder
+    /// missing). `Starting` → `Idle`.
+    pub(super) fn on_backend_failed(&mut self) {
+        if self.rec_state == RecState::Starting {
+            self.rec_state = RecState::Idle;
+            self.press_timer_active = false;
+            self.long_press = false;
+            self.finish_emitted = false;
+        }
+    }
+
+    /// External state transition (e.g. async transcription completion).
+    /// Resets cycle-scoped flags when entering `Idle`.
+    pub(super) fn set_rec_state(&mut self, new_state: RecState) {
+        self.rec_state = new_state;
+        if new_state == RecState::Idle {
+            self.press_timer_active = false;
+            self.long_press = false;
+            self.finish_emitted = false;
+        }
+    }
+
+    /// Pointer up. Always clears the press-timer slot (bug 2). Returns
+    /// the action the caller should take.
+    ///
+    /// Three guarded paths correspond to the three documented bugs:
+    ///   - `Starting` → `Ignored` (bug 1: ghost gesture — backend never
+    ///     reached Recording, so no finish).
+    ///   - `Recording` + first call → `Finish` (clears timer, sets
+    ///     `finish_emitted`).
+    ///   - `Recording` + second call → `Ignored` (bug 3: double-finish
+    ///     guard for browser backend where `MediaRecorder::stop()`
+    ///     does not synchronously advance state to `Transcribing`).
+    pub(super) fn on_pointer_up(&mut self) -> PointerUpAction {
+        // Bug 2: always clear the press-timer slot on every pointer_up.
+        self.press_timer_active = false;
+        match self.rec_state {
+            // Bug 1: Starting — the gesture was a hold-to-dictate that
+            // never made it to Recording (permission dialog dismissed,
+            // mic unavailable). The button is already visually disabled
+            // in this state, so we leave it as-is and emit no finish.
+            RecState::Starting => PointerUpAction::Ignored,
+            // Recording + not yet finished → emit finish.
+            RecState::Recording if !self.finish_emitted => {
+                self.finish_emitted = true;
+                self.finish_calls += 1;
+                self.long_press = false;
+                self.rec_state = RecState::Transcribing;
+                PointerUpAction::Finish
+            }
+            // Bug 3: Recording but finish already emitted → ignore.
+            RecState::Recording => PointerUpAction::Ignored,
+            RecState::Idle => {
+                self.long_press = false;
+                PointerUpAction::OpenVoiceMode
+            }
+            RecState::Transcribing => PointerUpAction::Ignored,
+        }
+    }
+}
+
+/// Mirrors a state transition into both the gesture state machine and
+/// the UI-facing `RwSignal<RecState>`. The component's sync closures
+/// and the async helpers (`begin`, `browser_start`, `finish`,
+/// `transcribe_and_send`, `read_blob_then`) all route their transitions
+/// through this so the testable core and the Leptos view stay aligned.
+fn apply_state(
+    core: &StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
+    state: &RwSignal<RecState>,
+    new_state: RecState,
+) {
+    core.get_value().borrow_mut().set_rec_state(new_state);
+    state.set(new_state);
+}
+
 /// Stop every track on a stream so the OS mic indicator clears promptly.
 fn stop_tracks(stream: &web_sys::MediaStream) {
     let tracks = stream.get_tracks();
@@ -75,17 +261,19 @@ fn stop_tracks(stream: &web_sys::MediaStream) {
 /// Transcribe base64 audio via the core, then send the transcript as a chat
 /// turn and register the run for spoken playback. Shared tail of both capture
 /// backends — once we have bytes, the rest is backend-agnostic.
+#[allow(clippy::too_many_arguments)]
 fn transcribe_and_send(
     dash: DashboardState,
     chat: ChatState,
     sessions: SessionMap,
     base64: String,
     mime: String,
+    core: StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
     let i18n = crate::i18n::use_i18n();
-    state.set(RecState::Transcribing);
+    apply_state(&core, &state, RecState::Transcribing);
     spawn_local(async move {
         let mut params = serde_json::json!({ "audio_base64": base64 });
         if !mime.is_empty() {
@@ -100,7 +288,7 @@ fn transcribe_and_send(
                     .trim()
                     .to_string();
                 if text.is_empty() {
-                    state.set(RecState::Idle);
+                    apply_state(&core, &state, RecState::Idle);
                     return;
                 }
                 // Send as a normal chat turn (R4: pure I/O — the core runs the
@@ -166,22 +354,24 @@ fn transcribe_and_send(
                 crate::components::admin_refusal::settings_write_error(i18n, &e, |e| e.to_string()),
             )),
         }
-        state.set(RecState::Idle);
+        apply_state(&core, &state, RecState::Idle);
     });
 }
 
 /// Read a recorded blob to base64, then hand off to [`transcribe_and_send`].
+#[allow(clippy::too_many_arguments)]
 fn read_blob_then(
     dash: DashboardState,
     chat: ChatState,
     sessions: SessionMap,
     blob: web_sys::Blob,
     mime: String,
+    core: StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
     let Ok(reader) = web_sys::FileReader::new() else {
-        state.set(RecState::Idle);
+        apply_state(&core, &state, RecState::Idle);
         return;
     };
     let reader_clone = reader.clone();
@@ -194,10 +384,19 @@ fn read_blob_then(
         // data URL shape: "data:<mime>;base64,<payload>"
         let base64 = data_url.split(',').nth(1).unwrap_or("").to_string();
         if base64.is_empty() {
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         }
-        transcribe_and_send(dash, chat, sessions, base64, mime.clone(), state, error);
+        transcribe_and_send(
+            dash,
+            chat,
+            sessions,
+            base64,
+            mime.clone(),
+            core,
+            state,
+            error,
+        );
     }) as Box<dyn FnMut()>);
     reader.set_onload(Some(onload.as_ref().unchecked_ref()));
     // One-shot per recording; leaking a single small closure mirrors the
@@ -213,6 +412,7 @@ fn begin(
     dash: DashboardState,
     chat: ChatState,
     sessions: SessionMap,
+    core: StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
@@ -221,7 +421,7 @@ fn begin(
     // Leave Idle synchronously so a second click while the permission dialog is
     // up is ignored (see `RecState::Starting`) rather than firing a duplicate
     // `record_start` that would race the first.
-    state.set(RecState::Starting);
+    apply_state(&core, &state, RecState::Starting);
     spawn_local(async move {
         match dash
             .rpc_call("voice.record_start", serde_json::json!({}))
@@ -229,12 +429,12 @@ fn begin(
         {
             Ok(_) => {
                 handle.borrow_mut().native = true;
-                state.set(RecState::Recording);
+                apply_state(&core, &state, RecState::Recording);
             }
             Err(e) => {
                 if e.contains("NATIVE_AUDIO_UNAVAILABLE") {
                     // No native helper (Windows/Linux, or signed macOS) → browser.
-                    browser_start(handle, dash, chat, sessions, state, error);
+                    browser_start(handle, dash, chat, sessions, core, state, error);
                 } else {
                     // A real failure (e.g. mic permission denied on macOS).
                     error.set(Some(
@@ -242,7 +442,7 @@ fn begin(
                             e.to_string()
                         }),
                     ));
-                    state.set(RecState::Idle);
+                    apply_state(&core, &state, RecState::Idle);
                 }
             }
         }
@@ -255,18 +455,19 @@ fn browser_start(
     dash: DashboardState,
     chat: ChatState,
     sessions: SessionMap,
+    core: StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
     spawn_local(async move {
         let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
             error.set(Some("Microphone unavailable".into()));
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         };
         let Ok(media_devices) = nav.media_devices() else {
             error.set(Some("Microphone not supported in this browser".into()));
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         };
 
@@ -278,14 +479,14 @@ fn browser_start(
         );
         let Ok(promise) = media_devices.get_user_media_with_constraints(&constraints) else {
             error.set(Some("Microphone access failed".into()));
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         };
         let stream: web_sys::MediaStream = match JsFuture::from(promise).await {
             Ok(s) => s.unchecked_into(),
             Err(_) => {
                 error.set(Some("Microphone permission denied".into()));
-                state.set(RecState::Idle);
+                apply_state(&core, &state, RecState::Idle);
                 return;
             }
         };
@@ -293,7 +494,7 @@ fn browser_start(
         let Ok(recorder) = web_sys::MediaRecorder::new_with_media_stream(&stream) else {
             stop_tracks(&stream);
             error.set(Some("Recorder init failed".into()));
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         };
 
@@ -327,8 +528,10 @@ fn browser_start(
                 stop_tracks(&stream);
             }
             match blob {
-                Some(blob) => read_blob_then(dash, chat, sessions, blob, mime, state, error),
-                None => state.set(RecState::Idle),
+                Some(blob) => {
+                    read_blob_then(dash, chat, sessions, blob, mime, core, state, error)
+                }
+                None => apply_state(&core, &state, RecState::Idle),
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
         recorder.set_onstop(Some(on_stop.as_ref().unchecked_ref()));
@@ -336,7 +539,7 @@ fn browser_start(
         if recorder.start().is_err() {
             stop_tracks(&stream);
             error.set(Some("Recording failed to start".into()));
-            state.set(RecState::Idle);
+            apply_state(&core, &state, RecState::Idle);
             return;
         }
 
@@ -349,7 +552,7 @@ fn browser_start(
             r._on_data = Some(on_data);
             r._on_stop = Some(on_stop);
         }
-        state.set(RecState::Recording);
+        apply_state(&core, &state, RecState::Recording);
     });
 }
 
@@ -360,13 +563,14 @@ fn finish(
     dash: DashboardState,
     chat: ChatState,
     sessions: SessionMap,
+    core: StoredValue<RefCell<VoiceButtonState>, LocalStorage>,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
     let i18n = crate::i18n::use_i18n();
     let native = handle.borrow().native;
     if native {
-        state.set(RecState::Transcribing);
+        apply_state(&core, &state, RecState::Transcribing);
         let handle = handle;
         spawn_local(async move {
             handle.borrow_mut().native = false;
@@ -386,10 +590,19 @@ fn finish(
                         .unwrap_or("audio/mp4")
                         .to_string();
                     if base64.is_empty() {
-                        state.set(RecState::Idle);
+                        apply_state(&core, &state, RecState::Idle);
                         return;
                     }
-                    transcribe_and_send(dash, chat, sessions, base64, mime, state, error);
+                    transcribe_and_send(
+                        dash,
+                        chat,
+                        sessions,
+                        base64,
+                        mime,
+                        core,
+                        state,
+                        error,
+                    );
                 }
                 Err(e) => {
                     error.set(Some(
@@ -397,7 +610,7 @@ fn finish(
                             e.to_string()
                         }),
                     ));
-                    state.set(RecState::Idle);
+                    apply_state(&core, &state, RecState::Idle);
                 }
             }
         });
@@ -407,7 +620,7 @@ fn finish(
             Some(rec) => {
                 let _ = rec.stop();
             }
-            None => state.set(RecState::Idle),
+            None => apply_state(&core, &state, RecState::Idle),
         }
     }
 }
@@ -437,14 +650,21 @@ pub(super) fn VoiceInputButton(
 
     // Dual-gesture state. A press starts a 450 ms timer: if it fires first the
     // gesture is a long-press → the original dictation flow (`begin`); a
-    // pointerup before then is a tap → enter immersive voice mode. `long_press`
-    // records which branch won so pointerup knows whether to `finish` (stop the
-    // in-flight recording) or open the overlay. `pointer_used` lets the `click`
-    // fallback (keyboard activation only — keyboard fires `click`, not pointer
-    // events) tell itself apart from a mouse click that pointerup already owned.
+    // pointerup before then is a tap → enter immersive voice mode. The state
+    // machine (press-timer slot, `long_press` flag, `finish_emitted` guard,
+    // and `finish_calls` counter) lives in [`VoiceButtonState`]; this
+    // component owns one via a `StoredValue` so the same transitions tests
+    // pin in `voice::tests` are what production gestures drive. The actual
+    // gloo `TimeoutHandle` for `set_timeout_with_handle` lives alongside
+    // because `TimeoutHandle` cannot be constructed in tests — only its
+    // presence is tracked by the core. `pointer_used` stays local: it is a
+    // pure UI-event demultiplexer between mouse pointer events (which fire
+    // `pointerup` first and own the gesture) and keyboard activations
+    // (which fire only `click`).
+    let core: StoredValue<RefCell<VoiceButtonState>, LocalStorage> =
+        StoredValue::new_local(RefCell::new(VoiceButtonState::new()));
     let press_timer: StoredValue<Option<TimeoutHandle>, LocalStorage> =
         StoredValue::new_local(None);
-    let long_press = StoredValue::new(false);
     let pointer_used = StoredValue::new(false);
 
     // Long-press dictation entry (the original Idle→record path), deferred
@@ -454,9 +674,21 @@ pub(super) fn VoiceInputButton(
         if disabled.get_untracked() {
             return;
         }
-        if state.get_untracked() == RecState::Idle {
-            long_press.set_value(true);
-            begin(handle.get_value(), dashboard, chat, sessions, state, error);
+        let started = core.get_value().borrow_mut().fire_long_press_timer();
+        if started {
+            // Mirror the core's transition to the UI signal and kick off the
+            // capture backend. `begin` itself will call `on_backend_ready`
+            // via `apply_state` when the bridge confirms.
+            state.set(core.get_value().borrow().rec_state());
+            begin(
+                handle.get_value(),
+                dashboard,
+                chat,
+                sessions,
+                core,
+                state,
+                error,
+            );
         }
     };
 
@@ -465,40 +697,48 @@ pub(super) fn VoiceInputButton(
             return;
         }
         pointer_used.set_value(true);
-        long_press.set_value(false);
-        // While recording, a press is a deliberate stop — don't arm the timer.
-        if state.get_untracked() != RecState::Idle {
-            return;
-        }
-        if let Ok(h) =
-            set_timeout_with_handle(start_dictation, std::time::Duration::from_millis(450))
-        {
-            press_timer.set_value(Some(h));
+        let cell = core.get_value();
+        let should_arm_timer = {
+            let mut c = cell.borrow_mut();
+            let was_idle = c.rec_state() == RecState::Idle;
+            c.on_pointer_down();
+            // Only arm a fresh 450 ms timer if we just armed the slot in
+            // Idle — a press while already recording means "stop", not
+            // "start a new gesture".
+            was_idle && c.rec_state() == RecState::Idle && c.press_timer_active()
+        };
+        state.set(core.get_value().borrow().rec_state());
+        if should_arm_timer {
+            if let Ok(h) = set_timeout_with_handle(
+                start_dictation,
+                std::time::Duration::from_millis(450),
+            ) {
+                press_timer.set_value(Some(h));
+            }
         }
     };
 
     let on_pointer_up = move |_: web_sys::PointerEvent| {
+        // Clear the gloo timer handle first — bug 2 fix is the core's
+        // unconditional `press_timer_active = false`, this is the matching
+        // I/O side that actually cancels the queued macrotask.
         if let Some(h) = press_timer.try_update_value(Option::take).flatten() {
             h.clear();
         }
         if disabled.get_untracked() {
             return;
         }
-        if long_press.get_value() {
-            // Long-press already fired → we're recording; release stops it.
-            long_press.set_value(false);
-            if state.get_untracked() == RecState::Recording {
-                finish(handle.get_value(), dashboard, chat, sessions, state, error);
+        let action = core.get_value().borrow_mut().on_pointer_up();
+        state.set(core.get_value().borrow().rec_state());
+        match action {
+            PointerUpAction::Finish => {
+                finish(handle.get_value(), dashboard, chat, sessions, core, state, error);
             }
-        } else if state.get_untracked() == RecState::Recording {
-            // Recording without a long-press means a prior gesture started it
-            // (e.g. keyboard); a release here stops it.
-            finish(handle.get_value(), dashboard, chat, sessions, state, error);
-        } else if state.get_untracked() == RecState::Idle {
-            // Quick tap on an idle mic → immersive voice mode.
-            voice_mode.open.set(true);
+            PointerUpAction::OpenVoiceMode => {
+                voice_mode.open.set(true);
+            }
+            PointerUpAction::Ignored => {}
         }
-        // Starting / Transcribing — ignore (mid round-trip).
     };
 
     // Keyboard activation fallback: a `<button>` reached via Enter/Space fires
@@ -512,12 +752,16 @@ pub(super) fn VoiceInputButton(
         if disabled.get_untracked() {
             return;
         }
-        match state.get_untracked() {
-            RecState::Idle => voice_mode.open.set(true),
-            RecState::Recording => {
-                finish(handle.get_value(), dashboard, chat, sessions, state, error)
+        let action = core.get_value().borrow_mut().on_pointer_up();
+        state.set(core.get_value().borrow().rec_state());
+        match action {
+            PointerUpAction::Finish => {
+                finish(handle.get_value(), dashboard, chat, sessions, core, state, error);
             }
-            RecState::Starting | RecState::Transcribing => {}
+            PointerUpAction::OpenVoiceMode => {
+                voice_mode.open.set(true);
+            }
+            PointerUpAction::Ignored => {}
         }
     };
 
@@ -608,5 +852,155 @@ pub(super) fn VoiceInputButton(
             }}
         </button>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! State-machine tests for [`VoiceButtonState`]. Each test pins ONE
+    //! gesture invariant so a regression surfaces as a single failing
+    //! assertion tied to the exact transition that broke. The component
+    //! uses this struct via `StoredValue<RefCell<VoiceButtonState>>` and
+    //! routes every `state.set(...)` through [`apply_state`]; these tests
+    //! are therefore the same code paths production gestures drive.
+
+    use super::*;
+
+    fn fresh() -> VoiceButtonState {
+        VoiceButtonState::new()
+    }
+
+    /// Idle + pointer_down arms the press-timer slot, then the simulated
+    /// long-press timer firing moves Idle → Starting. A pointer_down
+    /// alone does not transition state — the 450 ms timer is what
+    /// distinguishes tap from hold.
+    #[test]
+    fn idle_pointer_down_then_timer_fire_moves_to_starting() {
+        let mut s = fresh();
+        assert_eq!(s.rec_state(), RecState::Idle);
+        assert!(!s.press_timer_active());
+
+        s.on_pointer_down();
+        // The press armed a timer; state still Idle (timer decides tap vs hold).
+        assert_eq!(s.rec_state(), RecState::Idle);
+        assert!(s.press_timer_active(), "Idle pointer_down must arm the press-timer slot");
+
+        // Timer fired (450 ms later) — the gesture was a long press.
+        assert!(s.fire_long_press_timer(), "timer fired in Idle+armed must transition");
+        assert_eq!(s.rec_state(), RecState::Starting);
+        assert!(s.long_press(), "long_press flag should be set after timer fires");
+        assert!(!s.press_timer_active(), "timer slot consumed after fire");
+    }
+
+    /// After the bridge (or browser MediaRecorder) confirms the
+    /// recording started, Starting → Recording. on_backend_ready on any
+    /// other state is a no-op (it's the bridge callback arrival, not a
+    /// user gesture).
+    #[test]
+    fn starting_backend_ready_moves_to_recording() {
+        let mut s = fresh();
+        s.on_pointer_down();
+        s.fire_long_press_timer();
+        assert_eq!(s.rec_state(), RecState::Starting);
+
+        s.on_backend_ready();
+        assert_eq!(s.rec_state(), RecState::Recording);
+
+        // Idempotent — calling it again does nothing harmful.
+        s.on_backend_ready();
+        assert_eq!(s.rec_state(), RecState::Recording);
+    }
+
+    /// Recording + pointer_up → Transcribing and emits Finish. This is
+    /// the happy path: a long press, hold to dictate, release.
+    #[test]
+    fn recording_pointer_up_transitions_to_transcribing_and_emits_finish() {
+        let mut s = fresh();
+        s.on_pointer_down();
+        s.fire_long_press_timer();
+        s.on_backend_ready();
+        assert_eq!(s.rec_state(), RecState::Recording);
+
+        let action = s.on_pointer_up();
+        assert_eq!(action, PointerUpAction::Finish);
+        assert_eq!(s.rec_state(), RecState::Transcribing);
+        assert_eq!(s.finish_calls(), 1);
+        assert!(s.finish_emitted(), "finish_emitted should guard any second call");
+    }
+
+    /// Bug 1 fix: pointer_up while still in Starting (mic permission
+    /// dialog dismissed, `getUserMedia` rejected) must NOT emit a
+    /// finish. The backend never reached Recording, so there is no
+    /// in-flight capture to stop — any `recorder.stop()` call here
+    /// would race the bridge's `record_start` that has not even
+    /// resolved yet.
+    #[test]
+    fn starting_pointer_up_does_not_emit_finish() {
+        let mut s = fresh();
+        s.on_pointer_down();
+        s.fire_long_press_timer();
+        assert_eq!(s.rec_state(), RecState::Starting);
+
+        let action = s.on_pointer_up();
+        assert_ne!(action, PointerUpAction::Finish, "ghost finish on Starting state");
+        assert_eq!(s.finish_calls(), 0, "no finish should have been emitted");
+    }
+
+    /// Bug 2 fix: every pointer_up clears the press-timer slot,
+    /// regardless of which state the gesture ended in. Without this
+    /// guard, a pointer_up fired while the timer is still armed would
+    /// leak the `TimeoutHandle` (and fire `start_dictation` 450 ms
+    /// later, opening voice mode on an already-resolved gesture).
+    #[test]
+    fn pointer_up_always_clears_press_timer_slot() {
+        let mut s = fresh();
+        s.on_pointer_down();
+        assert!(s.press_timer_active(), "press-timer slot should be armed after Idle pointer_down");
+
+        // Pre-timer release — gesture was a tap, timer still queued.
+        let action = s.on_pointer_up();
+        assert_eq!(action, PointerUpAction::OpenVoiceMode);
+        assert!(!s.press_timer_active(), "press-timer slot leaked after pointer_up");
+    }
+
+    /// Bug 3 fix: a double release (a quick double-tap on the mic
+    /// glyph, or two pointerup events before the browser backend's
+    /// `MediaRecorder::stop()` has synchronised state to
+    /// `Transcribing`) must emit Finish once and only once. The
+    /// `finish_emitted` guard catches the second call even when the
+    /// state signal has not yet caught up.
+    #[test]
+    fn double_pointer_up_emits_only_one_finish() {
+        let mut s = fresh();
+        s.on_pointer_down();
+        s.fire_long_press_timer();
+        s.on_backend_ready();
+        assert_eq!(s.rec_state(), RecState::Recording);
+
+        // First release — the recording finishes.
+        let first = s.on_pointer_up();
+        assert_eq!(first, PointerUpAction::Finish);
+        let n_after_first = s.finish_calls();
+        assert_eq!(n_after_first, 1);
+
+        // Second release — already finished (state is Transcribing now,
+        // and finish_emitted is also set); must be ignored.
+        let second = s.on_pointer_up();
+        assert_ne!(second, PointerUpAction::Finish, "double finish emitted");
+        assert_eq!(s.finish_calls(), n_after_first, "finish_calls must not advance on second release");
+
+        // And even if state were still Recording (simulate the browser
+        // backend race where `MediaRecorder::stop()` has not yet hit
+        // the state signal), the `finish_emitted` guard still
+        // suppresses the second emit.
+        let mut s2 = fresh();
+        s2.on_pointer_down();
+        s2.fire_long_press_timer();
+        s2.on_backend_ready();
+        assert_eq!(s2.on_pointer_up(), PointerUpAction::Finish);
+        // Force the core back to Recording to simulate the browser
+        // race window between `rec.stop()` and `onstop`.
+        s2.set_rec_state(RecState::Recording);
+        assert_eq!(s2.on_pointer_up(), PointerUpAction::Ignored, "finish_emitted guard must block re-entry");
     }
 }

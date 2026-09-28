@@ -50,7 +50,7 @@ fn map_node_type(kind: &str) -> TraceNodeType {
     match kind {
         "tool_call_started" | "tool_call_completed" => TraceNodeType::ToolCall,
         "tool_summary" => TraceNodeType::ToolResult,
-        "turn_state_entered" => TraceNodeType::Thinking,
+        "turn_state_entered" | "reasoning_emitted" => TraceNodeType::Thinking,
         "text_emitted" => TraceNodeType::Observation,
         "turn_started" | "turn_completed" | "session_completed" => TraceNodeType::Decision,
         _ => TraceNodeType::Observation,
@@ -124,6 +124,22 @@ mod tests {
         assert_eq!(node.node_type, TraceNodeType::ToolCall);
         assert_eq!(node.status, TraceStatus::InProgress);
         assert!(node.content.contains("read_file"));
+    }
+
+    /// The node type is keyed by the presentation's kind string, which comes
+    /// from the shared crate's `kind()`; this pins the literal in
+    /// `map_node_type` to that spelling (otherwise it falls to Observation).
+    #[test]
+    fn converts_reasoning_emitted_to_a_thinking_node() {
+        let labels = TraceLabels::default();
+        let event = AgentTraceEvent::ReasoningEmitted {
+            iteration: 2,
+            text: "Weighing the options.".into(),
+        };
+
+        let node = trace_node_from_event(&event, 3, &labels).unwrap();
+        assert_eq!(node.node_type, TraceNodeType::Thinking);
+        assert!(node.content.contains("Weighing the options."));
     }
 
     #[test]

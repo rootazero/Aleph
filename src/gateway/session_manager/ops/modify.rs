@@ -4,6 +4,43 @@ use tracing::{debug, info};
 use super::{SessionIdentityMeta, SessionManager, SessionManagerError, SessionPatch, SessionState};
 use crate::gateway::router::SessionKey;
 
+/// The session-row half of billing a run: add its tokens and cost, and pin
+/// the model it ran on when it names one. Returns the rows changed — 0 means
+/// there is no session row to bill, which the caller must not read as done.
+/// Shared by `update_session_usage` and the transactional
+/// `stamp_and_bill_in_range`, so the two cannot drift on what "billing" adds.
+pub(crate) fn add_usage(
+    conn: &rusqlite::Connection,
+    key_str: &str,
+    bill: &crate::gateway::session_store::RunBill,
+) -> rusqlite::Result<usize> {
+    let total = bill.input_tokens + bill.output_tokens;
+    let mut sql = String::from(
+        "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?, estimated_cost_usd = estimated_cost_usd + ?"
+    );
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![
+        &bill.input_tokens,
+        &bill.output_tokens,
+        &total,
+        &bill.cost_usd,
+    ];
+    if bill.model.is_some() {
+        sql.push_str(", model = ?");
+    }
+    if bill.model_provider.is_some() {
+        sql.push_str(", model_provider = ?");
+    }
+    sql.push_str(" WHERE key = ?");
+    if let Some(ref m) = bill.model {
+        params.push(m);
+    }
+    if let Some(ref mp) = bill.model_provider {
+        params.push(mp);
+    }
+    params.push(&key_str);
+    conn.execute(&sql, params.as_slice())
+}
+
 impl SessionManager {
     /// Stamp the P1 attribution columns onto a row that has neither set.
     ///
@@ -498,9 +535,14 @@ impl SessionManager {
     /// Until this had a production caller, the session's token columns were
     /// permanently 0 and `estimated_cost_usd` had no column at all — while both
     /// were surfaced to the model (the `sessions` tool) and to the Panel as
-    /// facts. The caller is `session_projector`'s `AssistantRunMeta` arm, whose
-    /// watermark suppression is what makes this accumulation idempotent under
-    /// the reconciler's replay.
+    /// facts.
+    ///
+    /// No production caller today, either: a run is billed only through
+    /// `stamp_and_bill_in_range`, inside the same operation that lands its
+    /// stamp (F10), and that stamp is the idempotence guard against a replay.
+    /// Calling this method to bill a run bypasses that guard — nothing here
+    /// stops a second call from billing the same run twice. Parked, not cut
+    /// (2026-09-24 review, I1).
     pub async fn update_session_usage(
         &self,
         key: &SessionKey,
@@ -511,43 +553,29 @@ impl SessionManager {
         model_provider: Option<&str>,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
+        let bill = crate::gateway::session_store::RunBill {
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            model: model.map(str::to_string),
+            model_provider: model_provider.map(str::to_string),
+        };
         let conn = self
             .conn
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-
-        let total = input_tokens + output_tokens;
-        let model_owned = model.map(|s| s.to_string());
-        let provider_owned = model_provider.map(|s| s.to_string());
-
-        let mut sql = String::from(
-            "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?, estimated_cost_usd = estimated_cost_usd + ?"
-        );
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            vec![&input_tokens, &output_tokens, &total, &cost_usd];
-
-        if model_owned.is_some() {
-            sql.push_str(", model = ?");
-        }
-        if provider_owned.is_some() {
-            sql.push_str(", model_provider = ?");
-        }
-        sql.push_str(" WHERE key = ?");
-
-        if let Some(ref m) = model_owned {
-            params.push(m);
-        }
-        if let Some(ref mp) = provider_owned {
-            params.push(mp);
-        }
-        params.push(&key_str);
-
-        conn.execute(&sql, params.as_slice())
+        add_usage(&conn, &key_str, &bill)
             .map_err(|e| SessionManagerError::DatabaseError(format!("Usage update failed: {e}")))?;
-
         drop(conn);
         self.emit_session_updated(&key_str);
         Ok(())
+    }
+
+    /// Publish `session_updated` after a bill landed outside this module
+    /// (`stamp_and_bill_in_range` lives on the store trait impl, which cannot
+    /// reach `emit_session_updated`).
+    pub(crate) fn notify_usage_updated(&self, key_str: &str) {
+        self.emit_session_updated(key_str);
     }
 
     /// Transition session to error state with optional error message

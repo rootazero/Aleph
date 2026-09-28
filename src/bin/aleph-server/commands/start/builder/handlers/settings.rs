@@ -133,13 +133,15 @@ pub(in crate::commands::start) fn register_projects_handlers(
         server,
         "projects.list",
         projects_handlers::handle_list,
-        project_store
+        project_store,
+        users_store
     );
     register_handler!(
         server,
         "projects.add",
         projects_handlers::handle_add,
         project_store,
+        users_store,
         event_bus
     );
     register_handler!(
@@ -147,6 +149,7 @@ pub(in crate::commands::start) fn register_projects_handlers(
         "projects.create_blank",
         projects_handlers::handle_create_blank,
         project_store,
+        users_store,
         event_bus
     );
     register_handler!(
@@ -167,13 +170,15 @@ pub(in crate::commands::start) fn register_projects_handlers(
         server,
         "projects.get",
         projects_handlers::handle_get,
-        project_store
+        project_store,
+        users_store
     );
     register_handler!(
         server,
         "projects.create",
         projects_handlers::handle_create,
         project_store,
+        users_store,
         event_bus
     );
     register_handler!(

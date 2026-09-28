@@ -35,6 +35,10 @@ pub(super) async fn open_tab(be: &CdpBackend, url: &str) -> Result<TabId, Browse
     // would answer `TabNotFound` here — creating a tab is this verb's job, and
     // the split is what keeps a typo from looking like a working page.
     handle.attach_tab(&target_id).await?;
+    // Identity first, URL later: the mapping tab↔targetId is known NOW, the
+    // landed URL only after the navigate below records it. If the navigate
+    // fails, the identity still stands — the tab exists, which is a fact.
+    be.record_tab(&tab_id, None);
     {
         let mut tabs = handle.tabs.lock().await;
         tabs.active = Some(tab_id.clone());
@@ -83,6 +87,11 @@ pub(super) async fn close_tab(be: &CdpBackend, tab_id: &str) -> Result<(), Brows
             tabs.active = None;
         }
     }
+    // A tab WE closed is forgotten: asking about it afterwards is
+    // `TabNotFound`, and `TabGone` stays reserved for tabs that vanished
+    // without us (the page's own `window.close`, an engine restart) — the
+    // registry's doc on `forget` owns the distinction.
+    be.forget_tab(tab_id);
     Ok(())
 }
 
@@ -118,6 +127,13 @@ pub(super) async fn list_tabs(be: &CdpBackend) -> Result<Vec<TabLine>, BrowserEr
     // ordered by the id the browser assigned — stable across calls, which is
     // the only property the fallback needs.
     lines.sort_by(|a, b| a.id.cmp(&b.id));
+    // The listing is also a discovery sweep: every tab in the table gets its
+    // identity (targetId + last-observed URL) recorded, which is how tabs the
+    // pump adopted (popups) and the launch's own first tab enter the registry
+    // without those paths needing a registry handle of their own.
+    for line in &lines {
+        be.record_tab(&line.id, Some(&line.url));
+    }
     Ok(lines)
 }
 
@@ -127,6 +143,12 @@ pub(super) async fn switch_tab(be: &CdpBackend, tab_id: &str) -> Result<(), Brow
     // must make it addressable, not merely foregrounded. `attach_tab` is
     // idempotent, so a tab already in the table costs one map lookup.
     handle.attach_tab(&TargetId(tab_id.to_string())).await?;
+    // The attach is what made the tab↔targetId mapping real; record it. No
+    // URL is recorded here — a freshly adopted tab's table entry starts at
+    // the documented `about:blank` placeholder, and recording that as a
+    // last-seen URL would be a claim nobody observed. The next `list_tabs`
+    // records whatever URL the table holds by then.
+    be.record_tab(tab_id, None);
     target::activate_target(&handle.conn, &TargetId(tab_id.to_string()))
         .await
         .map_err(|e| map_cdp_err(be.engine(), "Target.activateTarget", e))?;
@@ -339,6 +361,171 @@ mod tests {
         assert!(
             text.contains("browser_tabs"),
             "a closed gate names a door that opens (判据 §14): {text}"
+        );
+    }
+
+    // ---- Identity recording (B3) --------------------------------------------
+
+    /// After `open_tab`, the registry knows both halves of the new tab's
+    /// identity: the tab↔targetId mapping and the landed URL.
+    ///
+    /// The two halves have DIFFERENT writers, and the falsification lives on
+    /// different lines: the identity half is `open_tab`'s own `record_tab`,
+    /// which the refused-navigation sibling below reddens (the refusal returns
+    /// before the audit, so nothing else records); the URL half is delivered
+    /// by the post-navigation audit's `list_tabs` sweep (the audit re-lists
+    /// after `apply_document_boundary` wrote the landed URL into the table),
+    /// which a mutation of that sweep reddens. `navigate` itself records
+    /// nothing on purpose — any line there is masked by that sweep and was
+    /// measured unfalsifiable (判据 §2), which its own comment states.
+    #[tokio::test]
+    async fn open_tab_records_the_tabs_identity_and_landed_url() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Target.createTarget",
+            Responder::Reply(json!({ "targetId": "T-NEW" })),
+        );
+        server.on(
+            "Page.navigate",
+            Responder::Reply(json!({ "frameId": "F1", "loaderId": "L1" })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+
+        // No load event arrives, so the navigate reports a timeout — but the
+        // document boundary is applied before that return (the sibling test
+        // above pins that ordering), so both halves of the identity exist.
+        let _ = backend.open_tab("https://ok.example/").await;
+
+        let reg = backend.tab_identities.clone();
+        let id = reg
+            .resolve_identity("default", "T-NEW", &["T-NEW".to_string()])
+            .expect("the created tab was recorded");
+        assert_eq!(id.target_id.as_deref(), Some("T-NEW"));
+        assert_eq!(id.last_url.as_deref(), Some("https://ok.example/"));
+    }
+
+    /// The OTHER half of the open path: when the engine REFUSES the
+    /// navigation, `navigate` returns before its own record runs — so the
+    /// identity standing afterwards is `open_tab`'s alone. The tab exists
+    /// (the engine created it) and the registry must know it, with no URL
+    /// claim: none was observed.
+    #[tokio::test]
+    async fn open_tab_records_identity_even_when_the_navigation_is_refused() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Target.createTarget",
+            Responder::Reply(json!({ "targetId": "T-REFUSED" })),
+        );
+        server.on(
+            "Page.navigate",
+            Responder::Reply(json!({ "frameId": "F1", "errorText": "net::ERR_BLOCKED_BY_CLIENT" })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+
+        let err = backend
+            .open_tab("https://ok.example/")
+            .await
+            .expect_err("the engine refused the load");
+        assert!(
+            matches!(err, crate::browser::error::BrowserError::NavigationFailed(_)),
+            "got {err:?}"
+        );
+        let reg = backend.tab_identities.clone();
+        let id = reg
+            .resolve_identity("default", "T-REFUSED", &["T-REFUSED".to_string()])
+            .expect("the tab exists — the engine created it — so it is recorded");
+        assert_eq!(id.target_id.as_deref(), Some("T-REFUSED"));
+        assert_eq!(id.last_url, None, "no navigation landed: {id:?}");
+    }
+
+    /// `list_tabs` doubles as the discovery sweep: tabs the pump adopted and
+    /// the launch's own first tab enter the registry here, so those paths
+    /// need no registry handle of their own.
+    #[tokio::test]
+    async fn list_tabs_records_every_tab_in_the_table() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("pre-seeded handle");
+        for id in ["AAA", "BBB"] {
+            handle
+                .attach_tab(&aleph_cdp::TargetId(id.to_string()))
+                .await
+                .expect("attach ok");
+        }
+
+        let _ = backend.list_tabs().await.expect("list ok");
+        let reg = backend.tab_identities.clone();
+        for id in ["AAA", "BBB"] {
+            let identity = reg
+                .resolve_identity("default", id, &[id.to_string()])
+                .unwrap_or_else(|e| panic!("{id} must be recorded by the listing: {e}"));
+            assert_eq!(identity.target_id.as_deref(), Some(id));
+        }
+    }
+
+    /// `switch_tab` attaches (adopting a tab the page opened itself) — the
+    /// attach is what makes the mapping real, and it is recorded without a
+    /// URL: a freshly adopted tab's table entry holds the documented
+    /// `about:blank` placeholder, and recording that as "last seen" would be
+    /// a claim nobody observed (判据 §8).
+    #[tokio::test]
+    async fn switch_tab_records_the_identity_without_a_url_claim() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on("Target.activateTarget", Responder::Reply(json!({})));
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+
+        backend.switch_tab("T-SW").await.expect("switch ok");
+        let reg = backend.tab_identities.clone();
+        let id = reg
+            .resolve_identity("default", "T-SW", &["T-SW".to_string()])
+            .expect("the switched-to tab was recorded");
+        assert_eq!(id.target_id.as_deref(), Some("T-SW"));
+        assert_eq!(id.last_url, None, "no URL was observed: {id:?}");
+    }
+
+    /// The deliberate-close / gone-without-us distinction, wired: a tab
+    /// `close_tab` closed is FORGOTTEN (`TabNotFound` afterwards), while a
+    /// tab that vanished on its own stays recorded so `resolve_identity` can
+    /// call it `TabGone`.
+    #[tokio::test]
+    async fn a_tab_we_closed_is_forgotten_and_a_vanished_one_is_gone() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Target.closeTarget",
+            Responder::Reply(json!({ "success": true })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("pre-seeded handle");
+        for id in ["T-CLOSED", "T-VANISHED"] {
+            handle
+                .attach_tab(&aleph_cdp::TargetId(id.to_string()))
+                .await
+                .expect("attach ok");
+        }
+        let _ = backend.list_tabs().await.expect("list ok");
+
+        backend.close_tab("T-CLOSED").await.expect("close ok");
+        let reg = backend.tab_identities.clone();
+        assert!(
+            matches!(
+                reg.resolve_identity("default", "T-CLOSED", &[]),
+                Err(crate::browser::error::BrowserError::TabNotFound(_))
+            ),
+            "a tab we closed is forgotten, not reported gone"
+        );
+        // T-VANISHED is still recorded; a fresh enumeration that no longer
+        // carries it is the `window.close` shape → TabGone.
+        assert!(
+            matches!(
+                reg.resolve_identity("default", "T-VANISHED", &[]),
+                Err(crate::browser::error::BrowserError::TabGone { .. })
+            ),
+            "a tab that vanished without us is TabGone"
         );
     }
 }

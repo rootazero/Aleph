@@ -800,9 +800,11 @@ impl ProjectStore {
     /// silently taken over — an overwrite would move a live room's traffic
     /// somewhere its members cannot see.
     ///
-    /// Re-binding a conversation to the SAME room is a no-op that succeeds and
-    /// refreshes the label: an operator repeating a bind must not be told they
-    /// broke something.
+    /// Re-binding a conversation to the SAME room is a no-op that succeeds: an
+    /// operator repeating a bind must not be told they broke something. The
+    /// label follows Ruling R-e — `None` keeps the stored label, `Some("")`
+    /// clears it, any other value replaces it — and the returned binding
+    /// carries the STORED label. A re-bind without a label used to erase it.
     ///
     /// `channel_id` and `peer_id` are normalized via
     /// [`binding::normalize_component`] before storage (Ruling AD) — the same
@@ -858,25 +860,38 @@ impl ProjectStore {
             if exists.is_none() {
                 return Err(ProjectError::NotFound(project_id.to_string()));
             }
-            conn.execute(
-                "INSERT INTO project_channel_bindings
-                     (project_id, channel_id, peer_kind, peer_id, bound_by, bound_at, label)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(channel_id, peer_kind, peer_id) DO UPDATE SET
-                     label = excluded.label,
-                     bound_by = excluded.bound_by,
-                     bound_at = excluded.bound_at",
-                rusqlite::params![
-                    project_id,
-                    channel_key,
-                    peer_kind_col,
-                    peer_key,
-                    bound_by,
-                    now,
-                    label
-                ],
-            )
-            .map_err(db_err)?;
+            // Ruling R-e, decided in the statement rather than by the caller:
+            // `?7` NULL (omitted) keeps the stored label, `''` clears it, any
+            // other value replaces it. `?7` is read twice on purpose — once for
+            // the INSERT (where `''` must also mean "no label") and once in the
+            // DO UPDATE arm, where `excluded.label` could no longer tell an
+            // omitted label from a cleared one. `RETURNING` makes the receipt
+            // report the stored value, not the argument.
+            let stored_label: Option<String> = conn
+                .query_row(
+                    "INSERT INTO project_channel_bindings
+                         (project_id, channel_id, peer_kind, peer_id, bound_by, bound_at, label)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULLIF(?7, ''))
+                     ON CONFLICT(channel_id, peer_kind, peer_id) DO UPDATE SET
+                         label = CASE
+                             WHEN ?7 IS NULL THEN project_channel_bindings.label
+                             ELSE NULLIF(?7, '')
+                         END,
+                         bound_by = excluded.bound_by,
+                         bound_at = excluded.bound_at
+                     RETURNING label",
+                    rusqlite::params![
+                        project_id,
+                        channel_key,
+                        peer_kind_col,
+                        peer_key,
+                        bound_by,
+                        now,
+                        label
+                    ],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .map_err(db_err)?;
             Ok(ChannelBinding {
                 project_id: project_id.to_string(),
                 channel_id: channel_key.clone(),
@@ -884,7 +899,7 @@ impl ProjectStore {
                 peer_id: peer_key.clone(),
                 bound_by: bound_by.map(str::to_string),
                 bound_at: now,
-                label: label.map(str::to_string),
+                label: stored_label,
             })
         })
     }
@@ -2433,6 +2448,70 @@ mod tests {
             .find(|b| b.channel_id == "slack")
             .expect("the slack binding is present");
         assert_eq!(slack.label.as_deref(), Some("#eng"));
+    }
+
+    /// Ruling R-e: re-binding without a label keeps the stored one, an empty
+    /// label clears it, a value replaces it — and the returned binding reports
+    /// what is STORED, not what was passed. Before, the upsert wrote
+    /// `excluded.label` unconditionally, so an idempotent-looking re-bind
+    /// silently erased the operator's label.
+    #[test]
+    fn a_rebind_keeps_clears_or_replaces_the_label_and_reports_what_is_stored() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let bind = |label: Option<&str>| {
+            store
+                .bind_conversation(
+                    &a.id,
+                    "telegram",
+                    BindingPeerKind::Group,
+                    "C-label",
+                    Some("u-alice"),
+                    label,
+                )
+                .unwrap()
+        };
+        let stored = || {
+            store
+                .bindings_for(&a.id)
+                .unwrap()
+                .into_iter()
+                .find(|b| b.peer_id == "c-label")
+                .expect("the binding is present")
+                .label
+        };
+
+        assert_eq!(bind(Some("#eng")).label.as_deref(), Some("#eng"));
+        let kept = bind(None);
+        assert_eq!(kept.label.as_deref(), Some("#eng"), "omitted keeps — in the receipt");
+        assert_eq!(stored().as_deref(), Some("#eng"), "omitted keeps — on disk");
+
+        assert_eq!(bind(Some("#ops")).label.as_deref(), Some("#ops"), "a value replaces");
+        assert_eq!(stored().as_deref(), Some("#ops"));
+
+        assert_eq!(bind(Some("")).label, None, "an empty label clears — in the receipt");
+        assert_eq!(stored(), None, "an empty label clears — on disk, as NULL not \"\"");
+    }
+
+    /// A FIRST bind with `""` stores NULL, not an empty string: `""` means
+    /// "no label" on every bind, not only on a re-bind.
+    #[test]
+    fn a_first_bind_with_an_empty_label_stores_no_label() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let bound = store
+            .bind_conversation(&a.id, "slack", BindingPeerKind::Group, "C-empty", None, Some(""))
+            .unwrap();
+        assert_eq!(bound.label, None);
+        assert_eq!(store.bindings_for(&a.id).unwrap()[0].label, None);
     }
 
     /// A catalogue created before this table existed must still open. The

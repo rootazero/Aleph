@@ -150,6 +150,19 @@ impl AlephTool for BrowserClickTool {
         }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
+                // Fail-closed: a ref we KNOW is stale is refused here, before
+                // the dispatch and its probe listener are spent on it.
+                if let crate::browser::types::ActionTarget::Ref { ref_id } = &target {
+                    if let Err(e) =
+                        super::precheck_ref(&self.manager, &backend, &args.profile, &tab_id, ref_id)
+                            .await
+                    {
+                        return Ok(BrowserClickOutput {
+                            success: false,
+                            message: Some(super::backend_error_text(&self.manager, &e)),
+                        });
+                    }
+                }
                 let result = if args.double {
                     backend.dblclick(&tab_id, target).await
                 } else {

@@ -1277,3 +1277,83 @@ mod idle_sweep_floor_tests {
         );
     }
 }
+
+/// Damage one `sessions` row the way a real upgrade or a manual edit can: a
+/// TEXT value in an INTEGER-affinity column. `map_session_metadata` decodes
+/// `message_count` positionally as `i64`, so this row fails to map.
+fn damage_session_row(manager: &SessionManager, key: &SessionKey) {
+    manager
+        .conn
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .execute(
+            "UPDATE sessions SET message_count = 'not-a-number' WHERE key = ?1",
+            rusqlite::params![key.to_key_string()],
+        )
+        .unwrap();
+}
+
+/// D1: a listing is "the complete list, or `Err`". It used to be
+/// `filter_map(|r| r.ok())`, which dropped an undecodable row in complete
+/// silence — and `projects.channel.bind` then reported `NothingToMove` for a
+/// conversation whose transcript row was merely damaged.
+#[tokio::test]
+async fn a_damaged_row_fails_the_listing_instead_of_vanishing_from_it() {
+    let temp = tempdir().unwrap();
+    let manager = SessionManager::new(test_config(temp.path().join("test.db"))).unwrap();
+    let healthy = SessionKey::main("healthy");
+    let damaged = SessionKey::main("damaged");
+    manager.get_or_create(&healthy).await.unwrap();
+    manager.get_or_create(&damaged).await.unwrap();
+    let state = manager.get_state(&damaged).await.unwrap();
+    damage_session_row(&manager, &damaged);
+
+    assert!(
+        matches!(
+            manager.list_sessions(None).await,
+            Err(SessionManagerError::DatabaseError(_))
+        ),
+        "an undecodable row must fail the listing, not shorten it"
+    );
+    assert!(
+        matches!(
+            manager.list_sessions(Some("damaged")).await,
+            Err(SessionManagerError::DatabaseError(_))
+        ),
+        "the agent-filtered arm is the same contract"
+    );
+    assert!(
+        matches!(
+            manager.list_by_state(state).await,
+            Err(SessionManagerError::DatabaseError(_))
+        ),
+        "list_by_state is the same contract"
+    );
+}
+
+/// The display-only half stays lossy on purpose (spec §6 D1): a preview that
+/// cannot decode one message still shows the others. Pins that the lossy
+/// variant was chosen here, so a future "make everything strict" sweep has to
+/// decide this read rather than inherit it.
+#[tokio::test]
+async fn a_damaged_message_is_dropped_from_a_preview_not_fatal_to_it() {
+    let temp = tempdir().unwrap();
+    let manager = SessionManager::new(test_config(temp.path().join("test.db"))).unwrap();
+    let key = SessionKey::main("preview");
+    manager.get_or_create(&key).await.unwrap();
+    manager.add_message(&key, "user", "kept").await.unwrap();
+    manager.add_message(&key, "assistant", "damaged").await.unwrap();
+    manager
+        .conn
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .execute(
+            "UPDATE messages SET timestamp = 'not-a-number' WHERE content = 'damaged'",
+            [],
+        )
+        .unwrap();
+
+    let preview = manager.get_session_preview(&key, 10).await.unwrap();
+    let contents: Vec<&str> = preview.messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["kept"]);
+}

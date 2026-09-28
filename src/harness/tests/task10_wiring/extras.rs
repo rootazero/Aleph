@@ -360,10 +360,11 @@ async fn split_session_failsoft_on_a_refused_batch_compacts_and_continues() {
 /// `tool_call_turns` calls, then text-only "final summary". Drives the
 /// `max_iterations` cap: the capped iterations emit tool calls (no
 /// terminal text), and the grace turn — the call after the cap — gets
-/// the text response.
+/// the text response, plus `grace_thinking` as its thinking block when set.
 struct CapGraceProvider {
     calls: AtomicUsize,
     tool_call_turns: usize,
+    grace_thinking: Option<String>,
 }
 
 impl CapGraceProvider {
@@ -371,6 +372,14 @@ impl CapGraceProvider {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             tool_call_turns,
+            grace_thinking: None,
+        })
+    }
+    fn with_grace_thinking(tool_call_turns: usize, thinking: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            tool_call_turns,
+            grace_thinking: Some(thinking.to_string()),
         })
     }
     fn call_count(&self) -> usize {
@@ -397,7 +406,10 @@ impl AiProvider for CapGraceProvider {
                     ..Default::default()
                 })
             } else {
-                Ok(ProviderResponse::text_only("final summary".to_string()))
+                Ok(ProviderResponse {
+                    thinking: self.grace_thinking.clone(),
+                    ..ProviderResponse::text_only("final summary".to_string())
+                })
             }
         })
     }
@@ -621,6 +633,73 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
     assert!(
         grace_text_present,
         "grace turn text must be persisted; got: {events:#?}",
+    );
+}
+
+/// The boundary grace turn is the second `TextEmitted{Final}` producer; its
+/// thinking block is recorded beside that text on the same iteration, so a
+/// capped run's last step folds with its reasoning like any other.
+#[tokio::test]
+async fn the_grace_turn_records_its_thinking_beside_its_text() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do work")]);
+    let provider = CapGraceProvider::with_grace_thinking(2, "Out of steps; summarize.");
+    let (sink, recorded) = crate::harness::tests::stability::RecordingTraceSink::new();
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        llm: provider.clone(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: Some(2),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    harness
+        .run(&sample_session_id(), &mut NoopHarnessCallback, &cancel)
+        .await
+        .expect("run should succeed when capped");
+    assert_eq!(provider.call_count(), 3, "the grace turn must have fired");
+
+    let events = recorded.lock().unwrap_or_else(|e| e.into_inner());
+    let reasoning: Vec<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            crate::harness::trace::LoopTraceEvent::ReasoningEmitted { iteration, text } => {
+                Some((*iteration, text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let grace_text_iteration = events.iter().find_map(|e| match e {
+        crate::harness::trace::LoopTraceEvent::TextEmitted {
+            iteration, text, ..
+        } if text == "final summary" => Some(*iteration),
+        _ => None,
+    });
+    let grace_text_iteration =
+        grace_text_iteration.expect("the grace turn records its TextEmitted{Final}");
+    assert_eq!(
+        reasoning,
+        vec![(grace_text_iteration, "Out of steps; summarize.".to_string())],
+        "exactly one reasoning record, on the grace text's iteration: {events:?}"
     );
 }
 

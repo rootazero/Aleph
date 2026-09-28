@@ -30,6 +30,11 @@ pub enum SessionError {
     /// so every face can say which row and the doctor can retire exactly it.
     #[error("undecodable session record: {0}")]
     UndecodableRecord(crate::session::store::UndecodableRecord),
+    /// A head-side `Retire::Through` found a different number of live rows
+    /// than its caller read, so the batch rolled back and nothing landed.
+    /// Not a storage failure: someone else retired part of that span first.
+    #[error("retire span changed: expected {expected} live rows, found {found}")]
+    RetireSpanChanged { expected: usize, found: usize },
     #[error("{0}")]
     Other(String),
 }

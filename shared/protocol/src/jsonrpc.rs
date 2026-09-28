@@ -72,9 +72,9 @@ pub const REVISION_CONFLICT: i32 = -32031;
 ///
 /// It lives in this crate — the one the server AND every client depend on —
 /// because BOTH sides read it: the server builds this envelope from four
-/// independent producers (`gateway::server::handler::event_wire_form`,
-/// `gateway::server::handler::overflow_warning_frame`,
-/// `gateway::server::handler::extract_topic_and_data`'s classifier, and
+/// independent producers (`gateway::server::connection::forward::event_wire_form`,
+/// `gateway::server::connection::forward::overflow_warning_frame`,
+/// `gateway::server::connection::forward::extract_topic_and_data`'s classifier, and
 /// `gateway::event_bus::TopicEvent::to_notification`), and every client's
 /// frame classifier (`shared/client::connection::classify_frame`) reads it
 /// back to recognise the shape. Before this constant existed each of those

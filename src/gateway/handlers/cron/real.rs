@@ -287,7 +287,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
 
     let mut job = CronJob::new(name, agent_id, prompt, schedule_kind);
     // P1 data isolation: the caller in front of this RPC owns the job it is
-    // minting. `current_scope()` is live on this face — `server::handler`
+    // minting. `current_scope()` is live on this face — `server::connection`
     // wraps `process_request` in `scope::with_scope` at BOTH dispatch
     // stations, and a loopback connection resolves to a real `u-` owner — so
     // this is the same derivation `cron_manage`'s tool face already uses.

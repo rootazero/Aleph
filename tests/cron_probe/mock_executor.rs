@@ -128,6 +128,7 @@ impl MockExecutor {
                             delivery_status: Some(DeliveryStatus::NotRequested),
                             trigger_source: snapshot.trigger_source,
                             retry_hint: None,
+                            unadmitted: false,
                         },
                         MockBehavior::Error { message, reason } => ExecutionResult {
                             started_at: snapshot.marked_at,
@@ -147,6 +148,7 @@ impl MockExecutor {
                                 }
                                 ErrorReason::Permanent(_) => RetryHint::permanent(),
                             }),
+                            unadmitted: false,
                         },
                         MockBehavior::Delayed { delay_ms, output } => {
                             // Simulate delay (we don't actually sleep — just report duration)
@@ -161,6 +163,7 @@ impl MockExecutor {
                                 delivery_status: Some(DeliveryStatus::NotRequested),
                                 trigger_source: snapshot.trigger_source,
                                 retry_hint: None,
+                                unadmitted: false,
                             }
                         }
                     }

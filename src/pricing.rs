@@ -289,6 +289,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             // Capabilities can share one `gpt-5.6` row because the shape is
             // identical; rates cannot, and these two must precede `gpt-5.6` or
             // they would silently bill at the flagship rate.
+            // `codex-mini-latest` (OpenAI's cheapest reasoning model) — not
+            // aliased to any existing prefix, so it needs its own row ahead of
+            // the broad `gpt-5` fallback (which would bill it 2x high).
+            Rates {
+                model_prefix: "codex-mini-latest",
+                input_per_mtok: Some(1.0),
+                output_per_mtok: Some(4.0),
+                cache_read_per_mtok: Some(0.10),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "gpt-5.6-terra",
                 input_per_mtok: Some(2.0),
@@ -746,18 +757,70 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
+            // Grok Code Fast 1 — xAI's coding-tier cheap model (pi-mono
+            // 2026-09, xai + github-copilot both serve it). Same rough
+            // shape as the 4-fast row but a distinct prefix: it would
+            // otherwise bill at the broad `grok-4` rate (12x high). Must
+            // precede `grok-4`.
             Rates {
-                // grok-3-mini is the cheap tier, but it used to inherit the
-                // broad `grok` row below — the *flagship* grok-3 rate — which
-                // priced it ~5x its own primary. The cross-table drift guard
-                // (`aux_model_is_not_pricier_than_the_default`) is what
-                // surfaced it: xAI's preset named grok-3-mini as its cheap aux
-                // model while the table billed it at $18/Mtok blended against
-                // grok-4.3's $3.75. xAI's published mini rate is $0.30/$0.50.
+                model_prefix: "grok-code-fast-1",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(1.50),
+                cache_read_per_mtok: Some(0.05),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // grok-3-mini is the cheap tier, but it used to inherit the
+            // broad `grok` row below — the *flagship* grok-3 rate — which
+            // priced it ~5x its own primary. The cross-table drift guard
+            // (`aux_model_is_not_pricier_than_the_default`) is what
+            // surfaced it: xAI's preset named grok-3-mini as its cheap aux
+            // model while the table billed it at $18/Mtok blended against
+            // grok-4.3's $3.75. xAI's published mini rate is $0.30/$0.50.
+            // Must precede the broader `grok-3` row below (which is its
+            // prefix in `prefix_matches`'s dot/dash-equivalent sense).
+            Rates {
                 model_prefix: "grok-3-mini",
                 input_per_mtok: Some(0.30),
                 output_per_mtok: Some(0.50),
                 cache_read_per_mtok: Some(0.075),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Grok 3 flagship (pi-mono 2026-09, models.dev xai):
+                // $3/$15 — same as the broad `grok` row that follows but
+                // distinct prefix so the canonicalised 3 / 3-mini ids reach
+                // the right shape. Must precede the `grok` broad row.
+                model_prefix: "grok-3",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.75),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Grok 2 Vision (pi-mono 2026-09, models.dev xai): 8K window +
+            // image input, $5/$15 (same as the grok-2 base below). Must
+            // precede `grok-2` so the canonicalised 2-vision id resolves
+            // its own row instead of the broader grok-2 shape (which
+            // happens to match here, but the vision flag is what's at
+            // stake — see the capability row).
+            Rates {
+                model_prefix: "grok-2-vision",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Grok 2 base (pi-mono 2026-09): 131K / 8K, $5/$15. Distinct
+            // from the broad `grok` row's $3/$15 — Grok 2 was the more
+            // expensive flagship. Must precede `grok`.
+            Rates {
+                model_prefix: "grok-2",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: None,
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -774,6 +837,103 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "mistral",
         &[
+            // Magistral reasoning family (pi-mono 2026-09, models.dev
+            // mistral): $0.50/$1.50 small + $0.50/$1.80 medium on the small
+            // and medium rungs; both reasoning-on and tool-capable. Must
+            // precede `mistral-large-latest` below, whose $0.50/$1.50 is
+            // coincidentally the same input price but only the Magistral
+            // small row is vision-on.
+            Rates {
+                model_prefix: "magistral-small",
+                input_per_mtok: Some(0.50),
+                output_per_mtok: Some(1.50),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "magistral",
+                input_per_mtok: Some(0.50),
+                output_per_mtok: Some(1.80),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Devstral coding family (pi-mono 2026-09): $0.20/$0.60 on the
+            // 262K latest row, $0.10/$0.30 on the smaller 128K tiers. All
+            // distinct prefixes that fall through to the broad `mistral`
+            // rate without their own row. Must precede `mistral`.
+            Rates {
+                model_prefix: "devstral",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(0.60),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Codestral (pi-mono 2026-09): $0.30/$0.90 text-only code model.
+            // Distinct from `mistral`'s $0.20/$0.60 (output 1.5x).
+            Rates {
+                model_prefix: "codestral",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(0.90),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Ministral 3B/8B (pi-mono 2026-09): $0.10/$0.10 — text-only,
+            // matching the `mistral` broad row by coincidence. Pin the
+            // prefix so the canonicalised id resolves the documented row
+            // ahead of the broad fallback.
+            Rates {
+                model_prefix: "ministral",
+                input_per_mtok: Some(0.10),
+                output_per_mtok: Some(0.10),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Pixtral vision family (pi-mono 2026-09): $0.20/$0.20 (large
+            // + 12b). Distinct from the broad `mistral` row so the
+            // vision-on flag and the same-cost doc row stay explicit.
+            Rates {
+                model_prefix: "pixtral",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(0.20),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            // Open-mixtral-8x22B / 8x7B / Open-mistral-7B (pi-mono 2026-09):
+            // all legacy open-weights ids that don't share a prefix with
+            // `mistral-*`. The 7B row's 8K window is the dangerous one
+            // (broad `mistral` over-promises by 16x). Must precede
+            // `mistral-large-latest` below — it doesn't shadow any row, but
+            // listing them up here keeps the open-weights family grouped.
+            Rates {
+                model_prefix: "open-mixtral-8x22b",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(6.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "open-mixtral-8x7b",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(0.60),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "open-mistral-7b",
+                input_per_mtok: Some(0.25),
+                output_per_mtok: Some(0.25),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 // The `mistral` preset's *default* — the 2512 snapshot at
                 // $0.50/$1.50 (models.dev mistral, 2026-08-15), NOT the
@@ -909,6 +1069,59 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "zai",
         &[
+            // GLM 4.x family (pi-mono 2026-09, zai catalog). All four
+            // 4.x tiers are reasoning models with distinct published rates
+            // (z.ai USD); the vision SKUs (`4.5v`, `4.6v`) are slightly
+            // cheaper than the text siblings on output. Must precede
+            // `glm-5.2-fast` below.
+            Rates {
+                model_prefix: "glm-4.7-flash",
+                input_per_mtok: Some(0.10),
+                output_per_mtok: Some(1.0),
+                cache_read_per_mtok: Some(0.02),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-4.7",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.20),
+                cache_read_per_mtok: Some(0.11),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-4.6v",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(0.90),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-4.6",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.20),
+                cache_read_per_mtok: Some(0.11),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-4.5v",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(0.60),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-4.5",
+                input_per_mtok: Some(0.35),
+                output_per_mtok: Some(1.10),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 // GLM-5.2-Fast — the Fireworks router (`glm-5p2-fast`, an
                 // advertised `fireworks` fallback rung) and Baseten's
@@ -973,6 +1186,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "qwen",
         &[
+            // Qwen QwQ — reasoning-tier Qwen, 131K / 16K (pi-mono 2026-09,
+            // groq catalog). Must precede `qwen` so the reasoning-on flag
+            // is correct on QwQ ids; broad `qwen` is reasoning-off.
+            Rates {
+                model_prefix: "qwen-qwq",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(0.60),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "qwen3.6-flash",
                 input_per_mtok: Some(0.029),
@@ -1042,6 +1266,39 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 // Same base $0.30/$1.20, so this row exists for the cache
                 // columns. Must precede `minimax-m2`.
                 model_prefix: "minimax-m2.7",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(1.20),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: Some(0.375),
+                reasoning_per_mtok: None,
+            },
+            // MiniMax-M2.5-highspeed — 2x the M2.5 base (models.dev
+            // minimax, 2026-08-15), same shape as the `-highspeed` rows
+            // above. Must precede `minimax-m2.5`.
+            Rates {
+                model_prefix: "minimax-m2.5-highspeed",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.40),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: Some(0.375),
+                reasoning_per_mtok: None,
+            },
+            // MiniMax-M2.5 — same $0.30/$1.20 as the broad M2 row, but
+            // with cache rates M2.x publishes on its newer snapshots. Must
+            // precede `minimax-m2.1` and `minimax-m2` below.
+            Rates {
+                model_prefix: "minimax-m2.5",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(1.20),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: Some(0.375),
+                reasoning_per_mtok: None,
+            },
+            // MiniMax-M2.1 — same rate as the broad M2 row; explicit prefix
+            // so the canonicalised M2.1 id resolves the documented row
+            // ahead of the broad fallback.
+            Rates {
+                model_prefix: "minimax-m2.1",
                 input_per_mtok: Some(0.30),
                 output_per_mtok: Some(1.20),
                 cache_read_per_mtok: Some(0.06),
@@ -2800,6 +3057,63 @@ mod tests {
         // The 2411-era snapshots keep the legacy rate via the family row.
         let legacy = rate_card("mistral", "mistral-large-2411").expect("priced");
         assert_eq!(legacy.input_per_mtok, Some(2.0));
+    }
+
+    /// End-of-pipe check for the 2026-09 round (vs pi.dev/models 2026-09
+    /// snapshot). Each assertion guards a single (provider, model) pair that
+    /// previously priced at the wrong row's rate (broad fallback, family
+    /// fallback, or `Unknown`).
+    #[test]
+    fn pi_dev_2026_09_rate_rows_resolve() {
+        // OpenAI codex-mini-latest: previously fell through to `gpt-5`'s
+        // $1.25/$10 (2.5x output).
+        let codex = rate_card("openai", "codex-mini-latest").expect("priced");
+        assert_eq!(codex.input_per_mtok, Some(1.0));
+        assert_eq!(codex.output_per_mtok, Some(4.0));
+
+        // Mistral reasoning / coding tiers — new rows added ahead of the
+        // broad `mistral` fallback.
+        assert!(rate_card("mistral", "magistral-small").is_some());
+        assert!(rate_card("mistral", "magistral").is_some());
+        assert!(rate_card("mistral", "devstral").is_some());
+        assert!(rate_card("mistral", "codestral").is_some());
+        assert!(rate_card("mistral", "ministral").is_some());
+        assert!(rate_card("mistral", "pixtral").is_some());
+        assert!(rate_card("mistral", "open-mixtral-8x22b").is_some());
+        assert!(rate_card("mistral", "open-mixtral-8x7b").is_some());
+        assert!(rate_card("mistral", "open-mistral-7b").is_some());
+
+        // xAI 2026-09 round: Grok 2 / 2-vision / 3 / 3-mini / Code Fast 1
+        // each resolve their own row. Grok 3 mini in particular must NOT be
+        // shadowed by the broader Grok 3 row that follows it.
+        assert!(rate_card("xai", "grok-2").is_some());
+        assert!(rate_card("xai", "grok-2-vision").is_some());
+        assert!(rate_card("xai", "grok-3").is_some());
+        assert!(rate_card("xai", "grok-3-mini").is_some());
+        let mini = rate_card("xai", "grok-3-mini").expect("mini priced");
+        assert_eq!(mini.input_per_mtok, Some(0.30));
+        assert_eq!(mini.output_per_mtok, Some(0.50));
+        let code = rate_card("xai", "grok-code-fast-1").expect("code priced");
+        assert_eq!(code.input_per_mtok, Some(0.20));
+
+        // ZAI GLM 4.x — distinct from the existing GLM-5.x family.
+        assert!(rate_card("zai", "glm-4.7").is_some());
+        assert!(rate_card("zai", "glm-4.7-flash").is_some());
+        assert!(rate_card("zai", "glm-4.6").is_some());
+        assert!(rate_card("zai", "glm-4.6v").is_some());
+        assert!(rate_card("zai", "glm-4.5").is_some());
+        assert!(rate_card("zai", "glm-4.5v").is_some());
+
+        // MiniMax M2.x specific rows.
+        assert!(rate_card("minimax", "MiniMax-M2.1").is_some());
+        assert!(rate_card("minimax", "MiniMax-M2.5").is_some());
+        assert!(rate_card("minimax", "MiniMax-M2.5-highspeed").is_some());
+
+        // Qwen QwQ reasoning tier — reasoning-on row ahead of the broad
+        // `qwen` (reasoning-off).
+        assert!(rate_card("qwen", "qwen-qwq-32b").is_some());
+        let qwq = rate_card("qwen", "qwen-qwq-32b").expect("qwq priced");
+        assert_eq!(qwq.input_per_mtok, Some(0.30));
     }
 
     #[test]

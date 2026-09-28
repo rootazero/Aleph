@@ -37,6 +37,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
         _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _run_id: String,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -118,6 +119,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "main".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("hello".into()),
             channel: None,
             session_hint: None,
@@ -126,6 +128,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -151,6 +154,79 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
     assert!(!calls[0].is_empty(), "session key must be non-empty");
 }
 
+/// A caller-supplied channel is the one `dispatch` subscribes to. Anything
+/// the caller publishes on its sender must reach `handle.events` — that is
+/// what lets the gateway's trace mirror share the harness callback's seq
+/// order instead of racing it on a second channel.
+#[tokio::test]
+async fn dispatch_subscribes_to_a_caller_supplied_channel() {
+    let (orch, _invocations) = fixture_orchestrator();
+    // The caller's own receiver is dropped at once, exactly as the gateway
+    // does: from here on the ONLY receiver that can exist is the one
+    // `dispatch` subscribed for `handle.events`.
+    let (tx, initial_rx) = crate::orchestrator::flow_event_channel();
+    drop(initial_rx);
+    let handle = orch
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "main".into(),
+            run_id: "test-run".into(),
+            input: FlowInput::Prompt("hello".into()),
+            channel: None,
+            session_hint: None,
+            scope: crate::scope::FlowScope::unscoped(),
+            parent_session: None,
+            depth: 0,
+            tool_service: None,
+            trace_sink: None,
+            event_tx: Some(tx.clone()),
+            interaction_manifest: None,
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            transient_context: None,
+            think_level: None,
+            envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
+        })
+        .await
+        .expect("dispatch ok");
+
+    // Published on the CALLER's sender, after dispatch returned. `send` fails
+    // only with zero receivers, and the caller's own receiver is gone — so an
+    // `Err` here means `dispatch` built a channel of its own instead of
+    // subscribing to this one.
+    tx.send(crate::orchestrator::dispatch::FlowStreamEvent::Reasoning(
+        "from-caller".into(),
+    ))
+    .expect("dispatch must have subscribed handle.events to the caller's channel");
+
+    // The mock harness sends its own `Delta` + `Complete` on the same channel
+    // from a spawned task, in an order we do not control relative to the
+    // send above — so read until OUR frame shows up (it was sent after the
+    // subscription, so it must), bounded so a broken subscription fails
+    // instead of hanging.
+    let mut events = handle.events;
+    let mut saw_caller_frame = false;
+    for _ in 0..8 {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), events.recv()).await {
+            Ok(Ok(crate::orchestrator::dispatch::FlowStreamEvent::Reasoning(t)))
+                if t == "from-caller" =>
+            {
+                saw_caller_frame = true;
+                break;
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(
+        saw_caller_frame,
+        "the caller's frame never reached handle.events"
+    );
+    let _ = handle.completion.await;
+}
+
 #[tokio::test]
 async fn dispatch_unknown_flow_id_returns_error() {
     let (orch, _) = fixture_orchestrator();
@@ -158,6 +234,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
         .dispatch(FlowRequest {
             flow_id: Some("does-not-exist".into()),
             agent_id: "main".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("x".into()),
             channel: None,
             session_hint: None,
@@ -166,6 +243,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -192,6 +270,7 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "ghost".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("x".into()),
             channel: None,
             session_hint: None,
@@ -200,6 +279,7 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -230,6 +310,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "main".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("x".into()),
             channel: None,
             session_hint: None,
@@ -238,6 +319,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             depth: MAX_FLOW_DEPTH + 1,
             tool_service: None,
             trace_sink: None,
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -293,6 +375,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _think_level: Option<crate::agents::thinking::ThinkLevel>,
             _envelope: crate::thinker::TurnEnvelope,
             _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+            _run_id: String,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
@@ -314,6 +397,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
     let mk_req = || FlowRequest {
         flow_id: None,
         agent_id: "main".into(),
+        run_id: "test-run".into(),
         input: FlowInput::Prompt("x".into()),
         channel: None,
         session_hint: Some("shared-session".into()),
@@ -322,6 +406,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        event_tx: None,
         interaction_manifest: None,
         sandbox_override: None,
         workspace_override: None,
@@ -347,6 +432,7 @@ async fn dispatch_releases_session_lock_after_completion() {
     let mk_req = || FlowRequest {
         flow_id: None,
         agent_id: "main".into(),
+        run_id: "test-run".into(),
         input: FlowInput::Prompt("x".into()),
         channel: None,
         session_hint: Some("reusable-session".into()),
@@ -355,6 +441,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        event_tx: None,
         interaction_manifest: None,
         sandbox_override: None,
         workspace_override: None,
@@ -395,6 +482,7 @@ async fn dispatch_releases_session_lock_after_completion() {
 struct CapturingHarness {
     received_tool_service: Arc<Mutex<Option<bool>>>,
     received_trace_sink: Arc<Mutex<Option<bool>>>,
+    received_run_id: Arc<Mutex<Option<String>>>,
 }
 
 #[async_trait]
@@ -416,7 +504,12 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
         _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        run_id: String,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
+        *self
+            .received_run_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(run_id);
         *self
             .received_tool_service
             .lock()
@@ -442,6 +535,7 @@ fn fixture_capturing_orchestrator() -> (
     Orchestrator,
     Arc<Mutex<Option<bool>>>,
     Arc<Mutex<Option<bool>>>,
+    Arc<Mutex<Option<String>>>,
 ) {
     let mut spec_map = FlowSet::new();
     let spec = FlowSpec {
@@ -465,12 +559,15 @@ fn fixture_capturing_orchestrator() -> (
 
     let received_tool_service = Arc::new(Mutex::new(None::<bool>));
     let received_trace_sink = Arc::new(Mutex::new(None::<bool>));
+    let received_run_id = Arc::new(Mutex::new(None::<String>));
 
     let harness = Arc::new(CapturingHarness {
         // rust-doctor-disable-next-line excessive-clone
         received_tool_service: received_tool_service.clone(),
         // rust-doctor-disable-next-line excessive-clone
         received_trace_sink: received_trace_sink.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        received_run_id: received_run_id.clone(),
     });
 
     (
@@ -483,6 +580,7 @@ fn fixture_capturing_orchestrator() -> (
         ),
         received_tool_service,
         received_trace_sink,
+        received_run_id,
     )
 }
 
@@ -513,7 +611,8 @@ impl crate::tools::service::ToolService for StubToolService {
 
 #[tokio::test]
 async fn dispatch_forwards_tool_service_override() {
-    let (orch, received_tool_service, _received_trace_sink) = fixture_capturing_orchestrator();
+    let (orch, received_tool_service, _received_trace_sink, _received_run_id) =
+        fixture_capturing_orchestrator();
 
     let tool_service: std::sync::Arc<dyn crate::tools::service::ToolService> =
         Arc::new(StubToolService);
@@ -522,6 +621,7 @@ async fn dispatch_forwards_tool_service_override() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "main".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("test".into()),
             channel: None,
             session_hint: None,
@@ -530,6 +630,7 @@ async fn dispatch_forwards_tool_service_override() {
             depth: 0,
             tool_service: Some(tool_service),
             trace_sink: None,
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -556,7 +657,8 @@ async fn dispatch_forwards_tool_service_override() {
 
 #[tokio::test]
 async fn dispatch_forwards_trace_sink() {
-    let (orch, _received_tool_service, received_trace_sink) = fixture_capturing_orchestrator();
+    let (orch, _received_tool_service, received_trace_sink, _received_run_id) =
+        fixture_capturing_orchestrator();
 
     let trace_sink: std::sync::Arc<dyn crate::harness::TraceSink> =
         Arc::new(crate::harness::NoopTraceSink);
@@ -565,6 +667,7 @@ async fn dispatch_forwards_trace_sink() {
         .dispatch(FlowRequest {
             flow_id: None,
             agent_id: "main".into(),
+            run_id: "test-run".into(),
             input: FlowInput::Prompt("test".into()),
             channel: None,
             session_hint: None,
@@ -573,6 +676,7 @@ async fn dispatch_forwards_trace_sink() {
             depth: 0,
             tool_service: None,
             trace_sink: Some(trace_sink),
+            event_tx: None,
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
@@ -595,4 +699,182 @@ async fn dispatch_forwards_trace_sink() {
         // rust-doctor-disable-next-line unwrap-in-production
         .expect("harness must have been called");
     assert!(got, "trace_sink must arrive as Some(_)");
+}
+
+/// The run id reaches the runner — the one fact the bridge needs to write
+/// markers the meta can join. Asserted at the runner, not on the request.
+#[tokio::test]
+async fn dispatch_forwards_run_id() {
+    let (orch, _tool_service, _trace_sink, received_run_id) = fixture_capturing_orchestrator();
+    let handle = orch
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "main".into(),
+            run_id: "engine-run-7".into(),
+            input: FlowInput::Prompt("test".into()),
+            channel: None,
+            session_hint: None,
+            scope: crate::scope::FlowScope::unscoped(),
+            parent_session: None,
+            depth: 0,
+            tool_service: None,
+            trace_sink: None,
+            event_tx: None,
+            interaction_manifest: None,
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            transient_context: None,
+            think_level: None,
+            envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
+        })
+        .await
+        // rust-doctor-disable-next-line unwrap-in-production
+        .expect("dispatch ok");
+    // rust-doctor-disable-next-line unwrap-in-production
+    let _ = handle.completion.await.unwrap();
+    assert_eq!(
+        received_run_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_deref(),
+        Some("engine-run-7"),
+        "dispatch must hand the runner the request's run id"
+    );
+}
+
+/// Harness that fails WITHOUT broadcasting a terminal `Complete` — the shape
+/// of `runner_impl`'s post-loop "session read" error. It mirrors one step
+/// event through the trace sink it was handed first, so the test also sees
+/// that the sink publishes on the run's channel.
+struct NoCompleteHarness;
+
+#[async_trait]
+impl crate::orchestrator::dispatch::HarnessRunner for NoCompleteHarness {
+    async fn run(
+        &self,
+        _session_key: String,
+        _spec: Arc<FlowSpec>,
+        _input: FlowInput,
+        _sandbox: Arc<dyn Sandbox>,
+        _events: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+        _cancel: CancellationToken,
+        _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        _interaction_manifest: Option<crate::thinker::InteractionManifest>,
+        _workspace_override: Option<std::path::PathBuf>,
+        _max_iterations_override: Option<u32>,
+        _transient_context: Option<String>,
+        _think_level: Option<crate::agents::thinking::ThinkLevel>,
+        _envelope: crate::thinker::TurnEnvelope,
+        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
+        _run_id: String,
+    ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
+        if let Some(sink) = trace_sink {
+            sink.on_trace(&crate::harness::trace::LoopTraceEvent::TurnStarted { iteration: 1 });
+        }
+        Err(FlowError::Internal("session read: fixture".into()))
+    }
+}
+
+/// No strong sender of the run's channel may outlive `dispatch`'s task.
+///
+/// The gateway drain exits on `RecvError::Closed` when the harness returns
+/// without `Complete`, and `Closed` needs every STRONG sender gone. The emit
+/// sink is reachable from holders that outlive the run (a background
+/// subagent's metering, which holds the run's chain as its accounting sink),
+/// so this test keeps an `Arc` of the sink
+/// alive past the assertion. Red (a timeout) if the sink — or anything else
+/// reachable from the request — owns a strong sender.
+#[tokio::test]
+async fn no_sender_outlives_dispatch() {
+    use crate::gateway::execution_engine::AgentTraceEmitSink;
+    use crate::harness::trace_sink::NoopTraceSink;
+
+    let mut spec_map = FlowSet::new();
+    let spec = FlowSpec {
+        id: "default-agent".into(),
+        description: "t".into(),
+        agent: "main".into(),
+        brain: BrainRef::Default,
+        session_strategy: SessionStrategy::Fresh,
+        overrides: FlowOverrides::default(),
+    };
+    spec_map.insert("default-agent".into(), Arc::new(spec));
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert("main".into(), "default-agent".into());
+    let orch = Orchestrator::new(
+        Arc::new(FlowRegistry::new(spec_map)),
+        Arc::new(defaults),
+        fake_session_service(),
+        build_sandbox_factory(Arc::new(|_| {
+            Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
+        })),
+        Arc::new(NoCompleteHarness),
+    );
+
+    let (tx, initial_rx) = crate::orchestrator::flow_event_channel();
+    drop(initial_rx);
+    // The long-lived holder: an `Arc` of the emit sink that lives OUTSIDE
+    // dispatch for the whole test.
+    let held_sink: Arc<dyn crate::harness::TraceSink> =
+        Arc::new(AgentTraceEmitSink::new(Arc::new(NoopTraceSink), &tx));
+
+    let handle = orch
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "main".into(),
+            run_id: "test-run".into(),
+            input: FlowInput::Prompt("hello".into()),
+            channel: None,
+            session_hint: None,
+            scope: crate::scope::FlowScope::unscoped(),
+            parent_session: None,
+            depth: 0,
+            tool_service: None,
+            trace_sink: Some(held_sink.clone()),
+            event_tx: Some(tx.clone()),
+            interaction_manifest: None,
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            transient_context: None,
+            think_level: None,
+            envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
+        })
+        .await
+        .expect("dispatch ok");
+
+    let completion = handle.completion.await.expect("the flow task answered");
+    assert!(
+        matches!(completion, Err(FlowError::Internal(_))),
+        "the fixture must take the no-Complete failure path, got {completion:?}"
+    );
+    // The request was consumed by `dispatch`; drop the test's own strong half.
+    drop(tx);
+
+    let mut events = handle.events;
+    let mut saw_trace = false;
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), events.recv()).await {
+            Ok(Ok(crate::orchestrator::dispatch::FlowStreamEvent::Trace(_))) => saw_trace = true,
+            Ok(Ok(other)) => panic!("unexpected frame on the no-Complete path: {other:?}"),
+            Ok(Err(broadcast::error::RecvError::Closed)) => break,
+            Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                panic!("lagged by {n} on a one-frame run")
+            }
+            Err(_) => panic!(
+                "the channel never closed: a strong sender outlived dispatch \
+                 (the emit sink, or something reachable from the request)"
+            ),
+        }
+    }
+    assert!(
+        saw_trace,
+        "the harness's trace event never reached the run's channel"
+    );
+    // The holder is still alive here — that is the point.
+    drop(held_sink);
 }

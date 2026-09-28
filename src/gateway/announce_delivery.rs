@@ -23,6 +23,31 @@
 //!   live run at its next turn boundary rather than spawning a second one.
 //! - **busy elsewhere → bounded retries**, then give up quietly and leave the
 //!   result reachable through the tool that produced it.
+//! - **may its owner still act?** — fire-time authority (round 11), re-asked
+//!   on every attempt; refused ends the ladder, unknown waits on its own
+//!   bounded budget and never spends a busy retry.
+//!
+//! ⚠️ **Known gap — ATTRIBUTION only: the person checked is the parent
+//! session's OWNER, not the initiator** (R-b / R-d). An announce run carries
+//! no `AUTHOR_USER_KEY`: the completion events (`SubAgentCompletionEvent`,
+//! `ProcessCompletionEvent`) and the orphan sidecar
+//! (`agents::background_persistence`'s `state.json`) record no author. In a
+//! project room the owner is the room's CREATOR, so a member's finished
+//! sub-agent or bash job is judged by the creator's STATUS: refused if the
+//! creator was deactivated, delivered if only the member was, and spend and
+//! the ledger are charged to the creator. On a multi-user server its ROLE is
+//! no longer the creator's: `fire_gate::authorize_session_run` caps a room
+//! run with no author and no carried role at `member` (final review I1), and
+//! the browser face composes no one's profile for a room run with no speaker
+//! (`visibility::run_principal`). On a single-user install (nobody but the
+//! machine owner in the users table) the floor does not apply: there is no
+//! member whose work the creator's grant could carry. Closing the
+//! rest means capturing `scope::current_room_author()` at the two spawn sites
+//! (`agents::subagent_tool::spawn`, `builtin_tools::bash_exec` →
+//! `builtin_tools::process_completion`), carrying it on both event types and
+//! on the sidecar record (serde-default fields — no database migration), and
+//! stamping it into the base metadata below. Personal sessions (one human)
+//! are not affected.
 //!
 //! What stays with each caller is exactly what differs: which event it listens
 //! for, what the notice says, what "already collected" means for its own
@@ -48,6 +73,17 @@ use crate::sync_primitives::Arc;
 /// Busy-retry schedule (seconds before each attempt). The first attempt is
 /// immediate; later ones give a busy parent time to free its run slot.
 const RETRY_DELAYS_SECS: [u64; 3] = [0, 30, 120];
+
+/// Wait before re-asking an authority that could not be established. An
+/// unknown answer is not a busy parent: it spends none of
+/// [`RETRY_DELAYS_SECS`] (ruling a), and has this budget of its own instead.
+const AUTHORITY_UNKNOWN_WAIT_SECS: u64 = 30;
+
+/// How many times an unknown authority is re-asked before the ladder gives up
+/// and leaves the result where [`Announcement::fallback`] says it is — five
+/// minutes at [`AUTHORITY_UNKNOWN_WAIT_SECS`]. A bound so a users store that
+/// stays down does not pin one waiting task per finished unit forever.
+const AUTHORITY_UNKNOWN_MAX_WAITS: u32 = 10;
 
 /// One completion, ready to be delivered into the session that owns it.
 pub(crate) struct Announcement {
@@ -94,6 +130,39 @@ where
         .subscribe_async(EventFilter::new(vec![event_type]), on_event)
         .await;
     info!(announce = kind, "Announce subscriber registered");
+}
+
+/// One announce attempt's `RunRequest`, built FROM the metadata the fire-time
+/// grant admitted for the parent session `row` (round 11, N9; ruling b):
+/// `deliver` executes exactly the request returned here, so there is no
+/// second copy of `base` a stamp could miss. Asked afresh on every attempt.
+/// `multi_user` is the room floor's mode (`fire_gate::authorize_session_run`).
+pub(crate) fn admit_announce<R>(
+    resolve: R,
+    multi_user: impl FnOnce() -> bool,
+    row: Option<&crate::gateway::session_store::types::SessionMetadata>,
+    base: &HashMap<String, String>,
+    input: &str,
+    session_key: &SessionKey,
+) -> Result<RunRequest, crate::gateway::fire_gate::FireStop>
+where
+    R: FnOnce(crate::scope::authority::FireSubject<'_>) -> crate::scope::authority::FireAuthority,
+{
+    let metadata =
+        crate::gateway::fire_gate::admit_session_metadata(resolve, multi_user, row, base.clone())?;
+    Ok(RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input: input.to_string(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: crate::gateway::media::PendingMedia::default(),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    })
 }
 
 /// Drive one completion into its parent session.
@@ -169,8 +238,20 @@ pub(crate) async fn deliver(
 
     let mut metadata = HashMap::new();
     metadata.insert(metadata_key.to_string(), key.clone());
+    // Unattended, like cron (round 11, N9): an announce run fires precisely
+    // when the person has walked away, so an approval-gated tool must fail
+    // closed instead of parking on a card nobody answers.
+    metadata.insert(
+        crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+        "true".to_string(),
+    );
 
-    for delay_secs in RETRY_DELAYS_SECS {
+    // `slot` walks `RETRY_DELAYS_SECS` and advances ONLY on a busy parent. An
+    // unknown authority retries the same slot after its own wait (M5).
+    let mut slot = 0usize;
+    let mut delay_secs = RETRY_DELAYS_SECS[0];
+    let mut unknown_waits = 0u32;
+    loop {
         if delay_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
             // Re-check the dedup guard after every wait, not just once up front.
@@ -189,18 +270,61 @@ pub(crate) async fn deliver(
             }
         }
 
-        let request = RunRequest {
-            run_id: uuid::Uuid::new_v4().to_string(),
-            input: input.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: None,
-            metadata: metadata.clone(),
-            attachments: Vec::new(),
-            pending_media: crate::gateway::media::PendingMedia::default(),
-            sandbox_override: None,
-            workspace_override: None,
-            max_iterations_override: None,
-            model_override: None,
+        // Fire-time authority, asked on EVERY attempt (round 11, N9): the
+        // parent session's owner may be deactivated or demoted during the
+        // two-minute retry schedule. Granted stamps the scope pair (the run
+        // used to carry none) and the member ceiling; Unknown waits and asks
+        // again without spending a busy retry (R-a). The person checked is
+        // the row's OWNER — see the module doc's known gap: no initiator
+        // rides an announce.
+        let admitted = match agent.session_store().get_metadata(&session_key).await {
+            Err(e) => Err(crate::gateway::fire_gate::FireStop::Unknown(format!(
+                "parent session row unreadable: {e}"
+            ))),
+            Ok(row) => admit_announce(
+                |subject| crate::scope::authority::resolve(&subject),
+                crate::gateway::security::store::slot::multi_user,
+                row.as_ref(),
+                &metadata,
+                &input,
+                &session_key,
+            ),
+        };
+        let request = match admitted {
+            Ok(request) => request,
+            Err(crate::gateway::fire_gate::FireStop::Refused(reason)) => {
+                warn!(
+                    announce = kind,
+                    key = %key,
+                    session = %session_id,
+                    reason = %reason,
+                    "announce refused: the parent session's owner may no longer act; {fallback}"
+                );
+                return;
+            }
+            Err(crate::gateway::fire_gate::FireStop::Unknown(reason)) => {
+                unknown_waits += 1;
+                if unknown_waits > AUTHORITY_UNKNOWN_MAX_WAITS {
+                    warn!(
+                        announce = kind,
+                        key = %key,
+                        session = %session_id,
+                        reason = %reason,
+                        waits = AUTHORITY_UNKNOWN_MAX_WAITS,
+                        "announce authority stayed unknown; {fallback}"
+                    );
+                    return;
+                }
+                warn!(
+                    announce = kind,
+                    key = %key,
+                    session = %session_id,
+                    reason = %reason,
+                    "announce authority unknown; asking again without spending a busy retry"
+                );
+                delay_secs = AUTHORITY_UNKNOWN_WAIT_SECS;
+                continue;
+            }
         };
 
         match adapter
@@ -220,7 +344,14 @@ pub(crate) async fn deliver(
                 return;
             }
             Err(ExecutionError::AgentBusy(_)) => {
-                continue;
+                slot += 1;
+                match RETRY_DELAYS_SECS.get(slot) {
+                    Some(&next) => {
+                        delay_secs = next;
+                        continue;
+                    }
+                    None => break,
+                }
             }
             Err(e) => {
                 warn!(
@@ -241,4 +372,54 @@ pub(crate) async fn deliver(
         session = %session_id,
         "parent stayed busy through all retries; {fallback}"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::security::store::{SecurityStore, UserRole};
+    use crate::scope::authority::resolve_with;
+
+    /// Ruling (b) at the announce site: the request `admit_announce` hands
+    /// back — the one `deliver` executes — carries the grant resolved for the
+    /// parent row, plus the base keys. A member's PERSONAL session, so the
+    /// member ceiling (not the room floor) supplies `caller_role`.
+    #[test]
+    fn the_announce_request_carries_the_resolved_grant() {
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+        let row = crate::gateway::session_store::types::SessionMetadata {
+            owner_user_id: Some("u-bob".into()),
+            scope_id: Some("personal:u-bob".into()),
+            ..Default::default()
+        };
+        let key = SessionKey::Main {
+            agent_id: "main".to_string(),
+            main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+            epoch: 0,
+        };
+        let mut base = HashMap::new();
+        base.insert("subagent_announce".to_string(), "sub-1".to_string());
+        let request = admit_announce(
+            |s| resolve_with(Some(&users), &s),
+            || true,
+            Some(&row),
+            &base,
+            "[system] done",
+            &key,
+        )
+        .expect("an active member's announce is admitted");
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("member")
+        );
+        assert_eq!(
+            request
+                .metadata
+                .get("subagent_announce")
+                .map(String::as_str),
+            Some("sub-1")
+        );
+        assert_eq!(request.input, "[system] done");
+    }
 }

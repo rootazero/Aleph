@@ -6,13 +6,13 @@
 //! tool-dispatch config-tier gate.
 //!
 //! Scoped only around `process_request` in the dispatch path
-//! (`server::handler`). Never crosses the run's spawn boundary (`start_run` reads
+//! (`server::connection::dispatch`). Never crosses the run's spawn boundary (`start_run` reads
 //! it while still in-task). Unset for non-gateway callers (cron, internal).
 //!
 //! Multi-user role model (P0 identity foundation, spec §4): the gateway
 //! resolves a `(user, role)` pair per connection at `connect` —
 //! [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity),
-//! called from `server::handler::resolve_stamped_identity` — and the WS
+//! called from `server::connection::auth::resolve_stamped_identity` — and the WS
 //! dispatch loop scopes `CALLER_ROLE` / `CALLER_USER` / `CALLER_IS_LOOPBACK`
 //! from that resolution around every `process_request` call, at both dispatch
 //! stations (`do_lane_dispatch` and the idempotency `Proceed` arm). Loopback
@@ -63,7 +63,7 @@ task_local! {
     pub static CALLER_USER: Option<String>;
 
     /// The originating WebSocket connection's id (`"{peer_addr}"`, minted once
-    /// per socket in `server::handler::handle_connection`), scoped alongside
+    /// per socket in `server::connection::handle_connection`), scoped alongside
     /// [`CALLER_ROLE`] in `dispatch_with_caller_context`. `None` outside a
     /// scope (cron, internal) and for non-gateway callers.
     ///

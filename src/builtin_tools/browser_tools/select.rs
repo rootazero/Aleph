@@ -108,19 +108,34 @@ impl AlephTool for BrowserSelectTool {
         }
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.select(&tab_id, target, &args.value).await {
-                Ok(()) => Ok(BrowserSelectOutput {
-                    success: true,
-                    message: Some(format!("Selected '{}'", args.value)),
-                }),
-                Err(e) => Ok(BrowserSelectOutput {
-                    success: false,
-                    message: Some(format!(
-                        "Select failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
-            },
+            Ok((backend, tab_id)) => {
+                // Fail-closed: a ref we KNOW is stale is refused before the
+                // dispatch, not after its side effects.
+                if let crate::browser::types::ActionTarget::Ref { ref_id } = &target {
+                    if let Err(e) =
+                        super::precheck_ref(&self.manager, &backend, &args.profile, &tab_id, ref_id)
+                            .await
+                    {
+                        return Ok(BrowserSelectOutput {
+                            success: false,
+                            message: Some(super::backend_error_text(&self.manager, &e)),
+                        });
+                    }
+                }
+                match backend.select(&tab_id, target, &args.value).await {
+                    Ok(()) => Ok(BrowserSelectOutput {
+                        success: true,
+                        message: Some(format!("Selected '{}'", args.value)),
+                    }),
+                    Err(e) => Ok(BrowserSelectOutput {
+                        success: false,
+                        message: Some(format!(
+                            "Select failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
+                    }),
+                }
+            }
             Err(e) => Ok(BrowserSelectOutput {
                 success: false,
                 message: Some(super::backend_error_text(&self.manager, &e)),

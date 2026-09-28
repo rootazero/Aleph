@@ -54,9 +54,12 @@ const ROOM_COLUMNS: &[(&str, &str)] = &[
 ///
 /// These three are timestamps. A room list is read to find an id to act on,
 /// and three date columns would push the id and name off the left of a narrow
-/// terminal to answer a question nobody asked it.
+/// terminal to answer a question nobody asked it. `manageable` is per-caller
+/// UI state for the Panel's controls; the CLI has no controls to enable, and
+/// every write is gated server-side anyway.
 #[cfg(test)]
-const ROOM_FIELDS_NOT_RENDERED: &[&str] = &["created_at", "updated_at", "last_used_at"];
+const ROOM_FIELDS_NOT_RENDERED: &[&str] =
+    &["created_at", "updated_at", "last_used_at", "manageable"];
 
 /// (display header, wire field name) for every column `channel list` renders.
 const BINDING_COLUMNS: &[(&str, &str)] = &[
@@ -373,6 +376,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             last_used_at: 0,
+            manageable: true,
         }
     }
 

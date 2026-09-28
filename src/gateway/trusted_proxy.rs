@@ -48,7 +48,7 @@ pub struct ResolvedClient {
     /// `malformed_xff_falls_back_to_peer` pins that. One *derived* bit had
     /// been overloaded onto it. A connection that arrived through a trusted
     /// proxy hop is never local, whether or not the forwarding header parsed —
-    /// the same fail-closed convention `server::handler::resolve_stamped_identity`
+    /// the same fail-closed convention `server::connection::auth::resolve_stamped_identity`
     /// already writes down for a lookup it could not actually perform.
     pub local: bool,
 }

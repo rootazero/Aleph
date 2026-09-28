@@ -6,7 +6,7 @@
 //! `AssistantMessage` per Think step, so calls and rows are 1:1. The session
 //! row's counters are the fold of those same events (`session::usage_fold`),
 //! accumulated once per run when its `AssistantRunMeta` lands — see
-//! [`bill_run_from_fold`] — or, for a run that finished but whose meta never
+//! [`fold_run_bill`] — or, for a run that finished but whose meta never
 //! reached the log, when a whole-session heal synthesizes that stamp
 //! ([`synthesize_missing_stamps`]).
 //!
@@ -53,12 +53,25 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::gateway::session_store::types::MessageRecord;
-use crate::gateway::session_store::{SessionStore, StampOutcome};
+use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::projection::{parse_source_seq, project_row, row_id};
 use crate::session::service::SessionId;
-use crate::session::store::{RetiredAnchorKind, RetiredRunAnchor, SessionEventStore};
+use crate::session::store::SessionEventStore;
+
+// Internal submodule — splits off `MissedSeqs` + `RepairReport` + `FlushTimeout`
+// (used by heal_session) and `RunSpan` + `collect_run_spans` +
+// `synthesize_missing_stamps` (used by both heal_session and the boot
+// reconciler). The drain task and `MessageProjector` itself stay here — they
+// are the single writer and the only path that owns the in-memory state.
+pub mod projector_sub;
+// Re-export so callers reach the moved types through the canonical
+// `crate::gateway::session_projector::*` path. `MissedSeqs` and `RunSpan` are
+// `pub(crate)` and stay internal — no glob re-export for those.
+pub use projector_sub::missed_seqs::{FlushTimeout, RepairReport};
+use projector_sub::missed_seqs::MissedSeqs;
+use projector_sub::run_span::{collect_run_spans, synthesize_missing_stamps};
 
 /// Capacity of the internal mpsc channel between the observer and the drain task.
 const QUEUE_CAP: usize = 4096;
@@ -116,95 +129,6 @@ enum ProjectorMsg {
     /// Answer once every message queued before this one has been handled.
     Flush(oneshot::Sender<()>),
 }
-
-/// What one `heal_session` pass did.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct RepairReport {
-    /// Transcript rows that were absent and are now written.
-    pub holes_filled: usize,
-    /// `AssistantRunMeta` stamps that landed on a row that had none.
-    pub stamps_reapplied: usize,
-    /// Stamps this pass wrote for a finished run whose `AssistantRunMeta`
-    /// never reached the log. Several shapes of run never get one, and at
-    /// boot the routine ones outnumber the crash: an errored or cancelled run
-    /// (the meta is emitted only on the engine's `Ok` arm), a slash-command
-    /// fast-path turn (no model call, no meta), a run the resume coordinator
-    /// closed as `Abandoned` and then repainted, the CHILD side of a session
-    /// split (the meta lands on the parent — `execute()` stamps
-    /// `request.session_key` and never learns the adopted child — so the
-    /// child's post-split span is the meta-less one), and the process dying
-    /// between `RunFinished` and the meta. Carries the `run_id` alone (the
-    /// gauge is unknown and is never written as zeros). Only a
-    /// [`HealScope::WholeSession`] pass writes these — see
-    /// [`synthesize_missing_stamps`].
-    pub stamps_synthesized: usize,
-    /// Of the stamps above (re-applied or synthesized), how many also
-    /// accumulated the run's spend. A stamp that found the row already
-    /// carrying this run's id bills nothing — that is what makes a replay,
-    /// and a second heal, non-double-billing.
-    pub usage_rebilled: usize,
-    /// Nothing was missing, nothing was stamped, and nothing was deferred.
-    ///
-    /// The last clause is the one that is easy to drop: a seq the pass could
-    /// not resolve sets no counter at all, so a heal that wrote nothing
-    /// *because it could not* would otherwise be indistinguishable from a
-    /// session that needed nothing.
-    pub up_to_date: bool,
-    /// The transcript is non-empty and carries no projector seq ids (foreign
-    /// or pre-SSOT content). Nothing was written: without seqs there is no way
-    /// to tell a hole from a row this projector never wrote, and filling
-    /// blindly would duplicate the conversation.
-    pub legacy: bool,
-    /// Something could not be read or written, so this report does NOT say the
-    /// session is whole — it says the pass could not find out.
-    pub errored: bool,
-}
-
-/// Seqs known to be absent from the projection, and which sessions have gained
-/// one since the last heal.
-///
-/// `dirty` exists so a heal is triggered by NEW information only. Re-inserting
-/// a seq that a pass could not resolve (a `RunMeta` whose run produced no
-/// assistant row at all, say) must not re-arm the heal, or every subsequent
-/// event on that session would pay for a full transcript read forever.
-#[derive(Default)]
-struct MissedSeqs {
-    seqs: HashMap<SessionId, BTreeSet<EventSeq>>,
-    dirty: HashSet<SessionId>,
-}
-
-impl MissedSeqs {
-    /// A newly-discovered gap: remember it AND arm the next heal.
-    fn record(&mut self, id: &SessionId, seq: EventSeq) {
-        self.seqs.entry(id.clone()).or_default().insert(seq);
-        self.dirty.insert(id.clone());
-    }
-
-    /// A gap this pass could not close: remember it WITHOUT arming a heal.
-    fn restore(&mut self, id: &SessionId, seqs: BTreeSet<EventSeq>) {
-        if seqs.is_empty() {
-            return;
-        }
-        self.seqs.entry(id.clone()).or_default().extend(seqs);
-    }
-
-    /// Take this session's gaps for a heal pass to work on.
-    fn take(&mut self, id: &SessionId) -> BTreeSet<EventSeq> {
-        self.dirty.remove(id);
-        self.seqs.remove(id).unwrap_or_default()
-    }
-
-    /// Has this session gained a gap since the last heal?
-    fn is_dirty(&self, id: &SessionId) -> bool {
-        self.dirty.contains(id)
-    }
-}
-
-/// `flush` gave up waiting. Not "the drain is empty" — the caller does not know
-/// what the drain still holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("the projector drain did not settle within the flush timeout")]
-pub struct FlushTimeout;
 
 /// Materialises a session event stream into the `messages` store.
 pub struct MessageProjector {
@@ -493,9 +417,10 @@ enum HealScope {
     /// routinely on live sessions, inside that window as a matter of course,
     /// and from a floor that can cut a run in half; this scope runs at boot
     /// before any run is live, or on a rare explicit request, and reads every
-    /// span from its opener. Stamping inside the window bills the run twice:
-    /// the real meta carries a different id from the synthesized stamp and
-    /// overwrites it (`synthesize_missing_stamps`'s race note).
+    /// span from its opener. Stamping inside the window loses the run's cost
+    /// and model: the synthesized stamp carries the run's own id since F1, so
+    /// the late meta reads `AlreadyStamped` and bills nothing (ruling U5); on
+    /// a log written before F1 it still double-bills (U1).
     WholeSession,
 }
 
@@ -575,9 +500,9 @@ async fn heal_session(
         };
         match project_event(id, rec, &ctx).await {
             Projected::Row => report.holes_filled += 1,
-            Projected::Stamped { billed } => {
+            Projected::Stamped { bill } => {
                 report.stamps_reapplied += 1;
-                if billed {
+                if bill == BillOutcome::Billed {
                     report.usage_rebilled += 1;
                 }
             }
@@ -631,10 +556,10 @@ async fn heal_session(
     }
     // `retry` is part of this answer. Every failure inside the loop — an append
     // that would not write, a stamp that would not land, a retirement flag that
-    // would not read — comes back as `Projected::Retry` and sets none of the
-    // counters, so without this clause a heal that wrote nothing BECAUSE it
-    // could not returns `up_to_date: true`, and the reconciler counts the
-    // session as whole in the boot line.
+    // would not read, a usage fold that would not read — comes back as
+    // `Projected::Retry` and sets none of the counters, so without this clause
+    // a heal that wrote nothing BECAUSE it could not returns `up_to_date: true`,
+    // and the reconciler counts the session as whole in the boot line.
     //
     // Deliberately not folded into `errored`: a `NoRowInRange` deferral is
     // benign (a run that produced no assistant row at all), and reporting it as
@@ -647,256 +572,6 @@ async fn heal_session(
         && deferred == 0;
     report
 }
-
-/// One run's extent in the log, as a heal pass sees it: where it opened,
-/// where (if anywhere) it closed, how many assistant messages it produced,
-/// and whether an `AssistantRunMeta` landed on it.
-struct RunSpan {
-    /// The id its `RunStarted` carries — the harness-minted MARKER id
-    /// (`runner_impl.rs`), which is NOT the engine's `RunRequest.run_id` the
-    /// meta carries (ruling A5: the two are never joined). It is what a
-    /// synthesized stamp writes under the row's `run_id` key, and it names
-    /// this span in log lines; it is never compared to a meta's id.
-    run_id: String,
-    /// Seq of the `RunStarted` that opened it.
-    start: EventSeq,
-    /// Seq of the `RunFinished` that closed it; `None` while it is open.
-    end: Option<EventSeq>,
-    /// `AssistantMessage` events between `start` and `end` — after the walk in
-    /// [`heal_session`], each is a transcript row or a deferred seq.
-    assistant_messages: usize,
-    /// A meta was appended after this span opened and before the next one
-    /// did — see [`collect_run_spans`] for why that is the join.
-    meta: bool,
-}
-
-impl RunSpan {
-    /// The seq to stamp up to when this run needs a synthesized stamp — it
-    /// finished, produced at least one assistant message, and no meta for it
-    /// is in the log. `None` for every other shape, each for its own reason:
-    /// an open run's meta may still come; a run with no assistant message has
-    /// no row to stamp; and a run WITH a meta keeps its own stamp — landed or
-    /// deferred, that meta carries the gauge and the price, which a
-    /// synthesized stamp cannot.
-    fn synthesis_end(&self) -> Option<EventSeq> {
-        if self.assistant_messages == 0 || self.meta {
-            return None;
-        }
-        self.end
-    }
-}
-
-/// Fold the log into run spans. Pure, so the shape a stamp is synthesized
-/// for is unit-testable without a store.
-///
-/// Every `RunStarted` opens a new span and a `RunFinished` closes the NEWEST
-/// one (the same "last marker wins" reading as `reduction::reduce_run`), so
-/// no span holds a second `RunStarted` between its `start` and its `end`.
-/// That is what lets the stamp range and the usage fold agree by
-/// construction: the fold anchors on the last `RunStarted` in the slice it
-/// is given, and over `[start, end)` that is `start`. A split child's log
-/// carries the parent's opener copied inside the tail and the child's own
-/// opener last (`session_split`); the copied one opens a span that is never
-/// closed, and so is never synthesized. The split's meta lands on the
-/// PARENT: `execute()` stamps `request.session_key` and never learns the
-/// adopted child (`final_session_id()` is read only by the harness bridge,
-/// for the `RunFinished`), so the parent's `RunStarted(p) … RunFinished {
-/// split_run_id } … AssistantRunMeta` is a span WITH a meta — billed live by
-/// the meta arm for its pre-split tokens plus the whole run's `cost_usd` and
-/// model. The CHILD's own span, `RunStarted { split_run_id } … RunFinished`,
-/// is the meta-less one: synthesized and billed (tokens only) at the next
-/// whole-session heal, so its tokens reach its session row no sooner than
-/// that (FOLLOW-UP F26). Assistant messages count into the newest span only
-/// while it is open.
-///
-/// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
-/// markers carry the harness-minted marker id and the meta carries the
-/// engine's run id, and the two are never equal on a live log (ruling A5),
-/// so an id join never matched: every finished run read as meta-less at
-/// boot, a stamp was synthesized and billed on EVERY boot, and the two
-/// stamps then overwrote each other's `run_id` so the next boot re-applied
-/// both — session totals doubled per restart (44 → 88 → 176 on the real
-/// machine). Position is the same derivation the projector's meta arm uses
-/// (`ctx.run_start` is the last `RunStarted` it walked past) and the usage
-/// fold anchors on (the last `RunStarted` in its slice), so the three cannot
-/// name three different runs. Two consequences: on a log written after
-/// `execute()` began holding the run slot through the meta append, the meta
-/// always precedes the next opener, so "newest span" is this run; on a
-/// historical log where a meta landed AFTER the next run's opener, it marks
-/// the next span — the same reading under which the projector anchored it
-/// on that opener and finalised it `NoRowInRange` — and the older span reads
-/// meta-less and is synthesized, billing that run's tokens once from its own
-/// messages. That is one bill for the older run, not two: its misanchored
-/// meta billed nothing (`NoRowInRange` never reaches the bill). What the
-/// historical shape still costs is on the projector's side, not this fold's
-/// — that meta can stamp and bill the NEXT run's first row under the older
-/// run's id if the next run had already produced one — and stays a T24
-/// known limit; the heal does not second-guess a landed meta.
-///
-/// `retired` — the session's retired openers and metas
-/// ([`SessionEventStore::load_retired_run_anchors`]), merged into the walk by
-/// `seq` — is the same positional join applied to the rows a rewind took
-/// out of the live log. A `chat.rewind` / `session.truncate` / `/undo` whose
-/// cut falls inside a finished, billed run retires that run's meta (and
-/// maybe its stamped row) and appends a `Cancelled` closer; over the live
-/// rows alone the run is then finished-without-meta and would be synthesized
-/// and billed again for whatever survived (final review I1). A retired meta
-/// marks the span the newest opener before it names, exactly as a live one
-/// does; a retired opener MOVES that anchor (so a retired later run's meta
-/// cannot be read as the surviving earlier run's) and opens no span of its
-/// own — its rows are gone from the fold and from `messages`. A live closer
-/// closes the newest LIVE span: the balancing closer is appended for the run
-/// the surviving prefix leaves open, after every retired row. Retired
-/// assistant messages and closers are not consulted: neither is billed, and
-/// a span's `end` must be a live seq.
-fn collect_run_spans(events: &[SessionEventRecord], retired: &[RetiredRunAnchor]) -> Vec<RunSpan> {
-    let mut spans: Vec<RunSpan> = Vec::new();
-    // Whether the newest opener walked so far — live or retired — is the one
-    // that opened `spans.last()`. False after a retired opener: the newest
-    // run is one the fold cannot see, so nothing that follows positionally
-    // (a message, a meta) belongs to a span in `spans`.
-    let mut newest_opener_is_live = false;
-    let mut retired = retired.iter().peekable();
-    let note_retired =
-        |anchor: &RetiredRunAnchor, spans: &mut Vec<RunSpan>, live: &mut bool| match anchor.kind {
-            RetiredAnchorKind::RunStarted => *live = false,
-            RetiredAnchorKind::RunMeta => {
-                if *live {
-                    if let Some(span) = spans.last_mut() {
-                        span.meta = true;
-                    }
-                }
-            }
-        };
-    for rec in events {
-        while let Some(anchor) = retired.next_if(|a| a.seq < rec.seq) {
-            note_retired(anchor, &mut spans, &mut newest_opener_is_live);
-        }
-        match &rec.event {
-            SessionEvent::RunStarted { run_id, .. } => {
-                spans.push(RunSpan {
-                    run_id: run_id.clone(),
-                    start: rec.seq,
-                    end: None,
-                    assistant_messages: 0,
-                    meta: false,
-                });
-                newest_opener_is_live = true;
-            }
-            // The two positional readers fall through to `_` after a retired
-            // opener: what they would mark belongs to a run the fold cannot see.
-            SessionEvent::AssistantMessage { .. } if newest_opener_is_live => {
-                if let Some(span) = spans.last_mut().filter(|s| s.end.is_none()) {
-                    span.assistant_messages += 1;
-                }
-            }
-            SessionEvent::RunFinished { .. } => {
-                if let Some(span) = spans.last_mut() {
-                    span.end.get_or_insert(rec.seq);
-                }
-            }
-            SessionEvent::AssistantRunMeta { .. } if newest_opener_is_live => {
-                if let Some(span) = spans.last_mut() {
-                    span.meta = true;
-                }
-            }
-            _ => {}
-        }
-    }
-    for anchor in retired {
-        note_retired(anchor, &mut spans, &mut newest_opener_is_live);
-    }
-    spans
-}
-
-/// Stamp and bill every finished run whose `AssistantRunMeta` never reached
-/// the log, so the run's rows never got their `run_id` join and its spend
-/// never reached the session row. #11 names the crash between `RunFinished`
-/// and the meta; the routine shapes that leave the same hole are listed on
-/// [`RepairReport::stamps_synthesized`], and this pass treats them alike.
-///
-/// The stamp carries the `run_id` alone — `build_message_metadata` with no
-/// occupancy — because the gauge is unknown here and a zero would read as a
-/// measurement on the Panel. It goes through the same
-/// `stamp_assistant_metadata_in_range` as a real meta, over the same shape of
-/// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
-/// rows strictly between), so a later heal reads `AlreadyStamped` and bills
-/// nothing: the stamp is the idempotence guard, exactly as on the live path.
-/// Against a later heal only — the stamp carries the MARKER id, a real meta
-/// carries the engine id, and `already_stamped_by` reads a different id as a
-/// different run (see the race note below). The bill is [`bill_run_from_fold`]
-/// with `run_start = start` and the fold read up to `end`; the cost and model
-/// are `None` because there is no meta to take them from, so a synthesized
-/// bill adds tokens and never dollars. A run whose provider reported no usage
-/// is stamped (the join is still owed) and not billed — nothing to add, and
-/// `bill_run_from_fold` says nothing about it.
-///
-/// `NoRowInRange` here means the run's row is a hole this pass could not
-/// fill — it is in `retry`, `up_to_date` is already false, and the pass that
-/// fills it synthesizes. A refused stamp sets `errored`: unlike a deferred
-/// meta there is no seq to retry, and the next whole-session pass finds the
-/// stamp still missing.
-///
-/// The boot reconciler runs before any run is live, so it cannot race a meta
-/// that is about to be appended. A `request_repair` on a live session (the
-/// doctor's repair) can, in the window between a run's `RunFinished` and its
-/// meta: the synthesized stamp lands first under the marker id, and the meta
-/// — carrying the engine id — then finds a row stamped by "a different run",
-/// overwrites the stamp and bills the run a second time. That window is one
-/// append wide and a T24 known limit; closing it needs the two ids joined
-/// (FOLLOW-UP "A5 join"), not a guess here about which id a stamp "really"
-/// names.
-async fn synthesize_missing_stamps(
-    store: &Arc<dyn SessionStore>,
-    id: &SessionId,
-    event_store: &Arc<dyn SessionEventStore>,
-    present: &(dyn Fn(EventSeq) -> bool + Send + Sync),
-    spans: &[RunSpan],
-    report: &mut RepairReport,
-) {
-    for span in spans {
-        let Some(end) = span.synthesis_end() else {
-            continue;
-        };
-        let Some(meta) =
-            crate::gateway::agent_instance::build_message_metadata(Some(&span.run_id), None)
-        else {
-            continue;
-        };
-        match store
-            .stamp_assistant_metadata_in_range(id, span.start, end, &meta)
-            .await
-        {
-            Ok(StampOutcome::Stamped) => {
-                report.stamps_synthesized += 1;
-                let ctx = ProjectionCtx {
-                    store,
-                    events: Some(event_store),
-                    present,
-                    run_start: span.start,
-                    bus: None,
-                };
-                if bill_run_from_fold(id, end, &ctx, &span.run_id, None, None, None).await {
-                    report.usage_rebilled += 1;
-                }
-            }
-            Ok(StampOutcome::AlreadyStamped | StampOutcome::NoRowInRange) => {}
-            Err(e) => {
-                tracing::warn!(
-                    session = ?id,
-                    run_id = %span.run_id,
-                    error = %e,
-                    "heal: synthesized stamp failed"
-                );
-                report.errored = true;
-            }
-        }
-    }
-}
-
-/// The live peer-echo frame for a row that is about to be appended, or `None`
-/// when this row is not one.
-///
 /// Pure and separate from the write so the decision is unit-testable without a
 /// store, a bus, or a runtime — every condition below is a way this has to be
 /// able to say "no", and each one is load-bearing:
@@ -1002,19 +677,34 @@ pub(crate) struct ProjectionCtx<'a> {
     pub bus: Option<&'a Arc<GatewayEventBus>>,
 }
 
+/// What happened to a run's spend when its stamp landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BillOutcome {
+    /// The fold found spend, and it was accumulated with the stamp.
+    Billed,
+    /// Nothing to add: no usage on the run's messages and no price.
+    NothingToBill,
+    /// Nothing to fold from — no event log installed, or no `RunStarted`
+    /// before the meta (a `/compact` retired the opener, or a legacy log).
+    /// The row is stamped and the spend is NOT accumulated, said at `warn!`
+    /// rather than read as "billed nothing" (criterion #8).
+    Unfoldable,
+}
+
 /// What one projection step did — the drain's and the heal's shared vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Projected {
     /// A transcript row was appended.
     Row,
-    /// An `AssistantRunMeta` stamp landed on a row that had none. `billed` says
-    /// whether the run's spend was accumulated in the same step.
-    Stamped { billed: bool },
+    /// An `AssistantRunMeta` stamp landed on a row that had none, together
+    /// with whatever the run owed (`bill`).
+    Stamped { bill: BillOutcome },
     /// Nothing to do: not row-producing, already present, already stamped,
     /// deliberately retired, or a stamp with no row in its run's range.
     Nothing,
     /// This seq must be tried again — its retirement state is unknown, a write
-    /// failed, or the row a stamp needs is not in the projection yet.
+    /// failed, a usage fold could not be read, or the row a stamp needs is
+    /// not in the projection yet.
     Retry,
 }
 
@@ -1118,13 +808,34 @@ pub(crate) async fn project_event(
             else {
                 return Projected::Nothing;
             };
+            // Fold BEFORE the stamp (F10): the stamp is the bill's idempotence
+            // guard, so a stamp that landed without its bill could never be
+            // billed again. A failed read writes nothing and retries.
+            let Some((bill, if_stamped, anchor)) = fold_run_bill(
+                id,
+                rec.seq,
+                ctx,
+                run_id,
+                *cost_usd,
+                model.as_deref(),
+                model_provider.as_deref(),
+            )
+            .await
+            .plan(fold_floor(ctx.run_start, rec.seq)) else {
+                return Projected::Retry;
+            };
             // The row this run's numbers belong to is the last assistant row
             // BETWEEN the run's own `RunStarted` and this meta — not "the last
             // assistant row in the table", which on a session with two runs
             // (or with a later row already back-filled) is somebody else's.
+            // The lower bound is `anchor`, not `ctx.run_start` (I2): they
+            // agree when `run_start` is this run's own opener, but
+            // `run_start` can go stale-low (0, after a drain respawn) while
+            // the fold still anchors correctly — using `run_start` there
+            // would let the stamp reach back into the PRIOR run's row.
             match ctx
                 .store
-                .stamp_assistant_metadata_in_range(id, ctx.run_start, rec.seq, &meta)
+                .stamp_and_bill_in_range(id, anchor, rec.seq, &meta, bill.as_ref())
                 .await
             {
                 Ok(StampOutcome::AlreadyStamped) => Projected::Nothing,
@@ -1151,30 +862,21 @@ pub(crate) async fn project_event(
                     Projected::Nothing
                 }
                 Ok(StampOutcome::Stamped) => {
-                    // Accumulate this run's spend onto the session row, exactly
-                    // once: the stamp above is the idempotence guard, because a
-                    // replay of the same meta returns `AlreadyStamped` and never
-                    // reaches this arm.
-                    //
-                    // The tokens come from the run's own messages (the usage
-                    // fold), the cost and model from this meta. `add_message_full`
-                    // does not add each row's tokens onto the same columns — it
-                    // did, silently, for as long as the rows carried zeros.
-                    Projected::Stamped {
-                        billed: bill_run_from_fold(
-                            id,
-                            rec.seq,
-                            ctx,
-                            run_id,
-                            *cost_usd,
-                            model.as_deref(),
-                            model_provider.as_deref(),
-                        )
-                        .await,
+                    // The spend landed with the stamp (or there was none):
+                    // one store operation, so a replay reads `AlreadyStamped`
+                    // and never reaches this arm again.
+                    if if_stamped == BillOutcome::Unfoldable {
+                        tracing::warn!(
+                            session = ?id,
+                            run_id = %run_id,
+                            "projector: run meta stamped, but its spend cannot be folded \
+                             (no event log, or no RunStarted before it); not accumulated"
+                        );
                     }
+                    Projected::Stamped { bill: if_stamped }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "projector: stamp run-meta failed");
+                    tracing::warn!(error = %e, "projector: stamp-and-bill of run-meta failed; nothing landed, retried");
                     Projected::Retry
                 }
             }
@@ -1224,26 +926,78 @@ pub(crate) async fn project_event(
     }
 }
 
-/// Accumulate the run's spend onto the session row from the usage fold —
-/// exactly once, guarded by the stamp that just landed. The tokens are
-/// [`crate::session::usage_fold::run_usage_totals`] over the log slice
-/// `[ctx.run_start, meta_seq)`, anchored on the last `RunStarted` in it; the
-/// cost and model are the meta's own — `None` from
-/// [`synthesize_missing_stamps`], which has no meta and passes the run's
-/// `RunFinished` seq as `meta_seq`.
-///
-/// `false` = nothing was accumulated — either it could not be told (no log
-/// installed, an unreadable slice, no `RunStarted` to anchor on, a refused
-/// `update_session_usage`: each such path warns) or there was nothing to add
-/// (a run whose messages carried no usage and whose meta carries no price: no
-/// warn). The heal counts it as "not rebilled" either way; the distinction
-/// lives in the log line. A run with messages that carried no usage bills a
-/// FLOOR (`UsageTotals::without_usage`), said at `debug!` on the way through.
+/// What the usage fold says a run owes, read BEFORE its stamp is written.
+/// `Owe` and `Nothing` carry the seq the fold anchored on — the last
+/// `RunStarted` in the slice, from [`crate::session::usage_fold::run_usage_totals`]
+/// — so a caller that stamps by range can bound it from the SAME anchor the
+/// fold used rather than re-deriving one (I2, criterion #12): a stale-low
+/// `ctx.run_start` (for example 0, after a drain respawn) must not let the
+/// stamp's lower bound reach further back than the fold's did, or it can pick
+/// up the PRIOR run's row instead of this run's.
+enum FoldedBill {
+    Owe(RunBill, EventSeq),
+    Nothing(EventSeq),
+    /// No anchor at all — no event log, or no `RunStarted` in the slice (a
+    /// retired opener, or a legacy log). [`FoldedBill::plan`] falls back to
+    /// the caller's own lower bound for this variant only.
+    Unfoldable,
+    /// The slice could not be read. Nothing may be written: the stamp is the
+    /// bill's idempotence guard, so stamping now would forfeit the bill.
+    ReadFailed,
+}
+
+impl FoldedBill {
+    /// The bill to hand the store, the outcome to report if the stamp lands,
+    /// and the seq to stamp FROM. `None` = the fold failed and the caller
+    /// writes nothing. `fallback` is the caller's own lower bound
+    /// ([`fold_floor`] of `ctx.run_start`, or a span's `start`), used only
+    /// for `Unfoldable`, which has no anchor to report.
+    fn plan(self, fallback: EventSeq) -> Option<(Option<RunBill>, BillOutcome, EventSeq)> {
+        match self {
+            Self::Owe(bill, anchor) => Some((Some(bill), BillOutcome::Billed, anchor)),
+            Self::Nothing(anchor) => Some((None, BillOutcome::NothingToBill, anchor)),
+            Self::Unfoldable => Some((None, BillOutcome::Unfoldable, fallback)),
+            Self::ReadFailed => None,
+        }
+    }
+}
+
+/// The floor a meta's fold reads from, and its stamp's fallback lower bound:
+/// `run_start`, or 0 when `run_start` lies ABOVE the meta. Post-F1,
+/// `execute()` holds the run slot through the meta append, so a live
+/// `run_start` above the meta is always stale — a heal re-walking this meta
+/// after the drain already saw the NEXT run's opener — and reading from the
+/// log head lets the fold find this run's anchor positionally instead of
+/// folding the empty slice `[run_start, meta)` (stale-high, M5).
+fn fold_floor(run_start: EventSeq, meta_seq: EventSeq) -> EventSeq {
+    if run_start > meta_seq {
+        0
+    } else {
+        run_start
+    }
+}
+
+/// Fold the run's spend from the log slice
+/// `[fold_floor(ctx.run_start), meta_seq)`, anchored on the last `RunStarted` in it
+/// ([`crate::session::usage_fold::run_usage_totals`]). The cost and model are
+/// the meta's own — `None` from [`synthesize_missing_stamps`], which has no
+/// meta and passes the run's `RunFinished` seq as `meta_seq`. Read BEFORE the
+/// stamp (F10): a read that fails leaves nothing half-written. The slice is
+/// NOT fixed once the meta exists — a `/compact` can retire the opener later,
+/// which is the `Unfoldable` case below; it is harmless because the replay by
+/// then reads `AlreadyStamped`.
 ///
 /// `ctx.run_start == 0` ⇒ the slice starts at the log head and the fold
-/// anchors on the last `RunStarted` it finds — the restarted-drain case, where
-/// this process never saw the marker go by.
-async fn bill_run_from_fold(
+/// anchors on the last `RunStarted` it finds — the restarted-drain case,
+/// where this process never saw the marker go by. That is also the shape I2
+/// fixes: `ctx.run_start` may be stale-low, but the anchor this function
+/// returns is never stale — it is POSITIONAL, the last live `RunStarted`
+/// before `meta_seq`, not "this run's own opener" by construction. That is
+/// this run's own opener on a log written after `execute()` began holding
+/// the run slot through the meta append; on the historical
+/// meta-after-next-opener shape (`run_span.rs`'s `collect_run_spans` doc),
+/// it is the NEXT run's opener.
+async fn fold_run_bill(
     id: &SessionId,
     meta_seq: EventSeq,
     ctx: &ProjectionCtx<'_>,
@@ -1251,28 +1005,26 @@ async fn bill_run_from_fold(
     cost_usd: Option<f64>,
     model: Option<&str>,
     provider: Option<&str>,
-) -> bool {
+) -> FoldedBill {
     let Some(events) = ctx.events else {
-        tracing::warn!(session = ?id, run_id, "projector: no event log; run spend not accumulated");
-        return false;
+        return FoldedBill::Unfoldable;
     };
     let slice = match events
-        .load_events_range(id, Some(ctx.run_start), Some(meta_seq))
+        .load_events_range(
+            id,
+            Some(fold_floor(ctx.run_start, meta_seq)),
+            Some(meta_seq),
+        )
         .await
     {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(session = ?id, run_id, error = %e, "projector: usage fold read failed");
-            return false;
+            tracing::warn!(session = ?id, run_id, error = %e, "projector: usage fold read failed; nothing written, retried");
+            return FoldedBill::ReadFailed;
         }
     };
-    let Some(totals) = crate::session::usage_fold::run_usage_totals(&slice) else {
-        tracing::warn!(
-            session = ?id,
-            run_id,
-            "projector: run meta with no RunStarted before it; spend not accumulated"
-        );
-        return false;
+    let Some((anchor, totals)) = crate::session::usage_fold::run_usage_totals(&slice) else {
+        return FoldedBill::Unfoldable;
     };
     if totals.without_usage > 0 {
         tracing::debug!(
@@ -1284,26 +1036,18 @@ async fn bill_run_from_fold(
         );
     }
     if totals.input == 0 && totals.output == 0 && cost_usd.is_none() {
-        return false;
+        return FoldedBill::Nothing(anchor);
     }
-    match ctx
-        .store
-        .update_session_usage(
-            id,
-            i64::try_from(totals.input).unwrap_or(i64::MAX),
-            i64::try_from(totals.output).unwrap_or(i64::MAX),
-            cost_usd.unwrap_or(0.0),
-            model,
-            provider,
-        )
-        .await
-    {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::warn!(session = ?id, run_id, error = %e, "projector: session usage accumulation failed");
-            false
-        }
-    }
+    FoldedBill::Owe(
+        RunBill {
+            input_tokens: i64::try_from(totals.input).unwrap_or(i64::MAX),
+            output_tokens: i64::try_from(totals.output).unwrap_or(i64::MAX),
+            cost_usd: cost_usd.unwrap_or(0.0),
+            model: model.map(str::to_string),
+            model_provider: provider.map(str::to_string),
+        },
+        anchor,
+    )
 }
 
 impl SessionEventObserver for MessageProjector {
@@ -1365,9 +1109,11 @@ impl SessionEventObserver for MessageProjector {
 mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_projector::projector_sub::run_span::{collect_run_spans, RunSpan};
     use crate::orchestrator::dispatch::TokenBreakdown;
     use crate::session::events::{Durability, MessageContent, Retire, ToolOutput, TurnId};
     use crate::session::service::SessionError;
+    use crate::session::store::{RetiredAnchorKind, RetiredRunAnchor};
     use tempfile::tempdir;
 
     /// See `session::store::tests::the_accessor_exposes_this_handle_to_the_roster`
@@ -1647,19 +1393,20 @@ mod tests {
         log
     }
 
-    /// The marker id a live log carries on its `RunStarted` / `RunFinished`
-    /// for the run whose meta carries `run`: the harness mints its own
-    /// (`runner_impl.rs`), and it is never the engine id the meta carries.
-    /// Every fixture that pairs a marker with a meta derives the marker id
-    /// here, so no test can pass by an equality the production log never
-    /// satisfies.
+    /// The marker id a log written BEFORE 2026-09-24 carries on its
+    /// RunStarted / RunFinished: the bridge minted its own, never the engine
+    /// id the meta carries (ruling A5, reversed by F1). Fixtures that pin
+    /// the legacy shape derive the marker id here; the same-id shape every
+    /// newer log carries has its own twins below (U1: both shapes stay
+    /// readable).
     fn marker_of(run: &str) -> String {
         format!("marker-{run}")
     }
 
     /// One run, one priced message, its meta after `RunFinished` — the shape
     /// every billing test below reads. `(45, 25)` is what the fold must find.
-    /// The markers carry [`marker_of`]`(run)`, the meta carries `run`.
+    /// The markers carry [`marker_of`]`(run)`, the meta carries `run` — the
+    /// legacy shape.
     fn one_billed_run(tid: TurnId, run: &str) -> Vec<(EventSeq, SessionEvent)> {
         vec![
             (1, run_started(&marker_of(run))),
@@ -1753,6 +1500,346 @@ mod tests {
         ) -> Result<Vec<(SessionId, crate::session::store::MarkerSlice)>, SessionError> {
             Ok(Vec::new())
         }
+    }
+
+    /// An event log whose retirement answer is "live" but whose range read
+    /// fails — the fold's read, not the retirement check, is what breaks.
+    struct UnreadableRange;
+
+    #[async_trait::async_trait]
+    impl SessionEventStore for UnreadableRange {
+        async fn append_batch(
+            &self,
+            _id: &SessionId,
+            _first_seq: EventSeq,
+            _events: &[(SessionEvent, i64)],
+            _retire: Option<Retire>,
+            _durability: Durability,
+        ) -> Result<(), SessionError> {
+            Ok(())
+        }
+        async fn load_all_events(
+            &self,
+            _id: &SessionId,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Ok(Vec::new())
+        }
+        async fn load_events_range(
+            &self,
+            _id: &SessionId,
+            _from: Option<EventSeq>,
+            _to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Err(SessionError::Storage("event log unreadable".into()))
+        }
+        async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
+            Ok(1)
+        }
+        async fn retire_from(
+            &self,
+            _id: &SessionId,
+            _from_seq: EventSeq,
+        ) -> Result<usize, SessionError> {
+            Ok(0)
+        }
+        async fn is_retired(&self, _id: &SessionId, _seq: EventSeq) -> Result<bool, SessionError> {
+            Ok(false)
+        }
+        async fn load_run_markers(
+            &self,
+        ) -> Result<Vec<(SessionId, crate::session::store::MarkerSlice)>, SessionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// F10: the fold is read BEFORE the stamp. A read that fails writes
+    /// nothing — the seq is retried — instead of landing a stamp whose bill
+    /// can then never be retried.
+    #[tokio::test]
+    async fn an_unreadable_fold_is_retried_and_stamps_nothing() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "unreadable_fold.db");
+        let id = SessionId::ephemeral("unreadable-fold");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+        let events: Arc<dyn SessionEventStore> = Arc::new(UnreadableRange);
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&events),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Retry
+        );
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("the row is there");
+        assert!(
+            row.metadata.is_none(),
+            "nothing stamped: {:?}",
+            row.metadata
+        );
+    }
+
+    /// F10 through the projector: the store refuses the bill, the meta is
+    /// retried with its row unstamped, and the retry bills it once.
+    #[tokio::test]
+    async fn a_refused_bill_is_retried_and_the_retry_bills_once() {
+        let temp = tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("refused_bill.db"),
+                max_messages: 10_000,
+                compaction_keep: 5_000,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let store: Arc<dyn SessionStore> = manager.clone();
+        let id = SessionId::ephemeral("refused-bill");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(&id, &one_billed_run(tid, "run_a")).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        manager
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_bill BEFORE UPDATE OF input_tokens ON sessions \
+                 BEGIN SELECT RAISE(ABORT, 'injected bill failure'); END;",
+            )
+            .unwrap();
+        let meta_rec = rec(4, run_meta(tid, "run_a"));
+        assert_eq!(project_event(&id, &meta_rec, &ctx).await, Projected::Retry);
+
+        manager
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_bill;")
+            .unwrap();
+        assert_eq!(
+            project_event(&id, &meta_rec, &ctx).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
+    }
+
+    /// Review Focus 4: a meta whose slice holds no `RunStarted` at all — a
+    /// legacy log, the same shape a retired opener would leave — stamps its
+    /// row and bills nothing, and the heal SAYS so: one stamp re-applied,
+    /// zero rebilled, tokens untouched.
+    #[tokio::test]
+    async fn a_heal_counts_an_unfoldable_stamp_as_not_rebilled() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "unfoldable_heal.db");
+        let id = SessionId::ephemeral("unfoldable-heal");
+        store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(
+            &id,
+            &[
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (4, run_meta(tid, "run_a")),
+            ],
+        )
+        .await;
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log);
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let mut run_start = HashMap::new();
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert_eq!(
+            (
+                report.holes_filled,
+                report.stamps_reapplied,
+                report.usage_rebilled
+            ),
+            (1, 1, 0),
+            "{report:?}"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (0, 0));
+    }
+
+    /// I2 regression: the stamp's lower bound must be the SAME anchor the
+    /// fold used, not `ctx.run_start` — which can go stale-low (0, after a
+    /// drain respawn) while the fold still anchors correctly on this run's
+    /// own `RunStarted`. Before the fix, a stale-low `run_start` let the
+    /// stamp's range reach back past this run's own opener and pick up the
+    /// PRIOR run's row instead — overwriting its stamp and billing the wrong
+    /// run there.
+    #[tokio::test]
+    async fn a_stale_low_run_start_cannot_steal_the_prior_runs_row() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "stale_run_start.db");
+        let id = SessionId::ephemeral("stale-run-start");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid_a = uuid::Uuid::new_v4();
+        let tid_b = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, assistant_msg_billed(tid_a, 10, 5)),
+            (3, run_finished("run_a")),
+            (4, run_meta(tid_a, "run_a")),
+            (5, run_started("run_b")),
+            // B's row is deliberately never projected — the hole this
+            // regression needs: the event is in the log (the fold can see
+            // it) but no row for it exists in `messages`.
+            (6, assistant_msg_billed(tid_b, 45, 25)),
+            (7, run_finished("run_b")),
+            (8, run_meta(tid_b, "run_b")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+
+        // Run A: project its row, then its meta, with its own correct
+        // `run_start`. This is the row a stale-low `run_start` must not
+        // reach.
+        let ctx_a = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        project_event(&id, &rec(2, assistant_msg_billed(tid_a, 10, 5)), &ctx_a).await;
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid_a, "run_a")), &ctx_a).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
+        );
+
+        // Run B: its row (seq 6) is never projected. Its meta is projected
+        // with `run_start: 0` — the stale-low value a drain respawn leaves
+        // behind (`ensure_drain`'s fresh, empty map).
+        let ctx_b = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 0,
+            bus: None,
+        };
+        assert_eq!(
+            project_event(&id, &rec(8, run_meta(tid_b, "run_b")), &ctx_b).await,
+            Projected::Nothing,
+            "B's row is a hole, not A's — the anchor must exclude A's row \
+             even though `run_start` is stale-low"
+        );
+
+        let row_a = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("A's row is there");
+        assert_eq!(
+            row_a
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("run_a"),
+            "A's row must still carry A's own stamp, not B's"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (10, 5),
+            "B must not have been billed onto A's row"
+        );
+    }
+
+    /// M5, the stale-HIGH twin of the test above: a heal re-walks run A's meta
+    /// after the drain already recorded run B's opener, so the `run_start` it
+    /// inherits lies ABOVE the meta. Folding `[5, 4)` read nothing and the
+    /// fallback range `(5, 4]` held no row, so A was neither stamped nor
+    /// billed. The floor clamps to 0, the fold anchors on A's own opener, and
+    /// A is stamped and billed exactly once.
+    #[tokio::test]
+    async fn a_stale_high_run_start_still_stamps_and_bills_the_run_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "stale_high_run_start.db");
+        let id = SessionId::ephemeral("stale-high-run-start");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("run_a")),
+            (4, run_meta(tid, "run_a")),
+            (5, run_started("run_b")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 5,
+            bus: None,
+        };
+        project_event(&id, &rec(2, assistant_msg_billed(tid, 45, 25)), &ctx).await;
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            },
+            "a run_start above the meta is stale; the fold must still find A's opener"
+        );
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Nothing,
+            "the replay reads AlreadyStamped"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("A's row is there");
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("run_a")
+        );
     }
 
     /// An unreadable retirement flag is neither "retired" nor "live". The old
@@ -1972,8 +2059,9 @@ mod tests {
         }
 
         // Run A opened at seq 1, its meta at seq 3 → row seq 2. No log is
-        // pinned: this test is about WHERE the stamp lands, and without a log
-        // the fold has nothing to bill from, which the outcome says.
+        // pinned: this test is about WHERE the stamp lands; without a log
+        // there is nothing to fold, which the outcome names (Unfoldable),
+        // rather than reading as "billed nothing".
         let never = |_: EventSeq| false;
         let ctx_a = ProjectionCtx {
             store: &store,
@@ -1984,7 +2072,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(3, run_meta(tid, "run_a")), &ctx_a).await,
-            Projected::Stamped { billed: false }
+            Projected::Stamped {
+                bill: BillOutcome::Unfoldable
+            }
         );
 
         let rows = store.get_history(&id, None).await.unwrap();
@@ -2079,6 +2169,154 @@ mod tests {
         );
     }
 
+    /// I1 (2026-09-25 final review), run against whichever backend `store` is.
+    ///
+    /// One run with two priced rows. Back-pressure dropped seqs 3 and 4, so the
+    /// live meta found only row 2 in `(1, 5]`, stamped it and billed the whole
+    /// fold — (55, 30), since the fold reads the log and row 3's tokens are in
+    /// it. The heal then fills row 3, which is now the NEWEST row in the same
+    /// range, and re-walks the meta (a meta is never `present`). A guard that
+    /// asked only the newest row "are you stamped?" heard no, stamped row 3 and
+    /// billed the run a second time.
+    async fn a_backfilled_row_scenario(store: Arc<dyn SessionStore>, key: &str) {
+        let id = SessionId::from_key_string(key).unwrap();
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 10, 5)),
+            (3, assistant_msg_billed(tid, 45, 25)),
+            (4, run_finished("engine-r")),
+            (5, run_meta(tid, "engine-r")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        for (seq, ev) in events.iter().filter(|(s, _)| [1, 2].contains(s)) {
+            project_event(&id, &rec(*seq, ev.clone()), &ctx).await;
+        }
+        assert_eq!(
+            project_event(&id, &rec(5, run_meta(tid, "engine-r")), &ctx).await,
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            },
+            "the live meta stamps row 2, the only row in range"
+        );
+        let tokens = |m: crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "precondition: the live bill is the whole fold, row 3 included"
+        );
+
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        lock_missed(&missed).record(&id, 3);
+        lock_missed(&missed).record(&id, 4);
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let mut run_start = HashMap::from([(id.clone(), 1)]);
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::KnownGaps,
+        )
+        .await;
+        assert_eq!(
+            (
+                report.holes_filled,
+                report.stamps_reapplied,
+                report.usage_rebilled
+            ),
+            (1, 0, 0),
+            "the heal fills row 3 and its meta re-walk stamps and bills nothing: {report:?}"
+        );
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "the run is billed exactly once"
+        );
+
+        let stamp_of = |seq: EventSeq, rows: &[MessageRecord]| {
+            rows.iter()
+                .find(|m| m.id == row_id(&id.to_key_string(), seq))
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(
+            stamp_of(2, &rows).as_deref(),
+            Some("engine-r"),
+            "the stamp stays on the row it first landed on"
+        );
+        assert_eq!(
+            stamp_of(3, &rows),
+            None,
+            "the back-filled row is not stamped"
+        );
+
+        // The same stamp-and-bill asked of the store directly: the range holds
+        // this run's stamp, so the answer is `AlreadyStamped` and nothing moves.
+        let again = store
+            .stamp_and_bill_in_range(
+                &id,
+                1,
+                5,
+                &serde_json::json!({ "run_id": "engine-r" }),
+                Some(&RunBill {
+                    input_tokens: 55,
+                    output_tokens: 30,
+                    cost_usd: 0.12,
+                    model: None,
+                    model_provider: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(again, StampOutcome::AlreadyStamped);
+        assert_eq!(
+            tokens(store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30)
+        );
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(stamp_of(3, &rows), None);
+    }
+
+    #[tokio::test]
+    async fn a_backfilled_row_does_not_move_the_stamp() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "backfilled_row.db");
+        a_backfilled_row_scenario(store, "agent:backfilled:main").await;
+    }
+
+    #[tokio::test]
+    async fn a_backfilled_row_does_not_move_the_stamp_on_the_file_backend() {
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        let temp = tempdir().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        a_backfilled_row_scenario(store, "agent:backfilledfile:main").await;
+    }
+
     /// T9's real defect, fixed at the executor: a run that produced no
     /// assistant row at all (a hook stopped it before its first Think) still
     /// emits a meta, and that meta has nowhere to land. It must finalise —
@@ -2162,7 +2400,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta_without_gauge(tid, "run_a")), &ctx).await,
-            Projected::Stamped { billed: false },
+            Projected::Stamped {
+                bill: BillOutcome::NothingToBill
+            },
             "no usage, no price: stamped, nothing to bill"
         );
         let row = store
@@ -2232,7 +2472,9 @@ mod tests {
         let meta_rec = rec(4, run_meta(tid, "run_a"));
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
-            Projected::Stamped { billed: true }
+            Projected::Stamped {
+                bill: BillOutcome::Billed
+            }
         );
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
@@ -2285,7 +2527,9 @@ mod tests {
         };
         assert_eq!(
             project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
-            Projected::Stamped { billed: false }
+            Projected::Stamped {
+                bill: BillOutcome::Unfoldable
+            }
         );
 
         let row = store
@@ -2445,10 +2689,9 @@ mod tests {
         );
     }
 
-    /// The production id shape, on the pure fold: the markers carry the
-    /// harness-minted marker id, the meta carries the engine's run id, and
-    /// the two are never equal (ruling A5). The meta must still mark the span
-    /// it follows — by position, the way the projector anchored it — or every
+    /// The legacy id shape, on the pure fold: in a log written before the
+    /// markers carried the engine id, the meta still marks the span it
+    /// follows — by position, the way the projector anchored it — or every
     /// finished run reads meta-less at boot and is stamped and billed again
     /// on every restart (the `holes` stage's 44 → 88 → 176). Reddens if the
     /// join goes back to comparing ids.
@@ -2465,6 +2708,23 @@ mod tests {
             vec![None],
             "the meta names an id the markers never carry, and still marks \
              the span it landed inside: nothing to synthesize"
+        );
+    }
+
+    /// The shape every log written since 2026-09-24 carries: the markers and
+    /// the meta share the engine's run id. Same answer as the legacy twin
+    /// above — the join is positional, so it never depended on the ids.
+    #[test]
+    fn a_meta_under_its_markers_own_id_marks_the_span_it_follows() {
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            synthesis_ends(&[
+                (1, run_started("engine-X")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, run_finished("engine-X")),
+                (4, run_meta(tid, "engine-X")),
+            ]),
+            vec![None],
         );
     }
 
@@ -2489,8 +2749,10 @@ mod tests {
     /// The historical shape: run a's meta landed AFTER run b's opener (the
     /// live path no longer writes this — `execute()` holds the run slot
     /// through the meta append, pinned in `execution_engine::tests` — but
-    /// logs written before that fix carry it). The walk anchors the meta on
-    /// b's opener, finds no assistant row in `(4, 5]`, finalises it
+    /// logs written before that fix carry it). This is also a log written
+    /// before the markers carried the engine id — the `marker_of` fixture ids
+    /// throughout — so the same positional join applies. The walk anchors the
+    /// meta on b's opener, finds no assistant row in `(4, 5]`, finalises it
     /// `NoRowInRange` and bills nothing; the positional fold reads the same
     /// way — the meta marks span b — so span a is finished, has a row and no
     /// meta, and IS synthesized: stamped with its marker id and billed ONCE
@@ -2587,9 +2849,9 @@ mod tests {
     }
 
     /// The shape `qa/resume_boundary` `holes` measures, at the store: a run
-    /// that finished normally on the LIVE path — markers with the marker id,
-    /// meta with the engine id, drained live so the meta's own stamp landed
-    /// and billed — is billed exactly once, and two whole-session repairs
+    /// that finished normally on the LIVE path — in a log written before the
+    /// markers carried the engine id, drained live so the meta's own stamp
+    /// landed and billed — is billed exactly once, and two whole-session repairs
     /// (the boot reconciler's pass, twice, as two restarts would run it) add
     /// nothing. With the fold joining meta to span by id equality this went
     /// `(45, 25)` → `(90, 50)` → `(180, 100)`: every pass read the run as
@@ -2653,6 +2915,163 @@ mod tests {
             Some("engine-x"),
             "the row still carries the meta's id — no synthesized stamp overwrote it"
         );
+    }
+
+    /// F1, at the store: `request_repair` runs in the one-append window between
+    /// a run's `RunFinished` and its meta, synthesizes the stamp and bills the
+    /// run's tokens; the meta then lands under the SAME id, reads
+    /// `AlreadyStamped` and bills nothing. Tokens once. Before the markers
+    /// carried the engine id, the meta read the synthesized stamp as "another
+    /// run's", overwrote it and billed a second time. The cost and model the
+    /// meta carried are lost — ruling U5, asserted so a change to it is seen.
+    #[tokio::test]
+    async fn a_synthesized_stamp_then_its_own_meta_bills_the_run_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "synth_then_meta.db");
+        let id = SessionId::ephemeral("synth-then-meta");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let run = [
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("engine-r")),
+        ];
+        let log = own_event_log(&id, &run).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log.clone()));
+        for (seq, ev) in &run {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        let repair = projector.request_repair(&id).await;
+        assert_eq!(
+            (repair.stamps_synthesized, repair.usage_rebilled),
+            (1, 1),
+            "the repair ran inside the window and synthesized: {repair:?}"
+        );
+
+        let meta_ev = run_meta(tid, "engine-r");
+        log.append(&id, 4, &meta_ev, 0).await.unwrap();
+        projector.on_appended(&id, &rec(4, meta_ev));
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (45, 25),
+            "tokens once"
+        );
+        assert_eq!(
+            (meta.estimated_cost_usd, meta.model.as_deref()),
+            (0.0, None),
+            "U5: the late meta's cost and model are not accumulated"
+        );
+    }
+
+    /// One engine run whose first attempt failed and was retried under the
+    /// same run id: two brackets, one meta after the last. The meta bills the
+    /// last bracket; the first — finished, with a row, no meta — is
+    /// synthesized and billed once from its own messages; a second repair adds
+    /// nothing. The provider billed both attempts, so both are counted.
+    #[tokio::test]
+    async fn a_retried_run_bills_each_bracket_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "retried_run.db");
+        let id = SessionId::ephemeral("retried-run");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("engine-r")),
+            (2, assistant_msg_billed(tid, 10, 5)),
+            (
+                3,
+                SessionEvent::RunFinished {
+                    run_id: "engine-r".into(),
+                    outcome: crate::session::events::RunOutcome::Errored,
+                    at: 2,
+                },
+            ),
+            (4, run_started("engine-r")),
+            (5, assistant_msg_billed(tid, 45, 25)),
+            (6, run_finished("engine-r")),
+            (7, run_meta(tid, "engine-r")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        let tokens = |m: &crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        assert_eq!(
+            tokens(&store.get_metadata(&id).await.unwrap().unwrap()),
+            (45, 25),
+            "the live meta billed the bracket it closes"
+        );
+
+        let first = projector.request_repair(&id).await;
+        assert_eq!(
+            (first.stamps_synthesized, first.usage_rebilled),
+            (1, 1),
+            "{first:?}"
+        );
+        let second = projector.request_repair(&id).await;
+        assert!(second.up_to_date, "{second:?}");
+        assert_eq!(
+            tokens(&store.get_metadata(&id).await.unwrap().unwrap()),
+            (55, 30),
+            "each bracket billed exactly once"
+        );
+    }
+
+    /// A session that straddles the upgrade: run a was written before the
+    /// markers carried the engine id (marker ≠ meta id), run b after (same id).
+    /// Both are billed once live, and two repairs add nothing.
+    #[tokio::test]
+    async fn a_legacy_run_and_a_same_id_run_in_one_log_are_each_billed_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "mixed_shapes.db");
+        let id = SessionId::ephemeral("mixed-shapes");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let mut events = one_billed_run(tid, "a");
+        events.extend([
+            (5, run_started("b")),
+            (6, assistant_msg_billed(tid, 10, 5)),
+            (7, run_finished("b")),
+            (8, run_meta(tid, "b")),
+        ]);
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        for pass in 1..=2 {
+            let repair = projector.request_repair(&id).await;
+            assert!(repair.up_to_date, "repair {pass}: {repair:?}");
+        }
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (55, 30));
+        let ids: Vec<Option<String>> = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.role == "assistant")
+            .map(|m| {
+                m.metadata
+                    .as_ref()
+                    .and_then(|v| v.get("run_id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(ids, vec![Some("a".to_string()), Some("b".to_string())]);
     }
 
     /// Final review I1, at the store: a `chat.rewind` / `session.truncate` /

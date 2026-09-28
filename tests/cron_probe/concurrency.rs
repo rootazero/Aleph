@@ -47,6 +47,7 @@ async fn concurrent_list_during_execution() {
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
+        unadmitted: false,
     };
 
     // Phase 3: writeback
@@ -102,6 +103,7 @@ async fn update_during_execution() {
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
+        unadmitted: false,
     };
 
     // Phase 3: writeback (force_reload merges concurrent edits)
@@ -170,6 +172,7 @@ async fn delete_during_execution() {
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
+        unadmitted: false,
     };
 
     // Phase 3: writeback — should NOT panic, just warn and skip

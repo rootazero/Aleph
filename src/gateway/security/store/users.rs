@@ -33,6 +33,21 @@ impl UserRole {
             Self::Member => "member",
         }
     }
+
+    /// The role as the wire and every `caller_role` stamp spell it:
+    /// `Admin` is `"operator"` there, `Member` is `"member"`.
+    ///
+    /// The single source of that mapping. It used to be hand-written twice
+    /// (`handlers::connect::resolve_connection_identity` and
+    /// `handlers::users::restamp_live_connections`), and the fire-time
+    /// authority resolver would have been the third copy.
+    #[must_use]
+    pub const fn wire_role(&self) -> &'static str {
+        match *self {
+            Self::Admin => "operator",
+            Self::Member => "member",
+        }
+    }
     #[must_use]
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
@@ -112,6 +127,18 @@ impl SecurityStore {
         )?;
         let rows = stmt.query_map([], row_to_user)?;
         rows.collect()
+    }
+
+    /// Whether any row other than `user_id`'s exists, in any status — one
+    /// `EXISTS` probe with no ordering and no allocation, for
+    /// `slot::multi_user_in`, which runs on every per-person tool call.
+    pub(crate) fn has_user_other_than(&self, user_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE user_id <> ?1)",
+            params![user_id],
+            |r| r.get(0),
+        )
     }
 
     pub fn count_users(&self) -> SqliteResult<i64> {
@@ -354,5 +381,16 @@ mod tests {
         let bob = store.get_user("u-bob").unwrap().unwrap();
         assert_eq!(bob.role, UserRole::Admin);
         assert_eq!(bob.status, UserStatus::Deactivated);
+    }
+
+    /// The wire word every consumer of a principal's role speaks. `admin`
+    /// is a storage word; on the wire and in `caller_role` it is
+    /// `"operator"` — the connect handshake, the live re-stamp on
+    /// `users.update`, and the fire-time authority resolver all read it
+    /// from here rather than each writing its own `match`.
+    #[test]
+    fn wire_role_maps_admin_to_operator_and_member_to_member() {
+        assert_eq!(UserRole::Admin.wire_role(), "operator");
+        assert_eq!(UserRole::Member.wire_role(), "member");
     }
 }

@@ -74,7 +74,7 @@ impl SessionActor {
         }
     }
 
-    /// The one store call behind both emit arms. Seqs are `head_seq + 1 ..`;
+    /// The one store call behind the hot and drain arms. Seqs are `head_seq + 1 ..`;
     /// on failure (typically a `(session_id, seq)` UNIQUE collision from a
     /// direct-store writer racing the actor — audit 4.1) resync `head_seq`
     /// from the store and retry the WHOLE batch once. Bounded: no loop,

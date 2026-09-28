@@ -167,6 +167,19 @@ impl MetaGuard {
         write(&self.path, &meta).await?;
         Ok(meta)
     }
+
+    /// Write the document back WITHOUT releasing the lock. For a caller that
+    /// must still act under the same lock after the write — the file
+    /// backend's `stamp_and_bill_in_range` rolls its transcript stamp back if
+    /// this write fails, and that rollback must not race another writer.
+    pub(crate) async fn write_back(&mut self) -> Result<(), SessionStoreError> {
+        let Some(meta) = self.meta.as_ref() else {
+            return Err(SessionStoreError::DatabaseError(
+                "write_back with no metadata to write".to_string(),
+            ));
+        };
+        write(&self.path, meta).await
+    }
 }
 
 /// Read and parse a metadata document. A missing file is `Ok(None)`; an
@@ -214,6 +227,12 @@ pub(crate) async fn read(path: &Path) -> Result<Option<SessionMetadata>, Session
 /// This stays atomic anyway: it is what bounds the damage from a crash or a
 /// full disk *during* the write, which no lock can prevent.
 async fn write(path: &Path, meta: &SessionMetadata) -> Result<(), SessionStoreError> {
+    #[cfg(test)]
+    if failpoint::take(path) {
+        return Err(SessionStoreError::DatabaseError(
+            "injected metadata write failure".to_string(),
+        ));
+    }
     if let Some(dir) = path.parent() {
         tokio::fs::create_dir_all(dir).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
@@ -225,6 +244,34 @@ async fn write(path: &Path, meta: &SessionMetadata) -> Result<(), SessionStoreEr
     crate::utils::atomic_write::atomic_write_file(path, &contents)
         .await
         .map_err(|e| SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}")))
+}
+
+/// Test-only failure injection for `write`, keyed by path so parallel tests
+/// cannot trip each other's.
+#[cfg(test)]
+pub(crate) mod failpoint {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static ARMED: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+    /// The next `write` to `path` fails once.
+    pub(crate) fn fail_next_write(path: &Path) {
+        ARMED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashSet::new)
+            .insert(path.to_path_buf());
+    }
+
+    pub(super) fn take(path: &Path) -> bool {
+        ARMED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+            .is_some_and(|armed| armed.remove(path))
+    }
 }
 
 #[cfg(test)]
@@ -335,5 +382,29 @@ mod tests {
             "slot table kept {} entries",
             locks.slot_count()
         );
+    }
+
+    /// `write_back` persists and keeps the lock: a second `lock` on the same
+    /// key waits until the guard is dropped.
+    #[tokio::test]
+    async fn a_written_back_guard_still_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s").join("metadata.json");
+        let locks = MetaLocks::new();
+        let mut guard = locks.lock("k", path.clone()).await.unwrap();
+        guard.insert(meta_with_title("written back"));
+        guard.write_back().await.unwrap();
+        assert_eq!(
+            read(&path).await.unwrap().unwrap().derived_title.as_deref(),
+            Some("written back")
+        );
+        let second = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            locks.lock("k", path.clone()),
+        )
+        .await;
+        assert!(second.is_err(), "the lock is still held after write_back");
+        drop(guard);
+        locks.lock("k", path).await.unwrap();
     }
 }

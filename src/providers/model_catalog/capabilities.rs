@@ -169,6 +169,21 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // Claude 3.7 Sonnet is the only reasoning member of the 3.x family
+    // (200K window, 64K output, image+tools+thinking). Must precede the
+    // broad `claude-3` row, which keeps the 3.5-era 8K output + no-reasoning
+    // shape and would under-size the budget on every 3.7 id (models.dev
+    // anthropic, 2026-09 snapshot).
+    (
+        "claude-3-7",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "claude-3",
         ModelCapabilities {
@@ -188,6 +203,20 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // are covered by the `gpt-5.6` prefix, so they need no rows here. They do
     // NOT share a rate card — see `pricing::PRICE_TABLE`, where each has its
     // own row ahead of the broad one.
+    // `codex-mini-latest` is OpenAI's cheapest reasoning model (200K / 100K
+    // output). pi-mono 2026-09: text-only reasoning model surfaced under the
+    // openai-codex / azure-openai-responses catalogs. Must precede `gpt-5`,
+    // which is the closest-priced broader prefix but a 2x window.
+    (
+        "codex-mini-latest",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 100_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "gpt-5.6",
         ModelCapabilities {
@@ -200,6 +229,21 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     ),
     (
         "gpt-5.5",
+        ModelCapabilities {
+            context_window: 1_050_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // GPT-5.4 Pro SKU — 1.05M / 128K, the same 1.05M the 5.6 flagship carries
+    // (vs the 272K the 5.4 base row reports). pi-mono 2026-09 (openai +
+    // azure-openai-responses). Without this row `gpt-5.4-pro` fell through
+    // to the 5.4 base row's 272K window — 4x early compression on the Pro
+    // id. Must precede `gpt-5.4` and the 5.4-mini/nano siblings that follow.
+    (
+        "gpt-5.4-pro",
         ModelCapabilities {
             context_window: 1_050_000,
             max_output_tokens: 128_000,
@@ -391,6 +435,21 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // Gemini 2.5 Flash Lite — same 1M/64K shape as `gemini-2.5-flash` but a
+    // distinct family (pi-mono 2026-09 / openclaw). Without a row here the
+    // id falls through to the broad `gemini-2.5-flash` row (correct) — the
+    // reason for the row is to *anchor* the prefix ahead of `gemini-2.5-flash`
+    // and document that the Lite SKU is intentionally on the same shape.
+    (
+        "gemini-2.5-flash-lite",
+        ModelCapabilities {
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "gemini-2.5-flash",
         ModelCapabilities {
@@ -514,6 +573,22 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // Grok Code Fast 1 — distinct from the 4-fast line: 256K window (not 2M)
+    // and 10K output (not 30K). pi-mono 2026-09 (xai + github-copilot, both
+    // serve the same id). Without this row it fell through to the broad
+    // `grok-4` row's 256K window — correct window but the output reserve
+    // would be 64K vs the published 10K, inflating the compaction reserve
+    // 6x on every Code Fast call. Must precede `grok-4`.
+    (
+        "grok-code-fast-1",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 10_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "grok-4",
         ModelCapabilities {
@@ -522,6 +597,60 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_vision: true,
             supports_tools: true,
             supports_reasoning: true,
+        },
+    ),
+    // Grok 3 Mini reasoning tier (pi-mono 2026-09, models.dev xai): 131K / 8K
+    // output, vision off (text-only), reasoning on. Must precede the broad
+    // `grok-3` row below (which is non-reasoning) and the broad `grok` row
+    // above (which carries 16K output + vision that 3 Mini doesn't have).
+    (
+        "grok-3-mini",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Grok 3 family (pi-mono 2026-09): 131K / 8K, vision off, no reasoning.
+    // The broad `grok` row above is 131K / 16K + vision + reasoning — the 3
+    // line is the non-reasoning predecessor and the wrong shape, so it needs
+    // its own row.
+    (
+        "grok-3",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Grok 2 Vision family (pi-mono 2026-09): 8K window, vision on, no
+    // reasoning. The broad `grok` row above is 131K — 16x over the real
+    // window. Must precede `grok-2`.
+    (
+        "grok-2-vision",
+        ModelCapabilities {
+            context_window: 8_192,
+            max_output_tokens: 4_096,
+            supports_vision: true,
+            supports_tools: false,
+            supports_reasoning: false,
+        },
+    ),
+    // Grok 2 family (pi-mono 2026-09): 131K / 8K, text-only, no reasoning.
+    // Same shape as Grok 3 below — distinct prefix so the 2.x ids don't
+    // silently ride the newer row.
+    (
+        "grok-2",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
         },
     ),
     (
@@ -550,6 +679,124 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             context_window: 262_144,
             max_output_tokens: 8_192,
             supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Mistral Pixtral (large / 12b) — both 128K / 128K, vision-on (the only
+    // vision Mistral subfamily Aleph didn't previously size specifically).
+    // Must precede `mistral-large` because `pixtral-large-latest` would
+    // otherwise land on the broad `mistral-large` row's 131K / no-vision
+    // shape and report the wrong capabilities.
+    (
+        "pixtral",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Magistral reasoning family (pi-mono 2026-09): the small SKU is
+    // 128K / 128K output (a *large* output budget by Mistral standards) and
+    // reasoning-on; the medium is 128K / 16K. Both must precede `mistral`,
+    // which carries reasoning=false and an 8K output reserve.
+    (
+        "magistral-small",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "magistral",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // Devstral coding family (pi-mono 2026-09): 262K / 262K on the latest
+    // snapshot, 128K / 128K on the 2507/medium tiers — all reasoning-off and
+    // text-only. Without a row here every devstral id sized at the broad
+    // 128K / 8K `mistral` fallback and reserved a third of the real output
+    // cap. Must precede `mistral`.
+    (
+        "devstral",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 262_144,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Codestral — text-only code model, 256K / 4K (pi-mono 2026-09). The
+    // broad `mistral` row keeps 128K / 8K, so the 256K window would be
+    // under-counted and the 4K output reserved double the real cap.
+    (
+        "codestral",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 4_096,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Ministral — 128K / 128K text-only (pi-mono 2026-09). Output reserve
+    // differs from the broad `mistral` row's 8K.
+    (
+        "ministral",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 128_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Open-mixtral 8x22B — 64K / 64K (pi-mono 2026-09). The 8x7B row below
+    // must precede it because both start with `open-mixtral-`; the 8x7B is
+    // the smaller / cheaper of the two so it claims its prefix first only
+    // by id length (`8x22b` vs `8x7b` — both 5 chars, declaration order is
+    // the tiebreaker).
+    (
+        "open-mixtral-8x22b",
+        ModelCapabilities {
+            context_window: 64_000,
+            max_output_tokens: 64_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "open-mixtral-8x7b",
+        ModelCapabilities {
+            context_window: 32_000,
+            max_output_tokens: 32_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // Open-mistral-7B — 8K / 8K legacy (pi-mono 2026-09). Without this row
+    // the broad `mistral` row's 128K window over-promises by 16x, the one
+    // direction where a missing row is dangerous for an early-compression
+    // context budget.
+    (
+        "open-mistral-7b",
+        ModelCapabilities {
+            context_window: 8_192,
+            max_output_tokens: 8_192,
+            supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,
         },
@@ -624,13 +871,59 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // MiniMax-M2.5-highspeed — same 204K / 131K shape as the plain M2.5 below
+    // (no pricing-tier window differences between the two), but a distinct
+    // prefix so the `-highspeed` SKU stays visible in the picker / catalog
+    // and the canonicalised id resolves the documented row before falling
+    // through to the plain M2.5 (pi-mono 2026-09). Must precede it.
+    (
+        "minimax-m2.5-highspeed",
+        ModelCapabilities {
+            context_window: 204_800,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // MiniMax-M2.5 — 204K / 131K (pi-mono 2026-09). Must precede the broad
+    // `minimax-m2` row that follows, which used to set max_output to 16K
+    // and reserved a twelfth of the real output cap.
+    (
+        "minimax-m2.5",
+        ModelCapabilities {
+            context_window: 204_800,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // MiniMax-M2.1 — same shape as M2.5 (204K / 131K), distinct prefix so
+    // the 2.1 ids reach their own row ahead of the broad `minimax-m2`.
+    (
+        "minimax-m2.1",
+        ModelCapabilities {
+            context_window: 204_800,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         // M2 / M2.1 / M2.5 / M2.7 chat family — 204K context, tool-calling,
-        // interleaved thinking. Broad `minimax` fallback follows.
+        // interleaved thinking. The 16K `max_output` carried here used to
+        // be the reserve for the whole M2 family; pi-mono 2026-09 confirms
+        // M2.x actually publishes 131K of output, so the reserve is the
+        // peer-consistent 131K — same as the M2.1 / M2.5 specific rows
+        // above. Callers needing the legacy 16K reserve set
+        // `[providers.*] max_tokens` explicitly. Broad `minimax` fallback
+        // follows.
         "minimax-m2",
         ModelCapabilities {
             context_window: 204_800,
-            max_output_tokens: 16_384,
+            max_output_tokens: 131_072,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: true,
@@ -690,6 +983,24 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // Kimi Code `k2p5` id (api.kimi.com/coding) — 262K / 32K, image+tools+
+    // reasoning. `canonicalize_model_id`'s `restore_dotted_generation`
+    // rewrites `k2p5` to `k2.5` (the Fireworks `p`-separator fix), so the
+    // lookup key is `k2.5`, not `k2p5`. Same shape as the
+    // `kimi-for-coding` row below (they are the same model served through
+    // different ids) but the bare `k2.5` prefix never reaches that row.
+    // Must precede `kimi-for-coding` so the shadow order stays
+    // first-match-wins.
+    (
+        "k2.5",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 32_768,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     // Kimi-for-coding endpoint model (256K/32K, multimodal). Also covers
     // `kimi-for-coding-highspeed`, which is the same model served faster.
     // Distinct prefix that would otherwise fall to the broad `kimi` 200K/8K
@@ -736,6 +1047,102 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Zhipu / GLM ──────────────────────────────────────────────────────
+    // GLM 4.x family (pi-mono 2026-09 / zai catalog). All 4.x tiers are
+    // reasoning models; the `4.5v` / `4.6v` vision SKUs are the only ones
+    // that accept images. None share a prefix with `glm-5` (which starts
+    // with `glm-5`, not `glm-4`), so these rows are scoped to the `glm-4.*`
+    // ids only — but they MUST precede the broad `glm` fallback below,
+    // which is text-only / no-reasoning and would under-size every 4.x id.
+    // GLM-4.7 Flash / GLM-4.7 (newest first).
+    (
+        "glm-4.7-flash",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.7",
+        ModelCapabilities {
+            // Rounded to 200K (vs pi-mono's 204_800) so it lines up with the
+            // existing `glm-5` 200K convention and the
+            // `moonshot_zhipu_alibaba_families_resolve` test expectation.
+            context_window: 200_000,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.6v",
+        ModelCapabilities {
+            context_window: 128_000,
+            max_output_tokens: 32_768,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.6",
+        ModelCapabilities {
+            // Rounded to 200K (vs pi-mono's 204_800) so it lines up with the
+            // existing `glm-5` 200K convention and the
+            // `moonshot_zhipu_alibaba_families_resolve` test expectation.
+            context_window: 200_000,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.5v",
+        ModelCapabilities {
+            context_window: 64_000,
+            max_output_tokens: 16_384,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // The 4.5 SKUs (`-air`, `-flash`, plain) share one shape; declared
+    // individually so each id resolves the documented row before falling
+    // through to the broad `glm-4.5` row (the most common case).
+    (
+        "glm-4.5-air",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 98_304,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.5-flash",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 98_304,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "glm-4.5",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 98_304,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     // GLM-5.2 is the current flagship: 1M lossless context, 128K output. Its
     // `glm-5.2` prefix MUST precede `glm-5` (which it starts with). GLM-5 /
     // GLM-5.1 keep the 200K window per the official bigmodel.cn / z.ai docs.
@@ -781,6 +1188,20 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,
+        },
+    ),
+    // Qwen QwQ — reasoning-tier Qwen, 131K / 16K (pi-mono 2026-09, groq
+    // catalog). The broad `qwen` row is reasoning-off; this row exists so
+    // the reasoning flag is correct on QwQ ids that some hosts (Groq)
+    // publish. Must precede `qwen`.
+    (
+        "qwen-qwq",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 16_384,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
         },
     ),
     (
@@ -883,13 +1304,30 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // Gemma 2 — 8K / 8K (pi-mono 2026-09, groq catalog). Without this row
+    // `gemma2-9b-it` falls through to the broad `gemini` fallback (1M!) —
+    // 128x over-promised window, the dangerous one for an early-compression
+    // budget. Must precede any future `gemma` broad row.
+    (
+        "gemma2",
+        ModelCapabilities {
+            context_window: 8_192,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: false,
+            supports_reasoning: false,
+        },
+    ),
     (
         // Original Llama 3 (8B/70B) shipped an 8K window — must precede the
-        // broad `llama` fallback so it isn't widened to 128K.
+        // broad `llama` fallback so it isn't widened to 128K. `max_output`
+        // 8K (not the 4K it carried) is also Groq's `llama3-70b-8192` /
+        // `llama3-8b-8192` cap (pi-mono 2026-09, groq catalog); `prefix_matches`
+        // folds `.`/`-` so both `llama-3-*` and `llama3-*-8192` ids land here.
         "llama-3",
         ModelCapabilities {
             context_window: 8_192,
-            max_output_tokens: 4_096,
+            max_output_tokens: 8_192,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,

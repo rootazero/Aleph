@@ -108,6 +108,36 @@ pub(crate) fn snapshot_body(
     }
 }
 
+/// Pick `(offload body, emitted text, truncated)` for one presented snapshot.
+///
+/// The presented-truncated arm emits the backend's bounded render VERBATIM:
+/// it is already within `max_chars` and already carries the omitted
+/// high-value-controls section, so running [`super::bound_content`] over it
+/// again would be a second cut that can slice the section in half. Every
+/// other arm — both formats on a backend without a presentation (the trait
+/// default answers `truncated: false`), and the JSON shape on any backend —
+/// runs exactly the pre-presentation pipeline: choose the body for the
+/// format, cut on a line boundary, offload the whole body when cut.
+pub(crate) fn present_body(
+    presented: &crate::browser::types::PresentedSnapshot,
+    format: SnapshotFormat,
+    max_chars: usize,
+) -> std::result::Result<(String, String, bool), String> {
+    if format == SnapshotFormat::Text && presented.truncated {
+        // A backend that broke the contract (`truncated` with no `full_text`)
+        // still owes the offload the whole text — `snap.snapshot_text` is the
+        // full render on every backend that can set the flag.
+        let full = presented
+            .full_text
+            .clone()
+            .unwrap_or_else(|| presented.snap.snapshot_text.clone());
+        return Ok((full, presented.text.clone(), true));
+    }
+    let body = snapshot_body(&presented.snap, format)?;
+    let (text, truncated) = super::bound_content(&body, max_chars);
+    Ok((body, text, truncated))
+}
+
 /// The `message` line that accompanies a snapshot.
 ///
 /// Pure and separate so every fact it carries is testable without a browser:
@@ -213,6 +243,134 @@ impl BrowserSnapshotTool {
     fn offload_full(&self, full: &str) -> Option<String> {
         super::offload_full_content(&self.manager, Self::NAME, full)
     }
+
+    /// The read half of `call`, split from the profile/tab resolution so tests
+    /// can drive it against a `FakeBackend` directly — the manager's backend
+    /// routing is not test-injectable, and re-assembling the guard in a test
+    /// would exercise a copy, not the tool (判据 §3).
+    async fn snapshot_via(
+        &self,
+        backend: &dyn crate::browser::backend::BrowserBackend,
+        profile: &str,
+        tab_id: &str,
+        max_chars: usize,
+        format: SnapshotFormat,
+    ) -> BrowserSnapshotOutput {
+        match backend.snapshot_presented(tab_id, max_chars).await {
+            Ok(presented) => {
+                let snap = &presented.snap;
+                // The body is chosen BEFORE the budget, so both shapes go
+                // through the one pipeline — same bound, same redaction,
+                // same offload — rather than the JSON arm growing a second
+                // copy of it (判据 §1).
+                let (body, text, truncated) = match present_body(&presented, format, max_chars)
+                {
+                    Ok(parts) => parts,
+                    Err(message) => {
+                        return BrowserSnapshotOutput {
+                            success: false,
+                            snapshot: None,
+                            truncated: false,
+                            ref_count: 0,
+                            // The page is still named: the refusal is about
+                            // the FORMAT, and a model that has to switch
+                            // should not also lose track of where it is.
+                            page_url: snap.page_url.clone(),
+                            page_title: snap.page_title.clone(),
+                            message: Some(message),
+                        };
+                    }
+                };
+                // `REF_TOKEN`, never a second literal: the renderer emits it
+                // and this counts it, and two spellings of one token is how
+                // a counter goes on reporting `0` after a format change
+                // (判据 §1). The count is over the EMITTED text on purpose —
+                // it is "how many refs the model can see", which is a
+                // different fact from `snap.ref_count`, "how many were
+                // minted".
+                //
+                // JSON needs a different derivation, not the same one: that
+                // body carries `"ref"` FIELDS, never the text token, so
+                // counting `REF_TOKEN` in it would report 0 for a body
+                // holding every single ref — a wrong label, which is worse
+                // than a missing one (判据 §17). Counting `"ref":` instead
+                // would be a second spelling of the renderer's output and
+                // rot the same way. No counting is needed: an untruncated
+                // JSON body is the WHOLE tree, so every minted ref is in it,
+                // and a truncated one does not parse at all, so none of them
+                // are usable.
+                let ref_count = match format {
+                    SnapshotFormat::Text => {
+                        text.matches(crate::browser::types::REF_TOKEN).count()
+                    }
+                    SnapshotFormat::Json if truncated => 0,
+                    SnapshotFormat::Json => snap.ref_count,
+                };
+                // A JSON body cut on a line boundary is no longer JSON. Say
+                // so IN the payload rather than letting the model discover
+                // it as a parse error it would read as a broken page; the
+                // offloaded blob named in the footer is the parseable copy.
+                let text = if truncated && format == SnapshotFormat::Json {
+                    format!(
+                        "[snapshot json truncated at {max_chars} chars — this fragment does \
+                         not parse; read the offloaded blob named below instead]\n{text}"
+                    )
+                } else {
+                    text
+                };
+                // Page-derived DOM text is untrusted external content: scrub
+                // embedded credentials, then wrap with the injection boundary
+                // so chat-template markers injected by a hostile page cannot
+                // escape (see `redact_wrap`).
+                let wrapped = super::redact_wrap(&self.manager, &text);
+                let snapshot = if truncated {
+                    // `body`, not `snap.snapshot_text`: the blob has to be
+                    // the shape that was asked for, or the footer sends a
+                    // caller who wanted JSON to a copy of the text tree. On
+                    // the presented arm `body` IS the full text the backend
+                    // handed over for exactly this (FL §3.12 ⑮).
+                    match self.offload_full(&body) {
+                        Some(footer) => format!("{wrapped}\n{footer}"),
+                        None => format!(
+                            "{wrapped}\n[snapshot truncated to {max_chars} chars and the \
+                             full tree could not be offloaded here; the dropped tail is not \
+                             recoverable — act on the refs above, or use browser_evaluate \
+                             with a targeted DOM query]"
+                        ),
+                    }
+                } else {
+                    wrapped
+                };
+                BrowserSnapshotOutput {
+                    success: true,
+                    snapshot: Some(snapshot),
+                    truncated,
+                    ref_count,
+                    page_url: snap.page_url.clone(),
+                    page_title: snap.page_title.clone(),
+                    message: Some(render_snapshot_message(
+                        profile,
+                        snap,
+                        ref_count,
+                        truncated,
+                        format,
+                    )),
+                }
+            }
+            Err(e) => BrowserSnapshotOutput {
+                success: false,
+                snapshot: None,
+                truncated: false,
+                ref_count: 0,
+                page_url: None,
+                page_title: None,
+                message: Some(format!(
+                    "Snapshot failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                )),
+            },
+        }
+    }
 }
 
 #[async_trait]
@@ -228,7 +386,9 @@ impl AlephTool for BrowserSnapshotTool {
     type Output = BrowserSnapshotOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Text-first: backend.snapshot() returns raw YAML/indented-tree text already.
+        // Text-first: a snapshot arrives as driver text (YAML / indented
+        // tree); reading it through the presentation-aware method is what
+        // lets the CDP backend cut it with the omitted controls named.
         let max_chars = resolve_max_chars(args.max_chars);
         // Resolved BEFORE a browser is touched, so a bad argument costs nothing
         // and is answered as a bad argument.
@@ -248,120 +408,9 @@ impl AlephTool for BrowserSnapshotTool {
         };
 
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
-                Ok(snap) => {
-                    // The body is chosen BEFORE the budget, so both shapes go
-                    // through the one pipeline — same bound, same redaction,
-                    // same offload — rather than the JSON arm growing a second
-                    // copy of it (判据 §1).
-                    let body = match snapshot_body(&snap, format) {
-                        Ok(b) => b,
-                        Err(message) => {
-                            return Ok(BrowserSnapshotOutput {
-                                success: false,
-                                snapshot: None,
-                                truncated: false,
-                                ref_count: 0,
-                                // The page is still named: the refusal is about
-                                // the FORMAT, and a model that has to switch
-                                // should not also lose track of where it is.
-                                page_url: snap.page_url.clone(),
-                                page_title: snap.page_title.clone(),
-                                message: Some(message),
-                            });
-                        }
-                    };
-                    // Bound first (line-boundary, never splitting a `[ref=]` token),
-                    // then count refs on the EMITTED body so the reported count
-                    // matches exactly what the model can see and act on.
-                    let (text, truncated) = super::bound_content(&body, max_chars);
-                    // `REF_TOKEN`, never a second literal: the renderer emits it
-                    // and this counts it, and two spellings of one token is how
-                    // a counter goes on reporting `0` after a format change
-                    // (判据 §1). The count is over the BOUNDED text on purpose —
-                    // it is "how many refs the model can see", which is a
-                    // different fact from `snap.ref_count`, "how many were
-                    // minted".
-                    //
-                    // JSON needs a different derivation, not the same one: that
-                    // body carries `"ref"` FIELDS, never the text token, so
-                    // counting `REF_TOKEN` in it would report 0 for a body
-                    // holding every single ref — a wrong label, which is worse
-                    // than a missing one (判据 §17). Counting `"ref":` instead
-                    // would be a second spelling of the renderer's output and
-                    // rot the same way. No counting is needed: an untruncated
-                    // JSON body is the WHOLE tree, so every minted ref is in it,
-                    // and a truncated one does not parse at all, so none of them
-                    // are usable.
-                    let ref_count = match format {
-                        SnapshotFormat::Text => {
-                            text.matches(crate::browser::types::REF_TOKEN).count()
-                        }
-                        SnapshotFormat::Json if truncated => 0,
-                        SnapshotFormat::Json => snap.ref_count,
-                    };
-                    // A JSON body cut on a line boundary is no longer JSON. Say
-                    // so IN the payload rather than letting the model discover
-                    // it as a parse error it would read as a broken page; the
-                    // offloaded blob named in the footer is the parseable copy.
-                    let text = if truncated && format == SnapshotFormat::Json {
-                        format!(
-                            "[snapshot json truncated at {max_chars} chars — this fragment does \
-                             not parse; read the offloaded blob named below instead]\n{text}"
-                        )
-                    } else {
-                        text
-                    };
-                    // Page-derived DOM text is untrusted external content: scrub
-                    // embedded credentials, then wrap with the injection boundary
-                    // so chat-template markers injected by a hostile page cannot
-                    // escape (see `redact_wrap`).
-                    let wrapped = super::redact_wrap(&self.manager, &text);
-                    let snapshot = if truncated {
-                        // `body`, not `snap.snapshot_text`: the blob has to be
-                        // the shape that was asked for, or the footer sends a
-                        // caller who wanted JSON to a copy of the text tree.
-                        match self.offload_full(&body) {
-                            Some(footer) => format!("{wrapped}\n{footer}"),
-                            None => format!(
-                                "{wrapped}\n[snapshot truncated to {max_chars} chars and the \
-                                 full tree could not be offloaded here; the dropped tail is not \
-                                 recoverable — act on the refs above, or use browser_evaluate \
-                                 with a targeted DOM query]"
-                            ),
-                        }
-                    } else {
-                        wrapped
-                    };
-                    Ok(BrowserSnapshotOutput {
-                        success: true,
-                        snapshot: Some(snapshot),
-                        truncated,
-                        ref_count,
-                        page_url: snap.page_url.clone(),
-                        page_title: snap.page_title.clone(),
-                        message: Some(render_snapshot_message(
-                            &args.profile,
-                            &snap,
-                            ref_count,
-                            truncated,
-                            format,
-                        )),
-                    })
-                }
-                Err(e) => Ok(BrowserSnapshotOutput {
-                    success: false,
-                    snapshot: None,
-                    truncated: false,
-                    ref_count: 0,
-                    page_url: None,
-                    page_title: None,
-                    message: Some(format!(
-                        "Snapshot failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
-            },
+            Ok((backend, tab_id)) => Ok(self
+                .snapshot_via(backend.as_ref(), &args.profile, &tab_id, max_chars, format)
+                .await),
             Err(e) => Ok(BrowserSnapshotOutput {
                 success: false,
                 snapshot: None,
@@ -379,6 +428,7 @@ impl AlephTool for BrowserSnapshotTool {
 mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
+    use crate::browser::testkit::FakeBackend;
     use crate::tools::result_store::ToolResultStore;
 
     /// The DESCRIPTION names a gap AND the door out of it, and neither half may
@@ -763,6 +813,165 @@ mod tests {
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+
+    /// ① — the tool must read through the presentation-aware backend method.
+    ///
+    /// A source pin, honestly labelled: it answers "which method the
+    /// production half of this file calls", which no runtime test can see —
+    /// `FakeBackend` answers both methods, so a behavioural test cannot tell
+    /// them apart (判据 §2: pick the observation that can actually fail).
+    #[test]
+    fn the_tool_reads_through_snapshot_presented_not_snapshot() {
+        let src = include_str!("snapshot.rs").replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would be reading \
+             its own source"
+        );
+        assert!(
+            production.contains(".snapshot_presented("),
+            "browser_snapshot must read through snapshot_presented — the backend's \
+             bounded presentation is where a cut names its omitted controls"
+        );
+        assert!(
+            !production.contains(".snapshot("),
+            "a direct .snapshot( call bypasses the presentation: the tool goes back \
+             to cutting the full text itself and the omitted-controls section is \
+             never produced"
+        );
+    }
+
+    /// ② — a backend that presents a truncated snapshot: the model is handed
+    /// the bounded render VERBATIM (omitted-controls section included), and
+    /// the offload is fed the FULL text (FL §3.12 ⑮ — a cut the model cannot
+    /// recover from is data loss, not a budget).
+    #[tokio::test]
+    async fn a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded()
+     {
+        let _store = crate::tools::result_store::install_test_tool_result_store();
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSnapshotTool::new(manager);
+
+        // A page whose full render is far over budget; the backend's
+        // presentation names one omitted control whose ref the body no longer
+        // carries.
+        let full: String = (0..4_000)
+            .map(|i| format!("- button \"b{i}\" [ref=e{i}]\n"))
+            .collect();
+        let presented_text = concat!(
+            "- button \"b0\" [ref=e0]\n",
+            "# Omitted high-value controls:\n",
+            "- button \"b3999\" [ref=e3999]\n",
+            "# …and 3998 more"
+        )
+        .to_string();
+        let max_chars = presented_text.chars().count() + 100;
+        let fake = FakeBackend::new(None)
+            .with_snapshot_text(&full)
+            .with_presented_snapshot(presented_text.clone(), true, Some(full.clone()));
+
+        let identity = crate::approval::CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: "call-presented".into(),
+        };
+        let out = crate::approval::with_call_identity(Some(identity), async {
+            tool.snapshot_via(&fake, "default", "1", max_chars, SnapshotFormat::Text)
+                .await
+        })
+        .await;
+
+        assert!(out.success, "{:?}", out.message);
+        assert!(out.truncated);
+        let snapshot = out.snapshot.expect("a truncated snapshot still has a body");
+        // The presentation is verbatim — a second `bound_content` over it
+        // could slice the section in half, which is exactly why the arm skips
+        // the tool's own cut.
+        assert!(snapshot.contains(&presented_text), "{snapshot}");
+        assert!(snapshot.contains("# Omitted high-value controls:"));
+        // The offload ran and was fed the FULL text, so the dropped tail is
+        // recoverable through the blob the footer names.
+        let footer_at = snapshot.find("[Full output persisted: ").unwrap_or_else(|| {
+            panic!("the truncated arm must run the offload: {snapshot}")
+        });
+        let path = crate::tools::result_store::extract_persisted_path(&snapshot[footer_at..])
+            .expect("the footer names a blob");
+        let blob = std::fs::read_to_string(path).expect("the blob exists on disk");
+        assert!(
+            blob.contains("[ref=e3998]"),
+            "the blob is the FULL text — the dropped tail must be recoverable"
+        );
+        assert!(blob.len() > presented_text.len());
+        // The section's ref counts as visible, because it is: the model can
+        // act on it.
+        assert_eq!(out.ref_count, 2);
+    }
+
+    /// ③ — a backend on the trait's DEFAULT presentation (the two text
+    /// drivers, which have no tree to re-render from): the tool's own budget
+    /// cut applies exactly as before this wiring existed. Untruncated is
+    /// byte-identical to `redact_wrap(raw)`; over budget is `bound_content`'s
+    /// plain cut with NO omitted-controls section — the honest asymmetry —
+    /// and the offload still gets the whole text.
+    #[tokio::test]
+    async fn a_backend_on_the_default_presentation_keeps_the_old_pipeline_byte_for_byte() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSnapshotTool::new(manager.clone());
+
+        // Untruncated: the wiring must not have moved a single byte. The
+        // fence id is random per call, so byte-identity is asserted on the
+        // fence's INTERIOR — which is exactly the pipeline output modulo the
+        // one part that is random by design.
+        let tree = "- button \"b0\" [ref=e0]\n- link \"l\" [ref=e1]";
+        let fake = FakeBackend::new(None).with_snapshot_text(tree);
+        let out = tool
+            .snapshot_via(&fake, "default", "1", 30_000, SnapshotFormat::Text)
+            .await;
+        assert!(out.success && !out.truncated, "{:?}", out.message);
+        let fenced = crate::security::content_sanitizer::split_external_fence(
+            out.snapshot.as_deref().unwrap(),
+        )
+        .expect("exactly one well-formed fence");
+        assert_eq!(
+            fenced.interior, tree,
+            "untruncated must be the raw tree verbatim — the pre-wiring pipeline \
+             did exactly redact+wrap, no cut, no footer"
+        );
+        assert!(fenced.prefix.is_empty(), "{:?}", fenced.prefix);
+        assert!(fenced.suffix.is_empty(), "{:?}", fenced.suffix);
+        assert_eq!(out.ref_count, 2);
+
+        // Over budget on the same default presentation: the tool's own
+        // `bound_content` cut, no section, and — with no call identity scoped
+        // in this arm of the test — the offload declines and says so.
+        let big: String = (0..2_000)
+            .map(|i| format!("- button \"b{i}\" [ref=e{i}]\n"))
+            .collect();
+        let fake = FakeBackend::new(None).with_snapshot_text(&big);
+        let out = tool
+            .snapshot_via(&fake, "default", "1", 5_000, SnapshotFormat::Text)
+            .await;
+        assert!(out.truncated);
+        let snapshot = out.snapshot.unwrap();
+        let (cut, was_cut) = super::super::bound_content(&big, 5_000);
+        assert!(was_cut, "precondition: the fixture really is over budget");
+        let fenced = crate::security::content_sanitizer::split_external_fence(&snapshot)
+            .expect("the cut body is still wholly fenced");
+        assert_eq!(
+            fenced.interior, cut,
+            "the cut is bound_content's, byte for byte: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("Omitted high-value controls"),
+            "a driver-text backend has no tree to name omitted controls from — \
+             the honest asymmetry: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("could not be offloaded"),
+            "no call identity is scoped here, so the offload declines and says \
+             so rather than pointing at a file that does not exist: {snapshot}"
+        );
     }
 
     /// `max_chars` is the one lever that opts out of the shared content budget;

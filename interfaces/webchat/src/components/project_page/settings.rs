@@ -1,43 +1,22 @@
 //! Project room settings tab (P2 Task 8, spec §6.4) — roster, workspace
 //! binding, rename, archive.
 //!
-//! ## What `is_owner` may and may not do here
+//! ## `manageable` — the server's answer, and why controls still only disable
 //!
-//! The `is_owner` threaded through these sections is a CLIENT-side
-//! approximation — `my_user_id == project.owner_user_id` — and it is strictly
-//! NARROWER than the rule the server enforces. `projects::authz::is_owner`
-//! also admits an org admin, and resolves a NULL `owner_user_id` through
-//! `gateway::visibility::owner_or_legacy`. Neither widening is available on
-//! this side: no `OWNER_USER_ID` is exported from `shared/protocol` at all,
-//! and re-deriving the legacy rule here would be a third spelling of
-//! something `visibility.rs` forbids duplicating by name.
+//! Every ownership-gated control reads `project.manageable`, which the server
+//! computes per response with `projects::authz::manageable` — the same
+//! function its owner-level gates enforce, so an org admin and a legacy
+//! (NULL-owner) room are answered correctly without this side re-deriving
+//! either rule.
 //!
-//! So this predicate may only ever *soften* a control, never remove one. A
-//! section that is simply absent reads as "this room cannot be archived"
-//! rather than "you may not archive it" — and an org admin, whom the server
-//! would have accepted, never learns the feature exists. In `WorkspaceSection`
-//! and `ArchiveSection` every ownership-gated control therefore renders, is
-//! `disabled` when this client cannot prove ownership, and carries the reason
-//! as its tooltip; the enabled path still calls and still reports whatever
-//! came back through `admin_refusal::settings_write_error` (a rename can be
-//! refused for reasons this predicate knows nothing about — ownership
-//! transferred while the tab was open, or `require_directory_choice` declining
-//! a chat-tier device). The sibling `channel_bindings` module states the same
-//! rule for its own, admin-gated, pair of verbs.
-//!
-//! **Two sites are not yet converted** and still vanish for a non-owner, for
-//! the same reason and with the same defect: `RosterSection`'s add-member `+`
-//! button and its per-row Remove. They go with the server-derived
-//! `manageable: bool` task named below — this is the honest state of the
-//! sweep, not a claim that it is finished, and
-//! `tests::the_roster_is_the_named_exception` keeps this paragraph and that
-//! code in step in both directions.
-//!
-//! The honest predicate is that server-derived `manageable: bool` on the
-//! project row, computed by the same derivation that enforces it. Until it
-//! exists, a non-owner gets a read-only view of the workspace and archive
-//! controls — not a room that appears to have no settings — and, at those two
-//! roster sites, still no view at all.
+//! It is still a snapshot. A role change after the fetch is not pushed as
+//! `projects.changed`, so a control may look enabled for a write the server
+//! now refuses, or disabled for one it would accept. That is why no control
+//! vanishes: in every section a gated control renders, is `disabled` when
+//! `manageable` is false, and carries the reason as its tooltip; the enabled
+//! path still reports whatever came back through
+//! `admin_refusal::settings_write_error`. The sibling `channel_bindings`
+//! module states the same rule for its own, admin-gated, pair of verbs.
 //!
 //! 工作区浏览 / 记忆浏览 are still P3 placeholders rendered by `ProjectRoomPage`
 //! (the parent); 看板 is live in `project_page::kanban`. This file is the 设置
@@ -78,15 +57,7 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
 
     dir.ensure_loaded(dash);
 
-    // `Memo` (not a raw closure): needs to be `Copy` to pass to four child
-    // components, and a closure capturing `owner: Option<String>` isn't.
-    //
-    // Narrower than the server's rule — see the module doc. It may disable a
-    // control; it may not decide whether one exists.
-    let is_owner: Memo<bool> = {
-        let owner = project.owner_user_id.clone();
-        Memo::new(move |_| dir.my_user_id.get().is_some() && dir.my_user_id.get() == owner)
-    };
+    let manageable = project.manageable;
 
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let on_done: OnDone = Callback::new(move |result: Result<(), String>| match result {
@@ -119,18 +90,18 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
                 </div>
             </Show>
 
-            <RenameSection project=project.clone() is_owner=is_owner dash=dash on_done=on_done />
-            <RosterSection project=project.clone() is_owner=is_owner dash=dash dir=dir on_done=on_done />
-            <WorkspaceSection project=project.clone() is_owner=is_owner dash=dash on_done=on_done />
-            // Takes neither `is_owner` nor `on_done`, and both omissions are
+            <RenameSection project=project.clone() manageable=manageable dash=dash on_done=on_done />
+            <RosterSection project=project.clone() manageable=manageable dash=dash dir=dir on_done=on_done />
+            <WorkspaceSection project=project.clone() manageable=manageable dash=dash on_done=on_done />
+            // Takes neither `manageable` nor `on_done`, and both omissions are
             // deliberate. `projects.channel.bind`/`.unbind` are ADMIN-gated,
-            // not owner-gated, so `is_owner` would be wrong in both directions
+            // not owner-gated, so `manageable` would be wrong in both directions
             // — and this section's receipts have to say more than "it worked"
             // (what happened to the conversation's existing transcript is a
             // three-valued answer), which the shared `Result<(), String>`
             // callback cannot carry. See that module's doc.
             <ChannelBindingsSection project_id=project.id.clone() dash=dash />
-            <ArchiveSection project=project.clone() is_owner=is_owner dash=dash on_done=on_archived />
+            <ArchiveSection project=project.clone() manageable=manageable dash=dash on_done=on_archived />
         </div>
     }
 }
@@ -138,7 +109,7 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
 #[component]
 fn RenameSection(
     project: ProjectInfo,
-    is_owner: Memo<bool>,
+    manageable: bool,
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
@@ -150,7 +121,7 @@ fn RenameSection(
         <section>
             <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.name)}</h3>
             <Show
-                when=move || is_owner.get()
+                when=move || manageable
                 fallback=move || view! { <p class="text-sm text-text-primary">{project.name.clone()}</p> }
             >
                 <div class="flex items-center gap-2">
@@ -186,7 +157,7 @@ fn RenameSection(
 #[component]
 fn RosterSection(
     project: ProjectInfo,
-    is_owner: Memo<bool>,
+    manageable: bool,
     dash: DashboardState,
     dir: UserDirectoryState,
     on_done: OnDone,
@@ -203,20 +174,28 @@ fn RosterSection(
     let project_id = StoredValue::new(project.id.clone());
     let picking = RwSignal::new(false);
 
+    let owner_only_hint = move || {
+        if manageable {
+            String::new()
+        } else {
+            t_string!(i18n, project_room.owner_only).to_string()
+        }
+    };
+
     view! {
         <section>
             <div class="flex items-center justify-between mb-2">
                 <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">{t!(i18n, project_room.members)}</h3>
-                <Show when=move || is_owner.get()>
-                    <button
-                        type="button"
-                        class="text-text-tertiary hover:text-text-primary text-base leading-none w-5 h-5 flex items-center justify-center rounded hover:bg-surface-sunken"
-                        title=move || t_string!(i18n, project_room.add_member).to_string()
-                        on:click=move |_| picking.update(|v| *v = !*v)
-                    >
-                        "+"
-                    </button>
-                </Show>
+                <button
+                    type="button"
+                    class="text-text-tertiary hover:text-text-primary text-base leading-none w-5 h-5 flex items-center justify-center rounded hover:bg-surface-sunken disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label=move || t_string!(i18n, project_room.add_member).to_string()
+                    disabled=move || !manageable
+                    title=owner_only_hint
+                    on:click=move |_| picking.update(|v| *v = !*v)
+                >
+                    "+"
+                </button>
             </div>
 
             <Show when=move || picking.get()>
@@ -287,11 +266,13 @@ fn RosterSection(
                                 <Show when=move || is_the_owner>
                                     <span class="text-[10px] uppercase tracking-wide text-text-tertiary">{t!(i18n, project_room.owner)}</span>
                                 </Show>
-                                <Show when=move || is_owner.get() && !is_the_owner>
+                                <Show when=move || !is_the_owner>
                                     <button
                                         type="button"
-                                        class="text-text-tertiary hover:text-danger text-xs px-1"
-                                        title=move || t_string!(i18n, project_room.remove_member).to_string()
+                                        class="text-text-tertiary hover:text-danger text-xs px-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        aria-label=move || t_string!(i18n, project_room.remove_member).to_string()
+                                        disabled=move || !manageable
+                                        title=owner_only_hint
                                         on:click=move |_| {
                                             let uid = uid.get_value();
                                             let project_id = project_id.get_value();
@@ -318,7 +299,7 @@ fn RosterSection(
 #[component]
 fn WorkspaceSection(
     project: ProjectInfo,
-    is_owner: Memo<bool>,
+    manageable: bool,
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
@@ -330,9 +311,9 @@ fn WorkspaceSection(
 
     // What a control this client left off must say. Empty for an owner so the
     // tooltip does not follow a control that works; `Copy` (it captures only
-    // `Memo` + `I18nContext`) so both buttons can carry the same closure.
+    // `bool` + `I18nContext`) so both buttons can carry the same closure.
     let owner_only_hint = move || {
-        if is_owner.get() {
+        if manageable {
             String::new()
         } else {
             t_string!(i18n, project_room.owner_only).to_string()
@@ -365,7 +346,7 @@ fn WorkspaceSection(
                 <button
                     type="button"
                     class="px-3 py-1.5 rounded-md text-sm bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled=move || !is_owner.get()
+                    disabled=move || !manageable
                     title=owner_only_hint
                     on:click=move |_| browser_open.set(true)
                 >
@@ -381,7 +362,7 @@ fn WorkspaceSection(
                     <button
                         type="button"
                         class="px-3 py-1.5 rounded-md text-sm text-text-tertiary hover:text-danger disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled=move || !is_owner.get()
+                        disabled=move || !manageable
                         title=owner_only_hint
                         on:click=move |_| {
                             let id = id.get_value();
@@ -411,7 +392,7 @@ fn WorkspaceSection(
 #[component]
 fn ArchiveSection(
     project: ProjectInfo,
-    is_owner: Memo<bool>,
+    manageable: bool,
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
@@ -421,7 +402,7 @@ fn ArchiveSection(
     // See `WorkspaceSection` for why this exists and why it is empty for an
     // owner.
     let owner_only_hint = move || {
-        if is_owner.get() {
+        if manageable {
             String::new()
         } else {
             t_string!(i18n, project_room.owner_only).to_string()
@@ -436,7 +417,7 @@ fn ArchiveSection(
                     <button
                         type="button"
                         class="px-3 py-1.5 rounded-md text-sm text-danger hover:bg-danger/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled=move || !is_owner.get()
+                        disabled=move || !manageable
                         title=owner_only_hint
                         on:click=move |_| confirming.set(true)
                     >
@@ -448,15 +429,13 @@ fn ArchiveSection(
                     <span class="text-sm text-text-secondary">
                         {t!(i18n, project_room.archive_confirm)}
                     </span>
-                    // Gated a second time on purpose: `is_owner` is reactive
-                    // and a refresh can flip it while this confirmation is
-                    // open (ownership handed over in another tab), which would
-                    // otherwise leave a live Confirm behind a trigger that has
-                    // already gone dead.
+                    // Gated a second time so every mutating control here
+                    // answers to the same `manageable`; a refresh re-renders
+                    // the whole tab with the new row.
                     <button
                         type="button"
                         class="px-3 py-1.5 rounded-md text-sm bg-danger text-white hover:bg-danger/90 disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled=move || !is_owner.get()
+                        disabled=move || !manageable
                         title=owner_only_hint
                         on:click=move |_| {
                             let id = id.get_value();
@@ -531,14 +510,13 @@ mod tests {
     ///
     /// `<Show when=..>` with no `fallback` renders nothing at all, so an
     /// affected person reads "this room cannot be archived" where the truth is
-    /// "you may not archive it", and an org admin — whom the server's
-    /// `authz::is_owner` admits and this client's narrower `is_owner` does not
-    /// — never learns the feature exists.
+    /// "you may not archive it", and a caller `manageable` would admit never
+    /// learns the feature exists.
     fn hides_behind_ownership(body: &str) -> bool {
-        body.contains("<Show when=move || is_owner.get()>")
+        body.contains("<Show when=move || manageable")
     }
 
-    const DISABLED: &str = "disabled=move || !is_owner.get()";
+    const DISABLED: &str = "disabled=move || !manageable";
     const HINT: &str = "title=owner_only_hint";
 
     /// Controls this client leaves off because it cannot prove ownership.
@@ -687,28 +665,40 @@ mod tests {
         }
     }
 
-    /// The module doc claims every ownership-gated control renders. Two do
-    /// not. This pins the exception in BOTH directions so the claim and the
-    /// code cannot drift apart: convert the roster and this test demands the
-    /// paragraph go, delete the paragraph and it demands the roster be
-    /// converted. A new fallback-less gate in Workspace/Archive is still
-    /// caught by the two assertions above.
+    /// Zero exceptions: no section hides a control behind `manageable`, and
+    /// the roster's two mutating controls (`+` and per-row Remove) render
+    /// disabled for a caller the server would refuse. This test used to pin
+    /// the roster as the named exception, waiting for this flag.
     #[test]
-    fn the_roster_is_the_named_exception() {
+    fn no_section_hides_a_control_behind_manageable() {
         let src = include_str!("settings.rs");
+        assert!(
+            !hides_behind_ownership(&production_source(src)),
+            "a control is hidden behind `manageable` again — a missing control \
+             reads as a missing capability"
+        );
+        let roster = body_of(src, "fn RosterSection(");
+        let mut gated = BTreeSet::new();
+        for block in roster.split("<button").skip(1) {
+            let kind = if block.contains("picking.update") {
+                "add"
+            } else if block.contains("ProjectsApi::member_remove") {
+                "remove"
+            } else {
+                continue;
+            };
+            assert!(block.contains(DISABLED), "the roster's {kind} control has no `{DISABLED}`");
+            gated.insert(kind);
+        }
+        assert_eq!(
+            gated,
+            BTreeSet::from(["add", "remove"]),
+            "the roster's add / remove controls were not found — the scan saw nothing"
+        );
         let doc = src.split("\nuse ").next().unwrap_or(src);
         assert!(
-            hides_behind_ownership(&body_of(src, "fn RosterSection(")),
-            "RosterSection no longer hides its controls — drop the exception \
-             paragraph from the module doc in this same edit, or the doc keeps \
-             naming a defect that is gone"
-        );
-        assert!(
-            doc.contains("RosterSection"),
-            "the module doc says every ownership-gated control renders and no \
-             longer names the two roster sites that still vanish — a swept \
-             invariant that is not swept is criterion #1 at its most expensive, \
-             because it will be cited as evidence the sweep is done"
+            !doc.contains("not yet converted"),
+            "the module doc still names an unconverted exception"
         );
     }
 
@@ -743,7 +733,7 @@ mod tests {
         let before = "
 fn ArchiveSection(
     view! {
-        <Show when=move || is_owner.get()>
+        <Show when=move || manageable>
             <section class=\"border-t border-border-subtle pt-6\">
                 <h3>danger zone</h3>
                 <button on:click=move |_| confirming.set(true)>archive</button>

@@ -168,18 +168,24 @@ pub async fn perform_session_split(
     // The epoch cannot join either transaction: the routing table is the
     // gateway `SessionStore`'s own connection, not the event log's.
     let at = crate::session::events::now_ms();
-    let split_run_id = uuid::Uuid::new_v4().to_string();
+    // The parent's open run continues on the child under the SAME id — the
+    // engine's `RunRequest.run_id`, which the bridge wrote on the parent's
+    // opener and `execute()` stamps on the run's meta. A fresh id here left
+    // the parent's opener and closer unpaired and the child's span unjoinable
+    // to the meta (F1).
+    let run_id = open_run.run_id.clone();
+    let opener_seq = open_run.seq;
 
     // 3. Close the parent FIRST. The harness bridge emitted `RunStarted` on
     //    the parent at run start; without this closer the frozen parent's log
     //    would end on a dangling `RunStarted` and `ResumeCoordinator` would
-    //    resume it. The run_id need only correlate the closer with the child's
-    //    opener — the resume scan is positional.
+    //    resume it. It carries the open run's own id, so a by-id reader pairs
+    //    it with the parent's opener.
     session
         .emit_batch(
             parent_session_id,
             vec![SessionEvent::RunFinished {
-                run_id: split_run_id.clone(),
+                run_id: run_id.clone(),
                 outcome: crate::session::events::RunOutcome::Completed,
                 at,
             }],
@@ -198,9 +204,16 @@ pub async fn perform_session_split(
         at,
     });
     child_batch.push(build_summary_event(summary_text, at));
-    child_batch.extend(tail.iter().map(|record| record.event.clone()));
+    // The parent's own opener can sit inside the tail (the bridge seeds the
+    // turn, THEN emits `RunStarted`). Copying it gave the child two openers
+    // for one run (F14); the split opener below is the only one it gets.
+    child_batch.extend(
+        tail.iter()
+            .filter(|record| record.seq != opener_seq)
+            .map(|record| record.event.clone()),
+    );
     child_batch.push(SessionEvent::RunStarted {
-        run_id: split_run_id,
+        run_id,
         at,
         // The parent's open run, verbatim. The in-memory `RunRequest` does
         // carry the same facts for the LIVE continuation — but a resume
@@ -708,7 +721,7 @@ mod tests {
     /// summarised half owns it and the copied tail is messages only. That is
     /// not the bridge's real order — production seeds the turn first and the
     /// bridge emits `RunStarted` after it (message-then-opener), which
-    /// `a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last`
+    /// `a_parents_opener_inside_the_tail_is_not_copied_into_the_child`
     /// exercises. Every other fixture that expects the split to SUCCEED
     /// starts from this — the child inherits the opener's envelope, so a
     /// parent without one is refused, not seeded blind.
@@ -942,6 +955,11 @@ mod tests {
                     run_id, closer_id,
                     "split run_id must correlate both markers"
                 );
+                assert_eq!(
+                    run_id, "run-parent",
+                    "the split closes and reopens the parent's OWN run — the \
+                     engine's id, which its meta carries — not a new one"
+                );
             }
             other => panic!("expected RunStarted on child, got {other:?}"),
         }
@@ -1093,15 +1111,14 @@ mod tests {
     }
 
     /// The bridge's real order — the turn is seeded, THEN `RunStarted` is
-    /// emitted — puts the parent's own opener inside the copied tail whenever
-    /// the split fires before the run's first assistant message. The child
-    /// then holds that copied opener AND the split's own; `reduce_run` reads
-    /// the LAST `RunStarted` as the open one, so the split opener must come
-    /// last and must carry the parent's envelope and project root — which is
-    /// what makes the two answers agree instead of the copied one winning by
-    /// position. Read back through the service, in emission order.
+    /// emitted — puts the parent's own opener inside the carried tail whenever
+    /// the split fires before the run's first assistant message. Copying it
+    /// gave the child two openers for one run (F14). The child gets exactly
+    /// one: the split's, under the parent's run id, carrying the parent's
+    /// envelope and project root. Read back through the service, in emission
+    /// order.
     #[tokio::test]
-    async fn a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last() {
+    async fn a_parents_opener_inside_the_tail_is_not_copied_into_the_child() {
         let parent = SessionKey::Main {
             agent_id: "agent-a".into(),
             main_key: "main".into(),
@@ -1165,21 +1182,14 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            openers.len(),
-            2,
-            "the copied parent opener and the split opener, got {openers:?}"
-        );
-        assert_eq!(
-            openers[0].0, "run-parent",
-            "the tail is copied verbatim, parent opener first"
-        );
-        let (split_run_id, split_root, split_envelope) = &openers[1];
-        assert_ne!(split_run_id, "run-parent", "the split mints its own run id");
-        assert_eq!(
-            (split_root.as_deref(), split_envelope.as_ref()),
-            (Some(PARENT_ROOT), Some(&parent_envelope())),
-            "the LAST opener — the one `reduce_run` treats as open — is the split's \
-             and carries the parent's envelope and project root"
+            openers,
+            vec![(
+                "run-parent".to_string(),
+                Some(PARENT_ROOT.to_string()),
+                Some(parent_envelope())
+            )],
+            "one opener in the child — the split's, under the parent's run id, \
+             inheriting its envelope and root; the tail's copy is filtered out"
         );
     }
 

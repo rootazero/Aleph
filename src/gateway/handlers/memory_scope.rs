@@ -4,7 +4,7 @@
 //! (`project_scope::session_write_id`, converged for the tool face on
 //! `BuiltinToolRegistry::caller_memory_partition`), and a zero-config loopback
 //! Panel session already resolves to `Personal(u-owner)` — the RPC dispatcher
-//! installs it for every request (`server::handler::dispatch_with_caller_context`).
+//! installs it for every request (`server::connection::dispatch::dispatch_with_caller_context`).
 //! So notes, raws, corrections and dream state written from a stock
 //! single-machine install land in `main__u-owner`.
 //!

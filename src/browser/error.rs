@@ -53,6 +53,26 @@ pub enum BrowserError {
     #[error("Tab not found: {0}")]
     TabNotFound(String),
 
+    /// A tab this profile previously recorded is gone from the browser: its
+    /// targetId is absent from the live target enumeration.
+    ///
+    /// Distinct from [`Self::TabNotFound`], which means "this registry never
+    /// heard of that id" (判据 §8 — the two answers license different
+    /// recoveries). `TabGone` carries the last URL we recorded so the reader
+    /// can recognise WHICH page vanished; it never claims anything about the
+    /// page's state beyond that last observation.
+    ///
+    /// Produced by [`super::tab_registry::TabRegistry::resolve_identity`] when
+    /// a recorded target is absent from a fresh enumeration — the page's own
+    /// `window.close`, a browser restart, a re-attach onto a browser whose
+    /// tabs changed. The recovery it names is a fresh listing, because every
+    /// id the model holds may be stale, not only this one.
+    #[error("{}", tab_gone_text(tab_id, last_url))]
+    TabGone {
+        tab_id: String,
+        last_url: Option<String>,
+    },
+
     #[error("Navigation failed: {0}")]
     NavigationFailed(String),
 
@@ -228,6 +248,32 @@ pub enum BrowserError {
     )]
     StaleRef { ref_id: String, reason: StaleReason },
 
+    /// The engine ACCEPTED the dispatch, but the effect probe's one-shot
+    /// listener saw no matching event arrive at the target element.
+    ///
+    /// A dedicated variant rather than `ActionFailed(String)` plus a message
+    /// prefix — a deliberate, approved deviation from spec §3: the tool
+    /// layer's failure classifier (browser_tools::recovery, Task B1) is an
+    /// EXHAUSTIVE match over these variants, so smuggling this verdict
+    /// through a string would force the classifier to string-match inside
+    /// `classify` — exactly the 判据 violation the enum exists to prevent.
+    /// The failure category gains a 15th variant `EffectNotDelivered` there.
+    ///
+    /// The distinction this variant protects: the engine answered (so this is
+    /// NOT `EngineBusy`, NOT `Cdp`) and the dispatch went out — but the page
+    /// never saw the effect. 「它答了」和「它答的是真的」是两个问题, and this
+    /// is the second one answered in the negative. `verb` names the tool verb
+    /// (`browser_click` / `browser_type` / `browser_fill_form`); `detail`
+    /// says what the probe observed instead. The most common cause is an
+    /// element that moved or was replaced mid-dispatch, so the door named is
+    /// a fresh snapshot.
+    #[error(
+        "{verb}: the engine accepted the dispatch, but no matching event arrived at the \
+         target element ({detail}). The element may have moved or been replaced \
+         mid-dispatch. Re-run browser_snapshot and retry with a fresh ref."
+    )]
+    EffectNotDelivered { verb: &'static str, detail: String },
+
     /// The engine answered the CDP call with a protocol error.
     ///
     /// Verbatim, both halves: the code is what a reader looks up against the
@@ -252,6 +298,24 @@ pub enum BrowserError {
         code: i64,
         message: String,
     },
+}
+
+/// The sentence for [`BrowserError::TabGone`]. Names the tab and, when we
+/// recorded one, the last URL we saw it at — QUOTED, because that URL is a
+/// page-influenced observation (a redirect target is the page's choice, R40).
+/// The page's own state is never claimed: "gone" is a fact about the target
+/// enumeration, not about what the page contains now.
+fn tab_gone_text(tab_id: &str, last_url: &Option<String>) -> String {
+    let seen = match last_url {
+        Some(url) => format!(", last seen at {}", crate::browser::page_state::quote(url)),
+        None => String::new(),
+    };
+    format!(
+        "tab {tab_id}{seen} is gone — the browser no longer has that target (the page \
+         may have closed itself, or the engine was restarted). Run \
+         browser_tabs{{action:\"list\"}} to see what is open now, and use an id from \
+         that listing: every id captured before this error may be stale."
+    )
 }
 
 /// The sentence for [`BrowserError::UnsupportedByEngine`].
@@ -533,6 +597,10 @@ mod tests {
 
             BrowserError::EngineUnavailable { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::EngineBusy { .. } => RecoverySignal::VerbAndEngine,
+            // Names `browser_tabs{action:"list"}` — the fresh listing whose
+            // ids replace every stale one the model holds. No engine field:
+            // the answer and the recovery are the same on both engines.
+            BrowserError::TabGone { .. } => RecoverySignal::VerbOnly,
             BrowserError::UnsupportedByEngine {
                 supported_by: Some(_),
                 ..
@@ -547,6 +615,10 @@ mod tests {
             // a diagnosis, which is what separates this from `Cdp`.
             BrowserError::EngineMismatch { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::StaleRef { .. } => RecoverySignal::VerbOnly,
+            // Names `browser_snapshot` — the common cause is an element that
+            // moved mid-dispatch. No engine field: the verdict is about the
+            // page, and the recovery is the same on both engines.
+            BrowserError::EffectNotDelivered { .. } => RecoverySignal::VerbOnly,
             BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
             // Names the engine and NO verb, on purpose: the profile is already
             // where the caller asked to be, so there is nothing for it to
@@ -604,6 +676,7 @@ mod tests {
     fn every_engine_error_names_the_engine_and_a_verb_the_model_can_call() {
         use crate::builtin_tools::browser_tools::{
             open::BrowserOpenTool, session::BrowserSessionTool, snapshot::BrowserSnapshotTool,
+            tabs::BrowserTabsTool,
         };
         use crate::tools::AlephTool;
 
@@ -649,6 +722,22 @@ mod tests {
                     reason: StaleReason::Navigated,
                 },
                 BrowserSnapshotTool::NAME,
+                RecoverySignal::VerbOnly,
+            ),
+            (
+                BrowserError::EffectNotDelivered {
+                    verb: "browser_click",
+                    detail: "no 'click' event arrived at the probed element".into(),
+                },
+                BrowserSnapshotTool::NAME,
+                RecoverySignal::VerbOnly,
+            ),
+            (
+                BrowserError::TabGone {
+                    tab_id: "T-9".into(),
+                    last_url: Some("https://a/".into()),
+                },
+                BrowserTabsTool::NAME,
                 RecoverySignal::VerbOnly,
             ),
         ];
@@ -800,6 +889,75 @@ mod tests {
                  the model back to the call that just refused: {already}"
             );
         }
+    }
+
+    /// `TabGone` names the tab and the last URL we recorded — the two facts
+    /// that let the model recognise WHICH page vanished — plus the door that
+    /// re-lists what is open. It must NOT say anything about the page's
+    /// current state: the target is absent, so no such observation exists
+    /// (判据 §8). And the URL is quoted: it is a page-influenced observation
+    /// (a redirect target is the page's choice), so it goes through the same
+    /// `page_state::quote` every other rendered page string does (R40).
+    #[test]
+    fn tab_gone_names_the_tab_and_last_url_without_claiming_page_state() {
+        use crate::builtin_tools::browser_tools::tabs::BrowserTabsTool;
+        use crate::tools::AlephTool;
+
+        let err = BrowserError::TabGone {
+            tab_id: "T-9".into(),
+            last_url: Some("https://a/".into()),
+        };
+        let text = err.to_string();
+        assert!(text.contains("T-9"), "the tab is named: {text}");
+        assert!(
+            text.contains(&crate::browser::page_state::quote("https://a/")),
+            "the last recorded URL is carried, quoted: {text}"
+        );
+        assert!(
+            text.contains(BrowserTabsTool::NAME),
+            "a fail-closed answer names the door that reopens it (判据 §14): {text}"
+        );
+
+        // No recorded URL: the sentence must not invent one.
+        let bare = BrowserError::TabGone {
+            tab_id: "T-1".into(),
+            last_url: None,
+        }
+        .to_string();
+        assert!(!bare.contains("last seen"), "no URL was recorded: {bare}");
+        assert!(bare.contains("T-1"), "{bare}");
+    }
+
+    /// The effect probe's negative verdict names the verb whose dispatch was
+    /// accepted, says what the probe saw instead, and names the door — a fresh
+    /// snapshot, because the common cause is an element that moved or was
+    /// replaced mid-dispatch. It must NOT read as a transport failure: the
+    /// engine answered; the effect did not arrive (判据 §8 — those are
+    /// different facts with different recoveries).
+    #[test]
+    fn effect_not_delivered_names_the_verb_the_observation_and_the_door() {
+        use crate::builtin_tools::browser_tools::snapshot::BrowserSnapshotTool;
+        use crate::tools::AlephTool;
+
+        let err = BrowserError::EffectNotDelivered {
+            verb: "browser_type",
+            detail: "no 'input' event arrived at the probed element".into(),
+        };
+        assert_eq!(spec_7_1_signal(&err), RecoverySignal::VerbOnly);
+        let text = err.to_string();
+        assert!(text.contains("browser_type"), "the verb is named: {text}");
+        assert!(
+            text.contains("no 'input' event arrived"),
+            "the probe's observation is carried, not paraphrased away: {text}"
+        );
+        assert!(
+            text.contains(BrowserSnapshotTool::NAME),
+            "a fail-closed answer names the door that reopens it (判据 §14): {text}"
+        );
+        assert!(
+            !text.contains("did not answer"),
+            "the engine DID answer — this is not a busy-engine verdict: {text}"
+        );
     }
 
     /// The one-sided trait defaults used to name Chrome DevTools MCP by hand,

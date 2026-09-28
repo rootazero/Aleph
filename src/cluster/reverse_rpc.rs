@@ -55,7 +55,7 @@ impl PendingInvokes {
     /// If no waiter exists for this id (unknown id, the receiver was already
     /// dropped, or the waiter was cancelled), the response is silently dropped
     /// and a `warn!` is logged. The previous `bool` return on this method was
-    /// severed: the sole production caller (`gateway/server/handler.rs:699`)
+    /// severed: the sole production caller (`rpc_pending.resolve` in `gateway/server/connection/mod.rs`)
     /// discarded the result, so a misrouted response could be swallowed
     /// without any log line. Moving the diagnostic into the callee makes the
     /// signal observable without requiring callers to opt in.

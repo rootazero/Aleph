@@ -35,6 +35,17 @@ pub struct WorkflowDef {
 /// Defaults to [`Agent`](WorkflowStepKind::Agent) so every pre-existing
 /// template (which has no `kind` field) deserialises unchanged, and an agent
 /// step serialises without a `kind` key (byte-identical on the wire).
+///
+/// **Collect is a marker, not a payload carrier.** A [`Collect`] step runs no
+/// agent; it is the workflow's own primitive that waits for a list of
+/// upstream steps to settle and reduces their outputs into a single
+/// deliverable. The actual `collect_from` and `reduce` configuration lives
+/// on [`WorkflowStepDef`](super::WorkflowStepDef) — keeping the variant a
+/// unit keeps `WorkflowStepKind` `Copy`, which every match site across
+/// `compile` / `manifest` / the workflow tool relies on, and keeps the wire
+/// shape `{"kind": "collect", "collect_from": [...], "reduce": "concat"}`
+/// instead of the nested `{"kind": {"collect": {...}}}` an externally-
+/// tagged struct variant would force.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStepKind {
@@ -45,6 +56,11 @@ pub enum WorkflowStepKind {
     /// and resume once they reply. Executed by the dispatcher via the shared
     /// clarification machinery — no agent runs (see [`crate::workflow::clarify`]).
     Clarify,
+    /// Reduce a list of upstream steps' outputs into one deliverable.
+    /// `collect_from` and `reduce` are carried on
+    /// [`WorkflowStepDef`](super::WorkflowStepDef); see
+    /// [`crate::workflow::compile`] for the materialisation rules.
+    Collect,
 }
 
 impl WorkflowStepKind {
@@ -53,6 +69,46 @@ impl WorkflowStepKind {
     pub const fn is_agent(&self) -> bool {
         matches!(self, Self::Agent)
     }
+
+    /// Whether this step runs the workflow's own collect machinery rather
+    /// than a team-member agent run.
+    #[must_use]
+    pub const fn is_collect(&self) -> bool {
+        matches!(self, Self::Collect)
+    }
+
+    /// Whether this step runs no team-member agent (clarify and collect
+    /// both pause the DAG for a non-agent reason). Used by `materialize`
+    /// to decide which steps carry the strategy frame and which need an
+    /// `agent` resolved against the team registry.
+    #[must_use]
+    pub const fn runs_no_agent(&self) -> bool {
+        matches!(self, Self::Clarify | Self::Collect)
+    }
+}
+
+/// How a [`Collect`](WorkflowStepKind::Collect) step folds its upstream
+/// outputs into the single deliverable it stamps onto the DAG. The
+/// `SkipIfMissing` family handles a partial-failure fan-in — a step that
+/// was tolerate-failed-deps upstream, or a step that was deliberately
+/// disabled — without aborting the whole reduction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectReduce {
+    /// Concatenate the textual outputs of every upstream step in
+    /// `collect_from` order, separated by `\n\n`. Default for a collect step
+    /// when the field is unset — the safe shape that any model can read.
+    #[default]
+    Concat,
+    /// Build a JSON array, one element per upstream step (the element is the
+    /// step's textual output verbatim, not parsed). Suitable for handing a
+    /// downstream step a structured "list of sources" to summarise or
+    /// cross-reference.
+    JsonArray,
+    /// Take the first non-empty upstream output. Useful when the upstream is
+    /// an N-way speculative generation and only the earliest deliverable
+    /// matters (the others are diagnostic).
+    First,
 }
 
 /// One step in a workflow. Compiles to a single `coord_task`.
@@ -147,6 +203,37 @@ pub struct WorkflowStepDef {
     /// templates).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
+    /// Parallel-group label: when two or more sibling steps share the same
+    /// `parallel_group`, the materialiser stamps every member of the group
+    /// with `[workflow_parallel_group, workflow_parallel_index,
+    /// workflow_parallel_size]` so the dispatcher (and reporting surfaces)
+    /// can see they are co-scheduled. **Only the LABEL is declarative** — the
+    /// runtime's actual concurrent execution depends on the existing DAG
+    /// scheduler, which fires independent roots in parallel already. The
+    /// group label makes the parallelism *visible* (a `status` report groups
+    /// the rows the way the `.workflow.js` live view groups them) rather than
+    /// implying a new scheduling primitive the layer does not own (R10). An
+    /// empty / `None` label means "no group", the byte-identical legacy
+    /// shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_group: Option<String>,
+    /// For a [`Collect`](WorkflowStepKind::Collect) step: the upstream step
+    /// ids whose outputs are reduced into the collect step's deliverable.
+    /// Each id must reference an existing step (validated in
+    /// [`WorkflowDef::validate`]) and must not be the collect step's own id
+    /// (a self-collect has no defined reduction — there is exactly one input,
+    /// the step's own empty prompt). Ignored on non-collect steps. Absent on
+    /// the wire when empty (byte-identical legacy templates).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collect_from: Vec<String>,
+    /// For a [`Collect`](WorkflowStepKind::Collect) step: how the upstream
+    /// outputs are folded. See [`CollectReduce`] for the available shapes.
+    /// `None` on a non-collect step; `None` on a collect step means "default
+    /// to [`Concat`](CollectReduce::Concat)" at materialisation time, so a
+    /// collect author who only sets `collect_from` gets the safe reduce.
+    /// Absent on the wire when `None` (byte-identical legacy templates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce: Option<CollectReduce>,
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
@@ -231,6 +318,68 @@ impl WorkflowDef {
                     if step.timeout_seconds.is_some() || step.max_retries.is_some() {
                         return Err(AlephError::invalid_input(format!(
                             "clarify step '{}' cannot set timeout_seconds/max_retries — it runs no agent",
+                            step.id
+                        )));
+                    }
+                }
+                WorkflowStepKind::Collect => {
+                    // A collect step is the workflow's own primitive: it
+                    // waits on a list of upstream steps, then folds their
+                    // outputs. There is no agent run, so the agent and
+                    // prompt fields must be empty (matching the clarify rule
+                    // — the same shape, the same rationale).
+                    if !step.agent.trim().is_empty() {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' cannot carry an agent — it runs no team-member loop",
+                            step.id
+                        )));
+                    }
+                    if !step.prompt.trim().is_empty() {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' cannot carry a prompt — its deliverable is the reduced upstream output",
+                            step.id
+                        )));
+                    }
+                    if step.collect_from.is_empty() {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' has no collect_from entries — there is nothing to reduce",
+                            step.id
+                        )));
+                    }
+                    // collect_from must reference existing steps AND must not
+                    // include the step itself (self-collect has no defined
+                    // reduction — the step's only "output" is its own empty
+                    // prompt, and the reduce would produce an empty
+                    // deliverable, which is not what the author meant).
+                    for dep in &step.collect_from {
+                        if dep == &step.id {
+                            return Err(AlephError::invalid_input(format!(
+                                "collect step '{}' cannot collect from itself",
+                                step.id
+                            )));
+                        }
+                        if !ids.contains(dep.as_str()) {
+                            return Err(AlephError::invalid_input(format!(
+                                "collect step '{}' references unknown step '{dep}'",
+                                step.id
+                            )));
+                        }
+                    }
+                    if step.review || step.require_grounding {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' cannot require review/grounding — there is no agent run to review",
+                            step.id
+                        )));
+                    }
+                    if step.tolerate_failed_deps {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' cannot set tolerate_failed_deps — there is no agent run whose readiness the flag affects",
+                            step.id
+                        )));
+                    }
+                    if step.timeout_seconds.is_some() || step.max_retries.is_some() {
+                        return Err(AlephError::invalid_input(format!(
+                            "collect step '{}' cannot set timeout_seconds/max_retries — it runs no agent",
                             step.id
                         )));
                     }
@@ -501,6 +650,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 
@@ -517,6 +669,28 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
+        }
+    }
+
+    fn collect_step(id: &str, collect_from: &[&str], reduce: Option<CollectReduce>) -> WorkflowStepDef {
+        WorkflowStepDef {
+            id: id.into(),
+            agent: String::new(),
+            prompt: String::new(),
+            depends_on: Vec::new(),
+            kind: WorkflowStepKind::Collect,
+            choices: Vec::new(),
+            review: false,
+            require_grounding: false,
+            tolerate_failed_deps: false,
+            timeout_seconds: None,
+            max_retries: None,
+            parallel_group: None,
+            collect_from: collect_from.iter().map(|s| (*s).to_string()).collect(),
+            reduce,
         }
     }
 
@@ -882,5 +1056,224 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(step.timeout_seconds, Some(300));
+    }
+
+    // ---- Parallel-group label ---------------------------------------------
+
+    /// A non-set `parallel_group` must not appear on the wire — the field is
+    /// reserved for "this step is one of a labelled parallel fan-out", and
+    /// every pre-existing template (which has no group) must keep its bytes.
+    #[test]
+    fn parallel_group_defaults_and_skips_serialisation() {
+        let json = r#"{"id":"a","agent":"w","prompt":"go"}"#;
+        let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
+        assert!(s.parallel_group.is_none());
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(
+            !out.contains("parallel_group"),
+            "an ungrouped step omits the key (byte-identical legacy row): {out}"
+        );
+    }
+
+    /// A set `parallel_group` round-trips, and the agent-step wire form is
+    /// unchanged apart from the new key.
+    #[test]
+    fn parallel_group_roundtrips_through_json() {
+        let mut s = step("a", &[]);
+        s.parallel_group = Some("scan".into());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""parallel_group":"scan""#));
+        let back: WorkflowStepDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parallel_group.as_deref(), Some("scan"));
+    }
+
+    // ---- Collect step -----------------------------------------------------
+
+    /// `WorkflowStepKind::Collect` exists, is its own kind, and is detected
+    /// by both `is_collect` and `runs_no_agent`. The `runs_no_agent` access
+    /// is what the materialiser branches on, so the new variant must slot
+    /// in alongside `Clarify`.
+    #[test]
+    fn collect_kind_exists_and_runs_no_agent() {
+        let s = collect_step("synth", &["a", "b"], None);
+        assert_eq!(s.kind, WorkflowStepKind::Collect);
+        assert!(s.kind.is_collect());
+        assert!(s.kind.runs_no_agent());
+        assert!(!s.kind.is_agent());
+        assert!(!s.is_clarify());
+    }
+
+    /// The wire form for a collect step is `{"kind":"collect",
+    /// "collect_from":[...], "reduce":"concat"}`: the kind tag and the
+    /// configuration fields at the same level. The fields MUST skip when
+    /// absent so legacy templates keep their bytes.
+    #[test]
+    fn collect_step_wire_shape_is_flat_and_skips_when_unset() {
+        let s = step("a", &[]);
+        let plain = serde_json::to_string(&s).unwrap();
+        assert!(!plain.contains("collect_from"), "no collect_from on agent: {plain}");
+        assert!(!plain.contains(r#""reduce""#), "no reduce on agent: {plain}");
+
+        let c = collect_step("synth", &["a", "b"], Some(CollectReduce::Concat));
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains(r#""kind":"collect""#));
+        assert!(json.contains(r#""collect_from":["a","b"]"#));
+        assert!(json.contains(r#""reduce":"concat""#));
+    }
+
+    /// A collect step with the default reduce (`None`) gets `Concat` when
+    /// it materialises, and the JSON form omits the field when unset —
+    /// matching the same "absent is `Concat`" contract every other
+    /// `Option<CollectReduce>` field has.
+    #[test]
+    fn collect_reduce_defaults_to_concat() {
+        let s = collect_step("s", &["a"], None);
+        assert!(s.reduce.is_none());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("reduce"), "None reduce stays off the wire: {json}");
+    }
+
+    /// A happy-path workflow with one fan-out (a → b, c) and one collect
+    /// step validates. The fan-in `collect_from` references valid steps and
+    /// the step itself is otherwise empty (no agent, no prompt).
+    #[test]
+    fn validate_accepts_collect_step_with_valid_collect_from() {
+        let d = def(vec![
+            step("a", &[]),
+            step("b", &["a"]),
+            step("c", &["a"]),
+            collect_step("synth", &["b", "c"], Some(CollectReduce::JsonArray)),
+        ]);
+        assert!(d.validate().is_ok(), "{:?}", d.validate());
+    }
+
+    /// A collect step must declare at least one upstream step — a collect
+    /// with no sources is an empty reduce, and an empty reduce is what the
+    /// author meant when they wrote the wrong template.
+    #[test]
+    fn validate_rejects_collect_with_empty_collect_from() {
+        let d = def(vec![collect_step("synth", &[], None)]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("nothing to reduce"), "got: {err}");
+    }
+
+    /// `collect_from` is validated against the same id set `depends_on`
+    /// uses: a typo'd upstream name fails the boundary check rather than
+    /// becoming a runtime "stuck waiting on a never-created task".
+    #[test]
+    fn validate_rejects_collect_from_unknown_step() {
+        let d = def(vec![
+            step("a", &[]),
+            collect_step("synth", &["a", "ghost"], None),
+        ]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("unknown step 'ghost'"), "got: {err}");
+    }
+
+    /// A self-collect is structurally valid (the step exists) but
+    /// semantically a no-op — its only "output" is its own empty prompt,
+    /// and the reduce would produce an empty deliverable. The validator
+    /// refuses so the author cannot ship the dead step.
+    #[test]
+    fn validate_rejects_collect_step_collecting_from_itself() {
+        let d = def(vec![collect_step("synth", &["synth"], None)]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("cannot collect from itself"), "got: {err}");
+    }
+
+    /// A collect step runs no agent — the same shape `Clarify` enforces.
+    /// An agent set on a collect step is a left-over from a copy-paste, and
+    /// accepting it would silently route the collect step to a team member
+    /// whose `prompt` (which is empty) was never rendered.
+    #[test]
+    fn validate_rejects_collect_step_with_agent() {
+        let mut c = collect_step("synth", &["a"], None);
+        c.agent = "writer".into();
+        let d = def(vec![step("a", &[]), c]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("cannot carry an agent"), "got: {err}");
+    }
+
+    /// A collect step carries no prompt — its deliverable is the reduced
+    /// upstream output, so a non-empty prompt would render into a
+    /// `coord_task.description` the model never reads.
+    #[test]
+    fn validate_rejects_collect_step_with_prompt() {
+        let mut c = collect_step("synth", &["a"], None);
+        c.prompt = "summarise".into();
+        let d = def(vec![step("a", &[]), c]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("cannot carry a prompt"), "got: {err}");
+    }
+
+    /// A collect step carries no per-step budget overrides: there is no
+    /// agent run to retry or time out. Accepting the flags would put
+    /// `timeout_secs` / `max_retries` on a `coord_task` row nothing reads.
+    #[test]
+    fn validate_rejects_budget_overrides_on_collect_step() {
+        let mut c = collect_step("synth", &["a"], None);
+        c.timeout_seconds = Some(60);
+        let d = def(vec![step("a", &[]), c]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("runs no agent"), "got: {err}");
+
+        let mut c = collect_step("synth", &["a"], None);
+        c.max_retries = Some(3);
+        let d = def(vec![step("a", &[]), c]);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("runs no agent"), "got: {err}");
+    }
+
+    /// `CollectReduce` round-trips through JSON for all three variants, and
+    /// the snake_case rename means the wire form matches the `.workflow.js`
+    /// vocabulary a downstream tool would import.
+    #[test]
+    fn collect_reduce_roundtrips_through_json() {
+        for (variant, expected) in [
+            (CollectReduce::Concat, r#""concat""#),
+            (CollectReduce::JsonArray, r#""json_array""#),
+            (CollectReduce::First, r#""first""#),
+        ] {
+            let s = collect_step("s", &["a"], Some(variant));
+            let json = serde_json::to_string(&s).unwrap();
+            assert!(json.contains(expected), "{variant:?} serialises as {expected}: {json}");
+            let back: WorkflowStepDef = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.reduce, Some(variant));
+        }
+    }
+
+    /// The `runs_no_agent` accessor must return `true` for both clarify and
+    /// collect — the only two kinds that pause the DAG for a non-agent
+    /// reason — and `false` for an agent step. The materialiser branches on
+    /// this single call, so its answer for the new variant must be correct
+    /// by construction (the test, not the compiler).
+    #[test]
+    fn runs_no_agent_branches_on_collect() {
+        assert!(!WorkflowStepKind::Agent.runs_no_agent());
+        assert!(WorkflowStepKind::Clarify.runs_no_agent());
+        assert!(WorkflowStepKind::Collect.runs_no_agent());
+    }
+
+    /// A workflow with NO new fields serialises to the exact JSON a legacy
+    /// template produced before this change — the byte-identical invariant
+    /// that every existing saved workflow depends on for `load` to round-trip
+    /// without rewriting the file.
+    #[test]
+    fn legacy_workflow_roundtrips_byte_identically() {
+        let legacy = def(vec![step("a", &[]), step("b", &["a"])]);
+        let json = serde_json::to_string(&legacy).unwrap();
+        // The four new-field keys must not appear at all on a template that
+        // does not set them. A single regression in any skip_serializing_if
+        // is caught here.
+        for forbidden in ["parallel_group", "collect_from", "\"reduce\"", "kind"] {
+            assert!(
+                !json.contains(forbidden),
+                "legacy template must not emit `{forbidden}`: {json}"
+            );
+        }
+        // And the round-trip is structurally identical (no fields lost in
+        // either direction).
+        let back: WorkflowDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, legacy);
     }
 }

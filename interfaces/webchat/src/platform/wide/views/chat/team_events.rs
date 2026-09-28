@@ -204,6 +204,7 @@ fn push_bubble(
             id: format!("team-{role}-{seq}"),
             role: role.to_string(),
             content: text.to_string(),
+            attachments: Vec::new(),
             tool_calls: Vec::new(),
             is_streaming: false,
             is_intermediate: false,

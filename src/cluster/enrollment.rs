@@ -8,7 +8,7 @@
 //! bookkeeping foundation for `cluster.deregister`. This module is the **single
 //! write/resolve source of truth** for that record, shared by two entry points:
 //!
-//! * `connect` seam (`gateway/server/handler.rs`) — node self-registration
+//! * `connect` seam (`gateway/server/connection/mod.rs`) — node self-registration
 //!   (first boot, no id).
 //! * `cluster.enroll` RPC (`gateway/handlers/cluster.rs`) — operator
 //!   pre-enrollment from the Panel.
@@ -418,7 +418,7 @@ pub fn deregister_node(
     });
 
     // Fire the operator-initiated `node.disconnected` event from the same
-    // single source the WebSocket drop arm uses (handler.rs:~2027). Without
+    // single source the WebSocket drop arm uses (`server/connection/cleanup.rs`). Without
     // this, an explicit `cluster.deregister` (RPC or `node_manage` tool)
     // evicts a live session but emits no event — the operator's Panel keeps
     // showing the node online until a hard refresh, after which it vanishes

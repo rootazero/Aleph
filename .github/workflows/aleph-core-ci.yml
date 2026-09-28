@@ -189,6 +189,12 @@ jobs:
         env:
           PROPTEST_CASES: 1024
 
+      # The shared crates' own tests; what and why: the header of
+      # scripts/test-shared.sh (also `just test-shared`).
+      - name: Run shared crate tests
+        shell: bash
+        run: bash scripts/ci_run_with_resource_log.sh bash scripts/test-shared.sh
+
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 

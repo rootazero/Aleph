@@ -8,8 +8,9 @@
 use crate::sync_primitives::Arc;
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use crate::scope::authority::{FireAuthority, FireSubject, Granted};
 use crate::tasks::cron::config::RunStatus;
 use crate::tasks::heartbeat::config::HeartbeatTask;
 use crate::tasks::heartbeat::dedup::{DedupEngine, DedupVerdict};
@@ -54,7 +55,8 @@ pub struct TickContext {
 /// Result of executing a single heartbeat task tick.
 #[derive(Debug)]
 pub struct HeartbeatTickResult {
-    /// "Triggered" / "Skipped" / "Error"
+    /// "Triggered" / "Skipped" / "Error". "Skipped" also records a beat the
+    /// fire-time authority check stopped before L1 (reason in `error`).
     pub l1_status: String,
     /// "Silent" / "Delivered" / "Deduped" / "Error" / None
     pub l2_status: Option<String>,
@@ -64,6 +66,33 @@ pub struct HeartbeatTickResult {
     pub delivery_status: Option<String>,
     /// Stringified raw probe value for Changed tracking
     pub new_probe_result: Option<String>,
+    /// The fire-time authority check CONFIRMED the owner walled or gone:
+    /// writeback disarms the task (`ops::disable_walled_owner_task`).
+    pub disable_task: bool,
+    /// The fire-time authority check could not read the users store (R-a).
+    /// Writeback alerts on such a beat only once the streak reaches cron's
+    /// `TRANSIENT_ALERT_FLOOR`: one store blip must not page every task's
+    /// target at once.
+    pub authority_unknown: bool,
+}
+
+impl HeartbeatTickResult {
+    /// A beat the fire-time authority check stopped before L1. The reason
+    /// goes into `error`, so it lands in `last_error`, the run history and
+    /// the failure-alert gate: a stop that says nothing is fail-dead.
+    fn authority_skip(reason: String, disable_task: bool) -> Self {
+        Self {
+            l1_status: "Skipped".into(),
+            l2_status: None,
+            l1_duration_ms: 0,
+            l2_duration_ms: None,
+            error: Some(reason),
+            delivery_status: None,
+            new_probe_result: None,
+            disable_task,
+            authority_unknown: !disable_task,
+        }
+    }
 }
 
 // ── Timer Loop ───────────────────────────────────────────────────────
@@ -291,12 +320,61 @@ async fn collect_due_tasks(
 
 // ── Execute Single Tick ──────────────────────────────────────────────
 
-/// Execute a single heartbeat task: L1 probe, optional L2 agent, dedup, delivery.
+/// What the fire-time authority resolver needs to know about a task. A
+/// beat carries no author and no role: the owner is the person checked.
+fn fire_subject(task: &HeartbeatTask) -> FireSubject<'_> {
+    FireSubject {
+        owner: task.owner_user_id.as_deref(),
+        scope: task.scope_id.as_deref(),
+        author: None,
+        carried_role: None,
+    }
+}
+
+/// Execute a single heartbeat task: fire-time authority, L1 probe,
+/// optional L2 agent, dedup, delivery.
 async fn execute_heartbeat_tick(
     task: &HeartbeatTask,
     wake_reason: Option<&str>,
     ctx: &TickContext,
 ) -> HeartbeatTickResult {
+    let authority = crate::scope::authority::resolve(&fire_subject(task));
+    execute_heartbeat_tick_as(task, wake_reason, ctx, authority).await
+}
+
+/// [`execute_heartbeat_tick`] with the verdict supplied, so tests inject a
+/// store through `resolve_with` instead of installing the process global.
+///
+/// The gate is BEFORE the L1 probe (N3 — cron's twin had it since round-5
+/// ④, heartbeat did not): a walled owner's probe tool must not run either.
+/// `Refused` flags the task for disarming at writeback; `Unknown` (the
+/// users store could not be read) skips only this beat and keeps the task
+/// armed (ruling R-a).
+async fn execute_heartbeat_tick_as(
+    task: &HeartbeatTask,
+    wake_reason: Option<&str>,
+    ctx: &TickContext,
+    authority: FireAuthority,
+) -> HeartbeatTickResult {
+    let granted = match authority {
+        FireAuthority::Legacy => Granted::legacy(&fire_subject(task)),
+        FireAuthority::Granted(granted) => granted,
+        refused @ FireAuthority::Refused(_) => {
+            let reason = format!(
+                "{} ({}) — task disabled at fire time",
+                refused.reason().unwrap_or_default(),
+                task.owner_user_id.as_deref().unwrap_or_default()
+            );
+            warn!(task_id = %task.id, %reason, "heartbeat: walled owner at fire time");
+            return HeartbeatTickResult::authority_skip(reason, true);
+        }
+        unknown @ FireAuthority::Unknown(_) => {
+            let reason = unknown.reason().unwrap_or_default();
+            warn!(task_id = %task.id, %reason, "heartbeat: fire-time authority unknown, skipping this beat");
+            return HeartbeatTickResult::authority_skip(reason, false);
+        }
+    };
+
     // L1 probe (bounded by job_timeout_secs so a hung tool can't stall).
     let probe_result = execute_probe(
         &task.probe,
@@ -315,6 +393,8 @@ async fn execute_heartbeat_tick(
             error: Some(e),
             delivery_status: None,
             new_probe_result: None,
+            disable_task: false,
+            authority_unknown: false,
         },
         Ok(ref r) if !r.triggered && wake_reason.is_none() => HeartbeatTickResult {
             l1_status: "Skipped".into(),
@@ -324,19 +404,15 @@ async fn execute_heartbeat_tick(
             error: None,
             delivery_status: None,
             new_probe_result: Some(r.raw_value.to_string()),
+            disable_task: false,
+            authority_unknown: false,
         },
         Ok(r) => {
             // L2 execution
             let prompt = build_heartbeat_prompt(task, &r, wake_reason);
             let l2_result = ctx
                 .adapter
-                .execute_heartbeat(
-                    &task.agent_id,
-                    &prompt,
-                    ctx.job_timeout_secs,
-                    task.owner_user_id.as_deref(),
-                    task.scope_id.as_deref(),
-                )
+                .execute_heartbeat(&task.agent_id, &prompt, ctx.job_timeout_secs, &granted)
                 .await;
 
             match l2_result {
@@ -348,6 +424,8 @@ async fn execute_heartbeat_tick(
                     error: Some(e),
                     delivery_status: None,
                     new_probe_result: Some(r.raw_value.to_string()),
+                    disable_task: false,
+                    authority_unknown: false,
                 },
                 Ok(l2) => {
                     let (l2_status, delivery_status) = match l2.status {
@@ -421,6 +499,8 @@ async fn execute_heartbeat_tick(
                         error: None,
                         delivery_status,
                         new_probe_result: Some(r.raw_value.to_string()),
+                        disable_task: false,
+                        authority_unknown: false,
                     }
                 }
             }
@@ -556,9 +636,19 @@ async fn writeback_one(
             // could fail indefinitely with `consecutive_errors` doing nothing
             // but lengthening the backoff — nobody is told. Same gate cron
             // uses (`tasks::shared::alert`), fed from heartbeat state.
-            if let Some(alert_cfg) =
+            //
+            // An authority-unknown beat is a users-store blip, not a broken
+            // monitor: like cron's transient failures it alerts only once the
+            // streak reaches the floor cron uses (final review M3).
+            let blip_within_floor = tick_result.authority_unknown
+                && task.state.consecutive_errors
+                    < crate::tasks::cron::service::concurrency::TRANSIENT_ALERT_FLOOR;
+            let alert_cfg = if blip_within_floor {
+                None
+            } else {
                 resolve_alert_config(task, state.config.notify_on_failure_default)
-            {
+            };
+            if let Some(alert_cfg) = alert_cfg {
                 let subject = format!("Heartbeat '{}' ({})", task.name, task.id);
                 let fresh = crate::tasks::shared::alert::should_send_alert(
                     &subject,
@@ -618,6 +708,15 @@ async fn writeback_one(
             error!(error = %e, "failed to insert heartbeat run record");
         }
         store.mark_dirty();
+    }
+
+    // After the schedule recompute on purpose: disarming clears the due
+    // time the block above just wrote. Set-not-toggle — see the op.
+    if tick_result.disable_task && super::ops::disable_walled_owner_task(&mut store, task_id) {
+        info!(
+            task_id,
+            "heartbeat: task disabled — owner walled at fire time"
+        );
     }
 
     if let Err(e) = store.persist() {
@@ -685,9 +784,11 @@ async fn deliver_alert(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scope::authority::{resolve_with, Granted};
     use crate::tasks::heartbeat::config::*;
     use crate::tasks::heartbeat::executor::{HeartbeatL2Result, HeartbeatL2Status};
     use crate::tasks::heartbeat::probe::ProbeExecutor;
+    use crate::tasks::heartbeat::store::HeartbeatStore;
     use serde_json::{json, Value};
 
     // Mock probe executor
@@ -709,14 +810,10 @@ mod tests {
     // Mock L2 adapter
     struct MockAdapter {
         status: &'static str, // "silent" or "delivery" or "error"
-        /// The attribution pair the tick actually handed down, recorded so a
-        /// test can tell "the timer forwarded the persisted task's columns"
-        /// apart from "the timer passed `None, None`". Both ends of that wire
-        /// were already defended — the creation faces write the columns and
-        /// the executor turns a pair into run metadata — but a mock that binds
-        /// these two parameters to `_` cannot see the segment between them
-        /// (criteria #4 and #7).
-        seen_attribution: std::sync::Mutex<Option<(Option<String>, Option<String>)>>,
+        /// The authority the tick actually handed down, recorded so a test
+        /// can tell "the timer forwarded the fire-time verdict" apart from
+        /// "the timer passed something else" (criteria #4 and #7).
+        seen_attribution: std::sync::Mutex<Option<Granted>>,
     }
 
     impl MockAdapter {
@@ -727,7 +824,7 @@ mod tests {
             })
         }
 
-        fn seen(&self) -> Option<(Option<String>, Option<String>)> {
+        fn seen(&self) -> Option<Granted> {
             self.seen_attribution
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -742,16 +839,12 @@ mod tests {
             _agent_id: &str,
             _prompt: &str,
             _timeout_secs: u64,
-            owner_user_id: Option<&str>,
-            scope_id: Option<&str>,
+            granted: &Granted,
         ) -> Result<HeartbeatL2Result, String> {
             *self
                 .seen_attribution
                 .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some((
-                owner_user_id.map(str::to_string),
-                scope_id.map(str::to_string),
-            ));
+                .unwrap_or_else(|e| e.into_inner()) = Some(granted.clone());
             let status = match self.status {
                 "silent" => HeartbeatL2Status::Silent,
                 "delivery" => HeartbeatL2Status::NeedsDelivery("Test output".into()),
@@ -763,6 +856,60 @@ mod tests {
                 duration_ms: 50,
             })
         }
+    }
+
+    /// A probe that must never run — the authority gate sits BEFORE L1.
+    struct PanickingProbe;
+
+    #[async_trait::async_trait]
+    impl ProbeExecutor for PanickingProbe {
+        async fn execute(
+            &self,
+            _tool_name: &str,
+            _params: Option<&Value>,
+        ) -> Result<Value, String> {
+            panic!("the L1 probe ran for a beat the authority check stopped");
+        }
+    }
+
+    fn owned_task(owner: &str) -> impl std::future::Future<Output = HeartbeatTask> + '_ {
+        async move {
+            let mut task = make_task();
+            crate::scope::with_scope(
+                Some(crate::scope::ScopeAttribution::personal(owner)),
+                async { task.stamp_current_scope() },
+            )
+            .await;
+            task
+        }
+    }
+
+    /// `u-owner` (active Admin), `u-alice` (active Member), `u-walled`
+    /// (deactivated Member).
+    fn users() -> crate::gateway::security::store::SecurityStore {
+        use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        store
+            .create_user("u-walled", "Walled", UserRole::Member)
+            .unwrap();
+        store
+            .update_user("u-walled", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+        store
+    }
+
+    fn gated_ctx(adapter: Arc<MockAdapter>) -> Arc<TickContext> {
+        Arc::new(TickContext {
+            probe_executor: Arc::new(PanickingProbe),
+            adapter,
+            delivery: Arc::new(DeliveryEngine::new()),
+            dedup: Arc::new(DedupEngine::noop(DedupConfig::default())),
+            job_timeout_secs: 120,
+            change_emitter: None,
+        })
     }
 
     fn make_task() -> HeartbeatTask {
@@ -824,11 +971,8 @@ mod tests {
             "the L2 must actually have run for the adapter to have seen anything"
         );
         assert_eq!(
-            adapter.seen(),
-            Some((
-                Some("u-owner".to_string()),
-                Some("personal:u-owner".to_string())
-            )),
+            adapter.seen().and_then(|g| g.scope),
+            Some(crate::scope::ScopeAttribution::personal("u-owner")),
             "the beat must carry the owner and scope persisted on the task"
         );
     }
@@ -1021,5 +1165,189 @@ mod tests {
         let cfg = resolve_alert_config(&task, true).unwrap();
         assert_eq!(cfg.after, 7);
         assert_eq!(cfg.cooldown_ms, 42);
+    }
+
+    /// N3: a walled owner's beat is stopped BEFORE the L1 probe, recorded
+    /// as Skipped with the reason, and flagged for disabling at writeback.
+    #[tokio::test]
+    async fn a_walled_owners_beat_is_refused_before_the_l1_probe() {
+        let task = owned_task("u-walled").await;
+        let adapter = MockAdapter::new("silent");
+        let ctx = gated_ctx(Arc::clone(&adapter));
+        let authority = resolve_with(Some(&users()), &fire_subject(&task));
+        let result = execute_heartbeat_tick_as(&task, None, &ctx, authority).await;
+        assert_eq!(result.l1_status, "Skipped");
+        assert!(
+            result.disable_task,
+            "a confirmed walled owner must disarm the task"
+        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("principal deactivated"));
+        assert!(adapter.seen().is_none(), "no L2 turn may run");
+    }
+
+    /// R-a: an unreadable users store skips THIS beat with the reason and
+    /// leaves the task armed.
+    #[tokio::test]
+    async fn an_unknown_authority_skips_the_beat_and_keeps_the_task_armed() {
+        let store = users();
+        store
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute("DROP TABLE users", [])
+            .unwrap();
+        let task = owned_task("u-alice").await;
+        let adapter = MockAdapter::new("silent");
+        let ctx = gated_ctx(Arc::clone(&adapter));
+        let authority = resolve_with(Some(&store), &fire_subject(&task));
+        let result = execute_heartbeat_tick_as(&task, None, &ctx, authority).await;
+        assert_eq!(result.l1_status, "Skipped");
+        assert!(!result.disable_task);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("authority unknown: "));
+        assert!(adapter.seen().is_none());
+    }
+
+    /// N4 for heartbeat: a Member owner's beat reaches the adapter with the
+    /// member ceiling.
+    #[tokio::test]
+    async fn a_member_owners_beat_reaches_the_adapter_capped_at_member() {
+        let task = owned_task("u-alice").await;
+        let adapter = MockAdapter::new("silent");
+        let ctx = make_ctx_with(Arc::clone(&adapter));
+        let authority = resolve_with(Some(&users()), &fire_subject(&task));
+        let result = execute_heartbeat_tick_as(&task, None, &ctx, authority).await;
+        assert_eq!(result.l2_status.as_deref(), Some("Silent"));
+        assert_eq!(adapter.seen().and_then(|g| g.role_ceiling), Some("member"));
+    }
+
+    /// The other half of the wire: the tick's flag must reach the store.
+    /// Refused ⇒ disabled with the reason on record; Unknown ⇒ still
+    /// armed, with the reason on record and a next due time.
+    #[tokio::test]
+    async fn writeback_disables_a_refused_task_and_keeps_an_unknown_one_armed() {
+        let mut store = HeartbeatStore::open_in_memory().unwrap();
+        let mut refused = make_task();
+        refused.id = "hb-refused".to_string();
+        let mut unknown = make_task();
+        unknown.id = "hb-unknown".to_string();
+        store.add_task(refused);
+        store.add_task(unknown);
+        let state = HeartbeatServiceState::new(
+            Arc::new(tokio::sync::Mutex::new(store)),
+            HeartbeatConfig::default(),
+        );
+        let ctx = make_ctx("silent");
+
+        let refused_reason = "principal deactivated (u-walled) — task disabled at fire time";
+        writeback_one(
+            &state,
+            "hb-refused",
+            HeartbeatTickResult::authority_skip(refused_reason.to_string(), true),
+            false,
+            &ctx,
+        )
+        .await;
+        writeback_one(
+            &state,
+            "hb-unknown",
+            HeartbeatTickResult::authority_skip("authority unknown: io".to_string(), false),
+            false,
+            &ctx,
+        )
+        .await;
+
+        let store = state.store.lock().await;
+        let r = store.get_task("hb-refused").unwrap();
+        assert!(!r.enabled);
+        assert!(r.state.next_due_ms.is_none());
+        assert_eq!(r.state.last_error.as_deref(), Some(refused_reason));
+        let u = store.get_task("hb-unknown").unwrap();
+        assert!(
+            u.enabled,
+            "R-a: a store read error must not disarm the task"
+        );
+        assert!(u.state.next_due_ms.is_some());
+        assert_eq!(u.state.last_error.as_deref(), Some("authority unknown: io"));
+    }
+
+    /// Final review M3: a users-store blip must not page every heartbeat's
+    /// target on its first beat. An authority-Unknown skip alerts only once
+    /// the streak reaches cron's `TRANSIENT_ALERT_FLOOR`; a CONFIRMED refusal
+    /// still alerts at once.
+    #[tokio::test]
+    async fn an_unknown_authority_beat_alerts_only_after_the_transient_floor() {
+        let alerting = |id: &str| {
+            let mut task = make_task();
+            task.id = id.to_string();
+            task.failure_alert = Some(crate::tasks::shared::alert::FailureAlertConfig {
+                after: 1,
+                cooldown_ms: 0,
+                target: webhook_target(),
+            });
+            task
+        };
+        let mut store = HeartbeatStore::open_in_memory().unwrap();
+        store.add_task(alerting("hb-blip"));
+        store.add_task(alerting("hb-walled"));
+        let state = HeartbeatServiceState::new(
+            Arc::new(tokio::sync::Mutex::new(store)),
+            HeartbeatConfig::default(),
+        );
+        let ctx = make_ctx("silent");
+        let floor = crate::tasks::cron::service::concurrency::TRANSIENT_ALERT_FLOOR;
+        let blip =
+            || HeartbeatTickResult::authority_skip("authority unknown: io".to_string(), false);
+
+        for _ in 1..floor {
+            writeback_one(&state, "hb-blip", blip(), false, &ctx).await;
+        }
+        {
+            let store = state.store.lock().await;
+            let t = store.get_task("hb-blip").unwrap();
+            assert_eq!(t.state.consecutive_errors, floor - 1);
+            assert!(
+                t.state.last_failure_alert_at_ms.is_none(),
+                "an unknown authority paged before the floor"
+            );
+        }
+        writeback_one(&state, "hb-blip", blip(), false, &ctx).await;
+        writeback_one(
+            &state,
+            "hb-walled",
+            HeartbeatTickResult::authority_skip(
+                "principal deactivated (u-walled) — task disabled at fire time".to_string(),
+                true,
+            ),
+            false,
+            &ctx,
+        )
+        .await;
+        let store = state.store.lock().await;
+        assert!(
+            store
+                .get_task("hb-blip")
+                .unwrap()
+                .state
+                .last_failure_alert_at_ms
+                .is_some(),
+            "an unknown that persists to the floor still alerts"
+        );
+        assert!(
+            store
+                .get_task("hb-walled")
+                .unwrap()
+                .state
+                .last_failure_alert_at_ms
+                .is_some(),
+            "a confirmed refusal alerts on its first beat"
+        );
     }
 }

@@ -5,7 +5,7 @@
 //! and user management are admin-only; everything scoped to the caller's own
 //! data stays open to members. Enforced at ONE chokepoint inside
 //! `process_request` — both WS dispatch paths (the `do_lane_dispatch`
-//! closure and the idempotency `Proceed` arm in `server::handler`) scope
+//! closure and the idempotency `Proceed` arm in `server::connection::handle_connection`) scope
 //! `CALLER_ROLE` around `process_request`, so a single check there covers
 //! both.
 //!
@@ -55,7 +55,7 @@
 //! delivery — the same per-user filtering this gate leaves to
 //! `crate::gateway::visibility` for RPCs — is Task 8's
 //! [`crate::gateway::event_visibility`], the 4th term in
-//! `server::handler`'s `should_forward` filter chain.
+//! `server::connection::handle_connection`'s `should_forward` filter chain.
 //!
 //! Two families were read (not guessed) and deliberately left OPEN despite
 //! looking admin-shaped at first glance:

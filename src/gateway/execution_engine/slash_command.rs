@@ -559,17 +559,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
-        // The same facts `ScopedToolService` builds. `requires_approval` is read
-        // from the adapter's own declaration list rather than guessed: the fast
-        // path can only reach builtin and plugin tools (MCP and skill modes fall
-        // through above), and those are exactly the tools that list covers — so
-        // this is the tier's real input, not a fail-closed stand-in that would
-        // make every command fall through.
-        let facts = ToolFacts {
-            name,
-            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
-            requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
-        };
+        // The same constructor `ScopedToolService` uses. No registry
+        // declaration is at hand here (the fast path dispatches through the
+        // executor's `ToolRegistry`), so `for_tool` answers from the builtin
+        // lists — which cover every tool this path can reach: MCP and skill
+        // modes fall through above.
+        let facts = ToolFacts::for_tool(name, None);
         let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
 
         if permission != PermissionAction::Allow {

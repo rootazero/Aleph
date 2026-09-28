@@ -80,6 +80,15 @@ pub enum FlowStreamEvent {
     },
     /// Safety gate blocked the turn. `reason` is for i18n formatting.
     SafetyBlock { reason: String },
+    /// A step-relevant harness trace event, mirrored onto THIS channel so it
+    /// takes its `seq` from the same serial drain as the text / thinking /
+    /// tool frames around it. Carried as the protocol type: the sink filters
+    /// (`is_step_event`) and converts before sending, so the drain only
+    /// stamps `run_id` + `seq`. Until 2026-09-23 these frames rode a separate
+    /// `mpsc` + spawned task and could be sequenced after the `ResponseChunk`s
+    /// of the iteration they open — the race the Panel's `begin_step` patched
+    /// around.
+    Trace(aleph_protocol::AgentTraceEvent),
     /// Terminal event — carries the complete `FlowOutcome`. Always last.
     Complete(FlowOutcome),
 }
@@ -427,6 +436,15 @@ pub struct ToolInvocation {
 pub struct FlowRequest {
     pub flow_id: Option<FlowId>,
     pub agent_id: AgentId,
+    /// The engine's id for the run this dispatch serves (`RunRequest.run_id`).
+    /// The harness bridge writes it on the run's `RunStarted` / `RunFinished`
+    /// markers, and `execute()` stamps the same id on the run's
+    /// `AssistantRunMeta` — so the log's markers and its meta name one run.
+    /// Required and deliberately not defaulted: a placeholder id would be a
+    /// marker that joins nothing. The fallback retry loop rebuilds this
+    /// request under the SAME id, so one run can leave several marker
+    /// brackets in one log.
+    pub run_id: String,
     pub input: FlowInput,
     /// Originating platform (`request.metadata["platform"]`), for diagnostics
     /// only — it appears in this struct's `Debug` output and nowhere else.
@@ -480,6 +498,21 @@ pub struct FlowRequest {
     /// Gateway-side observability sink. `None` is a no-op.
     /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
     pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    /// The run's flow-event channel, when the caller already publishes on it.
+    /// The gateway's `AgentTraceEmitSink` must send `FlowStreamEvent::Trace`
+    /// on the same channel the harness callback uses, or trace frames lose
+    /// their place in the run's `seq` order — and that sink is built by
+    /// `execution_engine/run_trace_sinks.rs::RunTraceSinks::build`, INSIDE the
+    /// unattended redacting wrap, before `dispatch` runs. `None` = `dispatch`
+    /// creates the channel itself (tests, callers with no trace mirror). Always from
+    /// [`flow_event_channel`], so the capacity is one number.
+    ///
+    /// This is a STRONG sender and it dies with the request (when `dispatch`
+    /// returns) — the caller must not keep a clone, or a harness that returns
+    /// without a terminal `Complete` leaves the gateway drain waiting for a
+    /// `Closed` that never comes. The emit sink holds only a weak half.
+    /// Not included in `Debug` output.
+    pub event_tx: Option<broadcast::Sender<FlowStreamEvent>>,
     /// Phase 4 (F4): channel-aware interaction envelope. When `Some`, the
     /// harness bridge threads this `InteractionManifest` into the
     /// `ResolvedContext` used for prompt assembly, so per-channel
@@ -564,6 +597,7 @@ impl std::fmt::Debug for FlowRequest {
         f.debug_struct("FlowRequest")
             .field("flow_id", &self.flow_id)
             .field("agent_id", &self.agent_id)
+            .field("run_id", &self.run_id)
             .field("input", &self.input)
             .field("channel", &self.channel)
             .field("session_hint", &self.session_hint)
@@ -587,6 +621,21 @@ impl std::fmt::Debug for FlowRequest {
 /// 256 is a deliberate balance: large enough for bursts of rapid tool calls,
 /// small enough to bound memory overhead per active flow.
 const CHANNEL_BUFFER_SIZE: usize = 256;
+
+/// The run's flow-event channel, at the one capacity every run uses.
+///
+/// Callers that must publish onto the run's channel BEFORE `dispatch` runs
+/// (the gateway's `AgentTraceEmitSink`, built by
+/// `execution_engine/run_trace_sinks.rs::RunTraceSinks::build` inside the
+/// unattended redacting wrap) create the channel here and hand the sender
+/// through [`FlowRequest::event_tx`]; `dispatch` subscribes to it instead of
+/// creating its own. One channel per run, never two.
+pub fn flow_event_channel() -> (
+    broadcast::Sender<FlowStreamEvent>,
+    broadcast::Receiver<FlowStreamEvent>,
+) {
+    broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE)
+}
 
 /// Orchestrator dependencies. Most are behind `Arc<dyn Trait>` so the struct
 /// itself is cheap to share. Per-session lock is an internal `Mutex<HashSet>`.
@@ -705,6 +754,9 @@ pub trait HarnessRunner: Send + Sync {
         // Outranks the session's sticky `select_model` pick and the agent's
         // `model_hint`; `None` leaves the directive chain untouched.
         model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
+        // The engine's run id (`FlowRequest::run_id`). Implementations that
+        // write run markers MUST write this id on them — see that field's doc.
+        run_id: String,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -1045,7 +1097,18 @@ impl Orchestrator {
         };
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
-        let (event_tx, event_rx) = broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE);
+        // One channel per run. A caller that already publishes on it (the
+        // gateway's trace mirror) hands the sender in; we subscribe. The
+        // subscription must happen before the harness task starts — a
+        // broadcast receiver only sees sends made after it exists.
+        // rust-doctor-disable-next-line excessive-clone
+        let (event_tx, event_rx) = match req.event_tx.clone() {
+            Some(tx) => {
+                let rx = tx.subscribe();
+                (tx, rx)
+            }
+            None => flow_event_channel(),
+        };
         let (done_tx, done_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
 
@@ -1081,6 +1144,8 @@ impl Orchestrator {
         let envelope = req.envelope.clone();
         // rust-doctor-disable-next-line excessive-clone
         let model_directive = req.model_directive.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let run_id = req.run_id.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
@@ -1196,6 +1261,7 @@ impl Orchestrator {
                                     think_level,
                                     envelope,
                                     model_directive,
+                                    run_id,
                                 ),
                             ),
                         ),
@@ -1217,9 +1283,7 @@ impl Orchestrator {
                     tracing::error!(
                         "harness task panicked; surfacing as FlowError::Internal: {msg}"
                     );
-                    Err(FlowError::Internal(format!(
-                        "harness task panicked: {msg}"
-                    )))
+                    Err(FlowError::Internal(format!("harness task panicked: {msg}")))
                 }
             };
 

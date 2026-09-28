@@ -59,9 +59,10 @@ impl EventScopeGuard {
     /// (`runtime.agents.list`'s prefix in `method_admin.rs`). Its one topic,
     /// `runtime.agents.changed`, carries NO session id or other payload
     /// (`json!({})` — clients re-fetch via the gated RPC), so unlike `pty.`
-    /// it needs no `session_identity_of` arm to narrow per-session ownership
-    /// within the operators this rule admits: role alone is the whole
-    /// answer, because there is no per-row content on the wire to leak.
+    /// its arm in `event_visibility::classify` narrows nothing: it is an
+    /// explicit `Global` (present so the raw-topic census can tell "somebody
+    /// decided" from "fell through"), and role alone is the whole answer,
+    /// because there is no per-row content on the wire to leak.
     ///
     /// `node.` is the delivery-side half of the `environments.` RPC gate
     /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the
@@ -184,7 +185,7 @@ pub fn is_superuser_scope(permissions: &[String]) -> bool {
 /// The event scope stamped onto a connection holding the resolved wire `role`.
 ///
 /// **Single authority for the role → event-scope mapping.** Both writers call
-/// it: the `connect` handshake (`server::handler`) and the live role re-stamp
+/// it: the `connect` handshake (`server::connection::handle_connection`) and the live role re-stamp
 /// (`handlers::users::restamp_live_connections`). Written twice, the two halves
 /// drift — a demoted admin would keep the wildcard on his open tab until he
 /// happened to reconnect, which is the exact indefinite window the re-stamp
@@ -519,55 +520,60 @@ mod tests {
         }
     }
 
-    /// SOURCE-level pin: every `node.*` topic the center actually publishes
+    /// SOURCE-level pin: every `node.*` topic any production code publishes
     /// must be refused to a member.
     ///
     /// The fleet events are raw `TopicEvent`s with no `GatewayEventFrame`
     /// variant behind them, so nothing in this crate breaks if the `node.`
     /// rule is deleted — the topics simply fall through `can_receive`'s
     /// default-allow tail and every logged-in member starts receiving live
-    /// cluster topology again, silently. Reading the producer's source text is
+    /// cluster topology again, silently. Reading the producers' source text is
     /// the only thing that is not blind to that, and it is deliberately NOT a
     /// suffix whitelist: a `node.evicted` added tomorrow is covered by the
     /// prefix rule and by this scan without anyone editing a list here.
+    ///
+    /// Built on [`source_census::all_topic_producers`] — the whole `src/`
+    /// tree, not a named file. It used to read `server/handler.rs` alone;
+    /// `4d1061370` moved both producers into `server/connection/{mod,cleanup}.rs`
+    /// and left that file re-exports only, so the pin scraped nothing (N7,
+    /// r11). `cluster/enrollment.rs`'s operator-deregister producer was never
+    /// in its corpus. The two topics below are a non-vacuity FLOOR, not the
+    /// coverage: every `node.*` the walk finds is asserted.
     #[test]
     fn every_node_topic_the_center_publishes_is_refused_to_a_member() {
-        // Production half only: handler.rs's own test module publishes topics
-        // that no client ever sees.
-        let production = source_census::production_prefix(include_str!("server/handler.rs"));
-        let topics = source_census::topic_event_literals(&production);
-        assert!(
-            !topics.is_empty(),
-            "the scanner matched no `TopicEvent::new(\"…\"` call in \
-             server/handler.rs — the call shape changed and this pin has \
-             quietly become vacuous"
-        );
-
         let g = EventScopeGuard::default_rules();
         let member = scope_for_role("member");
         let operator = scope_for_role("operator");
-        let mut node_topics = 0usize;
-        for topic in &topics {
+        let mut seen = std::collections::BTreeSet::new();
+        for producer in source_census::all_topic_producers() {
+            let Some(topic) = producer.topic.as_deref() else {
+                continue;
+            };
             if !topic.starts_with("node.") {
                 continue;
             }
-            node_topics += 1;
             assert!(
                 !g.can_receive(topic, &member),
-                "server/handler.rs publishes `{topic}`, which a member can \
-                 still receive — cluster topology is admin-only on both faces"
+                "{} publishes `{topic}`, which a member can still receive — \
+                 cluster topology is admin-only on both faces",
+                producer.file
             );
             assert!(
                 g.can_receive(topic, &operator),
-                "an operator must still receive `{topic}` — the Panel's fleet \
-                 list is driven by it"
+                "an operator must still receive `{topic}` ({}) — the Panel's \
+                 fleet list is driven by it",
+                producer.file
+            );
+            seen.insert(topic.to_string());
+        }
+        for floor in ["node.connected", "node.disconnected"] {
+            assert!(
+                seen.contains(floor),
+                "the census found no producer of `{floor}` (saw {seen:?}) — the \
+                 walk or the scraper stopped matching and this pin has quietly \
+                 become vacuous"
             );
         }
-        assert!(
-            node_topics >= 2,
-            "only {node_topics} `node.*` topic(s) scraped; handler.rs publishes \
-             node.connected and node.disconnected, so the scanner is missing some"
-        );
     }
 
     /// The fleet has two faces and they must agree. `environments.list` (RPC)

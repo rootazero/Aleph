@@ -730,6 +730,24 @@ pub fn validate_engine_driver(profile_name: &str, cfg: &ProfileConfig) -> Result
     Ok(())
 }
 
+/// The profile key a principal's browser state lives under — the ONE place
+/// "whose browser is this" is composed.
+///
+/// Same grammar as a memory partition (`memory::project_scope::scoped_agent_id`,
+/// separator `__`): Alice's `default` is `default__u-alice`. The machine owner
+/// and an actor-less caller get `name` itself, so the `default` directory
+/// every install already has stays the owner's with no data migration (r11
+/// ruling R-c).
+#[must_use]
+pub fn principal_profile_key(name: &str, actor: Option<&str>) -> String {
+    match actor {
+        Some(principal) if principal != crate::gateway::security::store::OWNER_USER_ID => {
+            crate::memory::project_scope::scoped_agent_id(name, principal)
+        }
+        _ => name.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1470,5 +1488,23 @@ variant = "stealth"
         // The table is PRESENT and `variant` is absent, so this exercises the
         // field-level serde default rather than `Default::default()`.
         assert_eq!(pinned.obscura.variant, ObscuraVariant::Default);
+    }
+
+    #[test]
+    fn a_principal_profile_key_is_the_memory_partition_grammar() {
+        use crate::gateway::security::store::OWNER_USER_ID;
+        assert_eq!(
+            principal_profile_key("default", Some("u-alice")),
+            "default__u-alice"
+        );
+        assert_eq!(
+            principal_profile_key("default", Some(OWNER_USER_ID)),
+            "default"
+        );
+        assert_eq!(principal_profile_key("default", None), "default");
+        assert_eq!(
+            principal_profile_key("work", Some("u-bob")),
+            crate::memory::project_scope::scoped_agent_id("work", "u-bob")
+        );
     }
 }

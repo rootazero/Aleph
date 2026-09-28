@@ -180,6 +180,78 @@ mod tests {
         }
     }
 
+    /// End-of-pipe check for the 2026-09 round (vs pi.dev/models 2026-09
+    /// snapshot). Each of these is a model Aleph now advertises via its
+    /// `pi-mono` 2026-09 catalog refresh and previously sized incorrectly
+    /// (either compressed to the conservative 128K fallback or to the
+    /// broad-family row's stale window).
+    #[test]
+    fn pi_dev_2026_09_families_resolve_correctly() {
+        for (provider, model, window) in [
+            // Anthropic 3.7 Sonnet — the only reasoning 3.x model. Used to
+            // land on `claude-3` (no reasoning, 8K output).
+            ("anthropic", "claude-3-7-sonnet-20250219", 200_000),
+            ("anthropic", "claude-3-7-sonnet-latest", 200_000),
+            // OpenAI GPT-5.4 Pro — 1.05M (vs the 272K the 5.4 base row
+            // reports). codex-mini-latest — new pi.dev id, text-only
+            // reasoning at 200K/100K.
+            ("openai", "gpt-5.4-pro", 1_050_000),
+            ("openai", "codex-mini-latest", 200_000),
+            // Google Gemini 2.5 Flash Lite — same shape as the regular Flash
+            // (1M/64K) but a distinct prefix so the Lite id stays visible.
+            ("gemini", "gemini-2.5-flash-lite", 1_048_576),
+            // xAI Grok 3 / Grok 3 Mini — 131K, distinct from the broad 131K
+            // / 16K + vision `grok` row. Grok Code Fast 1 — 256K / 10K
+            // (not the broad 256K / 64K).
+            ("xai", "grok-3", 131_072),
+            ("xai", "grok-3-mini", 131_072),
+            ("xai", "grok-code-fast-1", 256_000),
+            // Mistral reasoning + coding tiers — previously fell to the
+            // broad 128K / 8K / no-reasoning row.
+            ("mistral", "magistral-small", 128_000),
+            // devstral-medium-latest is recorded as superseded by
+            // `mistral-medium-3-5` in `lifecycle.rs` and is therefore
+            // deliberately excluded here.
+            ("mistral", "codestral-latest", 256_000),
+            ("mistral", "pixtral-large-latest", 128_000),
+            ("mistral", "open-mixtral-8x22b", 64_000),
+            ("mistral", "open-mistral-7b", 8_192),
+            // MiniMax M2.x — the broad M2 row carried max_output = 16K (vs
+            // 131K), reserving 8x less than the real cap. The M2.1 / M2.5 /
+            // M2.5-highspeed specific rows pin the right shape.
+            ("minimax", "MiniMax-M2.1", 204_800),
+            ("minimax", "MiniMax-M2.5", 204_800),
+            ("minimax", "MiniMax-M2.5-highspeed", 204_800),
+            // ZAI GLM 4.x — distinct from the existing GLM-5.x family.
+            ("zai", "glm-4.7", 200_000),
+            ("zai", "glm-4.6v", 128_000),
+            ("zai", "glm-4.5v", 64_000),
+            ("zai", "glm-4.5-air", 131_072),
+            // Kimi Coding subscription id `k2p5` — canonicalises to `k2.5` (the
+            // Fireworks `p`-separator rewrite), but neither shape reaches
+            // the `kimi-for-coding` row; the explicit `k2.5` prefix below
+            // is what sizes it.
+            ("kimi-for-coding", "k2p5", 262_144),
+            // Qwen QwQ reasoning tier — distinct from the broad `qwen` row.
+            ("qwen", "qwen-qwq-32b", 131_072),
+            // Gemma 2 — 8K, used to land on the 1M `gemini` fallback.
+            ("groq", "gemma2-9b-it", 8_192),
+        ] {
+            let r = ModelRecord::resolve(provider, model, None, ModelSource::PresetDefault);
+            let caps = r
+                .capabilities
+                .unwrap_or_else(|| panic!("{provider}/{model} has no capability row"));
+            assert_eq!(
+                caps.context_window, window,
+                "{provider}/{model} window drifted"
+            );
+            assert!(
+                !r.lifecycle.is_deprecated(),
+                "{provider}/{model} is advertised but recorded as retired"
+            );
+        }
+    }
+
     /// Retirement scope, seen from the surface that consumes it rather than
     /// from the table. Groq dropped both Llama tiers; Together did not.
     #[test]

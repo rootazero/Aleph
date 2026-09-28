@@ -81,7 +81,7 @@ impl<S> RateLimitService<S> {
 /// 3. **No principal** — a pre-login `connect`, or a walled connection — stays
 ///    pooled in `"rpc"`. There is no identity to ration yet, and inventing one
 ///    from something the caller supplies would be a bucket the caller chooses.
-///    The WS dispatch loop's own per-client-IP check (`server/handler.rs`) is
+///    The WS dispatch loop's own per-client-IP check (`server/connection/mod.rs`) is
 ///    the isolator for that traffic, and it is why this arm is safe to pool.
 ///
 /// # What this layer does NOT claim to be

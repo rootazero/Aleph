@@ -79,7 +79,7 @@
 
 中心对每条连接强制两道闸,顺序是**先首帧规则、后登录墙**:
 
-1. **首帧必须是 `connect`**(`gateway/server/handler.rs`)——否则回 `AUTH_REQUIRED`
+1. **首帧必须是 `connect`**(`gateway/server/connection/mod.rs::handle_connection`;`server/handler.rs` 自 `4d1061370` 拆分后只剩 re-export)——否则回 `AUTH_REQUIRED`
    **并关闭 socket**。
 2. **登录墙**:远程未授权连接只能发 `connect`,别的方法一律拒。
 
@@ -602,7 +602,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。**该轮**四个 LLM 工具与
   `NodeRegistry` **零改动**(纯传输层收口)——这是当时那笔 diff 的记账,不是现状:
   一周后的注销掐断、以及 2026-09-05 的原子化,都改到了 `NodeRegistry`。锚点 `cluster/reverse_rpc.rs::with_close` +
-  `gateway/server/handler.rs` 的 `rpc_close` select arm。
+  `gateway/server/connection/mod.rs::handle_connection` 的 `rpc_close` select arm(写下时在 `server/handler.rs`)。
 
 - **按名寻址 Unicode 化(2026-07-20 收口 ASCII-only 漂移)**:`normalize_node_key` 曾用
   `is_ascii_alphanumeric` + `to_ascii_lowercase`,把所有非 ASCII 字母当分隔符——中文/日文节点名

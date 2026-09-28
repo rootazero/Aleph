@@ -225,6 +225,28 @@ impl ProjectManageTool {
         crate::gateway::visibility::ambient_actor()
     }
 
+    /// The `owner_user_id` a room created this call is stamped with — a
+    /// PERSON, composed from `ambient_principal` (never `ambient_actor`, whose
+    /// last arm is the turn's agent id: a room owned by `main` is a room no
+    /// user owns or can administer).
+    ///
+    /// - A person ⇒ that person.
+    /// - The legacy single-user install with nobody attached ⇒ unowned, which
+    ///   reads as the legacy owner by absence (`owner_or_legacy`).
+    /// - Nobody attached on a server with users ⇒ refused: "I do not know who
+    ///   this is" must not be written down as an owner (判据 §8).
+    fn room_owner(principal: crate::gateway::visibility::RunPrincipal) -> Result<Option<String>> {
+        use crate::gateway::visibility::RunPrincipal;
+        match principal {
+            RunPrincipal::Person(person) => Ok(Some(person)),
+            RunPrincipal::Legacy => Ok(None),
+            RunPrincipal::Unattached => Err(AlephError::tool(
+                "no person is attached to this run, and a room must be owned by a person; \
+                 create the room from a signed-in session",
+            )),
+        }
+    }
+
     /// Resolve a room the actor may address, or the one refusal shape.
     ///
     /// "Not on the roster" and "does not exist" are one message on purpose:
@@ -236,16 +258,7 @@ impl ProjectManageTool {
 
     /// Refuse unless the actor may reconfigure `project`.
     fn require_owner(&self, project: &Project, actor: Option<&str>) -> Result<()> {
-        let is_admin = match (actor, self.users.as_ref()) {
-            (Some(caller), Some(users)) => matches!(
-                users.get_user(caller),
-                Ok(Some(u))
-                    if u.role == crate::gateway::security::store::UserRole::Admin
-                        && u.status == crate::gateway::security::store::UserStatus::Active
-            ),
-            _ => false,
-        };
-        if authz::is_owner(project, actor, is_admin) {
+        if authz::manageable(project, actor, self.users.as_deref()) {
             return Ok(());
         }
         Err(AlephError::tool(
@@ -291,13 +304,14 @@ impl ProjectManageTool {
         }
     }
 
-    fn render(&self, project: Project) -> Result<ProjectRow> {
+    fn render(&self, project: Project, actor: Option<&str>) -> Result<ProjectRow> {
         let members = self
             .store
             .members(&project.id)
             .map_err(|e| AlephError::tool(format!("failed to read roster: {e}")))?;
+        let manageable = authz::manageable(&project, actor, self.users.as_deref());
         Ok(crate::gateway::handlers::projects::render_project(
-            project, members,
+            project, members, manageable,
         ))
     }
 
@@ -420,7 +434,7 @@ impl AlephTool for ProjectManageTool {
                 let mut rows = Vec::new();
                 for p in all {
                     if crate::gateway::visibility::project_visible_to(&p.id, actor) {
-                        rows.push(self.render(p)?);
+                        rows.push(self.render(p, actor)?);
                     }
                 }
                 let message = format!("{} room(s)", rows.len());
@@ -438,7 +452,7 @@ impl AlephTool for ProjectManageTool {
                 let name = project.name.clone();
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(project)?),
+                    project: Some(self.render(project, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("room '{name}'"),
@@ -446,15 +460,16 @@ impl AlephTool for ProjectManageTool {
             }
             ProjectAction::Create => {
                 let name = Self::need(args.name.as_ref(), "name", action)?;
+                let owner = Self::room_owner(crate::gateway::visibility::run_principal())?;
                 let project = self
                     .store
-                    .create(name, actor, None)
+                    .create(name, owner.as_deref(), None)
                     .map_err(|e| AlephError::tool(format!("failed to create project: {e}")))?;
                 let id = project.id.clone();
                 self.announce(&id, ChangeKind::Created, None);
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(project)?),
+                    project: Some(self.render(project, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("created room '{name}' ({id})"),
@@ -472,7 +487,7 @@ impl AlephTool for ProjectManageTool {
                 self.announce(id, ChangeKind::Updated, None);
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(renamed)?),
+                    project: Some(self.render(renamed, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message: format!("renamed to '{name}'"),
@@ -644,7 +659,7 @@ impl AlephTool for ProjectManageTool {
                 );
                 Ok(ProjectManageOutput {
                     action,
-                    project: Some(self.render(bound)?),
+                    project: Some(self.render(bound, actor)?),
                     projects: Vec::new(),
                     members: Vec::new(),
                     message,
@@ -714,6 +729,35 @@ mod tests {
             user_id: None,
             path: None,
         }
+    }
+
+    #[tokio::test]
+    async fn the_tool_row_says_who_may_manage_the_room() {
+        let (tool, project, _store, _g) = fixture();
+        let get = |who: &'static str| {
+            let tool = tool.clone();
+            let id = project.id.clone();
+            async move {
+                as_user(who, async {
+                    tool.call(ProjectManageArgs {
+                        action: ProjectAction::Get,
+                        project_id: Some(id),
+                        name: None,
+                        user: None,
+                        user_id: None,
+                        path: None,
+                    })
+                    .await
+                })
+                .await
+                .expect("a roster member reads the room")
+                .project
+                .expect("get returns the row")
+                .manageable
+            }
+        };
+        assert!(get("u-alice").await, "the owner");
+        assert!(!get("u-bob").await, "a plain member");
     }
 
     /// The capability this task exists for. Asserted on the ROSTER, not on the
@@ -1165,8 +1209,9 @@ mod tests {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (log, mut rx) =
-            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(
+            crate::security::audit::TEST_LOG_CAPACITY,
+        );
         crate::security::audit::replace_global_for_test(&log);
 
         let (tool, project, _store, _g) = fixture();
@@ -1611,5 +1656,117 @@ mod tests {
         let row = out.project.expect("a created room comes back");
         assert_eq!(row.name, "headless room");
         assert_eq!(row.owner_user_id, None);
+    }
+
+    /// A run with no person but a turn agent id (A2A, a bare turn): the
+    /// room's owner column must never be written as the AGENT id — a room
+    /// owned by `main` is one no user owns or can administer.
+    #[tokio::test]
+    async fn a_room_is_never_owned_by_an_agent_id() {
+        let (tool, _project, _store, _g) = fixture();
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::Main {
+                agent_id: "main".to_string(),
+                main_key: crate::routing::session_key::DEFAULT_MAIN_KEY.to_string(),
+                epoch: 0,
+            },
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        let out = crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, async {
+                assert_eq!(
+                    crate::gateway::visibility::ambient_actor().as_deref(),
+                    Some("main"),
+                    "precondition: the actor falls back to the turn's agent id"
+                );
+                tool.call(ProjectManageArgs {
+                    action: ProjectAction::Create,
+                    project_id: None,
+                    name: Some("a2a room".into()),
+                    user: None,
+                    user_id: None,
+                    path: None,
+                })
+                .await
+            })
+            .await
+            .expect("single-user: an unattached create is the legacy owner's");
+        let row = out.project.expect("a created room comes back");
+        assert_eq!(row.owner_user_id, None);
+    }
+
+    /// The None-principal ruling (r11) on room creation: a person owns the
+    /// room; on a server with users, a run nobody is attached to is refused
+    /// with a reason instead of writing an owner it does not know.
+    #[test]
+    fn a_room_needs_a_person_to_own_it_on_a_server_with_users() {
+        use crate::gateway::visibility::run_principal_with;
+        assert_eq!(
+            ProjectManageTool::room_owner(run_principal_with(Some("u-alice".into()), true))
+                .unwrap()
+                .as_deref(),
+            Some("u-alice")
+        );
+        assert_eq!(
+            ProjectManageTool::room_owner(run_principal_with(None, false)).unwrap(),
+            None
+        );
+        let refused = ProjectManageTool::room_owner(run_principal_with(None, true))
+            .expect_err("nobody attached on a server with users owns no room");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+    }
+
+    /// Re-review N1: a speakerless run inside a room (announce delivery, boot
+    /// resume) has an unknown initiator, so room creation must not stamp the
+    /// room's CREATOR — whom `ambient_principal` falls back to — as the new
+    /// room's owner. On a server with users it is refused; single-user it is
+    /// unowned (the legacy owner by absence); a seeded speaker owns it.
+    #[tokio::test]
+    async fn a_speakerless_room_run_owns_no_room_it_creates() {
+        use crate::gateway::visibility::run_principal_in;
+        let room = || {
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: "u-alice".to_string(),
+                scope: crate::scope::ScopeId::Project("p-room".to_string()),
+            })
+        };
+        let (multi, single) = crate::scope::with_scope(room(), async {
+            assert_eq!(
+                crate::gateway::visibility::ambient_principal().as_deref(),
+                Some("u-alice"),
+                "precondition: with no speaker the ambient person is the room's creator"
+            );
+            (
+                ProjectManageTool::room_owner(run_principal_in(true)),
+                ProjectManageTool::room_owner(run_principal_in(false)),
+            )
+        })
+        .await;
+        let refused = multi.expect_err("an unknown initiator owns no room on a server with users");
+        assert!(
+            refused.to_string().contains("no person is attached"),
+            "{refused}"
+        );
+        assert_eq!(single.unwrap(), None);
+
+        let spoken = crate::scope::with_scope(
+            room(),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                ProjectManageTool::room_owner(run_principal_in(true))
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(spoken.as_deref(), Some("u-bob"));
     }
 }

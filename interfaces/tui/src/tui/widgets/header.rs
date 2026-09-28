@@ -198,7 +198,11 @@ mod tests {
         // Both are CalVer strings, so a wrong wiring would still *look*
         // right; what pins it is that this is the file the release process
         // writes.
-        let from_file = std::fs::read_to_string("../../VERSION").expect("workspace VERSION file");
+        // Anchor the path on the package manifest dir so the test works
+        // regardless of the cwd cargo happens to invoke it from.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let from_file = std::fs::read_to_string(format!("{}/../../VERSION", manifest_dir))
+            .expect("workspace VERSION file");
         assert_eq!(VERSION, from_file.trim());
     }
 

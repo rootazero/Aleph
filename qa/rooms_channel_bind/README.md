@@ -100,9 +100,8 @@ Those two assertions had never once executed before.
   spelling assumes the agent id never changes, and an agent switch is precisely
   what changes it. The claim is that the *room* survives the switch, so the
   assertion is on the room half of the partition plus the new row's scope.
-- **A second `bind` with no `--label` clears the stored label.** Recorded as a
-  fact by the driver rather than asserted: a re-bind reads like an idempotent
-  no-op and this half of it is not.
+- **A second `bind` with no `--label` keeps the stored label** (Ruling R-e,
+  round-11). Asserted by the driver; `--label ""` is the way to clear it.
 
 ## Not covered
 

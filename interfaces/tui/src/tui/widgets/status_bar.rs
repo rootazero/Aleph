@@ -245,6 +245,21 @@ impl StatusBar<'_> {
             ));
         }
 
+        // The conversation's pinned model (`select_model`), if any. Same kind
+        // as the settable knobs so a narrow line sheds them together. The
+        // glyph and `pin:` prefix set it apart from the `<command>:<value>`
+        // shape of the four above — a pin is read-only, and a user who
+        // glances at the bar must not mistake the prefix for one they can
+        // type after `/`. Deliberately NOT via `SessionKnob::ALL`: that
+        // constant stays at four (see the doc on `SessionKnob`).
+        if let Some(pin) = self.knobs.model_pin {
+            out.push(Segment::one(
+                SegKind::Knob,
+                format!(" \u{1f4cc}pin:{pin} "),
+                text_style,
+            ));
+        }
+
         // Background sub-agents still working for this session. Absent at
         // zero — an idle session does not need a zero.
         if self.running_agents > 0 {
@@ -441,6 +456,7 @@ mod tests {
                 exec_tier: Some("ask"),
                 think_level: None,
                 memory_mode: None,
+                model_pin: None,
             },
         }
     }
@@ -504,6 +520,32 @@ mod tests {
         bar.cost = CostView::AtLeast(0.1);
         let line = painted(&bar, 200);
         assert!(line.contains("$0.100+?"), "{line}");
+    }
+
+    /// A pin armed on the conversation paints as a `📌pin:<model>` segment
+    /// (T1.9, was missing — the caption used to name `model` instead and so
+    /// mis-described the model the user just switched away from). The
+    /// assertion skips the emoji itself: ratatui's `TestBackend` encodes it
+    /// as a wide character that takes two cells, with the trailing cell
+    /// rendering as a space — what the reader sees is the model id preceded
+    /// by `pin:`, and that is the contract under test.
+    #[test]
+    fn a_pinned_model_paints_as_a_pin_segment() {
+        let mut bar = full_bar();
+        bar.knobs.model_pin = Some("claude-opus-5");
+        let line = painted(&bar, 200);
+        assert!(line.contains("pin:claude-opus-5"), "{line}");
+    }
+
+    /// A conversation with no pin shows no `pin:` segment — an unset pin is
+    /// a real state (the install default is in play), not a missing field.
+    /// The default `full_bar()` has `model_pin: None`; this guards the
+    /// `if let Some(pin)` branch from becoming an unconditional render.
+    #[test]
+    fn an_unpinned_conversation_paints_no_pin_segment() {
+        let bar = full_bar();
+        let line = painted(&bar, 200);
+        assert!(!line.contains("pin:"), "{line}");
     }
 
     #[test]

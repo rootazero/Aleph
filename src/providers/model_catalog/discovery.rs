@@ -357,6 +357,13 @@ fn parse_listing(body: &str) -> Option<Vec<DiscoveredModel>> {
             "context_window",
             "max_context_length",
             "inputTokenLimit",
+            // Ollama `/api/tags` does not currently emit `context_length` on
+            // `details` (it ships `parameter_size` and `family` instead), so
+            // this entry is a forward-compatibility slot, not a known shape:
+            // the day Ollama starts advertising the figure it lands here
+            // without a parser change. Listing it now keeps the table the
+            // single place to consult when a new vendor shape appears.
+            "details.context_length",
         ]
         .iter()
         .find_map(|k| row.get(*k))
@@ -463,6 +470,33 @@ mod tests {
         let models = parse_listing(body).unwrap();
         assert_eq!(models[0].id, "models/gemini-3.1-pro-preview");
         assert_eq!(models[0].context_window, Some(1_048_576));
+    }
+
+    #[test]
+    fn parses_ollama_shape_with_details() {
+        // Ollama `/api/tags` uses the `models[]` array (same outer shape as
+        // Gemini) with two material differences: the id lives on `name` and
+        // the only metadata shipped today is `details.parameter_size` /
+        // `details.family` — there is **no** context-length field. The parser
+        // must still resolve both ids; window stays `None` because Ollama
+        // simply does not send it. The `details.context_length` slot in the
+        // context-window array is a forward-compatibility placeholder for the
+        // day Ollama starts emitting the figure.
+        let body = r#"{"models":[
+            {"name":"llama3.3:70b","details":{"parameter_size":"70B","family":"llama"}},
+            {"name":"codellama:13b","details":{"parameter_size":"13B"}}
+        ]}"#;
+        let models = parse_listing(body).unwrap();
+        assert_eq!(models.len(), 2, "both Ollama rows must surface");
+        assert_eq!(models[0].id, "llama3.3:70b");
+        assert!(
+            models[0].context_window.is_none(),
+            "Ollama does not emit context_length; the lookup table must not \
+             invent one. Window stays None and the picker falls back to the \
+             conservative default."
+        );
+        assert_eq!(models[1].id, "codellama:13b");
+        assert!(models[1].context_window.is_none());
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub struct AgentTracePresentationLabels {
     pub state_finalize: String,
     pub text_intermediate: String,
     pub text_final: String,
+    /// Label for the per-iteration reasoning record (`ReasoningEmitted`).
+    pub reasoning_emitted: String,
     pub tool_call_started: String,
     pub tool_call_completed: String,
     pub tool_summary: String,
@@ -110,6 +112,7 @@ impl AgentTracePresentationLabels {
             state_finalize: "Finalizing".into(),
             text_intermediate: "Intermediate text".into(),
             text_final: "Final text".into(),
+            reasoning_emitted: "Reasoning".into(),
             tool_call_started: "Tool call".into(),
             tool_call_completed: "Tool done".into(),
             tool_summary: "Tool summary".into(),
@@ -265,6 +268,18 @@ pub fn present_agent_trace_event(
                 duration_ms: None,
             })
         }
+
+        AgentTraceEvent::ReasoningEmitted { iteration, text } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!(
+                "[{}] iter {}: {}",
+                labels.reasoning_emitted,
+                iteration,
+                truncate(text, options.content_limit)
+            ),
+            duration_ms: None,
+        }),
 
         AgentTraceEvent::ToolCallStarted { call, .. } => Some(AgentTracePresentation {
             kind: event.kind().into(),
@@ -916,6 +931,32 @@ mod tests {
         )
         .unwrap();
         assert!(p.content.contains("Runde gestartet"));
+    }
+
+    #[test]
+    fn reasoning_emitted_presents_under_its_own_label_and_is_clipped() {
+        let event = AgentTraceEvent::ReasoningEmitted {
+            iteration: 2,
+            text: "x".repeat(10_000),
+        };
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug)
+                .expect("reasoning has a presentation");
+        assert_eq!(p.kind, "reasoning_emitted");
+        assert_eq!(p.status, AgentTracePresentationStatus::Info);
+        assert!(
+            p.content.starts_with("[Reasoning] iter 2: "),
+            "{}",
+            p.content
+        );
+        let limit = AgentTracePresentationPreset::TuiDebug
+            .options()
+            .content_limit;
+        assert!(
+            p.content.chars().count() < limit + 40,
+            "content must be clipped by content_limit ({limit}), got {}",
+            p.content.chars().count()
+        );
     }
 
     // -- MoA presentation (round-2 W3a) --------------------------------------

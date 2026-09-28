@@ -336,6 +336,18 @@ mod tests {
         async fn set_idle(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
+        async fn stamp_and_bill_in_range(
+            &self,
+            _key: &SessionKey,
+            _after_seq: u64,
+            _before_seq: u64,
+            _metadata: &serde_json::Value,
+            _bill: Option<&crate::gateway::session_store::RunBill>,
+        ) -> Result<crate::gateway::session_store::StampOutcome, SessionStoreError> {
+            // No row here carries a source seq, so no row is in any range —
+            // with or without a bill: nothing is stamped, so nothing is billed.
+            Ok(crate::gateway::session_store::StampOutcome::NoRowInRange)
+        }
 
         async fn load_window(
             &self,

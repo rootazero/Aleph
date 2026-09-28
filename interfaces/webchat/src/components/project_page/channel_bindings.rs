@@ -6,18 +6,18 @@
 //! it. Deliberately no line count here — the one that used to be quoted drifted
 //! twice, and a rationale that names no number cannot go stale.
 //!
-//! ## Why this section does not hide its controls behind `is_owner`
+//! ## Why this section does not hide its controls behind `manageable`
 //!
 //! `settings.rs`'s workspace and archive sections render read-only for a
-//! non-owner, softening rather than removing the control (its `RosterSection`
-//! has two sites that still vanish — that file's module doc names them as the
-//! unfinished half). This one must not gate at all, for two separate reasons:
+//! non-owner, softening rather than removing the control. This one must not
+//! gate at all, for two separate reasons:
 //!
 //! 1. `projects.channel.bind` / `.unbind` are **admin**-gated
 //!    (`method_admin.rs`), not owner-gated. A room's owner who is not an org
-//!    admin fails; an org admin who is not the owner passes. `is_owner` is
-//!    therefore wrong in both directions here, and a hidden control that the
-//!    server would have accepted is a feature the user never learns exists.
+//!    admin fails; an org admin who is not the owner passes. `manageable`
+//!    (owner-or-admin) is therefore wrong in both directions here, and a
+//!    hidden control that the server would have accepted is a feature the
+//!    user never learns exists.
 //! 2. The Panel deliberately holds no client-side role predicate at all —
 //!    `DashboardState::is_operator()` was deleted on 2026-08-07 because a role
 //!    captured at `connect` is stale in both directions once
@@ -34,7 +34,7 @@
 //!
 //! ## 频道绑定区（中文）
 //!
-//! 绑定 / 解绑是 **admin** 闸（不是房主闸），所以这一区刻意不按 `is_owner`
+//! 绑定 / 解绑是 **admin** 闸（不是房主闸），所以这一区刻意不按 `manageable`
 //! 隐藏控件——房主未必是管理员，管理员未必是房主，两个方向都会判错。读写两侧
 //! 的拒绝都经 `admin_refusal` 分类，只接读那一半会让同一个判决对用户讲两个
 //! 故事。

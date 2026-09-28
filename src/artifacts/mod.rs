@@ -4,8 +4,9 @@
 //! generated, a file a user uploaded, an exported transcript. The store is the
 //! **authoritative settlement** for those bytes — not any wire event.
 //!
-//! This matters because the `agent_trace` stream is deliberately lossy (bounded
-//! `mpsc` + `try_send`, dropped rather than backpressuring the agent loop). A UI
+//! This matters because the `agent_trace` stream is best-effort (a lagging
+//! receiver of the run's bounded broadcast flow channel drops frames rather
+//! than backpressuring the agent loop). A UI
 //! that treated a live event as the record of truth would show permanent ghosts
 //! whenever a frame is dropped. So live notifications are content-free
 //! invalidation pings and every consumer re-reads [`ArtifactStore::list`].

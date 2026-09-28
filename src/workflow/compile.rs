@@ -117,6 +117,25 @@ pub const NOTIFIED_BY_SETTLE: &str = "settle";
 /// rollback) BEFORE / INSTEAD OF the status writes, so unsettled tasks may
 /// legitimately linger for a moment. This is the marker the grace is for.
 pub const NOTIFIED_BY_CANCEL: &str = "cancel";
+/// Metadata key carrying a step's parallel-group label (the manifest's
+/// per-step `parallelGroup`, when set). Sibling steps that share the same
+/// label carry the same value, so a `status` reporter can group a run's
+/// co-scheduled steps together even though the dispatcher executes them via
+/// its existing DAG scheduler. The label is a **grouping affordance, not a
+/// scheduling primitive** — the runtime schedules independent roots in
+/// parallel already, and changing that contract here would couple the
+/// workflow layer to the dispatcher's internals (R10).
+pub const WORKFLOW_PARALLEL_GROUP_KEY: &str = "workflow_parallel_group";
+/// Metadata key carrying a member step's zero-based position WITHIN its
+/// parallel group. Pairs with [`WORKFLOW_PARALLEL_GROUP_KEY] and
+/// [`WORKFLOW_PARALLEL_SIZE_KEY`] so a consumer can render the group as an
+/// ordered list without rescanning the manifest. `None` / `0` size for steps
+/// outside any group, byte-identical legacy rows.
+pub const WORKFLOW_PARALLEL_INDEX_KEY: &str = "workflow_parallel_index";
+/// Metadata key carrying the size (member count) of a step's parallel
+/// group. Together with [`WORKFLOW_PARALLEL_INDEX_KEY`] a consumer learns
+/// "this is step 2 of 4 in group `scan`" without walking the manifest.
+pub const WORKFLOW_PARALLEL_SIZE_KEY: &str = "workflow_parallel_size";
 
 /// Read the originating channel address stamped on a materialised workflow
 /// task under [`WORKFLOW_ORIGIN_KEY`]. Returns `(channel_id, conversation_id)`;
@@ -298,6 +317,124 @@ pub struct MaterializedWorkflow {
     pub task_ids: Vec<CoordTaskId>,
 }
 
+/// List the parallel groups declared by `manifest`, in declaration order
+/// (the order the first member of each group first appears in the step
+/// list). Each inner `Vec` is the set of step ids that share a
+/// [`WorkflowStepDef::parallel_group`] label, sorted by the position of
+/// each member in `manifest.steps`. Steps with no `parallel_group` label
+/// are omitted entirely; a label declared on only one step is reported as
+/// a one-member group (the labelling is the authoritive part — the count
+/// is informational).
+///
+/// **Pure, non-materialising** — callers that only want to render the
+/// groups (e.g. a `parallel_groups_for` projection in the workflow tool,
+/// or a unit test) get the same answer `materialize` would compute for the
+/// group stamps without standing up a `coord_task` store. The function is
+/// defined on the manifest rather than the def because the manifest's
+/// `.workflow.js` interchange lane also carries the same field, and a
+/// caller that has only the manifest (the import path) should not have to
+/// project to a def to list groups.
+#[must_use]
+pub fn parallel_groups_for(
+    manifest: &crate::workflow::interop::manifest::WorkflowManifest,
+) -> Vec<Vec<String>> {
+    use std::collections::HashMap;
+    // label → ordered Vec<step_id> preserving manifest.steps order.
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    // Track declaration order of labels so the outer Vec is stable across
+    // runs — HashMap's iteration order is otherwise non-deterministic and
+    // the projection is a stable surface for tests and UI.
+    let mut label_order: Vec<String> = Vec::new();
+    for step in &manifest.steps {
+        let Some(label) = step
+            .parallel_group
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if !groups.contains_key(label) {
+            label_order.push(label.to_string());
+        }
+        groups
+            .entry(label.to_string())
+            .or_default()
+            .push(step.id.clone());
+    }
+    label_order
+        .into_iter()
+        .map(|label| {
+            // Unreachable in practice: the entry was inserted above. `unwrap`
+            // would be clearer than `unwrap_or_default()` (which silently
+            // hides a bug if the map ever gets mutated between the two
+            // loops), and the fallback is unreachable by construction.
+            groups.remove(&label).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Per-step assignment of `(group_label, zero_based_index, group_size)` for
+/// the parallel groups declared in `def`. Steps outside any group are
+/// absent from the map — the caller distinguishes "no group" (absent) from
+/// "labelled group with size 1" (present, index = 0, size = 1).
+///
+/// The function takes a [`WorkflowDef`] rather than a manifest because
+/// [`materialize`] operates on a def: the manifest interchange lane calls
+/// `to_def()` before `materialize`, so the assignments computed from the
+/// def match exactly what the materialiser would compute from the same
+/// manifest. The size is computed once up-front (rather than per-step) so
+/// every member of a group reports the SAME size — without this, a step
+/// that joined late in the iteration order would carry a size computed
+/// against a yet-incomplete map, and the stamps would disagree.
+fn compute_parallel_assignments(
+    def: &WorkflowDef,
+) -> std::collections::HashMap<String, (String, usize, usize)> {
+    use std::collections::HashMap;
+    let mut label_to_size: HashMap<String, usize> = HashMap::new();
+    let mut label_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // First pass: count members of every label so the size is stable.
+    for step in &def.steps {
+        if let Some(label) = step
+            .parallel_group
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            *label_to_size.entry(label.to_string()).or_insert(0) += 1;
+        }
+    }
+    // Second pass: assign each labelled step its zero-based index. The
+    // first step to claim a label gets index 0, the next gets 1, etc.
+    // This is a single-key counter rather than a `HashMap<String, usize>`
+    // because two groups with the same name would otherwise collide on the
+    // counter — the inner map gates the counter by label.
+    let mut counters: HashMap<String, usize> = HashMap::new();
+    let mut out: HashMap<String, (String, usize, usize)> = HashMap::new();
+    for step in &def.steps {
+        let Some(label) = step
+            .parallel_group
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if !label_seen.insert(label.to_string()) {
+            // already counted on a previous step; just bump the counter.
+        }
+        let size = *label_to_size.get(label).unwrap_or(&1);
+        let counter = counters.entry(label.to_string()).or_insert(0);
+        let index = *counter;
+        *counter += 1;
+        out.insert(
+            step.id.clone(),
+            (label.to_string(), index, size),
+        );
+    }
+    out
+}
+
 /// Materialise `def` into `coord_tasks` under `team_id`, substituting the run's
 /// [`RunInputs`] into each step's prompt. Returns the created task ids in
 /// topological order.
@@ -354,6 +491,13 @@ pub async fn materialize(
     // byte-identical to the legacy materialisation.
     let strategy_frame: Option<String> = strategy.map(render_workflow_global_frame);
 
+    // Pre-compute the parallel-group assignment for this run. Computed ONCE
+    // before the create loop so every member of a group sees the same size
+    // and a stable zero-based index — without this, two stampers could
+    // disagree on the group's size if a step gets added between passes.
+    // `None` for steps outside any group → byte-identical legacy rows.
+    let parallel_assignments = compute_parallel_assignments(def);
+
     // step-local id → freshly-minted coord_task id.
     let mut id_map: std::collections::HashMap<&str, CoordTaskId> =
         std::collections::HashMap::with_capacity(def.steps.len());
@@ -386,8 +530,11 @@ pub async fn materialize(
         let rendered = render_prompt(&step.prompt, inputs);
 
         // A clarify step is owned by the sentinel and carries its awaiting
-        // record in metadata; an agent step is owned by its agent. Both keep the
-        // dispatcher-managed + workflow provenance tags.
+        // record in metadata; an agent step is owned by its agent. A collect
+        // step is owned by ITS OWN sentinel (parallel to `__clarify__`) and
+        // carries the reduce spec in metadata — there is no agent run, no
+        // user question, just the runtime's own fold of upstream outputs.
+        // All three keep the dispatcher-managed + workflow provenance tags.
         let (owner, metadata) = if step.is_clarify() {
             let ctx = clarify_ctx.cloned().unwrap_or_default();
             let clarify_meta = ClarifyTaskMeta {
@@ -406,6 +553,33 @@ pub async fn materialize(
                     WORKFLOW_RUN_ID_KEY: run_id,
                     CLARIFY_META_KEY: clarify_meta.to_value(),
                 }),
+            )
+        } else if step.kind.is_collect() {
+            let collect_meta = crate::workflow::collect::CollectTaskMeta {
+                collect_from: step.collect_from.clone(),
+                reduce: step.reduce.unwrap_or_default(),
+            };
+            let mut meta = json!({
+                MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
+                WORKFLOW_NAME_KEY: def.name,
+                WORKFLOW_STEP_KEY: step.id,
+                WORKFLOW_RUN_ID_KEY: run_id,
+                crate::workflow::collect::COLLECT_META_KEY: collect_meta.to_value(),
+            });
+            // Parallel-group stamp: a collect step can still be a member of
+            // a parallel group (a synth over a labelled fan-out is a real
+            // shape), so the same labelling applies. `None` for an
+            // ungrouped collect → byte-identical row.
+            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned() {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
+                    obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
+                    obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
+                }
+            }
+            (
+                crate::workflow::collect::COLLECT_OWNER.to_string(),
+                meta,
             )
         } else {
             let mut meta = json!({
@@ -448,6 +622,22 @@ pub async fn materialize(
             if let Some(frame) = strategy_frame.as_deref() {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(WORKFLOW_STRATEGY_KEY.to_string(), json!(frame));
+                }
+            }
+            // Parallel-group assignment: stamped onto every member of a
+            // labelled parallel fan-out so `status` reporting can group them
+            // the way the `.workflow.js` live view does. Steps outside any
+            // group see `None` from `compute_parallel_assignments` and leave
+            // their row byte-identical (no keys at all). Stamp only on agent
+            // steps — clarify and collect carry the workflow provenance but
+            // their row shape is different (clarify has CLARIFY_META_KEY,
+            // collect is handled in the collect branch below), and parallel
+            // grouping is meaningless on a step that does not run an agent.
+            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned() {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
+                    obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
+                    obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
                 }
             }
             // Per-step execution-budget overrides: stamped through the SAME
@@ -648,6 +838,9 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
         }
     }
 
@@ -664,6 +857,28 @@ mod tests {
             tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
+            parallel_group: None,
+            collect_from: Vec::new(),
+            reduce: None,
+        }
+    }
+
+    fn collect_step(id: &str, collect_from: &[&str]) -> WorkflowStepDef {
+        WorkflowStepDef {
+            id: id.into(),
+            agent: String::new(),
+            prompt: String::new(),
+            depends_on: Vec::new(),
+            kind: crate::workflow::def::WorkflowStepKind::Collect,
+            choices: Vec::new(),
+            review: false,
+            require_grounding: false,
+            tolerate_failed_deps: false,
+            timeout_seconds: None,
+            max_retries: None,
+            parallel_group: None,
+            collect_from: collect_from.iter().map(|s| (*s).to_string()).collect(),
+            reduce: None,
         }
     }
 
@@ -1464,5 +1679,390 @@ mod tests {
         }
         .stamp(&mut blank_meta);
         assert!(blank_meta.as_object().unwrap().is_empty());
+    }
+
+    // ---- Parallel group materialisation ------------------------------------
+
+    /// Two steps sharing a `parallel_group` label are stamped with
+    /// `[workflow_parallel_group, workflow_parallel_index, workflow_parallel_size]`,
+    /// and each member's index matches its position in the steps array.
+    /// Unrelated steps carry no group keys — byte-identical legacy rows.
+    #[tokio::test]
+    async fn materialize_stamps_parallel_group_on_sibling_steps() {
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "fanout".into(),
+            description: String::new(),
+            steps: vec![
+                step("root", "w", &[]),
+                {
+                    let mut s = step("a", "w", &["root"]);
+                    s.parallel_group = Some("scan".into());
+                    s
+                },
+                {
+                    let mut s = step("b", "w", &["root"]);
+                    s.parallel_group = Some("scan".into());
+                    s
+                },
+            ],
+        };
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let root = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert!(
+            root.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).is_none(),
+            "ungrouped step has no group key (byte-identical legacy row)"
+        );
+        let a = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        let b = store.get_task(&mat.task_ids[2]).await.unwrap().unwrap();
+        for (task, expected_idx) in [(&a, 0usize), (&b, 1usize)] {
+            assert_eq!(
+                task.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+                Some("scan"),
+                "group label rides with the member"
+            );
+            assert_eq!(
+                task.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+                Some(expected_idx as u64),
+                "zero-based index matches position"
+            );
+            assert_eq!(
+                task.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+                Some(2),
+                "size is the SAME on every member (no per-step recomputation)"
+            );
+        }
+    }
+
+    /// A single-member parallel group still gets the keys — the labelling is
+    /// the author's intent, the count is informational. Not recognising a
+    /// one-member group would make "this is a labelled solo step" silently
+    /// invisible, which is the byte-identical legacy shape.
+    #[tokio::test]
+    async fn materialize_stamps_parallel_group_on_a_solo_step() {
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "solo".into(),
+            description: String::new(),
+            steps: vec![
+                step("a", "w", &[]),
+                {
+                    let mut s = step("solo", "w", &["a"]);
+                    s.parallel_group = Some("scan".into());
+                    s
+                },
+            ],
+        };
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let solo = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert_eq!(
+            solo.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+            Some("scan")
+        );
+        assert_eq!(
+            solo.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            solo.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+            Some(1),
+            "a solo group has size 1"
+        );
+    }
+
+    /// Two parallel groups side-by-side do NOT cross-share their index
+    /// counters — the second group's first member gets index 0, not index 1.
+    /// A single-key counter would silently merge them.
+    #[tokio::test]
+    async fn parallel_groups_keep_separate_indexes_per_label() {
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "two-fans".into(),
+            description: String::new(),
+            steps: vec![
+                step("root", "w", &[]),
+                {
+                    let mut s = step("a1", "w", &["root"]);
+                    s.parallel_group = Some("scan".into());
+                    s
+                },
+                {
+                    let mut s = step("a2", "w", &["root"]);
+                    s.parallel_group = Some("scan".into());
+                    s
+                },
+                {
+                    let mut s = step("b1", "w", &["root"]);
+                    s.parallel_group = Some("review".into());
+                    s
+                },
+            ],
+        };
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        // tasks 1,2 = scan; task 3 = review
+        let scan_members: Vec<&CoordTaskId> = mat.task_ids.iter().take(3).skip(1).collect();
+        let review_member = &mat.task_ids[3];
+        for (i, id) in scan_members.iter().enumerate() {
+            let t = store.get_task(id).await.unwrap().unwrap();
+            assert_eq!(
+                t.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+                Some(i as u64),
+                "scan group member {} has index {}",
+                i,
+                i
+            );
+        }
+        let review = store.get_task(review_member).await.unwrap().unwrap();
+        assert_eq!(
+            review.metadata.get(WORKFLOW_PARALLEL_INDEX_KEY).and_then(|v| v.as_u64()),
+            Some(0),
+            "review group starts its own index counter at 0"
+        );
+        assert_eq!(
+            review.metadata.get(WORKFLOW_PARALLEL_GROUP_KEY).and_then(|v| v.as_str()),
+            Some("review")
+        );
+        assert_eq!(
+            review.metadata.get(WORKFLOW_PARALLEL_SIZE_KEY).and_then(|v| v.as_u64()),
+            Some(1)
+        );
+    }
+
+    /// `parallel_groups_for` is pure, manifest-level, and order-stable:
+    /// ungrouped steps are omitted, the outer Vec follows declaration order
+    /// (first-label-first), and the inner Vec follows step order. Empty
+    /// input → empty output.
+    #[test]
+    fn parallel_groups_for_lists_groups_in_declaration_order() {
+        use crate::workflow::interop::manifest::WorkflowManifest;
+        let mut manifest = WorkflowManifest::from_def(&linear_def());
+        manifest.steps[0].parallel_group = Some("scan".into());
+        // linear_def() has two steps; add two more with different groups.
+        let mut a = step("a", "w", &[]);
+        a.parallel_group = Some("scan".into());
+        let mut b = step("b", "w", &[]);
+        b.parallel_group = Some("review".into());
+        let mut c = step("c", "w", &[]);
+        c.parallel_group = Some("review".into());
+        let mut d = step("d", "w", &[]);
+        d.parallel_group = Some("ship".into());
+        let def = WorkflowDef {
+            name: "x".into(),
+            description: String::new(),
+            steps: vec![a, b, c, d],
+        };
+        let manifest = WorkflowManifest::from_def(&def);
+        let groups = parallel_groups_for(&manifest);
+        // Declaration order: scan first (in step `a`), then review (in `b`), then ship.
+        assert_eq!(
+            groups,
+            vec![
+                vec!["a".to_string()],
+                vec!["b".to_string(), "c".to_string()],
+                vec!["d".to_string()],
+            ]
+        );
+
+        // No groups declared → empty Vec.
+        let plain = WorkflowManifest::from_def(&def);
+        // clear all labels
+        let plain = WorkflowManifest {
+            name: plain.name,
+            description: plain.description,
+            when_to_use: plain.when_to_use,
+            phases: plain.phases,
+            steps: plain
+                .steps
+                .into_iter()
+                .map(|mut s| {
+                    s.parallel_group = None;
+                    s
+                })
+                .collect(),
+        };
+        assert!(parallel_groups_for(&plain).is_empty());
+    }
+
+    // ---- Collect step materialisation --------------------------------------
+
+    /// A collect step materialises with the `__collect__` sentinel owner and
+    /// its `collect_from`/`reduce` config stamped under `COLLECT_META_KEY`.
+    /// Downstream consumers (`build_handoff_context`, `status`) read the
+    /// meta the same way they read a clarify step's awaiting record.
+    #[tokio::test]
+    async fn materialize_stamps_collect_step_owner_and_meta() {
+        use crate::workflow::collect::{
+            collect_task_meta, COLLECT_META_KEY, COLLECT_OWNER,
+        };
+        use crate::workflow::def::CollectReduce;
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "fan-in".into(),
+            description: String::new(),
+            steps: vec![
+                step("a", "w", &[]),
+                step("b", "w", &["a"]),
+                step("c", "w", &["a"]),
+                {
+                    let mut s = collect_step("synth", &["b", "c"]);
+                    s.reduce = Some(CollectReduce::JsonArray);
+                    s
+                },
+            ],
+        };
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        // The collect step's row carries the sentinel owner + meta.
+        // We look it up by its `workflow_step` metadata key because the
+        // collect step has no `depends_on` (its blockers live in
+        // `collect_from`, not the DAG) — so a topological `last()` would
+        // land on `c`, an agent step, not the synth itself.
+        let mut synth_id = None;
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            if task.metadata.get(WORKFLOW_STEP_KEY).and_then(|v| v.as_str()) == Some("synth") {
+                synth_id = Some(id.clone());
+                break;
+            }
+        }
+        let synth_id = synth_id.expect("collect step in task_ids");
+        let synth = store.get_task(&synth_id).await.unwrap().unwrap();
+        assert_eq!(synth.owner.as_deref(), Some(COLLECT_OWNER));
+        let meta = collect_task_meta(&synth.metadata).expect("collect meta present");
+        assert_eq!(meta.collect_from, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(meta.reduce, CollectReduce::JsonArray);
+
+        // The upstream steps still see a real team-member owner (the
+        // sentinel is for the collect only).
+        let upstream_a = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert_eq!(upstream_a.owner.as_deref(), Some("w"));
+
+        // No keys on the upstream rows beyond the dispatcher + workflow tags
+        // — the collect meta is per-step, not propagated.
+        assert!(upstream_a.metadata.get(COLLECT_META_KEY).is_none());
+        assert!(
+            synth.metadata.get(WORKFLOW_STRATEGY_KEY).is_none(),
+            "a collect step runs no agent, so it never gets the strategy frame"
+        );
+    }
+
+    /// A collect step with no explicit `reduce` defaults to `Concat`. The
+    /// materialiser stamps the explicit value on the row so the dispatcher
+    /// reads it without re-deriving the default.
+    #[tokio::test]
+    async fn materialize_defaults_collect_reduce_to_concat() {
+        use crate::workflow::collect::collect_task_meta;
+        use crate::workflow::def::CollectReduce;
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "wf".into(),
+            description: String::new(),
+            steps: vec![
+                step("a", "w", &[]),
+                collect_step("synth", &["a"]), // no reduce set
+            ],
+        };
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut synth_id = None;
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            if task.metadata.get(WORKFLOW_STEP_KEY).and_then(|v| v.as_str()) == Some("synth") {
+                synth_id = Some(id.clone());
+                break;
+            }
+        }
+        let synth_id = synth_id.expect("collect step in task_ids");
+        let synth = store.get_task(&synth_id).await.unwrap().unwrap();
+        let meta = collect_task_meta(&synth.metadata).expect("collect meta present");
+        assert_eq!(
+            meta.reduce,
+            CollectReduce::Concat,
+            "None on the step defaults to Concat at materialisation"
+        );
+    }
+
+    /// `materialize` rejects a def that passed no `validate()` (because the
+    /// caller built the collect step manually with a typo'd upstream name).
+    /// The wiring of `collect` into the validate/compile pair is the same
+    /// shape as `clarify` — the compile step is downstream of the gate.
+    #[tokio::test]
+    async fn materialize_rejects_collect_with_unknown_upstream() {
+        // Skipping `validate()` to assert the runtime defensiveness; the
+        // save/import path always validates, but a hand-built def is fair game.
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "wf".into(),
+            description: String::new(),
+            steps: vec![
+                step("a", "w", &[]),
+                collect_step("synth", &["a", "ghost"]),
+            ],
+        };
+        assert!(materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .is_err());
     }
 }

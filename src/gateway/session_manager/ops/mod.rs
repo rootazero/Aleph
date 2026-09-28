@@ -15,6 +15,7 @@ mod tests;
 
 pub(crate) use crud::NewMessage;
 pub(crate) use emit::*;
+pub(crate) use modify::add_usage;
 
 /// The `sessions` column list every `SELECT` that feeds [`map_session_metadata`]
 /// must use, in the order that mapper decodes positionally.

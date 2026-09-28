@@ -162,6 +162,24 @@ impl AlephTool for BrowserFillFormTool {
                 }
             };
 
+        // Fail-closed: EVERY field's ref is prechecked before the first fill —
+        // a form half-filled onto a page that has moved on is worse than no
+        // fill at all.
+        for (target, _) in &targets {
+            if let crate::browser::types::ActionTarget::Ref { ref_id } = target {
+                if let Err(e) =
+                    super::precheck_ref(&self.manager, &backend, &args.profile, &tab_id, ref_id)
+                        .await
+                {
+                    return Ok(BrowserFillFormOutput {
+                        success: false,
+                        filled_count: 0,
+                        message: Some(super::backend_error_text(&self.manager, &e)),
+                    });
+                }
+            }
+        }
+
         match backend.fill_form(&tab_id, &targets).await {
             Ok(filled) => Ok(BrowserFillFormOutput {
                 success: true,

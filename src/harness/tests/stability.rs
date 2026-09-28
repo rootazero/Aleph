@@ -325,6 +325,7 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::TurnStarted { .. } => "TurnStarted",
             LoopTraceEvent::TurnStateEntered { .. } => "TurnStateEntered",
             LoopTraceEvent::TextEmitted { .. } => "TextEmitted",
+            LoopTraceEvent::ReasoningEmitted { .. } => "ReasoningEmitted",
             LoopTraceEvent::ToolCallStarted { .. } => "ToolCallStarted",
             LoopTraceEvent::ToolCallCompleted { .. } => "ToolCallCompleted",
             LoopTraceEvent::TurnCompleted { .. } => "TurnCompleted",

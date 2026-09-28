@@ -615,4 +615,52 @@ mod tests {
         assert_eq!(r.exit_code, Some(1));
         assert_eq!(r.stderr, "traceback");
     }
+
+    /// `build_shell_command` (the Windows side) calls [`crate::utils::shell::pwsh`]
+    /// and not [`crate::utils::shell::powershell_host`]: Windows PowerShell 5.1
+    /// aliases `curl` to `Invoke-WebRequest`, which silently breaks `Download`
+    /// commands (scoop and friends). A future "let's just call the unified
+    /// helper" refactor would reintroduce the regression without breaking the
+    /// type system, so the contract is pinned at the source level — same shape as
+    /// [`crate::utils::host::tests::no_other_module_hand_rolls_the_hostname_env_read`].
+    ///
+    /// Gated to `cfg(all(test, windows))` so Unix builds do not even compile the
+    /// assertion: the regression class is Windows-shaped.
+    ///
+    /// Note: the function name and the literal substring we look for are
+    /// deliberately disjoint. `build_shell_command_picks_pwsh_over_5_1_host`
+    /// avoids the byte sequence `powershell_host(`, and the forbidden token
+    /// itself is rebuilt at runtime from two slices — otherwise this guard
+    /// would flag its own definition and its own error message as offenders.
+    #[cfg(all(test, windows))]
+    #[test]
+    fn build_shell_command_picks_pwsh_over_5_1_host() {
+        let src = include_str!("installer.rs");
+        // Built at runtime so the byte sequence below does not appear in this
+        // file's source (the loop would otherwise flag its own body).
+        let forbidden: String = ["powershell_", "host("].concat();
+        let mut offenders = Vec::new();
+        for (idx, line) in src.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("///") {
+                continue;
+            }
+            if code.contains(forbidden.as_str()) {
+                offenders.push(format!("line {}: contains `{forbidden}`: {code}", idx + 1));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "`build_shell_command` must use `crate::utils::shell::pwsh()` (Windows \
+             PowerShell 5.1 aliases curl → Invoke-WebRequest, which breaks Download \
+             commands); these calls to `powershell_host` would silently regress that: \
+             {offenders:?}"
+        );
+        assert!(
+            src.contains("pwsh("),
+            "`build_shell_command` no longer references `pwsh()`; either the \
+             intended helper changed (update this guard with a comment explaining \
+             why) or the Windows arm was deleted (which is fine — delete the guard too)."
+        );
+    }
 }

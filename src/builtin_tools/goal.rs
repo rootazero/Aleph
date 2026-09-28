@@ -851,7 +851,11 @@ token_budget. \
                     // ambient attribution of THIS creating run. `None` outside
                     // any scope (e.g. no caller user resolved) leaves the goal
                     // unscoped — legacy owner semantics, never guessed.
-                    .with_owner_scope(crate::scope::current_scope().as_ref());
+                    .with_owner_scope(crate::scope::current_scope().as_ref())
+                    // Round 11 (R-b): the person who asked, so a wake — which
+                    // has no completing run to inherit it from — resolves
+                    // fire-time authority against them, not the room creator.
+                    .with_author(crate::scope::current_room_author());
                 if let Some(requested) = args.pursuit_max_iterations {
                     // Hard cap autonomous continuations (R5 menu-bar-first): an
                     // unbounded value would let a single session self-run for
@@ -1468,6 +1472,34 @@ mod tests {
         let saved = store.get("sess-room").unwrap().unwrap();
         assert_eq!(saved.scope_id.as_deref(), Some("project:p-x"));
         assert_eq!(saved.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// R-b: the goal remembers who SET it, not only whose room it is in —
+    /// the wake path has no completing run to inherit the author from.
+    #[tokio::test]
+    async fn a_goal_set_by_a_room_member_records_that_member_as_author() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-room-author".to_string()));
+        let tool = GoalTool::new(store.clone()).with_session_key_handle(Some(handle));
+
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("ship it".into());
+        let attr = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-x".to_string()),
+        };
+        let out = crate::scope::with_scope(
+            Some(attr),
+            crate::scope::with_room_author(Some("u-bob".to_string()), tool.call(set)),
+        )
+        .await
+        .unwrap();
+        assert!(out.success);
+
+        let saved = store.get("sess-room-author").unwrap().unwrap();
+        assert_eq!(saved.owner_user_id.as_deref(), Some("u-alice"));
+        assert_eq!(saved.author_user_id.as_deref(), Some("u-bob"));
     }
 
     /// The room-outside twin: no ambient scope ⇒ current (pre-P2) behavior —

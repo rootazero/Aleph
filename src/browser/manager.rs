@@ -127,8 +127,12 @@ pub struct ProfileManager {
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
     playwright_cli_driver: Arc<PlaywrightCliDriver>,
     idle_reaper_started: AtomicBool,
-    /// Per-tab lifecycle tracking for Managed profiles (idle reclamation + cap).
-    tab_registry: TabRegistry,
+    /// Per-tab lifecycle tracking for Managed/Cdp profiles (idle reclamation
+    /// + cap) AND the tab-identity registry (targetId / last-url per tab).
+    ///
+    /// An `Arc` because the cdp backend — constructed per call — records the
+    /// identities it discovers straight into it.
+    tab_registry: Arc<TabRegistry>,
     /// The live CDP engines, for `driver = "cdp"` profiles.
     ///
     /// An `Arc` because [`Self::get_backend`] is SYNCHRONOUS (and the idle
@@ -158,6 +162,12 @@ struct ManagedProfile {
     /// names, and both callers say so in the text the model reads.
     adopted_engine: Option<Engine>,
     last_activity: std::time::Instant,
+    /// `Some(principal)` when this entry was materialized for one principal by
+    /// [`ProfileManager::principal_profile`] rather than read from config.
+    /// Such an entry is never a BASE another principal is derived from, never
+    /// answers to its own key typed back in, and never appears in
+    /// [`ProfileManager::list_profiles_for`].
+    materialized_for: Option<String>,
 }
 
 impl ProfileManager {
@@ -182,6 +192,7 @@ impl ProfileManager {
                     config: ProfileConfig::default(),
                     adopted_engine: None,
                     last_activity: std::time::Instant::now(),
+                    materialized_for: None,
                 },
             );
         } else {
@@ -192,6 +203,7 @@ impl ProfileManager {
                         config: profile_config.clone(),
                         adopted_engine: None,
                         last_activity: std::time::Instant::now(),
+                        materialized_for: None,
                     },
                 );
             }
@@ -218,6 +230,7 @@ impl ProfileManager {
                     config: ProfileConfig::default(),
                     adopted_engine: None,
                     last_activity: std::time::Instant::now(),
+                    materialized_for: None,
                 },
             );
         }
@@ -234,6 +247,7 @@ impl ProfileManager {
                     },
                     adopted_engine: None,
                     last_activity: std::time::Instant::now(),
+                    materialized_for: None,
                 },
             );
         }
@@ -288,7 +302,7 @@ impl ProfileManager {
             chrome_mcp_driver,
             playwright_cli_driver,
             idle_reaper_started: AtomicBool::new(false),
-            tab_registry: TabRegistry::new(),
+            tab_registry: Arc::new(TabRegistry::new()),
             engines,
         }
     }
@@ -509,24 +523,29 @@ impl ProfileManager {
                 self.ssrf_guard.load_full(),
             ))),
             BrowserDriver::Cdp => {
-                // ONE source for both halves of the backend's identity, which
-                // is the question `CdpBackend::new`'s doc hands to this task.
+                // ONE source for both halves of the backend's identity:
                 // `launch_request_for` writes `req.profile` AND
                 // `req.session_key` from the same `profile_name` this call
-                // receives, so the registry key, the sidecar name and the
-                // argument agree by construction rather than by coincidence —
-                // there is no second string here free to drift (判据 §1).
+                // receives (already principal-scoped — the tool layer resolves
+                // `principal_profile` before calling in), so the registry key,
+                // the sidecar name and the profile agree by construction
+                // rather than by coincidence (判据 §1). `CdpBackend::new`
+                // takes no second profile argument to disagree with it.
                 let (engine, req) = self.launch_request_for(profile_name)?;
                 Ok(Arc::new(super::cdp_backend::CdpBackend::new(
                     self.engines.clone(),
                     engine,
                     req,
-                    profile_name,
                     // The LIVE guard, loaded per call: backends are built per
                     // call precisely so a `browser.update` reaches the next
                     // action without a restart.
                     self.ssrf_guard.load_full(),
                     self.cdp_command_timeout(),
+                    // The shared identity registry: the backend records every
+                    // tab↔targetId mapping it discovers into it, so the answer
+                    // to "is this tab still that tab" survives the per-call
+                    // backend itself.
+                    self.tab_registry.clone(),
                 )))
             }
         }
@@ -539,6 +558,13 @@ impl ProfileManager {
     #[must_use]
     pub const fn engines(&self) -> &Arc<EngineRegistry> {
         &self.engines
+    }
+
+    /// The shared tab-identity + activity registry. The cdp backend records
+    /// into it; the tool layer reads `resolve_identity` / `last_url` from it.
+    #[must_use]
+    pub const fn tab_registry(&self) -> &Arc<TabRegistry> {
+        &self.tab_registry
     }
 
     /// The per-command CDP timeout both engines are driven with.
@@ -1264,6 +1290,16 @@ impl ProfileManager {
                 }
             };
             let live_ids = tab_ids(&tabs);
+            // The sweep's `list_tabs` is also the OLD drivers' identity
+            // discovery point (the cdp backend records into the same registry
+            // itself, from inside the verbs). A listing row knows no targetId,
+            // so `None` is recorded for it — and because `record_identity`
+            // merges rather than replaces, that `None` never erases a
+            // targetId the cdp backend recorded.
+            for line in &tabs {
+                self.tab_registry
+                    .record_identity(&profile, &line.id, None, Some(line.url.clone()));
+            }
             let victims = self.tab_registry.select_victims(
                 &profile,
                 &live_ids,
@@ -1295,7 +1331,10 @@ impl ProfileManager {
         result
     }
 
-    /// List all profiles with derived session liveness (see [`Self::session_active`]).
+    /// Every entry with derived session liveness (see [`Self::session_active`]),
+    /// INCLUDING principal-materialized ones. Diagnostic / construction-time
+    /// use (`tools::probes::browser`); the tool face lists through
+    /// [`Self::list_profiles_for`].
     pub fn list_profiles(&self) -> Vec<(String, bool)> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         profiles
@@ -1308,6 +1347,96 @@ impl ProfileManager {
     pub fn get_config(&self, name: &str) -> Option<ProfileConfig> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         profiles.get(name).map(|p| p.config.clone())
+    }
+
+    /// The key `name` resolves to for `principal` — THE browser-profile
+    /// boundary for a caller-supplied name (r11 N5).
+    ///
+    /// - A composed name (`default__u-alice`) is refused as not found: it is the
+    ///   OUTPUT of this function, never a value a caller was handed to type
+    ///   back in — the `memory_scope::read_partitions` rule. Same text as a
+    ///   genuinely missing profile, so the refusal is no oracle.
+    /// - The owner and an actor-less caller get `name` itself.
+    /// - Anyone else gets [`principal_profile_key`], materialized on first use
+    ///   from the CONFIGURED `name` with three changes: no `user_data_dir` (a
+    ///   configured directory is the operator's browser store, logins
+    ///   included), no `--user-data-dir` / `--profile-directory` in the
+    ///   inherited `extra_args` (the same store named another way — on the cdp
+    ///   engines `extra_args` go first, and Chrome takes the first occurrence),
+    ///   and a refusal for `ExistingSession` (that driver attaches to the
+    ///   machine owner's own Chrome — there is no per-principal copy).
+    ///
+    /// Materialized entries live in the same map as configured ones, so the
+    /// idle reapers, the tab registry, the engine override and both data-dir
+    /// derivations key them exactly like any other profile.
+    ///
+    /// [`principal_profile_key`]: super::profile::principal_profile_key
+    pub fn principal_profile(
+        &self,
+        name: &str,
+        principal: Option<&str>,
+    ) -> Result<String, BrowserError> {
+        let not_found = || BrowserError::ProfileNotFound(name.to_string());
+        if crate::memory::project_scope::is_composed_id(name) {
+            return Err(not_found());
+        }
+        let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
+        let base = profiles
+            .get(name)
+            .filter(|p| p.materialized_for.is_none())
+            .map(|p| p.config.clone())
+            .ok_or_else(not_found)?;
+        let key = super::profile::principal_profile_key(name, principal);
+        if key == name {
+            return Ok(key);
+        }
+        if base.driver == BrowserDriver::ExistingSession {
+            return Err(BrowserError::ActionFailed(format!(
+                "profile '{name}' attaches to the machine owner's own Chrome, which is not \
+                 available to other users; use a managed profile such as 'default'"
+            )));
+        }
+        let extra_args = args_without_store_flags(&base.extra_args);
+        profiles
+            .entry(key.clone())
+            .or_insert_with(|| ManagedProfile {
+                config: ProfileConfig {
+                    user_data_dir: None,
+                    extra_args,
+                    ..base
+                },
+                adopted_engine: None,
+                last_activity: std::time::Instant::now(),
+                materialized_for: principal.map(str::to_string),
+            });
+        Ok(key)
+    }
+
+    /// The profile list as `principal` sees it: every CONFIGURED profile once,
+    /// under the name the caller types back in, with the liveness of the
+    /// caller's own copy. Never another principal's copy, never a composed key.
+    /// `ExistingSession` profiles are omitted for anyone but the owner / an
+    /// actor-less caller, because [`Self::principal_profile`] refuses them.
+    pub fn list_profiles_for(&self, principal: Option<&str>) -> Vec<(String, bool)> {
+        let configured: Vec<(String, BrowserDriver)> = {
+            let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+            profiles
+                .iter()
+                .filter(|(_, p)| p.materialized_for.is_none())
+                .map(|(name, p)| (name.clone(), p.config.driver))
+                .collect()
+        };
+        configured
+            .into_iter()
+            .filter_map(|(name, driver)| {
+                let key = super::profile::principal_profile_key(&name, principal);
+                if key != name && driver == BrowserDriver::ExistingSession {
+                    return None;
+                }
+                let active = self.session_active(&key);
+                Some((name, active))
+            })
+            .collect()
     }
 
     /// The live CDP endpoint of a `Managed` profile's browser, if it has one.
@@ -1492,12 +1621,105 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
     now.saturating_duration_since(last_activity).as_secs() > timeout_secs
 }
 
+/// `args` minus every flag that names a browser store: `user-data-dir` and
+/// `profile-directory`, behind either prefix Chromium's switch parser accepts
+/// (`--` and `-`; re-review N7), in the `=value` spelling and in the
+/// separate-argument spelling (whose value is dropped with it, unless the
+/// next argument is itself a flag) — i.e. `^-{1,2}(user-data-dir|
+/// profile-directory)(=|$)`. A principal's copy of a profile must not
+/// inherit the operator's store through `extra_args` (final review M10).
+/// Not stripped: the `/flag` prefix Chromium also accepts on Windows.
+fn args_without_store_flags(args: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut drop_value = false;
+    for arg in args {
+        if std::mem::take(&mut drop_value) && !arg.starts_with('-') {
+            continue;
+        }
+        match store_flag(arg) {
+            Some(StoreFlagValue::Separate) => drop_value = true,
+            Some(StoreFlagValue::Inline) => {}
+            None => kept.push(arg.clone()),
+        }
+    }
+    kept
+}
+
+/// Where a store flag's value is, for [`args_without_store_flags`].
+enum StoreFlagValue {
+    /// `-{1,2}flag=value`.
+    Inline,
+    /// `-{1,2}flag`, the value in the next argument.
+    Separate,
+}
+
+/// Whether `arg` names a browser store, and how its value is spelled.
+fn store_flag(arg: &str) -> Option<StoreFlagValue> {
+    const STORE_FLAGS: [&str; 2] = ["user-data-dir", "profile-directory"];
+    let name = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'))?;
+    STORE_FLAGS.iter().find_map(|flag| {
+        let rest = name.strip_prefix(flag)?;
+        if rest.is_empty() {
+            Some(StoreFlagValue::Separate)
+        } else if rest.starts_with('=') {
+            Some(StoreFlagValue::Inline)
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::browser::testkit::{engine_peer, FakeEngineProcess};
     use crate::utils::paths::AlephHomeEnvGuard;
     use aleph_cdp::testkit::FakeCdpServer;
+
+    /// Final review M10: a principal's copy must not reach the operator's
+    /// browser store through `extra_args` — both spellings of both flags,
+    /// behind either switch prefix (`--`, and the single `-` Chromium also
+    /// accepts — re-review N7), are dropped (a separate value with them),
+    /// everything else is kept, and the configured profile itself is
+    /// untouched.
+    #[test]
+    fn a_principal_copy_drops_the_operators_store_flags() {
+        let mut config = BrowserSystemConfig::default();
+        let operator_args: Vec<String> = [
+            "--user-data-dir=/operator/chrome",
+            "--profile-directory=Default",
+            "--user-data-dir",
+            "/operator/other",
+            "--profile-directory",
+            "Profile 1",
+            "-user-data-dir=/x",
+            "-profile-directory",
+            "Profile 2",
+            "--lang=en",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                extra_args: operator_args.clone(),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let key = manager
+            .principal_profile("default", Some("u-alice"))
+            .expect("a member may use a managed profile");
+        let copy = manager.get_config(&key).expect("the copy is an entry");
+        assert_eq!(copy.extra_args, vec!["--lang=en".to_string()]);
+        assert_eq!(
+            manager.get_config("default").unwrap().extra_args,
+            operator_args
+        );
+    }
 
     /// A manager whose `default` profile is `driver = cdp, engine = chromium`
     /// and whose registry's only launcher is a fake.
@@ -1713,7 +1935,7 @@ mod tests {
         let src = include_str!("manager.rs").replace('\r', "");
         // `code_text` on top of the `#[cfg(test)]` bound, matching the two
         // sibling pins (`engine_handle_is_built_in_exactly_one_production_place`
-        // and `both_daemon_exit_paths_reap_background_jobs_and_browsers`, whose
+        // and `both_daemon_exit_paths_run_every_reaper`, whose
         // own comment documents this hazard). Without it a COMMENT spelling the
         // call satisfies the assertion, so deleting the statement and leaving a
         // `// engines.shutdown_all()` behind would stay green — a guard a
@@ -2176,6 +2398,58 @@ mod tests {
         assert_eq!(manager.reap_idle().await, 0);
     }
 
+    /// The sweep's `list_tabs` is the OLD drivers' identity discovery point:
+    /// a `Managed` profile's backend holds no registry handle, so the sweep
+    /// loop is the sole writer of what those tabs were last seen at. This is
+    /// the test that reddens when the loop is dropped (判据 §6: count the
+    /// writers — for the old drivers there is exactly one, here).
+    ///
+    /// The CLI is a script that answers `tab-list` with a real
+    /// playwright-format listing and exits 0 for everything else; no browser
+    /// exists, which is fine — the fake's exit-0 is what `LaunchPolicy::Refuse`
+    /// needs, and the listing is the subject, not the browser.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_sweep_records_a_managed_profiles_tab_identities() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = tmp.path().join("fake-playwright-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\n\
+             case \" $* \" in\n\
+             *\" tab-list \"*) printf '%s\\n' '### Result' '- 0: (current) [Example Domain](https://example.com/)' '- 1: [Other](https://other.example/)' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .expect("write the fake playwright-cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod the fake playwright-cli");
+
+        let manager = ProfileManager::new(managed_config(Some(&cli)));
+        // A tracked tab makes the profile a sweep candidate; both listed tabs
+        // are fresh and under the cap, so nothing is closed.
+        manager.touch_tab("default", "0");
+        assert_eq!(manager.reap_idle_tabs().await, 0, "no victims");
+
+        let registry = manager.tab_registry();
+        assert_eq!(
+            registry.last_url("default", "0").as_deref(),
+            Some("https://example.com/"),
+            "the listing's URL observation reached the registry"
+        );
+        // The old-driver shape: no targetId was ever learnable, so the
+        // registry holds the URL and must NOT be able to call the tab gone
+        // (判据 §8 — 'I cannot tell' is not a verdict).
+        let identity = registry
+            .resolve_identity("default", "1", &[])
+            .expect("a recorded identity without a targetId resolves, never TabGone");
+        assert_eq!(identity.target_id, None);
+        assert_eq!(identity.last_url.as_deref(), Some("https://other.example/"));
+    }
+
     #[tokio::test]
     async fn policy_update_applies_without_a_restart() {
         // Boot with SSRF on: loopback is refused.
@@ -2236,7 +2510,7 @@ mod tests {
     /// production half is `cfg(not(test))` — it reads the real `$ALEPH_HOME`
     /// and kills pids, so no unit test may run it — which leaves the wire
     /// itself unobservable at runtime. Same shape and the same reason as
-    /// `both_daemon_exit_paths_reap_background_jobs_and_browsers`. Deleting the
+    /// `both_daemon_exit_paths_run_every_reaper`. Deleting the
     /// call then fails a test by name, instead of silently letting every
     /// crashed daemon's Chromium survive forever.
     #[test]
@@ -3112,5 +3386,201 @@ mod tests {
             "a source that survived must be stated, and named: {:?}",
             report.warnings
         );
+    }
+
+    /// r11 N5: one configured profile, a store per principal — on BOTH
+    /// families of browser this manager owns: the playwright-managed Chromium
+    /// (`chromium-udd/<key>`) and a CDP engine (`<engine>/<key>`). The owner
+    /// and an actor-less caller keep the `default` directory every install
+    /// already has.
+    #[test]
+    fn each_principal_gets_its_own_browser_store_on_both_engines() {
+        use crate::gateway::security::store::OWNER_USER_ID;
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let udd = |principal: Option<&str>| {
+            let key = manager
+                .principal_profile("default", principal)
+                .expect("resolves");
+            let cfg = manager
+                .get_config(&key)
+                .expect("the key is a profile entry");
+            crate::browser::playwright_cli::chromium_user_data_dir(
+                &SessionLaunch::from_profile(&cfg, true),
+                &key,
+            )
+            .expect("home resolves")
+        };
+        let owner = udd(Some(OWNER_USER_ID));
+        assert!(
+            owner.ends_with("chromium-udd/default"),
+            "{}",
+            owner.display()
+        );
+        assert_eq!(
+            udd(None),
+            owner,
+            "an actor-less caller drives the owner's browser"
+        );
+        let alice = udd(Some("u-alice"));
+        let bob = udd(Some("u-bob"));
+        assert!(
+            alice.ends_with("chromium-udd/default__u-alice"),
+            "{}",
+            alice.display()
+        );
+        assert!(
+            bob.ends_with("chromium-udd/default__u-bob"),
+            "{}",
+            bob.display()
+        );
+        assert_ne!(alice, bob);
+
+        for engine in [Engine::Chromium, Engine::Obscura] {
+            let mut config = BrowserSystemConfig::default();
+            config.profiles.insert(
+                "default".into(),
+                ProfileConfig {
+                    driver: BrowserDriver::Cdp,
+                    engine: Some(engine),
+                    ..Default::default()
+                },
+            );
+            let manager = ProfileManager::new(config);
+            let data_dir = |principal: Option<&str>| {
+                let key = manager.principal_profile("default", principal).unwrap();
+                let (_, req) = manager.launch_request_for(&key).expect("launchable");
+                assert_eq!(
+                    req.session_key, key,
+                    "registry key and data dir share one string"
+                );
+                req.data_dir
+            };
+            let sub = engine.data_subdir();
+            assert!(data_dir(Some(OWNER_USER_ID)).ends_with(format!("{sub}/default")));
+            assert!(data_dir(Some("u-alice")).ends_with(format!("{sub}/default__u-alice")));
+            assert!(data_dir(Some("u-bob")).ends_with(format!("{sub}/default__u-bob")));
+        }
+    }
+
+    /// A configured `user_data_dir` is the OPERATOR's browser store, logins
+    /// included. It stays the owner's; a second principal gets a managed one.
+    #[test]
+    fn a_configured_user_data_dir_is_never_handed_to_another_principal() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                user_data_dir: Some("/operator/chrome".into()),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let owner = manager.principal_profile("default", None).unwrap();
+        assert_eq!(
+            manager.get_config(&owner).unwrap().user_data_dir.as_deref(),
+            Some("/operator/chrome")
+        );
+        let alice = manager
+            .principal_profile("default", Some("u-alice"))
+            .unwrap();
+        let cfg = manager.get_config(&alice).unwrap();
+        assert_eq!(cfg.user_data_dir, None);
+        let dir = crate::browser::playwright_cli::chromium_user_data_dir(
+            &SessionLaunch::from_profile(&cfg, true),
+            &alice,
+        )
+        .unwrap();
+        assert!(
+            dir.ends_with("chromium-udd/default__u-alice"),
+            "{}",
+            dir.display()
+        );
+    }
+
+    /// A composed name is the OUTPUT of `principal_profile`, never an input:
+    /// refused as "not found", in the same words as a profile that does not
+    /// exist, whoever asks — including the principal it names. The configured
+    /// `work__u-bob` is the case only the `is_composed_id` gate catches (the
+    /// `materialized_for` filter covers the materialized ones).
+    #[test]
+    fn a_composed_profile_name_is_refused_as_not_found() {
+        let mut config = BrowserSystemConfig::default();
+        config
+            .profiles
+            .insert("work__u-bob".into(), ProfileConfig::default());
+        let manager = ProfileManager::new(config);
+        manager
+            .principal_profile("default", Some("u-alice"))
+            .unwrap();
+        for (input, who) in [
+            ("default__u-alice", Some("u-bob")),
+            ("default__u-alice", Some("u-alice")),
+            ("default__u-alice", None),
+            ("default__p-room", Some("u-bob")),
+            ("work__u-bob", Some("u-carol")),
+            ("work__u-bob", None),
+        ] {
+            let err = manager
+                .principal_profile(input, who)
+                .expect_err("a composed name must be refused");
+            assert_eq!(
+                err.to_string(),
+                BrowserError::ProfileNotFound(input.into()).to_string(),
+                "{input} as {who:?}"
+            );
+        }
+    }
+
+    /// `ExistingSession` attaches to the machine owner's own Chrome; there is
+    /// no per-principal copy of it to hand out (assumption A-1).
+    #[test]
+    fn only_the_owner_may_drive_the_existing_session_profile() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        assert_eq!(manager.principal_profile("user", None).unwrap(), "user");
+        assert!(matches!(
+            manager.principal_profile("user", Some("u-alice")),
+            Err(BrowserError::ActionFailed(_))
+        ));
+        assert!(
+            manager.get_config("user__u-alice").is_none(),
+            "a refusal must not leave a materialized entry behind"
+        );
+    }
+
+    /// The listing a principal sees: configured names only, its own liveness,
+    /// nobody else's materialized copy, no composed key.
+    #[test]
+    fn a_principal_lists_configured_names_only() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        manager.principal_profile("default", Some("u-bob")).unwrap();
+        let alice: Vec<String> = manager
+            .list_profiles_for(Some("u-alice"))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert!(alice.contains(&"default".to_string()), "{alice:?}");
+        assert!(alice.iter().all(|n| !n.contains("__")), "{alice:?}");
+        assert!(!alice.contains(&"user".to_string()), "{alice:?}");
+        let mut owner: Vec<String> = manager
+            .list_profiles_for(None)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        owner.sort();
+        assert_eq!(owner, vec!["default".to_string(), "user".to_string()]);
     }
 }

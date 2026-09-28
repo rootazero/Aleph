@@ -29,9 +29,9 @@
 // # Why claims outlive the exchange
 //
 // `claimed` is a bounded FIFO of run ids, not just the in-flight one. A run's
-// last frames can arrive after `RunComplete` has already settled the exchange
-// (`agent_trace` is a deliberately lossy mirror and can reorder against the
-// authoritative stream), and a frame from a run this overlay asked for must
+// last frames may arrive after `RunComplete` has already settled the exchange
+// (the overlay does not assume every frame precedes the terminal record),
+// and a frame from a run this overlay asked for must
 // never reach the transcript. Eviction is safe in the same direction as
 // `AppState::run_sessions`: an evicted id stops being intercepted here and
 // falls back to `frame_belongs_here`, which drops it because the side session

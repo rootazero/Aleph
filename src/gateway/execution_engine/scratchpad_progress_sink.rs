@@ -131,6 +131,19 @@ impl ScratchpadProgressSink {
         });
         Self { inner, tx }
     }
+
+    /// A second sink over `inner` that pushes into THIS sink's queue, drained
+    /// by the one task `new` spawned. A run's spawned subagents get one of
+    /// these (`run_trace_sinks.rs`): their progress lines reach the same
+    /// channel in one FIFO with the parent's, instead of racing it from a
+    /// second drain. The drain ends once every sharer has dropped.
+    #[must_use]
+    pub(crate) fn sharing_queue(&self, inner: Arc<dyn TraceSink>) -> Self {
+        Self {
+            inner,
+            tx: self.tx.clone(),
+        }
+    }
 }
 
 impl TraceSink for ScratchpadProgressSink {
@@ -282,6 +295,46 @@ mod tests {
         let line = scratchpad_progress_line(&ev).expect("failure cap should surface");
         assert!(line.contains("5"));
         assert!(line.contains("熔断"));
+    }
+
+    /// Counts the events forwarded to it.
+    struct CountingSink(std::sync::atomic::AtomicUsize);
+
+    impl TraceSink for CountingSink {
+        fn on_trace(&self, _event: &LoopTraceEvent) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn flush(&self) {}
+    }
+
+    /// A sharer pushes into the SAME queue as the sink it was made from, so a
+    /// parent's line and a child's line keep the order they were emitted in,
+    /// and it forwards every event to its OWN inner. Red if `sharing_queue`
+    /// builds its own queue (the child's line never reaches this receiver),
+    /// or if the sharer drops its `inner` (the child's counter stays at 0).
+    #[test]
+    fn a_sharer_pushes_into_the_same_queue_in_emission_order() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let parent = ScratchpadProgressSink {
+            inner: Arc::new(crate::harness::NoopTraceSink),
+            tx,
+        };
+        let child_inner = Arc::new(CountingSink(std::sync::atomic::AtomicUsize::new(0)));
+        let child = parent.sharing_queue(child_inner.clone());
+
+        parent.on_trace(&scratchpad_completed("complete_item", Some("[x] parent")));
+        child.on_trace(&scratchpad_completed("complete_item", Some("[x] child")));
+
+        let first = rx.try_recv().expect("the parent's line is queued");
+        let second = rx.try_recv().expect("the child's line is queued behind it");
+        assert!(first.contains("[x] parent"), "got {first}");
+        assert!(second.contains("[x] child"), "got {second}");
+        assert!(rx.try_recv().is_err(), "exactly two lines");
+        assert_eq!(
+            child_inner.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the sharer forwards the child's event to its own inner"
+        );
     }
 
     #[test]

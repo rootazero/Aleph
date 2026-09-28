@@ -325,6 +325,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
                 WorkflowManifestStep {
                     id: "write".into(),
@@ -345,6 +348,9 @@ mod tests {
                     tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
+                    parallel_group: None,
+                    collect_from: Vec::new(),
+                    reduce: None,
                 },
             ],
         }

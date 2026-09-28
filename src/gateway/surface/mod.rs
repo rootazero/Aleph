@@ -1,7 +1,7 @@
 //! Surface identity — what *kind* of I/O surface a connection is.
 //!
 //! This is distinct from `ChannelClass` (lane priority, see
-//! `server::handler`): `SurfaceKind` names the attachment for tiering and
+//! `server::connection::upgrade`): `SurfaceKind` names the attachment for tiering and
 //! delivery routing, not scheduling. Phase 1's `DeliverySurface` trait will
 //! live alongside this enum.
 

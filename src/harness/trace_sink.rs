@@ -6,11 +6,11 @@
 use crate::harness::trace::LoopTraceEvent;
 
 /// Implementations MUST NOT block. The sink is invoked from `AgentHarness`
-/// async tasks; blocking calls back-pressure the entire harness loop.
-/// Production sinks should push events to an `mpsc` channel and drain
-/// elsewhere. The Gateway path uses `GatewayTraceSink`, which forwards
-/// synchronously into `TracePersistence`'s own mpsc-backed queue (drained
-/// asynchronously), so the harness-side call still never blocks.
+/// async tasks; blocking calls back-pressure the entire harness loop, so
+/// production sinks return before any write happens. The Gateway path uses
+/// `GatewayTraceSink`, which forwards synchronously into
+/// `TracePersistence::record`; that spawns one write task per event and keeps
+/// its handle for `flush`, so the harness-side call never blocks.
 pub trait TraceSink: Send + Sync {
     fn on_trace(&self, event: &LoopTraceEvent);
     fn flush(&self);
