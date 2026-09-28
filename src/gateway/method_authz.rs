@@ -235,7 +235,7 @@ mod tests {
     fn every_tool_face_of_an_admin_rpc_family_is_operator_gated() {
         // (builtin tool name, a registered method of the RPC family it duplicates)
         const TOOL_FACES: &[(&str, &str)] = &[
-            ("plugin_manage", "plugin.enable"),
+            ("plugin_manage", "plugins.enable"),
             ("workspace_manage", "workspace.create"),
             ("hooks_manage", "hooks.add"),
             ("skill_manage", "skills.remove"),
