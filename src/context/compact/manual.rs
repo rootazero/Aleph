@@ -62,7 +62,9 @@
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::estimate_tokens_smart;
-use crate::context::compact::compactor::{deterministic_truncation, ContextCompactor};
+use crate::context::compact::compactor::{
+    deterministic_truncation, CompactorConfig, ContextCompactor,
+};
 use crate::context::compact::event_snap::{snap_out_of_open_run, snap_past_tool_results};
 use crate::context::compact::preserve::SUMMARY_MARKER;
 use crate::context::compact::session_split::event_to_message;
@@ -173,9 +175,16 @@ impl ManualCompactOutcome {
 /// Same shape as the neighbouring `set_global_session_service` /
 /// `set_global_session_event_store` handles this module already depends on.
 pub struct ManualCompactWiring {
-    /// Provider for the side-channel summarization call. `None` degrades to
-    /// deterministic truncation — still a real compaction, just a blunt summary.
+    /// The main provider for the side-channel summarization call — the floor
+    /// a failing cheap tier falls back to. `None` degrades to deterministic
+    /// truncation — still a real compaction, just a blunt summary.
     pub summarizer: Option<Arc<dyn AiProvider>>,
+    /// The cheap-tier summarizer (`[context_budget] summary_model` / the
+    /// preset's aux model), tried first. Carried beside `summarizer` rather
+    /// than instead of it so a cheap model the endpoint does not serve falls
+    /// back to the main model exactly as the automatic path does, instead of
+    /// degrading every `/compact` to truncation.
+    pub cheap_summarizer: Option<Arc<dyn AiProvider>>,
     /// Operator default for the verbatim tail budget
     /// (`[context_budget] manual_compact_keep_tokens`).
     pub keep_tokens: usize,
@@ -183,15 +192,15 @@ pub struct ManualCompactWiring {
     /// window at startup (`ContextBudgetConfig::summarizer_input_budget`).
     /// The manual path has no run to inherit a compactor config from, so the
     /// derived value rides the wiring; defaults to the historical constant
-    /// when the budget section is absent/disabled.
+    /// when context management is switched off (`[context_budget] enabled = false`).
     pub summarizer_input_budget: usize,
 }
 
-/// `IndistinguishableDefault`, derived across all three readers: two of them
-/// substitute a compiled constant ([`manual_keep_tokens`] →
-/// [`DEFAULT_KEEP_TOKENS`], [`manual_summarizer_input_budget`] →
-/// [`SUMMARIZER_INPUT_TOKEN_BUDGET`]) and the third returns no summarizer,
-/// which degrades `/compact` to deterministic truncation — "still a real
+/// `IndistinguishableDefault`, derived across both readers: one substitutes a
+/// compiled constant ([`manual_keep_tokens`] → [`DEFAULT_KEEP_TOKENS`]) and the
+/// other returns no compactor ([`manual_compactor`]), so `compact_session`
+/// sizes its input with [`SUMMARIZER_INPUT_TOKEN_BUDGET`] and degrades
+/// `/compact` to deterministic truncation — "still a real
 /// compaction, just a blunt summary", as this module's own doc puts it.
 ///
 /// Every one of those is a legal-looking answer. An operator who set
@@ -229,10 +238,28 @@ pub fn decline_manual_compaction(because: &'static str) {
     MANUAL_WIRING.decline(because);
 }
 
-/// The summarizer provider installed at boot, if any.
+/// The compactor every `/compact` surface summarizes with, built from the
+/// boot wiring, if any.
 #[must_use]
-pub fn manual_summarizer() -> Option<Arc<dyn AiProvider>> {
-    MANUAL_WIRING.get().and_then(|w| w.summarizer.clone())
+pub fn manual_compactor() -> Option<ContextCompactor> {
+    MANUAL_WIRING.get().and_then(compactor_for)
+}
+
+/// The manual compactor a wiring describes: main provider as the floor, the
+/// cheap tier routed first — the same shape `runner_impl` gives the automatic
+/// path, so both fall back identically. `None` when there is no main provider.
+fn compactor_for(wiring: &ManualCompactWiring) -> Option<ContextCompactor> {
+    let main = wiring.summarizer.clone()?;
+    Some(
+        ContextCompactor::new(
+            main,
+            CompactorConfig {
+                summarizer_input_budget: wiring.summarizer_input_budget,
+                ..CompactorConfig::default()
+            },
+        )
+        .with_cheap_provider(wiring.cheap_summarizer.clone()),
+    )
 }
 
 /// The operator-configured verbatim tail budget, or [`DEFAULT_KEEP_TOKENS`].
@@ -241,16 +268,6 @@ pub fn manual_keep_tokens() -> usize {
     MANUAL_WIRING
         .get()
         .map_or(DEFAULT_KEEP_TOKENS, |w| w.keep_tokens)
-}
-
-/// The startup-derived summarizer-input budget (see
-/// [`ManualCompactWiring::summarizer_input_budget`]), or the historical
-/// constant when the wiring was never installed (tests, non-daemon callers).
-#[must_use]
-pub fn manual_summarizer_input_budget() -> usize {
-    MANUAL_WIRING
-        .get()
-        .map_or(SUMMARIZER_INPUT_TOKEN_BUDGET, |w| w.summarizer_input_budget)
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,6 +1502,40 @@ mod tests {
         );
     }
 
+    /// A cheap summarizer the endpoint does not serve must fall back to the
+    /// main provider, as it does on the automatic path — not degrade every
+    /// `/compact` to truncation. Boot used to install `cheap.or(main)` as the
+    /// only provider, so the main model was never tried.
+    #[tokio::test]
+    async fn a_failing_cheap_summarizer_falls_back_to_the_main_provider() {
+        use crate::providers::{MockError, MockProvider};
+        let main: Arc<dyn AiProvider> =
+            Arc::new(MockProvider::new("summary from the main model").with_name("manual-main"));
+        let cheap: Arc<dyn AiProvider> = Arc::new(
+            MockProvider::new("never returned")
+                .with_name(format!("manual-cheap-{}", uuid::Uuid::new_v4()))
+                .with_error(MockError::Provider(
+                    "error 404: model 'aux-x' not found".to_string(),
+                )),
+        );
+        let wiring = ManualCompactWiring {
+            summarizer: Some(main),
+            cheap_summarizer: Some(cheap),
+            keep_tokens: DEFAULT_KEEP_TOKENS,
+            summarizer_input_budget: SUMMARIZER_INPUT_TOKEN_BUDGET,
+        };
+        let compactor = compactor_for(&wiring).expect("a main provider → a compactor");
+        let messages = vec![
+            UnifiedMessage::user("first question"),
+            UnifiedMessage::assistant("first answer"),
+        ];
+        let summary = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .expect("summarize");
+        assert_eq!(summary, "summary from the main model");
+    }
+
     /// The `reads_as` sentence names two compiled constants, so both are tied
     /// to the arms that really return them.
     ///
@@ -1515,10 +1566,6 @@ mod tests {
              an installed handle, not an absent one"
         );
         assert_eq!(manual_keep_tokens(), DEFAULT_KEEP_TOKENS);
-        assert_eq!(
-            manual_summarizer_input_budget(),
-            SUMMARIZER_INPUT_TOKEN_BUDGET
-        );
-        assert!(manual_summarizer().is_none());
+        assert!(manual_compactor().is_none());
     }
 }

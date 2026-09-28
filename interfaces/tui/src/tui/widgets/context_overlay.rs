@@ -39,8 +39,7 @@ const UNKNOWN: &str = "?";
 
 /// Rows the overlay spends on something other than a measured row: two
 /// borders, the headline, the blank under it, and the key hint. The footer is
-/// counted separately because it is one or two lines depending on what there
-/// is to say.
+/// counted separately because its line count depends on what there is to say.
 const CHROME_ROWS: u16 = 5;
 
 /// `1.2 kB` / `847 B` / `3.4 MB` — byte sizes, distinct from the `k`/`M`
@@ -121,7 +120,7 @@ fn headline(view: &ContextView) -> String {
 /// does: the layer rows describe the prompt as ASSEMBLED, and for a session
 /// over the system-prompt budget they overstate what the model received.
 ///
-/// Two short lines rather than one long one, because the overlay does not wrap
+/// Short lines rather than one long one, because the overlay does not wrap
 /// — a row that wraps stops being a table — and a clipped footer is a wrong
 /// label, not a shorter one (判据 §17).
 #[must_use]
@@ -134,6 +133,31 @@ fn footer(view: &ContextView) -> Vec<String> {
         first.push_str(&format!(" \u{00b7} {} trimmed", compact_bytes(cut)));
     }
     let mut out = vec![first];
+    // What tool output cost on its way in — not a row, because it is a
+    // session-long sum, not a share of the window this prompt occupies. The
+    // heading says since when, from the server's own start of counting: it
+    // keeps the tally in memory, so a restart or a dropped record starts it
+    // over. Two lines, because one would clip on a narrow overlay.
+    if let Some(t) = view.tool_output {
+        // "at ingress": the tally is the per-result (Layer 2) pass only; a
+        // per-turn spill later is not in it (`ToolOutputIngress` docs).
+        out.push(match t.since_unix_ms.and_then(since_label) {
+            Some(since) => format!("tool output at ingress since {since}:"),
+            // A server that predates the field: the start is not known.
+            None => "tool output at ingress (start unknown):".to_string(),
+        });
+        out.push(format!(
+            "  {} produced \u{2192} {} kept \u{00b7} {} offloaded \u{00b7} {} call{}",
+            compact_tokens(t.produced_tokens),
+            compact_tokens(t.in_context_tokens),
+            t.offloaded,
+            t.calls,
+            if t.calls == 1 { "" } else { "s" },
+        ));
+    }
+    if view.rows.rows.iter().any(|r| r.estimated) {
+        out.push("~ estimated from the messages sent".to_string());
+    }
     // Only when there IS a remainder: naming `Other` when the row is not on
     // screen would describe something the reader cannot see.
     if view.rows.other > 0 {
@@ -142,6 +166,19 @@ fn footer(view: &ContextView) -> Vec<String> {
         );
     }
     out
+}
+
+/// `HH:MM` in local time, with the date when it is not today — a tally
+/// counted since yesterday must not read as since this morning.
+fn since_label(unix_ms: u64) -> Option<String> {
+    let at = chrono::DateTime::from_timestamp_millis(i64::try_from(unix_ms).ok()?)?
+        .with_timezone(&chrono::Local);
+    let today = chrono::Local::now().date_naive();
+    Some(if at.date_naive() == today {
+        at.format("%H:%M").to_string()
+    } else {
+        at.format("%m-%d %H:%M").to_string()
+    })
 }
 
 /// Render the overlay, centred over the transcript like the `/agents` detail
@@ -245,7 +282,12 @@ fn row_line(row: &ContextRow, total: Option<u64>, label_width: usize) -> Line<'s
         ));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::raw(format!("{:>7}", compact_tokens(row.tokens))));
+    let tokens = if row.estimated {
+        format!("~{}", compact_tokens(row.tokens))
+    } else {
+        compact_tokens(row.tokens)
+    };
+    spans.push(Span::raw(format!("{tokens:>7}")));
     spans.push(Span::styled(
         format!(" {:>4}", share(row.tokens, total)),
         Style::default().fg(theme().muted),
@@ -262,7 +304,9 @@ fn row_line(row: &ContextRow, total: Option<u64>, label_width: usize) -> Line<'s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::context_breakdown::{ContextBreakdown, LayerSizeView, ToolSchemaSize};
+    use aleph_protocol::context_breakdown::{
+        ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolSchemaSize,
+    };
     use ratatui::{backend::TestBackend, Terminal};
 
     fn breakdown() -> ContextBreakdown {
@@ -288,7 +332,8 @@ mod tests {
                 schema_bytes: 400,
                 description_bytes: 400,
             }],
-            messages_tokens: None,
+            messages: None,
+            tool_output: None,
             provider_reported: None,
             context_window: Some(200_000),
             dynamic_bytes_sent: Some(6_000),
@@ -311,6 +356,61 @@ mod tests {
             .map(|row| row.concat())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The conversation half is painted as its per-kind rows, and the
+    /// session's tool-output tally as a footer line — the two fields the
+    /// server now fills, each with a line of code that shows it.
+    #[test]
+    fn the_message_split_and_the_tool_output_tally_are_painted() {
+        let mut b = breakdown();
+        b.messages = Some(MessageTokens {
+            tool_results: 12_000,
+            reasoning: 3_000,
+            other: 1_500,
+        });
+        let since = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(9, 5, 0)
+            .and_then(|t| t.and_local_timezone(chrono::Local).single())
+            .expect("a local 09:05 today");
+        b.tool_output = Some(ToolOutputIngress {
+            calls: 7,
+            produced_tokens: 90_000,
+            in_context_tokens: 14_000,
+            offloaded: 2,
+            since_unix_ms: u64::try_from(since.timestamp_millis()).ok(),
+        });
+        // 80 columns: the tally must fit the common terminal, not only a wide one.
+        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
+        for label in [
+            "Messages: tool results",
+            "Messages: reasoning",
+            "Messages: other",
+        ] {
+            assert!(screen.contains(label), "missing {label}:\n{screen}");
+        }
+        assert!(
+            screen.contains("tool output at ingress since 09:05:")
+                && screen.contains("2 offloaded \u{00b7} 7 calls"),
+            "the tally must be painted with what it measures and from when:\n{screen}"
+        );
+        assert!(
+            screen.contains("~12.0k") && screen.contains("~ estimated"),
+            "estimated rows are marked as estimates:\n{screen}"
+        );
+    }
+
+    /// A server that predates `since_unix_ms` gets no invented start time.
+    #[test]
+    fn a_tally_without_a_start_says_so() {
+        let mut b = breakdown();
+        b.tool_output = Some(ToolOutputIngress {
+            calls: 1,
+            ..ToolOutputIngress::default()
+        });
+        let screen = painted(ContextView::new(&b, Some((40_000, 200_000))), 80, 24);
+        assert!(screen.contains("(start unknown)"), "{screen}");
     }
 
     /// **B7's guard.** A breakdown whose `provider_reported` is unknown — the

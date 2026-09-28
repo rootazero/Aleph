@@ -8,6 +8,7 @@ use crate::providers::anthropic::{
     ContentBlock, ImageSource, Message, MessageContent, SystemBlock, ThinkingBlock,
 };
 use crate::providers::message::UnifiedMessage;
+use crate::providers::model_catalog::binds_thinking_to_prefix;
 use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
@@ -21,6 +22,17 @@ use super::{sanitize_anthropic_tool_name, AnthropicProtocol, CLAUDE_CODE_IDENTIT
 /// least some room must remain for the visible answer. Mirrors openclaw
 /// `adjustMaxTokensForThinking` (`minOutputTokens = 1024`).
 const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
+
+/// Preserved-thinking controls. Sent alone (no `thinking.block_binding` field)
+/// it opts the request into the beta's default, `drop_block`: a replayed
+/// thinking block whose conversation prefix changed — and every later one —
+/// is dropped for that request instead of failing it with a 400, and each
+/// drop is reported in the response's `input_transformations`.
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+
+/// Server-side context editing (`context_management.edits`).
+const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
+
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     #[must_use]
@@ -62,9 +74,13 @@ impl AnthropicProtocol {
         format!("{base_url}/v1/messages")
     }
 
-    /// Convert `UnifiedMessages` to Anthropic Messages
+    /// Convert `UnifiedMessages` to Anthropic Messages under one endpoint's
+    /// capabilities (`caps` decides host-specific replay shapes).
     // rust-doctor-disable-next-line high-cyclomatic-complexity
-    pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
+    pub(super) fn convert_messages(
+        messages: &[UnifiedMessage],
+        caps: &AnthropicCapabilities,
+    ) -> Vec<Message> {
         let mut result = Vec::new();
         let mut i = 0;
         while i < messages.len() {
@@ -148,8 +164,8 @@ impl AnthropicProtocol {
                 UnifiedMessage::Assistant { content } => {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
-                    // Track the most recent signed thinking block so we can inject
-                    // reasoning_content into the next ToolUse when thinking is enabled.
+                    // Most recent signed thinking text, copied into the following
+                    // tool_use inputs on hosts that demand it (see the capability).
                     let mut pending_thinking: Option<String> = None;
                     for block in content {
                         match block {
@@ -170,6 +186,7 @@ impl AnthropicProtocol {
                             crate::providers::message::ContentBlock::Thinking {
                                 thinking,
                                 signature: Some(sig),
+                                ..
                             } => {
                                 // Replay the signed thinking block when we have its signature.
                                 // Anthropic requires a verbatim replay (thinking + signature)
@@ -184,9 +201,10 @@ impl AnthropicProtocol {
                                         // rust-doctor-disable-next-line excessive-clone
                                         signature: sig.clone(),
                                     });
-                                    // Remember this thinking for the next ToolCall
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    pending_thinking = Some(thinking.clone());
+                                    if caps.requires_reasoning_content_in_tool_input {
+                                        // rust-doctor-disable-next-line excessive-clone
+                                        pending_thinking = Some(thinking.clone());
+                                    }
                                 }
                             }
                             crate::providers::message::ContentBlock::ToolCall {
@@ -207,18 +225,18 @@ impl AnthropicProtocol {
                                     })
                                     .take(64)
                                     .collect();
-                                // Anthropic API requires input to be a dictionary, never a string.
-                                // When thinking is enabled and precedes a tool call, we must
-                                // include reasoning_content in the tool_use input or the API
-                                // rejects the request with:
-                                //   "thinking is enabled but reasoning_content is missing
-                                //    in assistant tool call message".
+                                // The Messages API requires input to be a dictionary,
+                                // never a string.
                                 let mut input = if arguments.is_object() {
                                     // rust-doctor-disable-next-line excessive-clone
                                     arguments.clone()
                                 } else {
                                     serde_json::json!({})
                                 };
+                                // Only set when the host demands the copy
+                                // (`requires_reasoning_content_in_tool_input`); it
+                                // stays set so EVERY tool_use after the signed
+                                // thinking block carries it, not just the first.
                                 if let Some(ref reasoning) = pending_thinking {
                                     if let Some(obj) = input.as_object_mut() {
                                         obj.insert(
@@ -227,10 +245,6 @@ impl AnthropicProtocol {
                                             serde_json::Value::String(reasoning.clone()),
                                         );
                                     }
-                                    // Keep pending_thinking set: Anthropic requires
-                                    // reasoning_content in EVERY tool_use block that
-                                    // follows a signed thinking block within the same
-                                    // assistant message, not just the first one.
                                 }
                                 blocks.push(ContentBlock::ToolUse {
                                     id: sanitized_id,
@@ -280,13 +294,9 @@ impl AnthropicProtocol {
                             let mut parts = Vec::new();
                             for b in content {
                                 match b {
-                                    crate::providers::message::ContentBlock::Text {
-                                        text, ..
-                                    // rust-doctor-disable-next-line excessive-clone
-                                    } => parts.push(text.clone()),
-                                    crate::providers::message::ContentBlock::Json { value } => {
-                                        parts
-                                            .push(serde_json::to_string(value).unwrap_or_default());
+                                    crate::providers::message::ContentBlock::Text { .. }
+                                    | crate::providers::message::ContentBlock::Json { .. } => {
+                                        parts.extend(b.as_model_text().map(|t| t.into_owned()));
                                     }
                                     crate::providers::message::ContentBlock::Image {
                                         data,
@@ -353,10 +363,17 @@ impl AnthropicProtocol {
     /// - OAuth stack (`claude-code-20250219` + `oauth-2025-04-20` + `token-restricted`)
     ///   when the API key is an Anthropic OAuth token — see `is_oauth_token`
     /// - `extended-cache-ttl-2025-04-11` when `extended_cache_ttl` is true (Long retention)
+    /// - `thinking-binding-controls-2026-08-01` — prefix-bound model (catalog
+    ///   fact) on a host that accepts the controls (policy fact), never on the
+    ///   OAuth path
+    /// - `context-management-2025-06-27` when `context_editing` — the caller
+    ///   passes [`Self::server_context_editing_applies`], the same value that
+    ///   put `context_management` in the body, so the two never disagree
     pub(super) fn build_beta_headers(
         model: &str,
         api_key: Option<&str>,
         extended_cache_ttl: bool,
+        context_editing: bool,
         caps: &AnthropicCapabilities,
     ) -> String {
         let mut betas: Vec<&'static str> = Vec::new();
@@ -374,7 +391,8 @@ impl AnthropicProtocol {
         if caps.supports_context_1m && Self::is_claude_4_family(model) {
             betas.push("context-1m-2025-08-07");
         }
-        if api_key.is_some_and(Self::is_oauth_token) {
+        let oauth = api_key.is_some_and(Self::is_oauth_token);
+        if oauth {
             // OAuth requests need the full Claude Code beta stack — without
             // claude-code/oauth Anthropic's OAuth infrastructure intermittently
             // 500s; without token-restricted the token's scope check fails.
@@ -385,7 +403,34 @@ impl AnthropicProtocol {
         if extended_cache_ttl {
             betas.push("extended-cache-ttl-2025-04-11");
         }
+        // Aleph cannot prove the history it replays is append-only, and on a
+        // prefix-bound model any edit before a thinking block invalidates it
+        // and every later one. The header alone selects `drop_block` (see
+        // `THINKING_BINDING_BETA`); the `thinking` body is left as the think
+        // level made it. The OAuth identity path keeps its beta stack (U1).
+        if !oauth && caps.supports_thinking_block_binding && binds_thinking_to_prefix(model) {
+            betas.push(THINKING_BINDING_BETA);
+        }
+        if context_editing {
+            betas.push(CONTEXT_MANAGEMENT_BETA);
+        }
         betas.join(",")
+    }
+
+    /// Whether a request built from `config` carries server-side context
+    /// editing: the provider enabled it, the host accepts it (a policy fact —
+    /// the docs make it available on every supported Claude model, so there is
+    /// no model gate), and the request is not on the OAuth identity path (U1:
+    /// unverified there). The one derivation behind the body field, its beta
+    /// header, the local passes standing down, and the "enabled but not
+    /// honoured" warning.
+    pub(crate) fn server_context_editing_applies(
+        config: &ProviderConfig,
+        caps: &AnthropicCapabilities,
+    ) -> bool {
+        config.server_context_editing.enabled
+            && caps.supports_context_editing
+            && !config.api_key.as_deref().is_some_and(Self::is_oauth_token)
     }
 
     /// True for Claude 4-family models (opus-4-*, sonnet-4-*, haiku-4-*).
@@ -513,10 +558,20 @@ impl AnthropicProtocol {
         Self::claude_version(model).is_some_and(|v| v >= (4, 7))
     }
 
-    /// True for generation-5 models (`claude-fable-5`, …) where an explicit
-    /// `thinking: {type: "disabled"}` block returns a 400 — the only way to
-    /// run without thinking is to **omit** the `thinking` field entirely.
-    /// 4.6–4.8 still accept (and need) the explicit disabled block to
+    /// True for generation-5 models (`claude-*-5*`): a requested `Off` **omits**
+    /// the `thinking` field instead of sending `{type: "disabled"}`. On every
+    /// one of them omission runs the default adaptive thinking; whether an
+    /// explicit disabled block would have turned it off is per model:
+    ///
+    /// - Fable 5 / 5.1, Mythos 5 / 5.1, Opus 5.5 — no off switch (`disabled`
+    ///   is a 400), so omission is the only valid request.
+    /// - Opus 5 — `disabled` is accepted at effort `high` or lower (400 at
+    ///   `xhigh` / `max`).
+    /// - Sonnet 5 — `disabled` is accepted.
+    ///
+    /// So on Opus 5 and Sonnet 5 a requested `Off` still thinks (known gap,
+    /// kept: the vendor's guidance there is a lower effort rather than
+    /// disabling). 4.6–4.8 accept (and need) the explicit disabled block to
     /// suppress their default thinking, so this gates only 5.x+.
     pub(super) fn omits_disabled_thinking(model: &str) -> bool {
         Self::claude_version(model).is_some_and(|v| v >= (5, 0))

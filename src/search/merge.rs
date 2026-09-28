@@ -286,7 +286,10 @@ mod tests {
     fn the_indexed_merge_keeps_each_rows_source() {
         let a = vec![r("https://shared.test/x", "a"), r("https://a1.test", "a")];
         let b: Vec<SearchResult> = vec![];
-        let c = vec![r("https://www.shared.test/x?utm_source=c", "c"), r("https://c1.test", "c")];
+        let c = vec![
+            r("https://www.shared.test/x?utm_source=c", "c"),
+            r("https://c1.test", "c"),
+        ];
         let (merged, dupes) = merge_by_rank_indexed(vec![a, b, c], 10);
         assert_eq!(dupes, 1, "the decorated repeat of the shared page");
         let rows: Vec<(usize, &str)> = merged

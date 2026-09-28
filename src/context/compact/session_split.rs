@@ -972,7 +972,8 @@ mod tests {
     /// A crash after a split is resumed against the CHILD, and a resume
     /// replays whatever the child's opener froze. An opener written with
     /// `envelope: None` resumes unsnapshotted — every knob replaced by
-    /// today's value, the skill scope gone — so the child's `RunStarted`
+    /// today's value, a plugin command's tool restriction gone — so the
+    /// child's `RunStarted`
     /// must carry the parent's open run's envelope and project root, read
     /// through the service the batch was handed to.
     #[tokio::test]
@@ -1446,5 +1447,29 @@ mod tests {
                 .any(|(_, e)| matches!(e, SessionEvent::UserMessage { .. })),
             "no fresh-tail UserMessage should be copied when tail_start is clamped",
         );
+    }
+
+    /// Both summarizer paths (split and `/compact`) build their input through
+    /// this one mapper, so reasoning must not survive it — pinned by a test,
+    /// not by reading the code.
+    #[test]
+    fn event_to_message_never_carries_reasoning() {
+        let event = SessionEvent::AssistantMessage {
+            turn_id: uuid::Uuid::nil(),
+            content: MessageContent {
+                text: "answer".into(),
+                blocks: vec![],
+                thinking: Some("secret plan".into()),
+                thinking_signature: Some("sig".into()),
+            },
+            usage: None,
+            at: now_ms(),
+        };
+        let msg = event_to_message(&event).expect("an assistant turn maps");
+        assert!(!msg
+            .content_blocks()
+            .iter()
+            .any(|b| matches!(b, crate::providers::message::ContentBlock::Thinking { .. })));
+        assert!(!msg.text_content().contains("secret plan"));
     }
 }

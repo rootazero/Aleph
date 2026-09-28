@@ -1800,7 +1800,11 @@ fn osc7_keeps_a_windows_drive_letter_out_of_the_path() {
     // slash before a colon" and nothing here would notice.
     let mut unix = Screen::new(3, 10);
     unix.feed(b"\x1b]7;file:///home/me\x07");
-    assert_eq!(unix.cwd(), Some("/home/me"), "an ordinary path is untouched");
+    assert_eq!(
+        unix.cwd(),
+        Some("/home/me"),
+        "an ordinary path is untouched"
+    );
 
     let mut oddball = Screen::new(3, 10);
     oddball.feed(b"\x1b]7;file:///C:no-separator\x07");

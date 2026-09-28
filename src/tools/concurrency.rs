@@ -262,11 +262,19 @@ pub fn normalize_path(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    #[cfg(windows)]
+    // Treat both '/' and '\\' as path separators on every host. This module
+    // exists to detect concurrent writes to the same file across tool calls
+    // in one turn, and a Windows-spelled path can reach the claim path on any
+    // host (CI workflow agent on Linux, cross-platform manifest import, a
+    // hook emitted by an extension shipped from a Windows dev). The
+    // `windows_separators_fold_onto_the_same_scope` test pins this contract.
+    // On Unix hosts '\\' is technically a legal filename byte, so files
+    // literally containing '\\' will be mis-canonicalised here — the path-
+    // conflict detector is about safety against concurrent file writes, and
+    // a name with '\\' on Unix is exotic enough that the bounded loss is
+    // acceptable.
     let separators: &[char] = &['/', '\\'];
-    #[cfg(not(windows))]
-    let separators: &[char] = &['/'];
-    let absolute = trimmed.starts_with('/') || (cfg!(windows) && trimmed.starts_with('\\'));
+    let absolute = trimmed.starts_with('/') || trimmed.starts_with('\\');
     let mut stack: Vec<&str> = Vec::new();
     for comp in trimmed.split(separators) {
         match comp {

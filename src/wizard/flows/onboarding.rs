@@ -332,7 +332,7 @@ impl OnboardingFlow {
         // preview: the outro below promises more than the flow delivers.
 
         prompter
-            .outro("Aleph is ready! Run 'aleph chat' to start.")
+            .outro("Aleph is ready! Run 'al chat' to start.")
             .await?;
 
         Ok(())

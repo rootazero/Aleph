@@ -644,6 +644,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 // three consumers consistent by construction.
                 let cfg = refined_context_budget.as_ref().unwrap_or(cfg);
                 let mut budget_inner = ContextBudget::new(cfg);
+                // Count reasoning as this run's provider will send it.
+                budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
+                budget_inner.set_server_clears_tool_results(llm.clears_tool_results_server_side());
+                budget_inner.publish_message_tokens_as(session_id.to_key_string());
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
                 // fresh per-run budget keeps breaker / split counters
@@ -754,7 +758,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Stage list + preventive-band gate live in ONE place
                 // (`preflight::default_pipeline`) so the subagent spawner builds
                 // the identical pipeline instead of re-deriving it.
-                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
+                    cfg,
+                    llm.as_ref(),
+                ));
                 (Some(budget), Some(compactor), Some(pipeline))
             }
             None => (None, None, None),
@@ -810,16 +817,53 @@ impl HarnessRunner for AgentHarnessRunner {
             (other, _) => other,
         };
         // B14: the Layer-3 per-turn tool-output cap tracks the model's real
-        // window instead of hermes' since-fixed 50k constant. `token_budget` is
-        // the same provider/capability-derived figure the compactor sizes itself
-        // from (`deps_builder::context_budget`), so on a 32k local model the 50k
-        // cap — 156 % of the window, and therefore unreachable — becomes one that
-        // can actually fire. Large-window models clamp back up to the old
-        // constant and are byte-for-byte unchanged. No config → no override.
+        // window instead of one fixed constant. `token_budget` is the same
+        // provider/capability-derived figure the compactor sizes itself from
+        // (`deps_builder::context_budget`), so on a small local model a fixed
+        // cap above the window — unreachable — becomes one that can actually
+        // fire. Large-window models clamp to `turn_budget::DEFAULT_MAX_TURN_TOKENS`
+        // (see `budget_for_window`). No config → no override.
         let windowed_turn_budget = self.context_budget_config.as_ref().map(|cfg| {
             let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
             Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
         });
+        // The store is process-wide; the *handle* carries the session scope
+        // (see `tools::result_store` module docs). Scoping it here is what
+        // keeps this run's Layer-3 spills out of every other live session's
+        // `ctx_search` — and out of the blast radius of their denial
+        // circuit-breaker. The key must be the wire session key, because
+        // `ctx_search` resolves its own scope from
+        // `turn_context::current_session_key()`.
+        let result_store = self
+            .result_store
+            // rust-doctor-disable-next-line excessive-clone
+            .clone()
+            .or_else(crate::tools::result_store::global_tool_result_store)
+            .map(|store| {
+                crate::tools::result_store::ToolResultStore::for_session(
+                    &store,
+                    session_id.to_key_string(),
+                )
+            });
+        // Layer 3 turn budget + Layer 2 shared store. Prefer the
+        // bridge's explicit field (set via direct injection / tests);
+        // then this run's window-sized budget; then the process-wide
+        // singleton installed at boot. `None` (nothing anywhere) keeps the
+        // legacy behavior — Layer 2 / Layer 3 are inert.
+        //
+        // This run's handle measures its spill floor on the SAME scoped store
+        // `Arc` the Layer-3 spill writes through (a clone of the budget shares
+        // its per-turn state; only the store handle is this run's).
+        let turn_budget = self
+            .turn_budget
+            // rust-doctor-disable-next-line excessive-clone
+            .clone()
+            .or(windowed_turn_budget)
+            .or_else(crate::tools::turn_budget::global_turn_result_budget)
+            .map(|budget| match &result_store {
+                Some(store) => Arc::new((*budget).clone().with_result_store(Arc::clone(store))),
+                None => budget,
+            });
         let deps = HarnessDeps {
             // rust-doctor-disable-next-line excessive-clone
             session: self.session_service.clone(),
@@ -864,35 +908,8 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
-            // Layer 3 turn budget + Layer 2 shared store. Prefer the
-            // bridge's explicit field (set via direct injection / tests);
-            // then this run's window-sized budget; then the process-wide
-            // singleton installed at boot. `None` (nothing anywhere) keeps the
-            // legacy behavior — Layer 2 / Layer 3 are inert.
-            turn_budget: self
-                .turn_budget
-                // rust-doctor-disable-next-line excessive-clone
-                .clone()
-                .or(windowed_turn_budget)
-                .or_else(crate::tools::turn_budget::global_turn_result_budget),
-            // The store is process-wide; the *handle* carries the session scope
-            // (see `tools::result_store` module docs). Scoping it here is what
-            // keeps this run's Layer-3 spills out of every other live session's
-            // `ctx_search` — and out of the blast radius of their denial
-            // circuit-breaker. The key must be the wire session key, because
-            // `ctx_search` resolves its own scope from
-            // `turn_context::current_session_key()`.
-            result_store: self
-                .result_store
-                // rust-doctor-disable-next-line excessive-clone
-                .clone()
-                .or_else(crate::tools::result_store::global_tool_result_store)
-                .map(|store| {
-                    crate::tools::result_store::ToolResultStore::for_session(
-                        &store,
-                        session_id.to_key_string(),
-                    )
-                }),
+            turn_budget,
+            result_store,
             // rust-doctor-disable-next-line excessive-clone
             session_epoch_registrar: self.session_epoch_registrar.clone(),
             // Spec 3 — per-tool-invocation signal capture. When a
@@ -1430,7 +1447,24 @@ impl HarnessRunner for AgentHarnessRunner {
             .get_events(&session_id, None, None)
             .await
             .unwrap_or_default();
-        let history = crate::harness::agent::prompt::build_prompt(&events, 0);
+        //    Reasoning is counted as the provider the next turn would use
+        //    sends it: `run` resolves a pinned provider through
+        //    `effective_model_directive` → `named_providers`, else the default
+        //    chain — the same resolution here, so a DeepSeek-pinned session
+        //    under an Anthropic default counts DeepSeek's reasoning_content.
+        let pinned_provider = effective_model_directive(
+            None,
+            crate::providers::session_model_handle::get_session_model(&canonical_key),
+            self.agent_registry
+                .get(&agent_id)
+                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
+        )
+        .and_then(|(provider, _)| provider)
+        .and_then(|p| self.named_providers.get(&p).cloned());
+        let serving = pinned_provider.unwrap_or_else(|| self.default_provider.current());
+        let history = serving
+            .reasoning_replay((!model.is_empty()).then_some(model.as_str()))
+            .project(&crate::harness::agent::prompt::build_prompt(&events, 0));
 
         // 6. used = overhead + history tokens; against the resolved window.
         //    When mid-run compaction is enabled, cap at the warning band it

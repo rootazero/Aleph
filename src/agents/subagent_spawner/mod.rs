@@ -659,8 +659,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     turns,
                 )
                 .ok_or_else(|| {
-                    "sub-agent failed: context=fork cannot be sized — this run has no \
-                     [context_budget], or the child's system prompt already fills its \
+                    "sub-agent failed: context=fork cannot be sized — this run has context \
+                     management off ([context_budget] enabled = false), or the child's system prompt already fills its \
                      window. Use context=isolated or context=summary."
                         .to_string()
                 })?;
@@ -860,12 +860,43 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             req.cancel.clone(),
         );
 
+        // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
+        // tool results were truncated inline (the subagent then re-ran the
+        // tool against truncated context). Reuse the same shared
+        // `ToolResultStore` singleton the main harness falls back to
+        // (`orchestrator::harness_bridge`), so large subagent results spill
+        // to disk and the subagent can re-read the marker.
+        //
+        // Scope the *handle* like the two other seams do
+        // (`tool_service_builder`, `harness_bridge::runner_impl`) — the
+        // process-wide handle was unscoped, so a child's Layer-3 spills
+        // landed outside every session directory and its own `ctx_search`
+        // (which resolves scope from `turn_context::current_session_key()`)
+        // could never find them. Failed safe, but the recall was dead.
+        //
+        // The key is the PARENT session, not `child_id`: a subagent runs its
+        // tools through the parent's `ScopedToolService`, so both the
+        // TURN_CONTEXT its `ctx_search` reads and the Layer-2 store its
+        // individual results spill to are already parent-scoped. Scoping
+        // Layer 3 to `child_id` would just move the artifacts to a third
+        // directory nothing reads. No parent session (direct/test callers,
+        // no ScopedToolService) → keep today's unscoped handle.
+        let result_store = crate::tools::result_store::global_tool_result_store().map(|store| {
+            base.parent_session_id.as_ref().map_or_else(
+                || store.clone(),
+                |sid| crate::tools::result_store::ToolResultStore::for_session(&store, sid.clone()),
+            )
+        });
         // Layer-3 per-turn aggregate budget — derive from `context_budget_config`
         // when the parent has one wired, otherwise fall back to the
         // process-wide singleton (mirrors the root runner's last-resort
         // branch). Without this, subagent tool results only see Layer 2
         // (per-message) caps; large bash/file outputs cannot spill to disk
         // and the subagent reads a truncated result.
+        //
+        // This run's handle measures its spill floor on the SAME store `Arc` the
+        // Layer-3 spill writes through (a clone of the budget shares its
+        // per-turn state; only the store handle is this run's).
         let turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>> = base
             .context_budget_config
             .as_ref()
@@ -873,7 +904,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
                 Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
             })
-            .or_else(crate::tools::turn_budget::global_turn_result_budget);
+            .or_else(crate::tools::turn_budget::global_turn_result_budget)
+            .map(|budget| match &result_store {
+                Some(store) => Arc::new((*budget).clone().with_result_store(Arc::clone(store))),
+                None => budget,
+            });
 
         let deps = HarnessDeps {
             session: base.session.clone(),
@@ -913,38 +948,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             consecutive_failure_cap: base.consecutive_failure_cap,
             turn_timeout: base.turn_timeout,
             turn_budget,
-            // §3.2 overflow-tier parity: was `None`, so a subagent's oversized
-            // tool results were truncated inline (the subagent then re-ran the
-            // tool against truncated context). Reuse the same shared
-            // `ToolResultStore` singleton the main harness falls back to
-            // (`orchestrator::harness_bridge`), so large subagent results spill
-            // to disk and the subagent can re-read the marker.
-            //
-            // Scope the *handle* like the two other seams do
-            // (`tool_service_builder`, `harness_bridge::runner_impl`) — the
-            // process-wide handle was unscoped, so a child's Layer-3 spills
-            // landed outside every session directory and its own `ctx_search`
-            // (which resolves scope from `turn_context::current_session_key()`)
-            // could never find them. Failed safe, but the recall was dead.
-            //
-            // The key is the PARENT session, not `child_id`: a subagent runs its
-            // tools through the parent's `ScopedToolService`, so both the
-            // TURN_CONTEXT its `ctx_search` reads and the Layer-2 store its
-            // individual results spill to are already parent-scoped. Scoping
-            // Layer 3 to `child_id` would just move the artifacts to a third
-            // directory nothing reads. No parent session (direct/test callers,
-            // no ScopedToolService) → keep today's unscoped handle.
-            result_store: crate::tools::result_store::global_tool_result_store().map(|store| {
-                base.parent_session_id.as_ref().map_or_else(
-                    || store.clone(),
-                    |sid| {
-                        crate::tools::result_store::ToolResultStore::for_session(
-                            &store,
-                            sid.clone(),
-                        )
-                    },
-                )
-            }),
+            result_store,
             session_epoch_registrar: None,
             // D6 — per-tool-invocation signal capture, mirroring the main path
             // (`harness_bridge::runner_impl`). This was a hardcoded Noop even
@@ -1443,9 +1447,11 @@ fn build_context_triple(
     let Some(cfg) = cfg else {
         return (None, None, None);
     };
-    let budget = Arc::new(tokio::sync::Mutex::new(
-        crate::context::budget::ContextBudget::new(cfg),
-    ));
+    let mut budget = crate::context::budget::ContextBudget::new(cfg);
+    // Count reasoning as the child's provider will send it.
+    budget.set_reasoning_replay(llm.reasoning_replay(None));
+    budget.set_server_clears_tool_results(llm.clears_tool_results_server_side());
+    let budget = Arc::new(tokio::sync::Mutex::new(budget));
     let compactor = Arc::new(
         ContextCompactor::new(
             llm.clone(),
@@ -1466,7 +1472,10 @@ fn build_context_triple(
         // count is per child.
         .with_cheap_provider(cheap_summary.cloned()),
     );
-    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(
+        cfg,
+        llm.as_ref(),
+    ));
     (Some(budget), Some(compactor), Some(pipeline))
 }
 

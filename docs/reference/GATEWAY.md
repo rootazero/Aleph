@@ -270,9 +270,11 @@ model. State the fact; let it judge.
 
 | Method | Description | Parameters |
 |--------|-------------|------------|
-| `events.subscribe` | Subscribe to topic | `pattern` (glob) |
-| `events.unsubscribe` | Unsubscribe | `pattern` |
+| `events.subscribe` | Subscribe to topics | `topics` (globs, or `{topic, where}` objects), `except?` (`aleph_protocol::TopicCarveOut`) |
+| `events.unsubscribe` | Remove the entries of these topics carrying exactly this carve-out | `topics`, `except?` |
 | `events.list` | List subscriptions | - |
+
+All three answer with `aleph_protocol::SubscriptionList`: `subscribed` (one pattern per entry) and `entries` (`SubscriptionEntry`: `topic`, `where`, `except`); subscribe / unsubscribe add `changed`.
 
 ### Memory Methods
 

@@ -607,14 +607,14 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
     }
 }
 
-/// T2.13: project one `StreamEvent::ReasoningBlock` into the per-run
+/// T2.13: project one `StreamEvent::Reasoning` into the per-run
 /// reasoning buffer that the existing `ReasoningPanel` renders.
 ///
 /// Backend has always emitted these events — the structured alternative to
 /// the flat `reasoning` events — but the panel's `match event_type`
 /// dispatcher never had a `"reasoning_block"` arm, so the content never
 /// reached `chat.reasoning_text` and the user never saw structured
-/// reasoning. The TUI has always consumed these (`StreamEvent::ReasoningBlock
+/// reasoning. The TUI has always consumed these (`StreamEvent::Reasoning
 /// { content, .. } => append_reasoning_entry`); the panel is the lone
 /// straggler this closes.
 ///
@@ -2425,7 +2425,7 @@ mod projection_tests {
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 0 });
     }
 
-    /// T2.13: backend has always emitted `StreamEvent::ReasoningBlock`, but the
+    /// T2.13: backend has always emitted `StreamEvent::Reasoning`, but the
     /// panel had no `reasoning_block` arm in its dispatcher, so the structured
     /// reasoning never reached `reasoning_text` and the ReasoningPanel never
     /// saw it. This test pins the projector: a `reasoning_block` event's
@@ -2552,7 +2552,7 @@ mod projection_tests {
         assert!(
             code.contains("\"reasoning_block\" =>"),
             "the `run.*` dispatcher no longer has a `reasoning_block` arm; \
-             `StreamEvent::ReasoningBlock` will silently drop on the panel"
+             `StreamEvent::Reasoning` will silently drop on the panel"
         );
         assert!(
             code.contains("apply_reasoning_block("),

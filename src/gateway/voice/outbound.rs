@@ -231,6 +231,8 @@ pub async fn generate_tts(
             url: None,
             path: None,
             data: Some(bytes),
+            is_voice_note: false,
+            is_video_note: false,
         },
         GenerationData::Url(url) => Attachment {
             id,
@@ -243,6 +245,8 @@ pub async fn generate_tts(
             url: Some(url),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         },
         GenerationData::LocalPath(path) => Attachment {
             id,
@@ -255,6 +259,8 @@ pub async fn generate_tts(
             url: None,
             path: Some(path),
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         },
     };
 

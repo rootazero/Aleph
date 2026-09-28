@@ -59,7 +59,7 @@ use rusqlite::{params, Connection};
 const DEFAULT_CHUNK_LINES: usize = 20;
 
 /// Max characters retained for a chunk title (UTF-8-safe truncation).
-const MAX_TITLE_CHARS: usize = 100;
+pub(crate) const MAX_TITLE_CHARS: usize = 100;
 
 /// Errors surfaced by the content index. Kept local (not `AlephError`) so the
 /// module stays decoupled — callers translate or log-and-fall-back as needed.
@@ -90,6 +90,12 @@ pub struct SearchHit {
     pub title: String,
     /// A short excerpt of the body around the match.
     pub snippet: String,
+    /// The whole chunk — up to [`DEFAULT_CHUNK_LINES`] lines of the indexed
+    /// text. `ctx_search` returns this, not the snippet: a ~14-token excerpt
+    /// tells the model *where* the match is but not what it says, and the only
+    /// other way to read the section was a `file_read` whose offset it had to
+    /// guess (section ordinals skip blank chunks, so they are not line numbers).
+    pub body: String,
     /// Fused relevance score from Reciprocal Rank Fusion across the porter and
     /// trigram indexes. Higher is more relevant; hits are returned pre-sorted
     /// descending, so callers can rely on order without re-sorting by score.
@@ -297,6 +303,31 @@ impl ContentIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>, IndexError> {
+        self.search_scoped(session_ids, None, query, limit)
+    }
+
+    /// [`Self::search_sessions`] restricted to the chunks of one `source`
+    /// (one indexed output), ranked among themselves. The restriction is in
+    /// the query, not a filter over the pooled top hits: a page's own sections
+    /// are never crowded out of the result by better-ranked chunks of the
+    /// session's other outputs.
+    pub fn search_source(
+        &self,
+        session_ids: &[&str],
+        source: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, IndexError> {
+        self.search_scoped(session_ids, Some(source), query, limit)
+    }
+
+    fn search_scoped(
+        &self,
+        session_ids: &[&str],
+        source: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, IndexError> {
         if limit == 0 || session_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -307,13 +338,13 @@ impl ContentIndex {
         // with; the floor keeps a small `limit` (e.g. 3) from starving it.
         let fetch = limit.saturating_mul(OVERFETCH_FACTOR).max(MIN_FETCH);
         let conn = self.lock();
-        let porter = query_index(&conn, "chunks", session_ids, &match_expr, fetch)?;
+        let porter = query_index(&conn, "chunks", session_ids, source, &match_expr, fetch)?;
         // The trigram side is best-effort: a query whose every term is shorter
         // than 3 chars matches nothing there, and a trigram quirk must never
         // fail a search the porter index already answered. Degrade to
         // porter-only on any trigram error.
-        let trigram =
-            query_index(&conn, "chunks_tri", session_ids, &match_expr, fetch).unwrap_or_default();
+        let trigram = query_index(&conn, "chunks_tri", session_ids, source, &match_expr, fetch)
+            .unwrap_or_default();
         drop(conn);
 
         let mut fused = rrf_fuse(porter, trigram);
@@ -436,7 +467,7 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
 }
 
 /// Number of section titles surfaced in the offload marker preview.
-const PREVIEW_COUNT: usize = 5;
+pub(crate) const PREVIEW_COUNT: usize = 5;
 
 /// Reciprocal Rank Fusion constant (Cormack et al. 2009). 60 is the
 /// widely-cited default: it damps deep ranks so the head of each list
@@ -479,8 +510,8 @@ const MAX_PROX_TERMS: usize = 64;
 
 /// One ranked row from a single FTS5 index, before fusion. Carries the display
 /// fields so the fused [`SearchHit`] is built without a second `SQLite` round-trip,
-/// plus the full chunk `body` used by the proximity reranker (never surfaced to
-/// callers — it is dropped when the fused list is finalized into `SearchHit`s).
+/// including the full chunk `body`, which the proximity reranker scores and the
+/// caller receives.
 struct RankedRow {
     source: String,
     chunk_no: i64,
@@ -490,32 +521,40 @@ struct RankedRow {
 }
 
 /// Run `match_expr` against one FTS5 `table` with title-weighted BM25, over the
-/// rows owned by any of `session_ids`, returning up to `fetch` rows in rank
-/// order (best first). `table` is an internal constant (`"chunks"` /
-/// `"chunks_tri"`), never user input, so interpolating it into the SQL is
-/// injection-safe; the session ids are bound, not interpolated.
+/// rows owned by any of `session_ids` (and, with `source`, of that one
+/// output), returning up to `fetch` rows in rank order (best first). `table`
+/// is an internal constant (`"chunks"` / `"chunks_tri"`), never user input, so
+/// interpolating it into the SQL is injection-safe; the session ids and the
+/// source are bound, not interpolated.
 fn query_index(
     conn: &Connection,
     table: &str,
     session_ids: &[&str],
+    source: Option<&str>,
     match_expr: &str,
     fetch: usize,
 ) -> Result<Vec<RankedRow>, IndexError> {
     if session_ids.is_empty() {
         return Ok(Vec::new());
     }
-    // `?1` is the MATCH expression, `?2..` the session ids, the last
-    // placeholder the LIMIT.
+    // `?1` is the MATCH expression, `?2..` the session ids, then the source
+    // when there is one, the last placeholder the LIMIT.
     let id_placeholders: Vec<String> = (0..session_ids.len())
         .map(|i| format!("?{}", i + 2))
         .collect();
-    let limit_pos = session_ids.len() + 2;
+    let source_pos = session_ids.len() + 2;
+    let source_clause = if source.is_some() {
+        format!(" AND source = ?{source_pos}")
+    } else {
+        String::new()
+    };
+    let limit_pos = source_pos + usize::from(source.is_some());
     let sql = format!(
         "SELECT source, chunk_no, title,
                 snippet({table}, 1, '', '', ' … ', 14) AS snip,
                 body
          FROM {table}
-         WHERE {table} MATCH ?1 AND session_id IN ({ids})
+         WHERE {table} MATCH ?1 AND session_id IN ({ids}){source_clause}
          ORDER BY bm25({table}, {TITLE_WEIGHT})
          LIMIT ?{limit_pos}",
         ids = id_placeholders.join(", ")
@@ -524,10 +563,13 @@ fn query_index(
     // Clamp to i64 so a very large `fetch` cannot truncate to a negative
     // value, which SQLite would interpret as "no limit" (unbounded scan).
     let fetch = i64::try_from(fetch).unwrap_or(i64::MAX);
-    let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(session_ids.len() + 2);
+    let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(session_ids.len() + 3);
     bound.push(&match_expr);
     for id in session_ids {
         bound.push(id);
+    }
+    if let Some(source) = &source {
+        bound.push(source);
     }
     bound.push(&fetch);
     let rows = stmt.query_map(bound.as_slice(), |row| {
@@ -547,8 +589,7 @@ fn query_index(
 }
 
 /// A chunk after RRF fusion, before finalization. Holds the fused `score` plus
-/// the full `body`, which the proximity reranker needs but callers never see
-/// (it is dropped in [`finalize`]).
+/// the full `body` (scored by the proximity reranker, handed on by [`finalize`]).
 #[derive(Debug)]
 struct FusedHit {
     source: String,
@@ -650,9 +691,8 @@ fn proximity_rerank(hits: &mut [FusedHit], terms: &[String]) {
     sort_by_score_desc(hits);
 }
 
-/// Drop the internal `body` and truncate to `limit`, producing the public
-/// [`SearchHit`] list. Kept separate from fusion so truncation runs *after* any
-/// proximity rerank.
+/// Truncate to `limit`, producing the public [`SearchHit`] list. Kept separate
+/// from fusion so truncation runs *after* any proximity rerank.
 fn finalize(hits: Vec<FusedHit>, limit: usize) -> Vec<SearchHit> {
     hits.into_iter()
         .take(limit)
@@ -661,6 +701,7 @@ fn finalize(hits: Vec<FusedHit>, limit: usize) -> Vec<SearchHit> {
             chunk_no: h.chunk_no,
             title: h.title,
             snippet: h.snippet,
+            body: h.body,
             score: h.score,
         })
         .collect()
@@ -1053,7 +1094,7 @@ mod tests {
             chunk_no,
             title: format!("{source}#{chunk_no}"),
             snippet: String::new(),
-            body: String::new(),
+            body: format!("body of {source}#{chunk_no}"),
         }
     }
 
@@ -1078,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_truncates_to_limit_and_drops_body() {
+    fn finalize_truncates_to_limit_and_keeps_body() {
         let porter = vec![row("A", 0), row("B", 0), row("C", 0)];
         let trigram = vec![];
         // `rrf_fuse` no longer truncates; `finalize` does. Porter-only keeps
@@ -1087,6 +1128,29 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].source, "A");
         assert_eq!(hits[1].source, "B");
+        // The chunk text reaches the caller — `ctx_search` returns it.
+        assert_eq!(hits[0].body, row("A", 0).body);
+    }
+
+    /// The body a search hands back is the whole indexed section, not the
+    /// FTS snippet: every line of the chunk that matched.
+    #[test]
+    fn a_search_hit_carries_its_whole_section() {
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text(SESS, "bash:1", "bash", &sample_log())
+            .unwrap();
+        let hits = idx.search(SESS, "timeout", 1).unwrap();
+        let hit = hits.first().expect("the sample log has a timeout line");
+        assert!(
+            hit.body.lines().count() > 1,
+            "a section, not a line: {:?}",
+            hit.body
+        );
+        assert!(hit.body.contains("timeout"), "{:?}", hit.body);
+        assert!(
+            sample_log().contains(&hit.body),
+            "the body is verbatim indexed text"
+        );
     }
 
     // ---- proximity reranking ----
@@ -1290,6 +1354,42 @@ mod tests {
             "B must survive A's purge"
         );
         assert!(!idx.search("sess-b", "beta payload", 5).unwrap().is_empty());
+    }
+
+    /// A source's own sections come back even when the session's other
+    /// outputs outrank every one of them: the restriction is in the query, not
+    /// a filter over the pooled top hits.
+    ///
+    /// Mutation-checked: dropping the `source = ?` clause turns this red.
+    #[test]
+    fn search_source_ranks_only_that_sources_chunks() {
+        let idx = ContentIndex::open_in_memory().unwrap();
+        let noisy: String = (0..2_000)
+            .map(|i| format!("gigawatt gigawatt gigawatt {i}\n"))
+            .collect();
+        idx.index_text("s", "bash:aaaa", "bash", &noisy).unwrap();
+        idx.index_text(
+            "s",
+            "web_fetch:bbbb",
+            "web_fetch",
+            "intro line\nthe gigawatt figure is 1.21\n",
+        )
+        .unwrap();
+
+        let pooled = idx.search_sessions(&["s"], "gigawatt", 3).unwrap();
+        assert!(
+            pooled.iter().all(|h| h.source == "bash:aaaa"),
+            "precondition: the other output outranks the page: {pooled:?}"
+        );
+        let own = idx
+            .search_source(&["s"], "web_fetch:bbbb", "gigawatt", 3)
+            .unwrap();
+        assert!(!own.is_empty(), "the page's own section is found");
+        assert!(own.iter().all(|h| h.source == "web_fetch:bbbb"), "{own:?}");
+        assert!(idx
+            .search_source(&["other"], "web_fetch:bbbb", "gigawatt", 3)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

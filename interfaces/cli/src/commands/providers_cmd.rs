@@ -290,7 +290,7 @@ fn failure_detail(provider: &str, kind: DiscoveryFailureKind, error: Option<&str
         // they can run: provider keys are resolved from the vault under
         // `ai:<name>`, which is exactly what `aleph secret set` writes to.
         DiscoveryFailureKind::MissingCredential => {
-            return format!("no API key \u{2014} run `aleph secret set ai:{provider}`")
+            return format!("no API key \u{2014} run `al secret set ai:{provider}`")
         }
         // Never retryable, and there is no button to offer: this provider ships
         // no readable listing, so its models are whatever was configured.
@@ -1235,7 +1235,7 @@ mod tests {
                     "anthropic".to_string(),
                     "failed".to_string(),
                     "0".to_string(),
-                    "no API key — run `aleph secret set ai:anthropic`".to_string(),
+                    "no API key — run `al secret set ai:anthropic`".to_string(),
                 ],
                 // Nothing failed here. This endpoint has no listing to fetch,
                 // and a red `failed` next to a provider that is answering
@@ -1263,7 +1263,7 @@ mod tests {
                 DiscoveryFailureKind::MissingCredential,
                 Some("vault miss")
             ),
-            "no API key — run `aleph secret set ai:anthropic`"
+            "no API key — run `al secret set ai:anthropic`"
         );
         assert_eq!(
             failure_detail("bedrock", DiscoveryFailureKind::Unsupported, None),

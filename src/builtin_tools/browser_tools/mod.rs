@@ -571,16 +571,20 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
 /// *before* `tool_output` ingress ever sees the value, so the pipeline's own
 /// "persist the pre-reduction original" contract (`tool_output::ingress`) cannot
 /// apply — it only ever sees the already-cut text. Reusing the harness's own
-/// spill pair (`ToolResultStore` + [`recovery_footer`]) rather than inventing a
+/// spill pair (`ToolResultStore` + [`recovery_footer_for`]) rather than inventing a
 /// second mechanism means the blob is indexed, so the model gets `ctx_search`
 /// and not just a file path.
 ///
-/// Redacted before it hits disk: everything persisted here is read back into
-/// model context by `ctx_search` / `read_file`, so it must clear the same
-/// secret-egress boundary the in-context copy clears. The injection fence is
-/// deliberately NOT applied to the blob — `ctx_search` returns *excerpts*, and
-/// an excerpt of a fenced blob carries at most one of the two marker lines; an
-/// unbalanced fence is worse than none.
+/// Redacted and fenced before it hits disk ([`redact_wrap`], the same pair the
+/// in-context copy gets): everything persisted here is read back into model
+/// context by `ctx_search` / `file_read`, so it must clear the same
+/// secret-egress boundary, and it is page content, so it carries the page's
+/// fence. The fence is also how the offload knows this is external content —
+/// `recovery_footer_for` asks the blob (`tool_output::render::Rendered::fenced`)
+/// rather than a list of tools, and keeps untrusted section titles out of the
+/// footer. The excerpt concern that used to keep the fence off the blob no
+/// longer holds: `ctx_search` escapes stray markers in each section and fences
+/// every section on its own.
 ///
 /// `tool_name` is the caller's, not a fixed one: the store is keyed by
 /// `(tool_call_id, tool_name)` and every caller has its own call id, so a second
@@ -621,11 +625,22 @@ pub(crate) fn offload_content_to(
     tool_name: &str,
     full: &str,
 ) -> Option<String> {
-    let redacted = manager.redact_content(full);
+    let fenced = redact_wrap(manager, full);
+    // The footer names only the retrieval tools this dispatch can call (as
+    // Layer 2 does); outside a dispatch nothing is known and both are assumed.
+    let recovery = crate::tools::result_processing::dispatch_recovery_tools()
+        .unwrap_or(crate::tools::result_processing::RecoveryTools::ALL);
     // Threshold 0: we already know the text overflowed the tool's own budget,
     // so persist unconditionally — same call shape the harness turn-spill uses.
-    crate::tools::result_processing::recovery_footer(Some(store), call_id, tool_name, &redacted, 0)
-        .map(|(footer, _)| footer)
+    crate::tools::result_processing::recovery_footer_for(
+        Some(store),
+        call_id,
+        tool_name,
+        &fenced,
+        0,
+        recovery,
+    )
+    .map(|(footer, _)| footer)
 }
 
 /// Re-emit a `browser_evaluate` raw response as a redacted + wrapped

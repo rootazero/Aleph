@@ -9,7 +9,6 @@
 //!
 //! - [`jsonrpc`] - JSON-RPC 2.0 protocol types
 //! - [`events`] - Streaming event types
-//! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
 //! - [`session_thread`] - Thread-continuity contract (`agent.run` request, attach snapshot)
 //! - [`btw`] - The one `/btw` side-question resolver, shared by core and thin clients
@@ -51,9 +50,9 @@ pub mod session_thread;
 pub mod sessions;
 pub mod spend;
 pub mod subagent_tree;
+pub mod subscription;
 pub mod team_topic;
 pub mod terminate;
-pub mod thinking;
 pub mod tool_permissions;
 pub mod trace_presentation;
 pub mod trace_replay;
@@ -63,14 +62,15 @@ pub mod workspace;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
+pub use context_breakdown::{
+    ContextBreakdown, LayerSizeView, MessageTokens, ToolOutputIngress, ToolOutputPage,
+    ToolOutputSource, ToolSchemaSize, UsageTokens,
+};
 pub use events::{
     cache_hit_ratio, peer_message_is_renderable, AgentTraceEvent, AgentTraceSessionOutcome,
     AgentTraceState, AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart,
     AgentTraceToolResult, AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption,
     AskUserQuestion, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
-};
-pub use context_breakdown::{
-    ContextBreakdown, LayerSizeView, ToolOutputPage, ToolOutputSource, ToolSchemaSize, UsageTokens,
 };
 pub use file_change::{
     FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation, Unavailable,
@@ -91,7 +91,10 @@ pub use sessions::SessionListRow;
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };
-pub use thinking::{ConfidenceLevel, ReasoningStepType};
+pub use subscription::{
+    FieldPredicate, SubscriptionEntry, SubscriptionList, TopicCarveOut, TopicsRequest,
+    STREAM_REASONING_TOPIC,
+};
 pub use trace_presentation::{
     present_agent_trace_event, present_agent_trace_event_with_labels_and_preset,
     present_agent_trace_event_with_preset, summarize_tool_input, summarize_tool_output,

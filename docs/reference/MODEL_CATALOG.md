@@ -47,7 +47,7 @@ ModelRecord {
 
 ### 契约住在协议 crate，不在 handler 旁边（2026-08-13）
 
-四张表的 **wire 投影**（`ModelCapabilities` / `RateCard`+`RateBasis` / `ModelLifecycle`+`ModelStatus` / `ModelSource` / `DiscoveredModel`）与整个 `providers.*` RPC 形状定义在 `shared/protocol/src/providers/`，`alephcore` `pub use` 回来。理由是**说这条 wire 的 crate 有四个，其中两个按设计不许依赖 `alephcore`**（`aleph-cli` / `aleph-tui`，它们的 `Cargo.toml` 用大写写着这句话）。各持一份手抄的代价已经付过：`aleph providers list` 读 `type`/`default` 而服务端只发过 `provider_type`/`is_default`（两列自写下之日起每行都是破折号）、`providers get` 读顶层而不是 `provider` 信封（**每一行**都是破折号）、`providers add`/`test` 发扁平 body 而 handler 要 `{name, config:{…}}`（**每一次调用都是 `INVALID_PARAMS`**，从来没成功过）。
+四张表的 **wire 投影**（`ModelCapabilities` / `RateCard`+`RateBasis` / `ModelLifecycle`+`ModelStatus` / `ModelSource` / `DiscoveredModel`）与整个 `providers.*` RPC 形状定义在 `shared/protocol/src/providers/`，`alephcore` `pub use` 回来。理由是**说这条 wire 的 crate 有四个，其中两个按设计不许依赖 `alephcore`**（`aleph-cli` / `aleph-tui`，它们的 `Cargo.toml` 用大写写着这句话）。各持一份手抄的代价已经付过：`al providers list` 读 `type`/`default` 而服务端只发过 `provider_type`/`is_default`（两列自写下之日起每行都是破折号）、`providers get` 读顶层而不是 `provider` 信封（**每一行**都是破折号）、`providers add`/`test` 发扁平 body 而 handler 要 `{name, config:{…}}`（**每一次调用都是 `INVALID_PARAMS`**，从来没成功过）。
 
 表的字面量仍在 `alephcore`（`ModelLifecycle` 的 `&'static str` 改 `Cow<'static, str>` 之后表照旧是 `const`），但**类型只有一个**，所以表与 wire 结构上不可能描述不同的东西。
 
@@ -272,7 +272,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 ⚠️ **sweep 行怎么读只有一个答案：`ModelsRefreshRow::outcome()`**（`Live` / `Stale` / `Failed` / `NotApplicable`，round-4）。CLI 的状态列、TUI 的那句话、Panel 的徽标此前各写一遍 `match (ok, stale)` —— 三份推导只在状态恰好是三个时活着，而 `NotApplicable`（＝`kind: Unsupported`）是第四个：**它不是失败**，那六家什么都没坏，只是没有清单可取。三张脸都曾把它印成红色/“no listing”，正是 round-3 在健康那张脸上修掉的“一排关于健康 provider 的红行”，从另一扇门进来。措辞各面自持（R4），**判决**归契约。
 
-⚠️ **`providers.modelsRefresh` 从写下之日到 2026-08-13 一个客户端都没有**（全仓 grep 零命中），而它的 doc 自称是"picker 的按行刷新按钮想要的"——那个按钮不存在。CLAUDE.md §0：**没有客户端的能力不算已交付**。现在的三个客户端是 Panel 的按行刷新、Panel 保存成功后的 fire-and-forget 窄化刷新（**不阻塞保存响应**——一家挂掉的 vendor 不该让"保存我的 API key"变慢），以及 `aleph providers models --refresh`。
+⚠️ **`providers.modelsRefresh` 从写下之日到 2026-08-13 一个客户端都没有**（全仓 grep 零命中），而它的 doc 自称是"picker 的按行刷新按钮想要的"——那个按钮不存在。CLAUDE.md §0：**没有客户端的能力不算已交付**。现在的三个客户端是 Panel 的按行刷新、Panel 保存成功后的 fire-and-forget 窄化刷新（**不阻塞保存响应**——一家挂掉的 vendor 不该让"保存我的 API key"变慢），以及 `al providers models --refresh`。
 
 ⚠️ **第三行是读，不是第三个触发面**：`providers.catalog` 把缓存里的 discovered id 合进 `roster`，所以人看到的和 `list_models` 给模型看的是同一份。在此之前只有模型那半合了——**同一份缓存、同一个 TTL，模型看得见、人看不见**。读缓存**闸在 `has_api_key` 上**：`cached_models` 是同步文件读，而发现无凭据不跑，所以没凭据的 preset 结构上不可能有缓存条目；不闸就是每次开设置页 stat 全部 preset。
 
@@ -520,7 +520,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 以下是 2026-08-13（契约收敛 + 链接后取模型 + 多选轮，对标 pi 的 `/model` 选择器）评估后**明确不做**的：
 
-- **给 `providers.catalog` 加 `query` / `limit` / `offset`** — 目录是几十行，**三个**客户端（Panel / TUI / CLI）都过滤服务端已经发下来的行（`aleph_protocol::providers::search`）。服务端过滤会是一个零消费者的抽象（R10），而且会开出第二个"哪些行匹配"的答案。行数上到四位数再回来。**同理 `providers.list` 也没有 `query` 参数**（round-2 给 CLI 加的 `aleph providers list [query]` 是客户端过滤）。
+- **给 `providers.catalog` 加 `query` / `limit` / `offset`** — 目录是几十行，**三个**客户端（Panel / TUI / CLI）都过滤服务端已经发下来的行（`aleph_protocol::providers::search`）。服务端过滤会是一个零消费者的抽象（R10），而且会开出第二个"哪些行匹配"的答案。行数上到四位数再回来。**同理 `providers.list` 也没有 `query` 参数**（round-2 给 CLI 加的 `al providers list [query]` 是客户端过滤）。
 - **移植 pi 的 `fuzzyFilter`**（`packages/tui/src/fuzzy.ts`）— `model_picker` 有一条记录在案的裁定：顺序保留的子串过滤，**刻意不 fuzzy 排序**，因为 catalog 的行序与每行的 roster 都是策展过的，按子序列质量打分会把它们洗成近似字母序。本轮只叠加分层排序（精确 id > id 前缀 > 别名 > display_name > 仅 model-id 命中），那是 TUI 命令面板已经付过学费的教训（输入 `mode` 选中 `/tools`）。**连带也不需要 pi 的"两份搜索文本"**（`model-search.ts` 把裸 id 排到最后）——那是给 fuzzy 位置惩罚打的补丁，不用 fuzzy 就没有这个问题。
 - **建 pi 式的全局 `enabledModels` glob 集**（`settings-manager.ts:122`，minimatch 模式 + 可选 `:thinkingLevel` 后缀）— 会成为 `[providers.*] models` 之外**第二个**"哪些模型可用"的真源。Aleph 的多选落在 operator 配置轴上，且那条轴同时是 failover 梯（顺序即语义），一个平行的 pattern 层会和它对同一个问题给两个答案。
 - **给会话加第五根 knob 承载多选** — pin 仍是单值、仍只有 `select_model` 一个写者，`sessions.patch` 的 `NOT_PATCHABLE` 一行未动。多选是 operator 配置，不是每对话设置。
@@ -614,7 +614,54 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
 | 某宿主用了别的 id 拼法 | `alias.rs::canonicalize_model_id`（host 路径折末段 / `p` 分隔符）；点号-短横见 §5.1 |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |
-| **想一次看完所有 provider 通不通** | `aleph providers health`（`providers.healthcheck`）。`aleph doctor` 是更宽的那一问。**「要不要拨这个 provider」只有 `probe::probe_disposition` 一处派生，「拨号」只有 `probe::probe_provider_bounded` 一个出口**（`probe_provider` 自 round-6 起私有，于是 `PROBE_TIMEOUT` 是结构属性不是约定）——别在这里数调用者，census 是 `grep -rn probe_provider_bounded src/`；后台健康探测（§8.5 / FL §3.6 round-6）就是它第三张脸，且只认 `Disabled` 一臂 |
+| **想一次看完所有 provider 通不通** | `al providers health`（`providers.healthcheck`）。`al doctor` 是更宽的那一问。**「要不要拨这个 provider」只有 `probe::probe_disposition` 一处派生，「拨号」只有 `probe::probe_provider_bounded` 一个出口**（`probe_provider` 自 round-6 起私有，于是 `PROBE_TIMEOUT` 是结构属性不是约定）——别在这里数调用者，census 是 `grep -rn probe_provider_bounded src/`；后台健康探测（§8.5 / FL §3.6 round-6）就是它第三张脸，且只认 `Disabled` 一臂 |
 | **给 `QUOTA_BILLED_MODELS` 加一条** | 写 **canonical** 形式（表在 `canonicalize_model` 之后被读），线上拼法留注释；守卫 `quota_billed_ids_are_stated_in_lookup_form` |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
 | 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |
+| **某模型的 API 会不会自己丢掉早先轮次的 thinking / 会不会把 thinking 绑到对话前缀** | 模型事实：`model_catalog/capabilities.rs` 的 `STRIPS_PRIOR_TURN_THINKING(_EXACT)` / `PREFIX_BOUND_THINKING`（经 `strips_prior_turn_thinking` / `binds_thinking_to_prefix` 读，与 `capabilities_for` 同一套 id 归一）。主机能不能接对应的请求控制是协议策略的问题，见 §11 |
+| **某个目标该收到哪段历史推理** | `providers/reasoning_replay.rs::ReasoningReplay::for_target` 一张表，见 §11。**别在 adapter 或 harness 里另加一条规则** |
+
+## 11. 推理回放与服务端上下文编辑 (Reasoning Replay & Server Context Editing)
+
+> 上下文瘦身轮（2026-09-25/26）引入；缘由与逐项裁定见 [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md)。
+> Introduced by the context-slim round; rationale in FEATURE_LOCATOR §2.21.
+
+**分工 · Who decides what**：harness（`harness/agent/prompt.rs::reconstruct_assistant_blocks`）只产出**事实**——每个持久化 thinking 块、它的签名、它是否属于更早的用户轮（`ContentBlock::Thinking.earlier_turn`）。**策略**在线上：failover 选定目标之后，`HttpProvider::outbound_messages` 调 `message::transform_messages(msgs, &ReasoningReplay)`，这是唯一的出站前咽喉（在 PII / 泄漏扫描之前）。估算侧（context budget、compact-to-fit 地板、记忆余量、上下文 gauge）用同一个投影 `ReasoningReplay::projected`，所以压力数的就是目标收到的推理。推理的来源从签名形状派生（`ThinkingOrigin::of`：无签名 / Anthropic 签名 / Responses 的 NDJSON 加密 item），**不持久化**。
+
+**一张表 · The one table** —— `ReasoningReplay::for_target(protocol, base_url, model)`，`protocol` 取 `ProtocolAdapter::wire_family()`（YAML `extends` 协议上报其基协议的族，不是用户起的名字）：
+
+| 线协议族 (`wire_family`) | 主机 / 模型 | 策略 | 收到什么 |
+|---|---|---|---|
+| `anthropic` | 任意；`strips_prior_turn_thinking(model)` 决定 `strip_earlier_turns` | `AnthropicSigned` | Anthropic 签名的 thinking，只在调用工具的 assistant 轮；模型的 API 会自己丢掉早先轮次 thinking 时，早先轮次的不发 |
+| `openai-responses` | 任意 | `ResponsesEncrypted` | Responses 加密推理 item，只在调用工具的轮 |
+| `openai` | `EndpointClass::DeepSeekNative` | `ReasoningContent { fill_missing: true }` | 无签名推理作 `reasoning_content`，**每个** assistant 轮；没有推理的轮补空值（带工具时缺任何一轮都是 400；空值填充本身未见文档） |
+| `openai` | `EndpointClass::MoonshotNative` | `ReasoningContent { fill_missing: false }` | 同上，不补空 |
+| 其余 | — | `Drop` | 不发推理 |
+
+另两条规则写在投影里（`project_message`），与策略无关：只有推理、没有正文的 assistant 轮**整条不发**；只有 assistant 消息会变。未列在表上的目标保持它协议在策略出现之前的行为——**不多给，也不少给**（U1）。
+
+**Anthropic 协议的主机事实 · Host facts**（`protocols/anthropic/provider_policy.rs::AnthropicCapabilities`，按 `AnthropicEndpointClass` + 主机子族解析）：
+
+| 位 | 为真的主机 | 驱动什么 |
+|---|---|---|
+| `requires_reasoning_content_in_tool_input` | 未验证的 Anthropic 兼容代理（Kimi / MiniMax / Kimi Coding / 未知 base_url）——**服务真 Claude 的 1P / Bedrock / Vertex / Azure AI Foundry 为假** | 把前面的签名 thinking 复制进同一 assistant 轮每个 `tool_use.input.reasoning_content`（那条错误不是 Anthropic 的，读起来像 Moonshot 系；不确定的厂商保持现状） |
+| `supports_thinking_block_binding` | 仅 1P（Claude API） | 与模型事实 `binds_thinking_to_prefix` 相与、且不在 OAuth 身份路径上时，`build_beta_headers` **只发** beta 头 `thinking-binding-controls-2026-08-01`（单独发头即选中 beta 默认 `drop_block`，`thinking` body 不变）。被丢掉的回放 thinking 由响应的 `input_transformations` 报告，SSE `message_start` 处记 info 日志 |
+| `supports_context_editing` | 仅 1P | 见下 |
+
+**gen-5 的 Off**：`AnthropicProtocol::omits_disabled_thinking`——Claude 5.x 上请求 Off 时省略 `thinking` 字段；省略即默认自适应思考，逐模型语义（哪些模型 `disabled` 是 400、哪些接受）写在该函数 doc 上，不在这里抄。
+
+**服务端上下文编辑 · Server-side context editing**（默认关，U3）：
+
+```toml
+[providers.my-claude]
+server_context_editing = { enabled = true }   # 或 server_context_editing = true
+```
+
+- 一个推导 `AnthropicProtocol::server_context_editing_applies(config, caps)` = 开关 × `supports_context_editing` × 非 OAuth。它同时驱动：body 的 `context_management.edits: [{type: clear_tool_uses_20250919}]`（只发策略类型，其余用 API 默认值）、beta `context-management-2025-06-27`（与其它 beta 合并）、`ProtocolAdapter::clears_tool_results_server_side`。
+- 为真时本地让位：`context::budget::preflight::default_pipeline` 只留 `HistoricalUserImageStrippingStage`（不再本地改写旧工具结果），`ContextBudget::set_server_clears_tool_results` 冻结校准。
+- 开了但不生效（非 1P 主机、OAuth 路径）时在构建 `HttpProvider` 那一刻 warn（`server_context_editing_unhonoured`），不在配置校验层——那一层看不见 vault 注入的 key，也看不见 YAML 协议的基协议。
+- Panel 的 provider 表单不展示也不写这个键（`ProviderConfigJson` 闭集）；从 Panel 改别的字段会保留它（守卫在 `gateway`）。
+
+**转发 · Forwarding**：`AiProvider::reasoning_replay()` / `clears_tool_results_server_side()` 是 leaf-only 默认，每个包装型 provider（failover、metering、think-level、MoA、model-override）都要转发；`providers::forwarding_census` 从源码派生，发现未转发且不在具名 leaf 名单上的生产 impl 按名字红。
+
+**已知缺口**：见 FEATURE_LOCATOR §2.21「刻意不做 / 延后」（`redacted_thinking`、Responses 历史 item、Claude Platform on AWS 的绑定分类、Opus 5 / Sonnet 5 请求 Off 仍会思考、推理来源是派生的等）。

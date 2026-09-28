@@ -76,10 +76,13 @@ pub(super) async fn run_cleanup(
                     );
                 }
             }
-            if let Err(e) = ctx.event_bus.publish_json(&crate::gateway::event_bus::TopicEvent::new(
-                "node.disconnected",
-                serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
-            )) {
+            if let Err(e) = ctx
+                .event_bus
+                .publish_json(&crate::gateway::event_bus::TopicEvent::new(
+                    "node.disconnected",
+                    serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
+                ))
+            {
                 warn!(
                     error = %e,
                     node_id = %node_id,

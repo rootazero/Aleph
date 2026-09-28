@@ -162,7 +162,10 @@ impl MemoryReflectTool {
             let synth = synthesis.clone();
             let sid = session_id.clone();
             tokio::spawn(async move {
-                if let Err(e) = qf.maybe_file(&filed_agent_id, &q, &synth, sid.as_deref()).await {
+                if let Err(e) = qf
+                    .maybe_file(&filed_agent_id, &q, &synth, sid.as_deref())
+                    .await
+                {
                     tracing::warn!("query filer failed: {e}");
                 }
             });

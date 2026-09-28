@@ -638,12 +638,53 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
                                  # first one drifted (16 in prose, 18 on screen).
 
 ./qa/plugins/run.sh manifest     # Claude Code manifest + marketplace unions through a real
-                                 # load_all; ${CLAUDE_PLUGIN_ROOT}; per-plugin config across
-                                 # a server restart
+                                 # load_all; a hook's ${CLAUDE_PLUGIN_ROOT} stored unspliced;
+                                 # per-plugin config across a server restart
 ./qa/plugins/run.sh scaffold     # `aleph plugin init --type <rt>` output really installs and
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+./qa/plugins/run.sh visibility   # a plugin under a registered project's .aleph/plugins
+                                 # reaches the model — skill index, agent catalog, joined MCP
+                                 # tool — only for a run bound to that project; the oracle is
+                                 # the mock provider's request log, never plugins.list. The
+                                 # daemon starts from $QA_ROOT so the project-less run's CWD
+                                 # fallback names no project
+./qa/plugins/run.sh scope        # MCP plugin enable → disable → enable through `plugin_manage`;
+                                 # the slash entry AND the server's tool leave and re-enter
+                                 # `tools.catalog` each time (polled — the mount enqueues the
+                                 # server start). Also greps the log for a mount that ran
+                                 # before its handle was installed. Every `plugins` stage
+                                 # needs python3 (the preamble's config patcher is python):
+                                 # without it the script is UNRUN (exit 2), never PASS.
+./qa/plugins/run.sh command      # `/cmd args` → the command's rendered body (with $1 / ${2:-d}
+                                 # substituted and an un-approved !`cmd` withheld with the
+                                 # operator placeholder) is in the messages the MODEL received;
+                                 # the persisted turn stays raw; the withheld command is pending
+                                 # on `aleph-server hooks list`; the listing is gated (disabled →
+                                 # the command is gone, enabled → back)
+./qa/plugins/run.sh exit2        # a `>&2; exit 2` PreToolUse hook — Claude Code's most common
+                                 # idiom, matcher spelled `Read` — fires once un-approved (the
+                                 # control: the tool runs). `aleph-server hooks test` REFUSES to
+                                 # review it without ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 (pinned,
+                                 # not endorsed); with it, it is approved, then it blocks
+                                 # file_read and the model reads `tool file_read was refused by
+                                 # a policy hook: <stderr>` — with nothing (no `switch=`, ladder,
+                                 # "try a different tool") routing it around the block
+./qa/plugins/run.sh subagent     # a command's `allowed-tools` also bounds the `subagent` child
+                                 # it delegates to; the control (a plain turn) proves the same
+                                 # child otherwise carries `bash`
+./qa/plugins/run.sh cc-cache     # ~/.claude/plugins/installed_plugins.json → discovered, origin
+                                 # claude_cache, DISABLED (no command, no MCP tool, no server
+                                 # process); the model's `plugin_manage` enable is refused with a
+                                 # `Permission denied:` label on the agent turn AND tools.invoke;
+                                 # the operator's `plugins.enable` works and is durable; its
+                                 # `.mcp.json` server (no aleph.runtime) reaches tools.catalog;
+                                 # a model file_read under the plugin root is denied by the
+                                 # protected-location rule (R2-I2, accepted compat cost, pinned);
+                                 # nothing under ~/.claude is written (find -newer AND a content
+                                 # digest). The command/exit2/subagent/cc-cache stages export
+                                 # ALEPH_ACTIVATION_GATE=fatal.
 
 ./qa/memory_curated/run.sh       # the curated hot tier's three verbs, the note window's
                                  # load-more, and the partition contract every enumerating
@@ -775,9 +816,12 @@ ESCAPE_ROUTE=system ./qa/browser_dual/run.sh escape   # route 2 — no pin, disc
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
 its siblings. The hook inventory elides action labels at 80 characters — a
 documented "what is wired up" listing — and macOS spells `$TMPDIR` as a
-48-character path, so under it the elision lands mid-path and cuts off the very
-plugin id that distinguishes "expanded to this plugin's root" from "expanded to
-something". Don't tidy that back without re-reading phase C.
+48-character path, so under it the elision lands mid-path. Phase C was written
+to read the install path expanded into a plugin hook's command — which was the
+defect: P4.14 F-1 showed that splice runs a root named `r $(touch M)` as code.
+Since P4.16 phase C asserts the opposite: the command comes back exactly as the
+plugin wrote it (`sh ${CLAUDE_PLUGIN_ROOT}/m.sh`), with the install path absent.
+Don't tidy the scratch root back without re-reading phase C.
 
 Two of this fixture's own assertions were wrong before they were right, and both
 mistakes are the kind worth naming. Phase C first read `commands.list`, which
@@ -1756,9 +1800,74 @@ widened a narrowly-scoped change into that question. Tracked in
   - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**——2026-09-05 起**每一个有生成 boot 的装置都带了**
     （此前只有它和 `channels`；`webview_compat` 没有生成 boot，不在其列）：那一次 boot 绑的是**内置默认端口**，机器上只要有别的 server 占着，进程在写出 config
     之前就退出了，症状是 `no config generated at …`——读起来像路径或权限问题，原因在日志下一行。
+- **`plugins`** — 改 `src/extension/`、`src/discovery/`、`src/gateway/execution_engine/slash_command_body/`
+  或插件相关 handler 前跑。阶段清单在本文件顶部的命令块与 `qa/plugins/run.sh` 的头注释里（**不在这里再抄一份**）。
+  下面只写 2026-09-27 加入的几个阶段各自挡的那一类假绿（**不写条数**——上一版写着「三行」而下面是四条）：
+  - `command` — `/cmd` 的渲染体**只走 transient 通道**、从不落盘，所以 `chat.history` 在这里是**反向**断言
+    （持久化的是原文），模型收到了什么只有 mock 的 request log 能答。未批准的 `` !`cmd` `` 的占位符
+    **引用命令原文**，所以 fixture 让命令的输出 ≠ 原文——否则「没跑」和「跑了」读起来一样。
+  - `exit2` — 批准绑定在 hook 触发时记下的 root 上，**手写 allowlist 不被承认**；所以先让 hook 未批准地
+    触发一次（这次**就是对照组**：工具照跑、probe 内容到达模型），再走 `aleph-server hooks test` 批准，
+    第二次才必须被挡。没有第一次，第二次的「probe 没到」可能只是 fixture 坏了。hook 的 stderr 不是它
+    源码的子串（`printf 'QA_%s'`）——引用命令原文的消息冒充不了「stderr 到了」。**钉住而非认可**：不带
+    `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` 时 `hooks test` 拒绝审查这个 CC 惯用写法，阶段先断言这次拒绝。
+  - `subagent` — 受限命令派出的子 agent 只能看到受限视图。**必须带对照组**（普通回合派出的同一个 `coder`
+    子 agent 看得到 `bash`）：没有对照，「子 agent 没有 `bash`」这条负断言会不会变红从未被证明过（判据 §2）。
+    子回合按内容归属且必须晚于父回合入 log——上一个 run 还在跑的子 agent 会把请求写进下一段 log（首跑时
+    正是这两条串味的请求让对照组误红）。
+  - `cc-cache` — `$HOME` 是 scratch，所以 fixture **就是**服务端眼里的 `~/.claude`。「禁用」由三个面各自
+    作证（命令列表、工具目录、**MCP 进程本身**是不是这个 daemon 的后代）——`commands_count: 1` 在禁用行上
+    就已经是 1，行本身证明不了什么。模型的 enable 被拒（D-A），**两张脸都断言**：真实 agent 回合（request
+    log）与 `tools.invoke`。「什么都没写」读两遍：`find -newer`（mtime）与整棵树的内容摘要（能看见保留
+    mtime 的写和整棵树消失）。
 - **`rooms_channel_bind`** — 把一个通道群会话绑到项目房间（`Real-machine QA for binding a channel
   group conversation to a project room.`，见其 `run.sh:2`）。改 `projects.channel.*` handler、绑定的
   CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
   这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
   只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
   不在根 `CLAUDE.md` 的路由表里。
+- **`context_slim`** — 改 `src/providers/reasoning_replay.rs`、任一协议适配器的 reasoning / thinking
+  出站、`result_processing` 的 offload 与 footer、`ctx_search`、`context.breakdown` 或 `events.subscribe`
+  的 `except`、或 `[context_budget]` 的开关推导（`Config::effective_context_budget`）前跑 `{replay,carve,ingress,breakdown,optout,gate,firstparty}`。
+  - **它怎么让一个本地 mock 站在第一方主机名后面**：Aleph 按**主机名**分类（`api.deepseek.com` =
+    DeepSeek 原生、`api.anthropic.com` = 第一方、`127.0.0.1` 两者都不是），所以 `replay` `carve` 与
+    `firstparty` 的 1P 臂把 `base_url` 写成 `http://api.<vendor>.com`，并以 `HTTP_PROXY` 指向 mock 启动
+    server——reqwest 把 absolute-form 请求发给代理，mock 作答，**没有任何流量离开本机**。
+  - `replay` — mock 执行 DeepSeek 文档里的规则：带 `tools` 的请求里任一早先的 assistant 消息缺
+    `reasoning_content` 就 400。两轮对话各带一次工具调用；断言两个 run 都 **completed**（`run_finished`
+    的存在不算——errored 的 run 也写它）、零次拒绝、第二轮的请求里每条 assistant 消息都带
+    `reasoning_content`、且推理标记**只**出现在那个字段里。**破坏开关**：`REQUIRE_FIELD=reasoning_details`
+    让 400 规则去查一个代码从不发送的字段，本阶段必须 FAIL（已实测）。
+  - `carve` — 两个连接各跑一轮：对照连接订阅 `stream.*` **必须**收到 `stream.reasoning`（锚点——没有它，
+    「被切掉的连接没收到」什么也证明不了），切出连接订阅 `stream.*` 减 `stream.reasoning`，其它
+    `stream.*` 照常到达而推理帧一个不到。
+  - `ingress` — 一个单进程的大输出命令（`awk` 打 9 万行，中间埋一行 needle）：模型收到的 tool_result
+    是 persist 标记 + footer、正文留在盘上、footer 点名的工具都在该请求的工具表里、之后的请求都不带正文、
+    `ctx_search` 从 persist 的原文里返回**段落正文**（needle 在内）。装置**不再重排 PATH**：server 继承
+    调用者的 PATH，每个 arm 打印 `first bash on PATH`——是 `/opt/homebrew/bin/bash` 时，这次运行同时证明
+    `bash` 工具在 Homebrew 在前时能跑（曾经每次 exit 71，修在 `utils::shell::locate_runnable`，见
+    [SANDBOX.md](../docs/reference/SANDBOX.md)）。曾记在这里的「seatbelt 禁 fork ⇒ 复合命令 exit 71」
+    是**同一个缺陷的误归因**：2026-09-26 把命令改成 `awk … | cat` 跑本阶段仍 PASS。
+  - `breakdown` — 同一轮之后 `context.breakdown` 回 `messages.tool_results > 0`、`tool_output` 带
+    `since_unix_ms` 并计到那次 Layer-2 offload。**本阶段不加任何 `[context_budget]`**：先断言生成的
+    默认配置里没有这一段（前提），再证 `messages` 在——这是「缺段即开」在真机上的证据。
+  - `optout` — 同一轮，配置里写 `[context_budget] enabled = false`：`messages` **缺席**，而
+    `tool_output` 仍计到那次 offload（锚点——入口账不依赖预算，它在就说明这是一份真 breakdown，
+    不是一份空回复）。
+  - `gate` — 一个落在**单结果默认预算与旧默认之间**的结果（`awk` 打 2600 行，`QA_GATE_LINES` 可调）：
+    现在被 offload（标记 + 找回 footer），在旧默认下它会原样进上下文。窗口的两端**不写在这里也不写在
+    `drive.py` 里**——`drive.py` 从 `src/tools/result_processing.rs` 读
+    `DEFAULT_RESULT_BUDGET_TOKENS` 与 `MAX_RESULT_BUDGET_TOKENS`（判据 §1：抄一份数就是第二份表述）。
+    **先证前提再断言**：`context.breakdown` 的 `tool_output.produced_tokens` 是 `estimate_tokens_smart`
+    对工具原始输出的估算——正是 ingress 拿去和单结果预算比的那一个数、那一个字符串（`ingress.rs` 的
+    `before > limit`）——且 `calls == 1`，所以它就是这一次调用的量度；不在窗口内就 FAIL 并提示重调。
+    实测 5834（`ab89b8b08` 上的 C2 重跑，2600 行）。**破坏开关**：`QA_GATE_LINES=1000`（实测 1994）让
+    前提与 offload 两条都 FAIL（`d306cf9c9` 之后的树上实测）。
+  - `firstparty` — 两次 boot。1P 臂（代理）：签名 thinking 被回放（锚点）、`tool_use.input` 里**没有**
+    `reasoning_content` 副本、`server_context_editing = true`（裸 bool 写法，顺带证明它能解析）让
+    `context_management.edits` 与 beta 头都在 wire 上、文件日志里**没有**「不生效」告警。custom 臂
+    （`127.0.0.1`）：副本保留（U1 现状）、没有 `context_management` 也没有 beta、文件日志
+    （`$ALEPH_HOME/logs/`，不是 stdout——stdout 只有 banner）里**有**那条告警——这条 `tracing::warn!`
+    单测够不着（并行测试下的 WARN 捕获会漏），这里是它唯一的证据。
+  - **它不覆盖**：真实厂商。mock 执行的是 DeepSeek 写在文档里的规则、按 Aleph 适配器读法编码的
+    Anthropic wire，证不出厂商真的接受 Aleph 发的东西（U1：不做线上探测）。

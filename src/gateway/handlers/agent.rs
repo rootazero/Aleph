@@ -1029,6 +1029,8 @@ pub async fn build_run_request(
                 url: None,
                 path: None,
                 data: Some(bytes),
+                is_voice_note: false,
+                is_video_note: false,
             }),
             Err(e) => {
                 error!(name = %a.name, error = %e, "Dropping attachment with invalid base64 data");

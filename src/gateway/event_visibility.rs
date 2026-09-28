@@ -420,7 +420,7 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         },
 
         // --- stream.* frames correlated only by run_id ---
-        "stream.reasoning"
+        aleph_protocol::STREAM_REASONING_TOPIC
         | "stream.tool_start"
         | "stream.tool_update"
         | "stream.tool_end"
@@ -429,7 +429,6 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         | "stream.context_gauge"
         | "stream.run_complete"
         | "stream.run_error"
-        | "stream.reasoning_block"
         | "stream.uncertainty_signal"
         | "stream.model_resolved"
         | "stream.run_retrying" => match str_field(data, "run_id") {
@@ -1284,9 +1283,7 @@ impl EventVisibilityIndex {
 mod tests {
     use super::*;
     use crate::gateway::channel::ConversationId;
-    use crate::gateway::event_emitter::{
-        ConfidenceLevel, ReasoningStepType, RunSummary, ToolResult, UncertaintyAction,
-    };
+    use crate::gateway::event_emitter::{RunSummary, ToolResult, UncertaintyAction};
     use crate::gateway::events::frame::{
         ChangeKind, ClarificationOutcome, GatewayEventFrame, InboundMessagePayload, MessageSender,
     };
@@ -2960,7 +2957,6 @@ mod tests {
                 | GatewayEventFrame::ContextGauge { run_id, .. }
                 | GatewayEventFrame::RunComplete { run_id, .. }
                 | GatewayEventFrame::RunError { run_id, .. }
-                | GatewayEventFrame::ReasoningBlock { run_id, .. }
                 | GatewayEventFrame::UncertaintySignal { run_id, .. }
                 | GatewayEventFrame::ModelResolved { run_id, .. }
                 | GatewayEventFrame::RunRetrying { run_id, .. } => {
@@ -3135,15 +3131,6 @@ mod tests {
             GatewayEventFrame::ClarificationEnded {
                 session_key: "agent:main:main".into(),
                 outcome: ClarificationOutcome::Resolved,
-            },
-            GatewayEventFrame::ReasoningBlock {
-                run_id: "r1".into(),
-                seq: 1,
-                step_type: ReasoningStepType::Observation,
-                label: "l".into(),
-                content: "c".into(),
-                confidence: Some(ConfidenceLevel::High),
-                is_final: false,
             },
             GatewayEventFrame::UncertaintySignal {
                 run_id: "r1".into(),

@@ -218,7 +218,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the MCP tool bridge below WRITES it as external servers advertise /
     // drop tools, and `run_loop` READS its snapshot per request (via
     // `set_mcp_tool_registry` just below) so every connected server's
-    // tools join the agent's LoopToolRegistry and become LLM-callable.
+    // tools, minus plugin servers invisible to the run (face ⑤,
+    // `join_mcp_tools`), join the agent's LoopToolRegistry and become
+    // LLM-callable.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolHandlerRegistry::new());
 
     // Consumer-side install: hand the registry to the execution engine's
@@ -1452,32 +1454,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.tool_catalog.clone(),
         ));
 
-        // Wire MCP-type plugins into the live manager: hand each plugin's
-        // `.mcp.json` servers to the manager as transient (runtime-only)
-        // servers. Their `ServerStarted` events flow through the tool bridge
-        // just spawned above, registering the plugin's tools. Done on a
-        // background task — starting MCP server subprocesses must never block
-        // boot. No-op if no plugins declare MCP servers.
-        if let Some(em) = alephcore::extension::try_extension_manager() {
-            let handle = h.clone();
-            tokio::spawn(async move {
-                em.set_mcp_handle(handle);
-                let n = em.sync_mcp_plugin_servers().await;
-                // X1: now that both the MCP handle and (from agent_init) the
-                // memory registry are set and plugins are loaded, bind every
-                // MCP-backed memory extension's caller to the live manager.
-                em.bind_memory_callers().await;
-                if n > 0 {
-                    tracing::info!(count = n, "plugin MCP servers registered at boot");
-                }
-                // Autostart manifest-declared plugin services now that the
-                // runtime is wired (idempotent; no-op without [[services]]).
-                let running = em.sync_plugin_services().await;
-                if running > 0 {
-                    tracing::info!(count = running, "plugin services autostarted at boot");
-                }
-            });
-        }
+        // Plugin MCP servers, memory extensions and services are mounted by
+        // `load_all` itself (the handles were installed in `agent_init` before the
+        // first load — `boot_order_tests`), so there is no catch-up task here any
+        // more. Servers a mount enqueued before this bridge subscribed are picked
+        // up by its reconcile pass.
         // Sibling publisher: subscribe to the same manager event stream and
         // emit `tools.changed` whenever an MCP server announces a catalog
         // mutation (start / stop / crash / list_changed). Lives next to the
@@ -3453,7 +3434,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::approval::adapters::FallbackApprovalRequester;
         use alephcore::approval::operator_requester::OperatorApprovalRequester;
 
-        let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
+        // W2 fix: the channel-bridge path now publishes `approval.*` frames
+        // alongside `OperatorApprovalRequester`, so the Panel approval bell
+        // mirrors a Telegram / Discord / Slack / iMessage card just like it
+        // mirrors operator-tier cards. The bridge itself is unchanged for the
+        // user (they still see Telegram buttons, plain-text menus) — the
+        // event is purely a mirror, never a fallback.
+        let bridge = Arc::new(ChannelApprovalBridge::with_event_bus(
+            channel_registry.clone(),
+            event_bus.clone(),
+        ));
         let channel_adapter = Arc::new(ChannelApprovalBridgeAdapter::new(
             bridge,
             exec_approval_manager.clone(),
@@ -3561,23 +3551,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // in-line truncation.
     //
     // Both budget layers are sized from the model's usable window rather than
-    // from fixed constants (B14). `token_budget` is the same figure the context
-    // compactor derives from provider/capabilities, so a 32k local model no
-    // longer gets an 8k-per-result / 50k-per-turn budget it cannot possibly
-    // honor. Large windows clamp back up to the historical constants, so the
-    // common case is unchanged. No `[context_budget]` → no window → constants.
-    let window_tokens = alephcore::orchestrator::build_context_budget_config(
-        &app_config_snapshot,
-        &app_config_snapshot
-            .general
-            .default_provider
-            .clone()
-            .unwrap_or_default(),
-    )
-    .map(|cb| cb.token_budget);
+    // from fixed constants (B14). `token_budget` is the budget the orchestrator
+    // built for its harness (`initialize_orchestrator` above) — read back from
+    // it, not derived a second time, so there is one derivation and one
+    // startup log line. A 32k local model thus no longer gets fixed budgets it
+    // cannot possibly honor; large windows clamp back up to the constants.
+    // `[context_budget] enabled = false`, or no orchestrator (no provider, so
+    // no runs) → no window → constants.
+    // The first value is a CEILING over every per-result budget (the default
+    // and the larger read window), not the default budget itself.
+    let window_tokens = server
+        .orchestrator
+        .as_ref()
+        .and_then(|orch| {
+            alephcore::orchestrator::HarnessRunner::context_budget_config(orch.harness.as_ref())
+        })
+        .map(|cb| cb.token_budget);
     let (per_result_tokens, max_turn_tokens) = window_tokens.map_or(
         (
-            alephcore::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+            alephcore::tools::result_processing::MAX_RESULT_BUDGET_TOKENS,
             alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
         ),
         alephcore::tools::turn_budget::budget_for_window,
@@ -3601,10 +3593,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // `set_global_tool_result_store` (auto-spawns the periodic
             // sweeper since main's c1756ce80).
             if !args.daemon {
+                // The ceiling in effect, not the one derived: the setter declines
+                // one that would clamp nothing.
+                let ceiling =
+                    alephcore::tools::result_processing::installed_result_budget_ceiling()
+                        .map_or_else(|| "none".to_string(), |c| c.to_string());
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
                      (<config_dir>/data/tool_results/global/, session-scoped handles, \
-                     max_result_tokens={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
+                     result_ceiling={ceiling}, max_turn_tokens={max_turn_tokens})"
                 );
             }
         }

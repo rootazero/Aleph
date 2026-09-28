@@ -155,8 +155,7 @@ impl Transcript {
         }
         let now = Some(now_ms);
         match ev {
-            StreamEvent::Reasoning { content, .. }
-            | StreamEvent::ReasoningBlock { content, .. } => self.append_thinking(content, now),
+            StreamEvent::Reasoning { content, .. } => self.append_thinking(content, now),
             StreamEvent::ResponseChunk { content, .. } => self.append_text(content, now),
             StreamEvent::ToolStart {
                 tool_id,

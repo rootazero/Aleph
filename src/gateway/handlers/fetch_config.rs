@@ -548,8 +548,7 @@ mod tests {
     #[test]
     fn synth_firecrawl_dto_present_when_search_configured() {
         let search = search_with_firecrawl("https://api.firecrawl.dev");
-        let dto = synth_firecrawl_dto(Some(&search), true, None)
-            .expect("firecrawl available");
+        let dto = synth_firecrawl_dto(Some(&search), true, None).expect("firecrawl available");
         assert_eq!(dto.name, "firecrawl");
         assert_eq!(dto.provider_type, "firecrawl");
         assert!(dto.shares_search);

@@ -11,7 +11,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
-use crate::tools::service::ToolError;
+use crate::tools::service::{RefusedBy, ToolError};
 
 use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
@@ -127,6 +127,16 @@ impl ConfirmDenial {
     /// nothing of the sort: an unattended run, an unwired requester, a channel
     /// that could not deliver. The model relays that sentence to the person it
     /// is talking to, so a wrong attribution does not stay inside the process.
+    /// Who refused, as the model-facing error records it — the same fact
+    /// [`Self::lead`] words.
+    fn refused_by(&self) -> RefusedBy {
+        if self.reason.is_a_human_decision() {
+            RefusedBy::Person
+        } else {
+            RefusedBy::NobodyAsked
+        }
+    }
+
     fn lead(&self, subject: &str) -> String {
         let outcome = self.outcome;
         if self.reason.is_a_human_decision() {
@@ -137,7 +147,7 @@ impl ConfirmDenial {
     }
 }
 
-/// Which dispatch branch `execute_inner` is routing into. Kept as a
+/// Which dispatch branch `execute_gated` is routing into. Kept as a
 /// fieldless enum so the retry closure can capture it by value.
 #[derive(Copy, Clone)]
 enum RoutingTarget {
@@ -153,7 +163,48 @@ impl ScopedToolService {
     /// the inner [`crate::tools::runtime::LoopToolRegistry::execute`] /
     /// [`crate::agents::subagent_tool::SubagentTool::execute`] so subprocess
     /// `kill_on_drop`, reqwest abort, etc. propagate naturally.
+    ///
+    /// The gated dispatch ([`Self::execute_gated`]), plus the one observation
+    /// no gate could make: a `PermissionDenied` leaving here fires the
+    /// `PermissionDenied` hook observers. Placed on the way OUT rather than
+    /// at each deny arm (tier / policy rule, operator gate ×2, hook `deny:`)
+    /// so a new arm is covered without knowing this seam exists. Which
+    /// refusals that is — and which it is not — is the variant's doc
+    /// (`HookEvent::PermissionDenied`). The input is cloned only when a
+    /// `PermissionDenied` hook is registered: a Write call's whole body is
+    /// not copied on every dispatch for an event nobody listens to.
     pub(super) async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        let for_hook = self
+            .hook_executor
+            .as_ref()
+            .filter(|e| e.has_hooks_for(HookEvent::PermissionDenied))
+            .map(|e| (e.clone(), input.clone()));
+        let result = self.execute_gated(name, input, cancel).await;
+        if let (
+            Err(ToolError::PermissionDenied {
+                name: denied,
+                reason,
+            }),
+            Some((executor, input)),
+        ) = (&result, for_hook)
+        {
+            let ctx = self
+                .build_hook_context(denied, &input, None, None)
+                .with_env("DENY_REASON", reason.clone());
+            executor
+                .execute_observers(HookEvent::PermissionDenied, &ctx)
+                .await;
+        }
+        result
+    }
+
+    /// Every gate, then the call — the body [`Self::execute_inner`] wraps.
+    async fn execute_gated(
         &self,
         name: &str,
         input: Value,
@@ -535,7 +586,7 @@ impl ScopedToolService {
     /// Returns `true` when this call was authorized by a person (or by a
     /// standing grant of theirs), `false` when no gate applied and nobody was
     /// asked. The caller threads that on to the `BeforeToolCall` hook seam so
-    /// one dispatch raises at most one card — see `execute_inner`.
+    /// one dispatch raises at most one card — see `execute_gated`.
     ///
     /// Which rule gated the call comes from [`Self::confirmation_rule`], and its
     /// prose goes to the human card and the model's refusal from that one
@@ -580,9 +631,10 @@ impl ScopedToolService {
                     let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                     let said = denial.user_reason_clause();
                     let lead = denial.lead(&format!("running `{name}`"));
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: denial.refused_by(),
+                        reason: format!(
                             "{lead}{said} Do not retry this call, do not rewrite it, and do \
                              not attempt to achieve the same result by other means.{hint} Ask \
                              the user what they would like to do instead."
@@ -601,9 +653,10 @@ impl ScopedToolService {
                     "auto-denied: confirmation required and no approval channel is available",
                 )
                 .await;
-                Err(ToolError::Execution {
+                Err(ToolError::Refused {
                     name: name.to_string(),
-                    cause: format!(
+                    by: RefusedBy::NobodyAsked,
+                    reason: format!(
                         "{} No approval channel is available, so it cannot be \
                          authorized here. Do not retry.",
                         rule.reason(name)
@@ -616,7 +669,7 @@ impl ScopedToolService {
     /// Run the call: route it to the subagent tool or the inner registry, through
     /// the one-shot retry helper and the Layer-2 result budget.
     ///
-    /// Split out of [`Self::execute_inner`] so the wall clock can wrap exactly
+    /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
     async fn route_and_execute(
         &self,
@@ -667,7 +720,14 @@ impl ScopedToolService {
                                     st.execute(input, cancel).await
                                 }
                                 RoutingTarget::Inner => {
-                                    self.inner.execute(&name_owned, input, cancel).await
+                                    // A tool that offloads its own output names
+                                    // only the retrieval tools this dispatch can
+                                    // call, as Layer 2 does below.
+                                    crate::tools::result_processing::with_recovery_tools(
+                                        self.recovery_tools(),
+                                        self.inner.execute(&name_owned, input, cancel),
+                                    )
+                                    .await
                                 }
                                 RoutingTarget::Missing => {
                                     return Err(ToolError::Execution {
@@ -1245,9 +1305,10 @@ impl ScopedToolService {
         let (_ctx, hook_result) = executor
             .execute_interceptors(HookEvent::BeforeToolCall, ctx)
             .await
-            .map_err(|e| ToolError::Execution {
+            .map_err(|e| ToolError::Refused {
                 name: name.to_string(),
-                cause: format!("BeforeToolCall hook executor failed: {e}"),
+                by: RefusedBy::HookFailed,
+                reason: format!("BeforeToolCall hook executor failed: {e}"),
             })?;
 
         // Hard deny — not retryable.
@@ -1260,11 +1321,20 @@ impl ScopedToolService {
             });
         }
 
-        // Soft block — surfaces as an execution error so the LLM can react.
+        // Block (exit 2, `decision: "block"`, `block:`, or a hook that failed
+        // and blocked fail-closed — `action_failed` tells the two apart) — a
+        // refusal the model reads with the hook's reason and no route around
+        // it, but not a `PermissionDenied`: a hook's verdict does not fire the
+        // PermissionDenied observers.
         if hook_result.blocked {
-            return Err(ToolError::Execution {
+            return Err(ToolError::Refused {
                 name: name.to_string(),
-                cause: hook_result
+                by: if hook_result.action_failed {
+                    RefusedBy::HookFailed
+                } else {
+                    RefusedBy::Hook
+                },
+                reason: hook_result
                     .block_reason
                     .unwrap_or_else(|| "blocked by hook".to_string()),
             });
@@ -1301,7 +1371,7 @@ impl ScopedToolService {
                     {
                         // An expired card is not a refusal — mirror the confirm
                         // gate and return the retryable ApprovalExpired rather
-                        // than a non-retryable Execution error the harness bans.
+                        // than a non-retryable refusal the harness bans.
                         if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                             return Err(ToolError::ApprovalExpired {
                                 name: name.to_string(),
@@ -1311,9 +1381,10 @@ impl ScopedToolService {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         let said = denial.user_reason_clause();
                         let lead = denial.lead(&format!("running `{name}`"));
-                        return Err(ToolError::Execution {
+                        return Err(ToolError::Refused {
                             name: name.to_string(),
-                            cause: format!(
+                            by: denial.refused_by(),
+                            reason: format!(
                                 "A BeforeToolCall hook required confirmation. \
                                  {lead}{said}{hint}"
                             ),
@@ -1339,9 +1410,10 @@ impl ScopedToolService {
                          approval channel is available",
                     )
                     .await;
-                    return Err(ToolError::Execution {
+                    return Err(ToolError::Refused {
                         name: name.to_string(),
-                        cause: format!(
+                        by: RefusedBy::NobodyAsked,
+                        reason: format!(
                             "Hook requested user confirmation for `{name}` but no \
                              approval channel is available. Do not retry."
                         ),
@@ -1449,6 +1521,13 @@ impl ScopedToolService {
             .with_tool_name(name.to_string())
             .with_arguments(input.to_string())
             .with_tool_input(input.to_string());
+        // The one Claude Code envelope fact only this seam can answer: the
+        // tier the gate below will enforce, read from the same method the
+        // gate reads (`effective_exec_tier`, so a released PlanGate shows).
+        // `transcript_path` / `cwd` are the executor's (`session_facts`).
+        if let Some(tier) = self.effective_exec_tier() {
+            ctx = ctx.with_permission_mode(tier.cc_permission_mode());
+        }
         if let Some(out) = tool_output {
             ctx = ctx.with_tool_output(out.to_string());
         }
@@ -1508,32 +1587,6 @@ impl ScopedToolService {
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
-        // Ingress clean — per-tool compression, then (only when over budget)
-        // field-level hygiene. Both stages run on `out.value` while its text
-        // fields still carry real newlines: flattening first escapes every
-        // newline and collapses the result onto one line, which blinds both
-        // content-aware cleaners (`structured::classify` needs lines;
-        // `distill_output` iterates `text.lines()`). See `tool_output::ingress`.
-        //
-        // `reduced_from` hands Layer 2 the untouched original so the offloaded
-        // blob — the model's way back to the dropped detail — is the full
-        // output, not the reduction.
-        let outcome = self.run_ingress(name, &mut out.value, budget).await;
-
-        if outcome.compressed {
-            tracing::debug!(tool = name, "ingress compressed a tool-result field");
-        }
-        for r in &outcome.reductions {
-            tracing::debug!(
-                tool = name,
-                field = %r.field,
-                method = ?r.method,
-                tokens_before = r.tokens_before,
-                tokens_after = r.tokens_after,
-                "ingress hygiene reduced a tool-result field"
-            );
-        }
-
         // Per-call file name suffix, so concurrent calls to the same tool do
         // not collide on disk.
         //
@@ -1550,6 +1603,37 @@ impl ScopedToolService {
         let call_id = crate::approval::current_tool_call_id()
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
+        // Ingress clean — per-tool compression, then (only when over budget)
+        // field-level hygiene. Both stages run on `out.value` while its text
+        // fields still carry real newlines: flattening first escapes every
+        // newline and collapses the result onto one line, which blinds both
+        // content-aware cleaners (`structured::classify` needs lines;
+        // `distill_output` iterates `text.lines()`). See `tool_output::ingress`.
+        //
+        // `reduced_from` hands Layer 2 the untouched original so the offloaded
+        // blob — the model's way back to the dropped detail — is the full
+        // output, not the reduction.
+        // A result carrying its own call's offload marker skips the rewrite: a
+        // cut that dropped the marker line would hide the offload from Layer 2,
+        // which would then persist this result over the blob the marker names.
+        let outcome = self
+            .run_ingress(name, &mut out.value, budget, &call_id)
+            .await;
+
+        if outcome.compressed {
+            tracing::debug!(tool = name, "ingress compressed a tool-result field");
+        }
+        for r in &outcome.reductions {
+            tracing::debug!(
+                tool = name,
+                field = %r.field,
+                method = ?r.method,
+                tokens_before = r.tokens_before,
+                tokens_after = r.tokens_after,
+                "ingress hygiene reduced a tool-result field"
+            );
+        }
+
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,
             name,
@@ -1557,7 +1641,39 @@ impl ScopedToolService {
             self.result_store.as_deref(),
             budget,
             outcome.reduced_from.as_deref(),
+            // Narrowed by any wrapper around this dispatch (a subagent's
+            // allowlist scopes its set around the delegation).
+            crate::tools::result_processing::dispatch_recovery_tools()
+                .map_or(self.recovery_tools(), |outer| {
+                    outer.intersect(self.recovery_tools())
+                }),
         );
+
+        // What this result cost on its way in: the tokens the tool produced
+        // (the untouched original when ingress reduced it) against the tokens
+        // Layer 2 admitted, summed on the session's prompt-size record for
+        // `context.breakdown`.
+        // Not under a delegated role: it runs on its parent's service and
+        // `TURN_CONTEXT` (`identity::actor`), but its results enter the child's
+        // context, so counting them here would charge the parent for output
+        // it never received.
+        let session = crate::tools::turn_context::current_session_key()
+            .filter(|_| crate::identity::current_actor().is_none());
+        let registry = crate::thinker::prompt_size_registry::global_prompt_size_registry();
+        if let (Some(session), Some(registry)) = (session, registry) {
+            let produced = crate::context::budget::pressure::estimate_tokens_smart(
+                outcome
+                    .reduced_from
+                    .as_deref()
+                    .unwrap_or(&outcome.model_facing),
+            );
+            registry.record_tool_output(
+                &session,
+                produced,
+                processed.tokens_in_context,
+                processed.persisted_path.is_some(),
+            );
+        }
 
         // Extension hooks observe large tool results offloaded to disk.
         if let Some(ref path) = processed.persisted_path {
@@ -1606,15 +1722,18 @@ impl ScopedToolService {
         name: &str,
         value: &mut Value,
         budget: Option<usize>,
+        call_id: &str,
     ) -> crate::tool_output::ingress::IngressOutcome {
+        use crate::tool_output::ingress::clean_for_ingress_of;
         if crate::tool_output::ingress::size_hint(value) < INGRESS_BLOCKING_THRESHOLD {
-            return crate::tool_output::ingress::clean_for_ingress(name, value, budget);
+            return clean_for_ingress_of(name, value, budget, Some(call_id));
         }
         let tool_name = name.to_owned();
+        let call_id = call_id.to_owned();
         let mut owned = std::mem::take(value);
         let joined = tokio::task::spawn_blocking(move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::tool_output::ingress::clean_for_ingress(&tool_name, &mut owned, budget)
+                clean_for_ingress_of(&tool_name, &mut owned, budget, Some(&call_id))
             }))
         })
         .await;
@@ -1724,10 +1843,14 @@ fn clean_error_body(body: &str) -> String {
     }
     if let Some(digest) = crate::tool_output::distill::distill_output(&stripped) {
         if digest.error_count > 0 {
+            // `scale_to_budget` takes a TOKEN budget; the limit here is in
+            // characters. Passing the character count read 4 000 chars as
+            // 4 000 tokens — a line cap sized for 10 000 characters, whose
+            // digest then overran the limit and fell back to the head/tail cut.
             let cap = crate::tool_output::scale_to_budget(
                 crate::tool_output::distill::MAX_SALIENT_LINES,
                 crate::tool_output::hygiene::MIN_SALIENT_LINES,
-                ERROR_BODY_MAX_CHARS,
+                crate::context::budget::pressure::result_tokens_for_chars(ERROR_BODY_MAX_CHARS),
             );
             let rendered = digest.render(cap);
             if rendered.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -1777,7 +1900,9 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
 /// tokens, because the only safe signal is the adapter's own report, and
 /// a misclassification would silently re-route a genuine tool failure.
 fn looks_like_cancellation(cause: &str) -> bool {
-    let trimmed = cause.trim_end().trim_end_matches(|c: char| !c.is_alphanumeric());
+    let trimmed = cause
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_alphanumeric());
     // Strip the trailing "by upstream" / "by client" / "by caller" style
     // participle so "... cancelled by upstream" still matches.
     let core = trimmed
@@ -1795,6 +1920,33 @@ fn looks_like_cancellation(cause: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-G9: the digest's line cap is sized for the error channel's CHARACTER
+    /// limit. A wall of distinct, ordinary-length error lines must come back
+    /// as a digest that fits — not overrun it and fall back to a head/tail cut
+    /// that drops the middle, which is where the failure is named.
+    #[test]
+    fn a_long_error_body_is_distilled_within_its_character_limit() {
+        let body: String = (0..300)
+            .map(|i| {
+                format!(
+                    "error[E{i:04}]: mismatched types in module_{i} while checking the \
+                     signature of handler_{i} against its declared contract; expected a \
+                     borrowed slice of records, found an owned vector instead\n"
+                )
+            })
+            .collect();
+        assert!(body.chars().count() > ERROR_BODY_MAX_CHARS);
+
+        let cleaned = clean_error_body(&body);
+
+        assert!(
+            cleaned.starts_with("[Output digest:"),
+            "a digest, not the head/tail cut: {}",
+            &cleaned[..cleaned.len().min(200)]
+        );
+        assert!(cleaned.chars().count() <= ERROR_BODY_MAX_CHARS);
+    }
 
     #[test]
     fn bound_error_body_passes_short_bodies_through_borrowed() {
@@ -1928,5 +2080,101 @@ mod tests {
         assert!(
             matches!(out.metadata.presentation, Some(aleph_protocol::Presentation::FileChanges { ref changes }) if changes.len() == 1)
         );
+    }
+
+    /// A turn whose session has a prompt-size record, as every run the
+    /// runner drives does by the time its tools execute.
+    fn tally_turn() -> (crate::tools::turn_context::TurnContext, String) {
+        let key = crate::routing::session_key::SessionKey::main(format!(
+            "tally-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let wire = key.to_key_string();
+        crate::thinker::prompt_size_registry::install_test_prompt_size_registry().record_turn(
+            &wire,
+            None,
+            vec![],
+        );
+        let turn = crate::tools::turn_context::TurnContext {
+            session_key: key,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        };
+        (turn, wire)
+    }
+
+    fn long_listing() -> ToolOutput {
+        ToolOutput {
+            value: Value::String(
+                (0..20_000)
+                    .map(|i| format!("line {i} of a long listing\n"))
+                    .collect(),
+            ),
+            metadata: Default::default(),
+        }
+    }
+
+    fn bare_service() -> ScopedToolService {
+        ScopedToolService::new(
+            Arc::new(crate::tools::runtime::LoopToolRegistry::new()),
+            std::collections::BTreeSet::new(),
+        )
+    }
+
+    fn tally_of(session: &str) -> Option<crate::thinker::prompt_size_registry::ToolOutputTally> {
+        crate::thinker::prompt_size_registry::install_test_prompt_size_registry()
+            .latest(session)
+            .and_then(|r| r.tool_output)
+    }
+
+    fn soon() -> std::time::Instant {
+        std::time::Instant::now() + std::time::Duration::from_secs(5)
+    }
+
+    /// `ProcessedResult::tokens_in_context` reaches the session's tally: one
+    /// call, admitted tokens from Layer 2, produced tokens from the output
+    /// before Layer 2 cut it — so an over-budget result reads as reduced.
+    ///
+    /// Mutation-checked: dropping the `record` call, or charging `produced`
+    /// from `processed.text` instead of the pre-budget output, turns this red.
+    #[tokio::test]
+    async fn layer_two_counts_what_it_admitted_against_the_turns_session() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service();
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn, svc.apply_layer_two("bash", long_listing(), soon()))
+            .await;
+        let t = tally_of(&session).expect("the call was counted");
+        assert_eq!(t.calls, 1);
+        assert!(t.in_context_tokens > 0, "{t:?}");
+        assert!(
+            t.produced_tokens > t.in_context_tokens,
+            "an over-budget result must read as reduced: {t:?}"
+        );
+    }
+
+    /// A delegated role's results enter the child's context, not the turn's.
+    ///
+    /// Mutation-checked: removing the `current_actor` filter turns this red.
+    #[tokio::test]
+    async fn a_delegated_roles_results_are_not_charged_to_the_parent() {
+        let (turn, session) = tally_turn();
+        let svc = bare_service();
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(
+                turn,
+                crate::identity::as_actor(
+                    "researcher",
+                    svc.apply_layer_two("bash", long_listing(), soon()),
+                ),
+            )
+            .await;
+        assert_eq!(tally_of(&session), None);
     }
 }

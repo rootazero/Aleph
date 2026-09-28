@@ -133,14 +133,21 @@ impl WorkflowRunBudget {
             let current = self.spent.load(Ordering::Relaxed);
             let headroom = cap.saturating_sub(current);
             if cost > headroom {
-                return BudgetOutcome::Exhausted { remaining: headroom };
+                return BudgetOutcome::Exhausted {
+                    remaining: headroom,
+                };
             }
             // CAS: another thread may have raced us between the load and the
             // store. The relaxed ordering is sufficient — the counter is
             // monotonic, and a lost CAS just retries against a fresher value.
             if self
                 .spent
-                .compare_exchange(current, current + cost, Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange(
+                    current,
+                    current + cost,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 return BudgetOutcome::Ok {
@@ -324,16 +331,24 @@ mod tests {
         // distinguishes them via `total` / `spent` rather than via `remaining`.
         let uncapped = WorkflowRunBudget::uncapped();
         let zero_cap = WorkflowRunBudget::capped(0);
-        let spent: WorkflowRunBudget =
-            WorkflowRunBudget { total: Some(5), spent: AtomicU64::new(5) };
+        let spent: WorkflowRunBudget = WorkflowRunBudget {
+            total: Some(5),
+            spent: AtomicU64::new(5),
+        };
         let uncapped_snap = uncapped.snapshot();
         let zero_cap_snap = zero_cap.snapshot();
         let spent_snap = spent.snapshot();
         assert_eq!(uncapped_snap.total, None, "uncapped has no cap");
         assert_eq!(zero_cap_snap.total, Some(0), "zero cap is a cap of zero");
-        assert_eq!(spent_snap.total, Some(5), "fully-spent keeps the original cap");
-        assert_ne!(uncapped_snap.spent, spent_snap.spent,
-            "uncapped spent differs from a fully-spent capped budget");
+        assert_eq!(
+            spent_snap.total,
+            Some(5),
+            "fully-spent keeps the original cap"
+        );
+        assert_ne!(
+            uncapped_snap.spent, spent_snap.spent,
+            "uncapped spent differs from a fully-spent capped budget"
+        );
         assert_eq!(uncapped_snap.remaining, u64::MAX, "uncapped is u64::MAX");
         assert_eq!(zero_cap_snap.remaining, 0, "zero cap is 0");
         assert_eq!(spent_snap.remaining, 0, "fully spent is 0");
@@ -359,7 +374,11 @@ mod tests {
         let _ = b2.try_charged(5); // spent = 5, headroom = 5
         let out2 = b2.try_charged(11); // cost(11) > cap(10), refuses
         assert!(out2.is_exhausted());
-        assert_eq!(out2.remaining(), 5, "headroom unchanged: cap(10) - spent(5)");
+        assert_eq!(
+            out2.remaining(),
+            5,
+            "headroom unchanged: cap(10) - spent(5)"
+        );
         let out3 = b2.try_charged(6); // cost(6) > headroom(5) but <= cap(10)
         assert!(out3.is_exhausted());
         assert_eq!(out3.remaining(), 5, "same shape, same headroom");
@@ -407,8 +426,10 @@ mod tests {
                 (oks, refused)
             }));
         }
-        let (total_ok, total_refused): (usize, usize) =
-            handles.into_iter().map(|h| h.join().unwrap()).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        let (total_ok, total_refused): (usize, usize) = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
         assert_eq!(total_ok, 1_000, "exactly the cap may be charged");
         assert_eq!(total_refused, 9_000, "every other charge is refused");
         assert_eq!(

@@ -78,6 +78,8 @@ async fn test_register_skills() {
             scope: crate::domain::skill::PromptScope::System,
             version: None,
             allowed_tools: None,
+            argument_hint: None,
+            plugin_id: None,
         },
         SkillInfo {
             id: "code-review".to_string(),
@@ -86,6 +88,8 @@ async fn test_register_skills() {
             scope: crate::domain::skill::PromptScope::System,
             version: None,
             allowed_tools: None,
+            argument_hint: None,
+            plugin_id: None,
         },
     ];
 
@@ -106,6 +110,50 @@ async fn test_register_skills() {
         tool.routing_system_prompt.is_none(),
         "skills must leave routing_system_prompt unset; got {:?}",
         tool.routing_system_prompt
+    );
+}
+
+/// The one hop from `SkillInfo.plugin_id` to the catalog row: `register_skills`
+/// must copy the owner onto `ToolSource::Skill`, or every face-④ reader
+/// (`commands.list`, the slash fast path) sees a row nobody owns and lists /
+/// admits it everywhere. The face tests register rows directly, so only this
+/// test sees the hop.
+#[tokio::test]
+async fn register_skills_carries_the_owning_plugin_onto_the_row() {
+    let registry = ToolCatalog::new();
+    let owned = SkillInfo {
+        id: "proj:cmd".to_string(),
+        name: "cmd".to_string(),
+        description: "owned by a plugin".to_string(),
+        scope: crate::domain::skill::PromptScope::System,
+        version: None,
+        allowed_tools: None,
+        argument_hint: None,
+        plugin_id: Some("proj".to_string()),
+    };
+    let unowned = SkillInfo {
+        plugin_id: None,
+        id: "plain".to_string(),
+        name: "plain".to_string(),
+        ..owned.clone()
+    };
+    registry.register_skills(&[owned, unowned]).await;
+
+    let row = fetch_by_id(&registry, "skill:proj:cmd").await.unwrap();
+    assert_eq!(
+        row.source,
+        ToolSource::Skill {
+            id: "proj:cmd".to_string(),
+            plugin_id: Some("proj".to_string()),
+        }
+    );
+    let row = fetch_by_id(&registry, "skill:plain").await.unwrap();
+    assert_eq!(
+        row.source,
+        ToolSource::Skill {
+            id: "plain".to_string(),
+            plugin_id: None,
+        }
     );
 }
 
@@ -707,6 +755,7 @@ async fn two_tools_may_share_an_alias_and_the_loser_keeps_it_as_a_fallback() {
         "Take notes",
         ToolSource::Skill {
             id: "notes".to_string(),
+            plugin_id: None,
         },
     )
     .with_aliases(["n"]);
@@ -1041,4 +1090,50 @@ async fn shorthand_alias_execution_and_discovery_agree() {
             .unwrap_or_else(|| panic!("/{alias} should resolve to {canonical}"));
         assert_eq!(resolved.tool.name, *canonical, "/{alias} → {canonical}");
     }
+}
+
+#[tokio::test]
+async fn unregister_skills_removes_exactly_the_named_skill_entries() {
+    let catalog = ToolCatalog::new();
+    let mk = |id: &str| crate::skill::SkillInfo {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: format!("{id} desc"),
+        scope: crate::domain::skill::PromptScope::System,
+        version: None,
+        allowed_tools: None,
+        argument_hint: None,
+        plugin_id: None,
+    };
+    let rejected = catalog
+        .register_plugin_commands(
+            &[mk("qa-plug:hello"), mk("qa-plug:bye"), mk("other:keep")],
+            &|_| false,
+        )
+        .await;
+    assert!(rejected.is_empty());
+    let names =
+        |tools: Vec<UnifiedTool>| -> Vec<String> { tools.into_iter().map(|t| t.name).collect() };
+    let before = names(catalog.list_all().await);
+    assert!(before.contains(&"qa-plug:hello".to_string()));
+
+    let removed = catalog
+        .unregister_skills(&["qa-plug:hello".to_string(), "qa-plug:bye".to_string()])
+        .await;
+    assert_eq!(removed, 2);
+    let after = names(catalog.list_all().await);
+    assert!(!after.contains(&"qa-plug:hello".to_string()));
+    assert!(!after.contains(&"qa-plug:bye".to_string()));
+    assert!(
+        after.contains(&"other:keep".to_string()),
+        "unrelated skill untouched"
+    );
+
+    assert_eq!(
+        catalog
+            .unregister_skills(&["qa-plug:hello".to_string()])
+            .await,
+        0,
+        "idempotent"
+    );
 }

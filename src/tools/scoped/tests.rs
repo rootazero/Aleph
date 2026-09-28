@@ -528,6 +528,8 @@ fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookCon
         plugin_root: PathBuf::from("/tmp"),
         handler: None,
         timeout_secs: None,
+        declared_event: None,
+        scope_key: crate::extension::visibility::ScopeKey::Global,
     }
 }
 
@@ -542,7 +544,7 @@ fn parse_tool_output(value: &Value) -> Value {
 
 #[tokio::test]
 #[cfg(unix)] // POSIX-only: shell hook uses sh (echo quoting / printf / '/tmp')
-async fn before_tool_hook_block_returns_execution_error() {
+async fn before_tool_hook_block_returns_refused_by_hook() {
     let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
         HookEvent::BeforeToolCall,
         HookKind::Interceptor,
@@ -552,14 +554,18 @@ async fn before_tool_hook_block_returns_execution_error() {
         .with_hook_executor(executor, "test-session");
 
     match svc.execute("echo", json!({})).await {
-        Err(ToolError::Execution { name, cause }) => {
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::Hook,
+            reason,
+        }) => {
             assert_eq!(name, "echo");
             assert!(
-                cause.contains("blocked by policy"),
-                "unexpected cause: {cause}"
+                reason.contains("blocked by policy"),
+                "unexpected reason: {reason}"
             );
         }
-        other => panic!("expected Execution error from block hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
+        other => panic!("expected Refused by a hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -584,6 +590,302 @@ async fn before_tool_hook_deny_returns_permission_denied() {
         }
         other => panic!("expected PermissionDenied from deny hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
+}
+
+/// Names `.1` as the transcript of session `.0` and of nothing else.
+#[cfg(unix)]
+struct OneTranscript(&'static str, PathBuf);
+
+#[cfg(unix)]
+impl crate::extension::hooks::TranscriptSource for OneTranscript {
+    fn transcript_path(&self, session_id: &str) -> Option<PathBuf> {
+        (session_id == self.0).then(|| self.1.clone())
+    }
+}
+
+/// A real tool call through the chokepoint hands its hooks the Claude Code
+/// envelope on both faces: `permission_mode` from the tier the gate enforces
+/// (the one fact this seam supplies), `cwd` / `$CLAUDE_PROJECT_DIR` /
+/// `transcript_path` from what the run published (the executor derives
+/// them), and — after the result budget has flattened the output to text —
+/// the tool's own answer as a `tool_response` OBJECT.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_real_tool_call_hands_its_hooks_the_claude_code_envelope() {
+    use crate::config::types::policies::ExecTier;
+    let dir = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("transcript.jsonl");
+    let pre = dir.path().join("pre.json");
+    let post = dir.path().join("post.json");
+    let post_env = dir.path().join("post.env");
+    let executor = Arc::new(HookExecutor::new(vec![
+        make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            &format!("cat > '{}'", pre.display()),
+        ),
+        make_command_hook(
+            HookEvent::AfterToolCall,
+            HookKind::Observer,
+            &format!("cat > '{}'; env > '{}'", post.display(), post_env.display()),
+        ),
+    ]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_hook_executor(executor, "agent:main:main");
+    crate::projects::with_project_root(
+        Some(project.path().to_path_buf()),
+        crate::extension::hooks::with_transcript_source(
+            Some(Arc::new(OneTranscript(
+                "agent:main:main",
+                transcript.clone(),
+            ))),
+            svc.execute("echo", json!({"k": "v"})),
+        ),
+    )
+    .await
+    .expect("echo runs under Full");
+
+    let project_dir = project.path().to_string_lossy().to_string();
+    let read = |file: &PathBuf| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(file).expect("the hook ran")).unwrap()
+    };
+    for (face, seen) in [("PreToolUse", read(&pre)), ("PostToolUse", read(&post))] {
+        assert_eq!(
+            seen["permission_mode"],
+            ExecTier::Full.cc_permission_mode(),
+            "{face}"
+        );
+        assert_eq!(seen["cwd"], project_dir.as_str(), "{face}");
+        assert_eq!(
+            seen["transcript_path"],
+            transcript.to_string_lossy().as_ref(),
+            "{face}"
+        );
+        assert_eq!(seen["tool_input"], json!({"k": "v"}), "{face}");
+    }
+    assert_eq!(read(&post)["tool_response"], json!({"k": "v"}));
+    let env = std::fs::read_to_string(&post_env).unwrap();
+    assert!(
+        env.lines()
+            .any(|l| l == format!("CLAUDE_PROJECT_DIR={project_dir}")),
+        "{env}"
+    );
+}
+
+// -------------------------------------------------------------------------
+// `HookEvent::PermissionDenied`: every `ToolError::PermissionDenied` leaving
+// the chokepoint fires the observer. One test per deny arm, so a fire-site
+// moved into a single arm goes red on the others.
+// -------------------------------------------------------------------------
+
+/// A `PermissionDenied` observer on `tool` that writes its stdin payload to a
+/// file, and that file's path.
+#[cfg(unix)]
+fn permission_denied_probe(dir: &std::path::Path, tool: &str) -> (HookConfig, PathBuf) {
+    let marker = dir.join(format!("{tool}.denied.json"));
+    let mut hook = make_command_hook(
+        HookEvent::PermissionDenied,
+        HookKind::Observer,
+        &format!("cat > '{}'", marker.display()),
+    );
+    hook.matcher = Some(tool.to_string());
+    (hook, marker)
+}
+
+/// The observer saw THIS refusal: its tool name and the exact reason the
+/// model was handed.
+#[cfg(unix)]
+fn assert_denial_observed(marker: &std::path::Path, err: &ToolError) {
+    let ToolError::PermissionDenied { name, reason } = err else {
+        panic!("expected PermissionDenied, got {err:?}"); // rust-doctor-disable-line panic-in-library
+    };
+    let seen: Value = serde_json::from_str(
+        &std::fs::read_to_string(marker).expect("the PermissionDenied observer ran"),
+    )
+    .unwrap();
+    assert_eq!(seen["hook_event_name"], "permission_denied");
+    assert_eq!(seen["tool_name"], name.as_str());
+    assert_eq!(seen["env"]["DENY_REASON"], reason.as_str());
+}
+
+#[cfg(unix)]
+fn guest_turn(session: &str) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main(session),
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: Some("guest".to_string()),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+    }
+}
+
+/// Arm 1: the `deny_rule` gate (here an explicit `[policies.tool_permissions]`
+/// entry) — the refusal no hook could witness before this event existed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_policy_denial_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_tool_permissions(crate::config::types::policies::ToolPermissionsConfig {
+            default: crate::extension::PermissionAction::Allow,
+            overrides: std::collections::HashMap::from([(
+                "echo".to_string(),
+                crate::extension::PermissionAction::Deny,
+            )]),
+        })
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("echo", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 2: the operator gate, where the operator answered no.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_refusal_fires_the_permission_denied_observer() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "cron_manage");
+    let svc = ScopedToolService::new(make_registry(&["cron_manage"]), BTreeSet::new())
+        .with_turn_context(guest_turn("p44-operator-refused"))
+        .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)))
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 3: the operator gate with no approval channel (refused unasked).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unaskable_operator_gate_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "cron_manage");
+    let svc = ScopedToolService::new(make_registry(&["cron_manage"]), BTreeSet::new())
+        .with_turn_context(guest_turn("p44-operator-unaskable"))
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![probe])), "test-session");
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// Arm 4: a BeforeToolCall hook's `deny:` — one hook's verdict, witnessed by
+/// another.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hook_deny_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let deny = make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'deny: hard policy stop'",
+    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![deny, probe])),
+        "test-session",
+    );
+    let err = svc.execute("echo", json!({})).await.unwrap_err();
+    assert_denial_observed(&marker, &err);
+}
+
+/// The other direction of the gate (判据 §14): a call that succeeds, and one
+/// refused as something other than `PermissionDenied`, never fire it. A hook
+/// `block:` is such a refusal: the model reads it as a policy refusal (kind
+/// `permission`), but it is not a `PermissionDenied` — a hook's verdict does
+/// not re-fire hooks.
+#[cfg(unix)]
+#[tokio::test]
+async fn only_a_permission_denied_fires_the_permission_denied_observer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probe, marker) = permission_denied_probe(dir.path(), "echo");
+    let allowed = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![probe.clone()])),
+        "test-session",
+    );
+    allowed
+        .execute("echo", json!({}))
+        .await
+        .expect("an allowed call succeeds");
+    let block = make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'block: not now'",
+    );
+    let blocked = ScopedToolService::new(echo_registry(), BTreeSet::new()).with_hook_executor(
+        Arc::new(HookExecutor::new(vec![block, probe])),
+        "test-session",
+    );
+    let err = blocked.execute("echo", json!({})).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::Hook,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.kind(),
+        crate::tools::error_kind::ToolErrorKind::Permission,
+        "{err:?}"
+    );
+    assert!(
+        !marker.exists(),
+        "neither a success nor a hook block is a permission denial"
+    );
+}
+
+/// This seam hands a REFUSED call's raw arguments to hooks, together with a
+/// reason that quotes the policy table in backticks. A `PermissionDenied`
+/// hook using both the natural way (`"$DENY_REASON"`, `"$ARGUMENTS"`) must
+/// receive them as data: the refused call's `$(…)` does not run there.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_calls_arguments_and_reason_reach_the_hook_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("M");
+    let (reason_out, args_out) = (dir.path().join("reason"), dir.path().join("args"));
+    let hook = make_command_hook(
+        HookEvent::PermissionDenied,
+        HookKind::Observer,
+        &format!(
+            r#"printf '%s\n' "$DENY_REASON" > '{}'; printf '%s' "$ARGUMENTS" > '{}'"#,
+            reason_out.display(),
+            args_out.display()
+        ),
+    );
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_tool_permissions(crate::config::types::policies::ToolPermissionsConfig {
+            default: crate::extension::PermissionAction::Allow,
+            overrides: std::collections::HashMap::from([(
+                "echo".to_string(),
+                crate::extension::PermissionAction::Deny,
+            )]),
+        })
+        .with_hook_executor(Arc::new(HookExecutor::new(vec![hook])), "test-session");
+    let input = json!({ "x": format!("$(touch {})", marker.display()) });
+    let err = svc.execute("echo", input.clone()).await.unwrap_err();
+    let ToolError::PermissionDenied { reason, .. } = &err else {
+        panic!("expected PermissionDenied, got {err:?}"); // rust-doctor-disable-line panic-in-library
+    };
+    assert!(
+        reason.contains('`'),
+        "premise: the policy reason quotes in backticks: {reason}"
+    );
+    assert!(
+        !marker.exists(),
+        "the refused call's `$(…)` ran in the hook"
+    );
+    let read = |p: &PathBuf| std::fs::read_to_string(p).expect("the hook ran");
+    assert_eq!(read(&reason_out), format!("{reason}\n"));
+    assert_eq!(read(&args_out), input.to_string());
 }
 
 #[tokio::test]
@@ -1631,7 +1933,11 @@ async fn declared_confirmation_tool_blocked_when_denied() {
         .with_confirmation(StdArc::clone(&requester) as _);
 
     match svc.execute("danger", json!({})).await {
-        Err(ToolError::Execution { name, .. }) => assert_eq!(name, "danger"),
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::Person,
+            ..
+        }) => assert_eq!(name, "danger"),
         other => panic!("denied confirmation must block, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
     assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
@@ -1643,7 +1949,11 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
     // never silently auto-run.
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
     match svc.execute("danger", json!({})).await {
-        Err(ToolError::Execution { name, cause }) => {
+        Err(ToolError::Refused {
+            name,
+            by: crate::tools::service::RefusedBy::NobodyAsked,
+            reason: cause,
+        }) => {
             assert_eq!(name, "danger");
             assert!(
                 cause.contains("approval channel is available"),
@@ -1656,7 +1966,7 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
                 "unexpected cause: {cause}"
             );
         }
-        other => panic!("expected fail-closed Execution error, got: {other:?}"), // rust-doctor-disable-line panic-in-library
+        other => panic!("expected a fail-closed refusal, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -2172,7 +2482,13 @@ async fn ask_tool_without_requester_fails_closed() {
         ));
     let err = svc.execute("alpha", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "Ask without approval transport must fail closed, got {err:?}"
     );
 }
@@ -2562,7 +2878,7 @@ async fn approval_gates_no_longer_force_global_claims() {
     }
 }
 
-/// Claims must judge the CANONICAL name, mirroring `execute_inner`: an alias
+/// Claims must judge the CANONICAL name, mirroring `execute_gated`: an alias
 /// spelling (`file.ops`) must resolve to the same inner tool and yield the
 /// same bounded claim the canonical spelling gets — otherwise the alias falls
 /// to the conservative `Global` and over-serializes.
@@ -2608,7 +2924,13 @@ async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
     // `agent_delete` is destructive → the Auto tier raises it to `Ask`.
     let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "an unattended confirm-gated call must fail closed, got {err:?}"
     );
     assert_eq!(
@@ -2887,6 +3209,11 @@ async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_hea
     let (_scratch, hygiene) = hygiene_store("failing_test_run");
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(FailingTestRunner));
+    // A retrieval tool to read the offload back: without one nothing is
+    // offloaded (see `an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload`).
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
         .with_result_store(hygiene);
 
@@ -2965,11 +3292,105 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
     );
 }
 
+/// T-G12: the recovery footer is an instruction to the model ("use
+/// `ctx_search` …"), so it may only name a retrieval tool this turn can
+/// actually dispatch. Both ways a tool stops being callable are exercised —
+/// absent from the agent's allow set, and denied by `[policies.tool_permissions]`
+/// — plus the positive half, so a footer that simply never names anything
+/// cannot pass.
+#[tokio::test]
+async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
+    use crate::extension::PermissionAction;
+
+    async fn footer_of(svc: ScopedToolService) -> String {
+        let out = svc.execute("bash", json!({})).await.expect("tool succeeds");
+        let text = out
+            .value
+            .as_str()
+            .expect("layer 2 flattens to text")
+            .to_string();
+        assert!(
+            text.contains("[Full output persisted: "),
+            "precondition: the result was offloaded:\n{text}"
+        );
+        text
+    }
+    fn registry() -> StdArc<LoopToolRegistry> {
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(FailingTestRunner));
+        r.register(Box::new(StubTool {
+            tool_name: "ctx_search",
+        }));
+        r.register(Box::new(StubTool {
+            tool_name: "file_read",
+        }));
+        StdArc::new(r)
+    }
+    let allow =
+        |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| (*n).to_string()).collect() };
+
+    // Positive half: both callable ⇒ the search hint is offered.
+    let (_s1, store) = hygiene_store("footer_both");
+    let both = footer_of(
+        ScopedToolService::new(registry(), allow(&["bash", "ctx_search", "file_read"]))
+            .with_result_store(store),
+    )
+    .await;
+    assert!(both.contains("ctx_search("), "both callable:\n{both}");
+
+    // Not in the agent's allow set.
+    let (_s2, store) = hygiene_store("footer_not_allowed");
+    let not_allowed = footer_of(
+        ScopedToolService::new(registry(), allow(&["bash", "file_read"])).with_result_store(store),
+    )
+    .await;
+    assert!(
+        !not_allowed.contains("ctx_search"),
+        "ctx_search is not in the allow set, yet the footer names it:\n{not_allowed}"
+    );
+    assert!(
+        not_allowed.contains("file_read"),
+        "the callable fallback must be named instead:\n{not_allowed}"
+    );
+
+    // Denied by policy (and hidden from the model's list).
+    let (_s3, store) = hygiene_store("footer_denied");
+    let denied = footer_of(
+        ScopedToolService::new(registry(), BTreeSet::new())
+            .with_tool_permissions(perms(
+                PermissionAction::Allow,
+                &[("ctx_search", PermissionAction::Deny)],
+            ))
+            .with_result_store(store),
+    )
+    .await;
+    assert!(
+        !denied.contains("ctx_search"),
+        "ctx_search is policy-denied, yet the footer names it:\n{denied}"
+    );
+    assert!(denied.contains("file_read"), "fallback:\n{denied}");
+
+    // Neither callable ⇒ nothing is offloaded: a bare path the model has no
+    // tool to open is a dead handle. The cut says so instead.
+    let (_s4, store) = hygiene_store("footer_neither");
+    let neither = ScopedToolService::new(registry(), allow(&["bash"]))
+        .with_result_store(store)
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let neither = neither.value.as_str().expect("flattened").to_string();
+    assert!(
+        !neither.contains("[Full output persisted: "),
+        "no retrieval tool is callable, so nothing may be offloaded:\n{neither}"
+    );
+    assert!(neither.contains("no retrieval tool"), "{neither}");
+}
+
 // -------------------------------------------------------------------------
 // Extension usage recording at the chokepoint
 //
 // These assert the EFFECT (a row exists in the sidecar), not that a function
-// was called: delete the `record_call_detached` line in `execute_inner` and
+// was called: delete the `record_call_detached` line in `execute_gated` and
 // they go red. A test that only counted calls would stay green if the write
 // were routed to a store nobody reads.
 // -------------------------------------------------------------------------
@@ -3176,7 +3597,13 @@ async fn a_session_grant_does_not_survive_into_an_unattended_run() {
         .with_unattended(true);
     let err = unattended.execute("danger", json!({})).await.unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "a remembered grant must not authorize an unattended run, got {err:?}"
     );
     assert_eq!(
@@ -3236,7 +3663,13 @@ async fn a_persistent_grant_does_not_survive_into_an_unattended_run() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, ToolError::Execution { .. }),
+        matches!(
+            err,
+            ToolError::Refused {
+                by: crate::tools::service::RefusedBy::NobodyAsked,
+                ..
+            }
+        ),
         "a persistent grant must not authorize an unattended run, got {err:?}"
     );
     assert_eq!(
@@ -4266,5 +4699,152 @@ async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
         ),
         "the confirm card parks as `Approval`, under the ambient call id: {:?}",
         rows[0].event
+    );
+}
+
+/// Reports the retrieval tools its dispatch scoped for it.
+struct RecoveryProbe;
+
+#[async_trait::async_trait]
+impl LoopTool for RecoveryProbe {
+    fn name(&self) -> &str {
+        "recovery_probe"
+    }
+    fn description(&self) -> &str {
+        "reports dispatch_recovery_tools"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        let seen = match crate::tools::result_processing::dispatch_recovery_tools() {
+            Some(t) => format!("ctx_search={} file_read={}", t.ctx_search, t.file_read),
+            None => "unscoped".to_string(),
+        };
+        LoopToolResult::Success {
+            output: json!(seen),
+        }
+    }
+}
+
+/// A tool that offloads its own output (`web_fetch`'s fetch by intent) sees
+/// the same callable retrieval tools Layer 2 derives for this dispatch — here
+/// `file_read` is registered and `ctx_search` is not — so its footer never
+/// names a tool the model cannot call.
+///
+/// Mutation-checked: dropping the dispatcher's `with_recovery_tools` scope
+/// turns this red (`unscoped`).
+#[tokio::test]
+async fn a_dispatched_tool_sees_the_dispatchs_callable_retrieval_tools() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(RecoveryProbe));
+    registry.register(Box::new(NamedStub::new("file_read")));
+    let svc = ScopedToolService::new(Arc::new(registry), BTreeSet::new());
+    let out = svc
+        .execute("recovery_probe", json!({}))
+        .await
+        .expect("the probe runs");
+    let text = out.value.as_str().unwrap_or_default().to_string();
+    assert!(
+        text.contains("ctx_search=false file_read=true"),
+        "got {text:?}"
+    );
+}
+
+/// A subagent's allowlist narrows the retrieval set for everything under it —
+/// the dispatched tool's own view and Layer 2's footer — through the real
+/// chain (`AllowlistToolService` → `ScopedToolService`). The inner dispatcher
+/// knows only its own gates, under which both retrieval tools are callable;
+/// the wrapper's narrowing (no `ctx_search`) must win.
+///
+/// Mutation-checked: dropping the allowlist's `with_recovery_tools` scope, or
+/// letting an inner scope replace an outer one instead of intersecting, turns
+/// this red.
+#[tokio::test]
+async fn an_allowlist_narrows_the_retrieval_set_under_it() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(RecoveryProbe));
+    registry.register(Box::new(FailingTestRunner));
+    registry.register(Box::new(StubTool {
+        tool_name: "ctx_search",
+    }));
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
+    let (_scratch, store) = hygiene_store("allowlist_chain");
+    let parent: StdArc<dyn ToolService> = StdArc::new(
+        ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
+    );
+    let mut def = crate::agents::AgentDef::new("narrow", crate::agents::AgentMode::SubAgent);
+    def.allowed_tools = ["recovery_probe", "bash", "file_read"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let child =
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(parent, StdArc::new(def));
+
+    let seen = child
+        .execute("recovery_probe", json!({}))
+        .await
+        .expect("the probe runs");
+    assert_eq!(
+        seen.value.as_str(),
+        Some("ctx_search=false file_read=true"),
+        "the tool's own view"
+    );
+
+    let out = child
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let text = out.value.as_str().expect("flattened").to_string();
+    let footer = text
+        .split("[Full output persisted: ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("precondition: the result was offloaded:\n{text}"));
+    assert!(
+        !footer.contains("ctx_search"),
+        "the agent may not call ctx_search, yet Layer 2's footer names it:\n{footer}"
+    );
+    assert!(footer.contains("file_read"), "{footer}");
+}
+
+/// An agent that may call neither retrieval tool gets no offload — a path it
+/// has no tool to open is a dead handle — but a cut that says the rest is
+/// gone. Through the real chain: the inner dispatcher can call both, the
+/// allowlist removes both.
+///
+/// Mutation-checked: dropping the empty-set check in `offload` turns this red.
+#[tokio::test]
+async fn an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(FailingTestRunner));
+    registry.register(Box::new(StubTool {
+        tool_name: "ctx_search",
+    }));
+    registry.register(Box::new(StubTool {
+        tool_name: "file_read",
+    }));
+    let (_scratch, store) = hygiene_store("no_retrieval_chain");
+    let parent: StdArc<dyn ToolService> = StdArc::new(
+        ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
+    );
+    let mut def = crate::agents::AgentDef::new("sealed", crate::agents::AgentMode::SubAgent);
+    def.allowed_tools = vec!["bash".to_string()];
+    let child =
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(parent, StdArc::new(def));
+
+    let out = child
+        .execute("bash", json!({}))
+        .await
+        .expect("tool succeeds");
+    let text = out.value.as_str().expect("flattened").to_string();
+    assert!(
+        !text.contains("[Full output persisted: "),
+        "an offload this agent cannot read back:\n{text}"
+    );
+    assert!(
+        text.contains("no retrieval tool"),
+        "the cut says so:\n{text}"
     );
 }

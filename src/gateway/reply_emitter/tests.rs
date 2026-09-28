@@ -782,6 +782,8 @@ mod media_cleanup_tests {
                     url: None,
                     path: None,
                     data: Some(b"hello".to_vec()),
+                    is_voice_note: false,
+                    is_video_note: false,
                 },
                 run_id,
             )
@@ -817,6 +819,8 @@ mod media_cleanup_tests {
                 url: None,
                 path: Some(path.to_string_lossy().into_owned()),
                 data: None,
+                is_voice_note: false,
+                is_video_note: false,
             }]));
 
         let emitter = ReplyEmitter::new(

@@ -175,9 +175,10 @@ impl AlephTool for TeamSnapshotTool {
                 // knows another team's `team_id` must not be able to
                 // enumerate its snapshot_ids (the next step would be to
                 // call Delete on each one).
-                let team_id = args.team_id.as_deref().ok_or_else(|| {
-                    AlephError::other("team_snapshot(list): team_id is required")
-                })?;
+                let team_id = args
+                    .team_id
+                    .as_deref()
+                    .ok_or_else(|| AlephError::other("team_snapshot(list): team_id is required"))?;
                 crate::builtin_tools::team::require_team_auth(
                     &*self.team_store,
                     team_id,

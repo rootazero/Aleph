@@ -131,9 +131,9 @@ impl FetchProvider for FirecrawlFetchProvider {
         // is exactly the fold `bytes_with_limit` was designed to prevent;
         // its own test asserts that an `Err` from a body stream must not
         // be reported as a size-cap answer.
-        let bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES).await.map_err(|e| {
-            AlephError::network(format!("firecrawl body read failed: {e}"))
-        })?;
+        let bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|e| AlephError::network(format!("firecrawl body read failed: {e}")))?;
         let body_bytes = bytes.ok_or_else(|| {
             AlephError::provider(format!(
                 "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"

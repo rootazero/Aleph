@@ -1220,6 +1220,110 @@ fn no_site_records_a_completed_terminate_reason() {
     );
 }
 
+/// Drive one run on the failing-provider rig with the context-budget handles
+/// boot would build from `config`, and report whether the run measured its
+/// prompt's message split — the effect only a live `HarnessDeps.context_budget`
+/// produces (`ContextBudget::before_turn` publishes it before the provider is
+/// called, so the failing provider does not hide it).
+async fn run_measures_its_messages(agent_id: &str, config: &crate::config::Config) -> bool {
+    let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
+    let mut runner = runner_with_failing_provider(fresh_service(), agent_id);
+    runner.context_budget_config =
+        crate::orchestrator::build_context_budget_config(config, "primary", &[]);
+    runner.context_budget_refiner =
+        crate::orchestrator::build_context_budget_refiner(config, "primary");
+    let key = SessionKey::ephemeral(agent_id).to_key_string();
+    let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let result = runner
+        .run(
+            key.clone(),
+            probe_spec(agent_id),
+            FlowInput::Prompt("measure me".into()),
+            std::sync::Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx,
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            None,
+            "budget-probe-run".to_string(),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "the rig's provider rejects every call; got {result:?}"
+    );
+    let record = registry
+        .latest(&key)
+        .expect("the runner records a prompt-size row for every run");
+    record.messages.is_some()
+}
+
+/// Default on, end to end: a config that never wrote `[context_budget]` gives
+/// the run a live context budget, and an explicit `enabled = false` does not.
+///
+/// Asserts the effect (the run measured its message split), not the handle —
+/// dropping the builder's result on the way to the runner turns this red.
+#[tokio::test]
+async fn a_config_without_a_context_budget_section_runs_with_one() {
+    let no_section = crate::config::Config::default();
+    assert!(no_section.context_budget.is_none());
+    assert!(
+        run_measures_its_messages("default-on-budget-probe", &no_section).await,
+        "a missing [context_budget] must reach the harness as a live budget"
+    );
+
+    let opted_out = crate::config::Config {
+        context_budget: Some(crate::ContextBudgetToml {
+            enabled: false,
+            ..crate::ContextBudgetToml::default()
+        }),
+        ..crate::config::Config::default()
+    };
+    assert!(
+        !run_measures_its_messages("opted-out-budget-probe", &opted_out).await,
+        "an explicit enabled = false must leave the run without a budget"
+    );
+}
+
+/// Context management on by default reaches the system prompt too: a default
+/// install's prompt gets the window-sized char cap and a token hard gate,
+/// while an explicit `enabled = false` keeps the legacy fixed cap with no gate.
+#[test]
+fn a_default_install_sizes_and_gates_the_system_prompt() {
+    use crate::thinker::prompt_budget::TokenBudget;
+    let run_budget = |config: &crate::config::Config| {
+        crate::orchestrator::build_context_budget_config(config, "primary", &[])
+            .map(|c| c.token_budget)
+    };
+
+    let window = run_budget(&crate::config::Config::default()).expect("on by default");
+    let on = system_prompt_budget(Some(window), None);
+    let sized = TokenBudget::from_context_window(window);
+    assert!(on.max_total_tokens.is_some(), "the token hard gate is on");
+    assert_eq!(on.max_total_tokens, sized.max_total_tokens);
+    assert_eq!(on.max_total_chars, sized.max_total_chars);
+
+    let opted_out = crate::config::Config {
+        context_budget: Some(crate::ContextBudgetToml {
+            enabled: false,
+            ..crate::ContextBudgetToml::default()
+        }),
+        ..crate::config::Config::default()
+    };
+    let off = system_prompt_budget(run_budget(&opted_out), None);
+    assert_eq!(
+        off.max_total_tokens, None,
+        "no token gate when switched off"
+    );
+    assert_eq!(off.max_total_chars, TokenBudget::default().max_total_chars);
+}
+
 /// G1b. Program order — thinking, then the turn boundary, then text —
 /// survives into seq order through the one drain, with every frame produced
 /// by its REAL producer: `BroadcastCallback` for the reasoning and text

@@ -8,8 +8,11 @@ pub mod cheap_passes;
 pub mod preflight;
 pub mod pressure;
 
-use crate::context::budget::pressure::{estimate_message_tokens_aware, estimate_tokens_aware};
+use crate::context::budget::pressure::{
+    estimate_message_tokens_split, estimate_tokens_aware, MessageTokenSplit,
+};
 use crate::providers::message::UnifiedMessage;
+use crate::providers::reasoning_replay::ReasoningReplay;
 
 // =============================================================================
 // ContextPressure
@@ -73,13 +76,45 @@ impl ContextPressure {
     /// schema actually sent to the provider. Keeping it a plain `usize` (rather
     /// than a `&[ToolDefinition]`) decouples this module from any tool-def type
     /// and lets the harness count the exact wire schema (`tool_metadata::ToolDefinition`).
-    pub(crate) fn compute(
-        messages: &[UnifiedMessage],
+    ///
+    /// `messages` is any sequence of message borrows — in production the
+    /// reasoning-replay projection, borrowed (`ReasoningReplay::projected`), so
+    /// computing pressure never clones the history.
+    pub(crate) fn compute<I>(
+        messages: I,
         system_prompt: &str,
         tool_schema_tokens: usize,
         token_budget: u64,
         ratio: f64,
-    ) -> Self {
+    ) -> Self
+    where
+        I: IntoIterator,
+        I::Item: std::borrow::Borrow<UnifiedMessage>,
+    {
+        Self::compute_with_split(
+            messages,
+            system_prompt,
+            tool_schema_tokens,
+            token_budget,
+            ratio,
+        )
+        .0
+    }
+
+    /// [`Self::compute`], also returning the messages' estimate split by kind
+    /// — from the same single pass, so the split sums to the snapshot's
+    /// message tokens exactly.
+    pub(crate) fn compute_with_split<I>(
+        messages: I,
+        system_prompt: &str,
+        tool_schema_tokens: usize,
+        token_budget: u64,
+        ratio: f64,
+    ) -> (Self, MessageTokenSplit)
+    where
+        I: IntoIterator,
+        I::Item: std::borrow::Borrow<UnifiedMessage>,
+    {
         // Content-aware estimation: `ratio` is the prose anchor, but CJK/code
         // content overrides it with denser ratios. This fixes the flat-ratio
         // blind spot (a fixed 3.5 under-counts CJK ~2.3× and code ~1.4×) that
@@ -94,13 +129,13 @@ impl ContextPressure {
         // tokens. `estimate_message_tokens_aware` adds the per-image charge so a
         // vision-heavy context reports its true pressure and compaction fires in
         // time. Image-free messages are byte-identical to the old text estimate.
-        let msg_tokens: usize = messages
-            .iter()
-            .map(|m| estimate_message_tokens_aware(m, ratio))
-            .sum();
-        let used = overhead + msg_tokens;
+        let mut split = MessageTokenSplit::default();
+        for m in messages {
+            split += estimate_message_tokens_split(std::borrow::Borrow::borrow(&m), ratio);
+        }
+        let used = overhead + split.total();
         let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
-        Self {
+        let pressure = Self {
             used_tokens: used,
             budget_tokens: budget,
             ratio: if budget == 0 {
@@ -110,7 +145,8 @@ impl ContextPressure {
             },
             overhead_tokens: overhead,
             available_for_messages: budget.saturating_sub(overhead),
-        }
+        };
+        (pressure, split)
     }
 
     /// Scale every token figure by a calibration `factor` (observed / estimated)
@@ -278,6 +314,17 @@ pub struct ContextBudget {
     /// `None` until the first observation — the estimate then runs uncalibrated
     /// (factor 1.0), keeping behaviour byte-identical to the pre-calibration path.
     calibration: Option<f64>,
+    /// The primary target's reasoning policy: pressure counts the reasoning
+    /// the wire will carry, via the same projection `HttpProvider` applies.
+    reasoning_replay: ReasoningReplay,
+    /// The run's provider clears old tool results server-side, so the prompt
+    /// it reports is post-clearing while the estimate is not — that ratio is
+    /// not a tokenizer ratio, and calibration must not learn it.
+    server_clears_tool_results: bool,
+    /// The session and turn this budget measures prompts for, when its runner
+    /// told it ([`Self::publish_message_tokens_as`]). Each measured prompt's
+    /// message split is then recorded on that turn's prompt-size record.
+    breakdown_turn: Option<(String, u64)>,
 }
 
 impl ContextBudget {
@@ -317,6 +364,52 @@ impl ContextBudget {
             split_count: 0,
             max_splits: config.max_splits,
             calibration: None,
+            reasoning_replay: ReasoningReplay::default(),
+            server_clears_tool_results: false,
+            breakdown_turn: None,
+        }
+    }
+
+    /// Count reasoning as `replay` sends it (the serving provider's
+    /// [`AiProvider::reasoning_replay`](crate::providers::AiProvider::reasoning_replay)).
+    pub fn set_reasoning_replay(&mut self, replay: ReasoningReplay) {
+        self.reasoning_replay = replay;
+    }
+
+    /// The reasoning policy pressure is counted under.
+    #[must_use]
+    pub const fn reasoning_replay(&self) -> &ReasoningReplay {
+        &self.reasoning_replay
+    }
+
+    /// The run's provider clears old tool results server-side
+    /// ([`AiProvider::clears_tool_results_server_side`](crate::providers::AiProvider::clears_tool_results_server_side)).
+    /// Freezes calibration for this budget: see [`Self::observe_actual_usage`].
+    pub fn set_server_clears_tool_results(&mut self, clears: bool) {
+        self.server_clears_tool_results = clears;
+    }
+
+    /// Record every measured prompt's message tokens, split by kind, on
+    /// `session_key`'s prompt-size record for `context.breakdown`. The figures
+    /// are the uncalibrated estimate, like every other breakdown row.
+    ///
+    /// Call it after the run's `record_turn`: the budget binds to the turn the
+    /// record holds now, so a later run's record never receives this run's
+    /// figures. With no record (or no registry) there is nothing to bind to,
+    /// and nothing is recorded.
+    pub fn publish_message_tokens_as(&mut self, session_key: impl Into<String>) {
+        let session_key = session_key.into();
+        self.breakdown_turn = crate::thinker::prompt_size_registry::global_prompt_size_registry()
+            .and_then(|reg| reg.current_stamp(&session_key))
+            .map(|turn| (session_key, turn));
+    }
+
+    fn publish(&self, split: MessageTokenSplit) {
+        let Some((key, turn)) = self.breakdown_turn.as_ref() else {
+            return;
+        };
+        if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+            reg.record_messages(key, *turn, split);
         }
     }
 
@@ -369,7 +462,7 @@ impl ContextBudget {
         tool_schema_tokens: usize,
     ) -> ContextPressure {
         ContextPressure::compute(
-            messages,
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
@@ -388,15 +481,16 @@ impl ContextBudget {
         system_prompt: &str,
         tool_schema_tokens: usize,
     ) -> LoopDirective {
-        let pressure = ContextPressure::compute(
-            messages,
+        let (pressure, split) = ContextPressure::compute_with_split(
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        )
-        .calibrated(self.calibration.unwrap_or(1.0));
+        );
+        let pressure = pressure.calibrated(self.calibration.unwrap_or(1.0));
         self.last_pressure = Some(pressure);
+        self.publish(split);
 
         // Bootstrap overhead warnings (system prompt + tool definitions)
         if pressure.budget_tokens > 0 {
@@ -488,14 +582,15 @@ impl ContextBudget {
         let Some(before) = self.last_pressure else {
             return;
         };
-        let after = ContextPressure::compute(
-            messages,
+        let (after, split) = ContextPressure::compute_with_split(
+            self.reasoning_replay.projected(messages),
             system_prompt,
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        )
-        .calibrated(self.calibration.unwrap_or(1.0));
+        );
+        let after = after.calibrated(self.calibration.unwrap_or(1.0));
+        self.publish(split);
         if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
             self.circuit_breaker.record_success();
         }
@@ -519,7 +614,18 @@ impl ContextBudget {
     /// behaviour that the fixed char-per-token ratio cannot capture. This is
     /// strictly an accuracy improvement to the estimate that already drives every
     /// compaction decision; it adds no new decision category and makes no LLM call.
+    ///
+    /// Not while the run's provider clears old tool results server-side: the
+    /// reported prompt is then post-clearing and the estimate is not, so the
+    /// ratio would sink the factor — and the runner carries the factor over to
+    /// the next run on the same model, which may not clear (another host, OAuth,
+    /// a failover, the setting off) and would then under-count and compact late.
+    /// Such a run keeps whatever factor it was seeded with; its local estimate
+    /// over-counts once the server starts clearing (a documented gap).
     pub fn observe_actual_usage(&mut self, observed_prompt_tokens: usize) {
+        if self.server_clears_tool_results {
+            return;
+        }
         let Some(p) = self.last_pressure else {
             return;
         };
@@ -566,9 +672,19 @@ impl ContextBudget {
     /// Record that a session-split completed. Increments the per-run split
     /// counter; once it reaches `max_splits`, further breaker trips fall back
     /// to `CompactToFit`.
-    pub const fn record_split(&mut self) {
+    ///
+    /// The run now continues in a child session, so the prompts this budget
+    /// measures from here on are the child's: it stops recording them on the
+    /// session it was told, and clears what it recorded there, rather than
+    /// report the child's conversation as the parent's.
+    pub fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
         self.circuit_breaker.reset();
+        if let Some((key, stamp)) = self.breakdown_turn.take() {
+            if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+                reg.clear_messages(&key, stamp);
+            }
+        }
     }
 }
 
@@ -591,6 +707,107 @@ mod tests {
             circuit_breaker_max: 3,
             max_splits: 3,
         }
+    }
+
+    /// T-G8: a budget told its session records each measured prompt's
+    /// message split on that session's turn — of the projection the target is
+    /// sent, so a target that gets no reasoning shows none — and an untold
+    /// budget records nothing.
+    ///
+    /// Mutation-checked: dropping `publish` from `before_turn`, or measuring
+    /// `messages.iter()` instead of the projection, turns this red.
+    #[test]
+    fn a_measured_prompt_publishes_its_projected_split_for_its_session() {
+        use crate::providers::message::ContentBlock;
+        let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
+        let key = format!("test:breakdown:{}", uuid::Uuid::new_v4());
+        let messages_of = |key: &str| registry.latest(key).and_then(|r| r.messages);
+        let msgs = vec![
+            UnifiedMessage::user("question"),
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "reason about it ".repeat(50),
+                        signature: Some("sig".into()),
+                        earlier_turn: false,
+                    },
+                    ContentBlock::ToolCall {
+                        id: "c1".into(),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({ "command": "ls" }),
+                        thought_signature: None,
+                    },
+                ],
+            },
+            UnifiedMessage::tool_result_json(
+                "c1",
+                "bash",
+                serde_json::json!("some output line\n".repeat(100)),
+                false,
+            ),
+        ];
+        let mut budget = ContextBudget::new(&default_config());
+        budget.publish_message_tokens_as(key.clone());
+        let _ = budget.before_turn(&msgs, "", 0);
+        registry.record_turn(&key, None, vec![]);
+        assert_eq!(
+            messages_of(&key),
+            None,
+            "a budget told before the turn was recorded has no turn to write to"
+        );
+
+        let mut budget = ContextBudget::new(&default_config());
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert_eq!(messages_of(&key), None, "untold budgets publish nothing");
+
+        budget.publish_message_tokens_as(key.clone());
+        let _ = budget.before_turn(&msgs, "", 0);
+        let kept = messages_of(&key).expect("published");
+        assert!(
+            kept.reasoning > 0 && kept.tool_results > 0 && kept.other > 0,
+            "{kept:?}"
+        );
+
+        budget.set_reasoning_replay(ReasoningReplay::Drop);
+        let _ = budget.before_turn(&msgs, "", 0);
+        let dropped = messages_of(&key).expect("published");
+        assert_eq!(
+            dropped.reasoning, 0,
+            "a target sent no reasoning shows none"
+        );
+        assert_eq!(dropped.tool_results, kept.tool_results);
+    }
+
+    /// F5: after a session split the run's prompts are the child's. The
+    /// parent's record must read as unknown, never as the child's
+    /// conversation — neither what was recorded before the split nor anything
+    /// measured after it.
+    ///
+    /// Mutation-checked: leaving the binding in place in `record_split` turns
+    /// this red.
+    #[test]
+    fn after_a_split_the_parent_record_holds_no_messages() {
+        let registry = crate::thinker::prompt_size_registry::install_test_prompt_size_registry();
+        let key = format!("test:split:{}", uuid::Uuid::new_v4());
+        registry.record_turn(&key, None, vec![]);
+        let msgs = vec![UnifiedMessage::user("question")];
+        let mut budget = ContextBudget::new(&default_config());
+        budget.publish_message_tokens_as(key.clone());
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert!(registry.latest(&key).unwrap().messages.is_some());
+
+        budget.record_split();
+        assert_eq!(
+            registry.latest(&key).unwrap().messages,
+            None,
+            "cleared at the split"
+        );
+        let _ = budget.before_turn(&msgs, "", 0);
+        assert_eq!(
+            registry.latest(&key).unwrap().messages,
+            None,
+            "the child's prompt is not written onto the parent"
+        );
     }
 
     #[test]
@@ -952,6 +1169,42 @@ mod tests {
         budget.before_turn(&msgs, "", 0);
         budget.observe_actual_usage(0);
         assert_eq!(budget.calibration(), None);
+    }
+
+    /// A run whose provider clears old tool results server-side reports a
+    /// post-clearing prompt against a pre-clearing estimate. It must learn
+    /// nothing from that: the factor it was seeded with — the one the runner
+    /// writes back to the cross-run carry-over — is left exactly as it was,
+    /// and an unseeded one stays unseeded (so nothing is written back at all).
+    /// The positive half: the same observation on a non-clearing budget moves
+    /// the factor.
+    #[test]
+    fn a_clearing_run_neither_learns_nor_moves_the_carried_factor() {
+        let config = ContextBudgetConfig {
+            token_budget: 10_000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let msgs = vec![UnifiedMessage::user("x".repeat(1000))];
+        let run = |clears: bool, seed: Option<f64>| {
+            let mut budget = ContextBudget::new(&config);
+            budget.set_server_clears_tool_results(clears);
+            if let Some(seed) = seed {
+                budget.seed_calibration(seed);
+            }
+            budget.before_turn(&msgs, "", 0);
+            // The server cleared most of it: it reports far fewer tokens.
+            budget.observe_actual_usage(300);
+            budget.calibration()
+        };
+
+        assert_eq!(run(true, Some(1.2)), Some(1.2));
+        assert_eq!(run(true, None), None);
+        let learned = run(false, Some(1.2)).expect("a non-clearing run learns");
+        assert!(
+            learned < 1.2,
+            "precondition: the observation moves the factor"
+        );
     }
 
     #[test]

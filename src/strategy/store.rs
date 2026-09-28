@@ -99,17 +99,19 @@ impl StrategyStore {
             )
             .optional()
             .map_err(|e| AlephError::other(format!("strategy get: {e}")))?;
-        Ok(row.and_then(|j| match serde_json::from_str::<Strategy>(&j) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!(
-                    key = %key,
-                    error = %e,
-                    "strategy store: corrupt row, returning None (consider delete + repair)"
-                );
-                None
-            }
-        }))
+        Ok(
+            row.and_then(|j| match serde_json::from_str::<Strategy>(&j) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!(
+                        key = %key,
+                        error = %e,
+                        "strategy store: corrupt row, returning None (consider delete + repair)"
+                    );
+                    None
+                }
+            }),
+        )
     }
 
     /// Remove the strategy for `key` (no-op if absent).

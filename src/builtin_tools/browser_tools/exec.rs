@@ -607,10 +607,7 @@ fn plan_action(
 /// A repeat/if condition into its [`WaitCondition`]. Exactly one of the four
 /// fields must be set — the same mutual-exclusion contract as
 /// `browser_wait_for`'s five-way mutex, and the same error wording style.
-fn resolve_condition(
-    c: &ExecCondition,
-    what: &str,
-) -> std::result::Result<WaitCondition, String> {
+fn resolve_condition(c: &ExecCondition, what: &str) -> std::result::Result<WaitCondition, String> {
     let set = [
         c.text.as_ref().map(|t| ("text", t)),
         c.text_gone.as_ref().map(|t| ("text_gone", t)),
@@ -917,7 +914,7 @@ async fn read_guard(
 ///
 /// This used to decline the offload, reasoning that the spill path "is the
 /// snapshot tool's own, keyed to its call id, and a second writer of it would be
-/// a second source". That reads the mechanism backwards: `recovery_footer` is
+/// a second source". That reads the mechanism backwards: `recovery_footer_for` is
 /// the harness's generic spill, keyed by `(tool_call_id, tool_name)` and already
 /// shared with `harness::agent::act`'s turn spill — `browser_exec` has its own
 /// call id, so it is the first writer of its own entry.
@@ -927,13 +924,18 @@ async fn read_guard(
 /// navigations, so by the time the model could act on "take a standalone
 /// browser_snapshot" that advice names a page which no longer exists. The
 /// dropped tail was unrecoverable, and the note said otherwise.
-fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> String {
+///
+/// Each step's offload has its own key ([`step_offload_key`]): a procedure can
+/// cut more than one snapshot, and under one `(call id, tool)` key the second
+/// write would replace the first blob and re-indexing would replace its
+/// sections — step 1's footer would then open step N's tree.
+fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize, step: usize) -> String {
     let (text, truncated) = super::bound_content(raw, max_chars);
     let wrapped = super::redact_wrap(manager, &text);
     if !truncated {
         return wrapped;
     }
-    match super::offload_full_content(manager, BrowserExecTool::NAME, raw) {
+    match super::offload_full_content(manager, &step_offload_key(step), raw) {
         Some(footer) => format!("{wrapped}\n{footer}"),
         // No store or no call id (direct `tools.invoke`, tests): say the tail is
         // gone rather than name a lever that cannot bring it back.
@@ -945,13 +947,22 @@ fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> Str
     }
 }
 
+/// The tool-name half of step `step`'s offload key: `browser_exec-step-{step}`.
+/// It names the blob file (`{call id}_{key}.txt`, still under the call's own
+/// `{call id}_` prefix) and the index source, so two steps of one procedure
+/// write two blobs.
+fn step_offload_key(step: usize) -> String {
+    format!("{}-step-{step}", BrowserExecTool::NAME)
+}
+
 /// The presentation-aware read ([`crate::browser::backend::BrowserBackend::snapshot_presented`]). A
 /// backend that renders from a `PageState` answers with the budget already
 /// applied and the omitted high-value controls named in `text` — that text is
 /// emitted VERBATIM (redacted and fenced, never re-bounded: a second
 /// `bound_content` could slice the controls section in half, and the contract
 /// already guarantees `text ≤ max_chars`). The FULL text still rides to the
-/// same offload [`snapshot_output`] uses, so a truncation the procedure
+/// same offload [`snapshot_output`] uses — keyed by the step, so two presented
+/// snapshots of one procedure write two blobs — so a truncation the procedure
 /// cannot scroll back to stays recoverable (FL §3.12 ⑮ / 第五轮⑨). Every
 /// other backend presents `snapshot()`'s text uncut (`truncated: false`), and
 /// that arm delegates — the pre-wiring pipeline, byte for byte, including
@@ -960,13 +971,14 @@ fn snapshot_presented_output(
     manager: &ProfileManager,
     presented: &crate::browser::types::PresentedSnapshot,
     max_chars: usize,
+    step: usize,
 ) -> String {
     if !presented.truncated {
-        return snapshot_output(manager, &presented.text, max_chars);
+        return snapshot_output(manager, &presented.text, max_chars, step);
     }
     let wrapped = super::redact_wrap(manager, &presented.text);
     let full = presented.full_text.as_deref().unwrap_or(&presented.text);
-    match super::offload_full_content(manager, BrowserExecTool::NAME, full) {
+    match super::offload_full_content(manager, &step_offload_key(step), full) {
         Some(footer) => format!("{wrapped}\n{footer}"),
         // The controls the cut removed are already named inside the fence, so
         // the honest note here is the offload's absence, not the tail's loss.
@@ -1040,6 +1052,7 @@ async fn execute_actions(
         started: std::time::Instant::now(),
         steps_run: 0,
         refs_stale: false,
+        offload_ordinal: 0,
     };
     let mut results = Vec::with_capacity(planned.len());
     for (i, action) in planned.iter().enumerate() {
@@ -1075,6 +1088,10 @@ struct ExecRunner<'a> {
     /// a `snapshot` step clears it, because the refs it mints postdate the
     /// navigation.
     refs_stale: bool,
+    /// Per-primitive offload ordinal: every step's blob gets its own key
+    /// ([`step_offload_key`]), so nested `repeat`/`if` steps count too —
+    /// under one shared key a second write would replace the first blob.
+    offload_ordinal: usize,
 }
 
 impl ExecRunner<'_> {
@@ -1094,74 +1111,73 @@ impl ExecRunner<'_> {
         Box<dyn std::future::Future<Output = std::result::Result<StepResult, String>> + Send + 'a>,
     > {
         Box::pin(async move {
-        if self.started.elapsed().as_millis() as u64 >= MAX_EXEC_BUDGET_MS {
-            return Err(format!(
-                "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {} actions",
-                self.steps_run
-            ));
-        }
-        if self.refs_stale && carries_ref(action) {
-            // The message ENDS with the resnapshot hint — pinned by test.
-            return Err(format!(
-                "{} targets a snapshot ref, but an earlier step in this procedure \
-                 navigated; refs may be stale; take a fresh snapshot",
-                action_label(action)
-            ));
-        }
-        if let Some((action_type, verb, target)) = approval_surface(action) {
-            if let Some(message) =
-                super::check_browser_approval(self.approval_policy, action_type, verb, &target)
-                    .await
-            {
-                return Err(message);
+            if self.started.elapsed().as_millis() as u64 >= MAX_EXEC_BUDGET_MS {
+                return Err(format!(
+                    "wall-clock budget of {MAX_EXEC_BUDGET_MS}ms exhausted after {} actions",
+                    self.steps_run
+                ));
             }
-        }
-        let label = action_label(action);
-        let (outcome, mut nested) = self.dispatch(action).await?;
-        self.steps_run += 1 + nested.len();
-        // The latch moves only on SUCCESS: a failed navigation changed
-        // nothing the refs point at.
-        match action {
-            PlannedAction::Navigate(_) => self.refs_stale = true,
-            // An ACCEPTED dialog can be a `beforeunload` letting the page
-            // leave — and the answer does not say whether it was one, so
-            // the fail-closed reading is that refs captured before it may
-            // be stale. A DISMISS cannot navigate and does not latch.
-            PlannedAction::Dialog {
-                action: DialogAction::Accept,
-                ..
-            } => self.refs_stale = true,
-            // The remedy the latch message names: a fresh snapshot mints
-            // refs that postdate the navigation.
-            PlannedAction::Snapshot { .. } => self.refs_stale = false,
-            _ => {}
-        }
-        // The effect-arrival verdict, when the backend probes (the cdp
-        // one) — read AFTER the verb, per the latch contract on
-        // `last_effect_verification`. `None` on a non-probing backend
-        // serializes as absence, never as a claim.
-        let effect_verification = match action {
-            PlannedAction::Click(_) | PlannedAction::Type(..) | PlannedAction::Fill(..) => self
-                .backend
-                .last_effect_verification()
-                .map(|v| v.as_wire()),
-            _ => None,
-        };
-        let has_image = outcome.image_base64.is_some();
-        // Number the nested results within their parent.
-        for (i, r) in nested.iter_mut().enumerate() {
-            r.step = i + 1;
-        }
-        Ok(StepResult {
-            step: 0,
-            action: label,
-            status: outcome.status,
-            output: outcome.output,
-            image_base64: outcome.image_base64,
-            format: has_image.then(|| "png".into()),
-            effect_verification,
-            steps: nested,
-        })
+            if self.refs_stale && carries_ref(action) {
+                // The message ENDS with the resnapshot hint — pinned by test.
+                return Err(format!(
+                    "{} targets a snapshot ref, but an earlier step in this procedure \
+                 navigated; refs may be stale; take a fresh snapshot",
+                    action_label(action)
+                ));
+            }
+            if let Some((action_type, verb, target)) = approval_surface(action) {
+                if let Some(message) =
+                    super::check_browser_approval(self.approval_policy, action_type, verb, &target)
+                        .await
+                {
+                    return Err(message);
+                }
+            }
+            let label = action_label(action);
+            let (outcome, mut nested) = self.dispatch(action).await?;
+            self.steps_run += 1 + nested.len();
+            // The latch moves only on SUCCESS: a failed navigation changed
+            // nothing the refs point at.
+            match action {
+                PlannedAction::Navigate(_) => self.refs_stale = true,
+                // An ACCEPTED dialog can be a `beforeunload` letting the page
+                // leave — and the answer does not say whether it was one, so
+                // the fail-closed reading is that refs captured before it may
+                // be stale. A DISMISS cannot navigate and does not latch.
+                PlannedAction::Dialog {
+                    action: DialogAction::Accept,
+                    ..
+                } => self.refs_stale = true,
+                // The remedy the latch message names: a fresh snapshot mints
+                // refs that postdate the navigation.
+                PlannedAction::Snapshot { .. } => self.refs_stale = false,
+                _ => {}
+            }
+            // The effect-arrival verdict, when the backend probes (the cdp
+            // one) — read AFTER the verb, per the latch contract on
+            // `last_effect_verification`. `None` on a non-probing backend
+            // serializes as absence, never as a claim.
+            let effect_verification = match action {
+                PlannedAction::Click(_) | PlannedAction::Type(..) | PlannedAction::Fill(..) => {
+                    self.backend.last_effect_verification().map(|v| v.as_wire())
+                }
+                _ => None,
+            };
+            let has_image = outcome.image_base64.is_some();
+            // Number the nested results within their parent.
+            for (i, r) in nested.iter_mut().enumerate() {
+                r.step = i + 1;
+            }
+            Ok(StepResult {
+                step: 0,
+                action: label,
+                status: outcome.status,
+                output: outcome.output,
+                image_base64: outcome.image_base64,
+                format: has_image.then(|| "png".into()),
+                effect_verification,
+                steps: nested,
+            })
         })
     }
 
@@ -1187,8 +1203,7 @@ impl ExecRunner<'_> {
                     // evaluation ERROR aborts the whole procedure: a
                     // condition that cannot be read is neither true nor
                     // false (判据 §8), so it must never be spent as either.
-                    match eval_condition_once(self.manager, self.backend, self.tab_id, until)
-                        .await
+                    match eval_condition_once(self.manager, self.backend, self.tab_id, until).await
                     {
                         Ok(true) => {
                             held = true;
@@ -1270,27 +1285,37 @@ impl ExecRunner<'_> {
                         "the condition did not hold; the otherwise-arm ran ({} step(s))",
                         nested.len()
                     ),
-                    (false, None) => {
-                        "the condition did not hold; there is no otherwise-arm".into()
-                    }
+                    (false, None) => "the condition did not hold; there is no otherwise-arm".into(),
                 };
                 Ok((StepOutcome::read(summary), nested))
             }
-            _ => Ok((
-                run_one(self.manager, self.backend, self.tab_id, action).await?,
-                Vec::new(),
-            )),
+            _ => {
+                self.offload_ordinal += 1;
+                Ok((
+                    run_one(
+                        self.manager,
+                        self.backend,
+                        self.tab_id,
+                        action,
+                        self.offload_ordinal,
+                    )
+                    .await?,
+                    Vec::new(),
+                ))
+            }
         }
     }
 }
 
 /// Execute a single planned action, returning its status word and — for a
-/// read — its already-bounded/redacted/fenced payload.
+/// read — its already-bounded/redacted/fenced payload. `step` is the action's
+/// 1-based ordinal in the procedure; an offload it makes is keyed by it.
 async fn run_one(
     manager: &ProfileManager,
     backend: &dyn BrowserBackend,
     tab_id: &str,
     action: &PlannedAction,
+    step: usize,
 ) -> std::result::Result<StepOutcome, String> {
     // Every backend error leaves through the same egress chokepoint the read
     // steps and every standalone tool use: `BrowserError` carries raw
@@ -1355,9 +1380,7 @@ async fn run_one(
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
             Ok(StepOutcome::read(snapshot_presented_output(
-                manager,
-                &presented,
-                *max_chars,
+                manager, &presented, *max_chars, step,
             )))
         }
         PlannedAction::Evaluate(js) => {
@@ -1428,9 +1451,9 @@ async fn run_one(
         ),
         // Compound steps never arrive here — `dispatch` intercepts them and
         // recurses through `run_step`. An internal error, not a panic path.
-        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => Err(
-            "internal: repeat/if steps are executed by ExecRunner::dispatch".into(),
-        ),
+        PlannedAction::Repeat { .. } | PlannedAction::If { .. } => {
+            Err("internal: repeat/if steps are executed by ExecRunner::dispatch".into())
+        }
     }
 }
 
@@ -1540,6 +1563,58 @@ impl AlephTool for BrowserExecTool {
 
 #[cfg(test)]
 mod tests {
+    /// Two snapshot steps of one procedure, both cut: each is offloaded to its
+    /// own blob and indexed under its own source, so each step's footer reads
+    /// back that step's tree — not whichever step wrote last.
+    ///
+    /// Mutation-checked: keying every step's offload by the bare tool name
+    /// again turns this red.
+    #[tokio::test]
+    async fn two_cut_snapshots_in_one_exec_keep_two_blobs() {
+        use crate::browser::profile::BrowserSystemConfig;
+
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let tree = |tag: &str| -> String {
+            (0..4_000)
+                .map(|i| format!("- generic \"{tag} filler {i}\" [ref=e{i}]\n"))
+                .collect()
+        };
+        let (first, second) = (tree("alphastep"), tree("betastep"));
+        let identity = crate::approval::CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: "exec-two-steps".to_string(),
+        };
+        let (out1, out2) = crate::approval::with_call_identity(Some(identity), async {
+            (
+                snapshot_output(&manager, &first, 2_000, 1),
+                snapshot_output(&manager, &second, 2_000, 2),
+            )
+        })
+        .await;
+        for (out, own, other) in [
+            (&out1, "alphastep", "betastep"),
+            (&out2, "betastep", "alphastep"),
+        ] {
+            let path = crate::tools::result_store::extract_persisted_path(out)
+                .unwrap_or_else(|| panic!("the cut step is offloaded: {out}"));
+            let blob = std::fs::read_to_string(path).expect("the blob is on disk");
+            assert!(blob.contains(own), "its own tree");
+            assert!(!blob.contains(other), "not the other step's tree");
+        }
+        for (step, own) in [(1, "alphastep"), (2, "betastep")] {
+            let label =
+                crate::tools::result_store::source_label(&step_offload_key(step), "exec-two-steps");
+            let hits = store
+                .search_source(&label, own, 3)
+                .expect("the test store's index is available");
+            assert!(
+                !hits.is_empty(),
+                "step {step} is indexed under its own source"
+            );
+        }
+    }
+
     /// The offload half of [`snapshot_output`], which the real-machine fixture
     /// structurally cannot reach: `tools.invoke` establishes no call identity,
     /// so the live run only ever exercises the "no store" branch.
@@ -2104,7 +2179,9 @@ mod tests {
         // honest controls-named variant.
         assert!(
             fenced.suffix.contains("snapshot truncated to")
-                && fenced.suffix.contains("omitted interactive controls are named above"),
+                && fenced
+                    .suffix
+                    .contains("omitted interactive controls are named above"),
             "the note must name what the model already has: {}",
             fenced.suffix
         );
@@ -2708,7 +2785,10 @@ mod tests {
             "one condition probe and nothing else: {calls:?}"
         );
         assert!(calls[0].starts_with("evaluate:"), "got: {calls:?}");
-        let out = results[0].output.as_deref().expect("the repeat step reports");
+        let out = results[0]
+            .output
+            .as_deref()
+            .expect("the repeat step reports");
         assert!(out.contains("0 iteration"), "got: {out}");
         assert!(out.contains("held"), "got: {out}");
     }
@@ -2802,11 +2882,15 @@ mod tests {
         assert!(failure.is_none(), "unexpected failure: {failure:?}");
         let calls = backend.calls();
         assert!(
-            calls.iter().any(|c| c == "press_key:Tab") && !calls.iter().any(|c| c == "press_key:Enter"),
+            calls.iter().any(|c| c == "press_key:Tab")
+                && !calls.iter().any(|c| c == "press_key:Enter"),
             "the then-arm and only the then-arm: {calls:?}"
         );
         assert!(
-            results[0].output.as_deref().is_some_and(|o| o.contains("then-arm")),
+            results[0]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("then-arm")),
             "{:?}",
             results[0].output
         );
@@ -2823,11 +2907,15 @@ mod tests {
         assert!(failure.is_none(), "unexpected failure: {failure:?}");
         let calls = backend.calls();
         assert!(
-            calls.iter().any(|c| c == "press_key:Enter") && !calls.iter().any(|c| c == "press_key:Tab"),
+            calls.iter().any(|c| c == "press_key:Enter")
+                && !calls.iter().any(|c| c == "press_key:Tab"),
             "the otherwise-arm and only the otherwise-arm: {calls:?}"
         );
         assert!(
-            results[0].output.as_deref().is_some_and(|o| o.contains("otherwise-arm")),
+            results[0]
+                .output
+                .as_deref()
+                .is_some_and(|o| o.contains("otherwise-arm")),
             "{:?}",
             results[0].output
         );
@@ -2930,7 +3018,10 @@ mod tests {
         let (_r, failure) = run(&manager, &backend, &planned).await;
         let (ordinal, err) = failure.expect("an accepted dialog may have navigated");
         assert_eq!(ordinal, 2);
-        assert!(err.ends_with("refs may be stale; take a fresh snapshot"), "{err}");
+        assert!(
+            err.ends_with("refs may be stale; take a fresh snapshot"),
+            "{err}"
+        );
         assert!(
             backend.calls().iter().all(|c| !c.starts_with("click:")),
             "{:?}",
@@ -2947,10 +3038,7 @@ mod tests {
         ])
         .unwrap();
         let (_r, failure) = run(&manager, &backend, &planned).await;
-        assert!(
-            failure.is_none(),
-            "a dismiss cannot navigate: {failure:?}"
-        );
+        assert!(failure.is_none(), "a dismiss cannot navigate: {failure:?}");
     }
 
     /// Zero new approval knobs: a click nested inside a repeat is judged as
@@ -3002,7 +3090,10 @@ mod tests {
             execute_actions(&manager, Some(&policy_dyn), &backend, "1", &planned).await;
         let (ordinal, err) = failure.expect("a denied nested click must abort");
         assert_eq!(ordinal, 1, "the repeat is the top-level failing step");
-        assert!(err.contains("iteration 1"), "the nested context is named: {err}");
+        assert!(
+            err.contains("iteration 1"),
+            "the nested context is named: {err}"
+        );
         assert!(err.contains("denied by approval policy"), "{err}");
         assert_eq!(
             *policy.seen.lock().unwrap_or_else(|e| e.into_inner()),

@@ -320,7 +320,8 @@ mod tests {
         // loopback/blocked hosts as SSRF targets, so a fixture that must
         // construct successfully needs a public-looking hostname.
         let provider =
-            SearxngProvider::new("http://searxng.test:8080".to_string(), None, None, false).unwrap();
+            SearxngProvider::new("http://searxng.test:8080".to_string(), None, None, false)
+                .unwrap();
         assert_eq!(provider.name(), "searxng");
         assert!(provider.is_available());
     }
@@ -334,7 +335,8 @@ mod tests {
     #[test]
     fn test_searxng_provider_trims_trailing_slash() {
         let provider =
-            SearxngProvider::new("http://searxng.test:8080/".to_string(), None, None, false).unwrap();
+            SearxngProvider::new("http://searxng.test:8080/".to_string(), None, None, false)
+                .unwrap();
         assert_eq!(provider.base_url, "http://searxng.test:8080");
     }
 
@@ -349,7 +351,8 @@ mod tests {
     #[test]
     fn test_searxng_provider_accepts_https() {
         let provider =
-            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false).unwrap();
+            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false)
+                .unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
     }
 
@@ -370,8 +373,8 @@ mod tests {
     /// the provider treats `Some(0)` as "throttle off".
     #[test]
     fn provider_zero_interval_disables_throttle() {
-        let p =
-            SearxngProvider::new("http://searxng.test:8080".to_string(), None, Some(0), false).unwrap();
+        let p = SearxngProvider::new("http://searxng.test:8080".to_string(), None, Some(0), false)
+            .unwrap();
         assert!(p.min_interval.is_zero());
     }
 
@@ -432,14 +435,22 @@ mod tests {
     #[test]
     fn constructor_honours_the_private_network_switch_and_its_floor() {
         let refused = SearxngProvider::new("http://127.0.0.1:8080".to_string(), None, None, false);
-        let text = refused.expect_err("loopback refused by default").to_string();
+        let text = refused
+            .expect_err("loopback refused by default")
+            .to_string();
         assert!(text.contains("allow_private_network"), "{text}");
 
         let allowed = SearxngProvider::new("http://127.0.0.1:8080".to_string(), None, None, true);
-        assert!(allowed.is_ok(), "loopback allowed under the operator switch");
+        assert!(
+            allowed.is_ok(),
+            "loopback allowed under the operator switch"
+        );
 
         let lan = SearxngProvider::new("http://192.168.1.8:8080".to_string(), None, None, true);
-        assert!(lan.is_ok(), "an RFC1918 SearXNG is what the switch exists for");
+        assert!(
+            lan.is_ok(),
+            "an RFC1918 SearXNG is what the switch exists for"
+        );
 
         for floor in [
             "http://169.254.169.254/",
@@ -464,8 +475,9 @@ mod tests {
         // reject-legacy-literals branch in `classify_ssrf_target_host` covers
         // host strings that never went through URL parsing; on this path
         // there is no un-normalized input to protect.
-        assert!(SearxngProvider::new("http://0x7f000001:8080".to_string(), None, None, false)
-            .is_err());
+        assert!(
+            SearxngProvider::new("http://0x7f000001:8080".to_string(), None, None, false).is_err()
+        );
         assert!(
             SearxngProvider::new("http://0x7f000001:8080".to_string(), None, None, true).is_ok()
         );

@@ -11,11 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::mcp::manager::McpManagerHandle;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
-use super::mcp_resource::qualified_id;
+use super::mcp_resource::{qualified_id, VisibleServers};
 
 /// Arguments for `mcp_get_prompt` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -47,14 +46,14 @@ pub struct McpGetPromptOutput {
 
 /// Tool for getting MCP prompts
 pub struct McpGetPromptTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpGetPromptTool {
-    /// Create a new MCP get prompt tool
+    /// Create a new MCP get prompt tool over the servers one run may see
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -113,7 +112,7 @@ impl AlephToolDyn for McpGetPromptTool {
             // duplicated the read-resource tool's shortest-match colon loop.
             let name = &args.name;
             let Some((client, prompt_name)) =
-                super::mcp_resource::resolve_server_qualified(&self.handle, name).await
+                super::mcp_resource::resolve_server_qualified(&self.servers, name).await
             else {
                 return Err(crate::error::AlephError::NotFound(format!(
                     "No MCP server found for prompt: {name}"
@@ -197,19 +196,19 @@ pub struct McpListPromptsOutput {
 }
 
 /// Discovery counterpart to [`McpGetPromptTool`]: lists the prompt templates
-/// every connected server advertises so the model knows what it can fetch. Each
+/// every server this run may see advertises, so the model knows what it can fetch. Each
 /// entry's `name` is an opaque, server-qualified id built by
 /// [`super::mcp_resource::qualified_id`] — the exact form [`McpGetPromptTool`]
 /// parses. Capability-gated by the MCP tool bridge alongside the get-prompt tool.
 pub struct McpListPromptsTool {
-    handle: McpManagerHandle,
+    servers: VisibleServers,
 }
 
 impl McpListPromptsTool {
-    /// Create a new MCP list-prompts tool.
+    /// Create a new MCP list-prompts tool over the servers one run may see.
     #[must_use]
-    pub const fn new(handle: McpManagerHandle) -> Self {
-        Self { handle }
+    pub(crate) const fn new(servers: VisibleServers) -> Self {
+        Self { servers }
     }
 }
 
@@ -260,7 +259,7 @@ impl AlephToolDyn for McpListPromptsTool {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
         Box::pin(async move {
             let args: McpListPromptsArgs = serde_json::from_value(args)?;
-            let servers = self.handle.list_servers().await?;
+            let servers = self.servers.list_servers().await?;
 
             let mut entries = Vec::new();
             let mut truncated = false;
@@ -273,7 +272,7 @@ impl AlephToolDyn for McpListPromptsTool {
                         continue;
                     }
                 }
-                let Some(client) = self.handle.get_client(&info.id).await? else {
+                let Some(client) = self.servers.get_client(&info.id).await? else {
                     continue;
                 };
                 for p in client.list_prompts().await {

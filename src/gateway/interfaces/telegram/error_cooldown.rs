@@ -36,7 +36,9 @@ struct TypingBreakerState {
 
 /// Coarse error classification for cooldown decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ErrorKind {
+/// `#[doc(hidden)]` — exposed alongside `ErrorCooldown` for tests.
+#[doc(hidden)]
+pub enum ErrorKind {
     /// Permanent failure — bot blocked, chat deleted, 403, invalid token.
     /// No point retrying for a long time.
     Permanent,
@@ -61,8 +63,12 @@ struct CooldownEntry {
 // ---------------------------------------------------------------------------
 
 /// Returned when a conversation is in cooldown and should not be sent to.
+///
+/// `#[doc(hidden)]` — exposed alongside `ErrorCooldown` for tests; not
+/// part of Aleph's stable API.
 #[derive(Debug)]
-pub(crate) struct CooldownError {
+#[doc(hidden)]
+pub struct CooldownError {
     pub remaining: Duration,
     pub error_kind: ErrorKind,
     pub consecutive_failures: u32,
@@ -88,7 +94,14 @@ impl std::fmt::Display for CooldownError {
 ///
 /// Thread-safe: uses `DashMap` for conversation entries and `Mutex` for
 /// the typing breaker state (which includes time-decay half-open logic).
-pub(crate) struct ErrorCooldown {
+///
+/// `#[doc(hidden)]` — exposed for `tests/telegram_delivery_e2e.rs` so the
+/// wiremock tests can assert which `ErrorKind` the channel recorded (P0-C
+/// verified: `Forbidden` is split into Permanent vs Retryable by sub-kind,
+/// and a miss in `MessageNotFound` no longer parks the conversation for
+/// hours). Not part of Aleph's stable API.
+#[doc(hidden)]
+pub struct ErrorCooldown {
     cooldowns: DashMap<String, CooldownEntry>,
     /// Circuit breaker for `sendChatAction` failures. Trips after 10
     /// consecutive failures, enters half-open state after 5 minutes to
@@ -328,6 +341,15 @@ impl ErrorCooldown {
         if was_tripped {
             tracing::info!("typing circuit breaker restored after successful sendChatAction");
         }
+    }
+}
+
+/// `Default` impl exists so `clippy::new_without_default` is satisfied;
+/// promoted to `pub` for the wiremock tests in
+/// `tests/telegram_delivery_e2e.rs`, so the lint now fires on it.
+impl Default for ErrorCooldown {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

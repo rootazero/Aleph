@@ -102,9 +102,7 @@ impl SearchProvider for JinaProvider {
                 // transient failure that "retry later" undersells (a free
                 // tier's lever is the plan, not the clock).
                 return Err(match jina_response.code {
-                    Some(429) => {
-                        AlephError::rate_limit(format!("Jina returned 0 results — {msg}"))
-                    }
+                    Some(429) => AlephError::rate_limit(format!("Jina returned 0 results — {msg}")),
                     Some(401 | 403) => {
                         AlephError::authentication(NAME, format!("Jina returned 0 results — {msg}"))
                     }

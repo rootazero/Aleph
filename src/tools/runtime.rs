@@ -164,7 +164,7 @@ pub trait LoopTool: Send + Sync {
     /// - `Some(n)` — persist this tool's outputs to disk when they exceed
     ///   `n` estimated tokens; the LLM sees a `[Full output persisted: ...]`
     ///   marker instead of the full text.
-    /// - `None` — fall back to the global name table / default budget in
+    /// - `None` — fall back to the global default budget in
     ///   [`crate::tools::result_processing::resolve_result_budget`].
     ///
     /// Default returns `None`; override on tools whose outputs are large

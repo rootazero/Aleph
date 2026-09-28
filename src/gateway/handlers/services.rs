@@ -330,7 +330,7 @@ pub async fn handle_status(request: JsonRpcRequest) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::ExtensionManager;
+    use crate::extension::manager_global::test_manager_without_claude_root;
     use crate::gateway::handlers::plugins::init_extension_manager;
     use crate::sync_primitives::Arc;
 
@@ -497,7 +497,7 @@ mod tests {
     async fn test_handle_list_no_params() {
         // Initialize manager if not already done
         if !is_extension_manager_initialized() {
-            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let manager = test_manager_without_claude_root().await;
             let _ = init_extension_manager(Arc::new(manager));
         }
 
@@ -515,7 +515,7 @@ mod tests {
     async fn test_handle_list_with_filters() {
         // Initialize manager if not already done
         if !is_extension_manager_initialized() {
-            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let manager = test_manager_without_claude_root().await;
             let _ = init_extension_manager(Arc::new(manager));
         }
 
@@ -539,7 +539,7 @@ mod tests {
     async fn test_handle_status_not_found() {
         // Initialize manager if not already done
         if !is_extension_manager_initialized() {
-            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let manager = test_manager_without_claude_root().await;
             let _ = init_extension_manager(Arc::new(manager));
         }
 
@@ -563,7 +563,7 @@ mod tests {
     async fn test_handle_start_service_not_registered() {
         // Initialize manager if not already done
         if !is_extension_manager_initialized() {
-            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let manager = test_manager_without_claude_root().await;
             let _ = init_extension_manager(Arc::new(manager));
         }
 
@@ -592,7 +592,7 @@ mod tests {
     async fn test_handle_stop_service_not_registered() {
         // Initialize manager if not already done
         if !is_extension_manager_initialized() {
-            let manager = ExtensionManager::with_defaults().await.unwrap();
+            let manager = test_manager_without_claude_root().await;
             let _ = init_extension_manager(Arc::new(manager));
         }
 

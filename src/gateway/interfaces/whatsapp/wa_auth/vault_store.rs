@@ -22,6 +22,7 @@ pub enum WaAuthError {
     Vault(String),
 }
 
+#[derive(Clone)]
 pub struct WaAuthManager {
     vault: Arc<Mutex<SecretVault>>,
     account_id: String,

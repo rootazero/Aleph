@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::providers::adapter::{StopReason, TokenUsage};
 use crate::providers::delta::IndexIdTracker;
 use crate::providers::delta::ProviderDelta;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::ToolNameMap;
 // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -201,6 +201,19 @@ pub(crate) fn parse_anthropic_sse_event(
 
         // ── message_start ─────────────────────────────────────────────────────
         "message_start" => {
+            // Replayed thinking the API dropped for this request (prefix or
+            // model binding mismatch). An operations fact — logged, never
+            // turned into a delta, so the model does not see it.
+            if let Some(message) = v.get("message") {
+                let dropped = input_transformations_summary(message);
+                if !dropped.is_empty() {
+                    info!(
+                        count = dropped.len(),
+                        entries = %dropped.join(", "),
+                        "Anthropic dropped replayed thinking blocks (input_transformations)"
+                    );
+                }
+            }
             // Extract initial usage: input_tokens, cache_read_input_tokens,
             // and cache_creation_input_tokens are only present here, not in
             // message_delta.
@@ -232,6 +245,39 @@ pub(crate) fn parse_anthropic_sse_event(
         // ── ping / other ───────────────────────────────────────────────────────
         _ => {}
     }
+}
+
+/// One `type:reason@path` line per entry of a response message's
+/// `input_transformations` (present only under the
+/// `thinking-binding-controls-2026-08-01` beta; empty when nothing was
+/// dropped). Unknown `type`/`reason` values are kept verbatim — later checks
+/// add values, and an operator reading the log should see them rather than
+/// have them filtered out. A missing field renders as `?`.
+fn input_transformations_summary(message: &serde_json::Value) -> Vec<String> {
+    let Some(entries) = message
+        .get("input_transformations")
+        .and_then(|t| t.as_array())
+    else {
+        return Vec::new();
+    };
+    let field = |entry: &serde_json::Value, key: &str| {
+        entry
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string()
+    };
+    entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{}:{}@{}",
+                field(e, "type"),
+                field(e, "reason"),
+                field(e, "path")
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -441,6 +487,33 @@ mod tests {
         assert_eq!(u.input_tokens, 150);
         assert_eq!(u.cache_read_tokens, Some(80));
         assert_eq!(u.cache_creation_tokens, Some(30));
+    }
+
+    // ── input_transformations: an ops fact for the log, never a delta ───────
+
+    #[test]
+    fn input_transformations_are_summarised_for_the_log_and_emit_no_delta() {
+        let data = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-5-5","input_transformations":[{"type":"thinking_dropped","path":"messages.1.content.0","reason":"prefix_binding_mismatch"},{"type":"some_future_kind","path":"messages.3.content.0"}],"usage":{"input_tokens":9,"output_tokens":0}}}"#;
+        let v: serde_json::Value = serde_json::from_str(data).unwrap();
+        assert_eq!(
+            super::input_transformations_summary(&v["message"]),
+            vec![
+                "thinking_dropped:prefix_binding_mismatch@messages.1.content.0".to_string(),
+                "some_future_kind:?@messages.3.content.0".to_string(),
+            ]
+        );
+        // The model never sees it: message_start still yields only its Usage.
+        let deltas = parse(data);
+        assert_eq!(deltas.len(), 1, "got {deltas:?}");
+        assert!(matches!(deltas[0], ProviderDelta::Usage(_)));
+
+        // With the header every response carries the array, usually empty;
+        // without it the field is absent. Neither is worth a log line.
+        let empty: serde_json::Value =
+            serde_json::from_str(r#"{"input_transformations":[]}"#).unwrap();
+        assert!(super::input_transformations_summary(&empty).is_empty());
+        let absent: serde_json::Value = serde_json::from_str(r#"{"id":"msg_2"}"#).unwrap();
+        assert!(super::input_transformations_summary(&absent).is_empty());
     }
 
     // ── Test 11: message_delta carries cache_creation_input_tokens ───────────

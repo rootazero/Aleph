@@ -171,7 +171,6 @@ impl EventEmitter for SseEventEmitter {
 
             // Suppress non-content events
             StreamEvent::Reasoning { .. } => None,
-            StreamEvent::ReasoningBlock { .. } => None,
             StreamEvent::ToolEnd { .. } => None,
             StreamEvent::ToolUpdate { .. } => None,
             StreamEvent::AgentTrace { .. } => None,
@@ -349,7 +348,7 @@ pub async fn handle(
                     tracing::warn!(
                         session_key = %session_key,
                         role = msg.role.as_str(),
-                        "session/service capability absent; dropped a replayed history message — see `aleph doctor`"
+                        "session/service capability absent; dropped a replayed history message — see `al doctor`"
                     );
                 }
             }

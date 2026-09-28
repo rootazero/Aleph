@@ -2973,6 +2973,23 @@ mod tests {
     /// 114_393 would give 115_935), which is exactly why this ledger forbids
     /// deriving a ceiling by addition. No description was edited in the
     /// merge; the +30 Windows gap recorded above is carried forward unchanged.
+    ///
+    /// 2026-09-24 (`al` CLI rename): 115_904 -> 115_911 B (+7), all of it
+    /// `hooks_manage` (1_015 -> 1_022), measured on macOS both ends: its
+    /// approval sentence named `aleph hooks test`, a command only the server
+    /// binary has, and now names `aleph-server hooks test`. A correction to an
+    /// existing runtime fact, not a new sentence.
+    ///
+    /// 2026-09-25 (context-slim round, B1): 115_911 -> 115_888 B (-23), all of
+    /// it `ctx_search`'s DESCRIPTION (352 -> 329 B — it now says each query
+    /// returns section text, several queries go in one call, and repeats are
+    /// marked; it dropped a restated chunk size the index owns). Lowered, not
+    /// left as headroom: slack above a measurement is allowance already issued
+    /// (判据 §13). Read off this test's panic with the ceiling floored to `1`
+    /// on macOS (aarch64-apple-darwin): 96_292 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge, `bash` at 4_740 (the Unix assembly), so
+    /// the +30 Windows gap recorded above is carried forward unchanged.
+    ///
     /// 2026-09-26 (C1 browser_network mock routes): 115_904 -> 116_114 B,
     /// measured on Linux (96_518 catalog + 16_613 registry-only + 1_039
     /// injected + 1_944 bridge); the only red test was this one and the
@@ -2987,7 +3004,19 @@ mod tests {
     /// reads before choosing the tool. The pre-change headroom was 15 B, so
     /// no amount of tightening could name four actions within the old
     /// ceiling.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_114;
+    ///
+    /// 2026-09-28 (merge of origin/main into local main): the two ledgers
+    /// above both start from 115_904 and moved it independently — local to
+    /// 116_114 for the browser_network mock paragraph, origin/main to
+    /// 115_888 via the `al` rename (+7) and context-slim B1 (-23). The
+    /// merged catalog was RE-MEASURED with this ceiling floored to `1` on
+    /// Linux (x86_64-unknown-linux-gnu, `bash` at 4_740 so the Unix
+    /// assembly): 116_072 B (96_476 catalog + 16_613 registry-only + 1_039
+    /// injected + 1_944 bridge). No description was edited in the merge, so
+    /// the +30 Windows gap recorded above is carried forward unchanged. As
+    /// the 2026-09-20 entry already established, this ledger forbids deriving
+    /// a ceiling by addition.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 116_072;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3404,7 +3433,45 @@ mod tests {
     /// 2026-09-06 merge: both deltas stack on the 104_302 base, so the
     /// ceiling is 104_302 + 528 + 361 = 105_191; re-measured on macOS after
     /// the merge (the guard prints the total if this drifts).
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_191;
+    ///
+    /// 2026-09-24 (`al` CLI rename): 105_191 -> 105_198 B (+7). The guard's own
+    /// per-tool ledger names `hooks_manage` (2_219 -> 2_226) as the only row
+    /// that moved: the `command` field doc named `aleph hooks test`, a
+    /// server-only command, and now names `aleph-server hooks test`.
+    ///
+    /// 2026-09-25 (context-slim round, B1): 105_198 -> 105_167 B (-31), all of
+    /// it `ctx_search` (579 -> 548): a `queries` array joined `query` and
+    /// `limit`, and the argument docs shrank because the sentences they carried
+    /// moved to the DESCRIPTION the tool owns. Read off this guard's own ledger
+    /// (the `ctx_search` row zeroed, the ceiling lowered by its old value);
+    /// `ctx_search` was the only row that moved.
+    ///
+    /// 2026-09-26 (context-slim round, B4): 105_167 -> 104_422 B (-745), all of
+    /// it `web_fetch` (1_536 -> 791): the `prompt` argument's doc carried a
+    /// design rationale into the schema; it now says only what the model does
+    /// with it (fetch by intent), and the rationale is a `//` comment. Read off
+    /// this guard's own ledger (the `web_fetch` row zeroed, the ceiling lowered
+    /// by its old value); `web_fetch` was the only row that moved.
+    ///
+    /// 2026-09-28 (plugin-scope round, P4.18): 105_191 -> 105_123 B (-68),
+    /// all of it `hooks_manage` (2_219 -> 2_151). The round had first grown
+    /// it to 2_304 without anyone running this guard: `3d21be979` +7
+    /// (`aleph hooks test` -> `aleph-server hooks test` in `command`'s doc)
+    /// and `3c111de88` +78 (`matcher`'s subject semantics), measured per
+    /// commit through `schema_for!`; the other two commits that touched the
+    /// file changed no doc on a schema type, so they contribute nothing.
+    /// Paid back by trimming, not by raising: `command` no longer repeats
+    /// the approval spelling the DESCRIPTION already carries (one copy fewer
+    /// to keep in step - the rename had to edit both), `only_unreachable`
+    /// no longer tells the model when to use it, and `action` drops "What to
+    /// do.". The `events` variant now names the `matcher_subject` it reports
+    /// rather than the retired `supports_matcher` (+9 of the -153).
+    ///
+    /// 2026-09-28 (merge plugin-scope-round into main): branch's -68
+    /// (hooks_manage) and main's -31 (ctx_search) + -745 (web_fetch) all
+    /// landed; 105_191 - 68 - 31 - 745 = 104_347, verified against the
+    /// guard's own ledger below.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_347;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3444,7 +3511,7 @@ mod tests {
         ("channel_pairing", 743),
         ("code_check", 837),
         ("code_exec", 2128),
-        ("ctx_search", 579),
+        ("ctx_search", 548),
         ("desktop", 20275),
         ("file_edit", 2480),
         ("file_ops", 2989),
@@ -3454,7 +3521,7 @@ mod tests {
         ("goal", 4985),
         ("grep", 1545),
         ("heartbeat_report", 764),
-        ("hooks_manage", 2219),
+        ("hooks_manage", 2151),
         ("list_models", 597),
         ("local_voice", 332),
         ("loop", 2998),
@@ -3486,7 +3553,7 @@ mod tests {
         ("strategy", 2322),
         ("system", 1256),
         ("voice_mode_set", 717),
-        ("web_fetch", 1536),
+        ("web_fetch", 791),
     ];
 
     /// The tool map with nothing wired — the deterministic half of what the
@@ -4008,6 +4075,75 @@ mod tests {
         // Verify sessions tools are defined when gateway feature is enabled
         assert!(names.contains(&"session_list".to_string()));
         assert!(names.contains(&"session_send".to_string()));
+    }
+
+    /// T-G4 / B4: a tool's per-result budget has one source — its
+    /// `AlephTool::MAX_RESULT_TOKENS`, stamped on its registry entry — and no
+    /// builtin declares one: every tool but the read family is gated at the
+    /// default. Over every tool this registry builds:
+    ///
+    /// * **the budget in effect** is the default, or `None` for the read
+    ///   family (a declaration that crept back in fails here);
+    /// * **the declaration reaches the entry** — for every tool the factory
+    ///   can construct, the entry carries exactly what the tool declares, so
+    ///   a registration path that forgets to stamp it fails here.
+    #[tokio::test]
+    async fn result_budgets_come_from_declarations_and_default_everywhere() {
+        // The read family is the one owner's answer (`is_read_family`), not a
+        // second list of names here.
+        fn expected(name: &str) -> Option<usize> {
+            (!crate::tools::result_processing::is_read_family(name))
+                .then_some(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS)
+        }
+        let map = unconditional_registry_map();
+        assert!(
+            map.len() > 20,
+            "the census must see the registry: {}",
+            map.len()
+        );
+        let mut constructed = 0usize;
+        for (name, entry) in &map {
+            assert_eq!(
+                crate::tools::result_processing::resolve_result_budget_under(
+                    name,
+                    entry.max_result_tokens,
+                    usize::MAX,
+                ),
+                expected(name),
+                "{name}: the budget in effect is not the default"
+            );
+            if let Some(tool) = create_tool_boxed(name, None) {
+                constructed += 1;
+                assert_eq!(
+                    entry.max_result_tokens,
+                    tool.max_result_tokens(),
+                    "{name}: the registry entry does not carry the tool's declaration"
+                );
+            }
+        }
+        assert!(
+            constructed > 10,
+            "the declaration half must actually run: {constructed}"
+        );
+        // The retired name table's `Grep | search_files` row had no owner: no registered
+        // tool carries either name (builtins are lowercase `grep`; MCP names
+        // are qualified `server__tool`), so it is recorded dead, not migrated.
+        for dead in ["Grep", "search_files"] {
+            assert!(
+                !map.contains_key(dead),
+                "{dead} is registered now — the retired 6_000 row needs an owner"
+            );
+        }
+        // The read family is a registered tool, so the `None` half above ran.
+        assert!(
+            map.keys()
+                .any(|name| crate::tools::result_processing::is_read_family(name)),
+            "no registered tool is in the read family"
+        );
+        // The three that declared a larger budget until B4 no longer do.
+        for name in ["web_fetch", "bash", "search"] {
+            assert_eq!(map[name].max_result_tokens, None, "{name}");
+        }
     }
 
     #[test]

@@ -452,7 +452,7 @@ pub(crate) fn clamp_start_to_budget(messages: &[UnifiedMessage], budget_tokens: 
     let mut acc = 0usize;
     let mut start = messages.len();
     while start > 0 {
-        let text = messages[start - 1].text_content();
+        let text = messages[start - 1].transcript_text();
         let cost =
             crate::context::budget::pressure::estimate_tokens_smart(&cap_transcript_text(&text));
         if start < messages.len() && acc.saturating_add(cost) > budget_tokens {

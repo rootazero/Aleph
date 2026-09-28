@@ -25,10 +25,10 @@ use tracing::{debug, info};
 mod bootstrap_tickets;
 mod devices;
 mod identity;
+pub(crate) mod slot;
 mod tokens;
 mod types;
 mod users;
-pub(crate) mod slot;
 
 #[cfg(test)]
 mod tests;
@@ -36,9 +36,9 @@ mod tests;
 pub use bootstrap_tickets::{
     BootstrapTicketError, ConsumedBootstrapTicket, OutstandingBootstrapTicket,
 };
+pub use slot::{install_degraded_users_store, install_users_store};
 pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
-pub use slot::{install_degraded_users_store, install_users_store};
 
 /// Schema version for migrations
 const SCHEMA_VERSION: i32 = 19;

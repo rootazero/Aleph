@@ -176,6 +176,11 @@ impl E2eSessionStore {
 
 #[async_trait]
 impl SessionStore for E2eSessionStore {
+    // In memory: there is no transcript file for a hook to open.
+    fn transcript_file(&self, _key: &SessionKey) -> Option<std::path::PathBuf> {
+        None
+    }
+
     // --- load_window: used by SummarySynthesizer ---
     async fn load_window(
         &self,

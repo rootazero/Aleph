@@ -368,10 +368,7 @@ impl HandlerRegistry {
         registry.register("plugins.uninstall", plugins::handle_uninstall);
         registry.register("plugins.enable", plugins::handle_enable);
         registry.register("plugins.disable", plugins::handle_disable);
-        registry.register("plugins.load", plugins::handle_load);
-        registry.register("plugins.unload", plugins::handle_unload);
         registry.register("plugins.callTool", plugins::handle_call_tool);
-        registry.register("plugins.executeCommand", plugins::handle_execute_command);
 
         // Plugin handlers (singular — canonical CC-compatible namespace)
         registry.register("plugin.list", plugins::handle_list);
@@ -1375,10 +1372,12 @@ mod tests {
         assert!(registry.has_method("plugins.uninstall"));
         assert!(registry.has_method("plugins.enable"));
         assert!(registry.has_method("plugins.disable"));
-        assert!(registry.has_method("plugins.load"));
-        assert!(registry.has_method("plugins.unload"));
         assert!(registry.has_method("plugins.callTool"));
-        assert!(registry.has_method("plugins.executeCommand"));
+        // Retired 2026-09-20: their only bodies were the lazy-load / unload
+        // paths the lifecycle primitives replaced, and no client ever called
+        // them (census in the commit that removed them).
+        assert!(!registry.has_method("plugins.load"));
+        assert!(!registry.has_method("plugins.unload"));
     }
 
     #[test]

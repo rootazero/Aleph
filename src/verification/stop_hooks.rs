@@ -247,12 +247,13 @@ pub async fn execute_stop_hooks(
     context: &StopHookContext,
     cancel: &CancellationToken,
 ) -> StopHookAggregateResult {
-    let mut verdicts_with_idx: Vec<(usize, StopHookVerdict)> =
-        futures::future::join_all(hooks.iter().enumerate().map(|(idx, hook)| {
-            hook.evaluate(context, cancel)
-                .map(move |v| (idx, v))
-        }))
-        .await;
+    let mut verdicts_with_idx: Vec<(usize, StopHookVerdict)> = futures::future::join_all(
+        hooks
+            .iter()
+            .enumerate()
+            .map(|(idx, hook)| hook.evaluate(context, cancel).map(move |v| (idx, v))),
+    )
+    .await;
     // join_all already preserves spawn order on a Vec, but we restate the
     // invariant explicitly so a future refactor (e.g. switching to an
     // unordered join) cannot silently break declaration-order semantics.
@@ -322,8 +323,7 @@ pub fn is_shell_safe(command: &str) -> bool {
     // — only the `^` escape and unescaped `"` introduce quoting — so
     // adding `\` here costs no safety and stops legitimate Windows
     // goal-gates from being silently rejected.
-    const SAFE: &str =
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=\\";
+    const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=\\";
     // Newline / carriage-return are already absent from `SAFE`, so the
     // single `contains` check covers them — no extra explicit comparison.
     command.chars().all(|c| SAFE.contains(c))

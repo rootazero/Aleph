@@ -23,36 +23,51 @@
 //!                       (unified hooks)
 //! ```
 
+pub mod activation_gate;
 pub mod hooks;
+mod lifecycle;
 mod loader;
 pub mod marketplace;
 pub mod runtime;
-pub mod scope;
 pub mod validation;
+pub mod visibility;
 
 pub mod capability;
+#[cfg(test)]
+mod claude_cache_tests;
+pub(crate) mod declared_model;
+pub mod effects;
 pub mod registrar;
 
 mod error;
+pub(crate) mod inline_shell;
 pub(crate) mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
+#[cfg(test)]
+mod mcp_plugin_tests;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
 pub mod plugin_trust;
 pub mod plugin_vars;
 mod projection;
+pub(crate) mod readiness;
 pub mod registry;
 mod service_manager;
 mod service_ops;
 mod skill_ops;
 mod skill_tool;
+mod slash_effect;
 mod template;
 mod types;
 pub mod watcher;
 
+pub use effects::{
+    async_disposer, sync_disposer, DisposeOutcome, DisposeReport, Disposer, EffectScope, PluginId,
+};
 pub use error::*;
+pub use lifecycle::{MountError, ReloadReport, UnmountError};
 pub use loader::PluginLoader;
 pub use manager_global::{
     decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
@@ -61,7 +76,11 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub use template::SkillTemplate;
+pub(crate) use template::{inline_commands, run_inline, SKILL_DIR_TOKEN};
+pub use template::{
+    inline_shell_command, split_arguments, InlineArgs, InlineShell, InlineSite, SkillTemplate,
+    TemplateCtx, SKILL_DIR_VARIABLE,
+};
 pub use types::*;
 
 // Re-export marketplace types
@@ -70,7 +89,6 @@ pub use marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
 // Re-export new plugin system types (Phase 1)
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
 pub use manifest::PluginManifest;
-pub use registrar::CapabilityApi;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
@@ -122,7 +140,7 @@ pub struct ExtensionConfig {
     /// same environment variable. Gated on `cfg(test)` so it cannot become an
     /// undocumented production knob with no consumers (R10).
     #[cfg(test)]
-    pub extra_plugin_parents: Vec<PathBuf>,
+    pub extra_plugin_parents: Vec<crate::discovery::ProjectPluginParent>,
     // NOTE: there is deliberately no `owner_trust` field here.
     //
     // One existed, alongside an `OwnerTrustPolicyConfig` DTO, and had zero
@@ -135,18 +153,28 @@ pub struct ExtensionConfig {
     // and the one an operator edits would be the one that loses.
 }
 
-/// One directory found by discovery, with the two facts the registry walk
-/// needs and the scan is the only place that knows.
+/// One directory found by discovery, with the facts the registry walk needs
+/// and the scan is the only place that knows.
 struct DiscoveredExtensionDir {
     path: PathBuf,
     /// Where it came from, per [`PluginOrigin::classify`].
     origin: PluginOrigin,
+    /// Who may see it, per [`visibility::ScopeKey::from_discovery`].
+    scope_key: visibility::ScopeKey,
+}
+
+/// One discovery pass as the load walk consumes it: the plugin roots, and
+/// the sources that pass could not read (`PluginDiscovery::unreadable`).
+struct CollectedPluginDirs {
+    dirs: Vec<DiscoveredExtensionDir>,
+    unreadable: Vec<PathBuf>,
 }
 
 /// Extension Manager - main entry point for the extension system
 pub struct ExtensionManager {
-    /// Discovery manager
-    discovery: DiscoveryManager,
+    /// Discovery manager. Shared (`Arc`) because it is one of the
+    /// [`projection::Views`] handles the server-start watcher captures.
+    discovery: Arc<DiscoveryManager>,
 
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
@@ -175,16 +203,23 @@ pub struct ExtensionManager {
     /// cheaply read tool metadata and revision state without awaiting locks.
     active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
 
+    /// `plugin_id → ScopeKey` for every registered row, refreshed in the same
+    /// registry read as [`Self::active_plugin_tools`]. Read by every visibility
+    /// face through [`Self::plugin_visible`]; `Option::None` for an id the
+    /// registry never saw, which the predicate reads as "not visible".
+    plugin_scope_keys: Arc<StdRwLock<HashMap<String, visibility::ScopeKey>>>,
+
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
 
-    /// Guard to serialize concurrent `load_all()` calls
-    load_guard: Mutex<()>,
+    /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
+    /// and a server-start watcher's final readiness write + view recompute
+    /// (`lifecycle.rs::watch_server_starts`) — which is why it is shared.
+    load_guard: Arc<Mutex<()>>,
 
     /// Memory extension registry (Spec 4 Task 11).
-    /// When set, `load_runtime_plugin` / `ensure_plugin_loaded` call
-    /// `load_plugin_with_memory` so that plugins declaring a `[memory]`
-    /// section are auto-registered as `McpMemoryExtension` entries.
+    /// When set, `mount` registers a plugin's `[memory]` section as a
+    /// `McpMemoryExtension` (`memory_extension` step); `None` records a skip.
     /// Wrapped in `RwLock` so it can be injected after construction (the manager
     /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
     memory_registry: crate::sync_primitives::RwLock<
@@ -213,15 +248,23 @@ pub struct ExtensionManager {
 
     /// Test-only extra plugin parents; see [`ExtensionConfig::extra_plugin_parents`].
     #[cfg(test)]
-    extra_plugin_parents: Vec<PathBuf>,
+    extra_plugin_parents: Vec<crate::discovery::ProjectPluginParent>,
 
-    /// Live MCP manager handle, used to register plugin-owned MCP servers as
-    /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
-    /// is called at server boot — CLI/test paths leave it unset, so plugin MCP
-    /// registration simply no-ops there. Wrapped in `RwLock<Option<_>>` because
-    /// the manager is behind an `Arc` by the time the MCP actor materialises,
-    /// mirroring the `memory_registry` injection pattern.
+    /// Live MCP manager handle, used by `mount` to register plugin-owned MCP
+    /// servers as **transient** (runtime-only) servers (`mcp_server` step).
+    /// `None` until [`Self::set_mcp_handle`] at boot; CLI/test paths leave it
+    /// unset and the step is recorded as skipped. Wrapped in `RwLock<Option<_>>`
+    /// because the manager is behind an `Arc` by the time the MCP actor
+    /// materialises, mirroring the `memory_registry` injection pattern.
     mcp_handle: crate::sync_primitives::RwLock<Option<crate::mcp::McpManagerHandle>>,
+
+    /// Live tool catalog, so `mount` can register a plugin's `commands/*.md`
+    /// as slash entries and `unmount` can remove them. `None` until
+    /// [`Self::set_tool_catalog`] is called at server boot (CLI/test paths
+    /// leave it unset, and the `slash_command` step is recorded as skipped).
+    /// Same injection shape as `mcp_handle` and `memory_registry`, for the
+    /// same reason: the manager is behind an `Arc` before the catalog exists.
+    tool_catalog: crate::sync_primitives::RwLock<Option<Arc<crate::tool_metadata::ToolCatalog>>>,
 
     /// File watcher for hot-reloading commands/agents/plugins/hooks.json.
     /// `None` until [`Self::start_watcher`] is called (test/CLI paths skip
@@ -237,6 +280,18 @@ pub struct ExtensionManager {
     /// Exposed via [`Self::reload_count`] — used by integration tests to
     /// assert at-most-once reload behaviour on adjacent watcher events.
     reload_count: AtomicU64,
+
+    /// One [`EffectScope`] per mounted plugin — everything `mount` put into
+    /// the runtime, owned here so `unmount` can take it all back out. A std
+    /// mutex, never held across an `await`: `lifecycle.rs` removes the scope
+    /// under the lock and disposes it after.
+    scopes: StdMutex<HashMap<String, effects::EffectScope>>,
+
+    /// Join handles of the per-plugin server-start watchers
+    /// (`lifecycle.rs::watch_server_starts`), so `activation_settled()` can
+    /// wait for the MCP half of a mount to reach its verdict. Std mutex,
+    /// never held across an `await`.
+    activation_watchers: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 /// Convert a plugin-shipped agent registration into an [`crate::agents::AgentDef`]
@@ -244,13 +299,25 @@ pub struct ExtensionManager {
 /// when it is not a delegatable sub-agent.
 ///
 /// Mirrors the disk-agent loader (`crate::agents::loader`): the markdown
-/// `content` (system-prompt body) is intentionally dropped — `AgentDef` is
-/// frontmatter / section-key based and disk agents discard their body the same
-/// way, so a plugin sub-agent runs through the standard sub-agent prompt flow.
-/// The declared `tools` map (name → allowed) becomes allow / deny lists; absent,
-/// the constructor default (`["*"]`) is kept, matching a disk agent with no tool
-/// frontmatter (a subagent is spawned by an already-privileged primary and the
-/// recursion guard blocks re-spawning, so wildcard-by-default is safe here too).
+/// `content` is the sub-agent's system prompt, through the same mapping the
+/// disk loader uses (`agents::system_prompt`).
+///
+/// The declared `model` becomes `model_hint` through the policy a plugin
+/// command's `model:` uses ([`declared_model::declared_model_pin`]):
+/// `inherit`, a blank and the aliases `sonnet` / `opus` / `haiku` set no
+/// hint; a retired id sets none either (warned), and the agent still loads.
+///
+/// The declared `tools` map (name → allowed) becomes allow / deny lists:
+/// * absent — the constructor default (`["*"]`) is kept, matching a disk agent
+///   with no tool frontmatter and Claude Code's "omitted = inherit" (a
+///   subagent is spawned by an already-privileged primary and the recursion
+///   guard blocks re-spawning, so wildcard-by-default is safe here too);
+/// * empty — a declaration that names no tool: deny-all, never the wildcard.
+///   `parse_single_agent` writes it for a `tools:` whose every entry had no
+///   Aleph tool, or whose shape named none (the restrict-list policy);
+/// * `true` entries — the allowlist;
+/// * only `false` entries — a deny list over the wildcard: every tool except
+///   those.
 fn plugin_agent_to_def(
     reg: &crate::extension::AgentRegistration,
 ) -> Option<crate::agents::AgentDef> {
@@ -276,7 +343,8 @@ fn plugin_agent_to_def(
             .collect();
         allowed.sort();
         denied.sort();
-        if !allowed.is_empty() {
+        // An empty map is a declaration too: `allowed` stays empty ⇒ deny-all.
+        if !allowed.is_empty() || tools.is_empty() {
             def = def.with_allowed_tools(allowed);
         }
         if !denied.is_empty() {
@@ -286,8 +354,19 @@ fn plugin_agent_to_def(
     if let Some(steps) = reg.steps {
         def = def.with_max_iterations(steps);
     }
-    if let Some(model) = &reg.model {
-        def = def.with_model_hint(model.clone());
+    // The one declared-model policy a plugin command's `model:` goes through
+    // too. What an unusable model costs an agent is its hint, never the agent.
+    match declared_model::declared_model_pin("agent", reg.model.as_deref()) {
+        Ok(Some(model)) => def = def.with_model_hint(model),
+        Ok(None) => {}
+        Err(why) => tracing::warn!(
+            agent = id,
+            why = %why,
+            "agent's declared model is not applied; it runs on the model it is spawned on"
+        ),
+    }
+    if let Some(prompt) = crate::agents::system_prompt::body_to_system_prompt(id, &reg.content) {
+        def = def.with_system_prompt(prompt);
     }
     def.source = crate::agents::AgentSource::Plugin;
     Some(def)
@@ -298,7 +377,7 @@ impl ExtensionManager {
 
     /// Create a new extension manager
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
-        let discovery = DiscoveryManager::new(config.discovery.clone())?;
+        let discovery = Arc::new(DiscoveryManager::new(config.discovery.clone())?);
         let hook_executor = Arc::new(RwLock::new(
             HookExecutor::empty().with_consent(ShellHookConsent::shared()),
         ));
@@ -342,13 +421,17 @@ impl ExtensionManager {
             // the builtin skill tools and the gateway RPC handlers.
             skill_system: crate::skill::shared_skill_system().clone(),
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
+            plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
-            load_guard: Mutex::new(()),
+            load_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
             mcp_handle: crate::sync_primitives::RwLock::new(None),
+            tool_catalog: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
+            scopes: StdMutex::new(HashMap::new()),
+            activation_watchers: StdMutex::new(Vec::new()),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
@@ -364,9 +447,10 @@ impl ExtensionManager {
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).
     ///
-    /// Safe to call on `&Arc<ExtensionManager>`. Subsequent plugin loads will
-    /// use `load_plugin_with_memory` so that manifests declaring a `[memory]`
-    /// section are auto-registered as `McpMemoryExtension` entries.
+    /// Safe to call on `&Arc<ExtensionManager>`. Subsequent mounts register
+    /// manifests declaring a `[memory]` section as `McpMemoryExtension`
+    /// entries (`memory_extension` step). Call it at boot BEFORE the first
+    /// `load_all` (see `agent_init::boot_order_tests`).
     pub fn set_memory_registry(
         &self,
         registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
@@ -400,380 +484,24 @@ impl ExtensionManager {
             .clone()
     }
 
-    /// Inject the live MCP manager handle after construction.
-    ///
-    /// Safe to call on `&Arc<ExtensionManager>`. Stores the handle so that
-    /// [`Self::sync_mcp_plugin_servers`] can register plugin-owned MCP servers.
-    /// Call it once at server boot — *after* the MCP tool bridge is spawned, so
-    /// the `ServerStarted` events the sync triggers are observed and turned into
-    /// tool registrations.
+    /// Inject the live MCP manager handle. Call it at boot BEFORE the first
+    /// `load_all` (see `agent_init::boot_order_tests`); a mount that runs
+    /// without it records `mcp_server` as skipped. Servers a plugin starts
+    /// before the MCP tool bridge is spawned are picked up by the bridge's
+    /// boot-time reconcile against the servers already running, so the early
+    /// install does not lose tool registrations.
     pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
         *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
-    /// Bind every registered MCP-backed memory extension to the live MCP
-    /// manager. Idempotent: re-binding an already-bound extension just re-stores
-    /// the caller. No-op unless BOTH the MCP handle and the memory registry are
-    /// present (CLI/test paths leave them unset). Call once at boot after
-    /// `set_mcp_handle` + `set_memory_registry` + plugin load, and again after
-    /// hot-loading a plugin.
-    pub async fn bind_memory_callers(&self) {
-        use crate::memory::extensions::ManagerBackedMcpCaller;
-        let handle = {
-            let g = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
-            match g.as_ref() {
-                Some(h) => h.clone(),
-                None => return,
-            }
-        };
-        let registry = {
-            let g = self
-                .memory_registry
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            match g.as_ref() {
-                Some(r) => r.clone(),
-                None => return,
-            }
-        };
-        for ext in registry.mcp_bindings_snapshot() {
-            if let Some(server_id) = ext.server_id() {
-                let caller = crate::sync_primitives::Arc::new(ManagerBackedMcpCaller::new(
-                    handle.clone(),
-                    server_id.to_string(),
-                ));
-                ext.rebind(caller);
-                tracing::info!(server_id = %server_id, "bound memory MCP caller");
-            }
-        }
-    }
-
-    /// Register every enabled MCP-kind plugin's `.mcp.json` servers with the
-    /// attached MCP manager as **transient** (runtime-only) servers.
-    ///
-    /// This is the wiring that makes MCP plugins actually run: `PluginLoader`
-    /// reads each plugin's `.mcp.json` into memory, and this method hands those
-    /// configs to `McpManager::add_transient_server`, whose `ServerStarted`
-    /// events the tool bridge converts into live tool registrations.
-    ///
-    /// Idempotent and non-fatal: a no-op (returns 0) when no handle is attached;
-    /// servers already running are skipped by the manager. Returns the number of
-    /// server configs handed to the manager this call.
-    pub async fn sync_mcp_plugin_servers(&self) -> usize {
-        let handle = {
-            let guard = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
-            match guard.as_ref() {
-                Some(h) => h.clone(),
-                None => return 0,
-            }
-        };
-
-        if let Err(e) = self.ensure_loaded().await {
-            tracing::warn!(error = %e, "sync_mcp_plugin_servers: ensure_loaded failed");
-            return 0;
-        }
-
-        // Snapshot active plugins (id + root_dir). `PluginRecord.kind` is always
-        // `Static` after `load_all` (the adapter doesn't carry runtime kind), so
-        // we re-parse each manifest to find the true MCP-kind plugins.
-        let candidates: Vec<(String, PathBuf)> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_plugins()
-                .into_iter()
-                .filter(|r| r.status.is_active())
-                .map(|r| (r.id.clone(), r.root_dir.clone()))
-                .collect()
-        };
-
-        for (id, root) in &candidates {
-            match manifest::parse_manifest_from_dir_cached_global(root) {
-                Ok(m) if m.kind == PluginKind::Mcp => {
-                    if let Err(e) = self.ensure_plugin_loaded(id).await {
-                        tracing::warn!(plugin = %id, error = %e, "sync_mcp_plugin_servers: failed to load MCP plugin");
-                    }
-                }
-                Ok(_) => {} // non-MCP plugin: nothing to register here
-                Err(e) => {
-                    tracing::debug!(plugin = %id, error = %e, "sync_mcp_plugin_servers: manifest parse failed");
-                }
-            }
-        }
-
-        let configs = self.plugin_loader.read().await.all_mcp_configs_map();
-        let mut registered = 0usize;
-        for (server_id, config) in configs {
-            match handle.add_transient_server(config).await {
-                Ok(()) => registered += 1,
-                Err(e) => {
-                    tracing::warn!(server_id = %server_id, error = %e, "sync_mcp_plugin_servers: add_transient_server failed");
-                }
-            }
-        }
-
-        if registered > 0 {
-            tracing::info!(
-                count = registered,
-                "registered plugin MCP servers (transient)"
-            );
-        }
-        registered
+    /// Inject the live tool catalog after construction. Call once at server
+    /// boot BEFORE the first `load_all`, so every plugin's slash entries are
+    /// registered by its own mount rather than by a boot-time catch-up.
+    pub fn set_tool_catalog(&self, catalog: Arc<crate::tool_metadata::ToolCatalog>) {
+        *self.tool_catalog.write().unwrap_or_else(|e| e.into_inner()) = Some(catalog);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
-
-    /// Load all extensions.
-    pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let mut summary = LoadSummary::default();
-
-        // The loader's copy of every plugin's stored configuration must be
-        // current before anything loads — a plugin started with an empty
-        // config is a plugin the operator configured and cannot tell.
-        self.publish_plugin_settings().await;
-
-        // Collect all plugin directories from discovery
-        let plugin_dirs = self.collect_plugin_dirs()?;
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-
-        // Clear and rebuild registry
-        {
-            let mut registry = self.plugin_registry.write().await;
-            registry.clear();
-            // `registered_plugin_ids` only tracks SUCCESSFUL parses —
-            // shadow resolution gates on the id coming from a parsed
-            // manifest. A parse failure must NOT poison this set: if the
-            // highest-priority copy of a plugin fails to parse, a
-            // lower-priority copy with the same id should still be
-            // allowed to take over. Parse failures are deduped in a
-            // separate set so the error record is only registered once
-            // per id.
-            let mut registered_plugin_ids = std::collections::HashSet::new();
-            let mut failed_plugin_ids = std::collections::HashSet::new();
-
-            for found in plugin_dirs.iter().rev() {
-                let dir_path = &found.path;
-                match self.adapter_registry.parse_dir(dir_path) {
-                    Ok(output) => {
-                        // Shadow resolution: dirs are walked highest-priority
-                        // first, so a repeat id lost. It used to be dropped
-                        // silently — indistinguishable from "not installed",
-                        // and the `Overridden` status written for exactly this
-                        // moment had zero producers. Record the loss on the
-                        // winner (the registry is keyed by id, so the loser
-                        // cannot hold a row of its own).
-                        if !registered_plugin_ids.insert(output.plugin_id.clone()) {
-                            let winner = registry
-                                .get_plugin(&output.plugin_id)
-                                .map(|p| p.root_dir.display().to_string())
-                                .unwrap_or_default();
-                            tracing::info!(
-                                plugin_id = %output.plugin_id,
-                                shadowed = %dir_path.display(),
-                                winner = %winner,
-                                "plugin id already registered from a higher-priority scope"
-                            );
-                            registry.add_diagnostic(PluginDiagnostic {
-                                level: DiagnosticLevel::Warn,
-                                message: format!(
-                                    "{} is shadowed by the copy at {winner}",
-                                    dir_path.display()
-                                ),
-                                plugin_id: Some(output.plugin_id.clone()),
-                                source: Some("discovery".to_string()),
-                            });
-                            summary.shadowed += 1;
-                            continue;
-                        }
-                        // Build plugin record from adapter output
-                        let mut record =
-                            PluginRecord::from_adapter_output(&output, dir_path.clone());
-                        // Overwrite the adapter's hardcoded `Global`. Same
-                        // shape as the `record.kind` override below: the
-                        // adapters answer what a manifest can say, and where
-                        // the plugin was found is not one of those things.
-                        record.origin = found.origin;
-                        if let Ok(manifest) =
-                            manifest::parse_manifest_from_dir_cached_global(dir_path)
-                        {
-                            record.kind = manifest.kind;
-                        }
-                        let plugin_id = output.plugin_id.clone();
-                        // P3.5 — owner trust policy gates the load. When the
-                        // policy is `restrictive`, plugins from `Workspace` or
-                        // `Global` origins are only registered if their id is
-                        // in the policy's allowlist; `Bundled`/`Config`
-                        // plugins always pass. The default is `permissive`
-                        // (matches the legacy "load everything" behaviour).
-                        let trust_allows = self
-                            .owner_trust_policy
-                            .read()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .allows(&plugin_id, record.origin);
-                        if !trust_allows {
-                            tracing::info!(
-                                plugin_id = %plugin_id,
-                                origin = ?record.origin,
-                                "plugin skipped by owner trust policy \
-                                 (not in allowlist)"
-                            );
-                            summary.skipped_by_trust += 1;
-                            // Register it as Blocked rather than dropping it:
-                            // "refused by policy" and "not installed" must not
-                            // render the same, and the operator needs the id to
-                            // put on the allowlist.
-                            let origin = record.origin;
-                            registry.register_plugin(record.inactive(
-                                PluginStatus::Blocked(format!("{origin:?}")),
-                                format!(
-                                    "refused by the owner trust policy ({origin:?} origin is not \
-                                     on the allowlist); add \"{plugin_id}\" to it to load this plugin"
-                                ),
-                            ));
-                            continue;
-                        }
-                        // Durable activation state. `.disabled` markers written
-                        // by older builds are migrated into `plugins.toml` on
-                        // first sight and then removed, so the answer converges
-                        // to one source instead of two (the marker could not
-                        // survive `plugin update`, which swaps the whole tree).
-                        let legacy_marker = dir_path.join(".disabled");
-                        if legacy_marker.exists() {
-                            let mut cfg = self.plugins_config.write().await;
-                            if cfg.set_enabled(&plugin_id, false) {
-                                let path = self.plugins_config_path.clone();
-                                if let Err(e) = cfg.save(&path).await {
-                                    tracing::warn!(error = %e, "failed to persist migrated plugin disable");
-                                }
-                            }
-                            drop(cfg);
-                            match tokio::fs::remove_file(&legacy_marker).await {
-                                Ok(()) => tracing::info!(
-                                    plugin_id = %plugin_id,
-                                    "migrated legacy .disabled marker into plugins.toml"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    plugin_id = %plugin_id, error = %e,
-                                    "legacy .disabled marker migrated but could not be removed"
-                                ),
-                            }
-                        }
-                        let operator_enabled =
-                            self.plugins_config.read().await.is_enabled(&plugin_id);
-                        if !operator_enabled {
-                            // Registered but not active. The record and its
-                            // capabilities are still registered — every
-                            // downstream consumer already filters on
-                            // `status.is_active()` (tool index, hook sync,
-                            // `projection.rs`), so a disabled plugin is invisible
-                            // to the model while staying listable and, crucially,
-                            // **re-enablable without a reload**: skipping
-                            // capability registration here would make
-                            // `set_plugin_enabled(id, true)` flip a status with
-                            // nothing behind it.
-                            record.status = PluginStatus::Disabled;
-                            summary.disabled_by_operator += 1;
-                        }
-
-                        registry.register_plugin(record);
-
-                        // Register all capabilities via CapabilityApi
-                        let mut api = registrar::CapabilityApi::new(
-                            &mut registry,
-                            plugin_id.clone(),
-                            output.permissions,
-                        );
-                        for cap in output.capabilities {
-                            if let Err(e) = api.register_capability(cap) {
-                                tracing::debug!(
-                                    "Failed to register capability for plugin {}: {}",
-                                    plugin_id,
-                                    e
-                                );
-                            }
-                        }
-
-                        summary.plugins_loaded += 1;
-                    }
-                    Err(e) => {
-                        // A plugin whose manifest will not parse used to vanish
-                        // at `debug!` level: on every surface it looked exactly
-                        // like a plugin that was never installed, so the
-                        // operator had nothing to fix. Give it a row, an id
-                        // derived from the directory, and the parse error.
-                        let fallback_id = dir_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| dir_path.display().to_string());
-                        tracing::warn!(
-                            plugin_dir = %dir_path.display(), error = %e,
-                            "plugin manifest could not be parsed; listing it as errored"
-                        );
-                        summary
-                            .errors
-                            .push(format!("{}: {}", dir_path.display(), e));
-                        // Use `failed_plugin_ids` (not `registered_plugin_ids`)
-                        // so a successful lower-priority parse with the same id
-                        // is allowed to take over after a higher-priority parse
-                        // failure. See comment on the set declaration above.
-                        if failed_plugin_ids.insert(fallback_id.clone()) {
-                            let record = PluginRecord::new(
-                                fallback_id,
-                                dir_path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default(),
-                                PluginKind::Static,
-                                PluginOrigin::Global,
-                            )
-                            .with_root_dir(dir_path.clone())
-                            .with_error(e.to_string());
-                            registry.register_plugin(record);
-                        }
-                    }
-                }
-            }
-
-            // Count loaded skills/commands/agents from registry
-            summary.skills_loaded = registry.list_skills().len();
-            summary.agents_loaded = registry.list_agents().len();
-            summary.hooks_loaded = registry.list_hooks().len();
-        }
-
-        // Sync hooks from registry to HookExecutor
-        self.sync_hooks_from_registry().await;
-
-        // Layer in user-level hooks from ~/.aleph/hooks.json and the
-        // project's .aleph/hooks.{json,local.json}. Claude Code parity:
-        // users edit these files directly; no plugin packaging required.
-        self.sync_user_hooks().await;
-
-        // Publish every plugin-owned process-global projection (skill dirs,
-        // sub-agents, tool index) from the ONE derivation that states the
-        // activation predicate — see `projection.rs`. This used to be inlined
-        // here with `list_plugins()` (every status), while `set_plugin_enabled`
-        // used `list_active_plugins()`: two authors, opposite answers, and the
-        // permissive one ran on every boot.
-        let projection = self.republish_plugin_projections().await;
-        tracing::debug!(
-            plugin_skill_dirs = projection.plugin_skill_dirs.len(),
-            plugin_subagents = projection.subagents.len(),
-            "published plugin projections"
-        );
-
-        let mut cache = self.cache_state.write().await;
-        cache.loaded = true;
-
-        tracing::info!(
-            "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
-            summary.skills_loaded,
-            summary.agents_loaded,
-            summary.plugins_loaded,
-            summary.hooks_loaded,
-        );
-
-        Ok(summary)
-    }
 
     /// Ensure extensions are loaded (lazy-loading entry point).
     ///
@@ -793,48 +521,9 @@ impl ExtensionManager {
             return Ok(());
         }
 
-        // load_all() sets cache_state.loaded = true on success
-        self.load_all().await?;
+        // `load_guard` is held above; `load_all` would take it again.
+        self.load_all_locked().await?;
         Ok(())
-    }
-
-    /// Force reload all extensions
-    pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
-        self.reload_count.fetch_add(1, Ordering::SeqCst);
-
-        // Hold load_guard for the entire reload so a concurrent
-        // `ensure_loaded` cannot interleave its own `load_all` between the
-        // cache reset below and the `load_all` we run at the end. Without
-        // this, two concurrent loads can race: each will see
-        // `loaded = false`, both will execute `load_all`, and the second
-        // will double-initialize `cache_state` / `active_plugin_tools` /
-        // `plugin_tool_revision`.
-        let _guard = self.load_guard.lock().await;
-
-        {
-            let mut state = self.cache_state.write().await;
-            state.loaded = false;
-        }
-
-        // Reset hook executor (registry.clear() is called inside load_all)
-        *self.hook_executor.write().await =
-            HookExecutor::empty().with_consent(ShellHookConsent::shared());
-
-        let summary = self.load_all().await?;
-
-        // Re-register plugin MCP servers after a hot-reload so a plugin
-        // installed/edited at runtime starts its servers without a restart.
-        // No-op when no MCP handle is attached (CLI/test paths).
-        self.sync_mcp_plugin_servers().await;
-
-        // Service lifecycle across hot-reloads: tear down services whose
-        // plugin vanished or was disabled (their registry entries are gone —
-        // the ServiceManager's registration snapshots keep them stoppable),
-        // then autostart services of the now-active plugin set.
-        self.stop_orphaned_services().await;
-        self.sync_plugin_services().await;
-
-        Ok(summary)
     }
 
     /// Record that Aleph itself just wrote `path`. The hot-reload watcher
@@ -868,7 +557,7 @@ impl ExtensionManager {
     /// - `Skill` → no-op (delegated to the already-wired `SkillWatcher`
     ///   which does per-skill targeted reloads — full `reload()` here would
     ///   double-fire).
-    /// - `HooksConfig` → [`Self::sync_user_hooks`] only (cheap, no plugin
+    /// - `HooksConfig` → `Views::sync_user_hooks` only (cheap, no plugin
     ///   re-discovery).
     /// - everything else → full [`Self::reload`].
     pub async fn start_watcher(
@@ -942,7 +631,7 @@ impl ExtensionManager {
                             paths = ?effective.changed_paths,
                             "Extension watcher: hooks config changed, reloading user hooks"
                         );
-                        mgr.sync_user_hooks().await;
+                        mgr.views().sync_user_hooks().await;
                     });
                 }
                 _ => {
@@ -953,8 +642,13 @@ impl ExtensionManager {
                             paths = ?effective.changed_paths,
                             "Extension watcher: triggering full reload"
                         );
-                        if let Err(e) = mgr.reload().await {
-                            tracing::warn!(error = %e, "Extension hot reload failed");
+                        match mgr.reload().await {
+                            Ok(report) if !report.failed.is_empty() => tracing::warn!(
+                                failed = ?report.failed.iter().map(|(id, e)| format!("{id}: {e}")).collect::<Vec<_>>(),
+                                "Extension hot reload: some plugins did not mount"
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(error = %e, "Extension hot reload failed"),
                         }
                     });
                 }
@@ -999,21 +693,23 @@ impl ExtensionManager {
     /// where a constant answer looks like a working shadowing rule. It stopped
     /// being harmless the moment the owner trust policy gained a producer.
     ///
-    /// # What this walk covers, and why the trust policy is still safe
+    /// # What this walk covers (D-2, 2026-09-21)
     ///
-    /// It unions the skill, command and agent directories too, so on a stock
-    /// install ~88 of the ~91 entries are bundled *skills*, not plugins. That
-    /// looks alarming next to a policy that refuses unvouched plugins, and a
-    /// `trust_gated` flag was briefly added here to exempt them.
+    /// This used to also union the skill, command and agent directories, so
+    /// on a stock install ~88 of the ~91 entries were bundled *skills*, not
+    /// plugins — no manifest adapter can match a skill/agent/command dir, so
+    /// every one of them became an `error` row in `plugins.list`
+    /// ("`No manifest adapter matched directory`"). A `trust_gated` flag was
+    /// briefly added to exempt those rows from the owner trust policy; it was
+    /// a no-op (the rows were errors *before* the trust gate ran, gate or no
+    /// gate) and was retracted (R10). The union itself carried no plugin the
+    /// plugin scanner didn't already find, so it has been removed: this walk
+    /// now returns plugin roots only, from `discover_plugins_with_extra`.
     ///
-    /// It was a no-op and has been retracted (R10). A skill directory has no
-    /// plugin manifest, so `adapter_registry.parse_dir` rejects it and the
-    /// registry records an `error` row *before* the trust gate is reached —
-    /// with the gate forced on for every entry, the blocked set was still
-    /// exactly the three planted plugins. Those rows are not `loaded` either
-    /// before or after enforcement, which is also why "0 of 91 loaded" was a
-    /// badly-chosen QA assertion rather than the regression it looked like.
-    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<DiscoveredExtensionDir>> {
+    /// The sources that pass could not read ride along (`unreadable`): the
+    /// load stores them with its rows, so "unknown this load" is never read
+    /// as "not installed" downstream.
+    fn collect_plugin_dirs(&self) -> ExtensionResult<CollectedPluginDirs> {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
@@ -1023,24 +719,32 @@ impl ExtensionManager {
         // `.aleph/plugins` (+ `.aleph/plugins.local`), so project-local installs
         // are discovered alongside the global `~/.aleph/plugins` (Claude-Code
         // style). The daemon serves all registered projects from one process,
-        // so discovery is union-of-all; isolating which project sees which
-        // plugin at runtime is a separate, deferred concern. A failure to read
-        // the registry degrades to global-only discovery.
-        let project_plugin_parents: Vec<PathBuf> = crate::projects::ProjectStore::shared()
-            .list()
-            .map(|projects| {
-                projects
-                    .into_iter()
-                    .filter_map(|p| p.workspace_path)
-                    .flat_map(|root| {
-                        [
-                            root.join(".aleph/plugins"),
-                            root.join(".aleph/plugins.local"),
-                        ]
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // so discovery is union-of-all; each parent is handed to the scanner
+        // WITH the project it belongs to, and that root becomes the row's
+        // `scope_key` — the fact the per-face visibility gate reads. A failure
+        // to read the registry degrades to global-only discovery.
+        let project_plugin_parents: Vec<crate::discovery::ProjectPluginParent> =
+            crate::projects::ProjectStore::shared()
+                .list()
+                .map(|projects| {
+                    projects
+                        .into_iter()
+                        .filter_map(|p| p.workspace_path)
+                        .flat_map(|root| {
+                            [
+                                crate::discovery::ProjectPluginParent {
+                                    project_root: root.clone(),
+                                    dir: root.join(".aleph/plugins"),
+                                },
+                                crate::discovery::ProjectPluginParent {
+                                    project_root: root.clone(),
+                                    dir: root.join(".aleph/plugins.local"),
+                                },
+                            ]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
         #[cfg(test)]
         let project_plugin_parents = {
@@ -1049,47 +753,47 @@ impl ExtensionManager {
             parents
         };
 
-        // Collect from all discovery sources: skills, commands, agents, plugins.
-        let all_dirs = [
-            self.discovery.discover_skill_dirs(),
-            self.discovery.discover_command_dirs(),
-            self.discovery.discover_agent_dirs(),
-            self.discovery
-                .discover_plugins_with_extra(&project_plugin_parents),
-        ];
-
-        for dirs in all_dirs.into_iter().flatten() {
-            for d in dirs {
-                let canonical = match d.path.canonicalize() {
-                    Ok(path) => path,
-                    Err(e) => {
-                        tracing::debug!("Failed to canonicalize path {:?}: {}", d.path, e);
-                        d.path.clone()
-                    }
-                };
-                if seen.insert(canonical) {
-                    result.push(DiscoveredExtensionDir {
-                        origin: PluginOrigin::classify(d.source),
-                        path: d.path,
-                    });
+        // Plugin roots come from the plugin scanner only. A skill, agent or
+        // command found by the component scanners is a component, not a
+        // plugin root — no manifest adapter can match one — so unioning them
+        // here only manufactured `Error` rows in `plugins.list` (88 of 89 on
+        // the first real-machine run of the 2026-09-20 round, D-2).
+        let discovery = self
+            .discovery
+            .discover_plugins_with_extra(&project_plugin_parents)?;
+        for d in discovery.found {
+            let canonical = match d.path.canonicalize() {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::debug!("Failed to canonicalize path {:?}: {}", d.path, e);
+                    d.path.clone()
                 }
+            };
+            if seen.insert(canonical) {
+                result.push(DiscoveredExtensionDir {
+                    origin: PluginOrigin::classify(d.source()),
+                    scope_key: visibility::ScopeKey::from_discovery(&d),
+                    path: d.path,
+                });
             }
         }
 
-        Ok(result)
+        Ok(CollectedPluginDirs {
+            dirs: result,
+            unreadable: discovery.unreadable,
+        })
     }
+}
 
-    /// Layer user-level hook configs (`~/.aleph/hooks.json`, project files)
-    /// on top of the plugin-registered hooks. Runs after
-    /// [`Self::sync_hooks_from_registry`] so user entries are evaluated in
-    /// the same executor pass — priority + matcher determine ordering, not
-    /// load order.
-    ///
-    /// Idempotent: every prior entry tagged with the `user:` plugin prefix
-    /// is dropped before the freshly-parsed config is appended. This lets the
-    /// hot-reload watcher call this method on every `hooks.json` change
-    /// without leaking duplicate registrations.
-    pub(crate) async fn sync_user_hooks(&self) {
+/// The hook and tool-index halves of the view recomputation
+/// (`lifecycle.rs::Views::after_transition`); the skill / sub-agent half is
+/// in `projection.rs`.
+impl projection::Views {
+    /// Compute the user-level hook configs (`~/.aleph/hooks.json`, project
+    /// files) fresh from disk. Pure derivation — does not touch
+    /// `hook_executor`. The one source both hook-install paths read from
+    /// (判据 §12); see `Views::after_transition` for how they differ.
+    fn user_hook_configs() -> Vec<HookConfig> {
         let cwd = std::env::current_dir().ok();
         // App mode: the daemon CWD is meaningless, so also load hooks from
         // every registered project folder. The executor gates each project
@@ -1105,7 +809,22 @@ impl ExtensionManager {
                     .collect()
             })
             .unwrap_or_default();
-        let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots);
+        crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots)
+    }
+
+    /// Layer user-level hook configs on top of whatever `hook_executor`
+    /// currently holds, under ONE write lock. Called ALONE by the hot-reload
+    /// watcher on every `hooks.json` change (no `load_guard`, no registry
+    /// involvement), so it must stay atomic on its own: this is an
+    /// incremental swap, not a rebuild — every prior entry tagged with the
+    /// `user:` plugin prefix is dropped, then the freshly-parsed set is
+    /// appended, both under the same guard. Idempotent, so repeat calls never
+    /// leak duplicate registrations.
+    ///
+    /// Not called by `after_transition` — see `Views::after_transition` for
+    /// how that path installs the user layer instead.
+    pub(crate) async fn sync_user_hooks(&self) {
+        let user_hooks = Self::user_hook_configs();
         let mut executor = self.hook_executor.write().await;
         let removed = executor.remove_by_plugin_prefix("user:");
         if user_hooks.is_empty() {
@@ -1121,95 +840,44 @@ impl ExtensionManager {
         tracing::info!(count, removed, "Loaded user-level hook configs");
     }
 
-    /// Sync hooks from `PluginRegistry` to `HookExecutor`.
+    /// Derive `HookConfig`s from `PluginRegistry`'s hook registrations and
+    /// add them to the CALLER-OWNED `executor`.
     ///
     /// Reads `HookRegistration` entries from the registry and converts them
-    /// to `HookConfig` entries that `HookExecutor` understands.
-    async fn sync_hooks_from_registry(&self) {
-        let hook_regs: Vec<HookRegistration> = {
+    /// to `HookConfig` entries that `HookExecutor` understands. Each hook is
+    /// stamped with the OWNING ROW's `scope_key`: a hook shipped by a
+    /// project-local plugin is visible only inside that project, exactly
+    /// like the plugin itself.
+    ///
+    /// Takes `executor` by `&mut` instead of writing `self.hook_executor`
+    /// directly, so its caller can build a next executor off-lock; see
+    /// `Views::after_transition`.
+    async fn sync_hooks_from_registry(&self, executor: &mut HookExecutor) {
+        let hook_regs: Vec<(HookRegistration, visibility::ScopeKey)> = {
             let registry = self.plugin_registry.read().await;
             registry
                 .list_hooks()
                 .into_iter()
-                .filter(|hook| {
+                .filter_map(|hook| {
                     registry
                         .get_plugin(&hook.plugin_id)
-                        .is_some_and(|plugin| plugin.status.is_active())
+                        .filter(|plugin| plugin.status.is_active())
+                        .map(|plugin| (hook.clone(), plugin.scope_key.clone()))
                 })
-                .cloned()
                 .collect()
         };
 
-        let mut executor = self.hook_executor.write().await;
-        // HookExecutor was already reset (via load_all's clear path or reload).
-        // Convert HookRegistration → HookConfig for the executor, consuming
-        // each registration by value so its fields move into the config.
-        for hr in hook_regs {
-            let HookRegistration {
-                event,
-                priority,
-                handler,
-                plugin_id,
-                kind,
-                matcher,
-                actions,
-                plugin_root,
-                timeout_secs,
-                ..
-            } = hr;
-            // Registrations carrying concrete actions (plugin-shipped
-            // hooks.json shell hooks) dispatch those directly — through the
-            // consent gate for command/http. Registrations without actions
-            // are runtime (WASM) hooks: emit a live Plugin dispatch action so
-            // the executor invokes the plugin's exported `handler` via the
-            // process-global ExtensionManager when the event fires. The
-            // `handler` field is kept for diagnostics display either way.
-            let runtime_hook = actions.is_empty();
-            let actions = if runtime_hook {
-                vec![HookAction::Plugin {
-                    plugin_id: plugin_id.clone(),
-                    handler: handler.clone(),
-                }]
-            } else {
-                actions
-            };
-            // Kind: explicit registration wins. Otherwise file-based action
-            // hooks get the same per-event default the user-hooks loader
-            // applies (blocking-capable events → interceptor, so a plugin
-            // PreToolUse command hook can actually block), while runtime
-            // (WASM) handler hooks keep their historical Observer default —
-            // flipping them implicitly would turn a handler error into a
-            // fail-closed tool block existing plugins never signed up for.
-            let kind = kind.unwrap_or_else(|| {
-                if runtime_hook {
-                    HookKind::default()
-                } else {
-                    hooks::default_kind_for_event(event)
-                }
-            });
-            let hook_config = HookConfig {
-                event,
-                kind,
-                priority: match priority {
-                    i if i <= HookPriority::System.as_i32() => HookPriority::System,
-                    i if i <= HookPriority::High.as_i32() => HookPriority::High,
-                    i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
-                    _ => HookPriority::Normal,
-                },
-                matcher,
-                actions,
-                plugin_name: plugin_id,
-                plugin_root: plugin_root.unwrap_or_default(),
-                handler: Some(handler),
-                timeout_secs,
-            };
-            executor.add_hook(hook_config);
+        for (hr, scope_key) in hook_regs {
+            executor.add_hook(hook_config_from_registration(hr, scope_key));
         }
     }
 
     fn build_active_plugin_tool_index(
         registry: &PluginRegistry,
-    ) -> HashMap<String, ToolRegistration> {
+    ) -> (
+        HashMap<String, ToolRegistration>,
+        HashMap<String, visibility::ScopeKey>,
+    ) {
         let mut active_plugins: Vec<String> = registry
             .list_active_plugins()
             .into_iter()
@@ -1231,25 +899,41 @@ impl ExtensionManager {
             }
         }
 
-        active_tools
+        let scope_keys = registry
+            .list_plugins()
+            .into_iter()
+            .map(|p| (p.id.clone(), p.scope_key.clone()))
+            .collect();
+
+        (active_tools, scope_keys)
     }
 
     async fn refresh_active_plugin_tools(&self) {
-        let active_tools = {
+        let (active_tools, scope_keys) = {
             let registry = self.plugin_registry.read().await;
             Self::build_active_plugin_tool_index(&registry)
         };
 
+        // Both maps are derived under the one registry read above, but published
+        // by two sequential writes: a reader between them can see new tools with
+        // a not-yet-published key, which reads as `None` → not visible
+        // (fail-closed), never the reverse.
         *self
             .active_plugin_tools
             .write()
             .unwrap_or_else(|e| e.into_inner()) = active_tools;
+        *self
+            .plugin_scope_keys
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = scope_keys;
         self.plugin_tool_revision.fetch_add(1, Ordering::SeqCst);
     }
+}
 
+impl ExtensionManager {
     /// Refresh sync runtime caches derived from the async plugin registry.
     pub async fn sync_runtime_snapshots(&self) {
-        self.refresh_active_plugin_tools().await;
+        self.views().refresh_active_plugin_tools().await;
     }
 
     /// Monotonic revision for active plugin tool metadata.
@@ -1266,6 +950,41 @@ impl ExtensionManager {
         let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
         snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
         snapshot
+    }
+
+    /// [`Self::active_plugin_tools_snapshot`] narrowed to the plugins a
+    /// session in `ctx` may see. This is face ① of the visibility predicate;
+    /// the request-build site (`tool_refresh::active_plugin_tools_for_agent`)
+    /// is its only production caller.
+    pub fn active_plugin_tools_visible_to(
+        &self,
+        ctx: &visibility::VisibilityCtx,
+    ) -> Vec<ToolRegistration> {
+        self.active_plugin_tools_snapshot()
+            .into_iter()
+            .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
+            .collect()
+    }
+
+    /// The visibility key of a registered plugin, any status. `None` = unknown id.
+    pub fn plugin_scope_key(&self, plugin_id: &str) -> Option<visibility::ScopeKey> {
+        self.plugin_scope_keys
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(plugin_id)
+            .cloned()
+    }
+
+    /// May a session in `ctx` see anything this plugin contributes?
+    ///
+    /// Fail-closed on an unknown id: the registry is the only authority on
+    /// where a plugin came from, and a plugin it cannot name has no key to
+    /// compare. Every capability face (tool index, skills, sub-agents, slash
+    /// list, request-time MCP join) asks this; hooks compare their own
+    /// stamped key with the same `visible_to`.
+    pub fn plugin_visible(&self, plugin_id: &str, ctx: &visibility::VisibilityCtx) -> bool {
+        self.plugin_scope_key(plugin_id)
+            .is_some_and(|key| visibility::visible_to(&key, ctx))
     }
 
     /// Resolve an active plugin tool by short name or `plugin_id:name`.
@@ -1290,49 +1009,82 @@ impl ExtensionManager {
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
     }
+}
 
-    /// Hot-reload a single plugin by ID.
-    ///
-    /// Unregisters all existing capabilities, re-parses the manifest from disk,
-    /// and re-registers all capabilities declared in the updated manifest.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the plugin is not found, the manifest cannot be parsed,
-    /// or capability registration fails (e.g. missing permissions).
-    pub async fn reload_plugin(&self, plugin_id: &str) -> anyhow::Result<()> {
-        // Find root dir from existing record
-        let root_dir = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .get_plugin(plugin_id)
-                .map(|p| p.root_dir.clone())
-                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {plugin_id}"))?
-        };
-
-        // Re-parse manifest via adapter registry
-        let output = self.adapter_registry.parse_dir(&root_dir)?;
-
-        // Use permissions from adapter output (consistent with load_all path)
-        let permissions = output.permissions.clone();
-
-        // Build updated plugin record
-        let mut record = PluginRecord::from_adapter_output(&output, root_dir.clone());
-        if let Ok(manifest) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
-            record.kind = manifest.kind;
+/// One plugin hook registration as the executor runs it, stamped with the
+/// OWNING ROW's `scope_key`. The one conversion: `sync_hooks_from_registry`
+/// feeds every active plugin's hooks through it, and a test that parses a
+/// plugin directory crosses the same derivation.
+///
+/// Consumes the registration by value so its fields move into the config.
+/// Every field is named (no `..`): a field added to the registration must be
+/// decided on here, not silently dropped between the parser that filled it
+/// and the executor that should read it.
+pub(crate) fn hook_config_from_registration(
+    hr: HookRegistration,
+    scope_key: visibility::ScopeKey,
+) -> HookConfig {
+    let HookRegistration {
+        event,
+        priority,
+        handler,
+        name: _,
+        description: _,
+        plugin_id,
+        kind,
+        matcher,
+        actions,
+        plugin_root,
+        timeout_secs,
+        declared_event,
+    } = hr;
+    // Registrations carrying concrete actions (plugin-shipped hooks.json
+    // shell hooks) dispatch those directly — through the consent gate for
+    // command/http. Registrations without actions are runtime (WASM) hooks:
+    // emit a live Plugin dispatch action so the executor invokes the
+    // plugin's exported `handler` via the process-global ExtensionManager
+    // when the event fires. The `handler` field is kept for diagnostics
+    // display either way.
+    let runtime_hook = actions.is_empty();
+    let actions = if runtime_hook {
+        vec![HookAction::Plugin {
+            plugin_id: plugin_id.clone(),
+            handler: handler.clone(),
+        }]
+    } else {
+        actions
+    };
+    // Kind: explicit registration wins. Otherwise file-based action hooks
+    // get the same per-event default the user-hooks loader applies
+    // (blocking-capable events → interceptor, so a plugin PreToolUse command
+    // hook can actually block), while runtime (WASM) handler hooks keep
+    // their historical Observer default — flipping them implicitly would
+    // turn a handler error into a fail-closed tool block existing plugins
+    // never signed up for.
+    let kind = kind.unwrap_or_else(|| {
+        if runtime_hook {
+            HookKind::default()
+        } else {
+            hooks::default_kind_for_event(event)
         }
-
-        // Atomically unregister old capabilities and register new ones
-        let mut registry = self.plugin_registry.write().await;
-        let mut api =
-            registrar::CapabilityApi::new(&mut registry, output.plugin_id.clone(), permissions);
-        api.reload(record, output.capabilities)?;
-        drop(registry);
-
-        self.refresh_active_plugin_tools().await;
-
-        tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
-        Ok(())
+    });
+    HookConfig {
+        event,
+        kind,
+        priority: match priority {
+            i if i <= HookPriority::System.as_i32() => HookPriority::System,
+            i if i <= HookPriority::High.as_i32() => HookPriority::High,
+            i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
+            _ => HookPriority::Normal,
+        },
+        matcher,
+        actions,
+        plugin_name: plugin_id,
+        plugin_root: plugin_root.unwrap_or_default(),
+        handler: Some(handler),
+        timeout_secs,
+        declared_event,
+        scope_key,
     }
 }
 
@@ -1466,14 +1218,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_agent_to_def_maps_subagent_and_drops_body() {
+    fn plugin_agent_to_def_maps_subagent_and_keeps_body() {
         use crate::extension::types::AgentMode as ExtMode;
         use crate::extension::AgentRegistration;
 
         let mut reg = AgentRegistration {
             name: "deployer".into(),
             description: Some("Ship the app".into()),
-            content: "SYSTEM PROMPT BODY — must be dropped like disk agents".into(),
+            content: "You are the deployer.\n".into(),
             mode: ExtMode::Subagent,
             ..Default::default()
         };
@@ -1493,6 +1245,7 @@ mod tests {
         assert_eq!(def.model_hint.as_deref(), Some("fast"));
         assert!(def.is_tool_allowed("bash"), "declared-allowed tool");
         assert!(!def.is_tool_allowed("file_write"), "declared-denied tool");
+        assert_eq!(def.system_prompt.as_deref(), Some("You are the deployer."));
 
         // A primary-only plugin agent is not a delegatable sub-agent.
         let primary = AgentRegistration {
@@ -1511,14 +1264,162 @@ mod tests {
         assert!(plugin_agent_to_def(&blank).is_none());
     }
 
+    #[test]
+    fn disk_and_plugin_agents_share_one_body_mapping() {
+        // The same body through both loaders lands as the same prompt —
+        // a second mapping is where the two would drift (判据 §16). The
+        // empty and whitespace-only bodies are where a copy would drift
+        // first: `Some("")` would inject a bare separator.
+        use crate::extension::types::AgentMode as ExtMode;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.md");
+        for (body, expected) in [
+            ("\n\nYou are X.\n\n", Some("You are X.")),
+            ("", None),
+            ("  \n\t\n", None),
+        ] {
+            let reg = crate::extension::AgentRegistration {
+                name: "x".into(),
+                content: body.into(),
+                mode: ExtMode::Subagent,
+                ..Default::default()
+            };
+            let via_plugin = plugin_agent_to_def(&reg).unwrap().system_prompt;
+            std::fs::write(
+                &path,
+                format!("---\nid: x\ndescription: d\nwhen_to_use: w\n---{body}"),
+            )
+            .unwrap();
+            let via_disk =
+                crate::agents::loader::parse_file(&path, crate::agents::AgentSource::User)
+                    .unwrap()
+                    .system_prompt;
+            assert_eq!(via_plugin, via_disk, "{body:?}");
+            assert_eq!(via_disk.as_deref(), expected, "{body:?}");
+        }
+    }
+
+    /// Every plugin agent in `<dir>/agents`, parsed by the production scan and
+    /// converted by the production `plugin_agent_to_def`, by name.
+    fn plugin_agent_defs(dir: &std::path::Path) -> HashMap<String, crate::agents::AgentDef> {
+        crate::extension::manifest::parsers::parse_agents_dir(dir, "agents", "plug")
+            .unwrap()
+            .into_iter()
+            .filter_map(|cap| match cap {
+                crate::extension::capability::CapabilityDeclaration::Agent(reg) => {
+                    plugin_agent_to_def(&reg).map(|def| (def.id.clone(), def))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A Claude Code agent's `tools:` only narrows. A declaration that names
+    /// no Aleph tool — every entry dropped, or a shape with no name in it — is
+    /// deny-all, never the constructor wildcard (判据 §8). Absent `tools:`
+    /// keeps the wildcard (Claude Code: omitted = inherit).
+    #[test]
+    fn an_agent_tools_list_that_names_nothing_allows_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        for (name, tools) in [
+            ("no-counterpart", "tools: NotebookEdit"),
+            ("comma", "tools: \",\""),
+            ("empty-list", "tools: []"),
+            ("map", "tools: {Read: true}"),
+            ("absent", ""),
+        ] {
+            std::fs::write(
+                agents.join(format!("{name}.md")),
+                format!("---\nname: {name}\ndescription: d\n{tools}\n---\nYou are {name}.\n"),
+            )
+            .unwrap();
+        }
+        let defs = plugin_agent_defs(dir.path());
+        for name in ["no-counterpart", "comma", "empty-list", "map"] {
+            let def = &defs[name];
+            assert!(
+                def.allowed_tools.is_empty(),
+                "`{name}`: {:?}",
+                def.allowed_tools
+            );
+            for tool in ["file_read", "bash", "grep", "skill_read"] {
+                assert!(
+                    !def.is_tool_allowed(tool),
+                    "`{name}` must allow no `{tool}`"
+                );
+            }
+        }
+        let absent = &defs["absent"];
+        assert_eq!(absent.allowed_tools, vec!["*"]);
+        assert!(absent.is_tool_allowed("file_read"));
+    }
+
+    /// A Claude Code agent's `model:` goes through the same pin policy a
+    /// plugin command's does. `inherit` and the family aliases pin nothing.
+    /// A retired id pins nothing either, and the agent still loads. Any
+    /// other id is the hint, as written. Handing `inherit` on as a hint made
+    /// the spawner ask the provider for a model called "inherit".
+    #[test]
+    fn a_cc_agent_model_goes_through_the_command_pin_policy() {
+        let def_with = |model: &str| {
+            plugin_agent_to_def(&crate::extension::AgentRegistration {
+                name: "m".into(),
+                mode: crate::extension::types::AgentMode::Subagent,
+                model: Some(model.into()),
+                ..Default::default()
+            })
+            .expect("the agent loads whatever its model says")
+        };
+        for pins_nothing in ["inherit", "sonnet", "opus", "haiku", "  "] {
+            assert_eq!(def_with(pins_nothing).model_hint, None, "{pins_nothing:?}");
+        }
+        // Retired by its vendor (the catalog's lifecycle table): the
+        // provider would fail it, so it is no hint — and the agent loads.
+        assert_eq!(def_with("deepseek-reasoner").model_hint, None);
+        assert_eq!(
+            def_with("claude-sonnet-5").model_hint.as_deref(),
+            Some("claude-sonnet-5")
+        );
+    }
+
+    /// A `tools` map of only `false` entries (a runtime registration's deny
+    /// list) keeps its meaning: every tool except those.
+    #[test]
+    fn a_false_only_tools_map_denies_those_and_keeps_the_rest() {
+        let reg = crate::extension::AgentRegistration {
+            name: "d".into(),
+            mode: crate::extension::types::AgentMode::Subagent,
+            tools: Some(HashMap::from([("bash".to_string(), false)])),
+            ..Default::default()
+        };
+        let def = plugin_agent_to_def(&reg).unwrap();
+        assert_eq!(def.allowed_tools, vec!["*"]);
+        assert_eq!(def.denied_tools, vec!["bash"]);
+        assert!(!def.is_tool_allowed("bash"));
+        assert!(def.is_tool_allowed("file_read"));
+    }
+
     /// Build an isolated manager whose only project plugin root is `dir`, with
-    /// the durable plugin document redirected to a temp file.
+    /// the durable plugin document redirected to a temp file. Plugins are
+    /// discovered under `<dir>/plugins`; `isolated_manager_at` takes the
+    /// parent explicitly for a test that needs the plugin somewhere else.
     ///
     /// `ALEPH_HOME` is deliberately **not** touched: it is a process-global
     /// switch and libtest runs tests in parallel, so two tests redirecting it
     /// would silently fight. The config path is a constructor parameter for
     /// exactly this reason.
     async fn isolated_manager(dir: &std::path::Path) -> (ExtensionManager, PathBuf) {
+        isolated_manager_at(dir, dir.join("plugins")).await
+    }
+
+    /// `isolated_manager` with the plugin parent directory chosen by the
+    /// caller (the project root stays `dir`).
+    async fn isolated_manager_at(
+        dir: &std::path::Path,
+        plugins_parent: PathBuf,
+    ) -> (ExtensionManager, PathBuf) {
         let cfg_path = dir.join("plugins.toml");
         let manager = ExtensionManager::new(ExtensionConfig {
             discovery: DiscoveryConfig {
@@ -1526,9 +1427,13 @@ mod tests {
                 scan_claude_dirs: false,
                 scan_project_dirs: false,
                 max_upward_depth: 0,
+                claude_home_override: None,
             },
             plugins_config_path: Some(cfg_path.clone()),
-            extra_plugin_parents: vec![dir.join("plugins")],
+            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                project_root: dir.to_path_buf(),
+                dir: plugins_parent,
+            }],
         })
         .await
         .unwrap();
@@ -1545,12 +1450,61 @@ mod tests {
         .unwrap();
     }
 
+    /// D-2: a component found by the skill / agent / command scanners is not a
+    /// plugin root — no manifest adapter can match it, so under the old union
+    /// every `<scan>/skills/<x>` became an `Error` row in `plugins.list`
+    /// (88 of 89 rows on the first real-machine run). The project `.aleph/`
+    /// is reached through the upward walk (`max_upward_depth: 1` = the
+    /// working dir itself); the real plugin is the positive control.
+    #[tokio::test]
+    async fn component_dirs_are_not_plugin_candidates() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join(".aleph/skills/planted-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: planted-skill\n---\n").unwrap();
+        write_project_plugin(dir.path(), "real-plugin");
+
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: dir.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: true,
+                max_upward_depth: 1,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(dir.path().join("plugins.toml")),
+            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                project_root: dir.path().to_path_buf(),
+                dir: dir.path().join("plugins"),
+            }],
+        })
+        .await
+        .unwrap();
+
+        let found: Vec<PathBuf> = manager
+            .collect_plugin_dirs()
+            .unwrap()
+            .dirs
+            .into_iter()
+            .map(|d| d.path)
+            .collect();
+        assert!(
+            found.iter().any(|p| p.ends_with("plugins/real-plugin")),
+            "positive control: the real plugin must be discovered: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|p| p.ends_with("skills/planted-skill")),
+            "a skill dir is a component, not a plugin root: {found:?}"
+        );
+    }
+
     /// The regression this whole round exists for.
     ///
     /// `aleph plugin disable X` used to write a `<plugin>/.disabled` marker
     /// that **nothing ever read** (four writers, zero readers), so the disable
     /// lasted exactly as long as the process. This asserts the load path
-    /// consults the durable document: delete the `is_enabled` check in
+    /// consults the durable document: delete the `is_enabled_for` check in
     /// `load_all` and this fails by name.
     #[tokio::test]
     async fn a_disabled_plugin_stays_inactive_across_a_fresh_load() {
@@ -1576,7 +1530,7 @@ mod tests {
         assert!(manager.set_plugin_enabled("quiet-plugin", false).await);
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
-                .is_enabled("quiet-plugin"),
+                .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
             "the preference must reach disk, not just the in-memory registry"
         );
 
@@ -1595,10 +1549,10 @@ mod tests {
         );
     }
 
-    /// A disabled plugin is registered *with* its capabilities so a runtime
-    /// re-enable has something behind it; only the active-status filter keeps
-    /// it away from the model. Skipping registration instead would make
-    /// `set_plugin_enabled(id, true)` flip a status pointing at nothing.
+    /// A disabled plugin keeps a listable `Disabled` row (no capability rows),
+    /// and `set_plugin_enabled(id, true)` goes through `mount`, which registers
+    /// the capabilities itself — so a runtime re-enable has something behind
+    /// it without a full reload.
     #[tokio::test]
     async fn re_enabling_needs_no_reload() {
         // `Config::load()` writes a default config when none exists, so an
@@ -1673,22 +1627,14 @@ mod tests {
             "the legacy marker's intent must be honoured on the migrating load"
         );
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).is_enabled("old-timer"),
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .is_enabled_for("old-timer", PluginOrigin::Workspace),
             "and be written into the durable document"
         );
         assert!(
             !marker.exists(),
             "the marker must be removed once migrated, or it is a second source"
         );
-    }
-
-    #[tokio::test]
-    async fn sync_mcp_plugin_servers_is_noop_without_handle() {
-        // With no MCP manager attached (the default for CLI/test paths), the
-        // sync must short-circuit to 0 *before* touching the loader/registry —
-        // so it never even forces an extension load.
-        let manager = ExtensionManager::with_defaults().await.unwrap();
-        assert_eq!(manager.sync_mcp_plugin_servers().await, 0);
     }
 
     #[tokio::test]
@@ -1737,7 +1683,7 @@ mod tests {
     async fn test_extension_manager_get_plugin_loader() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let loader = manager.get_plugin_loader().await;
-        assert!(!loader.is_any_runtime_active());
+        assert!(!loader.is_wasm_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
     }
 
@@ -1880,5 +1826,288 @@ mod tests {
         std::fs::create_dir(&outside).unwrap();
         let err = ensure_plugin_root_within_authoritative(&root, &outside).unwrap_err();
         assert!(err.contains("outside authoritative"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        use crate::extension::visibility::{ScopeKey, VisibilityCtx};
+        let dir = tempfile::tempdir().unwrap();
+        write_project_plugin(dir.path(), "p2-vis");
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+
+        let here = VisibilityCtx {
+            project_root: Some(crate::extension::visibility::canonical_root(dir.path())),
+        };
+        let elsewhere = VisibilityCtx { project_root: None };
+        assert_eq!(
+            manager.plugin_scope_key("p2-vis"),
+            Some(ScopeKey::project(dir.path()))
+        );
+        assert!(manager.plugin_visible("p2-vis", &here));
+        assert!(!manager.plugin_visible("p2-vis", &elsewhere));
+        // Never registered → not visible anywhere. `Some(true)` here would let
+        // a face show a tool whose owner the registry cannot name.
+        assert!(!manager.plugin_visible("never-registered", &here));
+        assert_eq!(manager.plugin_scope_key("never-registered"), None);
+
+        // The key map covers every registered row, any status — activation is
+        // a separate question each face asks itself. `unmount` is a lifecycle
+        // transition (Loaded → Disabled) that runs `after_transition`, which
+        // rebuilds both snapshots; the row survives, so the key must too.
+        manager.unmount("p2-vis").await.unwrap();
+        assert_eq!(
+            manager.plugin_scope_key("p2-vis"),
+            Some(ScopeKey::project(dir.path())),
+            "the key map covers every registered row, any status — activation is a separate question each face asks itself"
+        );
+        assert!(manager.plugin_visible("p2-vis", &here));
+        assert!(
+            !manager
+                .active_plugin_tools_snapshot()
+                .iter()
+                .any(|t| t.plugin_id == "p2-vis"),
+            "the tool index, by contrast, is active-only"
+        );
+    }
+
+    /// Face ①: a Project(p) plugin's tools are in the index for a session in
+    /// p and absent for a session with no project. The snapshot is global;
+    /// the request-time filter is what changes.
+    #[tokio::test]
+    async fn plugin_tool_index_is_filtered_by_the_owning_plugins_visibility() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut record = PluginRecord::new(
+                "p2-tools".into(),
+                "P2 Tools".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Workspace,
+            );
+            record.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(record);
+            registry.register_tool(ToolRegistration {
+                name: "p2_scoped_tool".into(),
+                description: "only in its project".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_p2_scoped_tool".into(),
+                plugin_id: "p2-tools".into(),
+            });
+            let mut global = PluginRecord::new(
+                "p2-global-tools".into(),
+                "P2 Global".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Global,
+            );
+            global.scope_key = ScopeKey::Global;
+            registry.register_plugin(global);
+            registry.register_tool(ToolRegistration {
+                name: "p2_global_tool".into(),
+                description: "everywhere".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_p2_global_tool".into(),
+                plugin_id: "p2-global-tools".into(),
+            });
+        }
+        manager.sync_runtime_snapshots().await;
+
+        let names = |ctx: &VisibilityCtx| -> Vec<String> {
+            manager
+                .active_plugin_tools_visible_to(ctx)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+        assert_eq!(names(&in_p), vec!["p2_global_tool", "p2_scoped_tool"]);
+        assert_eq!(names(&nowhere), vec!["p2_global_tool"]);
+        // The unfiltered snapshot still holds both: the filter is per request.
+        assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
+    }
+
+    /// Face ⑤: the owner decoded from a plugin server id is a key the
+    /// manager answers for — a project-keyed plugin's server is visible in
+    /// its project and nowhere else.
+    #[tokio::test]
+    async fn plugin_visible_decides_the_mcp_join_for_owned_servers() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut record = PluginRecord::new(
+                "proj".into(),
+                "P".into(),
+                PluginKind::Mcp,
+                PluginOrigin::Workspace,
+            );
+            record.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(record);
+        }
+        manager.sync_runtime_snapshots().await;
+        let server_id = crate::extension::mcp_config::plugin_server_id("proj", "srv");
+        let owner = crate::extension::mcp_config::owning_plugin_of_server_id(&server_id).unwrap();
+        assert!(manager.plugin_visible(
+            owner,
+            &VisibilityCtx {
+                project_root: Some(canonical_root(proj.path()))
+            }
+        ));
+        assert!(!manager.plugin_visible(owner, &VisibilityCtx { project_root: None }));
+    }
+
+    /// The projection publishes each plugin's skills dir WITH its key: the
+    /// derivation of "which dirs" and "whose dirs" is one pass over the
+    /// registry, so the two cannot disagree.
+    #[tokio::test]
+    async fn projection_publishes_skill_dirs_with_their_scope_keys() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        // The same guard also serializes this test against every sibling that
+        // calls `load_all()` (they all take this one mutex): `PLUGIN_SKILL_DIRS`
+        // is a process-global replaced wholesale by each `load_all()`, so an
+        // unguarded read here raced a concurrent sibling's publish and lost
+        // the entry before the assertion — reproducible 100% of the time
+        // under this module's default parallel test run.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        write_project_plugin(dir.path(), "p2-skilled");
+        std::fs::create_dir_all(dir.path().join("plugins/p2-skilled/skills/hello")).unwrap();
+        std::fs::write(
+            dir.path().join("plugins/p2-skilled/skills/hello/SKILL.md"),
+            "---\nname: hello\ndescription: hi\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+        let published = crate::utils::paths::plugin_skill_dirs();
+        let mine = published
+            .iter()
+            .find(|d| d.dir.ends_with("p2-skilled/skills"))
+            .expect("plugin skills dir published");
+        assert_eq!(
+            mine.scope_key,
+            crate::extension::visibility::ScopeKey::project(dir.path())
+        );
+    }
+
+    /// D-4: a plugin whose directory name is not its id (`My_Plugin` →
+    /// registry id `my-plugin`, via `sanitize_plugin_id`) must still have its
+    /// skills classified under the REGISTRY id, or every visibility face
+    /// looks up an owner no registry names and drops the skill everywhere.
+    #[tokio::test]
+    async fn plugin_skills_are_owned_by_the_registry_id_not_the_directory_name() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        // Auto-discovered plugin: no manifest, id = sanitize_plugin_id("My_Plugin").
+        let skill = dir.path().join("plugins/My_Plugin/skills/planted");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: planted\ndescription: planted skill\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager(dir.path()).await;
+        manager.load_all().await.unwrap();
+
+        let record = manager
+            .get_plugin_record("my-plugin")
+            .await
+            .expect("registered under the sanitised id");
+        let published = crate::utils::paths::plugin_skill_dirs();
+        let entry = published
+            .iter()
+            .find(|d| d.dir == record.root_dir.join("skills"))
+            .expect("the plugin's skills dir is published");
+        assert_eq!(entry.plugin_id, "my-plugin");
+
+        let manifests = manager.skill_system().list_skills().await;
+        let planted = manifests
+            .iter()
+            .find(|m| m.name() == "planted")
+            .expect("the planted skill was loaded");
+        assert_eq!(
+            planted.source(),
+            &crate::domain::skill::SkillSource::Plugin(crate::domain::skill::PluginId::new(
+                "my-plugin"
+            )),
+            "owner must be the registry id, not the directory name"
+        );
+
+        // And the face that dropped it before this task now keeps it.
+        let in_p = crate::extension::visibility::VisibilityCtx {
+            project_root: Some(crate::extension::visibility::canonical_root(dir.path())),
+        };
+        let kept = crate::extension::visibility::retain_visible_plugin_skills(
+            manifests.clone(),
+            &in_p,
+            |id| manager.plugin_scope_key(id),
+        );
+        assert!(
+            kept.iter().any(|m| m.name() == "planted"),
+            "visible in its own project"
+        );
+    }
+
+    /// D-5: disabling a plugin removes its skills from BOTH sub-faces of
+    /// face ② — the `<available_skills>` index (`SkillSystem`) and the
+    /// `skill_read` search set (`get_all_skills_dirs`) — without a restart.
+    /// Re-enabling brings them back (the published list is the one source).
+    ///
+    /// The plugin is planted under `<dir>/.aleph/plugins/` on purpose: that
+    /// is a well-known root the old static scan (`get_plugin_skills_dirs`)
+    /// enumerated, so the search-set arm is also the guard against that scan
+    /// coming back — under `<dir>/plugins` it would stay green either way.
+    #[tokio::test]
+    async fn disabling_a_plugin_removes_its_skills_from_the_index_and_the_search_set() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_parent = dir.path().join(".aleph/plugins");
+        let skill = plugins_parent.join("p2-off/skills/off-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: off-skill\ndescription: goes away when disabled\n---\nbody\n",
+        )
+        .unwrap();
+        let (manager, _cfg) = isolated_manager_at(dir.path(), plugins_parent).await;
+        manager.load_all().await.unwrap();
+
+        async fn indexed(m: &ExtensionManager) -> bool {
+            m.skill_system()
+                .list_skills()
+                .await
+                .iter()
+                .any(|s| s.name() == "off-skill")
+        }
+        let searchable = || {
+            crate::utils::paths::get_all_skills_dirs(Some(dir.path()))
+                .unwrap()
+                .iter()
+                .any(|d| d.ends_with("plugins/p2-off/skills"))
+        };
+        assert!(indexed(&manager).await, "loaded: indexed");
+        assert!(searchable(), "loaded: searchable");
+
+        manager.unmount("p2-off").await.unwrap();
+        assert!(!indexed(&manager).await, "disabled: must leave the index");
+        assert!(!searchable(), "disabled: must leave the search set");
+
+        manager.mount("p2-off").await.unwrap();
+        assert!(indexed(&manager).await, "re-enabled: indexed again");
+        assert!(searchable(), "re-enabled: searchable again");
     }
 }

@@ -56,10 +56,10 @@ runtimes:
 
 ### Prerequisites
 
-Run `aleph plugin doctor` to check your environment:
+Run `al plugin doctor` to check your environment:
 
 ```bash
-aleph plugin doctor
+al plugin doctor
 ```
 
 This checks for Node.js and npm (needed to run MCP-server plugins written in JS/TS), the WASM compilation target, and the global plugin directory.
@@ -68,17 +68,17 @@ This checks for Node.js and npm (needed to run MCP-server plugins written in JS/
 
 ```bash
 # MCP server plugin (Node/TypeScript — `nodejs`/`node`/`js`/`ts` are aliases)
-aleph plugin init my-plugin --type mcp
+al plugin init my-plugin --type mcp
 
 # WASM plugin (Rust)
-aleph plugin init my-wasm-plugin --type wasm
+al plugin init my-wasm-plugin --type wasm
 
 # Static plugin (Markdown skill)
-aleph plugin init my-skill --type static
+al plugin init my-skill --type static
 ```
 
 This creates a directory with `.claude-plugin/plugin.toml` and template source
-files. `aleph plugin validate .` reads the same manifest the server will, and
+files. `al plugin validate .` reads the same manifest the server will, and
 rejects a runtime the host cannot load — so a green check means the plugin is
 loadable, which it did not before 2026-08-19.
 
@@ -94,7 +94,7 @@ npm install
 cargo build --target wasm32-wasi --release
 
 # Validate the plugin
-aleph plugin validate .
+al plugin validate .
 ```
 
 ### Development Loop
@@ -135,7 +135,7 @@ runtime = "mcp"        # "mcp" | "wasm" | "static" — omit for "static"
 appeared throughout this guide and is **not** one of them: `PluginKind` rejects
 it with `unknown variant`, so a manifest declaring it never loads. There is no
 Node.js plugin runtime — a plugin written in Node runs as an MCP stdio server
-(`runtime = "mcp"` + `.mcp.json`), which is what `aleph plugin init --type
+(`runtime = "mcp"` + `.mcp.json`), which is what `al plugin init --type
 nodejs` now scaffolds.
 
 ### Full Manifest Reference
@@ -295,7 +295,7 @@ the server registers appears in the agent's tool list namespaced
 > documented a JSON-RPC-over-stdio host process and an `api.registerTool(...)`
 > entry point; `src/extension/runtime/` contains `wasm` and nothing else, and
 > `registerTool` had exactly one occurrence in the whole tree — the scaffolder
-> template that wrote it. `aleph plugin init --type nodejs` produced a plugin
+> template that wrote it. `al plugin init --type nodejs` produced a plugin
 > that could never load. It now scaffolds what is written below.
 
 ### Project Structure
@@ -686,7 +686,7 @@ Services are started and stopped via the Aleph API:
 
 ```bash
 # From the CLI
-aleph plugins call <plugin-id> service.start --args '{"service_id": "file-watcher"}'
+al plugin call <plugin-id> service.start '{"service_id": "file-watcher"}'
 ```
 
 ---
@@ -799,10 +799,10 @@ and background services, so it is never implicit.
 
 ```bash
 # Validate manifest and structure
-aleph plugin validate .
+al plugin validate .
 
 # JSON output for CI
-aleph plugin validate . --json
+al plugin validate . --json
 ```
 
 Validation checks:
@@ -815,10 +815,10 @@ Validation checks:
 ### Check Environment
 
 ```bash
-aleph plugin doctor
+al plugin doctor
 
 # JSON output
-aleph plugin doctor --json
+al plugin doctor --json
 ```
 
 Doctor checks:
@@ -834,7 +834,7 @@ Doctor checks:
 aleph plugin dev .
 
 # In another terminal, test tool calls
-aleph plugins call <plugin-id> <tool-name> --args '{"key": "value"}'
+al plugin call <plugin-id> <tool-name> '{"key": "value"}'
 ```
 
 ### Testing Node.js Plugins
@@ -862,7 +862,7 @@ cargo test
 
 # Build and validate
 cargo build --target wasm32-wasi --release
-aleph plugin validate .
+al plugin validate .
 ```
 
 ---
@@ -873,10 +873,10 @@ aleph plugin validate .
 
 ```bash
 # Create a distributable archive
-aleph plugin pack .
+al plugin pack .
 
 # Specify output path
-aleph plugin pack . --output ./dist/my-plugin.aleph-plugin.zip
+al plugin pack . --output ./dist/my-plugin.aleph-plugin.zip
 ```
 
 The `pack` command:
@@ -909,27 +909,27 @@ When the same plugin ID exists at multiple levels, the higher-priority version w
 
 ```bash
 # Install from a local directory
-aleph plugins install /path/to/my-plugin
+al plugin install /path/to/my-plugin
 
 # Install from a zip archive
-aleph plugins install ./my-plugin.aleph-plugin.zip
+al plugin install ./my-plugin.aleph-plugin.zip
 ```
 
 ### Managing Plugins
 
 ```bash
 # List installed plugins
-aleph plugins list
+al plugin list
 
 # Enable/disable a plugin
-aleph plugins enable <plugin-id>
-aleph plugins disable <plugin-id>
+al plugin enable <plugin-id>
+al plugin disable <plugin-id>
 
 # Uninstall a plugin
-aleph plugins uninstall <plugin-id>
+al plugin uninstall <plugin-id>
 
 # Call a tool directly
-aleph plugins call <plugin-id> <tool-name> --args '{"key": "value"}'
+al plugin call <plugin-id> <tool-name> '{"key": "value"}'
 ```
 
 ### Plugin Directory Layout

@@ -536,7 +536,7 @@ pub fn daemonize(
     if let Err(e) = write_pid_file(pid_file) {
         eprintln!(
             "Warning: daemon started but PID file '{pid_file}' could not be written: {e}.\n  \
-             The process is running; 'aleph stop' will fail to find it. Use 'ps' / 'pgrep' \
+             The process is running; 'aleph-server stop' will fail to find it. Use 'ps' / 'pgrep' \
              and the singleton lock to recover."
         );
         tracing::warn!(

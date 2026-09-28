@@ -14,7 +14,7 @@ use crate::thinker::nudges::{orphan_tool_result_note, user_turn_text, INTERRUPTI
 
 /// Build the per-turn message vector handed to the provider. Walks the
 /// session log slice and:
-///   * Reconstructs the preceding assistant turn (including signed thinking)
+///   * Reconstructs the preceding assistant turn (reasoning as facts)
 ///     when `tail_start > 0`, dropping orphan `tool_use` blocks whose
 ///     matching `ToolResult` / `ToolError` is missing — Anthropic-compatible
 ///     backends reject orphans with HTTP 400.
@@ -76,6 +76,7 @@ pub(crate) fn build_prompt_with_transient_tail(
     // inserted when an assistant turn's surviving tool_use blocks are emitted
     // and removed when their result is consumed.
     let mut open_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let current_turn = super::latest_turn_id(events);
 
     // Walk the FULL conversation in order, emitting one message per event.
     //
@@ -107,7 +108,8 @@ pub(crate) fn build_prompt_with_transient_tail(
                     .iter()
                     .filter_map(|r| result_call_id_of_turn(&r.event, *turn_id))
                     .collect();
-                if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved) {
+                let earlier = current_turn.is_some_and(|t| t != *turn_id);
+                if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved, earlier) {
                     messages.push(UnifiedMessage::Assistant { content: blocks });
                     assistant_emitted = true;
                     // Record which surviving (non-orphan) tool_use call_ids this
@@ -357,13 +359,14 @@ fn orphan_result_note(
 /// `resolved` is the set of tool-call ids whose `ToolResult`/`ToolError`
 /// appears later in the log; `tool_use` blocks without one are orphans (an
 /// interrupted turn) and are dropped — Anthropic-compatible backends reject
-/// orphan `tool_use` with HTTP 400. The signed thinking block is replayed only
-/// alongside a surviving `tool_use` (a lone thinking block is also rejected).
-/// Returns `None` when nothing survives (no text and only orphan `tool_use`),
-/// so the caller emits no empty assistant placeholder.
+/// orphan `tool_use` with HTTP 400. Reasoning is emitted as facts (signature,
+/// `earlier_turn`); which target is sent it is `ReasoningReplay`'s call.
+/// Returns `None` when there is no text and no surviving `tool_use`, so the
+/// caller emits no empty assistant placeholder.
 fn reconstruct_assistant_blocks(
     content: &crate::session::events::MessageContent,
     resolved: &std::collections::HashSet<&str>,
+    earlier_turn: bool,
 ) -> Option<Vec<ContentBlock>> {
     let mut tool_blocks: Vec<ContentBlock> = Vec::new();
     let mut dropped_orphans: Vec<String> = Vec::new();
@@ -386,20 +389,16 @@ fn reconstruct_assistant_blocks(
         );
     }
 
+    if tool_blocks.is_empty() && content.text.is_empty() {
+        return None;
+    }
     let mut blocks: Vec<ContentBlock> = Vec::new();
-    // Signed thinking goes first so following tool_use blocks receive
-    // reasoning_content in convert_messages. Only with a surviving tool_use.
-    if !tool_blocks.is_empty() {
-        if let (Some(ref thinking), Some(ref sig)) =
-            (&content.thinking, &content.thinking_signature)
-        {
-            if !thinking.is_empty() {
-                blocks.push(ContentBlock::Thinking {
-                    thinking: thinking.clone(),
-                    signature: Some(sig.clone()),
-                });
-            }
-        }
+    if let Some(thinking) = content.thinking.as_ref().filter(|t| !t.is_empty()) {
+        blocks.push(ContentBlock::Thinking {
+            thinking: thinking.clone(),
+            signature: content.thinking_signature.clone(),
+            earlier_turn,
+        });
     }
     if !content.text.is_empty() {
         blocks.push(ContentBlock::Text {
@@ -408,11 +407,7 @@ fn reconstruct_assistant_blocks(
         });
     }
     blocks.extend(tool_blocks);
-    if blocks.is_empty() {
-        None
-    } else {
-        Some(blocks)
-    }
+    Some(blocks)
 }
 
 /// Parse a previously persisted `tool_use` JSON block back into a

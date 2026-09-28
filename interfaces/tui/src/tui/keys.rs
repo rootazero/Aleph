@@ -1848,7 +1848,8 @@ mod mouse_tests {
                 })
                 .collect(),
             tools: Vec::new(),
-            messages_tokens: None,
+            messages: None,
+            tool_output: None,
             provider_reported: None,
             context_window: None,
             dynamic_bytes_sent: None,

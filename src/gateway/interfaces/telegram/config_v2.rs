@@ -28,6 +28,15 @@ pub struct StatusReactionConfig {
     /// Reaction to set when agent starts processing
     #[serde(default)]
     pub processing: Option<String>,
+    /// Reaction to set while the model is emitting a `<think>` block.
+    ///
+    /// Defaults to `processing` (a single emoji for the whole "thinking"
+    /// phase). Set to a distinct symbol (e.g. `"🤔"`) when a deploy wants
+    /// the user to be able to tell at-a-glance whether the model is
+    /// mid-thought or post-thought-but-pre-tool — the latter is the same
+    /// emoji as `processing` so they look identical without this knob.
+    #[serde(default)]
+    pub thinking: Option<String>,
     /// Reaction to set when tools are executing
     #[serde(default)]
     pub tool_active: Option<String>,
@@ -58,6 +67,18 @@ pub enum LinkPreviewMode {
 }
 
 /// Streaming mode for Telegram delivery.
+///
+/// **`draft_api_enabled` deliberately CUT (P1-A, 2026-09)** — Telegram's
+/// `sendMessageDraft` API was never wired through Aleph's orchestrator, the
+/// `streaming/draft_api.rs` shim that wrapped it was removed in 2026-07, and
+/// openclaw's § 5.14 doc explicitly warns against shipping it (the API is
+/// restricted to a small set of opted-in bot owners and silently no-ops for
+/// everyone else). If/when the restriction changes and we want it back, the
+/// field is recoverable from git history — it used to gate the orchestrator
+/// path in `inbound_router/executor.rs::try_create_telegram_emitter`. The
+/// orchestrator now lights up purely on `reasoning_lane_enabled` /
+/// `status_reactions`, which are the two Telegram-streaming capabilities
+/// Aleph actually delivers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamingMode {
@@ -94,9 +115,6 @@ pub struct StreamingOptions {
     /// Buffer size for streaming events
     #[serde(default = "default_stream_buffer_size")]
     pub buffer_size: usize,
-    /// Enable experimental Draft API support (deprecated, use `mode = Draft`)
-    #[serde(default = "default_false")]
-    pub draft_api_enabled: bool,
     /// Enable reasoning lane extraction (<think> tags)
     #[serde(default = "default_false")]
     pub reasoning_lane_enabled: bool,
@@ -115,7 +133,6 @@ impl Default for StreamingOptions {
             max_edit_interval_ms: 200,
             preserve_formatting: true,
             buffer_size: 256,
-            draft_api_enabled: false,
             reasoning_lane_enabled: false,
             status_reactions: StatusReactionConfig::default(),
         }
@@ -210,6 +227,20 @@ pub struct TelegramGroupConfig {
 pub struct TelegramAccountConfig {
     pub id: String,
     pub bot_token: String,
+    /// SHA-256 fingerprint (lowercase hex) of the bot token this account is
+    /// expected to use. Verified at boot and by the doctor against the
+    /// running `bot_token`. A mismatch is logged at `warn` (the bot still
+    /// starts — a mismatched token surfaces later as a `get_me` failure, which
+    /// the operator can already diagnose) and surfaces as a diagnostic entry
+    /// so a misconfigured deployment is observable without a reboot.
+    ///
+    /// Why optional: emitting this field is a deliberate choice that costs a
+    /// config writer a `echo -n "$TOKEN" | sha256sum` step. We do not want
+    /// that friction to block deployments that already validate at the bot
+    /// level; we want it cheap to enable on hosts where the token is shared
+    /// with another system and a drift check is worth one extra line of YAML.
+    #[serde(default)]
+    pub token_fingerprint: Option<String>,
     pub bot_username: Option<String>,
     pub default_agent: Option<String>,
     pub dm_policy: Option<DmPolicy>,

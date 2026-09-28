@@ -100,3 +100,81 @@ impl ReactionHandler {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
+    use chrono::Utc;
+
+    /// Test double for `ReactionSender` — counts how many `send_reaction` calls
+    /// the handler fired and remembers the last emoji / jid / msg id. The
+    /// production wiring points `ReactionHandler` at a `WaRuntime` adapter;
+    /// here we just want to assert "handler called the sender with the
+    /// configured emoji exactly once per inbound message".
+    #[derive(Default)]
+    struct MockReactionSender {
+        calls: tokio::sync::Mutex<Vec<(String, String, String)>>,
+    }
+
+    impl MockReactionSender {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        async fn call_count(&self) -> usize {
+            self.calls.lock().await.len()
+        }
+
+        async fn last_emoji(&self) -> String {
+            self.calls
+                .lock()
+                .await
+                .last()
+                .map(|c| c.2.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReactionSender for MockReactionSender {
+        async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> Result<(), String> {
+            self.calls
+                .lock()
+                .await
+                .push((jid.to_string(), msg_id.to_string(), emoji.to_string()));
+            Ok(())
+        }
+    }
+
+    fn make_test_inbound_message(conversation_id: &str, is_group: bool) -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new("msg-1"),
+            channel_id: ChannelId::new("whatsapp"),
+            conversation_id: ConversationId::new(conversation_id),
+            sender_id: UserId::new("user-1"),
+            sender_name: Some("Alice".to_string()),
+            text: "hello".to_string(),
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group,
+            raw: None,
+            metadata: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn ack_reaction_sent_on_inbound_message() {
+        let sender = Arc::new(MockReactionSender::new());
+        let handler = ReactionHandler::new(
+            ReactionLevel::Ack,
+            Some(AckReactionConfig::default()),
+            sender.clone(),
+        );
+        let msg = make_test_inbound_message("chat-1@g.us", false);
+        handler.send_ack(&msg).await.unwrap();
+        assert_eq!(sender.call_count().await, 1);
+        assert_eq!(sender.last_emoji().await, "\u{1f440}");
+    }
+}

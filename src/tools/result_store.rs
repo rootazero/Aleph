@@ -40,7 +40,7 @@ use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::retrieval::{ContentIndex, IndexOutcome, SearchHit};
 
 /// Prefix used to identify persisted-result reference lines.
-const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
+pub(crate) const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
 
 /// Default retention window for the periodic sweeper. Mirrors opencode's
 /// `Truncate.cleanup` cutoff (7 days). Persisted tool-result files older
@@ -333,17 +333,24 @@ impl ToolResultStore {
         content: &str,
         threshold_tokens: usize,
     ) -> Option<String> {
-        let tokens = estimate_tokens_smart(content);
-        if tokens <= threshold_tokens {
+        if estimate_tokens_smart(content) <= threshold_tokens {
             return None;
         }
+        self.persist(tool_call_id, tool_name, content)
+    }
 
-        // Use a sanitized filename: {tool_call_id}_{tool_name}.txt
-        let safe_name = format!(
-            "{}_{}.txt",
-            sanitize_for_filename(tool_call_id),
-            sanitize_for_filename(tool_name)
-        );
+    /// Persist `content` unconditionally and return its reference marker, or
+    /// `None` when the write failed (logged here).
+    ///
+    /// The ungated half of [`Self::persist_if_large`], for a caller that decides
+    /// "is this large" on one string and stores another:
+    /// `result_processing::recovery_footer_for` gates on the flattened text the
+    /// model would otherwise receive and stores its line-preserving rendering,
+    /// whose token estimate is a different number (see `tool_output::render`).
+    /// The marker's token count describes what is on disk.
+    pub fn persist(&self, tool_call_id: &str, tool_name: &str, content: &str) -> Option<String> {
+        let tokens = estimate_tokens_smart(content);
+
         let dir = self.blob_dir();
         if let Err(e) = create_private_dir(&dir) {
             tracing::warn!(
@@ -353,7 +360,7 @@ impl ToolResultStore {
             );
             return None;
         }
-        let path = dir.join(&safe_name);
+        let path = self.blob_path(tool_call_id, tool_name);
 
         if let Err(e) = write_private_file(&path, content) {
             tracing::warn!(
@@ -365,14 +372,34 @@ impl ToolResultStore {
             return None;
         }
 
-        let marker = format!(
+        Some(Self::marker(&path, tokens, tool_name))
+    }
+
+    /// The file [`Self::persist`] writes for this call: a sanitized
+    /// `{tool_call_id}_{tool_name}.txt` in this handle's blob directory. One
+    /// call id, one file — a second persist for the same call replaces it.
+    #[must_use]
+    pub fn blob_path(&self, tool_call_id: &str, tool_name: &str) -> PathBuf {
+        self.blob_dir()
+            .join(blob_file_name(tool_call_id, tool_name))
+    }
+
+    /// The marker [`Self::persist`] would return for this call and a blob of
+    /// `tokens` tokens — the exact string, without writing anything. What a
+    /// caller measures to know a spill would not be smaller than its marker.
+    #[must_use]
+    pub fn marker_for(&self, tool_call_id: &str, tool_name: &str, tokens: usize) -> String {
+        Self::marker(&self.blob_path(tool_call_id, tool_name), tokens, tool_name)
+    }
+
+    fn marker(path: &Path, tokens: usize, tool_name: &str) -> String {
+        format!(
             "{}{} ({} tokens, {})]",
             PERSISTED_REF_PREFIX,
             path.display(),
             tokens,
             tool_name,
-        );
-        Some(marker)
+        )
     }
 
     /// Read back the blob this store wrote **for `tool_call_id`**.
@@ -538,7 +565,7 @@ impl ToolResultStore {
         // the same call still replaces its own chunks (the `(source,
         // chunk_no)` identity) instead of colliding with another call of the
         // same tool.
-        let source = format!("{tool_name}:{}", short_call_id(tool_call_id));
+        let source = source_label(tool_name, tool_call_id);
         match idx.index_text(&self.session, &source, tool_name, content) {
             Ok(out) => Some(out),
             Err(e) => {
@@ -589,6 +616,26 @@ impl ToolResultStore {
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
         idx.search_sessions(&key_refs, query, limit)
             .unwrap_or_default()
+    }
+
+    /// [`Self::search`] over the sections of one indexed output — the one
+    /// indexed under `source` (a [`source_label`]) — ranked among themselves.
+    ///
+    /// `None` when the index is unavailable or the query failed: "no section
+    /// matched" is an answer only a working index can give, so a failure is
+    /// not flattened into an empty list here (unlike [`Self::search`], whose
+    /// callers render no hits and a dead index the same way).
+    pub fn search_source(&self, source: &str, query: &str, limit: usize) -> Option<Vec<SearchHit>> {
+        let idx = self.index()?;
+        let keys = self.read_scope_keys();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        match idx.search_source(&key_refs, source, query, limit) {
+            Ok(hits) => Some(hits),
+            Err(e) => {
+                tracing::warn!(source, error = %e, "source-scoped search failed");
+                None
+            }
+        }
     }
 
     /// Number of indexed sections readable by this handle — its own session
@@ -1172,9 +1219,46 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
     opts.open(path)?.write_all(content.as_bytes())
 }
 
+/// The file name a persist under (`tool_call_id`, `tool_name`) writes, in
+/// whatever directory the store scopes it to. What names a blob as a call's
+/// own — the directory differs between the scoped and unscoped handle of one
+/// store, the file name does not.
+pub(crate) fn blob_file_name(tool_call_id: &str, tool_name: &str) -> String {
+    format!(
+        "{}_{}.txt",
+        sanitize_for_filename(tool_call_id),
+        sanitize_for_filename(tool_name)
+    )
+}
+
 /// Last 8 chars of a tool call id (char-safe). Call-id *prefixes* are constant
 /// (`toolu_…`, `call_…`), so the tail is the distinctive part — the head would
 /// collide across every call of the run.
+/// The `source` label an offloaded output is indexed under:
+/// `{tool_name}:{last 8 chars of the call id}`. [`tool_of_source_label`] is its
+/// inverse; the two live together so the format has one owner.
+pub(crate) fn source_label(tool_name: &str, tool_call_id: &str) -> String {
+    format!("{tool_name}:{}", short_call_id(tool_call_id))
+}
+
+/// The tool named in a `source` label written by [`source_label`], or `None`
+/// when the label names no tool.
+///
+/// Splits at the FIRST `:`. The call-id half may itself contain one (Kimi-style
+/// ids read `functions.bash:0`), the tool half cannot: every dispatched tool
+/// name is in the provider function-name alphabet `[A-Za-z0-9_-]` (MCP names
+/// are mapped onto it by `tools::handlers::mcp::sanitize_tool_name`), plus the
+/// `.` alias `resolve()` accepts. `None` covers rows indexed before labels
+/// carried the tool (2026-07-16) — a bare call id with no `:` — and an empty
+/// tool half; callers must then say "unknown", not guess.
+#[must_use]
+pub fn tool_of_source_label(label: &str) -> Option<&str> {
+    label
+        .split_once(':')
+        .map(|(tool, _)| tool)
+        .filter(|tool| !tool.is_empty())
+}
+
 fn short_call_id(id: &str) -> &str {
     let skip = id.chars().count().saturating_sub(8);
     match id.char_indices().nth(skip) {
@@ -1969,6 +2053,25 @@ mod tests {
             before,
             "re-indexing the same call must replace, not append"
         );
+    }
+
+    /// `ctx_search` fences each returned section with the name of the tool
+    /// that produced it, read back from the label — so the inverse must return
+    /// exactly the tool the writer was given, including when the call id
+    /// itself carries a `:`, and nothing at all for a label with no tool.
+    #[test]
+    fn the_tool_read_back_from_a_source_label_is_the_one_written() {
+        for (tool, call_id) in [
+            ("web_fetch", "toolu_01ABCDEFGH"),
+            ("bash", "functions.bash:0"),
+            ("chrome_devtools__take_snapshot", "c:a:l:l"),
+        ] {
+            let label = source_label(tool, call_id);
+            assert_eq!(tool_of_source_label(&label), Some(tool), "{label}");
+        }
+        // Rows indexed before labels carried the tool: a bare call id.
+        assert_eq!(tool_of_source_label("toolu_01ABCDEFGH"), None);
+        assert_eq!(tool_of_source_label(":abc"), None);
     }
 
     // -------------------------------------------------------------------

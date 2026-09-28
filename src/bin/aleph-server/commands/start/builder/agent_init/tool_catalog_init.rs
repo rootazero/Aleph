@@ -1,25 +1,25 @@
-//! Unified dispatch registry (`ToolCatalog`) construction + command/tool RPC
+//! Unified dispatch registry (`ToolCatalog`) population + command/tool RPC
 //! wiring.
 //!
 //! Extracted verbatim from `agent_init/mod.rs`. This block runs after the
 //! real/simulated branch split — it is AI-provider-independent (it only maps
-//! command names to metadata) and produces the `ToolCatalog` the caller stores
-//! on `AgentHandlersResult.tool_catalog`.
+//! command names to metadata) and fills the `ToolCatalog` the caller built
+//! before the first extension load and stores on
+//! `AgentHandlersResult.tool_catalog`.
 //!
 //! Side effects preserved exactly: registers `commands.list` / `tools.catalog`
 //! / `tools.invoke` / `tools.effective` / `tools.cancel_call` /
 //! `tools.in_flight` / `command.execute` handlers, injects the `CommandParser`
-//! into the deferred `command_parser_cell`, spawns the `MemoryProducerScheduler`
-//! (handle intentionally leaked for server lifetime), and threads the memory
-//! extension registry into the global `ExtensionManager`.
+//! into the deferred `command_parser_cell`, and spawns the
+//! `MemoryProducerScheduler` (handle intentionally leaked for server lifetime).
 
 use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::GatewayServer;
 
-/// Build the unified dispatch registry and wire the command/tool RPC handlers.
-/// Returns the constructed `ToolCatalog` (the caller publishes it on
+/// Fill the unified dispatch registry and wire the command/tool RPC handlers.
+/// Returns the same `ToolCatalog` it was handed (the caller publishes it on
 /// `AgentHandlersResult`).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn init_tool_catalog(
@@ -31,17 +31,9 @@ pub(super) async fn init_tool_catalog(
     memory_db: &alephcore::memory::store::MemoryBackend,
     memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
-    tool_health: Arc<alephcore::tool_metadata::ToolHealthCache>,
+    tool_catalog: Arc<alephcore::tool_metadata::ToolCatalog>,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
-    use alephcore::tool_metadata::ToolCatalog;
-
-    // Shares the cache the `ExecutionEngine` already holds: the engine is
-    // wrapped in an `Arc` long before this runs, so it cannot be handed the
-    // catalog's own cache afterwards. Creating one cache up front and giving
-    // the same handle to both is what makes the probes registered below
-    // reachable from the per-request tool service.
-    let tool_catalog = Arc::new(ToolCatalog::with_health(tool_health));
 
     // Register curated multi-word slash commands (skill_read/skill_list,
     // groupchat, session_new, cron_manage, voice, goal, help).
@@ -162,7 +154,6 @@ pub(super) async fn init_tool_catalog(
 
     // Register skills and plugin tools from ExtensionManager (if initialized)
     {
-        use alephcore::domain::Entity;
         use alephcore::gateway::handlers::plugins::get_extension_manager;
         if let Ok(ext_manager) = get_extension_manager() {
             // Ensure extensions are discovered and loaded (skills + plugins)
@@ -172,83 +163,26 @@ pub(super) async fn init_tool_catalog(
 
             {
                 let skill_manifests = ext_manager.skill_system().list_skills().await;
+                // One projection (`From<&SkillManifest>`), so the catalog row
+                // carries the same six fields plus the owning plugin
+                // (`SkillSource::Plugin`) that every other producer of a
+                // `SkillInfo` does — the literal that used to live here was a
+                // second, field-for-field copy of that impl.
                 let skill_infos: Vec<alephcore::skill::SkillInfo> = skill_manifests
                     .iter()
                     .filter(|s| s.is_user_invocable())
-                    .map(|s| alephcore::skill::SkillInfo {
-                        id: s.id().as_str().to_string(),
-                        name: s.name().to_string(),
-                        description: s.description().to_string(),
-                        scope: s.scope().clone(),
-                        version: s.version().map(str::to_string),
-                        // `allowed-tools:` frontmatter, projected verbatim.
-                        // `None` (key absent) and `Some(vec![])` (explicit
-                        // deny-all) mean different things all the way down to
-                        // the run loop, so this must not be flattened.
-                        allowed_tools: s
-                            .allowed_tools()
-                            .map(|tools| tools.iter().map(String::clone).collect()),
-                    })
+                    .map(alephcore::skill::SkillInfo::from)
                     .collect();
-                let rejected = tool_catalog.register_skills(&skill_infos).await;
+                // Every skill registers: an `allowed-tools:` entry that can
+                // pre-grant nothing (an unknown name, a Claude Code tool with
+                // no Aleph counterpart, a scoped `Bash(...)`) is dropped with
+                // a warn naming the skill and the entry.
+                tool_catalog.register_skills(&skill_infos).await;
                 if !daemon {
                     println!(
                         "  Dispatch registry: {} skills registered",
-                        skill_infos.len() - rejected.len()
+                        skill_infos.len()
                     );
-                    // A skill refused for an unresolvable `allowed-tools:` is
-                    // simply absent from the catalog afterwards, which reads
-                    // identically to "never installed". Name it here so the
-                    // author sees the boundary they crossed.
-                    if !rejected.is_empty() {
-                        println!(
-                            "  Dispatch registry: {} skill(s) NOT registered — unknown \
-                             `allowed-tools:` names: {}",
-                            rejected.len(),
-                            rejected.join(", ")
-                        );
-                    }
-                }
-            }
-
-            // Register plugin commands (from CC-format plugins' commands/ directories)
-            {
-                let commands = ext_manager.get_all_commands().await;
-                // Gate on `plugin_id`, the field every production construction
-                // site actually assigns. This filter read `plugin_name` until
-                // 2026-08-19 — a field with zero producers — so it discarded
-                // every plugin command ever parsed and this block registered
-                // nothing. `qualified_name()` is the registry's own key
-                // derivation, so the dispatch id and the lookup key cannot
-                // drift apart again.
-                let command_skill_infos: Vec<alephcore::skill::SkillInfo> = commands
-                    .iter()
-                    .filter(|cmd| !cmd.plugin_id.is_empty())
-                    .map(|cmd| alephcore::skill::SkillInfo {
-                        id: cmd.qualified_name(),
-                        name: cmd.name.clone(),
-                        description: cmd.description.clone(),
-                        // Plugin commands have no SkillManifest behind them;
-                        // System is the manifest default and matches how every
-                        // other slash command behaves. No version to project.
-                        scope: alephcore::domain::skill::PromptScope::System,
-                        version: None,
-                        // Plugin commands carry no SkillManifest, so there is
-                        // no `allowed-tools:` to project. `None` = declares
-                        // nothing = keeps the agent's full tool surface, which
-                        // is what plugin commands have always done.
-                        allowed_tools: None,
-                    })
-                    .collect();
-
-                if !command_skill_infos.is_empty() {
-                    let _ = tool_catalog.register_skills(&command_skill_infos).await;
-                    if !daemon {
-                        println!(
-                            "  Dispatch registry: {} plugin commands registered",
-                            command_skill_infos.len()
-                        );
-                    }
                 }
             }
 
@@ -303,8 +237,14 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("commands.list", move |req| {
             let registry = reg.clone();
             async move {
-                alephcore::gateway::handlers::commands::handle_list_from_registry(req, &registry)
-                    .await
+                let owner_visible =
+                    alephcore::extension::visibility::manager_backed_owner_visible();
+                alephcore::gateway::handlers::commands::handle_list_from_registry(
+                    req,
+                    &registry,
+                    &owner_visible,
+                )
+                .await
             }
         });
         if !daemon {
@@ -500,22 +440,6 @@ pub(super) async fn init_tool_catalog(
         // server lifetime. Shutdown via process exit.
         if !daemon {
             println!("  MemoryProducerScheduler: spawned");
-        }
-    }
-
-    // ── Spec 4 Task 11: wire memory_registry into ExtensionManager ───────
-    // After the registry is constructed we inject it into the global
-    // ExtensionManager so any plugin loaded at runtime via
-    // `load_runtime_plugin` / `ensure_plugin_loaded` also gets
-    // `load_plugin_with_memory` (MCP memory extension auto-registration).
-    {
-        use alephcore::gateway::handlers::plugins::get_extension_manager;
-        if let Ok(ext_manager) = get_extension_manager() {
-            // ExtensionManager is stored behind Arc; we can only thread the
-            // registry through the methods that take `&self`.
-            // Inject via set_memory_registry if available (no-op if the
-            // Arc is already shared across threads).
-            ext_manager.set_memory_registry(memory_ext_registry.clone());
         }
     }
 

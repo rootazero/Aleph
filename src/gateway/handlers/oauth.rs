@@ -154,6 +154,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         top_logprobs: None,
         metadata_user_id: None,
         effort: None,
+        server_context_editing: Default::default(),
     }
 }
 

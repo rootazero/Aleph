@@ -225,6 +225,16 @@ pub struct Attachment {
     pub path: Option<String>,
     /// Inline data (for small attachments)
     pub data: Option<Vec<u8>>,
+    /// Hint to channels that support it: render this audio as a circular
+    /// "voice message" rather than as a generic audio file. Telegram-only
+    /// today; other channels ignore the flag. Defaults to `false` so
+    /// unchanged call sites behave identically.
+    #[serde(default)]
+    pub is_voice_note: bool,
+    /// Same shape as `is_voice_note` but for short round video notes
+    /// (Telegram's "video message"). Defaults to `false`.
+    #[serde(default)]
+    pub is_video_note: bool,
 }
 
 /// Platform-specific metadata attached to an inbound message.

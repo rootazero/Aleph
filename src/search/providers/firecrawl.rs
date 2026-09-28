@@ -207,7 +207,11 @@ impl crate::search::ProviderFactory for FirecrawlFactory {
             log::warn!("search backend '{name}' ({NAME}) skipped: no api_key in vault");
             return Ok(None);
         };
-        match FirecrawlProvider::new(key.to_string(), backend.base_url.clone(), allow_private_network) {
+        match FirecrawlProvider::new(
+            key.to_string(),
+            backend.base_url.clone(),
+            allow_private_network,
+        ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
                 log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
@@ -223,8 +227,7 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_creation_defaults_to_cloud() {
-        let provider =
-            FirecrawlProvider::new("fc-test-key".to_string(), None, false).unwrap();
+        let provider = FirecrawlProvider::new("fc-test-key".to_string(), None, false).unwrap();
         assert_eq!(provider.name(), "firecrawl");
         assert!(provider.is_available());
         assert_eq!(provider.base_url, "https://api.firecrawl.dev");
@@ -258,7 +261,11 @@ mod tests {
     #[test]
     fn firecrawl_constructor_honours_the_private_network_switch() {
         let loopback = || {
-            FirecrawlProvider::new("fc-k".to_string(), Some("http://127.0.0.1:3002".to_string()), false)
+            FirecrawlProvider::new(
+                "fc-k".to_string(),
+                Some("http://127.0.0.1:3002".to_string()),
+                false,
+            )
         };
         assert!(loopback().is_err(), "loopback refused by default");
         let allowed = FirecrawlProvider::new(
@@ -266,19 +273,28 @@ mod tests {
             Some("http://127.0.0.1:3002".to_string()),
             true,
         );
-        assert!(allowed.is_ok(), "loopback allowed under the operator switch");
+        assert!(
+            allowed.is_ok(),
+            "loopback allowed under the operator switch"
+        );
         let metadata = FirecrawlProvider::new(
             "fc-k".to_string(),
             Some("http://169.254.169.254/".to_string()),
             true,
         );
-        assert!(metadata.is_err(), "cloud metadata refused under every policy");
+        assert!(
+            metadata.is_err(),
+            "cloud metadata refused under every policy"
+        );
     }
 
     #[test]
     fn firecrawl_provider_rejects_bad_scheme() {
-        let result =
-            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()), false);
+        let result = FirecrawlProvider::new(
+            "fc-k".to_string(),
+            Some("ftp://example.com".to_string()),
+            false,
+        );
         assert!(result.is_err());
     }
 

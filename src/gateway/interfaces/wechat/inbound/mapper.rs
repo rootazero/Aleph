@@ -38,6 +38,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             url: build_media_url(&i.media),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }),
         MessageItem::Voice(v) => Some(Attachment {
             id: format!("voice_{index}"),
@@ -47,6 +49,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             url: build_media_url(&v.media),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }),
         MessageItem::File(f) => Some(Attachment {
             id: format!("file_{index}"),
@@ -56,6 +60,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             url: build_media_url(&f.media),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }),
         MessageItem::Video(v) => Some(Attachment {
             id: format!("video_{index}"),
@@ -65,6 +71,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
             url: build_media_url(&v.media),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }),
         MessageItem::Text(_) => None,
     }

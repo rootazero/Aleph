@@ -5,17 +5,17 @@
 //! exists to prevent is a click that returned success while landing on a cookie
 //! banner.
 
-use aleph_cdp::SessionId;
 use aleph_cdp::methods::{dom, input, page, runtime};
+use aleph_cdp::SessionId;
 
 use crate::browser::backend::EffectVerification;
 use crate::browser::engine::EngineHandle;
 use crate::browser::engine::{Cap, EngineCapabilities};
 use crate::browser::error::BrowserError;
-use crate::browser::page_state::{RefId, StaleReason, quote};
+use crate::browser::page_state::{quote, RefId, StaleReason};
 use crate::browser::types::{ActionTarget, ScrollDirection};
 
-use super::{CdpBackend, map_cdp_err};
+use super::{map_cdp_err, CdpBackend};
 
 /// A target that has been turned into something dispatchable.
 enum Resolved {
@@ -1354,9 +1354,11 @@ pub(super) async fn type_text(
     // `Skipped` (判据 §8).
     be.record_effect_verdict(None);
     let armed = match &resolved {
-        Some(node @ Resolved::Node {
-            backend_node_id, ..
-        }) => {
+        Some(
+            node @ Resolved::Node {
+                backend_node_id, ..
+            },
+        ) => {
             dom::focus(
                 &handle.conn,
                 Some(&session),
@@ -1684,9 +1686,9 @@ mod tests {
 
     use crate::browser::backend::{BrowserBackend, EffectVerification};
     use crate::browser::cdp_backend::test_support::*;
-    use crate::browser::engine::{Cap, Engine, capabilities};
+    use crate::browser::engine::{capabilities, Cap, Engine};
     use crate::browser::error::BrowserError;
-    use crate::browser::page_state::{RefKey, StaleReason, quote};
+    use crate::browser::page_state::{quote, RefKey, StaleReason};
     use crate::browser::types::ActionTarget;
 
     /// A fake peer that answers `resolve_target`'s liveness probe with a LIVE
@@ -1744,15 +1746,12 @@ mod tests {
         F: Fn(&serde_json::Value) -> Responder + Send + Sync + 'static,
     {
         move |frame: &serde_json::Value| {
-            if frame.get("method").and_then(serde_json::Value::as_str)
-                == Some("Runtime.evaluate")
+            if frame.get("method").and_then(serde_json::Value::as_str) == Some("Runtime.evaluate")
                 && frame["params"]["expression"]
                     .as_str()
                     .is_some_and(|e| e.contains("__alephProbeHit"))
             {
-                return Responder::Reply(
-                    json!({ "result": { "type": "string", "value": event } }),
-                );
+                return Responder::Reply(json!({ "result": { "type": "string", "value": event } }));
             }
             base(frame)
         }
@@ -2853,34 +2852,34 @@ mod tests {
     /// does.
     #[tokio::test]
     async fn a_click_that_opens_a_dialog_answers_on_the_event_not_the_budget() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
         let seen = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&seen);
         let server = FakeCdpServer::start(peer_with_effect_hit(
             "click",
             peer_with_live_node(move |frame: &serde_json::Value| {
-            if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
-                // The hit test. The liveness probe on the same method is
-                // answered by `peer_with_live_node` before this runs.
-                return Responder::Reply(
-                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
-                );
-            }
-            if frame["method"].as_str() == Some("Input.dispatchMouseEvent")
+                if frame["method"].as_str() == Some("Runtime.callFunctionOn") {
+                    // The hit test. The liveness probe on the same method is
+                    // answered by `peer_with_live_node` before this runs.
+                    return Responder::Reply(
+                        json!({ "result": { "type": "object", "value": { "ok": true } } }),
+                    );
+                }
+                if frame["method"].as_str() == Some("Input.dispatchMouseEvent")
                 // 0 = move, 1 = press, 2 = release.
                 && counter.fetch_add(1, Ordering::SeqCst) == 2
-            {
-                return Responder::Event(json!({
-                    "method": "Page.javascriptDialogOpening",
-                    "sessionId": "S1",
-                    "params": { "type": "confirm", "message": "delete everything?" }
-                }));
-            }
-            Responder::Reply(json!({}))
-        },
-        )))
+                {
+                    return Responder::Event(json!({
+                        "method": "Page.javascriptDialogOpening",
+                        "sessionId": "S1",
+                        "params": { "type": "confirm", "message": "delete everything?" }
+                    }));
+                }
+                Responder::Reply(json!({}))
+            }),
+        ))
         .await;
         wire_session(&server, "S1");
         server.on(
@@ -3621,14 +3620,10 @@ mod tests {
         // The read-back falls through to `scripted`'s catch-all `Reply({})`,
         // whose absent `result` decodes as `null` — exactly what the page
         // says when the listener never fired.
-        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
-            vec![(
-                "Runtime.callFunctionOn",
-                Responder::Reply(
-                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
-                ),
-            )],
-        )))
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
+        )])))
         .await;
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
         let handle = backend.handle().await.expect("handle");
@@ -3715,7 +3710,12 @@ mod tests {
         // fails in `prepare` (a ref this table never minted) clears it
         // rather than leaving the previous success behind to be misread.
         let stale = backend
-            .click("T1", ActionTarget::Ref { ref_id: "e9".into() })
+            .click(
+                "T1",
+                ActionTarget::Ref {
+                    ref_id: "e9".into(),
+                },
+            )
             .await
             .expect_err("e9 was never minted in this table");
         assert!(matches!(stale, BrowserError::StaleRef { .. }));
@@ -3731,14 +3731,10 @@ mod tests {
     /// "I could not ask" is not "it did not happen").
     #[tokio::test]
     async fn a_readback_failure_marks_the_action_skipped_not_failed() {
-        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
-            vec![(
-                "Runtime.callFunctionOn",
-                Responder::Reply(
-                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
-                ),
-            )],
-        )))
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
+        )])))
         .await;
         server.on(
             "Runtime.evaluate",
@@ -3768,14 +3764,10 @@ mod tests {
     /// `skipped(obscura)`.
     #[tokio::test]
     async fn an_engine_without_the_probe_capability_is_honestly_skipped() {
-        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(
-            vec![(
-                "Runtime.callFunctionOn",
-                Responder::Reply(
-                    json!({ "result": { "type": "object", "value": { "ok": true } } }),
-                ),
-            )],
-        )))
+        let server = probed_click_server(peer_with_live_node(FakeCdpServer::scripted(vec![(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
+        )])))
         .await;
         let (_reg, backend) = backend_with(&server, Engine::Obscura, open_guard()).await;
         let handle = backend.handle().await.expect("handle");

@@ -1132,7 +1132,8 @@ async fn sync_batch_returns_partial_results_and_leaves_nothing_running() {
     // Starve the fan-out: every concurrency permit is held for the whole call.
     let permits = u32::try_from(tool.background.subagent_semaphore.available_permits()).unwrap();
     let _held = tool
-        .background.subagent_semaphore
+        .background
+        .subagent_semaphore
         .clone()
         .acquire_many_owned(permits)
         .await
@@ -3056,7 +3057,10 @@ async fn a_primary_mode_agent_cannot_be_spawned_as_a_subagent() {
         "a real sub-agent must stay spawnable"
     );
     assert!(
-        !registry.spawnable_agent_ids().iter().any(|id| id == "main"),
+        !registry
+            .spawnable_agent_ids(None)
+            .iter()
+            .any(|id| id == "main"),
         "the id list printed back to the model must not advertise `main`"
     );
 

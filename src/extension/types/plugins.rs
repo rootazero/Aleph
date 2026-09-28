@@ -32,6 +32,11 @@ pub struct PluginInfo {
     /// rendered a dash on every row.
     #[serde(default)]
     pub kind: String,
+    /// Where the plugin was found — [`PluginOrigin::label`]. A
+    /// `claude_cache` row is Claude Code's install: read-only here and off
+    /// until enabled.
+    #[serde(default)]
+    pub origin: String,
     /// Runtime status label — see
     /// [`aleph_protocol::plugins::PluginRuntimeStatus`], which is the wire
     /// vocabulary this string must stay inside.
@@ -57,6 +62,13 @@ pub enum PluginOrigin {
     Global,
     /// Bundled with core (lowest priority)
     Bundled,
+    /// Installed by Claude Code under `~/.claude/plugins/cache/…`
+    /// (`GlobalRoot::ClaudeCache`): read-only, and off until `plugins.toml`
+    /// says otherwise ([`Self::enabled_by_default`]). Renamed so serde says
+    /// what [`Self::label`] says — `rename_all = "lowercase"` alone would
+    /// write `claudecache`.
+    #[serde(rename = "claude_cache")]
+    ClaudeCache,
 }
 
 impl PluginOrigin {
@@ -67,8 +79,28 @@ impl PluginOrigin {
             Self::Config => 4,
             Self::Workspace => 3,
             Self::Global => 2,
-            Self::Bundled => 1,
+            Self::Bundled | Self::ClaudeCache => 1,
         }
+    }
+
+    /// Stable lowercase wire label (`PluginRow.origin`); equal to the serde
+    /// spelling.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Workspace => "workspace",
+            Self::Global => "global",
+            Self::Bundled => "bundled",
+            Self::ClaudeCache => "claude_cache",
+        }
+    }
+
+    /// Whether a plugin with NO `plugins.toml` preference loads. Everything
+    /// Aleph installed is an opt-in already; a Claude Code install is not.
+    #[must_use]
+    pub const fn enabled_by_default(self) -> bool {
+        !matches!(self, Self::ClaudeCache)
     }
 
     /// Classify a plugin by where it was found on disk.
@@ -115,6 +147,9 @@ impl PluginOrigin {
             crate::discovery::DiscoverySource::Project => Self::Workspace,
             crate::discovery::DiscoverySource::AlephGlobal
             | crate::discovery::DiscoverySource::ClaudeGlobal => Self::Global,
+            // Claude Code's cache: not exempt from the trust policy either —
+            // another tool installed it, and the operator never chose it here.
+            crate::discovery::DiscoverySource::ClaudeCache => Self::ClaudeCache,
         }
     }
 }
@@ -149,6 +184,18 @@ impl PluginKind {
         }
     }
 
+    /// Whether a plugin of this kind has its declared MCP servers started.
+    /// The one gate for both faces of a plugin's servers: the row counts them
+    /// (`lifecycle.rs::build_record`) and the mount spawns them (the
+    /// `mcp_server` step) only when this is true.
+    #[must_use]
+    pub const fn starts_mcp_servers(self) -> bool {
+        match self {
+            Self::Mcp => true,
+            Self::Wasm | Self::Static => false,
+        }
+    }
+
     /// Detect plugin kind from a file path
     ///
     /// Returns `Some(kind)` if the path indicates a known plugin type,
@@ -177,8 +224,6 @@ pub enum PluginStatus {
     Loaded,
     /// Plugin is disabled by user
     Disabled,
-    /// Plugin is overridden by a higher-priority plugin with the same name
-    Overridden,
     /// Plugin failed to load with an error
     Error(String),
     /// The owner trust policy refused this plugin's origin.
@@ -187,24 +232,56 @@ pub enum PluginStatus {
     /// entry, not the per-plugin toggle. Collapsing the two would point the
     /// operator at a switch that cannot change the outcome.
     Blocked(String),
+    /// Mounted, but a declared dependency has not reached its terminal state:
+    /// the MCP manager is not attached yet, a declared MCP server has not
+    /// answered `initialize`, a required runtime is not provisioned.
+    ///
+    /// `waiting_on` is derived from the plugin's declared MCP servers and
+    /// their start reports (`extension::readiness::derive_readiness`), never
+    /// hand-written, and is never empty. It changes only when a dependency
+    /// reports — there is no timer that turns this into [`Self::Error`]
+    /// (判据 §8: "not ready" is not "failed"). The boot activation gate and the
+    /// `extension/plugins-activated` doctor check list every plugin still
+    /// here after boot, with this field as the reason.
+    Pending { waiting_on: Vec<String> },
 }
 
 impl PluginStatus {
-    /// Check if this plugin is actively running
+    /// Whether the plugin's registered capabilities are live.
+    ///
+    /// `Pending` is active: the capabilities that do not depend on the
+    /// outstanding dependency (skills, agents, hooks, commands) are already
+    /// registered and usable; the ones that do (the pending server's tools)
+    /// are simply not there yet. Making `Pending` inactive would unregister
+    /// and re-register everything else around a slow `initialize`.
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        matches!(self, Self::Loaded)
+        matches!(self, Self::Loaded | Self::Pending { .. })
     }
 
-    /// Stable lowercase label for client display / serialization.
+    /// Whether this is a state the plugin can stay in: everything except
+    /// [`Self::Pending`]. Written as an exhaustive `match` with no wildcard
+    /// so that a new variant is a compile error HERE, where a human decides
+    /// whether it is terminal — not a silent "true". The activation gate and
+    /// the doctor check derive their "still waiting" set from this.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        match self {
+            Self::Loaded | Self::Disabled | Self::Error(_) | Self::Blocked(_) => true,
+            Self::Pending { .. } => false,
+        }
+    }
+
+    /// Stable lowercase label for client display / serialization — the wire
+    /// vocabulary of [`aleph_protocol::plugins::PluginRuntimeStatus`].
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
             Self::Loaded => "loaded",
             Self::Disabled => "disabled",
-            Self::Overridden => "overridden",
             Self::Error(_) => "error",
             Self::Blocked(_) => "blocked",
+            Self::Pending { .. } => "pending",
         }
     }
 }
@@ -240,9 +317,12 @@ pub struct LoadSummary {
     /// higher-priority scope.
     pub shadowed: usize,
     /// Number of plugins registered but held inactive because the operator
-    /// disabled them (`<data_dir>/plugins.toml`). Distinct from
-    /// [`Self::skipped_by_trust`]: that is a policy refusal, this is a
-    /// deliberate per-plugin toggle, and the two need different remedies.
+    /// disabled them (an explicit `enabled = false` in
+    /// `<data_dir>/plugins.toml`). Distinct from [`Self::skipped_by_trust`]:
+    /// that is a policy refusal, this is a deliberate per-plugin toggle, and
+    /// the two need different remedies. A Claude Code install that is merely
+    /// not enabled yet is NOT counted here — nobody toggled it; its row says
+    /// so in its detail (`MountError::NotEnabled`).
     pub disabled_by_operator: usize,
     /// Errors encountered during loading
     pub errors: Vec<String>,
@@ -328,6 +408,14 @@ pub struct PluginRecord {
     pub error: Option<String>,
     /// Root directory of the plugin
     pub root_dir: PathBuf,
+    /// Who may see this plugin (`extension::visibility`). Stamped by
+    /// `lifecycle.rs::build_record` from the discovery that found the
+    /// directory — the adapters cannot know it, exactly as they cannot know
+    /// `origin` (the `record.origin = origin` line beside it). `PluginRecord::new`
+    /// / `from_adapter_output` start it at `Global` for the same reason they
+    /// start `origin` at the adapter's placeholder; `load_all` overwrites it
+    /// on every row it registers, including error rows.
+    pub scope_key: crate::extension::visibility::ScopeKey,
     // Registration tracking
     /// Tool names registered by this plugin
     pub tool_names: Vec<String>,
@@ -363,6 +451,7 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             root_dir: PathBuf::new(),
+            scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names: Vec::new(),
             hook_count: 0,
             service_ids: Vec::new(),
@@ -424,6 +513,7 @@ impl PluginRecord {
             status: PluginStatus::Loaded,
             error: None,
             root_dir,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
             tool_names,
             hook_count,
             service_ids,
@@ -459,11 +549,124 @@ impl PluginRecord {
         self
     }
 
+    /// Mark this record pending on the named dependencies (sorted, deduped).
+    ///
+    /// Not `inactive`: a pending plugin's other capabilities stay live (see
+    /// [`PluginStatus::is_active`]). The detail is the operator's window onto
+    /// WHAT is being waited for, so it lists every entry.
+    ///
+    /// The empty-list check below is `assert!`, not `inactive`'s
+    /// `debug_assert!`: an empty `waiting_on` is not "an unusual status to
+    /// pass" the way a caller-supplied `PluginStatus` might be, it is a
+    /// contradiction in terms ("pending on nothing" — 判据 §2, a predicate
+    /// that can never go red). No runtime-data path calls this with a list it
+    /// did not itself derive as non-empty; if one ever does, that is a
+    /// programmer error this build should catch, release or not.
+    #[must_use]
+    pub fn with_pending(mut self, mut waiting_on: Vec<String>) -> Self {
+        assert!(
+            !waiting_on.is_empty(),
+            "waiting_on must name at least one dependency"
+        );
+        waiting_on.sort();
+        waiting_on.dedup();
+        self.error = Some(format!("waiting on {}", waiting_on.join(", ")));
+        self.status = PluginStatus::Pending { waiting_on };
+        self
+    }
+
     /// Set the root directory
     #[must_use]
     pub fn with_root_dir(mut self, path: PathBuf) -> Self {
         self.root_dir = path;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
+
+    #[test]
+    fn pending_is_active_and_labelled_and_carries_its_dependencies() {
+        let s = PluginStatus::Pending {
+            waiting_on: vec!["mcp:plugin:x/srv".into()],
+        };
+        assert!(
+            s.is_active(),
+            "a pending plugin's other capabilities are live"
+        );
+        assert_eq!(s.label(), "pending");
+        let rec = PluginRecord::new(
+            "x".into(),
+            "X".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Global,
+        )
+        .with_pending(vec!["mcp:plugin:x/srv".into(), "mcp:plugin:x/aux".into()]);
+        assert!(matches!(rec.status, PluginStatus::Pending { .. }));
+        assert_eq!(
+            rec.error.as_deref(),
+            Some("waiting on mcp:plugin:x/aux, mcp:plugin:x/srv"),
+            "the operator-facing detail names every dependency"
+        );
+    }
+
+    /// `with_pending` refuses an empty list: "pending on nothing" is not a
+    /// state, it is a predicate that can never go red (判据 §2).
+    #[test]
+    #[should_panic(expected = "waiting_on must name at least one dependency")]
+    fn pending_on_nothing_is_rejected() {
+        let _ = PluginRecord::new(
+            "x".into(),
+            "X".into(),
+            PluginKind::Mcp,
+            PluginOrigin::Global,
+        )
+        .with_pending(Vec::new());
+    }
+
+    /// G6: the activation gate's "terminal" set is derived from the enum.
+    /// This test lists every variant ONCE with the expected answer; adding
+    /// a variant to the enum without adding a row here does not compile
+    /// (the `match` below has no wildcard), and adding a row with the wrong
+    /// answer fails the assertion. Mutation record: adding `Paused` to the
+    /// enum turned this red with `non-exhaustive patterns` before any row
+    /// was written for it.
+    #[test]
+    fn g6_terminal_set_is_derived_from_the_enum() {
+        let rows = [
+            (PluginStatus::Loaded, true),
+            (PluginStatus::Disabled, true),
+            (PluginStatus::Error("e".into()), true),
+            (PluginStatus::Blocked("b".into()), true),
+            (
+                PluginStatus::Pending {
+                    waiting_on: vec!["mcp:manager".into()],
+                },
+                false,
+            ),
+        ];
+        for (status, expected) in &rows {
+            // The match is the census: every variant must appear.
+            let by_match = match status {
+                PluginStatus::Loaded
+                | PluginStatus::Disabled
+                | PluginStatus::Error(_)
+                | PluginStatus::Blocked(_) => true,
+                PluginStatus::Pending { .. } => false,
+            };
+            assert_eq!(status.is_terminal(), *expected, "{status:?}");
+            assert_eq!(
+                by_match, *expected,
+                "{status:?}: the test's own census disagrees with is_terminal"
+            );
+        }
+        assert_eq!(
+            rows.len(),
+            5,
+            "one row per variant — update when the enum changes"
+        );
     }
 }
 
@@ -493,6 +696,36 @@ mod runtime_vocabulary_tests {
             assert_eq!(json, format!("\"{}\"", kind.as_str()));
             let back: PluginKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, kind);
+        }
+    }
+
+    /// One spelling per origin. `PluginRow.origin` carries `label()`; the
+    /// enum's own serde derive (`PluginRecord`, `CapabilitySource`) must say
+    /// the same word, or `ClaudeCache` reaches one reader as `claude_cache`
+    /// and another as `claudecache` (`rename_all = "lowercase"`).
+    #[test]
+    fn every_origin_serialises_as_its_wire_label() {
+        use super::PluginOrigin;
+        let every = [
+            PluginOrigin::Config,
+            PluginOrigin::Workspace,
+            PluginOrigin::Global,
+            PluginOrigin::Bundled,
+            PluginOrigin::ClaudeCache,
+        ];
+        for origin in every {
+            // The census: a new variant does not compile until it is listed.
+            match origin {
+                PluginOrigin::Config
+                | PluginOrigin::Workspace
+                | PluginOrigin::Global
+                | PluginOrigin::Bundled
+                | PluginOrigin::ClaudeCache => {}
+            }
+            let json = serde_json::to_value(origin).unwrap();
+            assert_eq!(json, serde_json::json!(origin.label()), "{origin:?}");
+            let back: PluginOrigin = serde_json::from_value(json).unwrap();
+            assert_eq!(back, origin);
         }
     }
 }

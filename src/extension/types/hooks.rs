@@ -34,6 +34,10 @@ use std::path::PathBuf;
 ///   ]
 /// }
 /// ```
+///
+/// What a command hook receives for an event, and how to read it safely on
+/// each platform (stdin JSON / environment, never spliced into the command
+/// text): [`HookAction::Command`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEvent {
@@ -74,7 +78,7 @@ pub enum HookEvent {
     #[serde(alias = "PreCompact", alias = "BeforeCompaction")]
     BeforeCompaction,
     /// After session compaction
-    #[serde(alias = "AfterCompaction")]
+    #[serde(alias = "AfterCompaction", alias = "PostCompact")]
     AfterCompaction,
     /// Before an LLM provider API request is issued
     #[serde(alias = "PreApiRequest")]
@@ -94,6 +98,58 @@ pub enum HookEvent {
     /// When a permission is requested
     #[serde(alias = "PermissionRequest")]
     PermissionRequest,
+    /// A tool call was refused at the tool-dispatch chokepoint
+    /// (`ScopedToolService`). Fired for every `ToolError::PermissionDenied`
+    /// leaving that chokepoint — so a new deny arm there is covered without
+    /// knowing this event exists — which today means:
+    ///
+    /// - the exec-tier / plan / side-question / `[policies.tool_permissions]`
+    ///   rule refused the tool;
+    /// - the operator gate (a configuration tool called from a non-operator
+    ///   turn): the operator said no, or no approval channel exists;
+    /// - a BeforeToolCall hook said `deny:`.
+    ///
+    /// NOT fired for these refusals, which reach the model as a different
+    /// error or are decided elsewhere. The first three are `ToolError::Refused`
+    /// — the model reads each as a refusal (kind `permission`, no route around
+    /// it), but they do not fire this event:
+    ///
+    /// - a person declining a confirmation card (Ask tier, destructive
+    ///   arguments) — `Refused { by: Person }` —, that gate refusing because
+    ///   no approval channel exists, or it refusing without asking anyone — an
+    ///   unattended run, or a call the denial ledger remembers being refused —
+    ///   `Refused { by: NobodyAsked }`;
+    /// - a BeforeToolCall hook's `ask:` that the person declined or that
+    ///   could not be raised — `Refused { by: Person | NobodyAsked }`;
+    /// - a BeforeToolCall hook's block (`block:`, exit 2, `decision: "block"`)
+    ///   — `Refused { by: Hook }` — including a BeforeToolCall hook that
+    ///   failed to run, which blocks fail-closed, and a failure of the hook
+    ///   executor itself — `Refused { by: HookFailed }`; a hook's verdict does
+    ///   not re-fire hooks;
+    /// - a card that expired unanswered — `ApprovalExpired`: nobody refused;
+    /// - a sub-agent calling a tool outside its allowlist
+    ///   (`AllowlistToolService`): decided above the chokepoint, before this
+    ///   event's seam.
+    ///
+    /// Those return before any post-call hook runs, so no hook event reports
+    /// them: a card a person declined is visible to hooks only as the
+    /// `PermissionRequest` that raised it, and a refusal made without raising
+    /// a card leaves no hook trace at all.
+    ///
+    /// Observer-only: the refusal has already been returned to the model;
+    /// hooks witness it (audit, metrics, a notification). Claude Code
+    /// `PermissionDenied` parity. Carries `tool_name` (so a `matcher`
+    /// applies), the refused call's raw arguments — `tool_input` in the
+    /// stdin JSON, `ARGUMENTS` / `TOOL_INPUT` in the environment, exactly as
+    /// a BeforeToolCall hook gets them (a PermissionRequest observer gets
+    /// only the redacted summary) — and `DENY_REASON` in `env`. Both reach a
+    /// command as data only, never as its source ([`HookAction::Command`]):
+    /// read the reason as `.env.DENY_REASON` from the stdin JSON, or as
+    /// `"$DENY_REASON"` (double-quoted) from the environment — it quotes
+    /// identifiers in backticks and can contain apostrophes and the
+    /// operator's own words. On Windows, use the stdin JSON.
+    #[serde(alias = "PermissionDenied")]
+    PermissionDenied,
     /// When a user prompt is about to be sent to the LLM (after history
     /// build, before the first think call). Lets hooks inject context or
     /// abort the run before any provider call.
@@ -127,7 +183,7 @@ impl HookEvent {
     /// `hooks_manage` tool's catalogue both project this instead of keeping
     /// their own hand-written lists (which is how a new variant ends up
     /// invisible to one surface and not the other).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::BeforeAgentStart,
         Self::AgentEnd,
         Self::BeforeToolCall,
@@ -147,33 +203,51 @@ impl HookEvent {
         Self::GatewayStop,
         Self::Notification,
         Self::PermissionRequest,
+        Self::PermissionDenied,
         Self::UserPromptSubmit,
         Self::SubagentStart,
         Self::SubagentStop,
         Self::Stop,
     ];
 
-    /// Whether this event's [`HookContext`](crate::extension::hooks::HookContext)
-    /// carries a `tool_name`, so a `matcher` regex can meaningfully select
-    /// among invocations.
-    ///
-    /// The executor matches `matcher` against `tool_name` ONLY. On any other
-    /// event the matcher can never match and the hook silently never fires —
-    /// a foot-gun surfaced at load time (`user_settings.rs`) and reported per
-    /// hook by the runtime inventory (`HookExecutor::inventory`). Keeping the
-    /// predicate on the event itself is what stops those two from drifting.
+    /// The serde snake_case name (`before_tool_call`) — what the payload
+    /// carries for a hook that declared no other spelling (runtime/WASM
+    /// registrations), and the name every diagnostic view (`hooks.registry`,
+    /// the `hooks.events` catalogue) lists an event under. Derived from serde
+    /// so the enum's rename attribute stays the single source.
     #[must_use]
-    pub const fn supports_matcher(self) -> bool {
+    pub fn canonical_name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(s)) => s,
+            _ => format!("{self:?}").to_lowercase(),
+        }
+    }
+
+    /// What a hook's `matcher` is tested against on this event — the one
+    /// derivation the executor's match, both hook-file readers' load-time
+    /// notices, the runtime inventory (`HookExecutor::inventory`) and the
+    /// `hooks_manage` catalogue read, so none of them can disagree.
+    ///
+    /// A tool event matches the tool name (`scan-cc-plugin-format.md` §5
+    /// documents tool-name matchers). `SessionStart` matching how the session
+    /// began is INFERRED, not documented in the evidence: the scan shows only
+    /// superpowers' `"matcher": "startup|clear|compact"` on that event. Where
+    /// the evidence names no subject, Aleph has nothing to test the matcher
+    /// against: it is ignored and the hook fires on every occurrence — a
+    /// matcher never silently means "never fires". Exhaustive, so a new
+    /// event has to choose.
+    #[must_use]
+    pub const fn match_subject(self) -> MatchSubject {
         use HookEvent::*;
-        matches!(
-            self,
-            BeforeToolCall
-                | AfterToolCall
-                | AfterToolCallFailure
-                | ToolResultPersist
-                | PermissionRequest
-                | Notification
-        )
+        match self {
+            BeforeToolCall | AfterToolCall | AfterToolCallFailure | ToolResultPersist
+            | PermissionRequest | PermissionDenied | Notification => MatchSubject::ToolName,
+            SessionStart => MatchSubject::SessionSource,
+            BeforeAgentStart | AgentEnd | MessageReceived | MessageSending | MessageSent
+            | SessionEnd | BeforeCompaction | AfterCompaction | PreApiRequest | PostApiRequest
+            | GatewayStart | GatewayStop | UserPromptSubmit | SubagentStart | SubagentStop
+            | Stop => MatchSubject::Ignored,
+        }
     }
 
     /// Whether this event's production fire-site dispatches interceptor-kind
@@ -199,6 +273,44 @@ impl HookEvent {
         )
     }
 }
+
+/// What a hook's `matcher` is tested against ([`HookEvent::match_subject`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchSubject {
+    /// The tool's name: the Aleph name and every Claude Code spelling of it
+    /// (`Edit` for `file_edit`).
+    ToolName,
+    /// How the session began — inferred to be what Claude Code's SessionStart
+    /// matcher selects (`startup`, `clear`, `compact`, …). Aleph fires
+    /// SessionStart only on an empty history, and only as
+    /// [`SESSION_SOURCE_STARTUP`].
+    SessionSource,
+    /// Nothing to select among: a matcher is ignored and the hook fires on
+    /// every occurrence.
+    Ignored,
+}
+
+impl MatchSubject {
+    /// The name the `hooks_manage` catalogue shows.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolName => "tool_name",
+            Self::SessionSource => "session_source",
+            Self::Ignored => "ignored",
+        }
+    }
+}
+
+/// The session source of the one SessionStart Aleph fires: an empty history
+/// — a brand-new session, which Claude Code calls `startup`, or one emptied
+/// by `reset_session`, which the fire site cannot tell apart.
+pub const SESSION_SOURCE_STARTUP: &str = "startup";
+
+/// Every session source Aleph fires SessionStart with. A reset session fires
+/// as `startup` too; Aleph never sends `resume` / `clear` / `compact`, so a
+/// matcher that selects only those never fires here.
+pub const SESSION_SOURCES_FIRED: [&str; 1] = [SESSION_SOURCE_STARTUP];
 
 /// Hook execution kind - determines how the hook is executed
 ///
@@ -332,9 +444,68 @@ impl std::str::FromStr for PromptScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum HookAction {
-    /// Execute a shell command. Event JSON is piped to stdin in addition to
-    /// being exposed via env vars; stdout is parsed using the line-prefix
-    /// protocol (see [`crate::extension::hooks::parse_command_output`]).
+    /// Execute a shell command (`sh -c` on unix, `cmd /C` on Windows). stdout
+    /// is parsed using the line-prefix protocol (see
+    /// [`crate::extension::hooks::parse_command_output`]).
+    ///
+    /// # Path variables
+    ///
+    /// `${CLAUDE_PLUGIN_ROOT}` (also `${PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}`)
+    /// is the hook's root; `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` is a
+    /// plugin-owned hook's data directory. Each is set in the command's
+    /// environment, and removed when the hook has none (a settings hook has
+    /// no data directory) rather than inherited from the daemon's.
+    ///
+    /// On unix that is the only way they reach the command: nothing is
+    /// substituted into `command`, and `sh` expands the variable as one word
+    /// of data, so a root named with a space or a `$(…)` stays one path.
+    /// Unquoted and double-quoted uses read the path —
+    /// `"${CLAUDE_PLUGIN_ROOT}"/hooks/x.sh` survives a space. Where `sh` does
+    /// not expand — single quotes (`'${CLAUDE_PLUGIN_ROOT}'`), a quoted
+    /// heredoc (`<<'EOF'`), an escaped `\${…}` — the text stays literal; it
+    /// was replaced before 2026-09-24 (and in a plugin's `hooks.json` until
+    /// 2026-09-27, where the manifest adapter spliced the root in at parse
+    /// time — `AdapterRegistry::parse_dir` now leaves the command as
+    /// written). A nested `sh -c '…${CLAUDE_PLUGIN_ROOT}…'`
+    /// still reads the path, from the environment it inherits.
+    ///
+    /// On Windows `cmd` cannot expand `${…}`, so the path variables — never
+    /// the event's data — are substituted into `command` before it parses the
+    /// line. Their values come from where the hook is installed, never from
+    /// the model or the event.
+    ///
+    /// # Event data
+    ///
+    /// The event's data is never substituted into `command`: it is
+    /// model-controlled or quotes identifiers in backticks, so splicing it
+    /// into the source would run it. A command reads the data from:
+    ///
+    /// - **stdin** — the whole event as JSON (`jq -r '.tool_input'`,
+    ///   `jq -r '.env.DENY_REASON'`); full fidelity, every platform.
+    /// - **its environment** — `TOOL_NAME`, `ARGUMENTS`, `TOOL_INPUT`,
+    ///   `SESSION_ID` and every key of the event's `env`
+    ///   (`DENY_REASON`, …). On unix write them double-quoted
+    ///   (`"$ARGUMENTS"`): the shell expands the value as one word of data;
+    ///   unquoted it is word-split and globbed, single-quoted it is not
+    ///   expanded at all. An `ARGUMENTS` / `TOOL_INPUT` value over the
+    ///   executor's env cap (`MAX_ENV_VALUE_BYTES`) is replaced by the marker
+    ///   `[N bytes — read from stdin JSON]`, which is then all the variable
+    ///   holds. A fixed field the event does not carry — `TOOL_NAME` /
+    ///   `ARGUMENTS` / `TOOL_INPUT` with no tool,
+    ///   `CLAUDE_PROJECT_DIR` outside a run — is removed from the
+    ///   environment, never inherited from the daemon's. An `env` key is set
+    ///   only on the events that carry it: on any other event a variable of
+    ///   that name is whatever the daemon's environment holds, so a script
+    ///   that reads `"$DENY_REASON"` should check `hook_event_name` first.
+    ///
+    /// `aleph-server hooks test` builds its run by the same derivation, so a command
+    /// reviewed there sees these same variables (on a synthetic tool call).
+    ///
+    /// On Windows `cmd` expands `%VAR%` before it parses the line, so a `&`,
+    /// `|` or `^` in the value would still be interpreted, and `$ARGUMENTS`
+    /// is plain text to it. Read the stdin JSON there — or `!VAR!` inside a
+    /// batch file that runs `setlocal EnableDelayedExpansion` (`cmd /C` does
+    /// not enable delayed expansion by itself).
     Command { command: String },
     /// Provide a prompt template. The resolved prompt is injected as
     /// `additional_context` for the next LLM turn (no separate LLM call).
@@ -390,7 +561,7 @@ pub struct HookConfig {
     #[serde(default)]
     pub plugin_name: String,
 
-    /// Plugin root (for variable substitution)
+    /// Plugin root: what the hook's path variables (`${CLAUDE_PLUGIN_ROOT}` …) name
     #[serde(skip)]
     pub plugin_root: PathBuf,
 
@@ -402,6 +573,37 @@ pub struct HookConfig {
     /// timeout when set. Applies to Command and Http actions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// The event name exactly as the hook's author wrote it (`PreToolUse`
+    /// or `before_tool_call`) — what the stdin payload's `hook_event_name`
+    /// echoes back (user ruling 2026-09-20 U-b). Filled by the two file
+    /// parsers that read the key as written (`~/.aleph` / project
+    /// `hooks.json`, a plugin's `hooks.json`). `None` for the runtime/WASM
+    /// registration API and `aleph.plugin.toml` `[[hooks]]`: both dispatch
+    /// to a WASM handler, which has always read the canonical serde name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_event: Option<String>,
+
+    /// Who may see this hook fire: stamped by the producer that knows where
+    /// the hook came from (`hooks::load_user_hooks` for `~/.aleph/hooks.json`
+    /// and project files, `extension/mod.rs::sync_hooks_from_registry` for
+    /// plugin-shipped hooks, from the owning plugin's registry row). The
+    /// executor compares it with `extension::visibility::visible_to`. There is
+    /// deliberately no `Default`: a hook constructed without saying where it
+    /// belongs would fire everywhere.
+    pub scope_key: crate::extension::visibility::ScopeKey,
+}
+
+impl HookConfig {
+    /// The `hook_event_name` this hook's payload carries: the declared
+    /// spelling when there is one, else the canonical serde name. THE one
+    /// derivation — the executor's dispatch loops read it per hook.
+    #[must_use]
+    pub fn event_name(&self) -> String {
+        self.declared_event
+            .clone()
+            .unwrap_or_else(|| self.event.canonical_name())
+    }
 }
 
 // =============================================================================
@@ -502,5 +704,57 @@ impl McpServerConfig {
             Self::Remote { url, .. } => Some(url),
             Self::Stdio { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_compact_is_an_alias_of_after_compaction() {
+        let e: HookEvent = serde_json::from_str("\"PostCompact\"").unwrap();
+        assert_eq!(e, HookEvent::AfterCompaction);
+    }
+
+    #[test]
+    fn permission_denied_parses_carries_a_tool_name_and_is_observer_only() {
+        let e: HookEvent = serde_json::from_str("\"PermissionDenied\"").unwrap();
+        assert_eq!(e, HookEvent::PermissionDenied);
+        assert_eq!(serde_json::to_value(e).unwrap(), "permission_denied");
+        assert_eq!(
+            e.match_subject(),
+            MatchSubject::ToolName,
+            "the refusal names a tool; a matcher can select it"
+        );
+        assert!(
+            !e.supports_interceptor(),
+            "the refusal has already been returned"
+        );
+        assert!(HookEvent::ALL.contains(&e));
+    }
+
+    #[test]
+    fn event_name_is_the_declared_spelling_else_the_canonical_name() {
+        let mut hook = HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::Normal,
+            matcher: None,
+            actions: Vec::new(),
+            plugin_name: "t".into(),
+            plugin_root: PathBuf::new(),
+            handler: None,
+            timeout_secs: None,
+            declared_event: None,
+            scope_key: crate::extension::visibility::ScopeKey::Global,
+        };
+        assert_eq!(hook.event_name(), "before_tool_call");
+        hook.declared_event = Some("PreToolUse".into());
+        assert_eq!(hook.event_name(), "PreToolUse");
+        // An absent spelling is not written out.
+        hook.declared_event = None;
+        let v = serde_json::to_value(&hook).unwrap();
+        assert!(v.get("declared_event").is_none(), "{v}");
     }
 }

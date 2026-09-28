@@ -789,10 +789,8 @@ impl SearchRegistry {
             return Err(AlephError::provider(lines.join("\n")));
         }
 
-        let (results, duplicates) = crate::search::merge::merge_by_rank_indexed(
-            per_query,
-            options.validated_max_results(),
-        );
+        let (results, duplicates) =
+            crate::search::merge::merge_by_rank_indexed(per_query, options.validated_max_results());
         if duplicates > 0 {
             notes.push(merged_duplicates_across_queries(duplicates));
         }
@@ -1233,19 +1231,23 @@ mod tests {
             self.asks
                 .fetch_add(1, crate::sync_primitives::Ordering::Relaxed);
             if let Some(delay) = self.delay {
-                let now = self.in_flight.fetch_add(1, crate::sync_primitives::Ordering::Relaxed) + 1;
+                let now = self
+                    .in_flight
+                    .fetch_add(1, crate::sync_primitives::Ordering::Relaxed)
+                    + 1;
                 self.max_in_flight
                     .fetch_max(now, crate::sync_primitives::Ordering::Relaxed);
                 tokio::time::sleep(delay).await;
-                self.in_flight.fetch_sub(1, crate::sync_primitives::Ordering::Relaxed);
+                self.in_flight
+                    .fetch_sub(1, crate::sync_primitives::Ordering::Relaxed);
             }
-            let fail = self.should_fail
-                || self.fail_on.as_deref().is_some_and(|n| query.contains(n));
+            let fail =
+                self.should_fail || self.fail_on.as_deref().is_some_and(|n| query.contains(n));
             if fail {
-                return Err(self.fail_with.as_ref().map_or_else(
-                    || AlephError::network("Mock provider failure"),
-                    |f| f(),
-                ));
+                return Err(self
+                    .fail_with
+                    .as_ref()
+                    .map_or_else(|| AlephError::network("Mock provider failure"), |f| f()));
             }
             if self.empty_on.as_deref().is_some_and(|n| query.contains(n)) {
                 return Ok(Vec::new());
@@ -1265,7 +1267,12 @@ mod tests {
             }
             for i in 0..self.result_count.min(options.max_results) {
                 let url = if self.keyed_by_query {
-                    format!("https://{}/{}/{}", self.host, query.replace(' ', "-"), i + 1)
+                    format!(
+                        "https://{}/{}/{}",
+                        self.host,
+                        query.replace(' ', "-"),
+                        i + 1
+                    )
                 } else {
                     format!("https://{}/{}", self.host, i + 1)
                 };
@@ -2332,18 +2339,22 @@ mod tests {
         let mut reg = SearchRegistry::new("tavily");
         reg.add_provider(
             "tavily".into(),
-            Arc::new(MockProvider::new("tavily", true, 0)
-                .failing_with(|| AlephError::authentication("tavily", "401"))),
+            Arc::new(
+                MockProvider::new("tavily", true, 0)
+                    .failing_with(|| AlephError::authentication("tavily", "401")),
+            ),
         );
         reg.add_provider(
             "brave".into(),
-            Arc::new(MockProvider::new("brave", true, 0)
-                .failing_with(|| AlephError::rate_limit("429"))),
+            Arc::new(
+                MockProvider::new("brave", true, 0).failing_with(|| AlephError::rate_limit("429")),
+            ),
         );
         reg.add_provider(
             "searxng".into(),
-            Arc::new(MockProvider::new("searxng", true, 0)
-                .failing_with(|| AlephError::provider("503"))),
+            Arc::new(
+                MockProvider::new("searxng", true, 0).failing_with(|| AlephError::provider("503")),
+            ),
         );
         reg.set_fallback_providers(vec!["brave".to_string(), "searxng".to_string()]);
 
@@ -2375,8 +2386,10 @@ mod tests {
         let mut reg = SearchRegistry::new("a");
         reg.add_provider(
             "a".into(),
-            Arc::new(MockProvider::new("a", true, 0)
-                .failing_with(|| AlephError::authentication("a", "401"))),
+            Arc::new(
+                MockProvider::new("a", true, 0)
+                    .failing_with(|| AlephError::authentication("a", "401")),
+            ),
         );
         let named = SearchOptions {
             providers: vec!["a".to_string()],
@@ -2639,7 +2652,10 @@ mod tests {
             "rank-interleaved across queries, shared page kept by the first query"
         );
         assert!(
-            answer.notes.iter().any(|n| n.contains("more than one query")),
+            answer
+                .notes
+                .iter()
+                .any(|n| n.contains("more than one query")),
             "the merged duplicate is announced: {:?}",
             answer.notes
         );

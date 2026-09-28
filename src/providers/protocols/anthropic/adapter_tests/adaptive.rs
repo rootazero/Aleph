@@ -330,9 +330,8 @@ fn build_request_omits_thinking_on_gen5_model_when_off() {
     use crate::agents::thinking::ThinkLevel;
     use crate::providers::message::UnifiedMessage;
     let msgs = [UnifiedMessage::user("Hi")];
-    // Generation-5 models 400 on an explicit `{type:"disabled"}` block —
-    // omission is the only off-switch (claude-api: "omit the thinking param
-    // entirely instead").
+    // Generation-5 `Off` omits the field; what that does per model is stated
+    // on `AnthropicProtocol::omits_disabled_thinking`.
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
     let mut config = ProviderConfig::test_config("claude-fable-5");
     config.api_key = Some("sk-ant-api-test".to_string());

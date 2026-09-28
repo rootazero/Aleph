@@ -105,9 +105,7 @@ Example:
         ) {
             Ok(p) => p,
             Err(e) => {
-                return Ok(DocumentExtractOutput::err(format!(
-                    "path rejected: {e}"
-                )));
+                return Ok(DocumentExtractOutput::err(format!("path rejected: {e}")));
             }
         };
         let mt = match detect_from_path(&path).await {

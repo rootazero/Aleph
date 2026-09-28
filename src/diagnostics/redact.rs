@@ -192,9 +192,8 @@ mod tests {
     /// application against Google's APIs.
     #[test]
     fn redacts_google_oauth_client_secrets() {
-        let out = redact_secrets(
-            "config dump: client_secret=GOCSPX-AbCdEfGhIjKlMnOpQrStUvWx rejected",
-        );
+        let out =
+            redact_secrets("config dump: client_secret=GOCSPX-AbCdEfGhIjKlMnOpQrStUvWx rejected");
         assert_eq!(out, "config dump: *** rejected");
         assert!(!out.contains("GOCSPX-"));
     }

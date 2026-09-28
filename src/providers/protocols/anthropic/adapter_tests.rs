@@ -8,13 +8,18 @@
 //! - `oauth`         — OAuth-token detection & authorization-header wiring.
 //! - `adaptive`      — Claude 4.6/4.7 adaptive-thinking + xhigh downgrade.
 //! - `prefix_stability` — strict-prefix-extension cache contract on raw bodies.
+//! - `thinking_replay` — per-host / per-model thinking replay on the wire
+//!   (`reasoning_content` copies, the thinking-binding beta header).
+//! - `context_editing` — server-side `context_management` + its beta.
 
 mod helpers;
 
 mod adaptive;
 mod basic;
 mod build_request;
+mod context_editing;
 mod convert;
 mod oauth;
 mod prefix_stability;
 mod schema;
+mod thinking_replay;

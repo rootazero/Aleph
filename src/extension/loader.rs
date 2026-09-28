@@ -1,4 +1,4 @@
-//! Plugin Loader - Manages runtime loading of WASM and MCP plugins
+//! Plugin Loader - Manages runtime loading of WASM plugins
 //!
 //! Provides a unified interface to load plugins into their appropriate runtimes
 //! based on `PluginKind`, and invoke tools/hooks on loaded plugins.
@@ -8,27 +8,21 @@
 //! ```text
 //! PluginLoader
 //! ├── wasm_runtime: Option<WasmRuntime>      (lazy initialized)
-//! ├── mcp_configs: HashMap<String, HashMap<String, McpManagerConfig>>
 //! └── loaded_plugins: HashMap<String, PluginKind>
 //! ```
 //!
-//! # MCP Plugin Flow
-//!
-//! MCP-type plugins delegate to Aleph's MCP client system (`McpManager`).
-//! The `PluginLoader` reads `.mcp.json`, stores the configs, and exposes them
-//! via `get_mcp_configs()`. The caller (`ExtensionManager` or Gateway) is
-//! responsible for registering these configs with `McpManager`.
+//! MCP plugins have no in-process runtime here; `lifecycle.rs` hands their
+//! `.mcp.json` servers to `McpManager`.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
-use crate::extension::mcp_config;
 use crate::extension::runtime::WasmRuntime;
-use crate::extension::types::{DirectCommandResult, PluginKind};
-use crate::mcp::McpManagerConfig;
+use crate::extension::types::PluginKind;
 use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry};
 
 /// Manages loading plugins into appropriate runtimes.
@@ -45,9 +39,6 @@ pub struct PluginLoader {
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
 
-    /// MCP server configs per plugin: `plugin_id` -> (`server_id` -> `McpManagerConfig`)
-    mcp_configs: HashMap<String, HashMap<String, McpManagerConfig>>,
-
     /// Map of `plugin_id` -> runtime kind for fast lookup
     loaded_plugins: HashMap<String, PluginKind>,
 }
@@ -59,15 +50,8 @@ impl PluginLoader {
         Self {
             plugin_settings: std::collections::HashMap::new(),
             wasm_runtime: None,
-            mcp_configs: HashMap::new(),
             loaded_plugins: HashMap::new(),
         }
-    }
-
-    /// Check if any runtime is currently active.
-    #[must_use]
-    pub fn is_any_runtime_active(&self) -> bool {
-        self.wasm_runtime.is_some() || !self.mcp_configs.is_empty()
     }
 
     /// Check if a specific plugin is loaded.
@@ -94,33 +78,6 @@ impl PluginLoader {
         self.loaded_plugins.len()
     }
 
-    // ===== MCP Config Access =====
-
-    /// Get MCP server configs for a specific plugin.
-    #[must_use]
-    pub fn get_mcp_configs(&self, plugin_id: &str) -> Option<&HashMap<String, McpManagerConfig>> {
-        self.mcp_configs.get(plugin_id)
-    }
-
-    /// Get all MCP server configs as a flat `HashMap` (`server_id` -> config).
-    ///
-    /// If two plugins register MCP servers with the same ID, the later one wins
-    /// and a warning is logged.
-    pub fn all_mcp_configs_map(&self) -> HashMap<String, McpManagerConfig> {
-        let mut result = HashMap::new();
-        for (plugin_id, servers) in &self.mcp_configs {
-            for (id, config) in servers {
-                if let Some(_existing) = result.insert(id.clone(), config.clone()) {
-                    warn!(
-                        "MCP server ID '{}' from plugin '{}' overwrites a server with the same ID from another plugin",
-                        id, plugin_id
-                    );
-                }
-            }
-        }
-        result
-    }
-
     // ===== Loading =====
 
     /// Mirror the operator's stored plugin configuration into the loader.
@@ -138,18 +95,21 @@ impl PluginLoader {
         self.plugin_settings = settings;
     }
 
-    /// Load a plugin based on its kind.
-    pub fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+    /// Load a plugin's in-process runtime. Only `Wasm` has one; `Mcp`
+    /// plugins are MCP *servers* and are mounted by `lifecycle.rs` through
+    /// `McpManager` (`mcp_server` step), `Static` plugins have none.
+    pub(super) fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.is_loaded(&manifest.id) {
             warn!("Plugin {} is already loaded, skipping", manifest.id);
             return Ok(());
         }
-
         match manifest.kind {
             PluginKind::Wasm => self.load_wasm_plugin(manifest),
-            PluginKind::Mcp => self.load_mcp_plugin(manifest),
-            PluginKind::Static => {
-                info!("Plugin {} is static, skipping runtime loading", manifest.id);
+            PluginKind::Mcp | PluginKind::Static => {
+                info!(
+                    "Plugin {} has no in-process runtime, skipping loader",
+                    manifest.id
+                );
                 Ok(())
             }
         }
@@ -190,70 +150,6 @@ impl PluginLoader {
         Ok(())
     }
 
-    /// Load an MCP-type plugin.
-    fn load_mcp_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
-        let settings = self
-            .plugin_settings
-            .get(&manifest.id)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let configs = mcp_config::read_mcp_json(&manifest.root_dir, &manifest.id, &settings)?;
-
-        if configs.is_empty() {
-            warn!(
-                "MCP plugin '{}' has no servers defined in .mcp.json",
-                manifest.id
-            );
-        }
-
-        let server_count = configs.len();
-        let mut server_names: Vec<String> = configs.keys().cloned().collect();
-        server_names.sort();
-
-        self.mcp_configs.insert(manifest.id.clone(), configs);
-        self.loaded_plugins
-            .insert(manifest.id.clone(), PluginKind::Mcp);
-
-        info!(
-            "Loaded MCP plugin '{}' with {} server(s): {:?}",
-            manifest.id, server_count, server_names
-        );
-
-        Ok(())
-    }
-
-    /// Load a plugin and, if the manifest declares a `[memory]` section,
-    /// register a `McpMemoryExtension` backed by an `UnboundMcpCaller` into
-    /// `memory_registry`.
-    ///
-    /// This is the preferred entry point when the `MemoryExtensionRegistry` is
-    /// available (threaded through the server context at startup). Existing
-    /// callers that don't yet have the registry can keep using `load_plugin`
-    /// unchanged.
-    pub fn load_plugin_with_memory(
-        &mut self,
-        manifest: &PluginManifest,
-        memory_registry: &Arc<MemoryExtensionRegistry>,
-    ) -> ExtensionResult<()> {
-        self.load_plugin(manifest)?;
-        // Resolve the plugin's MCP server id (memory hooks route there). A
-        // memory plugin is expected to declare exactly one server; if it
-        // declares several, use the first and warn.
-        let server_id = self.mcp_configs.get(&manifest.id).and_then(|servers| {
-            let mut keys: Vec<String> = servers.keys().cloned().collect();
-            keys.sort();
-            if keys.len() > 1 {
-                warn!(
-                    plugin = %manifest.id,
-                    "plugin declares >1 MCP server; routing [memory] hooks to the first"
-                );
-            }
-            keys.into_iter().next()
-        });
-        register_memory_extension_if_declared(manifest, server_id, memory_registry);
-        Ok(())
-    }
-
     // ===== Unloading =====
 
     /// Unload a plugin from its runtime.
@@ -279,17 +175,8 @@ impl PluginLoader {
                     ));
                 }
             }
-            Some(PluginKind::Mcp) => {
-                let removed = self.mcp_configs.remove(plugin_id);
-                let server_count = removed.as_ref().map_or(0, |m| m.len());
-                info!(
-                    "Unloaded MCP plugin '{}' ({} server configs removed). \
-                     Caller must remove servers from McpManager.",
-                    plugin_id, server_count
-                );
-            }
-            Some(PluginKind::Static) => {
-                info!("Static plugin '{}' removed from tracking", plugin_id);
+            Some(PluginKind::Static) | Some(PluginKind::Mcp) => {
+                info!("Plugin '{}' removed from tracking", plugin_id);
             }
             None => {
                 return Err(ExtensionError::PluginNotFound(plugin_id.to_string()));
@@ -303,7 +190,8 @@ impl PluginLoader {
 
     /// Call a tool handler on a loaded plugin.
     ///
-    /// For MCP plugins, tool calls should go through the MCP system (`McpManager`).
+    /// Only `Wasm` plugins have a callable in-process runtime; any other
+    /// kind is an error (MCP plugin tools are reached through `McpManager`).
     pub fn call_tool(
         &self,
         plugin_id: &str,
@@ -335,10 +223,7 @@ impl PluginLoader {
                     ))
                 }
             }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugin tool calls must go through McpManager, not PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(format!(
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support tool calls"
             ))),
         }
@@ -380,57 +265,9 @@ impl PluginLoader {
                     ))
                 }
             }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugins do not support hooks via PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(format!(
+            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support hooks"
             ))),
-        }
-    }
-
-    /// Execute a direct command handler on a loaded plugin.
-    pub fn execute_command(
-        &self,
-        plugin_id: &str,
-        handler: &str,
-        args: serde_json::Value,
-    ) -> ExtensionResult<DirectCommandResult> {
-        let kind = self
-            .loaded_plugins
-            .get(plugin_id)
-            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
-
-        match kind {
-            PluginKind::Wasm => {
-                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
-                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
-                })?;
-
-                let input = crate::extension::runtime::WasmToolInput {
-                    name: handler.to_string(),
-                    arguments: args,
-                };
-                let output = runtime.call_tool(plugin_id, handler, input)?;
-
-                if output.success {
-                    let result = output.result.unwrap_or(serde_json::Value::Null);
-                    Ok(serde_json::from_value(result)
-                        .unwrap_or_else(|_| DirectCommandResult::success("Command executed")))
-                } else {
-                    Ok(DirectCommandResult::error(
-                        output
-                            .error
-                            .unwrap_or_else(|| "Unknown WASM error".to_string()),
-                    ))
-                }
-            }
-            PluginKind::Mcp => Err(ExtensionError::Runtime(
-                "MCP plugins do not support direct commands via PluginLoader".to_string(),
-            )),
-            PluginKind::Static => Err(ExtensionError::Runtime(
-                "Static plugins cannot have direct commands".to_string(),
-            )),
         }
     }
 
@@ -442,7 +279,6 @@ impl PluginLoader {
         );
 
         // WASM runtime cleanup happens automatically when dropped.
-        self.mcp_configs.clear();
         self.loaded_plugins.clear();
 
         info!("PluginLoader shutdown complete");
@@ -453,18 +289,6 @@ impl PluginLoader {
     pub const fn is_wasm_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some()
     }
-
-    /// Check if any MCP plugins are loaded.
-    #[must_use]
-    pub fn has_mcp_plugins(&self) -> bool {
-        !self.mcp_configs.is_empty()
-    }
-
-    /// Get the number of MCP servers across all loaded MCP plugins.
-    #[must_use]
-    pub fn mcp_server_count(&self) -> usize {
-        self.mcp_configs.values().map(|m| m.len()).sum()
-    }
 }
 
 impl Default for PluginLoader {
@@ -473,40 +297,86 @@ impl Default for PluginLoader {
     }
 }
 
-/// Register a `McpMemoryExtension` into `registry` when `manifest` declares a
-/// `[memory]` section.
+/// Mount-time runtime effect for a `PluginKind::Wasm` plugin: instantiate the
+/// module now and hand back the disposer that unloads it.
 ///
-/// The extension is initially backed by `UnboundMcpCaller`, which returns a
-/// clear diagnostic error on every call. `ExtensionManager::bind_memory_callers`
-/// replaces the caller with a real `McpManager` binding at server startup.
+/// Loading at mount (not lazily at first tool call, as the loader used to)
+/// is what lets the `service` step that follows run the plugin's
+/// `start_handler`, and what puts the module inside the scope's dispose order
+/// instead of beside it.
+pub(crate) async fn load_wasm_effect(
+    loader: Arc<tokio::sync::RwLock<PluginLoader>>,
+    manifest: &PluginManifest,
+) -> ExtensionResult<Disposer> {
+    debug_assert_eq!(
+        manifest.kind,
+        PluginKind::Wasm,
+        "only WASM plugins have a module to load"
+    );
+    loader.write().await.load_plugin(manifest)?;
+    let plugin_id = manifest.id.clone();
+    Ok(async_disposer(move || async move {
+        loader
+            .write()
+            .await
+            .unload_plugin(&plugin_id)
+            .map_err(|e| e.to_string())
+    }))
+}
+
+/// The smallest valid WebAssembly module (magic + version, no sections).
+/// extism links it without complaint and fails only when an export is
+/// called, which is exactly the shape a lifecycle fixture needs.
+#[cfg(test)]
+pub(crate) const EMPTY_WASM_MODULE: &[u8] = b"\0asm\x01\x00\x00\x00";
+
+/// The `memory_extension` effect: register a `McpMemoryExtension` when
+/// `manifest` declares a `[memory]` section, bound to the live MCP manager
+/// when one is attached, and return the disposer that unregisters it.
 ///
-/// This is extracted as a free function so it can be unit-tested directly
-/// without constructing a full `PluginLoader`.
-pub(crate) fn register_memory_extension_if_declared(
+/// `Ok(None)` when there is no `[memory]` section — nothing to register,
+/// nothing to dispose. `Err` when the name is already taken: two plugins
+/// claiming one extension name would double-fire every hook, so the second
+/// mount fails at this step instead of logging and carrying on.
+///
+/// Free function (not a `PluginLoader` method) because it never touches the
+/// loader; it lives here so the G1 census finds every plugin-facing memory
+/// registration in one file.
+pub(crate) fn register_memory_extension_effect(
     manifest: &PluginManifest,
     server_id: Option<String>,
     registry: &Arc<MemoryExtensionRegistry>,
-) {
-    if manifest.memory_manifest.is_some() {
-        let ext = McpMemoryExtension::new_unbound(manifest.name.clone(), server_id);
-        if let Err(e) = registry.register_mcp(Arc::new(ext)) {
-            warn!(
-                plugin = %manifest.name,
-                error = %e,
-                "failed to register McpMemoryExtension (duplicate or invalid plugin name)"
-            );
-            return;
-        }
-        info!(
-            plugin = %manifest.name,
-            "registered McpMemoryExtension (unbound) for plugin with [memory] section"
-        );
+    mcp_handle: Option<crate::mcp::McpManagerHandle>,
+) -> Result<Option<Disposer>, String> {
+    if manifest.memory_manifest.is_none() {
+        return Ok(None);
     }
+    let ext = Arc::new(McpMemoryExtension::new_unbound(manifest.name.clone()));
+    if let (Some(handle), Some(sid)) = (mcp_handle, server_id) {
+        ext.rebind(Arc::new(
+            crate::memory::extensions::ManagerBackedMcpCaller::new(handle, sid),
+        ));
+    }
+    let name = manifest.name.clone();
+    registry
+        .register_mcp(Arc::clone(&ext))
+        .map_err(|e| format!("memory extension '{name}' not registered: {e}"))?;
+    info!(plugin = %name, "registered McpMemoryExtension for plugin with [memory] section");
+    let registry = Arc::clone(registry);
+    Ok(Some(crate::extension::effects::sync_disposer(move || {
+        if registry.unregister(&name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "memory extension '{name}' was not registered at dispose time"
+            ))
+        }
+    })))
 }
 
 impl Drop for PluginLoader {
     fn drop(&mut self) {
-        if self.is_any_runtime_active() || !self.loaded_plugins.is_empty() {
+        if self.is_wasm_runtime_active() || !self.loaded_plugins.is_empty() {
             self.shutdown();
         }
     }
@@ -516,16 +386,15 @@ impl Drop for PluginLoader {
 mod tests {
     use super::*;
     use crate::memory::extensions::manifest::{MemoryHook, MemoryManifestSection};
+    use crate::memory::extensions::traits::MemoryExtension;
     use std::path::PathBuf;
 
     #[test]
     fn test_plugin_loader_new() {
         let loader = PluginLoader::new();
-        assert!(!loader.is_any_runtime_active());
+        assert!(!loader.is_wasm_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
         assert_eq!(loader.loaded_count(), 0);
-        assert!(!loader.has_mcp_plugins());
-        assert_eq!(loader.mcp_server_count(), 0);
     }
 
     #[test]
@@ -537,9 +406,7 @@ mod tests {
     #[test]
     fn test_plugin_loader_default() {
         let loader = PluginLoader::default();
-        assert!(!loader.is_any_runtime_active());
         assert!(!loader.is_wasm_runtime_active());
-        assert!(!loader.has_mcp_plugins());
     }
 
     #[test]
@@ -582,17 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_loader_execute_command_nonexistent() {
-        let loader = PluginLoader::new();
-        let result = loader.execute_command("nonexistent", "handler", serde_json::json!({}));
-        assert!(result.is_err());
-        match result {
-            Err(ExtensionError::PluginNotFound(id)) => assert_eq!(id, "nonexistent"),
-            _ => panic!("Expected PluginNotFound error"),
-        }
-    }
-
-    #[test]
     fn test_plugin_loader_shutdown_empty() {
         let mut loader = PluginLoader::new();
         loader.shutdown();
@@ -604,13 +460,6 @@ mod tests {
         let loader = PluginLoader::new();
         let ids = loader.loaded_plugin_ids();
         assert!(ids.is_empty());
-    }
-
-    #[test]
-    fn test_plugin_loader_mcp_configs_empty() {
-        let loader = PluginLoader::new();
-        assert!(loader.get_mcp_configs("nonexistent").is_none());
-        assert!(loader.all_mcp_configs_map().is_empty());
     }
 
     // ===== Memory extension registration helpers =====
@@ -639,93 +488,174 @@ mod tests {
         )
     }
 
-    #[test]
-    fn register_memory_extension_registers_when_memory_section_present() {
+    #[tokio::test]
+    async fn memory_extension_effect_registers_and_its_disposer_unregisters() {
         let manifest = make_manifest_with_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
-
-        assert_eq!(registry.len(), 0);
-        register_memory_extension_if_declared(
+        let disposer = register_memory_extension_effect(
             &manifest,
             Some("plugin:test/srv".to_string()),
             &registry,
+            None,
+        )
+        .expect("fresh name registers")
+        .expect("[memory] section present → an effect");
+        assert_eq!(registry.len(), 1);
+        let snap = registry.mcp_bindings_snapshot();
+        assert_eq!(
+            snap[0].name(),
+            "Test Memory Plugin",
+            "keyed by manifest.name"
         );
-        assert_eq!(registry.len(), 1, "should have registered one extension");
+        // No MCP handle was attached, so the step leaves the placeholder
+        // caller in place: a call answers with the "not yet bound" diagnostic
+        // instead of reaching a manager.
+        let err = snap[0]
+            .call_for_test("noop", serde_json::json!({}))
+            .await
+            .expect_err("placeholder caller rejects every call");
+        assert!(err.to_string().contains("not yet bound"), "{err}");
+
+        disposer().await.unwrap();
+        assert_eq!(registry.len(), 0);
+        assert!(registry.mcp_bindings_snapshot().is_empty());
     }
 
     #[test]
-    fn register_memory_extension_skips_when_no_memory_section() {
+    fn memory_extension_effect_is_none_without_a_memory_section() {
         let manifest = make_manifest_no_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
+        let effect = register_memory_extension_effect(&manifest, None, &registry, None).unwrap();
+        assert!(effect.is_none());
+        assert_eq!(registry.len(), 0);
+    }
 
-        register_memory_extension_if_declared(
+    #[test]
+    fn memory_extension_effect_refuses_a_duplicate_name_loudly() {
+        let manifest = make_manifest_with_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+        let _first = register_memory_extension_effect(&manifest, None, &registry, None)
+            .unwrap()
+            .unwrap();
+        let err = register_memory_extension_effect(&manifest, None, &registry, None)
+            .err()
+            .expect(
+                "a second plugin claiming the same extension name is a mount failure, not a warn",
+            );
+        assert!(err.contains("Test Memory Plugin"), "{err}");
+        assert_eq!(registry.len(), 1, "the loser registered nothing");
+    }
+
+    /// With a live MCP handle the extension is bound at registration — no
+    /// separate boot-time rebind pass over the registry is needed — and it is
+    /// bound to the server id the step was given: the extension records no
+    /// server id of its own, so the only place to read the binding target is
+    /// the caller's own error, which names the server it tried to reach.
+    #[tokio::test]
+    async fn memory_extension_effect_binds_the_caller_when_a_handle_is_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let (actor, handle) =
+            crate::mcp::manager::McpManagerActor::new(Some(dir.path().join("mcp.json")))
+                .await
+                .unwrap();
+        tokio::spawn(actor.run());
+        let manifest = make_manifest_with_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+        let _d = register_memory_extension_effect(
             &manifest,
             Some("plugin:test/srv".to_string()),
             &registry,
+            Some(handle),
+        )
+        .unwrap()
+        .unwrap();
+        let ext = &registry.mcp_bindings_snapshot()[0];
+        // `UnboundMcpCaller` answers every call with its diagnostic error;
+        // a bound caller reaches the manager and gets "server not running",
+        // naming the server it was bound to.
+        let err = ext
+            .call_for_test("noop", serde_json::json!({}))
+            .await
+            .expect_err("no such server on a fresh manager");
+        assert!(
+            !err.to_string().contains("not yet bound"),
+            "must be bound: {err}"
         );
-        assert_eq!(
-            registry.len(),
-            0,
-            "no extension should be registered without [memory] section"
+        assert!(
+            err.to_string().contains("'plugin:test/srv' not running"),
+            "must be bound to the server id the step was given: {err}"
         );
     }
 
+    /// An MCP manifest never enters `loaded_plugins`: its servers are mounted
+    /// through `McpManager`, so the loader has nothing to call a tool on.
     #[test]
-    fn test_plugin_loader_mcp_tool_call_rejected() {
+    fn test_plugin_loader_mcp_tool_call_is_not_loaded_into_the_loader() {
         let mut loader = PluginLoader::new();
-        loader
-            .loaded_plugins
-            .insert("mcp-test".to_string(), PluginKind::Mcp);
+        let manifest = make_manifest_no_memory();
+        loader.load_plugin(&manifest).unwrap();
+        assert!(!loader.is_loaded(&manifest.id));
 
-        let result = loader.call_tool("mcp-test", "handler", serde_json::json!({}));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("McpManager"));
+        let err = loader
+            .call_tool(&manifest.id, "handler", serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::PluginNotFound(_)), "{err}");
     }
 
     #[test]
-    fn test_plugin_loader_mcp_hook_rejected() {
+    fn test_plugin_loader_mcp_hook_is_not_loaded_into_the_loader() {
         let mut loader = PluginLoader::new();
-        loader
-            .loaded_plugins
-            .insert("mcp-test".to_string(), PluginKind::Mcp);
+        let manifest = make_manifest_no_memory();
+        loader.load_plugin(&manifest).unwrap();
+        assert!(!loader.is_loaded(&manifest.id));
 
-        let result = loader.execute_hook("mcp-test", "hook", serde_json::json!({}));
-        assert!(result.is_err());
+        let err = loader
+            .execute_hook(&manifest.id, "hook", serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, ExtensionError::PluginNotFound(_)), "{err}");
     }
 
-    #[test]
-    fn test_plugin_loader_mcp_command_rejected() {
-        let mut loader = PluginLoader::new();
-        loader
-            .loaded_plugins
-            .insert("mcp-test".to_string(), PluginKind::Mcp);
+    #[tokio::test]
+    async fn load_wasm_effect_loads_the_module_and_its_disposer_unloads_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("plugin.wasm"), EMPTY_WASM_MODULE).unwrap();
+        let mut manifest = PluginManifest::new(
+            "qa-wasm".to_string(),
+            "QA WASM".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("plugin.wasm"),
+        );
+        manifest.root_dir = tmp.path().to_path_buf();
 
-        let result = loader.execute_command("mcp-test", "cmd", serde_json::json!({}));
-        assert!(result.is_err());
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+        let disposer = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .expect("an empty module links");
+        assert!(loader.read().await.is_loaded("qa-wasm"));
+        assert!(loader.read().await.is_wasm_runtime_active());
+
+        disposer()
+            .await
+            .expect("unload of a loaded module succeeds");
+        assert!(!loader.read().await.is_loaded("qa-wasm"));
     }
 
-    #[test]
-    fn test_plugin_loader_unload_mcp_plugin() {
-        let mut loader = PluginLoader::new();
-        loader
-            .loaded_plugins
-            .insert("mcp-test".to_string(), PluginKind::Mcp);
-        loader.mcp_configs.insert("mcp-test".to_string(), {
-            let mut m = HashMap::new();
-            m.insert(
-                "plugin:mcp-test/srv".to_string(),
-                McpManagerConfig::stdio("plugin:mcp-test/srv", "srv", "echo"),
-            );
-            m
-        });
-
-        assert!(loader.has_mcp_plugins());
-        assert_eq!(loader.mcp_server_count(), 1);
-
-        loader.unload_plugin("mcp-test").unwrap();
-
-        assert!(!loader.is_loaded("mcp-test"));
-        assert!(loader.get_mcp_configs("mcp-test").is_none());
-        assert!(!loader.has_mcp_plugins());
+    #[tokio::test]
+    async fn load_wasm_effect_with_a_missing_file_registers_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut manifest = PluginManifest::new(
+            "qa-missing".to_string(),
+            "QA Missing".to_string(),
+            PluginKind::Wasm,
+            PathBuf::from("nope.wasm"),
+        );
+        manifest.root_dir = tmp.path().to_path_buf();
+        let loader = Arc::new(tokio::sync::RwLock::new(PluginLoader::new()));
+        let err = load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .err()
+            .expect("missing file is an error, not a silent skip");
+        assert!(err.to_string().contains("WASM file not found"), "{err}");
+        assert!(!loader.read().await.is_loaded("qa-missing"));
     }
 }

@@ -92,6 +92,16 @@ impl FileWriteTool {
         }
     }
 
+    /// A tool that refuses exactly `denied_paths` (a test's own list, so a
+    /// `~/…`-shaped entry can live in a tempdir instead of the real home).
+    #[cfg(test)]
+    pub(crate) fn with_denied_paths(denied_paths: Vec<String>) -> Self {
+        Self {
+            denied_paths,
+            tool_context_handle: None,
+        }
+    }
+
     /// Attach a `ToolContextHandle` for workspace-scoped output path resolution.
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);

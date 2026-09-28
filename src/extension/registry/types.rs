@@ -111,6 +111,12 @@ pub struct HookRegistration {
     /// Per-hook timeout in seconds (applies to command/http actions).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+    /// The event name exactly as the author wrote it (`PreToolUse` /
+    /// `before_tool_call`); carried onto `HookConfig::declared_event`, whose
+    /// doc says who fills it. `None` for the WASM runtime API and
+    /// `aleph.plugin.toml` `[[hooks]]` registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_event: Option<String>,
 }
 
 // ============================================================================
@@ -225,6 +231,29 @@ pub struct SkillRegistration {
     /// ID of the plugin that registered this skill (plugin API path)
     #[serde(default)]
     pub plugin_id: String,
+
+    /// Claude Code `argument-hint:` as the text the author wrote
+    /// (`"[pr-number] [priority]"`; an unquoted `[pr-number]`, which YAML reads
+    /// as a list, is rendered back to `[pr-number]` — `manifest/parsers.rs`).
+    /// Read for commands by `slash_effect::plugin_command_skill_info`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+
+    /// A command's `allowed-tools:`, ALREADY normalised to Aleph names
+    /// (`extension::hooks::normalize_cc_tool_entry`, restrict mode). `None` =
+    /// no declaration (full tool surface); `Some(vec![])` = deny-all. Always
+    /// `None` on a [`SkillType::Skill`] registration — see `SkillFm` in
+    /// `manifest/parsers.rs` for why a skill's declaration is not carried here.
+    ///
+    /// [`SkillType::Skill`]: crate::extension::types::SkillType::Skill
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+
+    /// Claude Code `model:` as written (`"sonnet"`, a full model id, …).
+    /// Carried for the slash dispatch's per-turn model pin (P4.7c); nothing
+    /// reads it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl SkillRegistration {
@@ -239,12 +268,6 @@ impl SkillRegistration {
     pub fn is_auto_invocable(&self) -> bool {
         !self.disable_model_invocation
             && self.skill_type == crate::extension::types::SkillType::Skill
-    }
-
-    /// Substitute $ARGUMENTS placeholder
-    #[must_use]
-    pub fn with_arguments(&self, arguments: &str) -> String {
-        self.content.replace("$ARGUMENTS", arguments)
     }
 
     /// Get the base directory for this skill (for file references)
@@ -500,6 +523,7 @@ mod tests {
             actions: Vec::new(),
             plugin_root: None,
             timeout_secs: None,
+            declared_event: None,
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));

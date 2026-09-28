@@ -425,10 +425,28 @@ impl ExecTier {
     /// An explicit `[policies.tool_permissions]` entry still stands it down
     /// (`ScopedToolServiceBuilder::explicitly_named`) — that entry is a
     /// decision a person wrote, and the first write that creates one cards
-    /// through this very rule.
+    /// through this very rule. An entry nobody wrote must therefore never
+    /// name a tool this floor covers ([`Self::has_argument_floor`]).
     #[must_use]
     pub fn floor_asks_for_arguments(name: &str, input: &Value) -> bool {
-        name == "self_config" && self_config_touches_the_gate(input)
+        Self::has_argument_floor(name) && self_config_touches_the_gate(input)
+    }
+
+    /// Whether [`Self::floor_asks_for_arguments`] can fire for `name` at all:
+    /// the floor's own name conjunct, so a caller that must never make it
+    /// stand down asks the floor rather than keeping a copy of its tool list.
+    ///
+    /// The caller today is a skill's `allowed-tools:` pre-grant
+    /// (`gateway::execution_engine::turn_permissions::apply_pregrant`): it
+    /// folds exact `allow` entries into a turn's policy, and never one for a
+    /// tool this floor covers — a skill author's list is not a decision the
+    /// operator wrote about the tool that retires the gates. (The folded
+    /// entries also carry their provenance, so the tool gate would not read
+    /// one as that decision either; this keeps even the name-level lift off
+    /// `self_config`.)
+    #[must_use]
+    pub fn has_argument_floor(name: &str) -> bool {
+        name == "self_config"
     }
 
     /// One model-facing line describing this tier's approval regime, for the
@@ -491,6 +509,22 @@ impl ExecTier {
     }
 }
 
+impl ExecTier {
+    /// The Claude Code `permission_mode` this tier is reported as to hooks —
+    /// the value a command hook reads from its stdin JSON. The `match` is the
+    /// only spelling; its exhaustiveness is the one-row-per-tier guard.
+    /// `acceptEdits` and `dontAsk` have no Aleph tier and are never emitted.
+    #[must_use]
+    pub const fn cc_permission_mode(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Ask => "default",
+            Self::Auto => "auto",
+            Self::Full => "bypassPermissions",
+        }
+    }
+}
+
 /// The effective permission for a tool: a refusing tier's floor, else the
 /// operator's explicit decision, else their configured baseline TIGHTENED by
 /// the tier.
@@ -538,8 +572,10 @@ impl ExecTier {
 /// circuits.
 ///
 /// The single composition point: `ScopedToolService::permission_for` (the loop's
-/// enforcement chokepoint) and the gateway slash-command fast path both call it,
-/// so neither surface can drift into its own precedence.
+/// enforcement chokepoint) calls it, and so does every gateway surface that asks
+/// the same question ahead of the loop — the slash-command fast path and a
+/// plugin command's inline shell (`TurnPermissions::builtin_permission`) — so
+/// none can drift into its own precedence.
 #[must_use]
 pub fn effective_permission(
     permissions: Option<&ToolPermissionsConfig>,
@@ -983,6 +1019,42 @@ mod tests {
     use crate::sandbox::command_policy::{CommandPolicy, EnforcementMode};
     use serde_json::json;
 
+    #[test]
+    fn every_session_tier_has_its_own_claude_code_permission_mode() {
+        // The tier set is the census the user surfaces read (`session_tiers`,
+        // pinned against the enum by `session_tiers_are_the_install_tiers_plus_plan`),
+        // not a hand list here: a fifth tier joins this loop by being offered.
+        let tiers: Vec<ExecTier> = session_tiers()
+            .iter()
+            .filter_map(|p| ExecTier::from_id(p.id))
+            .collect();
+        assert_eq!(
+            tiers.len(),
+            session_tiers().len(),
+            "every offered id parses"
+        );
+        let mut modes: Vec<&str> = tiers.iter().map(|t| t.cc_permission_mode()).collect();
+        modes.sort_unstable();
+        modes.dedup();
+        assert_eq!(
+            modes.len(),
+            tiers.len(),
+            "two tiers must not spell the same mode"
+        );
+        // The live enum (scan-cc-plugin-format §8): every emitted value is one of these.
+        const CC: [&str; 6] = [
+            "default",
+            "plan",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+        ];
+        for m in modes {
+            assert!(CC.contains(&m), "{m} is not a Claude Code permission_mode");
+        }
+    }
+
     /// Facts as the chokepoint would build them for a tool nobody declared
     /// anything about — an MCP tool, a browser tool, a tool shipped tomorrow.
     fn unknown(name: &str) -> ToolFacts<'_> {
@@ -1009,16 +1081,31 @@ mod tests {
         let gated = crate::tools::adapters::registry_adapter::CONFIRMATION_REQUIRED_TOOLS[0];
 
         let unknown = ToolFacts::for_tool("never-heard-of-it", None);
-        assert!(!unknown.idempotent && !unknown.requires_approval, "unknown is fail-closed");
+        assert!(
+            !unknown.idempotent && !unknown.requires_approval,
+            "unknown is fail-closed"
+        );
 
-        assert!(ToolFacts::for_tool(read_only, None).idempotent, "builtin read-only list");
-        assert!(ToolFacts::for_tool(gated, None).requires_approval, "builtin confirmation list");
+        assert!(
+            ToolFacts::for_tool(read_only, None).idempotent,
+            "builtin read-only list"
+        );
+        assert!(
+            ToolFacts::for_tool(gated, None).requires_approval,
+            "builtin confirmation list"
+        );
 
         let declared = ToolFacts::for_tool(
             "mcp_tool",
-            Some(DeclaredFacts { idempotent: true, requires_confirmation: true }),
+            Some(DeclaredFacts {
+                idempotent: true,
+                requires_confirmation: true,
+            }),
         );
-        assert!(declared.idempotent && declared.requires_approval, "the registry's declaration");
+        assert!(
+            declared.idempotent && declared.requires_approval,
+            "the registry's declaration"
+        );
     }
 
     /// D8 census: `ToolFacts` has ONE production constructor. The slash fast

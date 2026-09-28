@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 
 
+MOCK_SERVER = Path(__file__).resolve().parent / "mcp_mock_server.py"
+
+
 def w(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -43,23 +46,25 @@ def plant_inline(root: Path):
         # Inline object, NOT a path string.
         "mcpServers": {
             "qa-echo": {
-                # `command` must exist on PATH or the server logs a spawn
-                # failure; the claim is about parsing + registration, so use
-                # something universally present.
-                "command": "echo",
-                "args": ["qa-inline-server"],
+                # A server that really speaks MCP. Since P4.15 a manifest that
+                # declares `mcpServers` is an MCP plugin and its servers are
+                # STARTED at mount; a server whose handshake fails turns the
+                # whole row `error` (readiness). This used to be `echo`, which
+                # passed only because nothing ever started it -- the claim is
+                # still "the inline form parses, registers and loads", and now
+                # "loads" includes the server the inline object declares.
+                "command": sys.executable,
+                "args": [str(MOCK_SERVER)],
             }
         },
         # The hook command carries a `${CLAUDE_PLUGIN_ROOT}` reference because
-        # the hook registry is the one surface that serves an expanded body
-        # back over the wire. `commands.list` returns a name/description tree
-        # and never the body, so asserting "no unexpanded variable survives"
-        # there passes for a plugin whose expansion is completely broken.
+        # the hook registry serves the stored command back over the wire, and
+        # phase C asserts it comes back exactly as written: the root reaches a
+        # hook through its environment, never spliced into its source (P4.16).
         #
         # `m.sh` is short for a reason: the hook inventory elides action labels
-        # at 80 characters, and the expanded absolute path plus a longer script
-        # name pushes the plugin id past the cut -- leaving a payload that
-        # proves only "some path", not "this plugin's path".
+        # at 80 characters (a leftover of when the command was stored with the
+        # absolute path expanded into it).
         "hooks": {
             "PreToolUse": [
                 {

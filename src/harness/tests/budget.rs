@@ -331,7 +331,8 @@ const BUDGETED: [&str; 12] = [
 ///
 /// 5066 → 5062 (−4): paid down by the tool-output hygiene round. The Layer-3
 /// turn spill stopped calling `ToolResultStore::persist_if_large` directly and
-/// now reuses `result_processing::recovery_footer`, which offloads *and* indexes
+/// now reuses `result_processing::recovery_footer_for` (then `recovery_footer`),
+/// which offloads *and* indexes
 /// *and* appends the `ctx_search` hint — the same recovery handle Layer 2 emits.
 /// The spill previously handed the model a marker over an unindexed blob, so the
 /// only way back to the output was re-reading the whole file. Folding the two
@@ -700,7 +701,38 @@ const BUDGETED: [&str; 12] = [
 ///     nothing renders before Phase T. Nothing was deleted to absorb it.
 ///     (Corrected in the review follow-up: the first version of this entry
 ///     answered a different three questions and left (2) unanswered.)
-const CEILING: usize = 5266;
+/// −4 (5250 → 5246, 2026-09-25, context-slim A2): `prompt.rs` stops
+///     deciding which reasoning is replayed (−5) — it emits every persisted
+///     thinking block as facts (signature, `earlier_turn`) and the per-target
+///     policy moved to `providers::reasoning_replay`, applied at the wire and
+///     by the estimators. `agent.rs` (+1) shares one `latest_turn_id` between
+///     `current_turn_id` and the prompt builder instead of a second scan.
+/// −3 (5246 → 5243, 2026-09-25, context-slim A5): `act.rs`'s own
+///     "string or structure" unwrap of a tool result becomes the one shared
+///     `providers::message::value_as_model_text`.
+/// −5 (5243 → 5238, 2026-09-25, context-slim follow-up): `act.rs`'s Layer-3
+///     spill drops the "earlier-iteration spill" branch and its offload
+///     closure (−6) — `TurnResultBudget::record` only ever spills the result
+///     it was just handed, so that branch could not run. Its footer now names
+///     the retrieval tools the turn's tool service reports callable
+///     (`ToolService::recovery_tools`, +1 argument line) instead of assuming
+///     both.
+/// −5 (5238 → 5233, 2026-09-26, context-slim A6 fold-in): `act.rs`'s
+///     "already persisted?" test asks the store's own reader
+///     (`result_store::extract_persisted_ref`) instead of re-spelling the
+///     `[Full output persisted: ` prefix and its any-line scan (判据 §1).
+/// −10 (5233 → 5223, 2026-09-26, context-slim review): the Layer-3 spill's
+///     replacement is one call to `result_processing::spill_replacement`, which
+///     owns the no-store / nothing-callable / failed-write residue the harness
+///     used to answer by leaving the result as it was; and the harness stops
+///     deciding "already persisted" (`TurnResultBudget::record` asks
+///     `carries_own_persisted_marker` itself, so the `already_persisted` field
+///     is CUT).
+/// ±0 (5239, 2026-09-28, merge origin/main into main): origin's +16
+///     (ReasoningEmitted) and the context-slim −27 both landed in this tree —
+///     5250 + 16 − 27 = 5239, and the guard's own measurement on the merged
+///     tree agrees exactly.
+const CEILING: usize = 5239;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

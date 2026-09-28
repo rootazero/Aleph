@@ -168,8 +168,8 @@ Three things about this pair are load-bearing:
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `web_fetch` | Fetch URL content | `url`, `method?`, `headers?` |
-| `web_search` | Search the web | `query`, `engine?` |
+| `web_fetch` | Fetch a page and extract its text; with `prompt`, a page too large to return whole comes back as the sections matching it plus a handle to the rest (fetch by intent, see *Result budgets & recovery* below) | `url`, `extract_mode?`, `prompt?` |
+| `search` | Search the web | `query` / `queries`, `limit?`, `recency?`, `domains?`, `exclude_domains?`, `full_content?`, `providers?` |
 
 ### Browser — 26 tools, two engines, one driver
 
@@ -645,6 +645,82 @@ mock LLM，实测确认 MCP 截图作为可解码 PNG 到达模型、三个工�
 FEATURE_LOCATOR §3.14「已定位·未做」）。
 
 详见 [FEATURE_LOCATOR §3.14](FEATURE_LOCATOR.md)。
+
+### Result budgets & recovery · 预算与找回
+
+> Numbers live in the constants named here; this section does not restate them (§1).
+> 数值只住在下面点名的常量里，本节不抄数字。
+
+**Three budgets, one source each · 三个预算，各有唯一来源**
+
+| Budget | Owner | What it bounds |
+|---|---|---|
+| Per result (Layer 2) | `tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS`, or a tool's `AlephTool::MAX_RESULT_TOKENS` | One result. Over it, the original is offloaded (persisted + indexed) and the model gets the recovery footer. **No builtin declares `MAX_RESULT_TOKENS`** — a larger budget belongs only on output that *is* the window the model chose; a merely large result (a build log, a page) is better offloaded and searched. The registry census `result_budgets_come_from_declarations_and_default_everywhere` pins it. |
+| Per turn (Layer 3) | `tools::turn_budget::DEFAULT_MAX_TURN_TOKENS` | All results of one Think→Act turn. Past it, `TurnResultBudget::record` spills **the result it was just handed** (the only one still rewritable) — unless it carries its own call's persist marker (`result_processing::carries_own_persisted_marker`, the derivation Layer 2 uses; a marker line quoted in the payload does not count) or is no larger than the offload floor. It credits what the spill removes at least (everything above the floor or `turn_budget::spill_residue_tokens`), and `result_processing::spill_replacement` leaves no more than that — cutting, with a note, when the write cannot happen. The floor is measured on the store the spill writes through: `runner_impl` and `subagent_spawner` hand the budget the same session-scoped `Arc` they put in `HarnessDeps::result_store` (`TurnResultBudget::with_result_store`). The harness spill (`act.rs`) replaces the result with exactly that `spill_replacement`. |
+| Read window | `result_processing::read_backstop_tokens()` (= `MAX_RESULT_BUDGET_TOKENS` clamped by the window ceiling) | The read family (`result_processing::is_read_family`: the builtin `file_read`). **Not offloaded at Layer 2** — it resolves no budget there and is truncated at the read window instead, because an offloaded read hands back a marker to read again. **Layer 3 does not exempt it**: the per-turn budget is the only per-turn bound on reads, and a spilled read is persisted and indexed (a re-read, not a loss). |
+
+Neither layer swaps a result for a footer at least as large as the result: both measure one floor,
+`result_processing::offload_floor_tokens` — the call's marker on the store the write goes through, plus the
+longest hint line the footer can carry (a preview grown by its scrub can exceed that bound). 两层用同一个地板。
+
+An **empty recovery set** (neither `ctx_search` nor `file_read` callable) means no offload at all — a path the
+model has no tool to open is a dead handle. `offload` checks `RecoveryTools::is_empty` for every writer, and
+also declines after the write when the footer would name no callable reader (only `ctx_search`, and the index
+did not take the blob); the writer cuts head and tail instead and says the rest was not saved.
+
+Context management is on by default (a missing `[context_budget]` is on; `enabled = false` opts out), so a default
+install runs these ingress gates **and** a per-run `ContextBudget` behind them (preflight pruning, calibration,
+`context.breakdown` `messages`). With `enabled = false` only the two ingress gates remain and no window ceiling is
+installed. 默认开启；显式关掉时只剩入口两道闸。
+
+Small-window models (context management on): boot installs a ceiling from `turn_budget::budget_for_window` (window fractions, clamped to
+`MAX_RESULT_BUDGET_TOKENS` / `DEFAULT_MAX_TURN_TOKENS`); the per-result ceiling caps **every** per-result budget,
+the read window included. `tool_output::scale_to_budget` sizes digests/profiles against
+`tool_output::KNOB_REFERENCE_BUDGET_TOKENS` (the budget the knob defaults were sized for), so a smaller budget gets a
+proportionately smaller artifact.
+
+**The recovery footer · 找回句柄** — every writer of an offloaded original goes through
+`result_processing::recovery_footer_for(store, call_id, tool, full, threshold, RecoveryTools)`: it stores
+`tool_output::render::line_preserving(full)` (a one-line JSON envelope becomes real lines, so the index gets real
+sections and `file_read` real lines), indexes it for `ctx_search`, and names **only the retrieval tools the model can
+call**. Who knows that set:
+
+| Writer | Where the `RecoveryTools` come from |
+|---|---|
+| Dispatcher, Layer 2 (`scoped/dispatch.rs::apply_layer_two`) | `ScopedToolService::recovery_tools()` — registered + allowed + not hidden — intersected with any outer scope (`dispatch_recovery_tools()`) |
+| Harness Layer-3 spill | `ToolService::recovery_tools()` — decorators forward it; `AllowlistToolService` narrows it to the agent's allow set |
+| A tool offloading its own output (browser offload, `web_fetch` fetch by intent) | `result_processing::dispatch_recovery_tools()` — a task-local scoped around the tool's execution by the dispatcher and by `AllowlistToolService` (`with_recovery_tools`, which intersects with an outer scope: an inner dispatcher cannot widen a wrapper's narrowing); `RecoveryTools::ALL` only outside a dispatch, where nothing about the gates is known |
+
+A fenced source (external content) gets no "First sections:" preview in its footer — the preview would be untrusted
+text outside the fence. `ctx_search` returns whole sections, each scrubbed and fenced on its own
+(`ContentSource::OffloadedToolOutput { tool }`), fitted to its budget by measurement.
+
+**`web_fetch` sizing · 定尺** — the content cap is derived from the budget Layer 2 will hold the result to
+(`chars_for_result_token_budget(resolve_result_budget(web_fetch, …))`); the policy's `max_content_length` can only
+lower it. `fit_to_budget` measures the whole result the way Layer 2 does (flattened JSON: fence, URL, title, focus
+marker) and shrinks the cap proportionally, at most `FIT_ATTEMPTS` times, so the result arrives inline instead of
+being offloaded again. A result still over after those attempts is bounded by Layer 2.
+
+**Fetch by intent · 按意图取页** (`builtin_tools/web_fetch/intent.rs`) — `web_fetch` with a `prompt` on a page
+longer than that cap: the page is extracted whole (bounded by `WebFetchTool::INTENT_EXTRACT_MAX_CHARS`);
+`index_page` offloads and indexes it **once** through `recovery_footer_for` into the same store `ctx_search`
+reads; `sections_for_prompt` BM25-searches **this page's own sections** with the prompt
+(`ContentIndex::search_source` — the source restriction is in the query, not a filter over the session's pooled top
+hits) and returns them in page order within the cap, fenced, followed by the footer; refitting re-selects
+sections only. No match → the page head, and the note says so; a page the index did not take (or an index that
+cannot answer) → the page head, and the note says it could not be searched, not that nothing matched. Layer 2
+recognises a result carrying the marker of its own call's blob (by the blob's file name, as written or
+JSON-escaped) and never persists it again — the blob is named by the call id, so a second write would replace
+the page with the sections result. Ingress does not rewrite such a result (a field cut could drop the marker
+line); over budget, Layer 2 keeps the footer (marker line and hint) whole and cuts everything else around it,
+text after the footer included.
+
+**`browser_exec` steps · 过程内的多次卸载** — each snapshot step a procedure cuts is offloaded under its own key
+(`browser_exec-step-N`, for both the blob file and the index source), so a second cut step does not replace the
+first step's blob or its sections. Pure retrieval (R7), no second index; prompted
+fetches bypass the URL cache (it holds capped pages).
+
+Why and how this round changed them → [FEATURE_LOCATOR §2.21](FEATURE_LOCATOR.md).
 
 ---
 

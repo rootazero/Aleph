@@ -1,23 +1,49 @@
-//! The skill tool scope carried by a `/<skill>` run.
+//! The two tool facts a `/<name>` run carries: the scope a plugin COMMAND's
+//! `allowed-tools:` RESTRICTS the turn to, and the names a SKILL's
+//! `allowed-tools:` PRE-GRANTS for it.
 //!
-//! A skill may declare `allowed-tools:` in its SKILL.md frontmatter. That
-//! declaration is validated at registration
+//! Claude Code gives the one frontmatter key two meanings. On a command it
+//! narrows the turn's tools; on a skill it "does NOT restrict tool access;
+//! only pre-grants permission for the listed tools". The two ride two keys
+//! here and are never allowed to share one: a restriction read as a
+//! pre-grant is an approval bypass, a pre-grant read as a restriction takes
+//! the model's tools away.
+//!
+//! **The restriction.** A command's declaration is validated at registration
 //! (`tool_metadata::registry::registration::ToolRegistrar::register_skills`),
 //! rides the slash-command envelope as `mode["allowed_tools"]`, and has to
 //! reach the run loop, which builds the tool surface. Since the envelope is
 //! re-parsed on entry and the run loop iterates Think→Act many times, the
 //! scope is lifted into request metadata once and read back from there.
+//! Which registrations restrict, and which pre-grant, is decided by
+//! `slash_skill_pregrant::split` — the one caller of both encoders.
 //!
-//! This module owns all three halves of that wire — the key's spelling, the
+//! **The pre-grant** ([`SLASH_SKILL_PREGRANT_TOOLS_KEY`]) is per turn: never
+//! replayed on resume (`resume_coordinator` replays only the restriction),
+//! stripped by the steering rescue ([`strip`]), and removed from every
+//! incoming request as `execute()`'s first statement ([`forget_at_ingress`])
+//! before `split` derives it. `turn_permissions::apply_pregrant` is its one
+//! reader.
+//!
+//! **The typed marker** ([`SLASH_MODE_TYPED_KEY`]) says the request's slash
+//! mode was stamped by a surface a person types into — the `chat.send` /
+//! `agent.run` handlers (`ExecutionEngine::stamp_slash_mode`) or the inbound
+//! router for a channel message — and not by `execute()`'s safety net, which
+//! stamps the text `sessions_send`, a team task, cron, heartbeat, A2A or the
+//! OpenAI shim put there. Only a typed `/skill` pre-grants. Written only by
+//! [`mark_typed`]; [`forget_at_ingress`] removes it from any request that
+//! arrives without a mode for it to vouch for.
+//!
+//! This module owns all three halves of that wire — the keys' spelling, the
 //! encoding, and the decoding — because they were previously spread across
 //! three files, with the decode written out twice (once for builtins, once
 //! for MCP) and a third tool source that nobody remembered to filter at all.
 //! One derivation, several consumers.
 //!
-//! # The tri-state is the whole point
+//! # The restriction's tri-state is the whole point
 //!
-//! * key absent → `None` → the skill declared nothing; the run keeps the
-//!   agent's full tool surface. This is what every skill shipped with.
+//! * key absent → `None` → the command declared nothing; the run keeps the
+//!   agent's full tool surface. This is what most commands ship with.
 //! * `[]` → `Some(empty)` → the author wrote `allowed-tools: []`; deny all.
 //! * `["grep", …]` → `Some(names)` → narrow to exactly these.
 //!
@@ -31,15 +57,31 @@ use std::collections::{HashMap, HashSet};
 
 use crate::tool_metadata::UnifiedTool;
 
-/// Request-metadata key carrying this run's skill tool scope.
+/// Request-metadata key carrying this run's tool RESTRICTION (a plugin
+/// command's `allowed-tools:`).
 ///
 /// Written by [`stamp_list`] (for [`stamp_from_mode`] and the resume replay),
 /// read by [`from_metadata`], removed by [`strip`]. Nothing outside this
 /// module should spell it.
 pub(crate) const SLASH_SKILL_ALLOWED_TOOLS_KEY: &str = "slash_skill_allowed_tools";
 
-/// Lift the skill scope out of a parsed slash-command envelope into request
-/// metadata.
+/// Request-metadata key: the tools a `/<skill>` PRE-GRANTS for this turn —
+/// Claude Code's reading of a skill's `allowed-tools:`: the listed names run
+/// without the tier's confirmation, and the tool SURFACE is untouched.
+///
+/// Distinct from [`SLASH_SKILL_ALLOWED_TOOLS_KEY`], which narrows the
+/// surface. Written only by [`stamp_pregrant_from_names`], read only by
+/// [`pregrant_from_metadata`], removed by [`forget_pregrant`] and [`strip`].
+/// Nothing outside this module should spell it.
+pub(crate) const SLASH_SKILL_PREGRANT_TOOLS_KEY: &str = "slash_skill_pregrant_tools";
+
+/// Request-metadata key present when a human-facing surface stamped the
+/// request's slash mode ([`mark_typed`]). See the module doc. Nothing outside
+/// this module should spell it.
+pub(crate) const SLASH_MODE_TYPED_KEY: &str = "slash_mode_typed";
+
+/// Lift a plugin command's restriction out of a parsed slash-command envelope
+/// into request metadata (`slash_skill_pregrant::split` decides it is one).
 ///
 /// `mode` is the deserialized `SLASH_COMMAND_MODE_KEY` JSON. A `null` or
 /// absent `allowed_tools` writes nothing (allow-all); an array — **including
@@ -93,11 +135,110 @@ pub(crate) fn from_metadata(metadata: &HashMap<String, String>) -> Option<HashSe
     })
 }
 
-/// Drop the scope from a metadata map that is being reused for a different
-/// run (steering rescue), so a skill's narrowing does not leak into a plain
-/// loop continuation.
+/// Drop both tool facts from a metadata map that is being reused for a
+/// different run (steering rescue), so a command's narrowing does not leak
+/// into a plain loop continuation, and a skill's pre-grant does not outlive
+/// the turn it was granted for.
 pub(crate) fn strip(metadata: &mut HashMap<String, String>) {
     metadata.remove(SLASH_SKILL_ALLOWED_TOOLS_KEY);
+    metadata.remove(SLASH_MODE_TYPED_KEY);
+    forget_pregrant(metadata);
+}
+
+/// Write a skill's pre-grant from its `allowed-tools:` names as the author
+/// wrote them, bounded by `registered` — the list registration validated for
+/// this skill at the last boot (known tool names only), which the slash mode
+/// carries.
+///
+/// Each name is mapped by [`crate::skill::frontmatter::pregrant_tool_name`] —
+/// the one mapping registration validated `registered` with, so the file's
+/// `Read` meets the registration's `file_read`. Dropped:
+/// - what that mapping drops: a scoped `Bash(git *)` (rather than folded into
+///   `bash` — pre-granting the whole tool for a grant scoped to one command
+///   widens an approval skip), and anything
+///   [`is_glob_pattern`](crate::config::types::policies::is_glob_pattern)
+///   accepts (`*`, `?*`, `file_*`, `mcp__s__*` → `s__*`): the fold writes
+///   exact entries, and the policy reads such a key back as a glob;
+/// - anything `registered` does not name: the file is re-read at turn start
+///   and may have been edited since registration validated it at the last
+///   boot (skill rows register only at startup, so the bound lasts until the
+///   next one).
+///
+/// Nothing left ⇒ nothing is written: an empty pre-grant is no grant, not
+/// deny-all.
+pub(crate) fn stamp_pregrant_from_names(
+    metadata: &mut HashMap<String, String>,
+    names: &[String],
+    registered: &[String],
+) {
+    let mut tools: Vec<String> = Vec::new();
+    for name in names {
+        let Some(tool) = crate::skill::frontmatter::pregrant_tool_name(name) else {
+            continue;
+        };
+        if registered.contains(&tool) && !tools.contains(&tool) {
+            tools.push(tool);
+        }
+    }
+    if tools.is_empty() {
+        return;
+    }
+    // `if let` is the shape serde hands back, not a swallow: a `&[String]`
+    // cannot fail to serialise.
+    if let Ok(encoded) = serde_json::to_string(&tools) {
+        metadata.insert(SLASH_SKILL_PREGRANT_TOOLS_KEY.to_string(), encoded);
+    }
+}
+
+/// This turn's pre-granted names. Absent or unreadable ⇒ empty: a grant that
+/// cannot be read is not granted — the fail-closed direction for a key whose
+/// only effect is to skip a confirmation.
+pub(crate) fn pregrant_from_metadata(metadata: &HashMap<String, String>) -> Vec<String> {
+    let Some(raw) = metadata.get(SLASH_SKILL_PREGRANT_TOOLS_KEY) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|e| {
+        tracing::error!(
+            error = %e,
+            "slash-skill pre-grant is unreadable; nothing is pre-granted for this run"
+        );
+        Vec::new()
+    })
+}
+
+/// Remove a pre-grant from a metadata map ([`forget_at_ingress`], [`strip`]).
+pub(crate) fn forget_pregrant(metadata: &mut HashMap<String, String>) {
+    metadata.remove(SLASH_SKILL_PREGRANT_TOOLS_KEY);
+}
+
+/// What `execute()` does to every request before anything reads it — its
+/// first statement, ahead of the busy lane's steer-fold resolution:
+/// - removes any pre-grant, so no producer (a client, a channel, a queue
+///   replay, a continuation) hands a run one it did not earn by a person
+///   invoking a skill — `slash_skill_pregrant::split` derives the turn's own;
+/// - removes the typed marker when the request carries no slash mode: the
+///   marker vouches for a mode, and the only modes stamped before
+///   `execute()` are the human-facing surfaces' (they write both at once).
+///   Every mode `execute()`'s safety net stamps is stamped after this, with
+///   no marker.
+pub(crate) fn forget_at_ingress(metadata: &mut HashMap<String, String>) {
+    forget_pregrant(metadata);
+    if !metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
+        metadata.remove(SLASH_MODE_TYPED_KEY);
+    }
+}
+
+/// Mark the slash mode a human-facing surface just stamped as typed by a
+/// person. Called by `ExecutionEngine::stamp_slash_mode` (the `chat.send` /
+/// `agent.run` handlers) and by the inbound router for a channel message —
+/// never by `execute()`'s safety net.
+pub(crate) fn mark_typed(metadata: &mut HashMap<String, String>) {
+    metadata.insert(SLASH_MODE_TYPED_KEY.to_string(), "true".to_string());
+}
+
+/// Whether the request's slash mode was stamped by a human-facing surface.
+pub(crate) fn is_typed(metadata: &HashMap<String, String>) -> bool {
+    metadata.contains_key(SLASH_MODE_TYPED_KEY)
 }
 
 /// Narrow a candidate tool list to `scope`, returning how many were dropped.
@@ -203,8 +344,130 @@ mod tests {
     fn strip_removes_the_declaration() {
         let mut meta = HashMap::new();
         stamp_from_mode(&mut meta, &mode(serde_json::json!(["grep"])));
+        stamp_pregrant_from_names(&mut meta, &names(&["bash"]), &names(&["bash"]));
+        mark_typed(&mut meta);
         strip(&mut meta);
         assert!(from_metadata(&meta).is_none());
+        assert!(
+            pregrant_from_metadata(&meta).is_empty(),
+            "the steering rescue's strip must drop the pre-grant too"
+        );
+        assert!(!is_typed(&meta), "and the typed marker");
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn pregrant_is_a_separate_key_from_the_restrict_scope() {
+        let mut md = HashMap::new();
+        stamp_pregrant_from_names(
+            &mut md,
+            &names(&["grep", "bash"]),
+            &names(&["bash", "grep"]),
+        );
+        assert!(md.contains_key(SLASH_SKILL_PREGRANT_TOOLS_KEY));
+        assert!(
+            !md.contains_key(SLASH_SKILL_ALLOWED_TOOLS_KEY),
+            "pre-grant must not narrow"
+        );
+        assert!(
+            from_metadata(&md).is_none(),
+            "and must not read back as a scope"
+        );
+        assert_eq!(
+            pregrant_from_metadata(&md),
+            vec!["grep".to_string(), "bash".to_string()]
+        );
+        // Absent / empty → nothing pre-granted (an empty pre-grant is a
+        // no-op, not deny-all), and nothing is written for an empty list.
+        assert!(pregrant_from_metadata(&HashMap::new()).is_empty());
+        let mut empty = HashMap::new();
+        stamp_pregrant_from_names(&mut empty, &[], &names(&["bash"]));
+        assert!(empty.is_empty());
+        forget_pregrant(&mut md);
+        assert!(pregrant_from_metadata(&md).is_empty());
+    }
+
+    #[test]
+    fn pregrant_entries_are_filtered_to_bare_aleph_names() {
+        // `Bash(gh:*)` would pre-grant ALL of bash for a scoped grant, and any
+        // glob — `*`, `?*` (= every tool), `file_*`, `mcp__s__*` (→ `s__*`) —
+        // would be read back by the policy as a pattern: all dropped. CC names
+        // map to Aleph names. `registered` names every one of them, so only
+        // the glob filter stands between them and the fold.
+        let written = names(&[
+            "Bash(gh pr view:*)",
+            "Read",
+            "*",
+            "?*",
+            "file_*",
+            "mcp__s__*",
+            "grep",
+            "file_read",
+        ]);
+        let registered = names(&["*", "?*", "file_*", "s__*", "grep", "file_read"]);
+        let mut md = HashMap::new();
+        stamp_pregrant_from_names(&mut md, &written, &registered);
+        assert_eq!(pregrant_from_metadata(&md), names(&["file_read", "grep"]));
+        // Nothing grantable left ⇒ nothing written.
+        let mut only_wide = HashMap::new();
+        stamp_pregrant_from_names(
+            &mut only_wide,
+            &names(&["*", "?*", "file_*", "mcp__s__*", "Bash(git *)"]),
+            &registered,
+        );
+        assert!(only_wide.is_empty(), "{only_wide:?}");
+    }
+
+    /// The file is re-read at turn start; registration validated an earlier
+    /// version of it. Only what both name is granted.
+    #[test]
+    fn pregrant_is_the_intersection_with_the_registered_list() {
+        let mut md = HashMap::new();
+        stamp_pregrant_from_names(
+            &mut md,
+            &names(&["file_write", "bash", "self_config"]),
+            &names(&["file_write", "grep"]),
+        );
+        assert_eq!(pregrant_from_metadata(&md), names(&["file_write"]));
+        let mut none_registered = HashMap::new();
+        stamp_pregrant_from_names(&mut none_registered, &names(&["bash"]), &[]);
+        assert!(none_registered.is_empty(), "{none_registered:?}");
+    }
+
+    /// A marker vouches for a mode: without one it is dropped at ingress,
+    /// with one it stays; the pre-grant never survives ingress.
+    #[test]
+    fn ingress_keeps_a_typed_marker_only_beside_a_mode() {
+        let mut orphan = HashMap::new();
+        mark_typed(&mut orphan);
+        stamp_pregrant_from_names(&mut orphan, &names(&["bash"]), &names(&["bash"]));
+        forget_at_ingress(&mut orphan);
+        assert!(!is_typed(&orphan), "a marker with no mode survived ingress");
+        assert!(pregrant_from_metadata(&orphan).is_empty());
+
+        let mut typed = HashMap::new();
+        typed.insert(
+            crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+            "{}".to_string(),
+        );
+        mark_typed(&mut typed);
+        stamp_pregrant_from_names(&mut typed, &names(&["bash"]), &names(&["bash"]));
+        forget_at_ingress(&mut typed);
+        assert!(is_typed(&typed), "a human surface's marker was dropped");
+        assert!(pregrant_from_metadata(&typed).is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_pregrant_grants_nothing() {
+        let mut md = HashMap::new();
+        md.insert(
+            SLASH_SKILL_PREGRANT_TOOLS_KEY.to_string(),
+            "bash,file_write".to_string(),
+        );
+        assert!(pregrant_from_metadata(&md).is_empty());
     }
 
     /// The list encoder a resume replays a frozen scope through writes the
@@ -223,10 +486,12 @@ mod tests {
     }
 }
 
-/// End-to-end tests over the whole `allowed-tools:` wire.
+/// End-to-end tests over the whole RESTRICT wire — a plugin command's
+/// `allowed-tools:` (a skill's pre-grants instead: `slash_skill_pregrant`'s
+/// tests) — and over registration's validation of any declaration.
 ///
-/// Every hop is the production function — skill registration, the command
-/// parser, the slash-command envelope, the metadata lift, the scope decode,
+/// Every hop is the production function — registration, the command parser,
+/// the slash-command envelope, the split `execute.rs` runs, the scope decode,
 /// the narrowing, the request registry build, and finally the real
 /// `ScopedToolService`. The assertion is on **the tool list the model is
 /// handed**, not on any intermediate value: throwing away the narrowing step's
@@ -276,23 +541,32 @@ mod wire_tests {
             .collect()
     }
 
-    /// Run the real wire for a skill declaring `declared`, and return the tool
-    /// names the model would see. `Err(rejected)` when registration refused
-    /// the skill.
+    /// The plugin command every wire test declares on: its catalog row is the
+    /// shape `extension::slash_effect::plugin_command_skill_info` registers.
+    const COMMAND: &str = "plug:scoped";
+
+    /// Run the real wire for a plugin command declaring `declared`, and
+    /// return the tool names the model would see. `Err(rejected)` when
+    /// registration refused the command.
     async fn surface_for(declared: Option<Vec<String>>) -> Result<Vec<String>, Vec<String>> {
         // --- hop 1: registration validates the declaration and puts it on
         // the UnifiedTool.
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
         let rejected = catalog
-            .register_skills(&[SkillInfo {
-                id: "scoped-skill".to_string(),
-                name: "Scoped Skill".to_string(),
-                description: "narrows its own toolbelt".to_string(),
-                scope: crate::domain::skill::PromptScope::System,
-                version: None,
-                allowed_tools: declared,
-            }])
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: COMMAND.to_string(),
+                    name: "scoped".to_string(),
+                    description: "narrows its own toolbelt".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: declared,
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
             .await;
         if !rejected.is_empty() {
             return Err(rejected);
@@ -300,19 +574,30 @@ mod wire_tests {
 
         // --- hop 2: the command parser derives CommandContext::Skill.
         let parsed = CommandParser::new(Arc::clone(&catalog))
-            .parse_async("/scoped-skill do a thing")
+            .parse_async(&format!("/{COMMAND} do a thing"))
             .await
-            .expect("the skill must resolve as a slash command");
+            .expect("the command must resolve as a slash command");
 
         // --- hop 3: the slash-command envelope.
-        let mode_json = serialize_parsed_command(&parsed).expect("skill commands serialize");
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), mode_json.clone());
-
-        // --- hop 4: `execute.rs` lifts the scope into request metadata.
+        let mode_json = serialize_parsed_command(&parsed).expect("commands serialize");
         let mode: Value = serde_json::from_str(&mode_json).expect("envelope is JSON");
         assert_eq!(mode.get("type").and_then(Value::as_str), Some("skill"));
-        super::stamp_from_mode(&mut metadata, &mode);
+        let session = crate::gateway::router::SessionKey::main("wire");
+        let mut request = super::super::tests::gate_test_request(&session, "wire-run");
+        request
+            .metadata
+            .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode_json);
+
+        // --- hop 4: `execute.rs`'s split lifts a COMMAND's scope into
+        // request metadata (no skill of that id is registered, so it is not a
+        // skill's pre-grant).
+        super::super::slash_skill_pregrant::split_with(
+            &mut request,
+            "wire-agent",
+            &crate::skill::SkillSystem::new(),
+        )
+        .await;
+        let metadata = request.metadata;
 
         // --- hop 5: the run loop decodes it once and narrows.
         let scope = super::from_metadata(&metadata);
@@ -358,7 +643,7 @@ mod wire_tests {
         assert_eq!(
             names,
             vec!["file_read".to_string(), "grep".to_string()],
-            "the model must see exactly the tools the skill declared"
+            "the model must see exactly the tools the command declared"
         );
     }
 
@@ -376,8 +661,8 @@ mod wire_tests {
         );
     }
 
-    /// Every skill in existence declares nothing. None of them may lose a
-    /// tool because of this change.
+    /// Most commands declare nothing. None of them may lose a tool because
+    /// of this wire.
     #[tokio::test]
     async fn no_declaration_preserves_the_full_surface() {
         let names = surface_for(None).await.expect("no declaration is fine");
@@ -388,53 +673,207 @@ mod wire_tests {
                 "file_read".to_string(),
                 "grep".to_string()
             ],
-            "a skill that declares nothing must keep the agent's whole toolbelt"
+            "a command that declares nothing must keep the agent's whole toolbelt"
         );
     }
 
-    /// Upstream Claude Code skills write `Read` / `Bash` / `Grep`. Aleph has
-    /// no such tools. Matching them literally would retain zero tools while
-    /// reporting success — a report-success no-op strictly worse than the
-    /// silent drop this replaces — so the skill is refused outright and the
-    /// author is named.
+    /// Upstream Claude Code writes `Read` / `Bash` / `Grep`. Aleph has no such
+    /// tools. A command's parse translates them (`manifest/parsers.rs`); a
+    /// declaration that still names one here would, matched literally, retain
+    /// zero tools while reporting success — a report-success no-op strictly
+    /// worse than the silent drop this replaces — so the command is refused
+    /// outright and the author is named. (A SKILL's list only pre-grants, so
+    /// a skill maps the name instead and never loses its row:
+    /// `a_claude_code_skill_registers_with_its_names_mapped`.)
     #[tokio::test]
-    async fn an_unknown_tool_name_refuses_the_skill_outright() {
+    async fn an_unknown_tool_name_refuses_the_command_outright() {
         let rejected = surface_for(Some(vec!["grep".to_string(), "Read".to_string()]))
             .await
             .expect_err("a declaration naming a nonexistent tool must be refused");
-        assert_eq!(rejected, vec!["scoped-skill".to_string()]);
+        assert_eq!(rejected, vec![COMMAND.to_string()]);
     }
 
     /// The refusal has to be visible in the *catalog*, not only in the return
-    /// value: a skill that registers with its declaration quietly dropped is
-    /// exactly the failure mode being fixed, and it would still satisfy an
+    /// value: a command that registers with its declaration quietly dropped
+    /// is exactly the failure mode being fixed, and it would still satisfy an
     /// assertion about the returned list.
     #[tokio::test]
-    async fn a_refused_skill_gets_no_slash_command_at_all() {
+    async fn a_refused_command_gets_no_slash_command_at_all() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
         let rejected = catalog
-            .register_skills(&[SkillInfo {
-                id: "bad-skill".to_string(),
-                name: "Bad Skill".to_string(),
-                description: "names a tool that does not exist".to_string(),
-                scope: crate::domain::skill::PromptScope::System,
-                version: None,
-                allowed_tools: Some(vec!["Bash".to_string()]),
-            }])
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: "plug:bad".to_string(),
+                    name: "bad".to_string(),
+                    description: "names a tool that does not exist".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: Some(vec!["Bash".to_string()]),
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
             .await;
 
-        assert_eq!(rejected, vec!["bad-skill".to_string()]);
+        assert_eq!(rejected, vec!["plug:bad".to_string()]);
         assert!(
-            catalog.check_conflict("bad-skill").await.is_none(),
-            "a refused skill must not be registered as a slash command"
+            catalog.check_conflict("plug:bad").await.is_none(),
+            "a refused command must not be registered as a slash command"
         );
         assert!(
             CommandParser::new(catalog)
-                .parse_async("/bad-skill")
+                .parse_async("/plug:bad")
                 .await
                 .is_none(),
             "and it must not resolve"
+        );
+    }
+
+    /// The validated list a catalog row carries — what the slash envelope
+    /// hands the turn as `mode["allowed_tools"]`.
+    async fn row_list(catalog: &ToolCatalog, name: &str) -> Option<Vec<String>> {
+        catalog
+            .list_all()
+            .await
+            .into_iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("/{name} is not in the catalog"))
+            .routing_capabilities
+    }
+
+    /// A Claude Code skill's `allowed-tools` names Claude Code tools. A
+    /// skill's list only pre-grants, so the skill registers with each name
+    /// mapped (`Read` → `file_read`) and what can grant nothing dropped: a
+    /// scoped `Bash(...)` (a pre-grant never widens a scoped grant to the
+    /// whole tool), a CC tool with no Aleph counterpart, an unknown name, a
+    /// glob. The same list on a plugin COMMAND still refuses the command —
+    /// registration translates nothing for a command, whose parse already
+    /// did.
+    #[tokio::test]
+    async fn a_claude_code_skill_registers_with_its_names_mapped() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        let declared = vec![
+            "Read".to_string(),
+            "Grep".to_string(),
+            "Bash(git status:*)".to_string(),
+            "NotebookEdit".to_string(),
+            "Frobnicate".to_string(),
+            "file_*".to_string(),
+            "file_read".to_string(),
+        ];
+        let info = |id: &str, plugin: Option<&str>| SkillInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "declares Claude Code tool names".to_string(),
+            scope: crate::domain::skill::PromptScope::System,
+            version: None,
+            allowed_tools: Some(declared.clone()),
+            argument_hint: None,
+            plugin_id: plugin.map(str::to_string),
+        };
+        catalog.register_skills(&[info("cc-skill", None)]).await;
+        assert_eq!(
+            row_list(&catalog, "cc-skill").await,
+            Some(vec!["file_read".to_string(), "grep".to_string()]),
+            "the skill registers, with exactly the grantable Aleph names"
+        );
+        assert!(
+            CommandParser::new(Arc::clone(&catalog))
+                .parse_async("/cc-skill go")
+                .await
+                .is_some(),
+            "and it resolves as a slash command"
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(&[info("plug:cc", Some("plug"))], &|_| false)
+            .await;
+        assert_eq!(
+            rejected,
+            vec!["plug:cc".to_string()],
+            "a command's list is not mapped here: its unknown names refuse it"
+        );
+    }
+
+    /// `subagent` and `tool_search` are real tools that no catalog row names
+    /// when slash rows register (`executor::TOOLS_OUTSIDE_DEFINITIONS`).
+    /// Claude Code's `Task` / `Agent` / `ToolSearch` map to them, so a skill
+    /// keeps them, and a plugin command naming them registers restricted to
+    /// them instead of being refused.
+    #[tokio::test]
+    async fn the_tools_outside_the_definitions_are_real_for_both_kinds() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        let row = |id: &str, plugin: Option<&str>, allowed: &[&str]| SkillInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "names tools outside the definitions".to_string(),
+            scope: crate::domain::skill::PromptScope::System,
+            version: None,
+            allowed_tools: Some(allowed.iter().map(|s| (*s).to_string()).collect()),
+            argument_hint: None,
+            plugin_id: plugin.map(str::to_string),
+        };
+        catalog
+            .register_skills(&[row(
+                "delegator",
+                None,
+                &["Task", "Agent", "ToolSearch", "Read"],
+            )])
+            .await;
+        assert_eq!(
+            row_list(&catalog, "delegator").await,
+            Some(vec![
+                "subagent".to_string(),
+                "tool_search".to_string(),
+                "file_read".to_string()
+            ])
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(
+                &[
+                    row("plug:sub", Some("plug"), &["subagent"]),
+                    row("plug:ts", Some("plug"), &["tool_search"]),
+                ],
+                &|_| false,
+            )
+            .await;
+        assert!(rejected.is_empty(), "refused: {rejected:?}");
+        assert_eq!(
+            row_list(&catalog, "plug:sub").await,
+            Some(vec!["subagent".to_string()])
+        );
+        assert_eq!(
+            row_list(&catalog, "plug:ts").await,
+            Some(vec!["tool_search".to_string()])
+        );
+    }
+
+    /// Nothing survives ⇒ the skill still registers, with an empty validated
+    /// list — nothing to pre-grant, not a lost skill.
+    #[tokio::test]
+    async fn a_skill_whose_every_entry_is_dropped_still_registers() {
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        catalog
+            .register_skills(&[SkillInfo {
+                id: "nothing-grantable".to_string(),
+                name: "Nothing Grantable".to_string(),
+                description: "names only what Aleph cannot grant".to_string(),
+                scope: crate::domain::skill::PromptScope::System,
+                version: None,
+                allowed_tools: Some(vec!["NotebookEdit".to_string(), "Bash(ls)".to_string()]),
+                argument_hint: None,
+                plugin_id: None,
+            }])
+            .await;
+        assert_eq!(
+            row_list(&catalog, "nothing-grantable").await,
+            Some(Vec::new())
         );
     }
 
@@ -512,16 +951,18 @@ mod wire_tests {
         );
     }
 
-    /// A skill may not borrow another *slash command's* name. The catalog is
-    /// a slash-command index; `Skill` and `Custom` entries live only there and
-    /// are never in the run loop's candidate tool list. Admitting one would
-    /// pass validation and then match nothing — a silent deny-all, which is
-    /// the failure this whole change removes.
+    /// No row may borrow another *slash command's* name as a tool. The
+    /// catalog is a slash-command index; `Skill` and `Custom` entries live
+    /// only there and are never in the run loop's candidate tool list.
+    /// Admitting one would pass validation and then match nothing — for a
+    /// command a silent deny-all (so the command is refused), for a skill a
+    /// grant of nothing reported as a grant (so the entry is dropped and the
+    /// skill registers without it).
     #[tokio::test]
     async fn a_sibling_skills_slash_name_is_not_a_tool_name() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
-        let rejected = catalog
+        catalog
             .register_skills(&[
                 SkillInfo {
                     id: "sibling".to_string(),
@@ -530,6 +971,8 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: None,
+                    argument_hint: None,
+                    plugin_id: None,
                 },
                 SkillInfo {
                     id: "borrower".to_string(),
@@ -538,24 +981,48 @@ mod wire_tests {
                     scope: crate::domain::skill::PromptScope::System,
                     version: None,
                     allowed_tools: Some(vec!["sibling".to_string()]),
+                    argument_hint: None,
+                    plugin_id: None,
                 },
             ])
             .await;
 
-        assert_eq!(rejected, vec!["borrower".to_string()]);
         assert!(
             catalog.check_conflict("sibling").await.is_some(),
             "the sibling itself must still register"
         );
+        assert_eq!(
+            row_list(&catalog, "borrower").await,
+            Some(Vec::new()),
+            "a skill's list never names a slash command"
+        );
+
+        let rejected = catalog
+            .register_plugin_commands(
+                &[SkillInfo {
+                    id: "plug:borrower".to_string(),
+                    name: "borrower".to_string(),
+                    description: "names a sibling skill".to_string(),
+                    scope: crate::domain::skill::PromptScope::System,
+                    version: None,
+                    allowed_tools: Some(vec!["sibling".to_string()]),
+                    argument_hint: None,
+                    plugin_id: Some("plug".to_string()),
+                }],
+                &|_| false,
+            )
+            .await;
+        assert_eq!(rejected, vec!["plug:borrower".to_string()]);
     }
 
-    /// A skill naming only real tools still registers — the guard has to be
-    /// able to say yes, or it is a guard that rejects everything.
+    /// A skill naming only real tools registers with its whole list — the
+    /// validation has to be able to say yes, or it is a guard that drops
+    /// everything.
     #[tokio::test]
     async fn a_skill_naming_real_tools_still_registers() {
         let catalog = Arc::new(ToolCatalog::new());
         catalog.register_builtin_tools().await;
-        let rejected = catalog
+        catalog
             .register_skills(&[SkillInfo {
                 id: "good-skill".to_string(),
                 name: "Good Skill".to_string(),
@@ -563,9 +1030,13 @@ mod wire_tests {
                 scope: crate::domain::skill::PromptScope::System,
                 version: None,
                 allowed_tools: Some(vec!["grep".to_string(), "bash".to_string()]),
+                argument_hint: None,
+                plugin_id: None,
             }])
             .await;
-        assert!(rejected.is_empty(), "unexpectedly refused: {rejected:?}");
-        assert!(catalog.check_conflict("good-skill").await.is_some());
+        assert_eq!(
+            row_list(&catalog, "good-skill").await,
+            Some(vec!["grep".to_string(), "bash".to_string()])
+        );
     }
 }

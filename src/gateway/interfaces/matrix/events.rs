@@ -70,6 +70,8 @@ fn convert_room_message(
                 url,
                 path: None,
                 data: None,
+                is_voice_note: false,
+                is_video_note: false,
             };
             (body.to_string(), vec![attachment], Vec::new())
         }

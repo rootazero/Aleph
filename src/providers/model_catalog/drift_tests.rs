@@ -410,8 +410,23 @@ fn alias_double_path_covers_same_vendor_set() {
     // resolve. Each one is the bare preset/vendor name so the if/else chain
     // is exercised, not the substring-alias path.
     let provider_aliases = [
-        "claude", "openai", "gemini", "xai", "mistral", "moonshot", "qwen", "zai", "minimax",
-        "doubao", "cohere", "perplexity", "stepfun", "baidu", "xiaomi", "meituan", "meta",
+        "claude",
+        "openai",
+        "gemini",
+        "xai",
+        "mistral",
+        "moonshot",
+        "qwen",
+        "zai",
+        "minimax",
+        "doubao",
+        "cohere",
+        "perplexity",
+        "stepfun",
+        "baidu",
+        "xiaomi",
+        "meituan",
+        "meta",
         "deepseek",
     ];
     let mut canonical_vendors = std::collections::HashSet::new();
@@ -449,7 +464,10 @@ fn alias_double_path_covers_same_vendor_set() {
 /// so the conservative 128K fallback kicks in.
 #[test]
 fn capabilities_for_handles_empty_input() {
-    assert!(capabilities_for("").is_none(), "empty string must be unknown");
+    assert!(
+        capabilities_for("").is_none(),
+        "empty string must be unknown"
+    );
     assert!(
         capabilities_for("   ").is_none(),
         "whitespace-only must be unknown"

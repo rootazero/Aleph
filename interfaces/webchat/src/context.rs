@@ -420,16 +420,53 @@ enum Handshake {
 /// component to re-subscribe them, so they are seeded on every connect.
 const BASE_TOPICS: [&str; 3] = ["config.**", "alerts.**", "approval.**"];
 
+/// One subscription as the ledger files it: a topic pattern and the topics
+/// carved out of it (`aleph_protocol::TopicCarveOut`). The carve-out is part
+/// of the key — the phone's `stream.*` minus reasoning and the wide chat's
+/// plain `stream.*` are two subscriptions, not one.
+type LedgerEntry = (String, Vec<String>);
+
 /// `BASE_TOPICS` ∪ ledger, deduplicated and ordered.
 ///
 /// Pure so the "a reconnect must not narrow the socket" rule is testable on the
 /// host without a websocket.
-fn replay_set(ledger: &BTreeSet<String>) -> Vec<String> {
-    let mut all: BTreeSet<String> = ledger.clone();
+fn replay_set(ledger: &BTreeSet<LedgerEntry>) -> Vec<LedgerEntry> {
+    let mut all: BTreeSet<LedgerEntry> = ledger.clone();
     for base in BASE_TOPICS {
-        all.insert(base.to_string());
+        all.insert((base.to_string(), Vec::new()));
     }
     all.into_iter().collect()
+}
+
+/// The `events.subscribe` / `events.unsubscribe` params for one entry.
+fn topics_request(pattern: &str, except: &[String]) -> Value {
+    serde_json::to_value(aleph_protocol::TopicsRequest::new(
+        vec![pattern.to_string()],
+        except.to_vec(),
+    ))
+    .unwrap_or(Value::Null)
+}
+
+/// Re-subscribe every replayed entry through `subscribe`, carve-out included,
+/// and return the ones that failed with the error. The reconnect handler's
+/// whole replay step: a carve-out that is filed in the ledger but not re-sent
+/// here would vanish on the first reconnect and the phone would be back to
+/// receiving every reasoning frame.
+async fn replay_subscriptions<F, Fut>(
+    entries: Vec<LedgerEntry>,
+    mut subscribe: F,
+) -> Vec<(String, String)>
+where
+    F: FnMut(Value) -> Fut,
+    Fut: std::future::Future<Output = Result<Value, String>>,
+{
+    let mut failed = Vec::new();
+    for (pattern, except) in entries {
+        if let Err(e) = subscribe(topics_request(&pattern, &except)).await {
+            failed.push((pattern, e));
+        }
+    }
+    failed
 }
 
 #[derive(Clone, Copy)]
@@ -489,7 +526,7 @@ pub struct DashboardState {
     /// The ledger is the single source for "what is this client subscribed to",
     /// so a new subscription site can never again forget to register itself for
     /// replay.
-    subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<String>>>>,
+    subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<LedgerEntry>>>>,
 
     // Channel for stopping the message loop
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
@@ -931,19 +968,28 @@ impl DashboardState {
     /// subscribe is idempotent. See that field's doc for why a missing replay
     /// is a silent kill rather than a missing restore.
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
+        self.subscribe_topic_except(pattern, &[]).await
+    }
+
+    /// [`Self::subscribe_topic`], minus the topics in `except` — for a surface
+    /// that never renders them. Unsubscribe with the same `except`
+    /// ([`Self::unsubscribe_topic_except`]): the carve-out names the
+    /// subscription, so another surface's plain subscription to the same
+    /// pattern is neither narrowed nor removed by this one.
+    pub async fn subscribe_topic_except(
+        &self,
+        pattern: &str,
+        except: &[&str],
+    ) -> Result<(), String> {
+        let except: Vec<String> = except.iter().map(|e| (*e).to_string()).collect();
         self.subscribed_topics.with_value(|set| {
             set.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(pattern.to_string());
+                .insert((pattern.to_string(), except.clone()));
         });
-        self.rpc_call(
-            "events.subscribe",
-            serde_json::json!({
-                "topics": [pattern]
-            }),
-        )
-        .await
-        .map(|_| ())
+        self.rpc_call("events.subscribe", topics_request(pattern, &except))
+            .await
+            .map(|_| ())
     }
 
     /// Subscribe **without** filing the pattern in the reconnect ledger.
@@ -956,35 +1002,35 @@ impl DashboardState {
     /// wanted it is gone. The caller must pair this with
     /// [`Self::unsubscribe_topic`] on unmount.
     pub async fn subscribe_topic_ephemeral(&self, pattern: &str) -> Result<(), String> {
-        self.rpc_call(
-            "events.subscribe",
-            serde_json::json!({
-                "topics": [pattern]
-            }),
-        )
-        .await
-        .map(|_| ())
+        self.rpc_call("events.subscribe", topics_request(pattern, &[]))
+            .await
+            .map(|_| ())
     }
 
     /// Unsubscribe from an event topic
     pub async fn unsubscribe_topic(&self, pattern: &str) -> Result<(), String> {
-        self.rpc_call(
-            "events.unsubscribe",
-            serde_json::json!({
-                "topics": [pattern]
-            }),
-        )
-        .await?;
+        self.unsubscribe_topic_except(pattern, &[]).await
+    }
+
+    /// Undo [`Self::subscribe_topic_except`] with the same `except`.
+    pub async fn unsubscribe_topic_except(
+        &self,
+        pattern: &str,
+        except: &[&str],
+    ) -> Result<(), String> {
+        let except: Vec<String> = except.iter().map(|e| (*e).to_string()).collect();
+        self.rpc_call("events.unsubscribe", topics_request(pattern, &except))
+            .await?;
         self.subscribed_topics.with_value(|set| {
             set.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(pattern);
+                .remove(&(pattern.to_string(), except));
         });
         Ok(())
     }
 
-    /// Every topic pattern this socket must (re-)subscribe to after a connect.
-    fn topics_to_replay(&self) -> Vec<String> {
+    /// Every subscription this socket must (re-)subscribe to after a connect.
+    fn topics_to_replay(&self) -> Vec<LedgerEntry> {
         let ledger = self.subscribed_topics.with_value(|set| {
             set.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1490,13 +1536,15 @@ impl DashboardState {
                             // `ChatView` is never unmounted. subscribe_topic is idempotent
                             // on the gateway, so the one-time client-side handlers stay
                             // registered.
-                            for topic in state_for_subscribe.topics_to_replay() {
-                                if let Err(e) = state_for_subscribe.subscribe_topic(&topic).await {
-                                    web_sys::console::error_1(
-                                        &format!("Failed to subscribe to {topic} events: {e}")
-                                            .into(),
-                                    );
-                                }
+                            let failed = replay_subscriptions(
+                                state_for_subscribe.topics_to_replay(),
+                                |params| state_for_subscribe.rpc_call("events.subscribe", params),
+                            )
+                            .await;
+                            for (topic, e) in failed {
+                                web_sys::console::error_1(
+                                    &format!("Failed to subscribe to {topic} events: {e}").into(),
+                                );
                             }
                         });
                         Ok(())
@@ -1911,6 +1959,7 @@ mod tests {
         gateway_readiness,
         query_with_bootstrap_ticket,
         replay_set,
+        replay_subscriptions,
         strip_params,
         ws_url_for,
         GatewayReadiness,
@@ -1986,8 +2035,46 @@ mod tests {
         );
     }
 
-    fn ledger(patterns: &[&str]) -> BTreeSet<String> {
-        patterns.iter().map(|p| (*p).to_string()).collect()
+    fn ledger(patterns: &[&str]) -> BTreeSet<super::LedgerEntry> {
+        patterns
+            .iter()
+            .map(|p| ((*p).to_string(), Vec::new()))
+            .collect()
+    }
+
+    fn replayed(replay: &[super::LedgerEntry], topic: &str) -> bool {
+        replay.iter().any(|(t, _)| t == topic)
+    }
+
+    /// The reconnect replay re-sends a carve-out with its topic. Drives the
+    /// replay step the reconnect handler runs (`replay_subscriptions` over
+    /// `replay_set` of the ledger) and reads what it puts on the wire — not
+    /// the ledger — because a carve-out that is filed but not re-sent is lost
+    /// on the first reconnect and the phone gets every reasoning frame again.
+    #[test]
+    fn a_reconnect_resends_the_carve_out_with_its_topic() {
+        let reasoning = aleph_protocol::STREAM_REASONING_TOPIC.to_string();
+        let mut set = ledger(&["team.*"]);
+        set.insert(("stream.*".to_string(), vec![reasoning.clone()]));
+        let mut sent = Vec::new();
+        let failed =
+            futures::executor::block_on(replay_subscriptions(replay_set(&set), |params| {
+                sent.push(params);
+                std::future::ready(Ok(serde_json::Value::Null))
+            }));
+        assert!(failed.is_empty());
+        let wire = |topic: &str, except: Vec<String>| {
+            serde_json::to_value(aleph_protocol::TopicsRequest::new(
+                vec![topic.to_string()],
+                except,
+            ))
+            .unwrap()
+        };
+        assert!(
+            sent.contains(&wire("stream.*", vec![reasoning])),
+            "the phone's carve-out must be re-sent: {sent:?}"
+        );
+        assert!(sent.contains(&wire("team.*", vec![])), "{sent:?}");
     }
 
     /// The reconnect replay is also a *narrowing*: an empty gateway-side filter
@@ -2005,7 +2092,7 @@ mod tests {
         ]));
         for topic in ["stream.*", "team.*", "team.*.task.*"] {
             assert!(
-                replay.iter().any(|t| t == topic),
+                replayed(&replay, topic),
                 "{topic} must survive a reconnect; it has no component to re-subscribe it \
                  (ChatView is never unmounted)"
             );
@@ -2018,7 +2105,7 @@ mod tests {
     fn the_base_set_is_replayed_even_with_an_empty_ledger() {
         let replay = replay_set(&BTreeSet::new());
         for base in BASE_TOPICS {
-            assert!(replay.iter().any(|t| t == base), "{base} must be seeded");
+            assert!(replayed(&replay, base), "{base} must be seeded");
         }
     }
 
@@ -2027,11 +2114,11 @@ mod tests {
     #[test]
     fn an_unsubscribed_topic_is_not_replayed() {
         let mut set = ledger(&["stream.*", "voice.transcribe.delta"]);
-        set.remove("voice.transcribe.delta");
+        set.remove(&("voice.transcribe.delta".to_string(), Vec::new()));
         let replay = replay_set(&set);
-        assert!(replay.iter().any(|t| t == "stream.*"));
+        assert!(replayed(&replay, "stream.*"));
         assert!(
-            !replay.iter().any(|t| t == "voice.transcribe.delta"),
+            !replayed(&replay, "voice.transcribe.delta"),
             "an unsubscribed topic must stay unsubscribed across a reconnect"
         );
     }

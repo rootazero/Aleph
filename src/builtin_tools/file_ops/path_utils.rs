@@ -82,7 +82,44 @@ pub fn get_denied_paths() -> Vec<String> {
         denied_paths.push(format!("{}/secrets.vault", config_dir.display()));
         denied_paths.push(format!("{}/secrets.vault.lock", config_dir.display()));
         denied_paths.push(format!("{}/data", config_dir.display()));
+        // The state of the gates only a HUMAN opens. A model that could write
+        // one could open its own gate — on an operator turn it can already
+        // write a skill (`skill_manage`, a project's `.aleph/skills`), so one
+        // more `file_write` of an `approved` consent entry would be a shell
+        // outside the sandbox with nobody in the loop. Each path comes from
+        // the store that owns it, never re-spelled here:
+        // - the shell-command consent registry (hooks, and every inline
+        //   `` !`cmd` `` — a plugin command's and a skill's);
+        // - the exec-approval grants a human gave "always";
+        // - the config-tier approval policy (its allow/block lists);
+        // - plugin enable + owner-trust state (`plugins.toml` — only a human
+        //   enables a Claude Code install). It sits under `data/` (above);
+        //   named on its own so moving it out of `data/` cannot un-deny it.
+        for gate in [
+            crate::extension::hooks::ShellHookConsent::default_path(),
+            crate::sandbox::exec_approval::grants::GrantStore::default_path(),
+            crate::approval::ConfigApprovalPolicy::config_path(),
+        ]
+        .into_iter()
+        .chain(
+            aleph_protocol::paths::data_dir()
+                .map(|data| data.join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)),
+        ) {
+            denied_paths.push(gate.display().to_string());
+        }
         // Note: output directory is intentionally NOT denied
+    }
+
+    // Every directory a typed `/<skill>` may pre-grant its `allowed-tools:`
+    // from — `<config>/skills` and `<config>/plugins` above, plus
+    // `~/.claude/skills` and `~/.claude/plugins`. A model that could write
+    // one could add a name to a skill's list that registration validates at
+    // the next boot. One list (`utils::paths::pregrant_roots`), shared with
+    // the pre-grant's own origin check.
+    for root in crate::utils::paths::pregrant_roots() {
+        if !denied_paths.iter().any(|d| Path::new(d) == root) {
+            denied_paths.push(root.display().to_string());
+        }
     }
 
     // Add Unix-specific paths. Beyond the classic credential files, deny the
@@ -391,13 +428,17 @@ fn denied_entry_normalized(denied: &str) -> Arc<DeniedEntry> {
 /// [`crate::sandbox::deny_globs::resolve_deny_read_paths_under`] applies before
 /// handing paths to the Windows ACE stamper, so a Windows `\` path and a Unix
 /// `/` path are judged by one rule.
+///
+/// The prefix compare is the file system's, not the string's
+/// ([`names_within`]): where names are compared case-insensitively, a path
+/// that spells a denied entry in another case is that entry.
 pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
     // Computed at most once per call, and only if a pattern entry is present.
     let mut slash_form: Option<String> = None;
     for denied in denied_paths {
         match &*denied_entry_normalized(denied) {
             DeniedEntry::Literal(location) => {
-                if canonical.starts_with(location) {
+                if names_within(canonical, location) {
                     return true;
                 }
             }
@@ -458,11 +499,78 @@ pub fn contains_denied_descendant(candidate: &Path, denied_paths: &[String]) -> 
     denied_paths
         .iter()
         .find_map(|denied| match &*denied_entry_normalized(denied) {
-            DeniedEntry::Literal(location) => {
-                (location != candidate && location.starts_with(candidate)).then(|| location.clone())
-            }
+            DeniedEntry::Literal(location) => (names_within(location, candidate)
+                && !names_within(candidate, location))
+            .then(|| location.clone()),
             DeniedEntry::Glob(_) | DeniedEntry::InertGlob => None,
         })
+}
+
+/// Whether `path` names `prefix` or something beneath it, compared the way
+/// this platform's default file system compares names — the one comparison
+/// both deny directions ([`path_is_denied`], [`contains_denied_descendant`])
+/// make against a literal entry.
+///
+/// A path reaches here from [`safe_normalize`]: its deepest EXISTING ancestor
+/// is canonical — on macOS and Windows in the case stored on disk — and
+/// whatever does not exist yet is appended AS WRITTEN. So a missing leaf keeps
+/// the model's spelling: `<config>/SHELL-HOOKS-ALLOWLIST.json`, written before
+/// the registry exists, is the file `ShellHookConsent` then reads as
+/// `shell-hooks-allowlist.json` on a case-insensitive volume, and a
+/// case-sensitive `starts_with` let the model create its own approval that
+/// way (review P4.17 R2-I-1). The same held for every absent credential leaf
+/// (`~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`,
+/// `~/.docker/config.json`) and for the gate files `approval-grants.json` and
+/// `approval-policy.json`, which a quiet install never creates.
+///
+/// - **macOS and Windows:** names are compared case-folded
+///   ([`fold_name`]), always. APFS and HFS+ volumes are case-insensitive by
+///   default and NTFS is on Windows. On a volume formatted case-SENSITIVE this
+///   over-denies — `~/.NETRC` is then a different file and is refused anyway —
+///   which fails closed: a refused write the operator can do by hand, never a
+///   write that lands on a protected file.
+/// - **Elsewhere:** names compare exactly, as the file system does.
+///
+/// Not covered (recorded, unverified): Unicode normalisation (APFS treats NFC
+/// and NFD spellings as one name; every fixed entry is ASCII, so an alias
+/// would need a decomposable letter the entry does not have), and Windows 8.3
+/// short names (`SHELL-~1.JSO`), which only exist for files that exist — and
+/// an existing file is canonicalized to its long name before it gets here.
+fn names_within(path: &Path, prefix: &Path) -> bool {
+    if !cfg!(any(target_os = "macos", windows)) {
+        return path.starts_with(prefix);
+    }
+    let mut names = path.components();
+    prefix
+        .components()
+        .all(|want| names.next().is_some_and(|got| same_name(got, want)))
+}
+
+/// Whether two path components name the same thing on a case-insensitive
+/// file system ([`names_within`]).
+fn same_name(a: std::path::Component<'_>, b: std::path::Component<'_>) -> bool {
+    use std::path::Component;
+    match (a, b) {
+        (Component::Normal(a), Component::Normal(b)) => fold_name(a) == fold_name(b),
+        (Component::Prefix(a), Component::Prefix(b)) => {
+            fold_name(a.as_os_str()) == fold_name(b.as_os_str())
+        }
+        _ => a == b,
+    }
+}
+
+/// A name as a case-insensitive file system compares it: upper- then
+/// lower-cased, so letters whose simple lower case is not their fold still
+/// meet (`ſ` → `S` → `s`, the Kelvin sign `K` → `k`). On Windows, also
+/// without the trailing dots and spaces Win32 strips from a name
+/// (`shell-hooks-allowlist.json.` opens `shell-hooks-allowlist.json`).
+fn fold_name(name: &std::ffi::OsStr) -> String {
+    let folded = name.to_string_lossy().to_uppercase().to_lowercase();
+    if cfg!(windows) {
+        folded.trim_end_matches(['.', ' ']).to_string()
+    } else {
+        folded
+    }
 }
 
 /// Whether `canonical` is a Linux `/proc/<pid>/…` pseudo-file that leaks another

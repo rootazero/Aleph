@@ -3303,7 +3303,7 @@ mod tests {
 
         let mut config = BrowserSystemConfig {
             default_engine: Engine::Obscura,
-            ..Default::default()
+            ..BrowserSystemConfig::default()
         };
         config.profiles.insert(
             "p".into(),

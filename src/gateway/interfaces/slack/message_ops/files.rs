@@ -117,6 +117,8 @@ pub(crate) async fn fetch_attachments(
             url: None,
             path: None,
             data,
+            is_voice_note: false,
+            is_video_note: false,
         });
     }
     out

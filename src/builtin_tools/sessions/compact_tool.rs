@@ -116,16 +116,7 @@ pub async fn run_manual_compaction(
     // The summarizer is optional by design: without a provider the compaction
     // still runs, falling back to the same deterministic truncation the
     // automatic path uses when its LLM call fails.
-    let compactor = crate::context::compact::manual::manual_summarizer().map(|provider| {
-        crate::context::compact::compactor::ContextCompactor::new(
-            provider,
-            crate::context::compact::compactor::CompactorConfig {
-                summarizer_input_budget:
-                    crate::context::compact::manual::manual_summarizer_input_budget(),
-                ..crate::context::compact::compactor::CompactorConfig::default()
-            },
-        )
-    });
+    let compactor = crate::context::compact::manual::manual_compactor();
 
     crate::context::compact::manual::compact_session(
         service.as_ref(),

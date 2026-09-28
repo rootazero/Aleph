@@ -141,10 +141,7 @@ pub fn compute_next_cron(
         // to avoid openclaw's containerisation regression — see that file's
         // module-level comment. Operators who want host-local behaviour
         // pass an explicit `tz` (e.g. `"America/New_York"`).
-        Ok(schedule
-            .after(&from)
-            .next()
-            .map(|t| t.timestamp_millis()))
+        Ok(schedule.after(&from).next().map(|t| t.timestamp_millis()))
     }
 }
 

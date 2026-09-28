@@ -40,6 +40,8 @@ pub use compile::{
     WORKFLOW_PARALLEL_INDEX_KEY, WORKFLOW_PARALLEL_SIZE_KEY, WORKFLOW_PHASE_KEY,
     WORKFLOW_RUN_ID_KEY, WORKFLOW_SCHEMA_KEY, WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
 };
-pub use def::{render_prompt, CollectReduce, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
+pub use def::{
+    render_prompt, CollectReduce, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind,
+};
 pub use determinism::{audit_step_prompt, DeterminismFinding, DeterminismFindingKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};

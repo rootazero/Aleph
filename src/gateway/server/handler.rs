@@ -16,6 +16,8 @@
 // top of `handler.rs` and are now in `connection/mod.rs`. Re-importing
 // them here so `use super::*;` in the test module keeps resolving.
 #[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
+use super::per_client_buffer::PerClientBuffer;
+#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 #[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::middleware::MiddlewareChain;
@@ -23,8 +25,6 @@ use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::protocol::JsonRpcResponse;
 #[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use crate::gateway::rate_limiter::RateLimiter;
-#[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
-use super::per_client_buffer::PerClientBuffer;
 #[allow(unused_imports)] // tests-only; legacy re-exports for handler::* callers
 use tokio::sync::broadcast;
 

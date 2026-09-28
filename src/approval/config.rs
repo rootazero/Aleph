@@ -199,8 +199,7 @@ fn compile_rules_grouped(
                     // then the process is already in trouble. `expect`
                     // rather than `unwrap` so the failure mode is named.
                     let match_anything = MATCH_ANYTHING.get_or_init(|| {
-                        regex::Regex::new("(?s).*")
-                            .expect("static regex pattern `(?s).*`")
+                        regex::Regex::new("(?s).*").expect("static regex pattern `(?s).*`")
                     });
                     error!(
                         pattern = %rule.pattern,
@@ -325,8 +324,10 @@ impl ConfigApprovalPolicy {
         }
     }
 
-    /// Return the expected path for the configuration file.
-    fn config_path() -> PathBuf {
+    /// Return the expected path for the configuration file. Also one of the
+    /// paths the model's file tools may never touch
+    /// (`builtin_tools::file_ops::get_denied_paths`).
+    pub(crate) fn config_path() -> PathBuf {
         crate::utils::paths::get_config_dir().map_or_else(
             |_| {
                 warn!(

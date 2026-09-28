@@ -67,6 +67,14 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters_schema: Option<Value>,
 
+    /// Per-result token budget the tool declares
+    /// ([`crate::tools::AlephTool::MAX_RESULT_TOKENS`]), stamped at
+    /// registration and carried by `RegistryToolAdapter` to the Layer-2
+    /// resolver. `None` = the global default. Runtime-only: it is not part of
+    /// the tool's wire description, so it is never serialized.
+    #[serde(skip)]
+    pub max_result_tokens: Option<usize>,
+
     /// Whether this tool is currently active/enabled
     /// Disabled tools are excluded from routing and prompt generation.
     /// Mutation is `pub(crate)` so the registry's lock-protected writers are
@@ -155,15 +163,22 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_system_prompt: Option<String>,
 
-    /// Tool names this command narrows the run's tool surface to.
+    /// The row's validated `allowed-tools:`, as Aleph tool names.
     ///
-    /// Only skills populate this today (from their frontmatter
-    /// `allowed-tools:`). `None` = the command declares nothing, so the run
-    /// keeps the agent's full tool surface; `Some(vec![])` = an explicit
-    /// deny-all. The `Option` is not decoration: it is the only thing that
-    /// keeps "deny everything" distinguishable from "said nothing" by the time
-    /// the value reaches `ScopedToolService`, which reads an empty allow-set
-    /// as allow-all.
+    /// Only `ToolRegistrar::register_skills` populates this today, for skill
+    /// and plugin-command rows (`registration::AllowedToolsMeaning`). For a
+    /// plugin command
+    /// (`commands/*.md`, already mapped to Aleph names at parse time) it is
+    /// what the run's tool surface is narrowed to: `None` = the command
+    /// declares nothing, so the run keeps the agent's full tool surface;
+    /// `Some(vec![])` = an explicit deny-all. For a skill it is what a typed
+    /// `/<skill>` may pre-grant — Claude Code names mapped, what grants
+    /// nothing dropped — and narrows nothing, except on the stale-row arm: a
+    /// skill row whose manifest is gone by the turn restricts like a command's
+    /// (`slash_skill_pregrant::split`). The `Option` is not decoration:
+    /// it is the only thing that keeps "deny everything" distinguishable from
+    /// "said nothing" by the time the value reaches `ScopedToolService`, which
+    /// reads an empty allow-set as allow-all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_capabilities: Option<Vec<String>>,
 
@@ -224,6 +239,7 @@ impl UnifiedTool {
             description: description.into(),
             source,
             parameters_schema: None,
+            max_result_tokens: None,
             is_active: true,
             requires_confirmation: false,
             safety_level: ToolSafetyLevel::default(),

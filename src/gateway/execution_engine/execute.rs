@@ -287,21 +287,24 @@ where
     ///   the turn cap is what actually bounds a cold seed, so the ceiling is a
     ///   backstop for one pathologically large turn rather than the operative
     ///   limit.
-    /// * **An absent `[context_budget]` is not a refusal.** That section is
-    ///   opt-in and absent on a default install, so treating `for_child`'s
-    ///   `None` as "I cannot size this" uniformly would make `/btw` refuse
-    ///   everywhere out of the box — a floor with no door. Absent means the
-    ///   install has opted out of window management altogether: the main
+    /// * **Context management switched off is not a refusal.** With
+    ///   `[context_budget] enabled = false` the harness has no budget, so
+    ///   treating `for_child`'s `None` as "I cannot size this" would make
+    ///   `/btw` refuse on every such install — a floor with no door. Off means
+    ///   the install has opted out of window management altogether: the main
     ///   conversation being forked from runs uncompacted too, so there is no
-    ///   line to stay below and the turn cap is the whole bound. This is the
+    ///   line to stay below and the turn cap is the whole bound. (A missing
+    ///   section is on — `Config::effective_context_budget` — so a default
+    ///   install takes the sized path.) This is the
     ///   same conclusion `btw::seed`'s own `delta_budget` reaches for the warm
     ///   path, and the same degradation `run_loop` applies when it declines to
     ///   hand a spawned child a budget it does not have.
     ///
-    /// A configured window too small to hold a fork IS a refusal: the operator
-    /// stated a window, and it cannot hold one. That is loud, and it names the
-    /// effective window and the `[context_budget]` section — deliberately not
-    /// one key inside it; the body below says why.
+    /// A window too small to hold a fork IS a refusal: context management is
+    /// on, so there is a line to stay below, and it cannot hold one — whether
+    /// the operator pinned it or it was derived from the model. That is loud,
+    /// and it names the effective window and the `[context_budget]` section —
+    /// deliberately not one key inside it; the body below says why.
     async fn btw_fork_budget(
         &self,
         orchestrator: &crate::orchestrator::Orchestrator,
@@ -343,6 +346,22 @@ where
         configured.unwrap_or(crate::config::types::policies::DEFAULT_BTW_FORK_TURNS)
     }
 
+    /// The fast path handed this run to the agent loop: it is `Running`, on
+    /// the model its request now names. A `/command` whose mode was stamped
+    /// after admission may just have pinned one (`slash_command_body::admit`;
+    /// a mode stamped before it was pinned before `admit_run`,
+    /// `slash_command_body::pin_model`), and the busy lane's steer-fold check
+    /// (`steering::find_busy_sibling`) compares this stored copy — not the
+    /// request the run was admitted with — against an incoming message.
+    pub(super) async fn mark_fallen_through(&self, run_id: &str, request: &RunRequest) {
+        if let Some(run) = self.active_runs.write().await.get_mut(run_id) {
+            run.state = RunState::Running;
+            run.request
+                .model_override
+                .clone_from(&request.model_override);
+        }
+    }
+
     /// Execute a run request
     ///
     /// Returns a stream of events for the run.
@@ -359,6 +378,13 @@ where
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
+
+        // First, before ANYTHING reads the metadata — `admit_run`'s steer-fold
+        // resolves this turn's permissions below: no request keeps a
+        // `/<skill>` pre-grant it arrived with, nor a typed marker without the
+        // slash mode it vouches for (`slash_skill_scope::forget_at_ingress`).
+        // `slash_skill_pregrant::split`, further down, derives the turn's own.
+        super::slash_skill_scope::forget_at_ingress(&mut request.metadata);
 
         // Recognise a `/btw` side question unconditionally, before anything
         // else in this function reads `request.metadata` — most importantly
@@ -474,6 +500,12 @@ where
         // `execute()` on the SAME session (see the release sites for why
         // holding it until the literal end of this function would deadlock
         // that re-entry, and why the `Ok` arm holds it through the meta).
+        //
+        // A plugin command's `model:` is pinned first: `admit_run` registers
+        // this request as the run's copy — a steer target while it parks for
+        // a slot — and the busy lane folds a follow-up only into a run on the
+        // same model (`slash_command_body::pin_model`).
+        super::slash_command_body::pin_model(&mut request).await;
         let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
@@ -669,11 +701,13 @@ where
             }
 
             // Safety net for producers that never pass through a handler —
-            // cron jobs, heartbeat, team dispatch, goal/loop continuations —
-            // and so cannot stamp before the busy lane. `chat.send` and
-            // `agent.run` stamp earlier (they must: see `stamp_slash_mode`),
-            // and this call is a no-op for them.
-            self.stamp_slash_mode(&request.input, &mut request.metadata)
+            // cron jobs, heartbeat, team dispatch, `sessions_send`, A2A,
+            // goal/loop continuations — and so cannot stamp before the busy
+            // lane. `chat.send` and `agent.run` stamp earlier (they must: see
+            // `stamp_slash_mode`), and this call is a no-op for them. Unattested:
+            // none of this text is a person typing `/foo`, so a `/skill` it
+            // resolves never pre-grants (`slash_skill_pregrant`).
+            self.stamp_slash_mode_unattested(&request.input, &mut request.metadata)
                 .await;
         }
 
@@ -763,24 +797,28 @@ where
             }
         }
 
-        // Pre-extract the skill's declared tool scope from the slash mode JSON
-        // so the agent loop (run_loop/inner.rs) can apply the intersection
-        // without re-parsing the envelope on every Think→Act iteration. One
-        // key is emitted: `slash_skill_allowed_tools`.
+        // This turn's `allowed-tools:` facts, from the slash mode and the
+        // registration it names (`slash_skill_pregrant::split`): a plugin
+        // COMMAND's list RESTRICTS the surface the agent loop
+        // (run_loop/inner.rs) builds, a SKILL's list PRE-GRANTS the named
+        // tools for this turn's tool gate (`resolve_turn_permissions`). Lifted
+        // into metadata once, so neither is re-parsed on every Think→Act
+        // iteration. Run for EVERY request, slash or not; it is the only
+        // writer of either key (any pre-grant the request arrived with was
+        // removed as this function's first statement).
         //
-        // Nothing here injects skill text into the prompt, and no code
-        // anywhere does: the skill's *description* reaches the model through
-        // the `<available_skills>` block (`thinker::layers::skill_instructions`,
-        // budgeted and sanitised), and the skill's *body* only through the
-        // always-resident `skill_read` tool, which is the sole path that runs
-        // `preprocess_skill_content` and records the use.
-        if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
-            if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
-                if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {
-                    super::slash_skill_scope::stamp_from_mode(&mut request.metadata, &mode);
-                }
-            }
-        }
+        // Nothing here injects skill text into the prompt: a SKILL's
+        // *description* reaches the model through the `<available_skills>`
+        // block (`thinker::layers::skill_instructions`, budgeted and
+        // sanitised), and its *body* only through the always-resident
+        // `skill_read` tool, which is the sole path that runs
+        // `preprocess_skill_content` and records the use. A plugin COMMAND's
+        // body is different — it is the user's instruction for this turn —
+        // and is admitted in the fast path's fallthrough arm below
+        // (`slash_command_body::admit`), once its owner has been judged
+        // visible, then rendered by the run loop after the turn-start hooks
+        // (`slash_command_body::render_admitted`).
+        super::slash_skill_pregrant::split(&mut request, agent.id()).await;
 
         // Slash command fast path (L0): bypass full agent loop
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
@@ -808,11 +846,9 @@ where
                         .await;
                 }
                 Err(ExecutionError::Fallthrough { ref reason }) => {
-                    // Skills/custom commands need LLM processing — fall through to agent loop
-                    let mut runs = self.active_runs.write().await;
-                    if let Some(run) = runs.get_mut(&run_id) {
-                        run.state = RunState::Running;
-                    }
+                    // Skills/custom commands need LLM processing — fall through
+                    // to the agent loop.
+                    //
                     // Round-2 B7: a `/moa <prompt>` arriving through a channel
                     // reaches this fallthrough with the RAW "/moa ..." text
                     // still in request.input (the channel-path intercept can't
@@ -835,6 +871,32 @@ where
                         reason = %reason,
                         "Command falling through to agent loop"
                     );
+                    // A plugin COMMAND is admitted here, not with the skill
+                    // scope above: the fast path just judged its owning plugin
+                    // visible to this session (face ④), and only the
+                    // registration that owner holds under the exact key the
+                    // mode names is admitted (`slash_command_body::owned_command`).
+                    // Admission judges the command's `model:` (a refused one
+                    // fails the turn visibly, before anything runs) and spawns
+                    // nothing: the body renders in the run loop, after the
+                    // turn-start hooks let the turn go ahead.
+                    //
+                    // No `active_runs` guard may be alive across this call:
+                    // the refusal below takes that lock again.
+                    let admitted = super::slash_command_body::admit(&mut request).await;
+                    self.mark_fallen_through(&run_id, &request).await;
+                    if let Err(why) = admitted {
+                        return self
+                            .finalize_fast_path_error(
+                                &run_id,
+                                &request,
+                                &agent,
+                                &emitter,
+                                &why,
+                                trace_task_persisted,
+                            )
+                            .await;
+                    }
                     // Fall through to normal agent loop
                 }
                 Err(ref e) => {
@@ -882,16 +944,29 @@ where
         let occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>> =
             Arc::new(std::sync::Mutex::new(None));
 
+        // Hooks fired in this task and in the harness task
+        // `orchestrator::dispatch` spawns (which carries it across) read
+        // `transcript_path` from THIS store (`extension::hooks::session_facts`),
+        // so the SQLite backend answers `None` instead of a re-derived
+        // file-backend path. Published outside `run_agent_loop` so its
+        // `BeforeAgentStart` / `AgentEnd` seams are inside the scope too.
+        // Sub-work spawned through `CarriedAttribution` (batch legs,
+        // background sub-agents) does not carry it and omits the key.
         let result: Result<String, ExecutionError> = tokio::select! {
-            result = self.run_agent_loop(
-                &run_id,
-                &request,
-                agent.clone(),
-                emitter.clone(),
-                deadline.clone(),
-                trace_task_persisted.then(|| run_id.clone()),
-                cancel_token.clone(),
-                occupancy_out.clone(),
+            result = crate::extension::hooks::with_transcript_source(
+                Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
+                    agent.session_store(),
+                ))),
+                self.run_agent_loop(
+                    &run_id,
+                    &request,
+                    agent.clone(),
+                    emitter.clone(),
+                    deadline.clone(),
+                    trace_task_persisted.then(|| run_id.clone()),
+                    cancel_token.clone(),
+                    occupancy_out.clone(),
+                ),
             ) => result,
 
             _ = cancel_rx.recv() => {

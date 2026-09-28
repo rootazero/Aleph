@@ -304,6 +304,22 @@ impl HomeEnvGuards {
         }
     }
 
+    /// Lock both and change neither — for a test that reads paths derived from
+    /// `$ALEPH_HOME` and `$HOME` (twice, say: once to list them, once inside
+    /// the code under test) and must not race a test that repoints either.
+    ///
+    /// Spelled `acquire_…` so the guard censuses that recognise this type by
+    /// its `HomeEnvGuards::acquire` prefix recognise it too.
+    pub(crate) fn acquire_and_keep() -> Self {
+        // Same fixed order as `acquire_and_set` — ALEPH_HOME first.
+        let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire();
+        let home = HomeEnvGuard::acquire();
+        Self {
+            _home: home,
+            _aleph_home: aleph_home,
+        }
+    }
+
     /// Lock both, then REMOVE `$ALEPH_HOME` and `$HOME` for the guard's
     /// lifetime — for a test that needs `get_config_dir()` to fail outright
     /// (no fallback of any kind), which only happens when neither resolves.

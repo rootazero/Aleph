@@ -167,7 +167,12 @@ async fn uninstall_plugin(plugin_id: &str) -> Result<(), String> {
         return Err(format!("plugin not found: {plugin_id}"));
     }
     if let Some(mgr) = crate::extension::try_extension_manager() {
-        let _ = mgr.unload_runtime_plugin(plugin_id).await;
+        match mgr.unmount(plugin_id).await {
+            Ok(_) => {}
+            // Never mounted — nothing to tear down; the directory goes anyway.
+            Err(crate::extension::UnmountError::NotMounted(_))
+            | Err(crate::extension::UnmountError::NotFound(_)) => {}
+        }
     }
     std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     crate::extension::plugin_state::forget_plugin_sidecars(plugin_id).await;

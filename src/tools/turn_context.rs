@@ -140,6 +140,32 @@ pub fn current_exec_tier() -> Option<crate::config::types::policies::ExecTier> {
 }
 
 tokio::task_local! {
+    /// Why the tool call running now may run no inline shell command
+    /// (`` !`cmd` `` in a skill's body), or `None` when it may: the one rule
+    /// ([`inline_shell_refusal`](crate::extension::inline_shell::inline_shell_refusal))
+    /// over this turn's caller role and what the tool gate answers for
+    /// `bash` on this call. Scoped by `ScopedToolService::execute` — the
+    /// chokepoint that scopes [`TURN_CONTEXT`] and [`TURN_EXEC_TIER`], and
+    /// the one place that holds both facts. The command face derives the
+    /// same rule from the same two facts at render time
+    /// (`slash_command_body::inline_shell_refusal`).
+    ///
+    /// Sole consumer: `skill_read` (`skill::preprocess`).
+    pub static TURN_INLINE_SHELL: Option<&'static str>;
+}
+
+/// Why the tool call running now may run no inline shell command, or `None`
+/// ([`TURN_INLINE_SHELL`]). A call no tool gate judged — outside the dispatch
+/// chokepoint: the `tools.invoke` RPC, a direct call, a test — may run none:
+/// "not judged" is not "allowed".
+#[must_use]
+pub fn current_inline_shell_refusal() -> Option<&'static str> {
+    TURN_INLINE_SHELL
+        .try_with(|refusal| *refusal)
+        .unwrap_or(Some("no tool gate judged this call"))
+}
+
+tokio::task_local! {
     /// Raw channel user id of the human whose message triggered the current
     /// run — the approval "originator".
     ///

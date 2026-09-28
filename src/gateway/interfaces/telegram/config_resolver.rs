@@ -180,6 +180,7 @@ mod tests {
                 link_preview: None,
                 proxy_url: None,
                 groups: vec![],
+                token_fingerprint: None,
             }],
         };
         let resolver = ConfigResolver::from_v2(&v2);
@@ -242,6 +243,7 @@ mod tests {
                         allowed_users: None,
                     }],
                 }],
+                token_fingerprint: None,
             }],
         };
         let resolver = ConfigResolver::from_v2(&v2);

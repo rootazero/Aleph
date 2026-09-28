@@ -53,7 +53,8 @@ pub const DISPLAY_NAMES: &[(&str, &str)] = &[
     ("ctx_search", "Context"),
 ];
 
-/// Fallback argument keys, first present wins. Objects/arrays are skipped.
+/// Fallback argument keys, first present wins. Objects/arrays are skipped;
+/// when none is present, a multi-query call is summarised by [`query_text`].
 pub const PREFERRED_ARG_KEYS: &[&str] = &[
     "path",
     "file_path",
@@ -142,6 +143,29 @@ pub fn clip_one_line(s: &str, max: usize) -> String {
     out
 }
 
+/// What a search-shaped call is searching for: its `query`, else its `queries`
+/// array joined with ` · ` (`ctx_search` and `search` both take several
+/// queries in one call). `None` when neither carries text.
+///
+/// One derivation for every client face that summarises such a call — the
+/// transcript line here and the CLI's exec echo read it from this function.
+#[must_use]
+pub fn query_text(args: &Value) -> Option<String> {
+    if let Some(q) = str_arg(args, "query") {
+        return Some(q.to_string());
+    }
+    let joined = args
+        .get("queries")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    (!joined.is_empty()).then_some(joined)
+}
+
 fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
@@ -221,7 +245,8 @@ pub fn summarize(tool: &str, args: &Value) -> CallSummary {
         _ => PREFERRED_ARG_KEYS
             .iter()
             .find_map(|k| str_arg(args, k))
-            .map(str::to_string),
+            .map(str::to_string)
+            .or_else(|| query_text(args)),
     };
     CallSummary {
         display_name: display,
@@ -233,6 +258,19 @@ pub fn summarize(tool: &str, args: &Value) -> CallSummary {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_multi_query_call_is_summarised_by_its_queries() {
+        let s = summarize(
+            "ctx_search",
+            &json!({ "queries": ["failing test", "  ", "timeout"] }),
+        );
+        assert_eq!(s.args_text, "failing test · timeout");
+        // The legacy single `query` still wins when present.
+        let s = summarize("ctx_search", &json!({ "query": "panic", "queries": ["x"] }));
+        assert_eq!(s.args_text, "panic");
+        assert_eq!(query_text(&json!({ "queries": [] })), None);
+    }
 
     #[test]
     fn known_tools_get_claude_code_names() {

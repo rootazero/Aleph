@@ -603,23 +603,44 @@ mod tests {
     /// the existing trail exact; it does not find a missing one.
     const AUTHORITY_VERBS: &[(&str, &str)] = &[
         ("src/builtin_tools/agent_manage/update.rs", "agent_update"),
-        ("src/builtin_tools/project_manage.rs", "project_manage.member_add"),
-        ("src/builtin_tools/project_manage.rs", "project_manage.member_remove"),
+        (
+            "src/builtin_tools/project_manage.rs",
+            "project_manage.member_add",
+        ),
+        (
+            "src/builtin_tools/project_manage.rs",
+            "project_manage.member_remove",
+        ),
         ("src/gateway/handlers/agents.rs", "agents.update"),
         ("src/gateway/handlers/cluster.rs", "cluster.deregister"),
         ("src/gateway/handlers/cluster.rs", "cluster.enroll"),
         ("src/gateway/handlers/config.rs", "config.patch"),
         ("src/gateway/handlers/daemon_control.rs", "daemon.shutdown"),
         ("src/gateway/handlers/gateway_devices.rs", "devices.revoke"),
-        ("src/gateway/handlers/gateway_ticket.rs", "gateway.ticket.create"),
-        ("src/gateway/handlers/gateway_ticket.rs", "gateway.ticket.revoke"),
-        ("src/gateway/handlers/gateway_token.rs", "gateway.token.rotate"),
+        (
+            "src/gateway/handlers/gateway_ticket.rs",
+            "gateway.ticket.create",
+        ),
+        (
+            "src/gateway/handlers/gateway_ticket.rs",
+            "gateway.ticket.revoke",
+        ),
+        (
+            "src/gateway/handlers/gateway_token.rs",
+            "gateway.token.rotate",
+        ),
         ("src/gateway/handlers/pairing.rs", "channel.pairing.approve"),
         ("src/gateway/handlers/pairing.rs", "channel.pairing.revoke"),
         ("src/gateway/handlers/projects.rs", "projects.member.add"),
         ("src/gateway/handlers/projects.rs", "projects.member.remove"),
-        ("src/gateway/handlers/projects_channel.rs", "projects.channel.bind"),
-        ("src/gateway/handlers/projects_channel.rs", "projects.channel.unbind"),
+        (
+            "src/gateway/handlers/projects_channel.rs",
+            "projects.channel.bind",
+        ),
+        (
+            "src/gateway/handlers/projects_channel.rs",
+            "projects.channel.unbind",
+        ),
         ("src/gateway/handlers/secrets.rs", "secrets.delete"),
         ("src/gateway/handlers/secrets.rs", "secrets.set"),
         ("src/gateway/handlers/users.rs", "users.create"),
@@ -644,7 +665,9 @@ mod tests {
         let mut rest = code;
         while let Some(at) = rest.find(CALL) {
             if !rest[..at + CALL.len()].ends_with(SPELLED) {
-                return Err(format!("a call not spelled `{SPELLED}` — this scanner cannot read it"));
+                return Err(format!(
+                    "a call not spelled `{SPELLED}` — this scanner cannot read it"
+                ));
             }
             let after = &rest[at + CALL.len()..];
             let quote = after.find('"').ok_or("no string literal after the call")?;
@@ -662,7 +685,9 @@ mod tests {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_');
             if !well_formed {
-                return Err(format!("detail prefix {verb:?} is not a dotted lowercase verb"));
+                return Err(format!(
+                    "detail prefix {verb:?} is not a dotted lowercase verb"
+                ));
             }
             verbs.push(verb.to_string());
             rest = &body[end + 1..];
@@ -717,13 +742,19 @@ mod tests {
             verbs_recorded_in(shipped).unwrap(),
             vec!["users.update".to_string(), "daemon.shutdown".to_string()]
         );
-        assert!(verbs_recorded_in("Entry::authority_change(None, \"a.b: c\")").is_err(), "alias");
         assert!(
-            verbs_recorded_in("AuditEntry::authority_change(None, detail);\nlet s = \"x.y: z\";").is_err(),
+            verbs_recorded_in("Entry::authority_change(None, \"a.b: c\")").is_err(),
+            "alias"
+        );
+        assert!(
+            verbs_recorded_in("AuditEntry::authority_change(None, detail);\nlet s = \"x.y: z\";")
+                .is_err(),
             "a non-literal detail must not borrow the next literal in the file"
         );
         assert!(verbs_recorded_in("AuditEntry::authority_change(None, \"no verb here\")").is_err());
-        assert!(verbs_recorded_in("AuditEntry::authority_change(None, \"Users.Update: x\")").is_err());
+        assert!(
+            verbs_recorded_in("AuditEntry::authority_change(None, \"Users.Update: x\")").is_err()
+        );
     }
 
     /// Every file expected to emit an SSRF-block audit entry. Much smaller

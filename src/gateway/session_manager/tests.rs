@@ -1342,7 +1342,10 @@ async fn a_damaged_message_is_dropped_from_a_preview_not_fatal_to_it() {
     let key = SessionKey::main("preview");
     manager.get_or_create(&key).await.unwrap();
     manager.add_message(&key, "user", "kept").await.unwrap();
-    manager.add_message(&key, "assistant", "damaged").await.unwrap();
+    manager
+        .add_message(&key, "assistant", "damaged")
+        .await
+        .unwrap();
     manager
         .conn
         .lock()
@@ -1354,6 +1357,10 @@ async fn a_damaged_message_is_dropped_from_a_preview_not_fatal_to_it() {
         .unwrap();
 
     let preview = manager.get_session_preview(&key, 10).await.unwrap();
-    let contents: Vec<&str> = preview.messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<&str> = preview
+        .messages
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect();
     assert_eq!(contents, vec!["kept"]);
 }

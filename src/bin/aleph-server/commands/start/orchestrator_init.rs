@@ -305,6 +305,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
+    // The providers this chain can migrate a request into, as the chain itself
+    // answers it — the compaction budget is sized for the narrowest of them,
+    // so it reads the live walk rather than re-deriving the chain from config.
+    let chain_fallbacks = alephcore::orchestrator::chain_fallback_names(&provider_chain);
     // Surface the chain's live runtime state (circuit breakers, cooldowns,
     // load, chain composition) as the process-global observability bundle the
     // `self_config` `route_status` action renders — the provider-health status
@@ -380,19 +384,20 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // reached without one — so it is published on a process-wide handle here,
     // the same shape as `set_global_session_service` / `set_global_route_*`.
     // Publishing it in ONE place is what keeps every `/compact` surface
-    // identical (R6); `None` degrades manual compaction to the deterministic
-    // summary, never to a no-op.
+    // identical (R6). Both providers ride the wiring: the cheap tier is tried
+    // first and a model-class failure falls back to the main one, the same
+    // shape the per-run compactor has.
     let cheap_summary_provider = build_cheap_summary_provider(config, primary_provider_key);
     // Build the context-budget config ONCE here (it used to be built inline in
     // the harness literal below): the manual `/compact` wiring needs the
     // derived summarizer-input budget, and building twice would double the
     // chain-minimum derivation + its startup log lines.
-    let context_budget_config = build_context_budget_config(config, primary_provider_key);
+    let context_budget_config =
+        build_context_budget_config(config, primary_provider_key, &chain_fallbacks);
     alephcore::context::compact::manual::install_manual_compaction(
         alephcore::context::compact::manual::ManualCompactWiring {
-            summarizer: cheap_summary_provider
-                .clone()
-                .or_else(|| Some(default_provider.current())),
+            summarizer: Some(default_provider.current()),
+            cheap_summarizer: cheap_summary_provider.clone(),
             keep_tokens: config
                 .context_budget
                 .as_ref()
@@ -414,8 +419,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         default_provider,
         named_providers,
         verifier_chain,
-        // H2: opt-in mid-run context compaction. `None` (section absent /
-        // disabled) keeps the previous behavior — no compaction. Built once
+        // H2: mid-run context compaction, on by default. `None` only under an
+        // explicit `[context_budget] enabled = false` — no compaction. Built once
         // above (the manual `/compact` wiring reads the derived
         // summarizer-input budget from the same value).
         context_budget_config,

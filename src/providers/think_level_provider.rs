@@ -107,6 +107,17 @@ impl AiProvider for ThinkLevelProvider {
         self.inner.serving_provider_hint()
     }
 
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.inner.reasoning_replay(model)
+    }
+
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.inner.clears_tool_results_server_side()
+    }
+
     fn as_http_provider(&self) -> Option<&crate::providers::http_provider::HttpProvider> {
         self.inner.as_http_provider()
     }

@@ -11,8 +11,8 @@
 //! also used by `artifact_route.rs` / `canvas_asset_route.rs`,
 //! `parse_trusted_ips` by `server/mod.rs`).
 
-use crate::sync_primitives::Arc;
 use crate::gateway::lane::ChannelClass;
+use crate::sync_primitives::Arc;
 use axum::{
     extract::{
         ws::{WebSocket, WebSocketUpgrade},
@@ -24,7 +24,7 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use tracing::{error, warn};
 
-use super::{ConnectionContext, handle_connection};
+use super::{handle_connection, ConnectionContext};
 use crate::gateway::server::GatewaySharedState;
 
 /// Parse configured trusted-proxy IP strings into `IpAddr`, dropping

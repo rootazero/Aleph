@@ -4,6 +4,7 @@
 
 mod cache;
 mod extract;
+mod intent;
 mod pdf;
 mod types;
 
@@ -54,6 +55,12 @@ impl WebFetchTool {
 
     /// Default maximum content length (used when no policy provided)
     const DEFAULT_MAX_CONTENT_LENGTH: usize = 10000;
+
+    /// How much of a page is extracted when the call carries a `prompt`: the
+    /// whole page is indexed for fetch-by-intent (see `intent`), so it is not
+    /// cut at the result's content cap first. Bounds the extraction of a
+    /// pathological page; the response itself is already capped at 10 MB.
+    const INTENT_EXTRACT_MAX_CHARS: usize = 2_000_000;
 
     /// Default minimum content length (used when no policy provided)
     const DEFAULT_MIN_CONTENT_LENGTH: usize = 100;
@@ -136,7 +143,14 @@ impl WebFetchTool {
         // different prompts share the same cached page body, which is
         // the right cost/freshness tradeoff for LLM-driven re-fetches.
         let key = cache_key(&args.url, &args.extract_mode);
-        if let Some(cached) = cache_lookup(&key) {
+        // A call with a `prompt` needs the whole page (fetch by intent), and the
+        // cache holds the capped one — so it fetches.
+        let cached = if focus_of(args.prompt.as_deref()).is_some() {
+            None
+        } else {
+            cache_lookup(&key)
+        };
+        if let Some(cached) = cached {
             debug!("web_fetch cache hit: {}", args.url);
             let result = apply_focus_prompt(cached, args.prompt.as_deref());
             let summary = format!("已获取网页内容 ({} 字符, cached)", result.content.len());
@@ -259,8 +273,13 @@ impl WebFetchTool {
         debug!("Extracted title: {:?}", title);
 
         // Enhanced extraction: Readability + Markdown with selector fallback
+        let cap = if focus_of(args.prompt.as_deref()).is_some() {
+            Self::INTENT_EXTRACT_MAX_CHARS
+        } else {
+            self.content_cap(Self::result_budget_tokens())
+        };
         let (content, extractor) =
-            self.extract_content_enhanced(&html_content, &args.url, &args.extract_mode);
+            self.extract_content_enhanced(&html_content, &args.url, &args.extract_mode, cap);
         debug!(
             "Extracted {} chars via {:?} extractor",
             content.len(),
@@ -315,25 +334,91 @@ impl WebFetchTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        // Every result is sized to the budget Layer 2 holds it to, so it comes
+        // back inline instead of being offloaded again behind a marker.
+        let budget = Self::result_budget_tokens();
+        let cap = self.content_cap(budget);
+
+        // Fetch by intent: a page too large to return whole comes back as the
+        // sections matching the prompt, plus the handle to the rest. Not cached
+        // — the cache holds whole-page results, and this one is per prompt.
+        if let Some(focus) = focus_of(prompt.as_deref()) {
+            if content.chars().count() > cap {
+                if let Some((store, call_id)) = Self::intent_store() {
+                    // Indexed once; only the selection is refit below, so the
+                    // page's blob is written exactly once.
+                    if let Some(indexed) = intent::index_page(&store, &call_id, &url, content) {
+                        let result =
+                            fit_to_budget(budget, cap, Some(focus), |cap| WebFetchResult {
+                                url: url.clone(),
+                                title: title.clone(),
+                                content: intent::sections_for_prompt(
+                                    &store, &call_id, &url, focus, content, &indexed, cap,
+                                ),
+                                extractor: extractor.clone(),
+                            });
+                        return apply_focus_prompt(result, Some(focus));
+                    }
+                }
+            }
+        }
+
         // Wrap with external content boundary markers. The content arrives
         // raw-capped from extraction; `truncate_fetched` re-caps the
         // SANITIZED image so placeholder growth (a 3-char `<s>` becomes a
         // 23-char `[REMOVED_SPECIAL_TOKEN]`) cannot push the fenced payload
-        // past `max_content_length`.
-        let content = self.truncate_fetched(content);
-        let wrapped_content =
-            wrap_external_content(&content, ContentSource::WebFetch { url: url.clone() });
-
+        // past the cap.
+        //
         // Cache the BARE wrapped result (no focus prompt) so subsequent
         // fetches with different prompts can share the cached body.
-        let bare_result = WebFetchResult {
-            url,
-            title,
-            content: wrapped_content,
-            extractor,
-        };
+        let bare_result = fit_to_budget(budget, cap, prompt.as_deref(), |cap| WebFetchResult {
+            url: url.clone(),
+            title: title.clone(),
+            content: wrap_external_content(
+                &Self::truncate_fetched(content, cap),
+                ContentSource::WebFetch { url: url.clone() },
+            ),
+            extractor: extractor.clone(),
+        });
         cache_store(key, bare_result.clone());
         apply_focus_prompt(bare_result, prompt.as_deref())
+    }
+
+    /// The per-result token budget Layer 2 holds this tool's result to: the
+    /// resolution the dispatcher runs (declaration, default, window ceiling).
+    fn result_budget_tokens() -> usize {
+        crate::tools::result_processing::resolve_result_budget(
+            Self::NAME,
+            <Self as AlephTool>::MAX_RESULT_TOKENS,
+        )
+        .unwrap_or(crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS)
+    }
+
+    /// Characters of page text a result may carry: what `budget` allows, or
+    /// less when the operator's `max_content_length` says less. The policy
+    /// can only lower it — a larger one would be offloaded by Layer 2 anyway.
+    fn content_cap(&self, budget: usize) -> usize {
+        crate::context::budget::pressure::chars_for_result_token_budget(budget)
+            .min(self.max_content_length)
+    }
+
+    /// This session's result store — the store `ctx_search` reads, scoped the
+    /// way the dispatcher scopes it — and this call's id. `None` without a
+    /// store.
+    fn intent_store() -> Option<(
+        std::sync::Arc<crate::tools::result_store::ToolResultStore>,
+        String,
+    )> {
+        use crate::tools::result_store::{global_tool_result_store, ToolResultStore};
+        let store = global_tool_result_store().map(|store| {
+            match crate::tools::turn_context::current_session_key() {
+                Some(session) => ToolResultStore::for_session(&store, session),
+                None => store,
+            }
+        })?;
+        let call_id = crate::approval::current_tool_call_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        Some((store, call_id))
     }
 
     /// Extract the page title from <title> tag
@@ -346,8 +431,7 @@ impl WebFetchTool {
         extract::validate_html_safety(html, Self::MAX_RESPONSE_BYTES)
     }
 
-    /// Truncate content to maximum length
-    /// Cap fetched content at `max_content_length` chars of SANITIZED text.
+    /// Cap fetched content at `cap` chars of SANITIZED text.
     ///
     /// The cap applies to what the model actually reads: sanitization inside
     /// [`wrap_external_content`] can grow the string (tokenizer markers
@@ -357,11 +441,9 @@ impl WebFetchTool {
     /// see. `truncate_sanitized_external_content` solves both; the "..."
     /// suffix convention from the old raw truncation is preserved so
     /// downstream consumers still see the truncation signal.
-    fn truncate_fetched(&self, content: &str) -> String {
-        let t = crate::security::content_sanitizer::truncate_sanitized_external_content(
-            content,
-            self.max_content_length,
-        );
+    fn truncate_fetched(content: &str, cap: usize) -> String {
+        let t =
+            crate::security::content_sanitizer::truncate_sanitized_external_content(content, cap);
         if t.truncated {
             format!("{}...", t.text)
         } else {
@@ -377,6 +459,7 @@ impl WebFetchTool {
         raw_html: &str,
         url: &str,
         mode: &ExtractMode,
+        max_chars: usize,
     ) -> (String, Extractor) {
         extract::extract_content_enhanced(
             raw_html,
@@ -384,7 +467,7 @@ impl WebFetchTool {
             mode,
             self.enable_readability,
             self.min_content_length,
-            self.max_content_length,
+            max_chars,
         )
     }
 }
@@ -419,7 +502,7 @@ impl Clone for WebFetchTool {
 /// spaces — the marker is meant to be a one-liner steering hint, not a
 /// multi-paragraph spec.
 fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFetchResult {
-    let Some(p) = prompt.map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(p) = focus_of(prompt) else {
         return result;
     };
     let mut marker = String::with_capacity(p.len() + 32);
@@ -437,6 +520,47 @@ fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFe
     result
 }
 
+/// The prompt, when it says anything.
+fn focus_of(prompt: Option<&str>) -> Option<&str> {
+    prompt.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Attempts at fitting a result into its budget. What overshoots is the
+/// envelope (URL, title, fence, focus marker, JSON escaping), which does not
+/// shrink with the cap, so the proportional step lands in one or two.
+const FIT_ATTEMPTS: usize = 4;
+
+/// Tokens Layer 2 charges for `result`: it measures the flattened JSON of the
+/// tool's output, so that is what is measured here.
+fn charged_tokens(result: &WebFetchResult) -> usize {
+    // Plain strings and a unit enum: serialization cannot fail.
+    let flat = serde_json::to_string(result).unwrap_or_default();
+    crate::context::budget::pressure::estimate_tokens_smart(&flat)
+}
+
+/// `build(cap)` for the largest cap (at most `cap`) whose result, with the
+/// focus marker `apply_focus_prompt` will add, Layer 2 keeps inline under
+/// `budget`. The returned result carries no marker; the caller adds it.
+fn fit_to_budget(
+    budget: usize,
+    cap: usize,
+    focus: Option<&str>,
+    build: impl Fn(usize) -> WebFetchResult,
+) -> WebFetchResult {
+    let mut cap = cap;
+    let mut result = build(cap);
+    for _ in 0..FIT_ATTEMPTS {
+        let charged = charged_tokens(&apply_focus_prompt(result.clone(), focus));
+        if charged <= budget || cap == 0 {
+            break;
+        }
+        let scaled = cap.saturating_mul(budget) / charged;
+        cap = scaled - scaled / 20;
+        result = build(cap);
+    }
+    result
+}
+
 /// Implementation of `AlephTool` trait for `WebFetchTool`
 #[async_trait]
 impl AlephTool for WebFetchTool {
@@ -445,13 +569,6 @@ impl AlephTool for WebFetchTool {
 
     type Args = WebFetchArgs;
     type Output = WebFetchResult;
-
-    /// A fetched page is reliably larger than the global default; cap at 10k
-    /// tokens (was the legacy `resolve_result_budget` name-table value for
-    /// `web_fetch`).
-    fn max_result_tokens(&self) -> Option<usize> {
-        Some(10_000)
-    }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.call_impl(args).await.map_err(Into::into)
@@ -470,6 +587,231 @@ mod tests {
             content: content.to_string(),
             extractor: Extractor::Selector,
         }
+    }
+
+    /// B4 wiring: a `prompt` on a page larger than the content cap takes
+    /// the fetch-by-intent path through the process store; without a prompt
+    /// the same page is truncated as before.
+    ///
+    /// Mutation-checked: never taking the intent branch in `finalize_success`
+    /// turns this red.
+    #[test]
+    fn a_prompted_fetch_of_a_large_page_returns_the_matching_sections() {
+        crate::tools::result_store::install_test_tool_result_store();
+        let tool = WebFetchTool::new();
+        let mut page = "Filler paragraph about nothing in particular.\n".repeat(600);
+        page.push_str("The flux capacitor requires 1.21 gigawatts to operate.\n");
+        page.push_str(&"More filler after the point.\n".repeat(200));
+        let url = "https://example.com/intent-wiring";
+        let fetch = |prompt: Option<&str>| {
+            tool.finalize_success(
+                WebFetchArgs {
+                    url: url.to_string(),
+                    extract_mode: ExtractMode::Markdown,
+                    prompt: prompt.map(str::to_string),
+                },
+                cache_key(url, &ExtractMode::Markdown),
+                None,
+                &page,
+                Extractor::Readability,
+            )
+        };
+        let focused = fetch(Some("flux capacitor gigawatts"));
+        assert!(
+            focused.content.contains("1.21 gigawatts"),
+            "{}",
+            focused.content
+        );
+        assert!(
+            focused.content.contains("matching the focus"),
+            "{}",
+            focused.content
+        );
+        assert!(focused.content.contains("[Full output persisted: "));
+
+        let plain = fetch(None);
+        assert!(!plain.content.contains("matching the focus"));
+        assert!(
+            !plain.content.contains("1.21 gigawatts"),
+            "the plain fetch is cut at the cap"
+        );
+    }
+
+    fn args(url: &str, prompt: Option<&str>) -> WebFetchArgs {
+        WebFetchArgs {
+            url: url.to_string(),
+            extract_mode: ExtractMode::Markdown,
+            prompt: prompt.map(str::to_string),
+        }
+    }
+
+    /// `result` through Layer 2 as the dispatcher runs it: the ingress clean,
+    /// then the per-result budget, under the budget the dispatcher resolves
+    /// for this tool.
+    fn through_layer_two(
+        result: &WebFetchResult,
+        call_id: &str,
+        store: &crate::tools::result_store::ToolResultStore,
+    ) -> crate::tools::result_processing::ProcessedResult {
+        let mut value = serde_json::to_value(result).expect("serializable");
+        let budget = crate::tools::result_processing::resolve_result_budget(
+            WebFetchTool::NAME,
+            <WebFetchTool as AlephTool>::MAX_RESULT_TOKENS,
+        );
+        let outcome = crate::tool_output::ingress::clean_for_ingress_of(
+            WebFetchTool::NAME,
+            &mut value,
+            budget,
+            Some(call_id),
+        );
+        crate::tools::result_processing::apply_result_budget(
+            call_id,
+            WebFetchTool::NAME,
+            &outcome.model_facing,
+            Some(store),
+            budget,
+            outcome.reduced_from.as_deref(),
+            crate::tools::result_processing::RecoveryTools::ALL,
+        )
+    }
+
+    /// A plain fetch of a page larger than the cap comes back from Layer 2
+    /// inline, not offloaded behind a marker: the result is sized to the
+    /// budget Layer 2 holds it to — envelope, fence and JSON escaping
+    /// included — not to a character count that only the page text meets.
+    ///
+    /// Mutation-checked: skipping the fit (`FIT_ATTEMPTS = 0`) turns this red.
+    #[test]
+    fn a_plain_fetch_at_the_cap_stays_inline_through_layer_two() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let tool = WebFetchTool::new();
+        let page = "Filler paragraph about \"nothing\" in particular.\n".repeat(600);
+        let url = "https://example.com/plain-at-cap";
+        let result = tool.finalize_success(
+            args(url, None),
+            cache_key(url, &ExtractMode::Markdown),
+            Some("A page title".to_string()),
+            &page,
+            Extractor::Readability,
+        );
+        let cap = tool.content_cap(WebFetchTool::result_budget_tokens());
+        assert!(
+            result.content.chars().count() > cap / 2,
+            "the page fills the result, not a sliver of it: {}",
+            result.content.chars().count()
+        );
+        let processed = through_layer_two(&result, "call_plain_at_cap", &store);
+        assert!(
+            processed.persisted_path.is_none(),
+            "offloaded: {}",
+            processed.text
+        );
+        assert!(!processed.text.contains("[Full output persisted: "));
+        assert!(processed.text.contains("Filler paragraph"));
+    }
+
+    /// A prompted fetch of a large page keeps the page's blob whole through
+    /// Layer 2: the sections result, under the same call id, is never written
+    /// over it.
+    ///
+    /// The prompt matches most of the page, so the selection fills its cap:
+    /// a result that fits by luck would not reach the collision at all.
+    ///
+    /// Mutation-checked: skipping both the fit and Layer 2's own-marker check
+    /// turns this red. Each alone is covered by its own test (the fit above,
+    /// the check in `result_processing`).
+    #[tokio::test]
+    async fn a_prompted_fetch_keeps_the_whole_page_blob_through_layer_two() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let tool = WebFetchTool::new();
+        let mut page = "Filler paragraph about nothing in particular.\n".repeat(600);
+        page.push_str("The flux capacitor requires 1.21 gigawatts to operate.\n");
+        page.push_str(&"More filler after the point.\n".repeat(200));
+        page.push_str("The very last line of the page.\n");
+        let url = "https://example.com/prompted-blob";
+        let call_id = "call_prompted_blob";
+        let identity = crate::approval::CallIdentity {
+            turn_id: crate::session::events::TurnId::nil(),
+            call_id: call_id.to_string(),
+        };
+        let result = crate::approval::with_call_identity(Some(identity), async {
+            tool.finalize_success(
+                args(url, Some("filler paragraph flux capacitor")),
+                cache_key(url, &ExtractMode::Markdown),
+                None,
+                &page,
+                Extractor::Readability,
+            )
+        })
+        .await;
+        assert!(
+            result.content.contains("matching the focus"),
+            "{}",
+            result.content
+        );
+
+        assert!(
+            result.content.chars().count()
+                > tool.content_cap(WebFetchTool::result_budget_tokens()) / 2,
+            "precondition: the selection fills the result: {}",
+            result.content.chars().count()
+        );
+
+        let processed = through_layer_two(&result, call_id, &store);
+        assert!(processed.persisted_path.is_none(), "persisted again");
+        let blob = std::fs::read_to_string(store.blob_path(call_id, WebFetchTool::NAME))
+            .expect("the page's blob");
+        assert!(blob.contains("The very last line of the page."));
+        assert!(
+            !blob.contains("matching the focus"),
+            "the blob is the page, not the sections result"
+        );
+    }
+
+    /// A result that carries its own offload and is still over budget — the
+    /// fit ran out of attempts — keeps its marker through the ingress rewrite:
+    /// a field cut that dropped the marker line would hide the offload from
+    /// Layer 2, which would then persist this result over the page's blob.
+    ///
+    /// Mutation-checked: letting ingress rewrite an own-offload result (no call
+    /// id) turns this red.
+    #[test]
+    fn an_over_budget_own_offload_keeps_its_marker_through_ingress() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let call_id = "call_fit_exhausted";
+        let page = "The original page line, kept only in the blob.\n".repeat(3_000);
+        let indexed = intent::index_page(&store, call_id, "https://example.com/x", &page)
+            .expect("the page is persisted");
+        // A test log around the marker: the ingress rewrite routes it to the
+        // log reducer, which keeps failures and the verdict and drops the
+        // passing lines — and the marker line between them.
+        let filler = |tag: &str| -> String {
+            (0..1_500)
+                .map(|i| format!("test suite::{tag}_section_{i} ... ok\n"))
+                .collect()
+        };
+        let result = WebFetchResult {
+            url: "https://example.com/x".to_string(),
+            title: None,
+            content: format!(
+                "running 3000 tests\n{}{}\n{}test result: ok. 3000 passed; 0 failed\n",
+                filler("head"),
+                indexed.footer,
+                filler("tail")
+            ),
+            extractor: Extractor::Readability,
+        };
+        let processed = through_layer_two(&result, call_id, &store);
+        assert!(processed.persisted_path.is_none(), "persisted again");
+        let blob = std::fs::read_to_string(store.blob_path(call_id, WebFetchTool::NAME))
+            .expect("the page's blob");
+        assert!(blob.contains("The original page line"), "blob replaced");
+        assert!(!blob.contains("head_section_"), "blob replaced");
+        assert!(
+            processed.text.contains("[Full output persisted: "),
+            "{}",
+            processed.text
+        );
     }
 
     #[test]
@@ -536,15 +878,15 @@ mod tests {
 
     #[test]
     fn test_truncate_fetched() {
-        let tool = WebFetchTool::new();
+        let cap = WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH;
 
         // Short content should not be truncated
         let short = "Hello world".to_string();
-        assert_eq!(tool.truncate_fetched(&short), short);
+        assert_eq!(WebFetchTool::truncate_fetched(&short, cap), short);
 
         // Long content should be truncated
         let long = "a".repeat(15000);
-        let truncated = tool.truncate_fetched(&long);
+        let truncated = WebFetchTool::truncate_fetched(&long, cap);
         assert!(truncated.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
         assert!(truncated.ends_with("..."));
     }
@@ -553,9 +895,9 @@ mod tests {
     fn fetched_truncation_caps_the_sanitized_image() {
         // `<s>` is 3 raw chars but sanitizes to a 23-char placeholder. The
         // cap must absorb that growth, not be defeated by it.
-        let tool = WebFetchTool::new();
         let hostile = "<s>".repeat(4000); // 12_000 raw chars → far over cap sanitized
-        let out = tool.truncate_fetched(&hostile);
+        let out =
+            WebFetchTool::truncate_fetched(&hostile, WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH);
         assert!(
             out.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3,
             "sanitized image exceeded cap: {} chars",

@@ -1902,6 +1902,40 @@ mod tests {
         assert!(!captured.contains("<strategy>"));
     }
 
+    /// The agent file's body (`AgentDef.system_prompt`) is in the system
+    /// prompt the child's provider actually receives, after the role header.
+    /// Driven through `spawn()`, so a spawner that stops handing its def to
+    /// the prompt builder goes red here.
+    #[tokio::test]
+    async fn spawn_request_agent_body_reaches_inline_system_prompt() {
+        const MARKER: &str = "You are the P4.8 marker agent. BODY-5d1e";
+        let provider = Arc::new(SystemPromptCapture(Mutex::new(None)));
+        let base = make_base(provider.clone());
+        let agent = agent_with_allowed("explore", vec![]).with_system_prompt(MARKER);
+
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do the thing",
+            context_summary: None,
+            model: None,
+            timeout_secs: 30,
+            cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
+            isolation: None,
+            strategy: None,
+            session_mode: None,
+            request_id: None,
+        };
+        let _ = spawn(&base, req).await.expect("spawn ok");
+
+        let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
+        let header = captured.find("# Sub-Agent Role").expect("role header");
+        let body = captured.find(MARKER).expect("the body reaches the child");
+        assert!(header < body, "header first, then the author's prompt");
+        assert_eq!(captured.matches(MARKER).count(), 1);
+    }
+
     // -- B15: the spawned loop is never left uncapped -------------------------
 
     /// An `AgentDef` with no `max_iterations` (the built-in "default" role, and

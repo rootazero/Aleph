@@ -57,7 +57,14 @@ impl ToolService for AllowlistToolService {
         if !self.agent_def.is_tool_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
-        crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)).await
+        // The narrowed retrieval set rides down to the dispatch this delegates
+        // to, so its footers (Layer 2, a tool's own offload) name only what
+        // this agent may call.
+        crate::tools::result_processing::with_recovery_tools(
+            self.recovery_tools(),
+            crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)),
+        )
+        .await
     }
 
     async fn execute_with_cancel(
@@ -72,9 +79,12 @@ impl ToolService for AllowlistToolService {
         if !self.agent_def.is_tool_allowed(name) {
             return Err(self.deny(name, &input).await);
         }
-        crate::identity::as_actor(
-            &self.agent_def.id,
-            self.inner.execute_with_cancel(name, input, cancel),
+        crate::tools::result_processing::with_recovery_tools(
+            self.recovery_tools(),
+            crate::identity::as_actor(
+                &self.agent_def.id,
+                self.inner.execute_with_cancel(name, input, cancel),
+            ),
         )
         .await
     }
@@ -120,6 +130,19 @@ impl ToolService for AllowlistToolService {
         self.inner.enforced_exec_tier()
     }
 
+    /// Narrowed, not forwarded: a retrieval tool this agent may not call is no
+    /// recovery handle for it, whatever the parent can dispatch.
+    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        use crate::builtin_tools::{CtxSearchTool, FileReadTool};
+        use crate::tools::AlephTool;
+        let parent = self.inner.recovery_tools();
+        let allowed = |name: &str| self.agent_def.is_tool_allowed(name);
+        crate::tools::result_processing::RecoveryTools {
+            ctx_search: parent.ctx_search && allowed(<CtxSearchTool as AlephTool>::NAME),
+            file_read: parent.file_read && allowed(<FileReadTool as AlephTool>::NAME),
+        }
+    }
+
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         // Filter the parent's metadata schema down to what this child agent
         // is allowed to see. Returning an empty slice here (the previous
@@ -156,6 +179,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentDef, AgentMode};
     use crate::session::events::{ToolOutput, ToolOutputMetadata};
+    use crate::tools::result_processing::RecoveryTools;
     use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
     use async_trait::async_trait;
     use serde_json::json;
@@ -209,6 +233,64 @@ mod tests {
         let mut def = AgentDef::new("test", AgentMode::SubAgent);
         def.allowed_tools = tools.into_iter().map(String::from).collect();
         Arc::new(def)
+    }
+
+    /// A parent that can dispatch only some of the retrieval tools.
+    struct GatedParent(RecoveryTools);
+
+    #[async_trait]
+    impl ToolService for GatedParent {
+        async fn execute(&self, name: &str, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+            Err(ToolError::NotFound { name: name.into() })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+            None
+        }
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+            std::sync::Arc::from(Vec::new())
+        }
+        fn recovery_tools(&self) -> RecoveryTools {
+            self.0
+        }
+    }
+
+    /// A tool this agent may not call is no recovery handle for it, whatever
+    /// the parent can dispatch: the wrapper narrows, it does not forward.
+    #[test]
+    fn recovery_tools_narrow_to_the_allowlist() {
+        let svc = AllowlistToolService::new(
+            Arc::new(FakeTools),
+            agent_with_allowed(vec!["read", "file_read"]),
+        );
+        assert_eq!(
+            svc.recovery_tools(),
+            RecoveryTools {
+                ctx_search: false,
+                file_read: true,
+            }
+        );
+        let svc = AllowlistToolService::new(Arc::new(FakeTools), agent_with_allowed(vec!["*"]));
+        assert_eq!(svc.recovery_tools(), RecoveryTools::ALL);
+    }
+
+    /// The chain a subagent runs behind (allowlist → MCP scope view → parent):
+    /// the parent's own narrowing must survive both wrappers.
+    #[test]
+    fn recovery_tools_survive_the_wrappers_a_subagent_runs_behind() {
+        let parent = RecoveryTools {
+            ctx_search: false,
+            file_read: true,
+        };
+        let with_mcp: Arc<dyn ToolService> =
+            Arc::new(crate::tools::mcp_scope_view::McpScopedToolService::new(
+                Arc::new(GatedParent(parent)),
+                Vec::new(),
+            ));
+        let child = AllowlistToolService::new(with_mcp, agent_with_allowed(vec!["*"]));
+        assert_eq!(child.recovery_tools(), parent);
     }
 
     #[tokio::test]

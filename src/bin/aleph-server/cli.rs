@@ -12,7 +12,7 @@ pub const DEFAULT_LOG_FILE: &str = "~/.aleph/logs/gateway.log";
 
 /// Aleph Gateway - WebSocket control plane for AI agents
 #[derive(Parser, Debug)]
-#[command(name = "aleph")]
+#[command(name = "aleph-server")]
 #[command(version = env!("ALEPH_VERSION"), about, long_about = None)]
 pub struct Args {
     /// Subcommand (start, stop, status)
@@ -190,7 +190,7 @@ pub enum Command {
         /// Ticket lifetime in seconds (default 300, clamped to 60..=86400).
         #[arg(long, value_name = "SECONDS", conflicts_with_all = ["list", "revoke"])]
         ttl: Option<u64>,
-        /// Bind the ticket to a principal from `aleph users list` (`u-…`).
+        /// Bind the ticket to a principal from `al users list` (`u-…`).
         ///
         /// Omit it to pair your own device: an unbound ticket resolves to the
         /// owner. Pass it to invite someone else — that is what makes the
@@ -239,7 +239,7 @@ pub enum Command {
     /// Smoke-test the active sandbox profile by running a command under it.
     /// Useful for diagnosing why a tool call failed under sandbox.
     ///
-    /// Example: `aleph sandbox-debug --network none -- ls /tmp`
+    /// Example: `aleph-server sandbox-debug --network none -- ls /tmp`
     SandboxDebug {
         /// Network policy: `none`, `all`, or omit for the default.
         #[arg(long, value_name = "POLICY")]

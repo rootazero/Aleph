@@ -242,7 +242,7 @@ impl HealthCheck for CapabilityWiringCheck {
                  fiction — the daemon is the only process that knows.",
             )
             .with_fix_hint(
-                "Run `aleph doctor` (it asks the running gateway over `diagnostics.run`) \
+                "Run `al doctor` (it asks the running gateway over `diagnostics.run`) \
                  rather than `aleph-server doctor`.",
             )
             .with_tag(TAG_WIRING_UNKNOWN)];

@@ -61,7 +61,7 @@ pub fn extract_source(source: &ToolSource) -> (String, String) {
         ToolSource::Native => ("native".into(), "Native".into()),
         ToolSource::Builtin => ("builtin".into(), "Built-in".into()),
         ToolSource::Mcp { server } => (format!("mcp:{server}"), server.clone()),
-        ToolSource::Skill { id } => (format!("skill:{id}"), id.clone()),
+        ToolSource::Skill { id, .. } => (format!("skill:{id}"), id.clone()),
         ToolSource::Plugin { plugin_id } => (format!("plugin:{plugin_id}"), plugin_id.clone()),
         ToolSource::Custom { .. } => ("custom".into(), "Custom".into()),
     }
@@ -221,7 +221,8 @@ mod tests {
         );
         assert_eq!(
             extract_source(&ToolSource::Skill {
-                id: "refine-text".into()
+                id: "refine-text".into(),
+                plugin_id: None
             }),
             ("skill:refine-text".into(), "refine-text".into())
         );
@@ -274,6 +275,7 @@ mod tests {
                 "Refine text",
                 ToolSource::Skill {
                     id: "refine-text".into(),
+                    plugin_id: None,
                 },
             ),
             make_tool(

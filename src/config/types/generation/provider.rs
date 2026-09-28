@@ -101,7 +101,6 @@ pub struct GenerationProviderConfig {
     pub voices_url: Option<String>,
 }
 
-
 impl Default for GenerationProviderConfig {
     fn default() -> Self {
         Self {

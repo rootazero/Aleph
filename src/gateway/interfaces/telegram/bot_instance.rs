@@ -1,3 +1,4 @@
+use super::access::AccessController;
 use super::config_resolver::ResolvedConfig;
 use super::config_v2::TelegramAccountConfig;
 use super::offset::OffsetTracker;
@@ -41,6 +42,9 @@ pub struct BotInstance {
     pub account_id: String,
     pub bot: Bot,
     pub resolved_config: ResolvedConfig,
+    /// Per-account access controller (SW-1): bound to this account's
+    /// `account_id`, looks up `chat_id` / `thread_id` overrides per inbound.
+    pub access: Arc<AccessController>,
     pub offset_tracker: Option<Arc<OffsetTracker>>,
     pub shutdown_tx: Option<oneshot::Sender<()>>,
     /// Connection health flag — updated by the polling watchdog's `get_me()` probe.
@@ -49,12 +53,17 @@ pub struct BotInstance {
 
 impl BotInstance {
     #[must_use]
-    pub fn new(account: &TelegramAccountConfig, resolved_config: ResolvedConfig) -> Self {
+    pub fn new(
+        account: &TelegramAccountConfig,
+        resolved_config: ResolvedConfig,
+        access: Arc<AccessController>,
+    ) -> Self {
         let bot = create_bot_with_proxy(&account.bot_token, account.proxy_url.as_deref());
         Self {
             account_id: account.id.clone(),
             bot,
             resolved_config,
+            access,
             offset_tracker: None,
             shutdown_tx: None,
             is_healthy: Arc::new(AtomicBool::new(true)),

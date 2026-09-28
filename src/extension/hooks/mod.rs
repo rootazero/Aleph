@@ -14,18 +14,19 @@
 //! - Message: `MessageReceived` / `MessageSending` / `MessageSent`
 //! - Compaction: `BeforeCompaction` / `AfterCompaction`
 //! - Provider: `PreApiRequest` / `PostApiRequest`
-//! - Approval: `PermissionRequest` / `Notification`
+//! - Approval: `PermissionRequest` / `PermissionDenied` / `Notification`
 //! - Gateway: `GatewayStart` / `GatewayStop`
 //!
-//! # Command-hook output contract
+//! # Command-hook decision contract
 //!
-//! A `command`-type hook signals decisions via stdout in one of two ways:
-//!
-//! 1. **Line-prefix protocol** (Aleph-native) — see [`parse_command_output`].
-//! 2. **JSON decision object** (Claude-Code / hermes interop) — when the entire
-//!    stdout is a JSON object it is decoded by the `json_output` module and
-//!    mapped onto the same [`HookResult`] fields. Non-JSON output falls back to
-//!    (1), so the two contracts coexist without ambiguity.
+//! ONE function, [`derive_decision`], turns a command hook's `(exit code,
+//! stdout, stderr)` into a decision. Exit `2` blocks with stderr as the
+//! reason (Claude Code's most common hook idiom); exit `0` reads stdout in
+//! one of two ways — a JSON decision object (`json_output`, Claude-Code /
+//! hermes interop) or the Aleph-native line-prefix protocol
+//! ([`parse_command_output`]); any other exit code is a non-blocking error.
+//! HTTP and plugin actions have no process exit code and read their body as
+//! stdout would be read on exit `0`.
 //!
 //! # Usage
 //!
@@ -46,19 +47,33 @@
 //! executor.execute_observers(HookEvent::AfterToolCall, &ctx).await;
 //! ```
 
+mod cc_tool_aliases;
 mod consent;
+#[cfg(all(test, unix))]
+mod consent_scope;
 mod executor;
 mod json_output;
+mod matcher;
 mod output_budget;
+#[cfg(test)]
+mod producer_census;
+mod session_facts;
 mod user_settings;
 
-pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
-pub(crate) use executor::read_capped;
-pub use executor::{event_payload_json, HookExecutor};
+pub(crate) use cc_tool_aliases::{cc_spellings, normalize_cc_tool_entry, scoped_tool_head};
+pub use consent::{
+    ConsentEntry, ConsentStatus, ShellHookConsent, Superseded, INLINE_COMMAND_EVENT,
+    SKILL_INLINE_EVENT, USER_SKILL_OWNER,
+};
+pub(crate) use executor::{bounded_env_value, read_capped, MAX_HOOK_OUTPUT_BYTES};
+pub use executor::{command_hook_invocation, CommandHookInvocation, HookExecutor};
+pub(crate) use matcher::{matcher_notice, warn_on_matcher};
 pub use output_budget::{budget_hook_contexts, join_messages};
-pub(crate) use user_settings::default_kind_for_event;
+pub use session_facts::{current_transcript_source, with_transcript_source, TranscriptSource};
 pub use user_settings::load_user_hooks;
+pub(crate) use user_settings::{default_kind_for_event, parse_event};
 
+use crate::extension::types::HookKind;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -89,8 +104,6 @@ pub struct HookContext {
     pub arguments: Option<String>,
     /// Tool input content
     pub tool_input: Option<String>,
-    /// File path (if applicable)
-    pub file_path: Option<PathBuf>,
     /// Working directory for commands
     pub working_dir: Option<PathBuf>,
     /// Additional environment variables
@@ -99,6 +112,21 @@ pub struct HookContext {
     pub tool_output: Option<String>,
     /// Whether the tool execution resulted in an error
     pub tool_error: Option<bool>,
+    /// This turn's execution tier in Claude Code's `permission_mode`
+    /// spelling (`ExecTier::cc_permission_mode`). Unlike `cwd` and
+    /// `transcript_path` (derived by the executor, `session_facts`), only a
+    /// fire site that holds the tier can say it: tool dispatch
+    /// (`build_hook_context`) and the turn-start seams in
+    /// `run_loop/inner.rs` (plus `aleph-server hooks test`'s synthetic tool call,
+    /// which states the default tier). Every other face leaves it `None` and
+    /// the payload omits the key — unknown, not a default tier.
+    pub permission_mode: Option<&'static str>,
+    /// How the session began, for `SessionStart` — Claude Code's `source`
+    /// (the stdin JSON's `source`, and what a SessionStart `matcher` is
+    /// tested against: `HookEvent::match_subject`). Only the SessionStart
+    /// fire site sets it (`session_start_hook_context`), and only to
+    /// [`SESSION_SOURCE_STARTUP`](crate::extension::types::SESSION_SOURCE_STARTUP).
+    pub session_source: Option<&'static str>,
 }
 
 impl HookContext {
@@ -128,12 +156,6 @@ impl HookContext {
         self
     }
 
-    /// Set the file path
-    pub fn with_file_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.file_path = Some(path.into());
-        self
-    }
-
     /// Set the working directory
     pub fn with_working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.working_dir = Some(dir.into());
@@ -156,6 +178,20 @@ impl HookContext {
     #[must_use]
     pub const fn with_tool_error(mut self, is_error: bool) -> Self {
         self.tool_error = Some(is_error);
+        self
+    }
+
+    /// Set the Claude Code `permission_mode` string for this turn.
+    #[must_use]
+    pub const fn with_permission_mode(mut self, mode: &'static str) -> Self {
+        self.permission_mode = Some(mode);
+        self
+    }
+
+    /// Set how the session began (SessionStart's `source`).
+    #[must_use]
+    pub const fn with_session_source(mut self, source: &'static str) -> Self {
+        self.session_source = Some(source);
         self
     }
 }
@@ -187,7 +223,8 @@ pub struct HookInventoryEntry {
     pub kind: String,
     /// Priority bucket; interceptors run in ascending order.
     pub priority: String,
-    /// Tool-name regex, when set.
+    /// The matcher as written, when set — tested against the event's subject
+    /// (`HookEvent::match_subject`).
     pub matcher: Option<String>,
     /// One label per action, e.g. `command: ./lint.sh` / `http: https://…`.
     pub actions: Vec<String>,
@@ -342,6 +379,82 @@ impl HookResult {
             .cloned()
             .unwrap_or_else(|| default.to_string())
     }
+
+    /// Record a hook's rewrite of the tool input. Last writer wins across an
+    /// interceptor chain; the interceptor loop then threads the value into
+    /// both `HookContext.arguments` and `.tool_input` for the next hook.
+    /// The `update_input:` line and the JSON `hookSpecificOutput.updatedInput`
+    /// both land here (`updated_input_has_exactly_one_writer`).
+    pub(crate) fn set_updated_input(&mut self, input: serde_json::Value) {
+        self.updated_input = Some(input);
+    }
+}
+
+/// Reason attached to an exit-2 block whose hook wrote nothing to stderr.
+/// A block must never be silent (same rule as `json_output`'s
+/// `DEFAULT_BLOCK_MESSAGE`); the wording names the exit code so the model
+/// can tell "a script refused" from "a policy refused".
+pub(crate) const EXIT2_DEFAULT_REASON: &str = "Blocked by hook (exit 2, no reason on stderr).";
+
+/// Fold one command-hook outcome — process exit code, stdout, stderr — into
+/// the accumulated [`HookResult`].
+///
+/// THE ONE derivation of "what did this hook decide". Both interceptor and
+/// observer seams call it (`executor.rs`), and it is the only caller of the
+/// two stdout parsers, so the exit-code contract and the stdout contracts
+/// cannot disagree. Claude Code's rules (hooks reference, "Exit codes"):
+///
+/// * exit `0` — stdout IS the decision: a `{…}` object goes through
+///   `json_output`, anything else through the line-prefix protocol
+///   ([`parse_command_output`]).
+/// * exit `2` — **blocking**. Reason = `hookSpecificOutput.permissionDecisionReason`
+///   when stdout carries one, else stderr, else [`EXIT2_DEFAULT_REASON`].
+///   No other JSON field is applied ("cannot be overridden by JSON").
+/// * any other code — non-blocking error: no decision is read from stdout
+///   (the hook failed; what it printed is diagnostics), stderr is logged.
+///
+/// `exit_code == None` means "no process exit code" — HTTP and plugin actions
+/// (whose transport already decided success) and a signal-killed command —
+/// and keeps the pre-existing behaviour: stdout is parsed as a decision.
+///
+/// `kind` bounds what a block may do. An [`HookKind::Observer`] runs on
+/// seams that never read the result, so exit 2 there is logged at `warn!`
+/// and nothing else: a CC hook registered on an observer-only seam must be
+/// neither a silent no-op nor a block that the seam would ignore anyway.
+pub(crate) fn derive_decision(
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    kind: HookKind,
+    result: &mut HookResult,
+) {
+    match exit_code {
+        Some(2) => {
+            let reason = json_output::block_reason_hint(stdout)
+                .or_else(|| {
+                    let s = stderr.trim();
+                    (!s.is_empty()).then(|| s.to_string())
+                })
+                .unwrap_or_else(|| EXIT2_DEFAULT_REASON.to_string());
+            match kind {
+                HookKind::Interceptor => {
+                    result.blocked = true;
+                    result.block_reason = Some(reason.clone());
+                    result.permission_decision = Some(PermissionDecision::Block { reason });
+                }
+                HookKind::Observer => tracing::warn!(
+                    reason = %reason,
+                    "observer hook exited 2 (a blocking exit) on a seam that cannot block; logged only"
+                ),
+            }
+        }
+        Some(0) | None => parse_command_output(stdout, result),
+        Some(code) => tracing::warn!(
+            exit_code = code,
+            stderr = %stderr.trim(),
+            "hook exited non-zero (non-blocking error); its stdout is not read as a decision"
+        ),
+    }
 }
 
 /// Parse structured output from a command hook.
@@ -398,7 +511,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
             });
         } else if let Some(json_str) = trimmed.strip_prefix("update_input:") {
             match serde_json::from_str(json_str.trim()) {
-                Ok(val) => result.updated_input = Some(val),
+                Ok(val) => result.set_updated_input(val),
                 Err(e) => {
                     tracing::warn!("Hook update_input invalid JSON: {}", e);
                 }
@@ -415,16 +528,33 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
     }
 }
 
-/// Substitute variables in a string
+/// Every spelling of the plugin-root path variable.
 ///
-/// Supported variables:
-/// - `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` — plugin root directory
-/// - `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` — plugin data directory
-/// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
-/// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
-/// - `$FILE` / `${FILE}` - File path
-/// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
-/// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+/// One list for the three places that must agree on it: the text
+/// substitution ([`substitute_path_variables`]), the variables a command
+/// hook's environment carries ([`command_hook_invocation`]) and the
+/// `aleph-server hooks test` metacharacter gate, which does not count a reference
+/// to one as shell syntax. A spelling substituted but not exported would
+/// read as empty in a unix hook, where the shell expands it.
+pub const PLUGIN_ROOT_VARIABLES: [&str; 3] =
+    ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "ALEPH_PLUGIN_ROOT"];
+
+/// Every spelling of the plugin-data path variable; plugin-owned hooks only.
+/// The same three consumers as [`PLUGIN_ROOT_VARIABLES`].
+pub const PLUGIN_DATA_VARIABLES: [&str; 2] = ["CLAUDE_PLUGIN_DATA", "ALEPH_PLUGIN_DATA"];
+
+/// Substitute the trusted path variables — and only those — in a string.
+///
+/// - [`PLUGIN_ROOT_VARIABLES`] (`${CLAUDE_PLUGIN_ROOT}` …) — plugin root directory
+/// - [`PLUGIN_DATA_VARIABLES`] (`${CLAUDE_PLUGIN_DATA}` …) — plugin data directory
+///
+/// Their values come from where the hook is installed, never from the model
+/// or the event. Text that is not shell source gets this (through
+/// [`substitute_variables`]). A Command action's shell source gets it on
+/// Windows only, where `cmd` cannot expand `${…}`; on unix the path
+/// variables reach the command through its environment like every data
+/// variable, because a value spliced into source is parsed — a directory
+/// named `fmt$(…)` would run. See [`HookAction::Command`](crate::extension::HookAction::Command).
 ///
 /// `owner` is the hook's `plugin_name`: a plugin id for plugin-registered
 /// hooks, or a source label like `user:project` for hooks that came from
@@ -438,28 +568,91 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// `${CLAUDE_PLUGIN_ROOT}` is destroyed by `plugin update`, which swaps the
 /// install directory.
 #[must_use]
-pub fn substitute_variables(
-    template: &str,
-    context: &HookContext,
-    plugin_root: &Path,
-    owner: &str,
-) -> String {
+pub(crate) fn substitute_path_variables(template: &str, plugin_root: &Path, owner: &str) -> String {
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();
 
-    // Plugin root (all three spellings)
-    result = result.replace("${PLUGIN_ROOT}", &plugin_root_str);
-    result = result.replace("${CLAUDE_PLUGIN_ROOT}", &plugin_root_str);
-    result = result.replace("${ALEPH_PLUGIN_ROOT}", &plugin_root_str);
+    for name in PLUGIN_ROOT_VARIABLES {
+        result = result.replace(&format!("${{{name}}}"), &plugin_root_str);
+    }
 
     // Plugin data directory — plugin-owned hooks only.
     if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
         let vars = crate::extension::plugin_vars::PluginVars::new(owner, plugin_root);
         vars.ensure_data_dir_if_referenced(&result);
         let data = vars.data_dir().to_string_lossy();
-        result = result.replace("${CLAUDE_PLUGIN_DATA}", &data);
-        result = result.replace("${ALEPH_PLUGIN_DATA}", &data);
+        for name in PLUGIN_DATA_VARIABLES {
+            result = result.replace(&format!("${{{name}}}"), &data);
+        }
     }
+
+    result
+}
+
+/// The line a shell parses for a plugin's command text — a command hook's
+/// `command`, or a command or skill body's `` !`cmd` `` — on this platform.
+///
+/// The text arrives as it was written: the manifest adapter never expands a
+/// path variable inside either (`AdapterRegistry::parse_dir`), nor does the
+/// skill preprocessor (`skill::preprocess`), so this is the only place one
+/// can be resolved into source (a skill's `${ALEPH_SKILL_DIR}` is resolved
+/// beside it, in [`inline_shell_command`](crate::extension::inline_shell_command)).
+///
+/// - unix: the text verbatim. Each path variable reaches the child through
+///   its environment ([`PLUGIN_ROOT_VARIABLES`], [`PLUGIN_DATA_VARIABLES`],
+///   set by the caller), and `sh` expands `"${CLAUDE_PLUGIN_ROOT}"` as one
+///   word of data — a root named `r $(touch M) "` stays one path.
+/// - Windows: `cmd` cannot expand `${…}`, so the path variables — and
+///   nothing else — are substituted ([`substitute_path_variables`]).
+///
+/// Either way the data directory is created when the text names it, for a
+/// plugin-owned owner only. `plugin_root` is `None` only when the root is
+/// unknown (an old consent entry): the line is then the text as written.
+#[must_use]
+pub(crate) fn plugin_shell_line(command: &str, plugin_root: Option<&Path>, owner: &str) -> String {
+    let Some(root) = plugin_root else {
+        return command.to_string();
+    };
+    if cfg!(windows) {
+        return substitute_path_variables(command, root, owner);
+    }
+    if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
+        crate::extension::plugin_vars::PluginVars::new(owner, root)
+            .ensure_data_dir_if_referenced(command);
+    }
+    command.to_string()
+}
+
+/// Substitute variables in a string that is NOT shell source: a Prompt
+/// action's prompt, an Http action's URL and header values.
+///
+/// Supported variables:
+/// - the path variables of [`substitute_path_variables`] (`${PLUGIN_ROOT}`
+///   and its spellings, the `_DATA` pair), replaced first;
+/// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
+/// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
+/// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
+/// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+/// - `$KEY` / `${KEY}` for every key of [`HookContext::env`] (`$DENY_REASON`, …)
+///
+/// Everything after the first bullet is DATA — model-controlled tool input,
+/// or policy text that quotes identifiers in backticks. A Command action
+/// never gets it spliced in: it receives [`substitute_path_variables`] on
+/// Windows and no substitution at all on unix, and each data variable is
+/// exported as an environment variable of the same name, which `sh` expands
+/// as data (`"$ARGUMENTS"`) rather than parsing as source. Splicing it made
+/// a tool argument's `$(…)` run as code in an unsandboxed shell, and consent
+/// approves the template, not the resolved string. On Windows `cmd /C` expands `%VAR%` before it parses
+/// the line, so a command hook there reads data from the stdin JSON. The
+/// full contract is on [`HookAction::Command`](crate::extension::HookAction::Command).
+#[must_use]
+pub fn substitute_variables(
+    template: &str,
+    context: &HookContext,
+    plugin_root: &Path,
+    owner: &str,
+) -> String {
+    let mut result = substitute_path_variables(template, plugin_root, owner);
 
     // Tool name
     if let Some(ref name) = context.tool_name {
@@ -477,13 +670,6 @@ pub fn substitute_variables(
     if let Some(ref input) = context.tool_input {
         result = result.replace("$TOOL_INPUT", input);
         result = result.replace("${TOOL_INPUT}", input);
-    }
-
-    // File path
-    if let Some(ref file) = context.file_path {
-        let file_str = file.to_string_lossy();
-        result = result.replace("$FILE", &file_str);
-        result = result.replace("${FILE}", &file_str);
     }
 
     // Session ID
@@ -556,6 +742,7 @@ pub async fn fire_global_observer(
 mod tests {
     use super::*;
     use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
+    use crate::extension::visibility::ScopeKey;
     use crate::extension::HookPriority;
 
     #[test]
@@ -565,17 +752,18 @@ mod tests {
             tool_name: Some("Write".to_string()),
             arguments: Some(r#"{"path": "/test.txt"}"#.to_string()),
             tool_input: Some("file content".to_string()),
-            file_path: Some(PathBuf::from("/path/to/file.txt")),
             working_dir: None,
             env: HashMap::new(),
             tool_output: None,
             tool_error: None,
+            permission_mode: None,
+            session_source: None,
         };
 
         let plugin_root = PathBuf::from("/plugins/my-plugin");
 
         let result = substitute_variables(
-            "Run ${PLUGIN_ROOT}/script.sh with $ARGUMENTS on $FILE for $TOOL_NAME",
+            "Run ${PLUGIN_ROOT}/script.sh with $ARGUMENTS for $TOOL_NAME",
             &context,
             &plugin_root,
             "test-plugin",
@@ -583,7 +771,6 @@ mod tests {
 
         assert!(result.contains("/plugins/my-plugin/script.sh"));
         assert!(result.contains(r#"{"path": "/test.txt"}"#));
-        assert!(result.contains("/path/to/file.txt"));
         assert!(result.contains("Write"));
     }
 
@@ -628,14 +815,12 @@ mod tests {
         let context = HookContext::new("session-123")
             .with_tool_name("Bash")
             .with_arguments(r#"{"command": "ls"}"#)
-            .with_file_path("/some/path")
             .with_working_dir("/work")
             .with_env("MY_VAR", "my_value");
 
         assert_eq!(context.session_id, "session-123");
         assert_eq!(context.tool_name, Some("Bash".to_string()));
         assert_eq!(context.arguments, Some(r#"{"command": "ls"}"#.to_string()));
-        assert_eq!(context.file_path, Some(PathBuf::from("/some/path")));
         assert_eq!(context.working_dir, Some(PathBuf::from("/work")));
         assert_eq!(context.env.get("MY_VAR"), Some(&"my_value".to_string()));
     }
@@ -719,6 +904,8 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -750,6 +937,8 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -778,6 +967,8 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -821,6 +1012,8 @@ mod tests {
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -953,6 +1146,8 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -982,6 +1177,8 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -1069,6 +1266,8 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }
     }
 
@@ -1122,6 +1321,8 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         };
         let executor = HookExecutor::new(vec![hook]).with_consent(consent.clone());
 
@@ -1152,9 +1353,17 @@ mod tests {
             dir.path().join("allowlist.json"),
         ));
         let cmd = "echo approved_output";
-        consent.record_pending("consent-test", cmd, "before_tool_call");
+        consent.record_pending(
+            "consent-test",
+            &ScopeKey::Global,
+            cmd,
+            "before_tool_call",
+            Path::new("/tmp"),
+        );
         let fp = consent.entries()[0].fingerprint.clone();
-        consent.approve(&fp).expect("approve");
+        consent
+            .approve(&fp, Some(Path::new("/tmp")))
+            .expect("approve");
 
         let executor = HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
         let (_ctx, result) = executor
@@ -1203,6 +1412,8 @@ mod tests {
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
             timeout_secs: None,
+            declared_event: None,
+            scope_key: ScopeKey::Global,
         }
     }
 
@@ -1274,5 +1485,174 @@ mod tests {
         )
         .await;
         assert!(sentinel.exists(), "MessageSent observer must run");
+    }
+
+    /// The exit-code × stdout × kind matrix, on the ONE derivation.
+    fn derived(exit: Option<i32>, stdout: &str, stderr: &str, kind: HookKind) -> HookResult {
+        let mut r = HookResult::default();
+        derive_decision(exit, stdout, stderr, kind, &mut r);
+        r
+    }
+
+    #[test]
+    fn exit_2_on_an_interceptor_blocks_with_stderr_as_the_reason() {
+        let r = derived(
+            Some(2),
+            "",
+            "path is outside the repo\n",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("path is outside the repo"));
+        assert_eq!(
+            r.permission_decision,
+            Some(PermissionDecision::Block {
+                reason: "path is outside the repo".into()
+            })
+        );
+        assert!(!r.denied, "exit 2 is a retryable block, not a policy deny");
+    }
+
+    #[test]
+    fn exit_2_with_empty_stderr_still_blocks_with_the_default_reason() {
+        let r = derived(Some(2), "", "   \n", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some(EXIT2_DEFAULT_REASON));
+    }
+
+    #[test]
+    fn exit_2_cannot_be_overridden_by_a_json_allow_on_stdout() {
+        // CC: "exit 2 … cannot be overridden by JSON".
+        let r = derived(
+            Some(2),
+            r#"{"decision":"approve"}"#,
+            "nope",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked, "stdout JSON must not lift an exit-2 block");
+        assert_eq!(r.block_reason.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn exit_2_takes_permission_decision_reason_over_stderr() {
+        let stdout = r#"{"hookSpecificOutput":{"permissionDecisionReason":"from json"}}"#;
+        let r = derived(Some(2), stdout, "from stderr", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("from json"));
+    }
+
+    #[test]
+    fn exit_2_on_an_observer_only_logs() {
+        // An observer seam never reads the result, so "block" there would be
+        // a lie either way; the derivation must not pretend.
+        let r = derived(Some(2), "", "reason", HookKind::Observer);
+        assert!(!r.blocked);
+        assert!(r.permission_decision.is_none());
+    }
+
+    #[test]
+    fn exit_0_json_deny_is_applied() {
+        let r = derived(
+            Some(0),
+            r#"{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"p"}}"#,
+            "",
+            HookKind::Interceptor,
+        );
+        assert!(r.denied);
+        assert_eq!(r.deny_reason.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn exit_0_line_prefix_block_is_applied() {
+        let r = derived(Some(0), "block: not now\n", "", HookKind::Interceptor);
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("not now"));
+    }
+
+    #[test]
+    fn other_non_zero_is_non_blocking_and_reads_no_decision_from_stdout() {
+        // CC: any other code = non-blocking error; the hook FAILED, so what it
+        // printed is diagnostics, not a decision.
+        let r = derived(
+            Some(1),
+            "deny: should be ignored\n",
+            "boom",
+            HookKind::Interceptor,
+        );
+        assert!(!r.blocked && !r.denied);
+        assert!(r.permission_decision.is_none());
+        assert!(
+            r.messages.is_empty(),
+            "a failed hook's stdout must not become model context"
+        );
+    }
+
+    #[test]
+    fn no_exit_code_parses_stdout_like_before() {
+        // HTTP / plugin actions (and a signal-killed command) have no process
+        // exit code; they keep the pre-existing "stdout is the decision" path.
+        let r = derived(
+            None,
+            r#"{"decision":"block","reason":"r"}"#,
+            "",
+            HookKind::Interceptor,
+        );
+        assert!(r.blocked);
+        assert_eq!(r.block_reason.as_deref(), Some("r"));
+    }
+
+    /// Both spellings of "rewrite the tool input" — the JSON `updatedInput`
+    /// and the `update_input:` line — must reach `updated_input` through the
+    /// one setter. Source-level, so a third spelling written as a bare field
+    /// assignment is red on arrival.
+    #[test]
+    fn updated_input_has_exactly_one_writer() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+        let corpus = [
+            (
+                "hooks/mod.rs",
+                code_text(&production_prefix(include_str!("mod.rs"))),
+            ),
+            (
+                "hooks/json_output.rs",
+                code_text(&production_prefix(include_str!("json_output.rs"))),
+            ),
+            (
+                "hooks/executor.rs",
+                code_text(&production_prefix(include_str!("executor.rs"))),
+            ),
+        ];
+        // (file, line, enclosing fn) for every direct write of the field.
+        let mut direct = Vec::new();
+        for (name, code) in &corpus {
+            let lines: Vec<&str> = code.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("updated_input = Some(") || line.contains("updated_input = None") {
+                    let enclosing = lines[..i]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            l.trim_start()
+                                .strip_prefix("pub(crate) fn ")
+                                .or_else(|| l.trim_start().strip_prefix("pub fn "))
+                                .or_else(|| l.trim_start().strip_prefix("fn "))
+                        })
+                        .map(|rest| rest.split('(').next().unwrap_or("?").to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    direct.push((name.to_string(), i + 1, enclosing));
+                }
+            }
+        }
+        assert_eq!(
+            direct.len(),
+            1,
+            "`updated_input` is written directly at {direct:?}; the only direct write is inside \
+             `HookResult::set_updated_input` — route new writers through it"
+        );
+        assert_eq!(
+            direct[0].2, "set_updated_input",
+            "the one direct write must be the setter itself, found in fn `{}` at {}:{}",
+            direct[0].2, direct[0].0, direct[0].1
+        );
     }
 }

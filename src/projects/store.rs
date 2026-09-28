@@ -2487,14 +2487,30 @@ mod tests {
 
         assert_eq!(bind(Some("#eng")).label.as_deref(), Some("#eng"));
         let kept = bind(None);
-        assert_eq!(kept.label.as_deref(), Some("#eng"), "omitted keeps — in the receipt");
+        assert_eq!(
+            kept.label.as_deref(),
+            Some("#eng"),
+            "omitted keeps — in the receipt"
+        );
         assert_eq!(stored().as_deref(), Some("#eng"), "omitted keeps — on disk");
 
-        assert_eq!(bind(Some("#ops")).label.as_deref(), Some("#ops"), "a value replaces");
+        assert_eq!(
+            bind(Some("#ops")).label.as_deref(),
+            Some("#ops"),
+            "a value replaces"
+        );
         assert_eq!(stored().as_deref(), Some("#ops"));
 
-        assert_eq!(bind(Some("")).label, None, "an empty label clears — in the receipt");
-        assert_eq!(stored(), None, "an empty label clears — on disk, as NULL not \"\"");
+        assert_eq!(
+            bind(Some("")).label,
+            None,
+            "an empty label clears — in the receipt"
+        );
+        assert_eq!(
+            stored(),
+            None,
+            "an empty label clears — on disk, as NULL not \"\""
+        );
     }
 
     /// A FIRST bind with `""` stores NULL, not an empty string: `""` means
@@ -2508,7 +2524,14 @@ mod tests {
         store.create_schema().unwrap();
         let a = store.create("room a", Some("u-alice"), None).unwrap();
         let bound = store
-            .bind_conversation(&a.id, "slack", BindingPeerKind::Group, "C-empty", None, Some(""))
+            .bind_conversation(
+                &a.id,
+                "slack",
+                BindingPeerKind::Group,
+                "C-empty",
+                None,
+                Some(""),
+            )
             .unwrap();
         assert_eq!(bound.label, None);
         assert_eq!(store.bindings_for(&a.id).unwrap()[0].label, None);

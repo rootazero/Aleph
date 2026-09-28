@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod file_backend;
+pub mod hook_transcripts;
 pub mod migration;
 pub mod sqlite_backend;
 pub mod types;
@@ -414,6 +415,13 @@ pub trait SessionStore: Send + Sync {
         let _ = key;
         Ok(None)
     }
+    /// The file holding this session's transcript, when this store keeps one
+    /// and it exists — what a Claude Code hook is handed as `transcript_path`
+    /// ([`hook_transcripts`]). A store that keeps no transcript file answers
+    /// `None`: never a path it does not write, even one that exists on disk.
+    /// No default, so every backend states its own answer. Synchronous (at
+    /// most a `stat`), and must not create anything.
+    fn transcript_file(&self, key: &SessionKey) -> Option<std::path::PathBuf>;
     async fn get_identity_context(
         &self,
         session_key: &str,

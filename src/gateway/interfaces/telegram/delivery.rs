@@ -51,18 +51,76 @@ const fn link_preview_options(
 // ---------------------------------------------------------------------------
 
 /// Classification of Telegram API errors for retry logic.
+///
+/// `#[doc(hidden)]` — exposed alongside `classify_error` for tests; not
+/// part of Aleph's stable API. The variants are still crate-internal
+/// (only `classify_error` returns them) but the type's visibility has to
+/// match the function's.
 #[derive(Debug)]
-pub(crate) enum ErrorClass {
-    /// DNS/TCP failure — safe to retry, data never sent.
-    PreConnect,
+#[doc(hidden)]
+pub enum ErrorClass {
     /// Timeout/reset — may have been sent, retry cautiously.
     PostConnect,
+    /// Network-class error with finer granularity than just "PreConnect /
+    /// PostConnect": the retry budget, log level, and operator diagnostics
+    /// all change with DNS vs TLS vs connect-timeout. Each variant is still
+    /// `Retryable` for the cooldown book — the distinction is for telemetry,
+    /// not retry policy.
+    Network(NetworkKind),
     /// Telegram API rejection — don't retry, fallback to plain text.
     Rejected(String),
     /// 429 rate limit — wait exact seconds then retry.
     RateLimited(u64),
     /// HTML parse error — fallback to plain text if enabled.
     HtmlParseError(String),
+    /// The bot lost authority to act in the target chat. **Permanent** for
+    /// that specific chat, but a DIFFERENT chat on the same account is
+    /// unaffected — so the cooldown is keyed on `(chat_id, kind)`, not the
+    /// whole account. Splits what was previously lumped into `Rejected` so
+    /// the operator's diagnostics can distinguish "the user blocked the bot"
+    /// (resumable when they unblock) from "the chat was deleted" (gone
+    /// forever).
+    Forbidden(ForbiddenKind),
+}
+
+/// Network error sub-kind for diagnostics. Doesn't change retry policy
+/// (`ErrorClass` still maps to `ErrorKind::Retryable`), but the operator's
+/// log + doctor dashboard do show the distinction — DNS failure on the bot's
+/// host means "your resolver is broken", TLS handshake means "your proxy /
+/// cert is broken", connect timeout means "the route is congested".
+///
+/// `#[doc(hidden)]` — see `ErrorClass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum NetworkKind {
+    Dns,
+    Tls,
+    Connect,
+    Timeout,
+}
+
+/// Sub-kind for `ErrorClass::Forbidden`. Distinct because each one carries a
+/// different unblock path:
+/// - `BotBlocked`: the user explicitly blocked this bot; unblockable from the
+///   bot's side. Recovery is the user un-blocking.
+/// - `UserNotFound`: the recipient's user_id no longer resolves; only fixed by
+///   a fresh user list (the user may have re-registered under a new id).
+/// - `ChatNotFound`: the chat was deleted or the bot was kicked. Permanent.
+/// - `MessageNotFound`: the bot tried to edit / delete a message that is
+///   already gone (user deleted it mid-stream). Different shape from the
+///   above three: it is NOT a "this chat is dead" signal, it's a "this
+///   particular edit target is gone" signal, and the cooldown key must be the
+///   message id, not the chat — otherwise editing a missing message would
+///   park the whole conversation for hours.
+///
+/// `#[doc(hidden)]` — see `ErrorClass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum ForbiddenKind {
+    BotBlocked,
+    UserNotFound,
+    ChatNotFound,
+    MessageNotFound,
 }
 
 /// Classify a teloxide request error for retry decisions.
@@ -70,7 +128,12 @@ pub(crate) enum ErrorClass {
 /// Uses teloxide's typed enums (`ApiError`, `RequestError::RetryAfter`) and
 /// reqwest's `is_connect()` for precise classification instead of fragile
 /// string matching.
-pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
+///
+/// `#[doc(hidden)]` — exposed for `tests/telegram_delivery_e2e.rs` so the
+/// P0-C error taxonomy (Network/Forbidden vs Rejected) can be asserted
+/// directly without round-tripping through the network.
+#[doc(hidden)]
+pub fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
     match err {
         // Rate limit is a top-level RequestError variant (not inside ApiError)
         teloxide::RequestError::RetryAfter(seconds) => {
@@ -79,11 +142,25 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
         teloxide::RequestError::Api(api_err) => {
             use teloxide::ApiError;
             match api_err {
-                // Permanent rejections — user blocked bot, chat/user gone
-                ApiError::BotBlocked | ApiError::ChatNotFound | ApiError::UserNotFound => {
-                    ErrorClass::Rejected(api_err.to_string())
+                // Forbidden bucket: chat/user/message-level permission or
+                // existence problems. They look similar (they're all "the
+                // server says you can't") but they have DIFFERENT recovery
+                // semantics (see ForbiddenKind doc), so they need to be
+                // distinguishable in the operator's log / doctor.
+                ApiError::BotBlocked => ErrorClass::Forbidden(ForbiddenKind::BotBlocked),
+                ApiError::ChatNotFound => ErrorClass::Forbidden(ForbiddenKind::ChatNotFound),
+                ApiError::UserNotFound => ErrorClass::Forbidden(ForbiddenKind::UserNotFound),
+                // Edit / delete targets that vanished mid-stream: NOT a chat-
+                // level permanent. Previously lumped into `Rejected` here, which
+                // parked the conversation for 4 hours over a missing edit
+                // target — exactly the bug class the new bucket prevents.
+                ApiError::MessageNotModified
+                | ApiError::MessageCantBeEdited
+                | ApiError::MessageToEditNotFound
+                | ApiError::MessageToDeleteNotFound => {
+                    ErrorClass::Forbidden(ForbiddenKind::MessageNotFound)
                 }
-                // Invalid token is also permanent
+                // Invalid token is permanent
                 ApiError::InvalidToken => ErrorClass::Rejected(api_err.to_string()),
                 // Catch other permanent errors by message content
                 _ => {
@@ -106,10 +183,36 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
             }
         }
         teloxide::RequestError::Network(reqwest_err) => {
+            // Split the old PreConnect / PostConnect bucket by ROOT CAUSE so
+            // the operator's diagnostic path points at the right subsystem.
+            // DNS failure means "the host's resolver is broken", TLS means
+            // "the cert chain or the proxy TLS config is broken", connect
+            // timeout means "the route is congested / firewalled", and a
+            // request-body timeout is the "we got TCP but Telegram stopped
+            // mid-stream" case — all of these would have been reported as
+            // the same indistinguishable "PreConnect" before.
             if reqwest_err.is_connect() {
-                ErrorClass::PreConnect // DNS/TCP failure — data never sent
+                if reqwest_err.is_timeout() {
+                    ErrorClass::Network(NetworkKind::Timeout)
+                } else if reqwest_err.to_string().to_lowercase().contains("dns")
+                    || reqwest_err.to_string().to_lowercase().contains("resolve")
+                {
+                    ErrorClass::Network(NetworkKind::Dns)
+                } else if reqwest_err.to_string().to_lowercase().contains("tls")
+                    || reqwest_err.to_string().to_lowercase().contains("handshake")
+                    || reqwest_err
+                        .to_string()
+                        .to_lowercase()
+                        .contains("certificate")
+                {
+                    ErrorClass::Network(NetworkKind::Tls)
+                } else {
+                    ErrorClass::Network(NetworkKind::Connect)
+                }
+            } else if reqwest_err.is_timeout() {
+                ErrorClass::Network(NetworkKind::Timeout)
             } else {
-                ErrorClass::PostConnect // timeout, reset, etc.
+                ErrorClass::PostConnect // reset, body read failure, etc.
             }
         }
         _ => ErrorClass::PostConnect,
@@ -119,8 +222,21 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
 /// Map an `ErrorClass` to an `ErrorKind` for cooldown purposes.
 const fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
     match ec {
+        // Forbidden splits:
+        //   - `BotBlocked` / `UserNotFound` / `ChatNotFound`: PERMANENT for
+        //     the chat. Cooldown goes 4 h, same as the old `Rejected` bucket.
+        //   - `MessageNotFound`: NOT a chat-level permanent. The conversation
+        //     may still be perfectly healthy — only this specific edit /
+        //     delete target is gone. Mapped to `Retryable` so a missing
+        //     target message on one edit does NOT park the conversation.
+        ErrorClass::Forbidden(kind) => match kind {
+            ForbiddenKind::BotBlocked
+            | ForbiddenKind::UserNotFound
+            | ForbiddenKind::ChatNotFound => ErrorKind::Permanent,
+            ForbiddenKind::MessageNotFound => ErrorKind::Retryable,
+        },
         ErrorClass::Rejected(_) | ErrorClass::HtmlParseError(_) => ErrorKind::Permanent,
-        ErrorClass::PreConnect | ErrorClass::PostConnect | ErrorClass::RateLimited(_) => {
+        ErrorClass::PostConnect | ErrorClass::Network(_) | ErrorClass::RateLimited(_) => {
             ErrorKind::Retryable
         }
     }
@@ -191,7 +307,14 @@ const fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
 /// Send an outbound message with chunking, retry, and attachment support.
 ///
 /// This is the extracted body of `Channel::send()`.
-pub(crate) async fn send_message(
+///
+/// `#[doc(hidden)]` — exposed for `tests/telegram_delivery_e2e.rs`, which
+/// drives this through a wiremock-backed `Bot::set_api_url` to exercise the
+/// error-taxonomy + media-group + voice-note paths without a real Telegram
+/// round-trip. The function is *not* part of Aleph's stable API; callers
+/// outside this crate should go through `Channel::send`.
+#[doc(hidden)]
+pub async fn send_message(
     bot: &Bot,
     config: &ResolvedConfig,
     message: &OutboundMessage,
@@ -429,27 +552,6 @@ pub(crate) async fn send_message(
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                         }
-                        ErrorClass::PreConnect => {
-                            // DNS/TCP failure — data never sent, safe to retry aggressively
-                            if attempts > max_retries {
-                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
-                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
-                                    return Err(ChannelError::SendFailed(
-                                        "Error suppressed by policy".to_string(),
-                                    ));
-                                }
-                                return Err(ChannelError::SendFailed(e.to_string()));
-                            }
-                            let backoff_ms = 500 * u64::from(attempts);
-                            tracing::warn!(
-                                "Telegram pre-connect error, retrying in {}ms (attempt {}/{}): {}",
-                                backoff_ms,
-                                attempts,
-                                max_retries,
-                                e
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                        }
                         ErrorClass::PostConnect => {
                             // Data may have been sent — limit retries to avoid duplicates
                             let post_connect_max = max_retries.min(2);
@@ -471,6 +573,59 @@ pub(crate) async fn send_message(
                                 e
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                        ErrorClass::Network(kind) => {
+                            // Same retry budget as PreConnect (DNS / TLS /
+                            // connect-timeout all imply "the server hasn't
+                            // received our bytes"), but the log line names
+                            // the actual network stage so the operator's first
+                            // question ("is it DNS?") gets answered in the
+                            // log instead of in a follow-up telemetry pull.
+                            if attempts > max_retries {
+                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
+                                return Err(ChannelError::SendFailed(e.to_string()));
+                            }
+                            let backoff_ms = 500 * u64::from(attempts);
+                            tracing::warn!(
+                                kind = ?kind,
+                                "Telegram network error ({:?}), retrying in {}ms (attempt {}/{}): {}",
+                                kind,
+                                backoff_ms,
+                                attempts,
+                                max_retries,
+                                e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                        ErrorClass::Forbidden(kind) => {
+                            // Mirror `Rejected`'s shape: mark the conversation
+                            // permanent (the right answer for chat-level
+                            // forbiddens), surface the original error, bail.
+                            // `MessageNotFound` is the one variant that maps
+                            // to `Retryable` via `error_class_to_kind`, so a
+                            // missing edit target on a single chunk does not
+                            // park the whole conversation.
+                            let kind_for_log = kind;
+                            tracing::warn!(
+                                kind = ?kind_for_log,
+                                "Telegram forbidden ({:?}) — bailing without retry",
+                                kind_for_log
+                            );
+                            cooldown.record_failure(
+                                conv_id,
+                                error_class_to_kind(&ErrorClass::Forbidden(kind_for_log)),
+                            );
+                            if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                return Err(ChannelError::SendFailed(
+                                    "Error suppressed by policy".to_string(),
+                                ));
+                            }
+                            return Err(ChannelError::SendFailed(e.to_string()));
                         }
                     }
                 }
@@ -496,9 +651,11 @@ pub(crate) async fn send_message(
         }
     };
 
-    // Send attachments if any
-    for attachment in &message.attachments {
-        send_attachment(bot, chat_id, thread_id, attachment).await?;
+    // Send attachments if any (P2-A: photo albums — when ≥2 attachments are
+    // image/*, send them as a single `sendMediaGroup` so Telegram renders
+    // them as one album instead of N separate messages).
+    if !message.attachments.is_empty() {
+        send_attachments(bot, chat_id, thread_id, &message.attachments).await?;
     }
 
     // Delivery succeeded — clear any cooldown for this conversation
@@ -602,8 +759,148 @@ pub(crate) async fn send_reaction(
 // Attachments
 // ---------------------------------------------------------------------------
 
+/// Send a batch of attachments, picking `sendMediaGroup` when ≥2 of them
+/// are images. Telegram requires every media-group entry to be the same
+/// kind (photo+video mixes are rejected); the function below splits by kind
+/// so each group is internally uniform.
+///
+/// Returns `Ok(())` on success and propagates the first error otherwise. A
+/// partial send (some succeeded, some failed) is signalled by the upstream
+/// cooldown — the caller treats any error as full failure and lets the
+/// cooldown backoff schedule the retry.
+///
+/// `#[doc(hidden)]` — see `send_message` for the rationale. Exposed for
+/// `tests/telegram_delivery_e2e.rs`.
+#[doc(hidden)]
+pub async fn send_attachments(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<i32>,
+    attachments: &[crate::gateway::channel::Attachment],
+) -> ChannelResult<()> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+
+    // Pass 1: collect image attachments into groups of up to 10 (Telegram's
+    // media-group ceiling). Non-image attachments and images whose MIME
+    // could not be resolved fall through to the per-item path. The split
+    // is by MIME up front so a `sendMediaGroup` never carries a video /
+    // document — Telegram would 400 the whole batch.
+    const ALBUM_MAX: usize = 10;
+    let mut image_buf: Vec<&crate::gateway::channel::Attachment> = Vec::new();
+    let mut singles: Vec<&crate::gateway::channel::Attachment> = Vec::new();
+
+    for att in attachments {
+        if att.mime_type.starts_with("image/") {
+            image_buf.push(att);
+        } else {
+            // Flush any in-progress album so the per-item send can start
+            // clean.
+            if !image_buf.is_empty() {
+                flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+                image_buf.clear();
+            }
+            singles.push(att);
+        }
+        if image_buf.len() >= ALBUM_MAX {
+            flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+            image_buf.clear();
+        }
+    }
+    if !image_buf.is_empty() {
+        flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+    }
+
+    // Anything not in an album gets the per-item path (voice, video,
+    // sticker, document, etc.).
+    for att in singles {
+        send_attachment(bot, chat_id, thread_id, att).await?;
+    }
+    Ok(())
+}
+
+/// Send one Telegram media-group with the buffered images.
+///
+/// Two-image threshold (not 1): a single image uses `sendPhoto`, which
+/// renders with the bot's name as the byline and the photo's full metadata;
+/// a media-group of one is functionally the same but loses the byline on
+/// some clients (openclaw § 5.14 observation). We only batch when there
+/// is at least one other image waiting, which is also when Telegram's UI
+/// starts grouping them anyway.
+async fn flush_image_album(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<i32>,
+    images: &[&crate::gateway::channel::Attachment],
+) -> ChannelResult<()> {
+    use teloxide::types::{InputMedia, InputMediaPhoto};
+
+    if images.len() < 2 {
+        // Single image — never batch.
+        for att in images {
+            send_attachment(bot, chat_id, thread_id, att).await?;
+        }
+        return Ok(());
+    }
+
+    let media: Vec<InputMedia> = images
+        .iter()
+        .map(|att| {
+            let input_file = attachment_to_input_file(att)?;
+            Ok::<InputMedia, ChannelError>(InputMedia::Photo(InputMediaPhoto {
+                media: input_file,
+                caption: None,
+                parse_mode: None,
+                caption_entities: None,
+                has_spoiler: false,
+                show_caption_above_media: false,
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut req = bot.send_media_group(chat_id, media);
+    if let Some(tid) = thread_id {
+        // Telegram rejects media-group with thread_id == 1 (General topic);
+        // the per-item `send_attachment` path omits it for the same reason.
+        if tid != 1 {
+            req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+        }
+    }
+    req.await
+        .map_err(|e| ChannelError::SendFailed(format!("Failed to send media group: {e}")))?;
+    Ok(())
+}
+
+/// Convert a channel-agnostic `Attachment` to teloxide's `InputFile`.
+/// Used by `flush_image_album` (and reserved for future album kinds) — the
+/// per-MIME destination (send_photo vs send_voice) still lives in
+/// `send_attachment` and the per-item fallback in `send_attachments`.
+fn attachment_to_input_file(
+    attachment: &crate::gateway::channel::Attachment,
+) -> Result<teloxide::types::InputFile, ChannelError> {
+    use teloxide::types::InputFile;
+    if let Some(data) = &attachment.data {
+        Ok(InputFile::memory(data.clone()))
+    } else if let Some(path) = &attachment.path {
+        Ok(InputFile::file(path))
+    } else if let Some(url) = &attachment.url {
+        url.parse()
+            .map(InputFile::url)
+            .map_err(|e| ChannelError::SendFailed(format!("Invalid attachment URL: {e}")))
+    } else {
+        Err(ChannelError::SendFailed(
+            "Attachment has no data, path, or URL".to_string(),
+        ))
+    }
+}
+
 /// Send an attachment with optional forum-topic routing.
-pub(crate) async fn send_attachment(
+///
+/// `#[doc(hidden)]` — see `send_message` for the rationale. Exposed for
+/// `tests/telegram_delivery_e2e.rs`.
+#[doc(hidden)]
+pub async fn send_attachment(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<i32>,
@@ -646,9 +943,28 @@ pub(crate) async fn send_attachment(
         req.await
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else if mime.starts_with("video/") {
-        let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
+        // `Some(true)` triggers the round-bubble `sendVideoNote` dispatch;
+        // `Some(false)` and `None` both fall through to the generic
+        // `sendVideo` (the historical default). Other channels that ignore
+        // the hint leave it `None` and pay no cost.
+        if attachment.is_video_note {
+            // Video note (round bubble) — Telegram-specific surface; ignored
+            // by other channels via the `is_video_note` flag.
+            let req = with_thread!(bot.send_video_note(chat_id, input_file), thread_id);
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video note: {e}")))?;
+        } else {
+            let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
+        }
+    } else if attachment.is_voice_note {
+        // Voice-note hint on a non-audio MIME (e.g. MP4 audio track). Honour
+        // the caller's intent — some TTS pipelines emit a video/* container
+        // and want it rendered as the round bubble anyway.
+        let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else {
         let req = with_thread!(bot.send_document(chat_id, input_file), thread_id);
         req.await

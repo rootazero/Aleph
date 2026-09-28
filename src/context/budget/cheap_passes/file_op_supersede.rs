@@ -201,7 +201,6 @@ impl PreflightStage for FileOpSupersedeStage {
         for (idx, msg) in messages.iter().enumerate().take(fresh_tail_start) {
             let UnifiedMessage::ToolResult {
                 tool_call_id,
-                content,
                 is_error,
                 ..
             } = msg
@@ -216,11 +215,16 @@ impl PreflightStage for FileOpSupersedeStage {
                 // LLM may rely on to plan its next move.
                 continue;
             }
-            let original_text = joined_text(content);
-            // Already-persisted markers (Layer 2 of the tool-result budget)
-            // are compact and carry the disk path the LLM needs to recover
-            // the full output — mirror `ToolResultPruningStage`'s guard.
-            if original_text.starts_with("[Full output persisted: ") {
+            // The same reader and the same marker test as the sibling
+            // `ToolResultPruningStage`: `tool_result_info` joins the blocks as
+            // the model is sent them (a string result unwrapped, not quoted),
+            // and `extract_persisted_ref` finds the marker on any line — Layer 2
+            // puts an inlined body or an error digest ABOVE it, so a byte-0
+            // test stubbed exactly the results whose recovery handle matters.
+            let Some((_, original_text)) = msg.tool_result_info() else {
+                continue;
+            };
+            if crate::tools::result_store::extract_persisted_ref(&original_text).is_some() {
                 continue;
             }
             let replacement = stub_message(superseder_tool);
@@ -264,34 +268,6 @@ impl PreflightStage for FileOpSupersedeStage {
 
         freed_tokens
     }
-}
-
-/// Join the text-bearing blocks of a tool-result body (Text + serialized
-/// Json) exactly like `UnifiedMessage::tool_result_info`, so the
-/// persisted-marker and token-accounting guards see the same bytes as the
-/// sibling `ToolResultPruningStage`. Image blocks contribute nothing — an
-/// image-only result therefore never clears the no-win guard and is left
-/// intact for `HistoricalImageStrippingStage` to police.
-fn joined_text(blocks: &[ContentBlock]) -> String {
-    let mut result = String::new();
-    for block in blocks {
-        match block {
-            ContentBlock::Text { text, .. } => {
-                if !result.is_empty() {
-                    result.push(' ');
-                }
-                result.push_str(text);
-            }
-            ContentBlock::Json { value } => {
-                if !result.is_empty() {
-                    result.push(' ');
-                }
-                result.push_str(&value.to_string());
-            }
-            _ => {}
-        }
-    }
-    result
 }
 
 /// Extract the canonical file path from a `ToolCall.arguments` value.
@@ -356,14 +332,23 @@ mod tests {
         }
     }
 
+    /// A tool result in the shape `build_prompt` produces: a success is the
+    /// logged `Value::String` as a `Json` block, an error a `Text` block.
     fn tool_result(id: &str, name: &str, body: &str, is_error: bool) -> UnifiedMessage {
+        let block = if is_error {
+            ContentBlock::Text {
+                text: body.to_string(),
+                cache_control: None,
+            }
+        } else {
+            ContentBlock::Json {
+                value: serde_json::Value::String(body.to_string()),
+            }
+        };
         UnifiedMessage::ToolResult {
             tool_call_id: id.to_string(),
             tool_name: name.to_string(),
-            content: vec![ContentBlock::Text {
-                text: body.to_string(),
-                cache_control: None,
-            }],
+            content: vec![block],
             is_error,
         }
     }
@@ -382,16 +367,18 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!("index 1 must remain a ToolResult");
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert!(text.contains("superseded"));
         let UnifiedMessage::ToolResult { content, .. } = &messages[3] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "wrote 12 bytes");
     }
 
@@ -408,16 +395,18 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert!(text.contains("superseded"));
         let UnifiedMessage::ToolResult { content, .. } = &messages[3] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "second diff");
     }
 
@@ -436,9 +425,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "aaa");
     }
 
@@ -470,9 +460,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text.chars().count(), 800);
     }
 
@@ -509,9 +500,10 @@ mod tests {
             panic!()
         };
         assert!(*is_error);
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "ENOENT: a does not exist");
     }
 
@@ -532,10 +524,35 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text.chars().count(), 800, "read body must stay verbatim");
+    }
+
+    /// Layer 2 inlines a reduced body ABOVE the recovery marker, and in the
+    /// prompt a success is a `Json` string. The old guard tested byte 0 of a
+    /// `value.to_string()` copy — a quoted, one-line string — so it saw the
+    /// marker in neither case and stubbed the result, recovery handle and all.
+    #[tokio::test]
+    async fn a_marker_below_an_inlined_body_is_never_stubbed() {
+        let composed = format!(
+            "{}[Full output persisted: /tmp/aleph/x.txt (12000 tokens, file_read)]",
+            "a line of the reduced body kept inline\n".repeat(40)
+        );
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &composed, false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "ok", false),
+        ];
+        let freed = FileOpSupersedeStage::default()
+            .prepare(&mut messages, &pressure(0.75), 0)
+            .await;
+        assert_eq!(freed, 0, "a result carrying a marker must not be stubbed");
+        let (_, text) = messages[1].tool_result_info().expect("still a ToolResult");
+        assert_eq!(text, composed, "text must survive verbatim");
     }
 
     #[tokio::test]
@@ -558,9 +575,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, &marker, "marker text must remain verbatim");
     }
 
@@ -577,9 +595,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert!(
             text.contains("file_edit"),
             "stub must name the superseding op, not the stubbed one; got: {text}"
@@ -602,9 +621,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "tiny", "a body smaller than the stub stays verbatim");
     }
 
@@ -655,9 +675,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert!(text.contains("superseded"));
     }
 
@@ -826,9 +847,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[6] else {
             panic!("messages[6] must remain a ToolResult");
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert!(
             text.starts_with("[pruned tool_result:"),
             "r2 should be pruned (large unsuperseded body); got: {text:.60?}"
@@ -865,9 +887,10 @@ mod tests {
         let UnifiedMessage::ToolResult { content, .. } = &messages[4] else {
             panic!()
         };
-        let ContentBlock::Text { text, .. } = &content[0] else {
-            panic!()
-        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
         assert_eq!(text, "ok");
     }
 }

@@ -98,6 +98,13 @@ pub struct PluginRow {
     #[serde(default)]
     pub kind: String,
 
+    /// Where the plugin was found: the server's `PluginOrigin::label`
+    /// (`global`, `workspace`, `claude_cache`, …). A `claude_cache` row is
+    /// Claude Code's install — read-only here, off until enabled, removed in
+    /// Claude Code. Empty from a server that predates the field.
+    #[serde(default)]
+    pub origin: String,
+
     /// Why this plugin is or is not active — see [`PluginRuntimeStatus`].
     #[serde(default)]
     pub status: PluginRuntimeStatus,
@@ -140,6 +147,18 @@ pub struct PluginRow {
 /// and a plugin that failed to parse, lost a shadow contest, or was refused by
 /// the owner-trust policy was simply dropped from the registry. "Installed but
 /// broken" and "never installed" were byte-for-byte the same answer.
+///
+/// `Overridden` was removed 2026-09 (still zero producers: registry rows are
+/// keyed by plugin id, so a shadow contest's loser never gets one — the
+/// winner's registry instead gains a `shadowed` diagnostic, recorded by
+/// `discover_and_mount` in `src/extension/lifecycle.rs`, which is not a status
+/// the loser could ever carry).
+///
+/// `Error` also carries `#[serde(other)]`: a label this build's enum does not
+/// know (an older client reading a newer server's vocabulary, or vice versa)
+/// deserialises as `Error` rather than failing the whole decode. Without it,
+/// one unrecognised status word takes down the entire `plugins.list` response
+/// for every plugin, not just the one with the unfamiliar label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginRuntimeStatus {
@@ -149,14 +168,27 @@ pub enum PluginRuntimeStatus {
     /// The operator turned it off (`<data_dir>/plugins.toml`). Registered and
     /// listable so it can be turned back on, but invisible to the model.
     Disabled,
-    /// A same-id plugin from a higher-priority scope won. `status_detail`
-    /// carries the winning path.
-    Overridden,
-    /// The manifest could not be parsed. `status_detail` carries the error.
-    Error,
     /// The owner-trust policy refused this origin. Distinct from `Disabled`:
     /// the remedy is an allowlist entry, not a toggle.
     Blocked,
+    /// Mounted, but a declared dependency (MCP manager / server `initialize` /
+    /// runtime provisioning) has not reached its terminal state.
+    /// `status_detail` carries `waiting on …`. Active: the plugin's other
+    /// capabilities are live.
+    Pending,
+    /// The manifest could not be parsed. `status_detail` carries the error.
+    ///
+    /// Also the fallback for a status label this build's enum does not
+    /// recognise (`#[serde(other)]`) — an unfamiliar word must never
+    /// decode-fail the whole response, and must never read as healthy.
+    ///
+    /// MUST stay the last variant: serde requires `#[serde(other)]` to sit on
+    /// the last one. This enum has no `PartialOrd`/`Ord`/`Hash` derive, no
+    /// discriminant cast, and no `ALL`/`VARIANTS`-style array anywhere in the
+    /// tree (checked) — declaration order is otherwise unobserved, and JSON
+    /// (de)serialisation goes by name (`rename_all`), not position.
+    #[serde(other)]
+    Error,
 }
 
 impl PluginRuntimeStatus {
@@ -166,16 +198,16 @@ impl PluginRuntimeStatus {
         match self {
             Self::Loaded => "loaded",
             Self::Disabled => "disabled",
-            Self::Overridden => "overridden",
             Self::Error => "error",
             Self::Blocked => "blocked",
+            Self::Pending => "pending",
         }
     }
 
     /// Whether the plugin's capabilities are live.
     #[must_use]
     pub const fn is_active(self) -> bool {
-        matches!(self, Self::Loaded)
+        matches!(self, Self::Loaded | Self::Pending)
     }
 }
 
@@ -571,11 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unrecognised_status_label_decodes_as_error() {
+        let status: PluginRuntimeStatus =
+            serde_json::from_str("\"some-future-status\"").expect("unknown labels must decode");
+        assert_eq!(status, PluginRuntimeStatus::Error);
+    }
+
+    #[test]
     fn status_labels_match_their_serde_representation() {
         for status in [
             PluginRuntimeStatus::Loaded,
             PluginRuntimeStatus::Disabled,
-            PluginRuntimeStatus::Overridden,
+            PluginRuntimeStatus::Pending,
             PluginRuntimeStatus::Error,
             PluginRuntimeStatus::Blocked,
         ] {
@@ -590,11 +629,11 @@ mod tests {
     }
 
     #[test]
-    fn only_loaded_is_active() {
+    fn loaded_and_pending_are_active() {
         assert!(PluginRuntimeStatus::Loaded.is_active());
+        assert!(PluginRuntimeStatus::Pending.is_active());
         for inactive in [
             PluginRuntimeStatus::Disabled,
-            PluginRuntimeStatus::Overridden,
             PluginRuntimeStatus::Error,
             PluginRuntimeStatus::Blocked,
         ] {

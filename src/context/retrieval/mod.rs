@@ -11,5 +11,5 @@
 
 mod content_index;
 
-pub(crate) use content_index::sanitize_fts_query;
+pub(crate) use content_index::{sanitize_fts_query, MAX_TITLE_CHARS, PREVIEW_COUNT};
 pub use content_index::{ContentIndex, IndexError, IndexOutcome, SearchHit};

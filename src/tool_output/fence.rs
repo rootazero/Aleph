@@ -13,6 +13,15 @@
 
 use crate::security::content_sanitizer::split_external_fence;
 
+/// Whether `text` is a well-formed fenced payload — the test
+/// [`rewrite_interior`] routes on, i.e. the ingress pipeline's own answer to
+/// "did the tool that produced this mark it as external, untrusted content".
+/// Anything downstream that needs that answer asks here rather than keeping a
+/// list of which tools fence.
+pub(crate) fn is_fenced(text: &str) -> bool {
+    split_external_fence(text).is_some()
+}
+
 /// Apply `rewrite` to `text`, or — when `text` is a well-formed fenced payload —
 /// to its interior only, re-emitting the markers verbatim.
 ///

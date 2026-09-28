@@ -148,7 +148,7 @@ impl HealthCheck for StaleLockCheck {
                 ),
             )
             .with_fix_hint(
-                "Find the holder in your process list and stop it cleanly (`aleph stop`); \
+                "Find the holder in your process list and stop it cleanly (`aleph-server stop`); \
                  a clean stop removes the record and a clean start writes a correct one. \
                  Do not remove the lock file while it is held.",
             )];
@@ -169,7 +169,7 @@ impl HealthCheck for StaleLockCheck {
             ),
         )
         .with_fix_hint(format!(
-            "Run `aleph doctor --fix`, or remove manually: rm \"{holder_display}\""
+            "Run `aleph-server doctor --fix`, or remove manually: rm \"{holder_display}\""
         ))
         .repairable();
 

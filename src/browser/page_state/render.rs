@@ -197,9 +197,8 @@ pub fn render_text(state: &PageState) -> String {
 /// `header` plus each node line, joined by newlines — the exact shape
 /// [`render_text`] has always produced (no trailing newline).
 fn join_lines(header: &str, lines: &[String]) -> String {
-    let mut out = String::with_capacity(
-        header.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>(),
-    );
+    let mut out =
+        String::with_capacity(header.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>());
     out.push_str(header);
     for line in lines {
         out.push('\n');
@@ -274,8 +273,7 @@ pub fn render_text_bounded(state: &PageState, max_chars: usize) -> (String, bool
     let selected = rendered_indices(state);
     let header = header(state);
     let lines = node_lines(state, &selected);
-    let total = header.chars().count()
-        + lines.iter().map(|l| 1 + l.chars().count()).sum::<usize>();
+    let total = header.chars().count() + lines.iter().map(|l| 1 + l.chars().count()).sum::<usize>();
     if total <= max_chars {
         // Untruncated: no section, and byte-identical to `render_text` — the
         // same derivation, never a second one.
@@ -1735,7 +1733,9 @@ mod tests {
     /// itself (判据 §10). `name_pad` widens the aria-labels so the byte-cap
     /// test can make the 2048-byte cap bind before the entry cap does.
     fn button_page(n: usize, name_pad: usize) -> (PageState, RefTable) {
-        use crate::browser::page_state::{Computed, RawDom, RawFrame, RawNode, RawNodeKind, RefTable};
+        use crate::browser::page_state::{
+            Computed, RawDom, RawFrame, RawNode, RawNodeKind, RefTable,
+        };
         use std::time::Duration;
 
         let mut raw = vec![RawNode {
@@ -1851,8 +1851,7 @@ mod tests {
             "the section opened but named nothing: {section}"
         );
         for entry in entries {
-            let parsed =
-                parse_render_line(entry).expect("a section entry is a complete node line");
+            let parsed = parse_render_line(entry).expect("a section entry is a complete node line");
             assert_eq!(parsed.refs.len(), 1, "one entry, one ref: {entry}");
             let id = &parsed.refs[0];
             refs.resolve(&RefId(id.clone())).unwrap_or_else(|e| {

@@ -47,9 +47,13 @@ pub struct MemoryExtensionRegistry {
     /// Extensions in registration order (for `on_capture` this is the chain order).
     extensions: RwLock<Vec<Arc<dyn MemoryExtension>>>,
     /// Typed side-table of MCP-backed extensions, retained at their concrete
-    /// type so the boot-time bind pass can call `rebind`. Each entry is the
-    /// SAME `Arc` as the corresponding `dyn MemoryExtension` in `extensions`,
-    /// so a rebind is immediately visible to dispatch.
+    /// type. Binding happens at mount (`register_memory_extension_effect`),
+    /// so in production this table is only maintained; the test-only
+    /// `mcp_bindings_snapshot` reads it — it is the one record of which
+    /// extensions are bound, and the memory-binding guards observe the
+    /// binding target through it, which is why a write-only table is the
+    /// accepted state. Each entry is the SAME `Arc` as the corresponding
+    /// `dyn MemoryExtension` in `extensions`.
     mcp_bindings: RwLock<Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>>>,
 }
 
@@ -106,8 +110,8 @@ impl MemoryExtensionRegistry {
 
     /// Register an MCP-backed extension. It lands in BOTH the dispatch list
     /// (as `dyn MemoryExtension`) and the typed side-table (as the concrete
-    /// `McpMemoryExtension`), sharing one `Arc` so a later `rebind` on the
-    /// side-table entry is visible to dispatch.
+    /// `McpMemoryExtension`), sharing one `Arc` so both lists hold the same
+    /// (already bound at mount) extension.
     ///
     /// Same dedup contract as [`register`]: rejects when an extension with
     /// the same `name()` is already registered.
@@ -128,8 +132,34 @@ impl MemoryExtensionRegistry {
         self.register(ext as Arc<dyn MemoryExtension>)
     }
 
-    /// Snapshot the MCP-backed extensions for the boot-time bind pass. The
-    /// lock is released before the caller does any async work.
+    /// Remove the extension registered under `name` from the dispatch list
+    /// and, if it was MCP-backed, from the typed side-table. Returns whether
+    /// anything was removed.
+    ///
+    /// The inverse of [`register`] / [`register_mcp`]; the plugin lifecycle
+    /// calls it from the `memory_extension` effect's disposer. Until it
+    /// existed a `[memory]` extension outlived its plugin's disable and kept
+    /// routing hooks to a transient MCP server that had already been removed.
+    pub fn unregister(&self, name: &str) -> bool {
+        let removed = {
+            let mut guard = self.extensions.write().unwrap_or_else(|e| e.into_inner());
+            let before = guard.len();
+            guard.retain(|e| e.name() != name);
+            before != guard.len()
+        };
+        {
+            let mut bindings = self.mcp_bindings.write().unwrap_or_else(|e| e.into_inner());
+            bindings.retain(|e| e.name() != name);
+        }
+        removed
+    }
+
+    /// Snapshot the MCP-backed extensions. Test-only: the in-process binding
+    /// guards read it under `cfg(test)`, and `tests/plugin_lifecycle_roundtrip.rs`
+    /// reads it through the `test-helpers` feature (an integration test
+    /// compiles the lib without `cfg(test)`). The lock is released before
+    /// the caller does any async work.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn mcp_bindings_snapshot(
         &self,
     ) -> Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>> {
@@ -881,16 +911,43 @@ mod tests {
     async fn register_mcp_appears_in_both_dispatch_and_snapshot() {
         use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
         let reg = MemoryExtensionRegistry::new();
-        let ext = Arc::new(McpMemoryExtension::new_unbound(
-            "p".to_string(),
-            Some("plugin:p/srv".to_string()),
-        ));
-        reg.register_mcp(ext).unwrap();
+        let ext = Arc::new(McpMemoryExtension::new_unbound("p".to_string()));
+        reg.register_mcp(Arc::clone(&ext)).unwrap();
         // Visible to dispatch (main list).
         assert_eq!(reg.len(), 1);
-        // Visible to the typed side-table for binding.
+        // Visible to the typed side-table, as the SAME `Arc` that dispatch
+        // holds — so whatever caller it carries is what dispatch will call.
         let snap = reg.mcp_bindings_snapshot();
         assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].server_id(), Some("plugin:p/srv"));
+        assert!(
+            Arc::ptr_eq(&snap[0], &ext),
+            "side-table entry must be the registered Arc, not a copy"
+        );
+    }
+
+    #[tokio::test]
+    async fn unregister_removes_from_dispatch_and_from_the_mcp_side_table() {
+        use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
+        let reg = MemoryExtensionRegistry::new();
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound("p".to_string())))
+            .unwrap();
+        reg.register(Arc::new(RecordDelegationExt {
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .unwrap();
+        assert_eq!(reg.len(), 2);
+
+        assert!(reg.unregister("p"), "a registered name is removed");
+        assert_eq!(reg.len(), 1, "the other extension is untouched");
+        assert!(
+            reg.mcp_bindings_snapshot().is_empty(),
+            "side-table entry goes with it"
+        );
+        assert!(!reg.unregister("p"), "second call: nothing to remove");
+
+        // The name is free again: re-registering does not hit the dedup error.
+        reg.register_mcp(Arc::new(McpMemoryExtension::new_unbound("p".to_string())))
+            .unwrap();
+        assert_eq!(reg.len(), 2);
     }
 }

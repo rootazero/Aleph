@@ -15,7 +15,7 @@ pub use context_budget::{
     build_context_budget_config, build_context_budget_refiner, ContextBudgetRefiner,
 };
 pub(crate) use provider_chain::provider_tier;
-pub use provider_chain::{build_failover_chain, ProviderChain};
+pub use provider_chain::{build_failover_chain, chain_fallback_names, ProviderChain};
 pub use stability::{build_stability_triple, StabilityTriple};
 pub use summary::{
     build_cheap_summary_provider, build_dream_provider, build_strategy_planner_provider,

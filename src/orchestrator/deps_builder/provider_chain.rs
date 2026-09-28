@@ -344,6 +344,24 @@ pub fn build_failover_chain(
     }
 }
 
+/// The providers `chain`'s global failover walk can migrate a request into,
+/// in walk order, primary excluded — asked of the chain itself
+/// ([`FailoverProvider::chain_composition`]), so whoever sizes for "every model
+/// a request can land on" reads the one selection the walk uses (the explicit
+/// or legacy chain, or the registry-derived one) instead of re-deriving it
+/// from config.
+///
+/// [`FailoverProvider::chain_composition`]: crate::providers::failover::FailoverProvider::chain_composition
+#[must_use]
+pub fn chain_fallback_names(chain: &ProviderChain) -> Vec<String> {
+    chain
+        .observability
+        .chain
+        .as_ref()
+        .map(|c| c.chain_composition().into_iter().map(|m| m.name).collect())
+        .unwrap_or_default()
+}
+
 /// Assemble the ordered fallback chain for the global failover provider.
 ///
 /// Source of truth is `[fallback_provider].chain` (with the back-compat
@@ -742,6 +760,48 @@ mod tests {
         let built = built_map(&["fb", "legacy"]);
         let (nodes, _) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
         assert_eq!(fallback_names(&nodes), vec!["fb"]);
+    }
+
+    /// The compaction budget is sized from the chain the walk uses, so a
+    /// provider the walk cannot reach does not shrink it. Here the walk takes
+    /// the legacy `[general] fallback_providers` (`mid`); `tiny` is enabled
+    /// but outside it. The config-level twin this replaced ignored the legacy
+    /// key and counted every enabled provider, pinning the budget to `tiny`'s
+    /// 16k floor.
+    #[test]
+    fn the_budget_is_sized_from_the_chain_the_walk_uses() {
+        let with_model = |model: &str| {
+            let mut pc = mock_provider_config();
+            pc.models = vec![model.to_string()];
+            pc
+        };
+        let mut primary = with_model("claude-sonnet-4-6");
+        primary.context_window = Some(1_000_000);
+        primary.max_tokens = Some(64_000);
+        let mut cfg = cfg_with_fallback(
+            None,
+            vec![
+                ("primary", primary),
+                ("mid", with_model("kimi-k2")),
+                ("tiny", with_model("step-1-8k")),
+            ],
+        );
+        cfg.general.fallback_providers = vec!["mid".to_string()];
+
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None, None);
+        let fallbacks = chain_fallback_names(&chain);
+        assert_eq!(fallbacks, vec!["mid".to_string()], "the walk's own chain");
+
+        let budget = crate::orchestrator::deps_builder::build_context_budget_config(
+            &cfg, "primary", &fallbacks,
+        )
+        .expect("context management is on by default");
+        let kimi = crate::providers::model_catalog::capabilities_for("kimi-k2").expect("catalog");
+        assert_eq!(
+            budget.token_budget,
+            u64::from(kimi.context_window) - u64::from(kimi.max_output_tokens),
+            "sized for the narrowest provider the walk can reach, not for `tiny`"
+        );
     }
 
     #[test]

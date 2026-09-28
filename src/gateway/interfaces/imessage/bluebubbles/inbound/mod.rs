@@ -24,6 +24,8 @@ pub async fn download_attachments(
                 url: None,
                 path: Some(path),
                 data: None,
+                is_voice_note: false,
+                is_video_note: false,
             });
         }
     }

@@ -641,6 +641,82 @@ async fn catalog_omits_moa_entry_without_moa_config() {
     );
 }
 
+/// The Panel edits a provider through the closed `ProviderConfigJson` DTO,
+/// which has no `server_context_editing` field. An edit to an unrelated
+/// field must carry the stored value forward — on disk AND in the live
+/// provider the registry is re-built with — not reset it to the default.
+#[tokio::test]
+async fn a_panel_edit_keeps_server_context_editing_on() {
+    use crate::providers::create_provider;
+    use crate::thinker::{MultiProviderRegistry, ProviderRegistry};
+
+    let _guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prev_aleph_home = std::env::var_os("ALEPH_HOME");
+    let (_home_scratch, tmp) = crate::utils::scratch::scratch_root();
+    tokio::fs::create_dir_all(&tmp)
+        .await
+        .expect("create test aleph home");
+    std::env::set_var("ALEPH_HOME", &tmp);
+
+    let mut initial = ProviderConfig::test_config("claude-sonnet-4-6");
+    initial.protocol = Some("anthropic".to_string());
+    initial.server_context_editing.enabled = true;
+    let mut config = Config::default();
+    config
+        .providers
+        .insert("custom".to_string(), initial.clone());
+    let config = Arc::new(RwLock::new(config));
+
+    let (_vault_scratch, vault) = test_vault();
+    vault
+        .store_secret("ai:custom", "test-key")
+        .expect("store provider key");
+    let registry = {
+        let provider = create_provider("custom", initial).expect("create initial provider");
+        Arc::new(MultiProviderRegistry::new("custom".to_string(), provider))
+    };
+
+    let request = JsonRpcRequest::with_id(
+        "providers.update",
+        Some(json!({
+            "name": "custom",
+            "config": {
+                "protocol": "anthropic",
+                "enabled": true,
+                "model": "claude-sonnet-4-6",
+                "timeout_seconds": 90,
+                "api_key": "test-key"
+            }
+        })),
+        json!(1),
+    );
+    let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+    let response =
+        handle_update_hot(request, config.clone(), event_bus, vault, registry.clone()).await;
+    assert!(response.is_success(), "update failed: {:?}", response.error);
+
+    let stored = config.read().await.providers["custom"].clone();
+    assert_eq!(stored.timeout_seconds, 90, "precondition: the edit applied");
+    assert!(
+        stored.server_context_editing.enabled,
+        "an unrelated Panel edit turned server_context_editing off"
+    );
+    assert!(
+        registry
+            .default_provider()
+            .clears_tool_results_server_side(),
+        "the hot-reloaded provider must still ask the server to clear"
+    );
+
+    match prev_aleph_home {
+        Some(v) => std::env::set_var("ALEPH_HOME", v),
+        None => std::env::remove_var("ALEPH_HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // Regression: providers.update must hot-reload the runtime provider instance
 // so protocol/base_url/model changes take effect without a daemon restart.
 #[tokio::test]

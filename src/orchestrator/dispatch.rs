@@ -1186,6 +1186,14 @@ impl Orchestrator {
         // `run_loop`, which re-seeds the originator from request metadata. A
         // sixth carrier field would have zero consumers (R10).
         let originator = crate::tools::turn_context::current_originator();
+        // Fifth capture at the same boundary: the session store the gateway
+        // published for hook payloads (`execution_engine/execute.rs`). Every
+        // tool-dispatch hook (PreToolUse / PostToolUse / …), `Stop` and the
+        // permission observers fire inside the harness task, so without this
+        // their `transcript_path` is silently absent — reads exactly like a
+        // SQLite session. Pinned by
+        // `hook_transcripts::tests::the_harness_spawn_carries_the_transcript_source`.
+        let transcripts = crate::extension::hooks::current_transcript_source();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -1245,23 +1253,26 @@ impl Orchestrator {
                             room_author,
                             crate::tools::turn_context::with_originator(
                                 originator,
-                                harness.run(
-                                    session_key,
-                                    spec_clone,
-                                    input_clone,
-                                    sandbox_clone,
-                                    event_tx,
-                                    cancel_clone,
-                                    tool_service_override,
-                                    trace_sink,
-                                    interaction_manifest,
-                                    workspace_override,
-                                    max_iterations_override,
-                                    transient_context,
-                                    think_level,
-                                    envelope,
-                                    model_directive,
-                                    run_id,
+                                crate::extension::hooks::with_transcript_source(
+                                    transcripts,
+                                    harness.run(
+                                        session_key,
+                                        spec_clone,
+                                        input_clone,
+                                        sandbox_clone,
+                                        event_tx,
+                                        cancel_clone,
+                                        tool_service_override,
+                                        trace_sink,
+                                        interaction_manifest,
+                                        workspace_override,
+                                        max_iterations_override,
+                                        transient_context,
+                                        think_level,
+                                        envelope,
+                                        model_directive,
+                                        run_id,
+                                    ),
                                 ),
                             ),
                         ),

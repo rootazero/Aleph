@@ -48,9 +48,7 @@ impl RoutingExperienceStore {
         outcome: &RoutingOutcome,
     ) -> Result<(), AlephError> {
         let dim = self.embedder.dimensions() as u32;
-        let created_at = match std::time::SystemTime::now().duration_since(
-            std::time::UNIX_EPOCH,
-        ) {
+        let created_at = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
             Ok(d) => d.as_secs() as i64,
             Err(e) => {
                 // Pre-1970 clock would silently backdate every recorded row,

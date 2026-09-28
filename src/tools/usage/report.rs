@@ -510,14 +510,34 @@ pub async fn collect_inventory(
         None => inv.unavailable.push(ExtensionKind::Mcp),
     }
 
-    let Some(manager) = crate::extension::try_extension_manager() else {
-        inv.unavailable.push(ExtensionKind::Plugin);
-        inv.unavailable.push(ExtensionKind::Skill);
-        return inv;
-    };
+    match crate::extension::try_extension_manager() {
+        Some(manager) => add_extension_inventory(manager, &mut inv).await,
+        None => {
+            inv.unavailable.push(ExtensionKind::Plugin);
+            inv.unavailable.push(ExtensionKind::Skill);
+        }
+    }
+    inv
+}
 
+/// The plugin and skill halves of the inventory, from one extension manager.
+///
+/// A load that could not read one of its plugin sources (Claude Code's
+/// `installed_plugins.json`, unreadable or of an unknown shape) leaves rows
+/// that are INCOMPLETE — a plugin missing from them may be unknown, not
+/// uninstalled. The kind is then reported `unavailable`, which is what keeps
+/// its `plugin:<id>` history from being declared an orphan (and deleted by
+/// `forget_orphans`). The signal is read from the same registry guard as
+/// the rows, so the two cannot come from different loads.
+pub(crate) async fn add_extension_inventory(
+    manager: &crate::extension::ExtensionManager,
+    inv: &mut UsageInventory,
+) {
     {
         let registry = manager.get_plugin_registry().await;
+        if !registry.unreadable_sources().is_empty() {
+            inv.unavailable.push(ExtensionKind::Plugin);
+        }
         inv.plugins = registry
             .list_plugins()
             .into_iter()
@@ -566,8 +586,18 @@ pub async fn collect_inventory(
             }
         })
         .collect();
+}
 
-    inv
+/// Drop the report's orphan rows from `store`; returns how many.
+///
+/// The ONE place `tool_usage(forget_orphans)` deletes history, so what it
+/// deletes is exactly `report.orphans` — which is empty whenever any kind was
+/// `unavailable` (`build_report`).
+pub(crate) fn forget_orphans(report: &ExtensionUsageReport, store: &ToolUsageStore) -> usize {
+    for key in &report.orphans {
+        store.forget(key);
+    }
+    report.orphans.len()
 }
 
 /// Collect the inventory and join it with the sidecar in one call — what the

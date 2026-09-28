@@ -32,6 +32,12 @@ pub async fn send(
         params["thinking"] = Value::String(t.to_string());
     }
 
+    let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+    if stream {
+        // Before dispatch: the reasoning frames start with the run.
+        run_follow::skip_unrendered_reasoning(&client, verbose, json).await;
+    }
+
     let result: Value = client.call("chat.send", Some(params)).await?;
 
     if stream {
@@ -40,7 +46,6 @@ pub async fn send(
         // floor, so `--stream` printed "Message sent." and exited. Pinned to
         // the dispatched run so concurrent runs on the broadcast bus don't
         // interleave.
-        let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
         let run_id = result
             .get("run_id")
             .and_then(|v| v.as_str())

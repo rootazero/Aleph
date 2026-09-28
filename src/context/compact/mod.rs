@@ -8,6 +8,7 @@
 //! live-compaction path — the compactor's zero-cost `SessionMemoryReuse`
 //! strategy reads it before paying a side-channel summarization call.
 
+mod cheap_poison;
 pub mod compactor;
 pub mod directive;
 /// Event-level cut-boundary guards shared by the drain sites that cut into

@@ -101,6 +101,12 @@ impl ToolService for McpScopedToolService {
         self.parent.enforced_exec_tier()
     }
 
+    /// Forwarded: extras are not dispatchable in Stage I, so the parent's
+    /// callable set is this view's.
+    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        self.parent.recovery_tools()
+    }
+
     async fn call_concurrency_claim(
         &self,
         name: &str,

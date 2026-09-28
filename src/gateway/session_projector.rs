@@ -69,8 +69,8 @@ pub mod projector_sub;
 // Re-export so callers reach the moved types through the canonical
 // `crate::gateway::session_projector::*` path. `MissedSeqs` and `RunSpan` are
 // `pub(crate)` and stay internal — no glob re-export for those.
-pub use projector_sub::missed_seqs::{FlushTimeout, RepairReport};
 use projector_sub::missed_seqs::MissedSeqs;
+pub use projector_sub::missed_seqs::{FlushTimeout, RepairReport};
 use projector_sub::run_span::{collect_run_spans, synthesize_missing_stamps};
 
 /// Capacity of the internal mpsc channel between the observer and the drain task.

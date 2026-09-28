@@ -517,6 +517,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         };
         let block = fallback_text(&att, "network timeout");
         if let ContentBlock::Text { text, .. } = block {
@@ -540,6 +542,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         };
         let block = fallback_text(&att, "download failed");
         if let ContentBlock::Text { text, .. } = block {
@@ -562,6 +566,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         };
         assert_eq!(
             media_summary("Attachment", &att, None, None),
@@ -588,6 +594,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         };
         let blocks = processor
             .process(&[att], true, "test-session", "test-run")
@@ -611,6 +619,8 @@ mod tests {
             url: None,
             path: None,
             data: Some(vec![0x89, 0x50, 0x4E, 0x47]), // PNG magic bytes
+            is_voice_note: false,
+            is_video_note: false,
         };
         let session_id = "test-image-vision";
         let blocks = processor
@@ -639,6 +649,8 @@ mod tests {
             url: None,
             path: None,
             data: Some(vec![0xFF, 0xD8, 0xFF]),
+            is_voice_note: false,
+            is_video_note: false,
         };
         let session_id = "test-no-vision";
         let blocks = processor
@@ -667,6 +679,8 @@ mod tests {
             url: None,
             path: None,
             data: Some(vec![0xFF, 0xFB]),
+            is_voice_note: false,
+            is_video_note: false,
         };
         let blocks = processor
             .process(&[att], true, "test-audio", "test-run")
@@ -694,6 +708,8 @@ mod tests {
                 url: None,
                 path: None,
                 data: Some(vec![1, 2, 3]),
+                is_voice_note: false,
+                is_video_note: false,
             },
             Attachment {
                 id: "doc".into(),
@@ -703,6 +719,8 @@ mod tests {
                 url: None,
                 path: None,
                 data: None,
+                is_voice_note: false,
+                is_video_note: false,
             },
             // This one has no source — should still produce a block
             Attachment {
@@ -713,6 +731,8 @@ mod tests {
                 url: None,
                 path: None,
                 data: None,
+                is_voice_note: false,
+                is_video_note: false,
             },
         ];
         let session_id = "test-multi";

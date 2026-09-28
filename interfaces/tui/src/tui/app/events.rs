@@ -685,15 +685,6 @@ impl AppState {
                 Action::None
             }
 
-            StreamEvent::ReasoningBlock { content, .. } => {
-                if self.current_run_uses_agent_trace {
-                    return Action::None;
-                }
-                // Treated same as Reasoning — append to reasoning buffer
-                self.append_reasoning_entry(content);
-                Action::None
-            }
-
             StreamEvent::UncertaintySignal {
                 uncertainty,
                 suggested_action,

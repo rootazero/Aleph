@@ -21,6 +21,11 @@ use crate::extension::types::PluginKind;
 /// Filename path for CC-format JSON manifest
 pub const CC_PLUGIN_JSON: &str = ".claude-plugin/plugin.json";
 
+/// The one file outside the manifest that this parse reads: a root
+/// `.mcp.json` makes a manifest with no `aleph` block an MCP plugin. The
+/// manifest cache keys on it for that reason (`manifest_cache.rs`).
+pub(crate) const KIND_SIDECAR: &str = ".mcp.json";
+
 // =============================================================================
 // CC plugin.json Types
 // =============================================================================
@@ -178,6 +183,9 @@ pub fn parse_cc_plugin_json_content(
     validate_plugin_id(&plugin_id)
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
+    // Read before `json.aleph` is moved out below.
+    let declares_servers = json.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
+
     // Parse [aleph] section from raw JSON value
     let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_ext, permissions) = if let Some(aleph_val) = json.aleph {
@@ -220,6 +228,20 @@ pub fn parse_cc_plugin_json_content(
             .unwrap_or_default();
 
         (kind, entry, Some(aleph_ext), permissions)
+    } else if declares_servers {
+        // A Claude Code MCP plugin declares no `aleph` block — its servers
+        // ARE its runtime. Without this inference the manifest parsed as
+        // `Static` and `lifecycle::mount` never started a single server (the
+        // `mcp_server` effect keys on `kind == Mcp`). Which servers, from
+        // which source (inline object, path, or `.mcp.json`), is the
+        // adapter's one reader's answer — `mcp_config::parse_declared_servers`;
+        // this line only decides the kind.
+        (
+            PluginKind::Mcp,
+            default_entry_for_kind(PluginKind::Mcp),
+            None,
+            Vec::new(),
+        )
     } else {
         (PluginKind::Static, ".".to_string(), None, Vec::new())
     };
@@ -438,9 +460,11 @@ mod tests {
 
         assert_eq!(manifest.id, "camel-case-plugin");
         assert_eq!(manifest.version, Some("1.2.3".to_string()));
-        // Component paths are stored in raw JSON struct, not in PluginManifest directly
-        // Just verify the manifest parsed correctly
-        assert_eq!(manifest.kind, PluginKind::Static);
+        // Component paths are stored in raw JSON struct, not in PluginManifest
+        // directly. A declared `mcpServers` makes this an MCP plugin with no
+        // `aleph` block (P4.15). This line asserted `Static` until then — the
+        // classification that kept a Claude Code MCP plugin's servers unmounted.
+        assert_eq!(manifest.kind, PluginKind::Mcp);
     }
 
     #[test]
@@ -723,6 +747,49 @@ label = "K"
                 .iter()
                 .any(|c| matches!(c, CapabilityDeclaration::McpServer(_))),
             "inline mcpServers must produce an McpServer capability"
+        );
+    }
+
+    #[test]
+    fn a_claude_code_manifest_with_mcp_servers_is_an_mcp_plugin_without_an_aleph_block() {
+        // Inline object form (two of Anthropic's own plugins) …
+        let content =
+            r#"{"name": "cc-mcp", "mcpServers": {"srv": {"command": "node", "args": ["s.js"]}}}"#;
+        let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Mcp);
+        assert_eq!(manifest.entry, PathBuf::from(".mcp.json"));
+        // … and the path-string form.
+        let content = r#"{"name": "cc-mcp-path", "mcpServers": "./servers.json"}"#;
+        let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Mcp);
+    }
+
+    #[test]
+    fn a_plugin_root_with_a_dot_mcp_json_is_an_mcp_plugin() {
+        // The `.mcp.json`-at-root convention (context7 on this machine): the
+        // manifest says nothing, the file beside it does.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers": {"ctx": {"type": "http", "url": "https://x"}}}"#,
+        )
+        .unwrap();
+        let manifest = parse_cc_plugin_json_content(r#"{"name": "ctx7"}"#, dir.path()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Mcp);
+    }
+
+    #[test]
+    fn a_manifest_without_servers_stays_static_and_an_aleph_block_still_wins() {
+        let manifest = parse_cc_plugin_json_content(r#"{"name": "plain"}"#, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Static);
+        // An explicit runtime is the author's word: `mcpServers` + `runtime: "wasm"` stays Wasm.
+        let content =
+            r#"{"name": "w", "mcpServers": {"s": {"command": "x"}}, "aleph": {"runtime": "wasm"}}"#;
+        assert_eq!(
+            parse_cc_plugin_json_content(content, &test_dir())
+                .unwrap()
+                .kind,
+            PluginKind::Wasm
         );
     }
 }

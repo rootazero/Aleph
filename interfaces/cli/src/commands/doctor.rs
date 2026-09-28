@@ -407,14 +407,14 @@ fn check_cli_binary() -> DoctorCheck {
         Ok(exe) => DoctorCheck::ok(
             "system",
             "aleph-cli",
-            "Path of the running aleph binary",
+            "Path of the running CLI binary",
             true,
             format!("{} (v{})", exe.display(), env!("ALEPH_VERSION")),
         ),
         Err(e) => DoctorCheck::fail(
             "system",
             "aleph-cli",
-            "Path of the running aleph binary",
+            "Path of the running CLI binary",
             true,
             format!("current_exe() failed: {e}"),
         ),
@@ -483,7 +483,7 @@ fn check_aleph_home() -> DoctorCheck {
             "~/.aleph data directory",
             true,
             format!(
-                "{} missing — run `aleph daemon start` once to bootstrap",
+                "{} missing — run `al daemon start` once to bootstrap",
                 home.display()
             ),
         )
@@ -585,7 +585,7 @@ async fn check_gateway_reachable(server_url: &str, config: &CliConfig) -> Doctor
             "gateway",
             "Aleph Gateway daemon (JSON-RPC over WS)",
             false,
-            format!("cannot reach {server_url}: {e} (start with `aleph daemon start`)"),
+            format!("cannot reach {server_url}: {e} (start with `al daemon start`)"),
         ),
         Err(_) => DoctorCheck::fail(
             "runtime",
@@ -637,7 +637,7 @@ async fn check_daemon_version(server_url: &str, config: &CliConfig) -> DoctorChe
                     "Client/daemon version match",
                     false,
                     format!(
-                        "CLI v{cli} but the running daemon is v{daemon} — restart it to pick up the upgrade (`aleph daemon restart`)"
+                        "CLI v{cli} but the running daemon is v{daemon} — restart it to pick up the upgrade (`al daemon restart`)"
                     ),
                 )
             }

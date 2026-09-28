@@ -2986,6 +2986,8 @@ mod tests {
             url: None,
             path: Some(path.to_string()),
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }
     }
 

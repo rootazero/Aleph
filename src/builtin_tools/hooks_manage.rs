@@ -27,7 +27,7 @@
 //! arbitrary URL). Letting the model approve hooks would let a prompt-injected
 //! model write a hook AND consent to it in one turn, which is exactly the
 //! attack consent exists to stop. Approval stays on the operator's terminal
-//! (`aleph hooks test <fingerprint>`), where the command is printed and run
+//! (`aleph-server hooks test <fingerprint>`), where the command is printed and run
 //! for review first. This tool can only *report* consent state, never grant it.
 
 use async_trait::async_trait;
@@ -51,13 +51,12 @@ pub enum HooksAction {
     Add,
     /// Remove matching hooks from the global hooks file.
     Remove,
-    /// List valid event names, and which support `matcher` / `interceptor`.
+    /// List event names with each one's `matcher` subject and `interceptor` support.
     Events,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HooksManageArgs {
-    /// What to do.
     pub action: HooksAction,
 
     /// Event name for `add` / `remove`. Accepts Claude-Code names
@@ -67,8 +66,7 @@ pub struct HooksManageArgs {
     pub event: Option<String>,
 
     /// Shell command to run. Exactly one of command/prompt/agent/url for `add`.
-    /// NOTE: a newly-added shell hook does NOT run until the operator approves
-    /// it at their terminal with `aleph hooks test <fingerprint>`.
+    /// Consent-gated: it does not run until the operator approves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
@@ -84,7 +82,9 @@ pub struct HooksManageArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 
-    /// Tool-name regex. ONLY meaningful on tool events — see `action="events"`.
+    /// Regex tested against the event's subject — the tool name, or
+    /// SessionStart's source (`startup`); ignored elsewhere. `*` = all. See
+    /// `action="events"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
 
@@ -96,8 +96,7 @@ pub struct HooksManageArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter_event: Option<String>,
 
-    /// For `list`: only show hooks that cannot fire. Use this first when
-    /// diagnosing "my hook doesn't run".
+    /// For `list`: only show hooks that cannot fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only_unreachable: Option<bool>,
 }
@@ -143,14 +142,14 @@ impl AlephTool for HooksManageTool {
          user prompt submit, stop, compaction, …). \
          Use action='list' to see every registered hook and whether it can actually fire — \
          this is the answer to 'why isn't my hook running?', because it reports the two \
-         silent-death causes (a `matcher` on an event that has no tool name, and \
+         silent-death causes (a `matcher` that can never match, and \
          kind=interceptor on an observer-only event) plus whether the hook is still \
          waiting on operator consent. Pass only_unreachable=true to see just the broken ones. \
          action='add'/'remove' edit the global ~/.aleph/hooks.json; project hook files are \
          intentionally read-only here since they live in repos. \
          IMPORTANT: adding a shell or http hook does NOT make it run — it is recorded as \
          pending until the operator approves it at their own terminal with \
-         `aleph hooks test <fingerprint>`. Say so when you add one; you cannot approve it \
+         `aleph-server hooks test <fingerprint>`. Say so when you add one; you cannot approve it \
          yourself and must not claim the hook is active.";
 
     type Args = HooksManageArgs;
@@ -202,7 +201,7 @@ impl AlephTool for HooksManageTool {
                     }
                     crate::approval::ApprovalDecision::Ask { prompt } => {
                         return Err(AlephError::tool(format!(
-                            "Approval required: {prompt} (run `aleph hooks test <fingerprint>` \
+                            "Approval required: {prompt} (run `aleph-server hooks test <fingerprint>` \
                              to grant consent at the operator terminal instead)"
                         )));
                     }
@@ -261,7 +260,7 @@ async fn list_registry(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     if pending > 0 {
         summary.push_str(&format!(
             " {pending} are waiting on operator consent and will be skipped until \
-             approved at the terminal with `aleph hooks test <fingerprint>`."
+             approved at the terminal with `aleph-server hooks test <fingerprint>`."
         ));
     }
     if shown.is_empty() && total == 0 {
@@ -324,8 +323,12 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     )
     .map_err(AlephError::tool)?;
 
+    // Written under the spelling given, not the canonical one: the key is
+    // what the hook's payload echoes on `hook_event_name` (a `PreToolUse`
+    // script branches on `PreToolUse`) — the same thing `hooks.add` and a
+    // hand-edited file do. `event` (canonical) only validates and reports.
     crate::gateway::handlers::hooks_admin::append_user_hook(
-        &event,
+        event_raw,
         action,
         args.matcher.as_deref(),
     )
@@ -334,24 +337,25 @@ fn add(args: &HooksManageArgs) -> Result<HooksManageOutput> {
     // Say the awkward part out loud rather than letting the model report
     // success: a gated hook that was just written is NOT live.
     let gated = args.command.is_some() || args.url.is_some();
-    let mut summary = format!("Added a hook on {event}.");
+    let mut summary = format!("Added a hook on {event_raw}.");
     if gated {
         summary.push_str(
             " It will NOT run yet: shell and HTTP hooks stay pending until the operator \
-             reviews and approves them at their own terminal with `aleph hooks list` then \
-             `aleph hooks test <fingerprint>`.",
+             reviews and approves them at their own terminal with `aleph-server hooks list` then \
+             `aleph-server hooks test <fingerprint>`.",
         );
     }
-    if args.matcher.is_some() && !supports_matcher(&event) {
-        summary.push_str(
-            " WARNING: the matcher was saved but this event carries no tool name, so the \
-             hook will never fire — remove the matcher to have it fire every time.",
-        );
+    // The verdict `hooks list` and the load-time notice read.
+    // The same notice as the RPC twin `hooks.add` (`matcher_warning`).
+    if let Some(notice) = crate::extension::hooks::parse_event(&event)
+        .and_then(|parsed| crate::extension::hooks::matcher_notice(parsed, args.matcher.as_deref()))
+    {
+        summary.push_str(&format!(" WARNING: {notice}."));
     }
 
     Ok(HooksManageOutput {
         summary,
-        data: serde_json::json!({ "event": event, "pending_consent": gated }),
+        data: serde_json::json!({ "event": event_raw, "pending_consent": gated }),
     })
 }
 
@@ -382,7 +386,10 @@ fn remove(args: &HooksManageArgs) -> Result<HooksManageOutput> {
             )
         })?;
 
-    let removed = crate::gateway::handlers::hooks_admin::remove_user_hooks(&event, Some(needle))
+    // Across every spelling the file uses for this event: `add` writes the
+    // key as given, so `PreToolUse` and `before_tool_call` groups can both
+    // exist and either name must reach both.
+    let removed = crate::gateway::handlers::hooks_admin::remove_user_hooks(event_raw, Some(needle))
         .map_err(AlephError::tool)?;
 
     Ok(HooksManageOutput {
@@ -406,16 +413,17 @@ fn events() -> HooksManageOutput {
         .iter()
         .map(|e| {
             serde_json::json!({
-                "event": event_name(*e),
-                "supports_matcher": e.supports_matcher(),
+                "event": e.canonical_name(),
+                "matcher_subject": e.match_subject().as_str(),
                 "supports_interceptor": e.supports_interceptor(),
             })
         })
         .collect();
     HooksManageOutput {
         summary: format!(
-            "{} hook events. `supports_matcher=false` means a `matcher` there never \
-             matches (the event carries no tool name). `supports_interceptor=false` means \
+            "{} hook events. `matcher_subject` is what a `matcher` is tested against: \
+             `tool_name`, `session_source` (Aleph fires only `startup`), or `ignored` (the \
+             hook fires on every occurrence). `supports_interceptor=false` means \
              the event only runs observer-kind hooks, so it cannot block or rewrite.",
             rows.len()
         ),
@@ -425,30 +433,12 @@ fn events() -> HooksManageOutput {
 
 // -- helpers -----------------------------------------------------------------
 
-fn event_name(event: crate::extension::HookEvent) -> String {
-    serde_json::to_value(event)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{event:?}"))
-}
-
 /// Parse a user/model-supplied event name into its canonical form, accepting
 /// both Claude-Code (`PreToolUse`) and Aleph (`before_tool_call`) spellings —
-/// the same aliases `user_settings.rs` accepts, so a name that works here
-/// works in the config file too.
+/// through the loader's own parser (`hooks::parse_event`), so a name that
+/// works here works in the config file too.
 fn parse_event_name(raw: &str) -> Option<String> {
-    let attempts = [raw.to_string(), raw.to_lowercase().replace('-', "_")];
-    for s in &attempts {
-        if let Ok(ev) = serde_json::from_str::<crate::extension::HookEvent>(&format!("\"{s}\"")) {
-            return Some(event_name(ev));
-        }
-    }
-    None
-}
-
-fn supports_matcher(canonical: &str) -> bool {
-    serde_json::from_str::<crate::extension::HookEvent>(&format!("\"{canonical}\""))
-        .is_ok_and(|e| e.supports_matcher())
+    crate::extension::hooks::parse_event(raw).map(crate::extension::HookEvent::canonical_name)
 }
 
 fn unknown_event(raw: &str) -> AlephError {
@@ -486,11 +476,13 @@ mod tests {
         };
         // A tool event: matcher meaningful, can intercept.
         let pre = find(&parse_event_name("PreToolUse").unwrap());
-        assert_eq!(pre["supports_matcher"], true);
+        assert_eq!(pre["matcher_subject"], "tool_name");
         assert_eq!(pre["supports_interceptor"], true);
-        // A lifecycle event with no tool name: matcher is a dead end.
+        // SessionStart matches its source; a lifecycle event ignores it.
         let start = find(&parse_event_name("SessionStart").unwrap());
-        assert_eq!(start["supports_matcher"], false);
+        assert_eq!(start["matcher_subject"], "session_source");
+        let prompt = find(&parse_event_name("UserPromptSubmit").unwrap());
+        assert_eq!(prompt["matcher_subject"], "ignored");
         // An observer-only seam: an interceptor there never executes.
         let sent = find(&parse_event_name("MessageSent").unwrap());
         assert_eq!(sent["supports_interceptor"], false);
@@ -553,6 +545,43 @@ mod tests {
             err.to_string().contains("EVERY hook"),
             "the error must explain the danger: {err}"
         );
+    }
+
+    /// `add` files the hook under the spelling given — the name its payload
+    /// echoes on `hook_event_name` — and `remove` reaches it under either
+    /// spelling of the same event.
+    #[tokio::test]
+    async fn add_keeps_the_event_spelling_and_remove_finds_it_under_either_name() {
+        use crate::gateway::handlers::hooks_admin::read_user_hooks_file;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let args = |action: HooksAction, event: &str| HooksManageArgs {
+            action,
+            event: Some(event.into()),
+            command: Some("echo cc".into()),
+            prompt: None,
+            agent: None,
+            url: None,
+            matcher: None,
+            timeout_secs: None,
+            filter_event: None,
+            only_unreachable: None,
+        };
+
+        HooksManageTool::new()
+            .call(args(HooksAction::Add, "PreToolUse"))
+            .await
+            .expect("add");
+        let (_, _, events) = read_user_hooks_file().unwrap();
+        let keys: Vec<&String> = events.keys().collect();
+        assert_eq!(keys, vec!["PreToolUse"]);
+
+        let out = HooksManageTool::new()
+            .call(args(HooksAction::Remove, "before_tool_call"))
+            .await
+            .expect("remove");
+        assert_eq!(out.data["removed"], 1);
+        let (_, _, events) = read_user_hooks_file().unwrap();
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[tokio::test]

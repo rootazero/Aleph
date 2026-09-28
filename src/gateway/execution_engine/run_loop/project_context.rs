@@ -4,21 +4,79 @@
 //! helpers build lifecycle hook contexts and the project-context / project-skill
 //! `<system-reminder>` blocks that the agent loop injects each turn.
 
-use crate::extension::hooks::HookContext;
+use crate::extension::hooks::{join_messages, HookContext, HookExecutor};
+use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 
 /// Build a `HookContext` for an agent/session lifecycle event. Carries the
 /// session id plus `RUN_ID` / `AGENT_ID` env vars so command hooks have
 /// correlation handles. Lifecycle events have no tool, so the tool fields
 /// stay unset.
+///
+/// `permission_mode` is `None` at the two callers in `run_loop/mod.rs`
+/// (`BeforeAgentStart`, `AgentEnd`): the tier is resolved inside
+/// `run_agent_loop_inner` and not returned from it, so neither end of the run
+/// can name it. `transcript_path` and `cwd` are not set here at all — the hook
+/// executor derives them for every face (`extension::hooks::session_facts`).
 pub(crate) fn lifecycle_hook_context(
     session_id: &str,
     run_id: &str,
     agent: &AgentInstance,
+    permission_mode: Option<&'static str>,
 ) -> HookContext {
-    HookContext::new(session_id)
+    let mut ctx = HookContext::new(session_id)
         .with_env("RUN_ID", run_id)
-        .with_env("AGENT_ID", agent.id())
+        .with_env("AGENT_ID", agent.id());
+    if let Some(mode) = permission_mode {
+        ctx = ctx.with_permission_mode(mode);
+    }
+    ctx
+}
+
+/// The `SessionStart` seam — the ONE function the fire site in
+/// `run_loop/inner.rs` calls (on an empty history), so a test that drives it
+/// drives the production dispatch, context included.
+///
+/// Builds the context — [`lifecycle_hook_context`] plus how the session
+/// began, which a SessionStart `matcher` is tested against and the stdin
+/// JSON's `source` says — then runs both of the seam's dispatches: observers
+/// fire-and-forget, then interceptors, whose output is harvested as context
+/// (`context:` lines / JSON `additionalContext` AND plain stdout lines,
+/// Claude Code's convention on this event). Block / deny is ignored here,
+/// as in Claude Code: SessionStart does not stop a run. Returns the raw
+/// blocks; the caller budgets them.
+///
+/// The source is always [`SESSION_SOURCE_STARTUP`](crate::extension::SESSION_SOURCE_STARTUP):
+/// the fire site cannot tell a brand-new key from a session emptied by
+/// `SessionStore::reset_session` (both are an empty history), so a reset
+/// session fires as `startup` too, and Aleph never sends `resume` / `clear`
+/// / `compact`.
+pub(crate) async fn fire_session_start(
+    executor: &HookExecutor,
+    session_id: &str,
+    run_id: &str,
+    agent: &AgentInstance,
+    permission_mode: &'static str,
+) -> Vec<String> {
+    let ctx = lifecycle_hook_context(session_id, run_id, agent, Some(permission_mode))
+        .with_session_source(crate::extension::SESSION_SOURCE_STARTUP);
+    executor
+        .execute_observers(HookEvent::SessionStart, &ctx)
+        .await;
+    match executor
+        .execute_interceptors(HookEvent::SessionStart, ctx)
+        .await
+    {
+        Ok((_ctx, hr)) => {
+            let mut blocks = hr.additional_contexts;
+            blocks.extend(join_messages(&hr.messages));
+            blocks
+        }
+        Err(e) => {
+            tracing::warn!(run_id = run_id, error = %e, "SessionStart hook failed");
+            Vec::new()
+        }
+    }
 }
 
 /// Upper bound on how many project-local skills are advertised in the
@@ -158,4 +216,107 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
         them. Use `skill_list` to see the complete set including global skills.\n\n{}",
         lines.join("\n")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P4.16 review I-2 residual: the SessionStart seam guard above drives
+    /// `fire_session_start`, so a fire site that bypassed it — re-inlining
+    /// its own dispatch — would stay green. Census: outside `src/extension/`
+    /// (the event's own definition, the executor and the readers live
+    /// there), production code names `HookEvent::SessionStart` in this file
+    /// only. Comments and `#[cfg(test)]` items are stripped before counting
+    /// (`production_code_text`). Limits: a fire site inside `src/extension/`,
+    /// or one spelled through `use HookEvent::*`, is not seen.
+    #[test]
+    fn only_the_seam_names_the_session_start_event_outside_extension() {
+        use crate::utils::source_scan::{production_code_text, rust_sources_under};
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let naming: Vec<String> = rust_sources_under(&src)
+            .into_iter()
+            .filter(|(rel, _)| !rel.starts_with("src/extension/"))
+            .filter(|(rel, text)| {
+                production_code_text(std::path::Path::new(rel), text)
+                    .contains("HookEvent::SessionStart")
+            })
+            .map(|(rel, _)| rel)
+            .collect();
+        assert_eq!(
+            naming,
+            ["src/gateway/execution_engine/run_loop/project_context.rs"],
+            "a SessionStart fire site outside `fire_session_start`"
+        );
+    }
+
+    /// P4.14 F-2: superpowers' bootstrap hook — `SessionStart` with
+    /// `"matcher": "startup|clear|compact"`, its real shape — fires at a
+    /// fresh session. Parsed by the plugin parser, converted as the registry
+    /// sync does, fired through `fire_session_start` — the function the
+    /// production fire site calls. Before the match subject existed the
+    /// matcher was tested against a tool name SessionStart does not have, so
+    /// this hook never ran; a matcher naming no source Aleph fires stays
+    /// silent (the control).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn superpowers_session_start_hook_fires_at_a_fresh_session() {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::sync_primitives::Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let agent = AgentInstance::new(
+            AgentInstanceConfig {
+                agent_id: "main".to_string(),
+                workspace: temp.path().join("workspace"),
+                agent_dir: temp.path().join("agent"),
+                ..Default::default()
+            },
+            store,
+        )
+        .unwrap();
+
+        let hooks_for = |matcher: &str, marker: &std::path::Path| {
+            let json = serde_json::json!({"hooks": {"SessionStart": [{
+                "matcher": matcher,
+                "hooks": [{"type": "command", "command": format!("touch '{}'", marker.display()),
+                           "shell": "bash", "async": false}]
+            }]}})
+            .to_string();
+            crate::extension::manifest::parsers::parse_hooks_content(
+                &json,
+                temp.path(),
+                "superpowers",
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c {
+                crate::extension::capability::CapabilityDeclaration::Hook(h) => {
+                    Some(crate::extension::hook_config_from_registration(
+                        h,
+                        crate::extension::visibility::ScopeKey::Global,
+                    ))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+        };
+
+        for (i, (matcher, want)) in [("startup|clear|compact", true), ("resume", false)]
+            .into_iter()
+            .enumerate()
+        {
+            let marker = temp.path().join(format!("fired-{i}"));
+            let executor = HookExecutor::new(hooks_for(matcher, &marker));
+            fire_session_start(&executor, "s", "run", &agent, "default").await;
+            assert_eq!(marker.exists(), want, "matcher {matcher:?}");
+        }
+    }
 }

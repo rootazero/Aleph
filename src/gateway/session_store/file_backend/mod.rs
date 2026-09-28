@@ -98,6 +98,35 @@ fn epoch_from_dir_name(pattern: &str, name: &str) -> Option<u32> {
     SessionKey::epoch_after_base(pattern, name, &[':', '_'])
 }
 
+/// The directory holding `session_key`'s files under `base_dir` — the ONE
+/// spelling of it. [`FileSessionStore::session_dir`] (metadata, checkpoints)
+/// and [`transcript_file`] both go through it, so changing the forward map
+/// moves every file of a session together.
+pub(crate) fn session_dir_for(base_dir: &std::path::Path, session_key: &str) -> PathBuf {
+    base_dir.join(sanitize_key_for_dir(session_key))
+}
+
+/// The transcript file for `session_key` under `base_dir`, whether or not it
+/// exists yet. The store reads and writes through it.
+fn transcript_file(base_dir: &std::path::Path, session_key: &str) -> PathBuf {
+    session_dir_for(base_dir, session_key).join("transcript.jsonl")
+}
+
+/// The transcript under `base_dir` a hook can open, if there is one.
+///
+/// `Some` only when the file exists — nothing is on disk before the first
+/// line is written, and a hook handed a path must be able to open it. Pure:
+/// one `stat`, no directory creation. The store answers through this with
+/// its OWN `base_dir` ([`SessionStore::transcript_file`]), never a
+/// re-derived default location.
+pub(crate) fn transcript_path_under(
+    base_dir: &std::path::Path,
+    session_key: &str,
+) -> Option<PathBuf> {
+    let p = transcript_file(base_dir, session_key);
+    p.is_file().then_some(p)
+}
+
 #[derive(Debug, Clone)]
 pub struct FileSessionStoreConfig {
     pub base_dir: PathBuf,
@@ -287,7 +316,7 @@ impl FileSessionStore {
     }
 
     fn session_dir(&self, key: &str) -> PathBuf {
-        self.config.base_dir.join(sanitize_key_for_dir(key))
+        session_dir_for(&self.config.base_dir, key)
     }
 
     fn metadata_path(&self, key: &str) -> PathBuf {
@@ -322,7 +351,7 @@ impl FileSessionStore {
     /// The lock is named for `metadata.json` because that is what it was built
     /// for, but it is the SESSION's write lock: one key, both files.
     fn transcript_path(&self, key: &str) -> PathBuf {
-        self.session_dir(key).join("transcript.jsonl")
+        transcript_file(&self.config.base_dir, key)
     }
 
     fn checkpoint_dir(&self, key: &str) -> PathBuf {
@@ -408,7 +437,7 @@ impl FileSessionStore {
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
         })?;
-        let path = dir.join("transcript.jsonl");
+        let path = self.transcript_path(key);
         let line = serde_json::to_string(msg).map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to serialize message: {e}"))
         })?;
@@ -519,6 +548,10 @@ fn add_bill(meta: &mut SessionMetadata, bill: &RunBill) {
 
 #[async_trait]
 impl SessionStore for FileSessionStore {
+    fn transcript_file(&self, key: &SessionKey) -> Option<PathBuf> {
+        transcript_path_under(&self.config.base_dir, &key.to_key_string())
+    }
+
     async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
         // The lock is held across the "does it exist? no — create it" pair as
@@ -2979,6 +3012,55 @@ mod rescope_attribution_tests {
         assert!(
             !changed,
             "there is no row yet for a group nobody has spoken in"
+        );
+    }
+}
+
+#[cfg(test)]
+mod transcript_path_tests {
+    use super::*;
+
+    /// The hook's answer comes from the store's own writer: `None` before the
+    /// first line (never a path that does not exist), then exactly the file
+    /// `append_message` wrote — not a second formula that happens to agree.
+    #[tokio::test]
+    async fn the_hook_transcript_is_the_file_the_store_writes_and_only_once_it_exists() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: temp.path().to_path_buf(),
+            ..FileSessionStoreConfig::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("hooks");
+        let key_str = key.to_key_string();
+        assert_eq!(transcript_path_under(temp.path(), &key_str), None);
+        assert_eq!(SessionStore::transcript_file(&store, &key), None);
+
+        store.get_or_create(&key).await.unwrap();
+        store
+            .append_message(
+                &key,
+                MessageRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: "user".into(),
+                    content: "hello".into(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    metadata: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    tool_call_id: None,
+                    tool_name: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let answered = SessionStore::transcript_file(&store, &key).expect("written ⇒ Some");
+        assert!(answered.is_file());
+        assert_eq!(answered, store.transcript_path(&key_str));
+        assert_eq!(
+            answered.parent(),
+            Some(store.session_dir(&key_str).as_path())
         );
     }
 }

@@ -26,7 +26,7 @@ use crate::providers::{create_provider, AiProvider};
 /// targets the same vendor — just a cheaper sibling.
 ///
 /// Returns `None` (→ compactor reuses the main LLM) when:
-/// - section missing / `enabled = false`;
+/// - `[context_budget] enabled = false` (a missing section is on);
 /// - the primary provider key has no `[providers.*]` entry to clone;
 /// - `summary_model` unset AND the primary preset declares no cheap aux model;
 /// - the resolved model equals the primary's configured default (a separate
@@ -45,7 +45,7 @@ use crate::providers::{create_provider, AiProvider};
 /// [`build_cheap_summary_provider`] implements: explicit `[context_budget]
 /// summary_model` first, then the primary preset's declared
 /// `default_aux_model`. Returns `None` under the same gates as that builder
-/// (section missing/disabled, no provider entry to clone, neither tier names
+/// (explicitly disabled, no provider entry to clone, neither tier names
 /// a model) — plus when the resolved model IS the provider's configured
 /// default, since summarization then runs on the main model and no distinct
 /// cheap provider is built. In that case the returned model is the primary's
@@ -55,10 +55,7 @@ pub(crate) fn effective_summary_model(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<(String, &'static str)> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
+    let cb = config.effective_context_budget()?;
     let base = config.providers.get(primary_provider_key)?;
     let explicit = cb
         .summary_model
@@ -87,13 +84,10 @@ pub fn build_cheap_summary_provider(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<Arc<dyn AiProvider>> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
-
     let base = config.providers.get(primary_provider_key)?;
 
+    // Gates on `Config::effective_context_budget` (off only under an explicit
+    // `enabled = false`) — the same gate, from the same derivation.
     let (summary_model, source) = effective_summary_model(config, primary_provider_key)?;
     if source == "primary default" {
         return None;
@@ -316,11 +310,17 @@ mod tests {
         cfg_summary_keyed("primary", primary_model, summary_model)
     }
 
+    /// Default on: a config that never wrote `[context_budget]` still routes
+    /// summarization to the preset's cheap aux model.
     #[test]
-    fn cheap_summary_none_when_section_missing() {
-        // No `[context_budget]` at all → no cheap provider (legacy main-LLM path).
-        let cfg = Config::default();
-        assert!(build_cheap_summary_provider(&cfg, "primary").is_none());
+    fn cheap_summary_auto_routes_when_section_missing() {
+        let mut cfg = cfg_summary_keyed("claude", "claude-sonnet-4-6", None);
+        cfg.context_budget = None;
+        assert_eq!(
+            effective_summary_model(&cfg, "claude"),
+            Some(("claude-haiku-4-5".to_string(), "preset aux_model"))
+        );
+        assert!(build_cheap_summary_provider(&cfg, "claude").is_some());
     }
 
     #[test]

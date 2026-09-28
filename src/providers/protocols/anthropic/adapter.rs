@@ -293,7 +293,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             actual_model = normalize_kimi_coding_model_id(actual_model);
         }
         let endpoint = Self::build_endpoint(config);
-        let messages = Self::convert_messages(payload.messages);
+        let messages = Self::convert_messages(payload.messages, &policy.capabilities);
 
         // Per-request overrides provider config
         let max_tokens = payload
@@ -328,9 +328,9 @@ impl ProtocolAdapter for AnthropicProtocol {
                 // enabled — the caller's "off" would be silently ignored. Emit
                 // `{type:"disabled"}` to actually turn it off (pi parity:
                 // `thinkingEnabled === false → thinking:{type:"disabled"}`).
-                // Generation-5 models (fable-5) 400 on an explicit disabled
-                // block — omission is the only off-switch there, so they get
-                // no `thinking` field at all. Older/non-adaptive models
+                // Generation-5 models get no `thinking` field at all — what
+                // that does per model (on some it still thinks) is stated on
+                // `omits_disabled_thinking`. Older/non-adaptive models
                 // default to no-thinking, so the generic arms below disable
                 // them by omission as before.
                 Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => {
@@ -620,6 +620,14 @@ impl ProtocolAdapter for AnthropicProtocol {
             }
         }
 
+        // Server-side context editing: only the strategy type, so the API's own
+        // defaults (trigger, keep) apply rather than a second copy of them.
+        let context_editing = Self::server_context_editing_applies(config, &policy.capabilities);
+        if context_editing {
+            body["context_management"] =
+                serde_json::json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+        }
+
         // Resolve prompt-cache retention for this request. An endpoint that
         // does not advertise `supports_cache_control` is treated exactly like
         // `cache_retention = "off"`: both mean "no cache_control anywhere on
@@ -703,6 +711,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             actual_model,
             Some(api_key),
             extended_cache_ttl,
+            context_editing,
             &policy.capabilities,
         );
         let mut req = self
@@ -947,6 +956,14 @@ impl ProtocolAdapter for AnthropicProtocol {
 
     fn name(&self) -> &'static str {
         "anthropic"
+    }
+
+    fn clears_tool_results_server_side(&self, config: &ProviderConfig) -> bool {
+        let policy =
+            crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
+                config.base_url.as_deref(),
+            );
+        Self::server_context_editing_applies(config, &policy.capabilities)
     }
 
     /// Forgive dotted variants of Claude model ids.

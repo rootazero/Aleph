@@ -42,6 +42,8 @@ fn make_attachment(id: &str, mime: &str, data: Vec<u8>) -> Attachment {
         url: None,
         path: None,
         data: Some(data),
+        is_voice_note: false,
+        is_video_note: false,
     }
 }
 
@@ -138,6 +140,8 @@ async fn test_unknown_type_placeholder() {
         url: None,
         path: None,
         data: None,
+        is_voice_note: false,
+        is_video_note: false,
     };
     let session_id = "multimodal-probe-unknown-type";
 
@@ -209,7 +213,9 @@ async fn test_download_failure_graceful() {
         size: None,
         url: None,
         path: None,
-        data: None, // no source at all
+        data: None, // no source at all,
+        is_voice_note: false,
+        is_video_note: false,
     };
     let session_id = "multimodal-probe-download-fail";
 

@@ -1053,10 +1053,10 @@ impl AgentHarness {
 // =============================================================================
 
 impl AgentHarness {
-    /// Apply Layer-3 turn budget: record this result, persist any spills via
-    /// the shared result store, and rewrite `output.value` to a marker string
-    /// when THIS call's result was the one spilled (so the LLM's next Think
-    /// sees the marker, not the full text). No-op when budget is unset.
+    /// Apply Layer-3 turn budget: record this result and, when THIS call's
+    /// result is the one spilled, rewrite `output.value` to what
+    /// `result_processing::spill_replacement` leaves (so the LLM's next Think
+    /// sees that, not the full text). No-op when budget is unset.
     fn apply_turn_budget(
         &self,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
@@ -1066,52 +1066,29 @@ impl AgentHarness {
         let Some(budget) = self.deps.turn_budget.as_ref() else {
             return;
         };
-        let text = match &output.value {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        // Layer-2 (`apply_result_budget`) may prepend an inline error digest
-        // above the `[Full output persisted: …]` marker, so it is not always at
-        // byte 0 — scan every line (mirrors `result_store::extract_persisted_ref`).
-        // A byte-0-only test would mis-flag such results as un-persisted and let
-        // the turn budget waste its spill slot re-offloading a marker.
-        let already_persisted = text
-            .lines()
-            .any(|l| l.starts_with("[Full output persisted: "));
+        let text = crate::providers::message::value_as_model_text(&output.value).into_owned();
         let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
         let record = crate::tools::turn_budget::TurnResult {
             call_id: call.id.clone(),
             tool_name: call.name.clone(),
             tokens_in_context: tokens,
             in_context_text: text,
-            already_persisted,
         };
+        // `record` only ever spills the result it was just handed, so the
+        // rewrite lands BEFORE the SessionEvent is emitted: the LLM sees the
+        // marker instead of the full text.
         let spills = budget.record(budget_turn_id, record);
-        if spills.is_empty() {
-            return;
-        }
-        let Some(store) = self.deps.result_store.as_ref() else {
+        let Some(spill) = spills.into_iter().find(|s| s.call_id == call.id) else {
             return;
         };
-        use crate::tools::result_processing::recovery_footer;
-        let offload = |s: &crate::tools::turn_budget::SpillInstruction| {
-            recovery_footer(Some(store), &s.call_id, &s.tool_name, &s.original_text, 0)
-        };
-        for spill in spills {
-            if spill.call_id != call.id {
-                // Earlier-iteration spill: its SessionEvent::ToolResult is
-                // already persisted, so post-hoc rewrite from here isn't
-                // possible. The marker file is still written for recovery;
-                // cheap_passes surfaces it on the next preflight.
-                let _ = offload(&spill);
-                continue;
-            }
-            // Same-turn newest spill: rewrite output BEFORE the SessionEvent
-            // is emitted so the LLM sees the marker instead of the full text.
-            if let Some((footer, _)) = offload(&spill) {
-                output.value = serde_json::Value::String(footer);
-            }
-        }
+        output.value =
+            serde_json::Value::String(crate::tools::result_processing::spill_replacement(
+                self.deps.result_store.as_deref(),
+                &spill.call_id,
+                &spill.tool_name,
+                &spill.original_text,
+                self.deps.tools.recovery_tools(),
+            ));
     }
 
     /// Persist a successful tool call to the transcript: emit

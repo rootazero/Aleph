@@ -249,7 +249,7 @@ where
 
     if let Some(cache) = cache {
         if let Ok(meta) = std::fs::metadata(manifest_path) {
-            if let Some(manifest) = cache.get(manifest_path, &meta) {
+            if let Some(manifest) = cache.get(dir, manifest_path, &meta) {
                 return Some(Ok(manifest));
             }
         }
@@ -259,7 +259,7 @@ where
         Ok(manifest) => {
             if let Some(cache) = cache {
                 if let Ok(meta) = std::fs::metadata(manifest_path) {
-                    cache.put(manifest_path, &meta, manifest.clone());
+                    cache.put(dir, manifest_path, &meta, manifest.clone());
                 }
             }
             Some(Ok(manifest))

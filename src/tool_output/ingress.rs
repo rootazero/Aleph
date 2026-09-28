@@ -49,6 +49,10 @@ pub(crate) struct IngressOutcome {
     /// [`is_lossy`](hygiene::ReductionMethod::is_lossy). `None` means the
     /// model-facing text *is* the original (modulo bytes that were never
     /// content), so there is nothing to offload.
+    ///
+    /// Flattened like `model_facing` (one line of JSON for a typed result);
+    /// the offload stores its line-preserving rendering, not these bytes —
+    /// see `result_processing::recovery_footer_for`.
     pub reduced_from: Option<String>,
     /// One entry per field hygiene shortened — for tracing. Empty when hygiene
     /// did not run or its result was rejected (the fields it touched are then
@@ -75,12 +79,37 @@ pub(crate) struct IngressOutcome {
 /// result wholesale, so the value's post-rejection state is never observed.
 /// Not cloning the value first is deliberate — an over-budget result is by
 /// definition large, and deep-cloning it on the hot path was pure waste.
+#[cfg(test)]
 pub(crate) fn clean_for_ingress(
     tool_name: &str,
     value: &mut Value,
     budget: Option<usize>,
 ) -> IngressOutcome {
+    clean_for_ingress_of(tool_name, value, budget, None)
+}
+
+/// [`clean_for_ingress`] for the result of call `call_id`: a result that
+/// carries its own call's persist marker (a tool that offloaded its output
+/// itself) passes through untouched — a field rewrite could drop the marker
+/// line, and Layer 2 would then persist the result over the blob it names.
+/// Layer 2 bounds such a result itself, keeping the marker whole.
+pub(crate) fn clean_for_ingress_of(
+    tool_name: &str,
+    value: &mut Value,
+    budget: Option<usize>,
+    call_id: Option<&str>,
+) -> IngressOutcome {
     let raw = flatten(value);
+    if call_id.is_some_and(|id| {
+        crate::tools::result_processing::carries_own_persisted_marker(&raw, id, tool_name)
+    }) {
+        return IngressOutcome {
+            model_facing: raw,
+            reduced_from: None,
+            reductions: Vec::new(),
+            compressed: false,
+        };
+    }
 
     // Compression first: it is per-tool and unconditional (cheap for anything
     // but the DevTools family), and a field rewrite is lossy by definition —
@@ -332,7 +361,8 @@ mod tests {
         let mut value = json!({ "content": [ { "type": "text", "text": base64 } ] });
         let raw = value.to_string();
 
-        let outcome = clean_for_ingress("chrome_devtools__take_screenshot", &mut value, Some(8_000));
+        let outcome =
+            clean_for_ingress("chrome_devtools__take_screenshot", &mut value, Some(8_000));
 
         assert!(outcome.compressed);
         assert!(
@@ -344,6 +374,74 @@ mod tests {
         );
         assert_eq!(outcome.reduced_from.as_deref(), Some(raw.as_str()));
         assert!(outcome.reductions.is_empty(), "hygiene never ran");
+    }
+
+    /// T-G2: the recovery handle has to open for a TYPED result, the most
+    /// common kind. Both readers of the offloaded original work in lines —
+    /// `file_read` pages it by line, `ContentIndex` chunks it by line count —
+    /// so a blob persisted as the one-line `Value::to_string()` envelope is one
+    /// index section and one clamped `file_read` line: found, never read.
+    /// Driven through the production pair (`clean_for_ingress` → Layer 2), not
+    /// a hand-built multi-line fixture, because the hand-built one is exactly
+    /// what kept the old tests green.
+    #[test]
+    fn a_typed_results_offloaded_original_is_line_oriented_for_both_readers() {
+        let mut log = String::from("$ cargo test\n\nrunning 400 tests\n");
+        for i in 0..400 {
+            log.push_str(&format!("test suite::case_{i} ... ok\n"));
+        }
+        let needle = "thread 'suite::needle_case' panicked at src/needle.rs:7:3:";
+        log.push_str(needle);
+        log.push_str("\ntest result: FAILED. 399 passed; 1 failed; 0 ignored\n");
+        let mut value = json!({ "success": false, "exit_code": 101, "stdout": log, "stderr": "" });
+
+        let outcome = clean_for_ingress("bash", &mut value, Some(500));
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&base).unwrap();
+        let store = crate::tools::result_store::ToolResultStore::with_dir_for_tests(base);
+        let processed = crate::tools::result_processing::apply_result_budget(
+            "call_typed",
+            "bash",
+            &outcome.model_facing,
+            Some(&store),
+            Some(500),
+            outcome.reduced_from.as_deref(),
+            crate::tools::result_processing::RecoveryTools::ALL,
+        );
+
+        let path = processed
+            .persisted_path
+            .expect("an over-budget result with a store is offloaded");
+        let blob = std::fs::read_to_string(&path).expect("blob readable");
+        assert!(
+            blob.lines().count() > 400,
+            "file_read pages by line, so the blob must keep stdout's lines; got {} line(s)",
+            blob.lines().count()
+        );
+        assert!(
+            blob.lines().any(|l| l == needle),
+            "a stdout line must be a verbatim line on disk, not an escaped JSON fragment"
+        );
+        assert!(
+            blob.lines().any(|l| l == "exit_code: 101"),
+            "non-string fields are kept too:\n{}",
+            &blob[..blob.len().min(300)]
+        );
+        assert!(
+            store.indexed_sections() > 1,
+            "the index must cut the blob into sections, got {}",
+            store.indexed_sections()
+        );
+        let hits = store.search("needle_case panicked", 3);
+        assert!(
+            hits.first().is_some_and(|h| h.chunk_no > 0),
+            "the needle sits ~400 lines in, so its best section is not section 0: {hits:?}"
+        );
+        assert!(
+            hits.first()
+                .is_some_and(|h| h.body.lines().any(|l| l == needle)),
+            "the hit hands back the section's text, the needle line included: {hits:?}"
+        );
     }
 
     #[test]

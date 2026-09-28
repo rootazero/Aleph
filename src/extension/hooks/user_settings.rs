@@ -10,10 +10,14 @@
 //!    targets). In App mode the daemon CWD is meaningless, so project hooks
 //!    are loaded from the registry rather than (only) the launch directory.
 //!
-//! Layers 2–4 are tagged `user:project` / `user:project-local`; the
-//! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time so a
-//! hook checked into project A never runs while the agent works inside project
-//! B. Layer 1 (`user:global`) always fires.
+//! Layers 2–4 are tagged `user:project` / `user:project-local` (logs) and
+//! stamped `ScopeKey::Project(root)`; the
+//! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time
+//! through `visibility::visible_to` so a hook checked into project A never
+//! runs while the agent works inside project B, and consent keys them by
+//! that same root, so approving it in A does not approve B's copy
+//! (`consent.rs`). Layer 1 (`user:global`) is stamped `ScopeKey::Global` and
+//! always fires.
 //!
 //! The format mirrors Claude Code's `settings.json` `hooks` block so users
 //! can copy a working config across both tools without translation:
@@ -48,12 +52,14 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+use crate::extension::visibility::{canonical_root, ScopeKey};
 
 /// One contiguous group from a `hooks.json` file.
 #[derive(Debug, Clone, Deserialize)]
 struct UserHookGroup {
-    /// Optional regex matched against `tool_name` for tool-related events.
-    /// Empty / missing = match all.
+    /// Optional regex tested against the event's subject
+    /// (`HookEvent::match_subject`: the tool name, SessionStart's source, or
+    /// nothing — then it is ignored). Empty / `*` / missing = match all.
     #[serde(default)]
     matcher: Option<String>,
 
@@ -84,7 +90,9 @@ struct UserHookGroup {
 enum UserHookAction {
     Command {
         command: String,
-        #[serde(default)]
+        /// Claude Code spells it `timeout`, as a plugin's `hooks.json` does
+        /// (`manifest::parsers::HookAction`) — take either.
+        #[serde(default, alias = "timeout")]
         timeout_secs: Option<u64>,
     },
     Prompt {
@@ -97,7 +105,7 @@ enum UserHookAction {
         url: String,
         #[serde(default)]
         headers: HashMap<String, String>,
-        #[serde(default)]
+        #[serde(default, alias = "timeout")]
         timeout_secs: Option<u64>,
     },
 }
@@ -123,7 +131,7 @@ pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<Hoo
     // silently empty layer.
     if let Ok(home) = crate::utils::paths::get_config_dir() {
         let p = home.join("hooks.json");
-        load_into(&p, "user:global", &mut out);
+        load_into(&p, "user:global", &ScopeKey::Global, &mut out);
     }
 
     // Track project roots already loaded (by canonical path) so a folder that
@@ -145,26 +153,31 @@ pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<Hoo
     out
 }
 
-/// Best-effort canonicalisation for path-equality bookkeeping. Falls back to
-/// the path as-given when the directory does not resolve (e.g. not yet
-/// created) so dedup stays stable instead of panicking.
+/// Best-effort canonicalisation for path-equality bookkeeping. A thin alias
+/// of the shared visibility derivation so the dedup key and the
+/// [`ScopeKey`] stamped on each row cannot canonicalise differently.
 fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    canonical_root(p)
 }
+
+/// The owner labels of a project's two hook files, checked-in and gitignored.
+/// Every project's files load under these same two labels, so a label never
+/// says WHICH project a hook belongs to — its `ScopeKey::Project` does, and
+/// that key is what the fire-time gate and consent (`consent.rs`) read.
+pub(crate) const PROJECT_LABELS: [&str; 2] = ["user:project", "user:project-local"];
 
 /// Load a project directory's checked-in + gitignored hook files. Both are
-/// tagged `user:project*` so the executor's fire-time gate binds them to this
-/// project root (`<root>/.aleph` → `plugin_root`, parent recovers `<root>`).
+/// tagged `user:project*` for logs and stamped `Project(root)` so the
+/// executor's fire-time gate (`visible_to`) and the consent key bind them to
+/// this project.
 fn load_project_layer(root: &Path, out: &mut Vec<HookConfig>) {
-    load_into(&root.join(".aleph/hooks.json"), "user:project", out);
-    load_into(
-        &root.join(".aleph/hooks.local.json"),
-        "user:project-local",
-        out,
-    );
+    let key = ScopeKey::project(root);
+    let [checked_in, local] = PROJECT_LABELS;
+    load_into(&root.join(".aleph/hooks.json"), checked_in, &key, out);
+    load_into(&root.join(".aleph/hooks.local.json"), local, &key, out);
 }
 
-fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
+fn load_into(path: &Path, source_label: &str, scope: &ScopeKey, out: &mut Vec<HookConfig>) {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
@@ -207,18 +220,14 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                 .unwrap_or_default();
 
             let matcher = g.matcher.clone().filter(|s| !s.is_empty());
-            // Foot-gun guard: matchers test `tool_name` only, so a matcher on
-            // an event whose context has no tool name silently never fires.
-            // Warn at load time rather than leaving a mysteriously-dead hook.
-            if matcher.is_some() && !event.supports_matcher() {
-                warn!(
-                    path = %path.display(),
-                    event = %event_str,
-                    "Hook `matcher` set on an event with no tool name; matchers test \
-                     tool_name only, so this hook will never fire — drop the matcher \
-                     to fire on every occurrence of this event"
-                );
-            }
+            // A matcher that never fires, or one this event ignores, is said
+            // at load time — the same notice a plugin's `hooks.json` gives.
+            super::warn_on_matcher(
+                &path.display().to_string(),
+                &event_str,
+                event,
+                matcher.as_deref(),
+            );
             // Second foot-gun: interceptor-kind hooks only run on events whose
             // fire-sites dispatch interceptors; the global fire-and-forget
             // seams (messages / provider / gateway / subagent…) run observers
@@ -289,6 +298,8 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                     plugin_root: plugin_root.clone(),
                     handler: None,
                     timeout_secs,
+                    declared_event: Some(event_str.clone()),
+                    scope_key: scope.clone(),
                 });
             }
         }
@@ -297,7 +308,12 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
 
 /// Map both Claude Code-style (`PreToolUse`) and Aleph-style
 /// (`before_tool_call`) event names to [`HookEvent`].
-fn parse_event(name: &str) -> Option<HookEvent> {
+///
+/// Shared by the three file readers — this loader, a plugin's `hooks.json`
+/// (`manifest::parsers::parse_hooks_content`) and `aleph.plugin.toml`
+/// `[[hooks]]` (`parse_v2_hooks`) — so a name one of them accepts, the
+/// others accept too.
+pub(crate) fn parse_event(name: &str) -> Option<HookEvent> {
     // Re-uses the serde aliases on HookEvent. snake_case → primary; PascalCase
     // → alias. Falls back to `from_str` via JSON deserialization.
     let attempts = [
@@ -350,47 +366,86 @@ mod tests {
         std::fs::write(path, contents).unwrap();
     }
 
+    /// The subject census: what a matcher is tested against, per event.
     #[test]
-    fn event_supports_matcher_only_for_tool_name_events() {
-        // Tool-name-bearing events accept a matcher.
-        assert!(HookEvent::supports_matcher(HookEvent::BeforeToolCall));
-        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCall));
-        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCallFailure));
-        assert!(HookEvent::supports_matcher(HookEvent::ToolResultPersist));
-        assert!(HookEvent::supports_matcher(HookEvent::PermissionRequest));
-        assert!(HookEvent::supports_matcher(HookEvent::Notification));
-        // Lifecycle events have no tool name; a matcher there never fires.
-        assert!(!HookEvent::supports_matcher(HookEvent::SessionStart));
-        assert!(!HookEvent::supports_matcher(HookEvent::BeforeAgentStart));
-        assert!(!HookEvent::supports_matcher(HookEvent::UserPromptSubmit));
-        assert!(!HookEvent::supports_matcher(HookEvent::AgentEnd));
+    fn a_matcher_is_tested_against_the_events_subject() {
+        use crate::extension::types::MatchSubject::{Ignored, SessionSource, ToolName};
+        for event in [
+            HookEvent::BeforeToolCall,
+            HookEvent::AfterToolCall,
+            HookEvent::AfterToolCallFailure,
+            HookEvent::ToolResultPersist,
+            HookEvent::PermissionRequest,
+            HookEvent::PermissionDenied,
+            HookEvent::Notification,
+        ] {
+            assert_eq!(event.match_subject(), ToolName, "{event:?}");
+        }
+        assert_eq!(HookEvent::SessionStart.match_subject(), SessionSource);
+        for event in [
+            HookEvent::BeforeAgentStart,
+            HookEvent::UserPromptSubmit,
+            HookEvent::AgentEnd,
+            HookEvent::Stop,
+            HookEvent::BeforeCompaction,
+        ] {
+            assert_eq!(event.match_subject(), Ignored, "{event:?}");
+        }
     }
 
-    #[test]
-    fn matcher_on_non_tool_event_still_loads_but_is_a_footgun() {
-        // The hook still loads (back-compat); we only warn. The matcher is
-        // preserved so behavior is unchanged — it simply will not match.
+    /// Retired `matcher_on_non_tool_event_still_loads_but_is_a_footgun`: a
+    /// matcher on an event with nothing to match is no longer a hook that
+    /// never fires. It loads with its matcher as written, and the executor
+    /// ignores it — the hook runs on every occurrence.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_matcher_on_an_event_with_nothing_to_match_is_ignored() {
         let dir = tempdir().unwrap();
+        let marker = dir.path().join("fired");
         let cfg = dir.path().join(".aleph/hooks.json");
         write(
             &cfg,
-            r#"{
-                "hooks": {
-                    "SessionStart": [
-                        { "matcher": "anything",
-                          "hooks": [
-                            { "type": "command", "command": "echo hi" }
-                          ]
-                        }
-                    ]
-                }
-            }"#,
+            &serde_json::json!({"hooks": {"UserPromptSubmit": [{
+                "matcher": "anything",
+                "hooks": [{"type": "command", "command": format!("touch '{}'", marker.display())}]
+            }]}})
+            .to_string(),
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].event, HookEvent::SessionStart);
         assert_eq!(out[0].matcher.as_deref(), Some("anything"));
+        crate::extension::hooks::HookExecutor::new(out)
+            .execute_interceptors(
+                HookEvent::UserPromptSubmit,
+                crate::extension::hooks::HookContext::new("s"),
+            )
+            .await
+            .expect("the hook runs");
+        assert!(marker.exists(), "an ignored matcher must not stop the hook");
+    }
+
+    /// P4.14 F-3: Claude Code spells an action's timeout `timeout`, and a
+    /// plugin's `hooks.json` already takes it. `~/.aleph/hooks.json` takes
+    /// both spellings, for `command` and `http` alike.
+    #[test]
+    fn an_actions_timeout_takes_either_spelling() {
+        for key in ["timeout", "timeout_secs"] {
+            let dir = tempdir().unwrap();
+            let cfg = dir.path().join(".aleph/hooks.json");
+            write(
+                &cfg,
+                &serde_json::json!({"hooks": {"PreToolUse": [{"hooks": [
+                    {"type": "command", "command": "true", key: 30},
+                    {"type": "http", "url": "http://127.0.0.1:9/h", key: 31}
+                ]}]}})
+                .to_string(),
+            );
+            let mut out = Vec::new();
+            load_into(&cfg, "user:global", &ScopeKey::Global, &mut out);
+            let timeouts: Vec<Option<u64>> = out.iter().map(|h| h.timeout_secs).collect();
+            assert_eq!(timeouts, [Some(30), Some(31)], "{key}");
+        }
     }
 
     #[test]
@@ -412,7 +467,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
         let h = &out[0];
         assert_eq!(h.event, HookEvent::BeforeToolCall);
@@ -441,7 +496,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].event, HookEvent::AfterToolCall);
         assert_eq!(out[0].kind, HookKind::Observer);
@@ -480,7 +535,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 2, "one registration per action");
         assert_eq!(out[0].timeout_secs, Some(5));
         assert_eq!(out[1].timeout_secs, Some(600));
@@ -511,7 +566,7 @@ mod tests {
             }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].timeout_secs, Some(42), "inherits group default");
         assert_eq!(out[1].timeout_secs, Some(7), "own value wins");
@@ -530,7 +585,7 @@ mod tests {
             r#"{ "hooks": { "PreToolUse": [ { "matcher": "Write", "hooks": [] } ] } }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
     }
 
@@ -540,7 +595,7 @@ mod tests {
         let cfg = dir.path().join(".aleph/hooks.json");
         write(&cfg, "not json");
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
     }
 
@@ -555,8 +610,41 @@ mod tests {
             ] } }"#,
         );
         let mut out = Vec::new();
-        load_into(&cfg, "user:project", &mut out);
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
         assert!(out.is_empty());
+    }
+
+    /// U-b: the key as written is what the hook's payload will echo, so the
+    /// loader keeps it — both spellings, side by side, each on its own row.
+    #[test]
+    fn each_row_keeps_the_event_spelling_its_author_wrote() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{ "hooks": {
+                "PreToolUse": [{ "hooks": [{ "type": "command", "command": "a" }] }],
+                "before_tool_call": [{ "hooks": [{ "type": "command", "command": "b" }] }]
+            } }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &ScopeKey::Global, &mut out);
+        let mut seen: Vec<(HookEvent, Option<String>)> = out
+            .iter()
+            .map(|h| (h.event, h.declared_event.clone()))
+            .collect();
+        seen.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            seen,
+            vec![
+                (HookEvent::BeforeToolCall, Some("PreToolUse".to_string())),
+                (
+                    HookEvent::BeforeToolCall,
+                    Some("before_tool_call".to_string())
+                ),
+            ]
+        );
+        assert_eq!(out[0].event_name(), out[0].declared_event.clone().unwrap());
     }
 
     const ONE_HOOK: &str = r#"{ "hooks": { "PreToolUse": [
@@ -581,10 +669,22 @@ mod tests {
         let roots = vec![proj.path().to_path_buf()];
         let hooks = load_user_hooks(Some(cwd.path()), &roots);
         assert_eq!(count_project_hooks(&hooks), 1);
+        // Picked by layer, not by position: the global layer loads first and
+        // reads the real config dir, which may hold a `hooks.json` of its own
+        // (another test's isolated home, or a developer's `~/.aleph`).
+        let project_hook = hooks
+            .iter()
+            .find(|h| h.plugin_name == "user:project")
+            .expect("the project hook");
         assert_eq!(
-            hooks[0].plugin_root,
+            project_hook.plugin_root,
             proj.path().join(".aleph"),
-            "project hook must carry its own .aleph as plugin_root for the fire-time gate"
+            "project hook must carry its own .aleph as plugin_root for variable substitution"
+        );
+        assert_eq!(
+            project_hook.scope_key,
+            ScopeKey::project(proj.path()),
+            "project hook must carry its project's key for the fire-time gate"
         );
     }
 
@@ -610,5 +710,34 @@ mod tests {
         let roots = vec![proj.path().to_path_buf()];
         let hooks = load_user_hooks(Some(cwd.path()), &roots);
         assert_eq!(count_project_hooks(&hooks), 2);
+    }
+
+    /// The producer stamps the key: a project layer file yields `Project(root)`
+    /// rows, the global file yields `Global` rows. Without the stamp the
+    /// executor's gate has nothing to compare and every project hook would
+    /// silently become global (fail-open).
+    #[test]
+    fn project_layer_rows_carry_their_project_key_and_global_rows_carry_global() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".aleph")).unwrap();
+        std::fs::write(
+            root.path().join(".aleph/hooks.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        load_project_layer(root.path(), &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scope_key, ScopeKey::project(root.path()));
+
+        let global = root.path().join("hooks.json");
+        std::fs::write(
+            &global,
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        load_into(&global, "user:global", &ScopeKey::Global, &mut out);
+        assert_eq!(out[0].scope_key, ScopeKey::Global);
     }
 }

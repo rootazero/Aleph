@@ -7,16 +7,19 @@
 use anyhow::{anyhow, Result};
 
 use crate::extension::capability::{CapabilityDeclaration, Tier};
+use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::manifest::PluginPermission;
-use crate::extension::registry::PluginRegistry;
+use crate::extension::registry::{DiagnosticLevel, PluginDiagnostic, PluginRegistry};
 use crate::extension::types::PluginRecord;
+use crate::sync_primitives::Arc;
 
 /// Unified registration API for writing capabilities into `PluginRegistry`.
 ///
 /// This struct borrows the registry mutably and provides permission-checked
-/// capability registration. It is the single entry point that all registrars
-/// (MCP, WASM, manifest adapters) use to write into the registry.
-pub struct CapabilityApi<'a> {
+/// capability registration. It is the write path `register_plugin_row` (the
+/// `registry_row` effect) uses; nothing else writes capabilities into the
+/// registry.
+pub(crate) struct CapabilityApi<'a> {
     /// The plugin registry to write into
     registry: &'a mut PluginRegistry,
     /// ID of the plugin performing registration
@@ -27,7 +30,7 @@ pub struct CapabilityApi<'a> {
 
 impl<'a> CapabilityApi<'a> {
     /// Create a new `CapabilityApi` for a specific plugin.
-    pub const fn new(
+    pub(super) const fn new(
         registry: &'a mut PluginRegistry,
         plugin_id: String,
         permissions: Vec<PluginPermission>,
@@ -43,7 +46,7 @@ impl<'a> CapabilityApi<'a> {
     ///
     /// - P0 (Core) and P1 (Important): no permission check
     /// - P2 (Pluggable): permission check if required by the capability
-    pub fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
+    pub(super) fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
         self.validate_owner(&decl)?;
         let tier = decl.tier();
 
@@ -82,33 +85,10 @@ impl<'a> CapabilityApi<'a> {
                 self.registry.register_agent(agent);
             }
             CapabilityDeclaration::McpServer(_) => {
-                // No-op: MCP servers are handled by the loader, not the registry
+                // No-op: MCP servers are mounted by `lifecycle.rs` (the
+                // `mcp_server` step), not written into the registry.
             }
         }
-        Ok(())
-    }
-
-    /// Reload a plugin: unregister all existing capabilities and re-register
-    /// with a new record and capability set.
-    pub fn reload(
-        &mut self,
-        record: PluginRecord,
-        new_caps: Vec<CapabilityDeclaration>,
-    ) -> Result<()> {
-        for cap in &new_caps {
-            self.validate_owner(cap)?;
-            if let Some(perm) = cap.required_permission() {
-                self.require_permission(&perm)?;
-            }
-        }
-
-        self.registry.unregister_plugin(&self.plugin_id);
-        self.registry.register_plugin(record);
-
-        for cap in new_caps {
-            self.dispatch(cap)?;
-        }
-
         Ok(())
     }
 
@@ -145,10 +125,59 @@ impl<'a> CapabilityApi<'a> {
     }
 
     /// Get a reference to the underlying registry (for inspection in tests).
+    #[cfg(test)]
     #[must_use]
-    pub const fn registry(&self) -> &PluginRegistry {
+    pub(super) const fn registry(&self) -> &PluginRegistry {
         self.registry
     }
+}
+
+/// Mount-time registry effect: write the plugin record and every capability
+/// it declares under one write lock, and hand back the disposer that removes
+/// all of it (`PluginRegistry::unregister_plugin`).
+///
+/// A capability the plugin lacks permission for is NOT a mount failure — it
+/// becomes a `Warn` diagnostic on the row (it used to be a `debug!` line in
+/// `load_all`, i.e. invisible on every face). The row itself cannot fail to
+/// register, so this returns `Disposer` rather than `Result<Disposer, _>`.
+///
+/// This is a free function taking the `Arc` handle, not a method on
+/// [`CapabilityApi`]: the api borrows `&mut PluginRegistry` inside the lock
+/// guard and cannot own what its disposer would need.
+pub(crate) async fn register_plugin_row(
+    registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
+    record: PluginRecord,
+    permissions: Vec<PluginPermission>,
+    capabilities: Vec<CapabilityDeclaration>,
+) -> Disposer {
+    let plugin_id = record.id.clone();
+    {
+        let mut reg = registry.write().await;
+        reg.register_plugin(record);
+        let mut refused: Vec<String> = Vec::new();
+        {
+            let mut api = CapabilityApi::new(&mut reg, plugin_id.clone(), permissions);
+            for cap in capabilities {
+                let kind = cap.kind_name();
+                if let Err(e) = api.register_capability(cap) {
+                    refused.push(format!("{kind} capability not registered: {e}"));
+                }
+            }
+        }
+        for message in refused {
+            tracing::warn!(plugin_id = %plugin_id, %message, "capability refused at mount");
+            reg.add_diagnostic(PluginDiagnostic {
+                level: DiagnosticLevel::Warn,
+                message,
+                plugin_id: Some(plugin_id.clone()),
+                source: Some("mount".to_string()),
+            });
+        }
+    }
+    async_disposer(move || async move {
+        registry.write().await.unregister_plugin(&plugin_id);
+        Ok(())
+    })
 }
 
 // ============================================================================
@@ -208,6 +237,14 @@ mod tests {
         })
     }
 
+    fn make_agent() -> CapabilityDeclaration {
+        CapabilityDeclaration::Agent(AgentRegistration {
+            name: "helper".to_string(),
+            plugin_id: "test-plugin".to_string(),
+            ..Default::default()
+        })
+    }
+
     fn make_hook() -> CapabilityDeclaration {
         CapabilityDeclaration::Hook(HookRegistration {
             event: HookEvent::BeforeToolCall,
@@ -221,6 +258,7 @@ mod tests {
             actions: Vec::new(),
             plugin_root: None,
             timeout_secs: None,
+            declared_event: None,
         })
     }
 
@@ -274,44 +312,6 @@ mod tests {
         assert!(api.registry().get_service("test-service").is_some());
     }
 
-    // ── Reload clears and re-registers ───────────────────────────────────
-
-    #[test]
-    fn test_reload_clears_and_reregisters() {
-        let mut registry = make_registry_and_plugin();
-
-        // First registration
-        {
-            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
-            api.register_capability(make_tool()).unwrap();
-            assert!(api.registry().get_tool("my_tool").is_some());
-        }
-
-        // Reload with different capabilities
-        {
-            let new_record = PluginRecord::new(
-                "test-plugin".to_string(),
-                "Test Plugin v2".to_string(),
-                crate::extension::types::PluginKind::Static,
-                crate::extension::types::PluginOrigin::Global,
-            );
-
-            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
-
-            api.reload(new_record, vec![make_skill()]).unwrap();
-
-            // Old tool should be gone
-            assert!(api.registry().get_tool("my_tool").is_none());
-            // New skill should be present
-            assert!(api.registry().get_skill("test-skill").is_some());
-            // Plugin record updated
-            assert_eq!(
-                api.registry().get_plugin("test-plugin").unwrap().name,
-                "Test Plugin v2"
-            );
-        }
-    }
-
     // ── Dispatch routes to correct registry collections ──────────────────
 
     #[test]
@@ -340,11 +340,7 @@ mod tests {
 
         // McpServer is a no-op
         api.register_capability(CapabilityDeclaration::McpServer(
-            crate::extension::types::McpServerConfig::Stdio {
-                command: "npx".to_string(),
-                args: vec![],
-                env: std::collections::HashMap::new(),
-            },
+            crate::mcp::McpManagerConfig::stdio("plugin:test-plugin/s", "s", "npx"),
         ))
         .unwrap();
 
@@ -371,5 +367,85 @@ mod tests {
         // Skill is P2 but required_permission() returns None
         assert!(api.register_capability(make_skill()).is_ok());
         assert!(api.registry().get_skill("test-skill").is_some());
+    }
+
+    #[tokio::test]
+    async fn register_plugin_row_writes_the_row_and_its_disposer_removes_everything() {
+        use crate::extension::registry::PluginRegistry;
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(PluginRegistry::new()));
+        let record = PluginRecord::new(
+            "test-plugin".to_string(),
+            "Test Plugin".to_string(),
+            crate::extension::types::PluginKind::Static,
+            crate::extension::types::PluginOrigin::Global,
+        );
+
+        let disposer = register_plugin_row(
+            std::sync::Arc::clone(&registry),
+            record,
+            vec![PluginPermission::Background],
+            vec![make_tool(), make_service(), make_skill(), make_agent()],
+        )
+        .await;
+
+        {
+            let reg = registry.read().await;
+            assert!(reg.get_plugin("test-plugin").is_some());
+            assert_eq!(reg.list_tools_for_plugin("test-plugin").len(), 1);
+            assert_eq!(reg.list_services().len(), 1);
+            assert_eq!(reg.list_skills().len(), 1);
+            assert_eq!(reg.list_agents().len(), 1);
+        }
+
+        disposer().await.expect("row disposer cannot fail");
+
+        let reg = registry.read().await;
+        assert!(reg.get_plugin("test-plugin").is_none(), "record removed");
+        assert!(reg.list_tools_for_plugin("test-plugin").is_empty());
+        assert!(reg.list_services().is_empty());
+        assert!(reg.list_skills().is_empty());
+        assert!(reg.list_agents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_capability_refused_for_permissions_becomes_a_diagnostic_not_a_failure() {
+        use crate::extension::registry::{DiagnosticLevel, PluginRegistry};
+        let registry = std::sync::Arc::new(tokio::sync::RwLock::new(PluginRegistry::new()));
+        let record = PluginRecord::new(
+            "test-plugin".to_string(),
+            "Test Plugin".to_string(),
+            crate::extension::types::PluginKind::Static,
+            crate::extension::types::PluginOrigin::Global,
+        );
+        // No `Background` permission → the service is refused; the tool still lands.
+        let disposer = register_plugin_row(
+            std::sync::Arc::clone(&registry),
+            record,
+            vec![],
+            vec![make_tool(), make_service()],
+        )
+        .await;
+        {
+            let reg = registry.read().await;
+            assert_eq!(reg.list_tools_for_plugin("test-plugin").len(), 1);
+            assert!(reg.list_services().is_empty());
+            let diags: Vec<_> = reg
+                .diagnostics()
+                .iter()
+                .filter(|d| d.plugin_id.as_deref() == Some("test-plugin"))
+                .collect();
+            assert_eq!(diags.len(), 1, "{diags:?}");
+            assert!(matches!(diags[0].level, DiagnosticLevel::Warn));
+            assert!(
+                diags[0].message.contains("background"),
+                "{}",
+                diags[0].message
+            );
+        }
+        disposer().await.unwrap();
+        assert!(
+            registry.read().await.diagnostics().is_empty(),
+            "diagnostics go with the row"
+        );
     }
 }

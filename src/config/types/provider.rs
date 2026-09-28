@@ -28,6 +28,76 @@ pub enum CacheRetention {
 }
 
 // =============================================================================
+// ServerContextEditing
+// =============================================================================
+
+/// Anthropic server-side context editing (beta `context-management-2025-06-27`):
+/// the API clears old tool results before the prompt reaches the model, with
+/// its own defaults (clear once input passes 100k tokens, keep the 3 most
+/// recent tool uses). Default off.
+///
+/// Honoured only where the request can carry it — the first-party Anthropic
+/// host, not on the OAuth identity path; a provider that enables it anywhere
+/// else logs a warning at construction instead of silently doing nothing. When
+/// it is honoured, Aleph's own passes that rewrite old tool results stand down
+/// for runs on this provider (one problem, one answer).
+///
+/// Known costs, documented rather than modelled: the local pressure estimate
+/// keeps counting the tool results the server has already cleared — its
+/// calibration is frozen on such runs, so the post-clearing prompt the server
+/// reports is never learned as a tokenizer ratio (or carried to the next run)
+/// — so on a large window local compaction can fire earlier than it needs to;
+/// and the stand-down is decided per run, so a failover onto a target that
+/// does not clear keeps the local passes off for the rest of that run.
+///
+/// Written either as a table (`{ enabled = true }`, room for future knobs) or
+/// as the bare flag (`server_context_editing = true`): a config file that
+/// fails to parse stops the server from booting, so the natural hand-written
+/// form must not be the one that does it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct ServerContextEditing {
+    /// Send `context_management.edits: [clear_tool_uses]`.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// The written forms of [`ServerContextEditing`] — the ONE description both
+/// the parser and the published schema are derived from, so the schema can
+/// never advertise a narrower key than the loader accepts.
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum ServerContextEditingWritten {
+    /// `server_context_editing = true`
+    Flag(bool),
+    /// `server_context_editing = { enabled = true }`
+    Table {
+        #[serde(default)]
+        enabled: bool,
+    },
+}
+
+impl<'de> Deserialize<'de> for ServerContextEditing {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(
+            match ServerContextEditingWritten::deserialize(deserializer)? {
+                ServerContextEditingWritten::Flag(enabled)
+                | ServerContextEditingWritten::Table { enabled } => Self { enabled },
+            },
+        )
+    }
+}
+
+impl JsonSchema for ServerContextEditing {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ServerContextEditing".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        ServerContextEditingWritten::json_schema(generator)
+    }
+}
+
+// =============================================================================
 // ResponseFormat
 // =============================================================================
 
@@ -243,6 +313,10 @@ pub struct ProviderConfig {
     /// None = field omitted (thinking disabled).
     #[serde(default)]
     pub effort: Option<String>,
+
+    /// Server-side context editing (Anthropic). See [`ServerContextEditing`].
+    #[serde(default)]
+    pub server_context_editing: ServerContextEditing,
 }
 
 pub fn default_provider_color() -> String {
@@ -326,6 +400,7 @@ impl ProviderConfig {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: ServerContextEditing::default(),
         }
     }
 }
@@ -333,6 +408,101 @@ impl ProviderConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published schema describes both written forms the loader accepts
+    /// — a schema that said "object" alone would reject the bare flag a
+    /// config tool validates against it.
+    #[test]
+    fn server_context_editing_schema_admits_the_flag_and_the_table() {
+        let schema = serde_json::to_value(schemars::schema_for!(ServerContextEditing))
+            .expect("schema serializes");
+        let arms = schema["anyOf"]
+            .as_array()
+            .expect("an anyOf of the written forms");
+        assert!(
+            arms.iter().any(|a| a["type"] == "boolean"),
+            "bare flag missing: {schema}"
+        );
+        assert!(
+            arms.iter()
+                .any(|a| a["type"] == "object" && a["properties"].get("enabled").is_some()),
+            "table missing: {schema}"
+        );
+    }
+
+    /// Both written forms parse, and an absent key is off.
+    #[test]
+    fn server_context_editing_accepts_the_bare_flag_and_the_table() {
+        let parse = |body: &str| -> ServerContextEditing {
+            #[derive(Deserialize)]
+            struct Doc {
+                #[serde(default)]
+                server_context_editing: ServerContextEditing,
+            }
+            toml::from_str::<Doc>(body)
+                .expect("parses")
+                .server_context_editing
+        };
+        assert!(parse("server_context_editing = true").enabled);
+        assert!(!parse("server_context_editing = false").enabled);
+        assert!(parse("server_context_editing = { enabled = true }").enabled);
+        assert!(parse("[server_context_editing]\nenabled = true").enabled);
+        assert!(!parse("").enabled);
+    }
+
+    /// R8: the setting is reachable through the surface the model edits
+    /// config with (`self_config` → `ConfigPatcher`, a deep-merge through the
+    /// whole serde type), survives the write to disk, and survives a later
+    /// edit of an unrelated field of the same provider.
+    #[tokio::test]
+    async fn server_context_editing_round_trips_through_the_config_patcher() {
+        use crate::config::backup::ConfigBackup;
+        use crate::config::patcher::{ConfigPatcher, PatchRequest};
+        use crate::config::Config;
+
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("config.toml");
+        Config::default().save_to_file(&path).expect("seed config");
+        let shared = crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(Config::default()));
+        let patcher = ConfigPatcher::new(
+            shared.clone(),
+            path.clone(),
+            ConfigBackup::new(dir.join("backups"), 10),
+        );
+        patcher.record_mtime().await;
+
+        let patch = |value: serde_json::Value| PatchRequest {
+            path: "providers.claude".to_string(),
+            patch: value,
+            health_check: false,
+            dry_run: false,
+        };
+        let enabled = |config: &Config| config.providers["claude"].server_context_editing.enabled;
+
+        let applied = patcher
+            .apply(patch(serde_json::json!({
+                "protocol": "anthropic",
+                "models": ["claude-sonnet-4-6"],
+                "server_context_editing": { "enabled": true },
+            })))
+            .await
+            .expect("patch");
+        assert!(applied.success);
+        assert!(enabled(&*shared.read().await), "in memory");
+        assert!(
+            enabled(&Config::load_from_file(&path).expect("reload")),
+            "on disk"
+        );
+
+        patcher
+            .apply(patch(serde_json::json!({ "timeout_seconds": 90 })))
+            .await
+            .expect("unrelated patch");
+        let reloaded = Config::load_from_file(&path).expect("reload");
+        assert_eq!(reloaded.providers["claude"].timeout_seconds, 90);
+        assert!(enabled(&reloaded), "an unrelated edit must not turn it off");
+    }
 
     #[test]
     fn test_protocol_default() {
@@ -381,6 +551,7 @@ mod tests {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -419,6 +590,7 @@ mod tests {
             top_logprobs: None,
             metadata_user_id: None,
             effort: None,
+            server_context_editing: Default::default(),
         };
         assert_eq!(config.protocol(), "openai");
     }

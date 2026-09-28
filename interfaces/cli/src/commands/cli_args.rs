@@ -24,10 +24,10 @@ pub enum Commands {
 
         /// Reopen the most recently active session (by `last_active_at`)
         ///
-        /// The interactive twin of `aleph ask --last`, and the same resolver
+        /// The interactive twin of `al ask --last`, and the same resolver
         /// (`aleph_client::resolve_last_session`). Opt-in rather than the
         /// default, matching codex `resume` and pi `--continue`: a bare
-        /// `aleph chat` must not silently append to yesterday's thread.
+        /// `al chat` must not silently append to yesterday's thread.
         #[arg(short = 'c', long = "continue", conflicts_with = "session")]
         continue_last: bool,
     },
@@ -35,8 +35,8 @@ pub enum Commands {
     /// Send a single message and get response
     ///
     /// The message may be omitted when text is piped on stdin
-    /// (`echo "prompt" | aleph ask`). When both are given, the piped text is
-    /// appended below the message as context (`git diff | aleph ask "review"`).
+    /// (`echo "prompt" | al ask`). When both are given, the piped text is
+    /// appended below the message as context (`git diff | al ask "review"`).
     Ask {
         /// The message to send (optional when piping text on stdin)
         message: Option<String>,
@@ -302,7 +302,7 @@ pub enum ToolsAction {
     },
     /// Show a single tool's description and schema metadata
     Describe {
-        /// Tool name (key) as shown by `aleph tools list`
+        /// Tool name (key) as shown by `al tools list`
         name: String,
     },
     /// Directly invoke a tool, bypassing the LLM loop. JSON arguments are
@@ -553,7 +553,7 @@ pub enum CallsAction {
     List,
     /// Cancel a specific in-flight tool call by `tool_call_id`
     Cancel {
-        /// LLM-issued `tool_call_id` (see `aleph calls list`)
+        /// LLM-issued `tool_call_id` (see `al calls list`)
         call_id: String,
     },
 }
@@ -661,7 +661,7 @@ pub enum ProvidersAction {
     /// Probe every configured provider in one sweep
     ///
     /// `test` asks about one provider; this asks about all of them, which is
-    /// the question after rotating a key or moving a relay. `aleph doctor`
+    /// the question after rotating a key or moving a relay. `al doctor`
     /// answers a wider one — the whole diagnostic engine, prose findings and a
     /// total-outage gate — so it is the tool for "is anything wrong", not for
     /// "which of my providers answer".
@@ -1032,12 +1032,12 @@ pub enum UsersAction {
     },
     /// Show everything one principal holds — read this BEFORE deactivating them
     Show {
-        /// The `u-…` id from `aleph users list`
+        /// The `u-…` id from `al users list`
         user_id: String,
     },
     /// Rename a principal, change their role, or deactivate them
     Update {
-        /// The `u-…` id from `aleph users list`
+        /// The `u-…` id from `al users list`
         user_id: String,
         /// New display name
         #[arg(long = "name")]
@@ -1074,12 +1074,12 @@ pub enum ProjectsAction {
 pub enum ChannelAction {
     /// Show the conversations a room is bound to (any member may read)
     List {
-        /// Room id, from `aleph projects list`
+        /// Room id, from `al projects list`
         project_id: String,
     },
     /// Bind a channel group conversation to a room (operator only)
     Bind {
-        /// Room id, from `aleph projects list`
+        /// Room id, from `al projects list`
         project_id: String,
         /// Channel id, e.g. `telegram`
         channel_id: String,

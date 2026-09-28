@@ -758,6 +758,7 @@ mod tests {
             None,
             None,
             None,
+            crate::tools::result_processing::RecoveryTools::ALL,
         );
 
         assert!(
@@ -831,6 +832,7 @@ mod tests {
             None,
             None,
             None,
+            crate::tools::result_processing::RecoveryTools::ALL,
         );
 
         assert!(

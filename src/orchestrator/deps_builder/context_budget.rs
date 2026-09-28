@@ -188,18 +188,6 @@ fn window_aware_fresh_tail(usable: u64) -> usize {
         .min(FRESH_TAIL_MAX_COUNT)
 }
 
-/// Build the optional per-run context-budget config from `[context_budget]`.
-///
-/// Returns `None` when the section is absent or `enabled = false` — the
-/// orchestrator then leaves `HarnessDeps.context_budget`/`context_compactor`
-/// as `None`, so behavior is identical to before this wiring (no mid-run
-/// compaction). When `Some`, `AgentHarnessRunner::run` constructs a *fresh*
-/// `ContextBudget` per run (its circuit-breaker / split state
-/// must not be shared across concurrent sessions).
-///
-/// `token_budget` and the two thresholds are user-tunable; the remaining
-/// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
-/// every knob needs a toml surface).
 /// A model-aware compaction budget derived from the primary model's real
 /// context window. `usable` is what the pressure sensor consumes; the rest is
 /// kept for the one observability line at startup.
@@ -255,47 +243,6 @@ struct ChainMinBudget {
     chain_len: usize,
 }
 
-/// Provider keys participating in the failover chain, **primary first**.
-///
-/// Config-level twin of [`assemble_fallbacks`]'s selection, resolved from
-/// `[providers]` + `[fallback_provider].chain` alone (no built provider Arcs):
-/// explicit chain entries that exist and are enabled (primary excluded), or —
-/// when that yields nothing — every *other* enabled provider (name-sorted).
-/// Mirrors the set the live `FailoverProvider` can migrate into, so the
-/// compaction budget can be sized for the smallest window any in-request model
-/// migration could land on (see [`derive_chain_min_budget`]). A disabled or
-/// undefined provider is dropped here exactly as it would be at chain assembly,
-/// so it can never drag the budget down for a route that can't actually happen.
-fn resolve_chain_provider_keys(config: &Config, primary_provider_key: &str) -> Vec<String> {
-    let enabled = |name: &str| config.providers.get(name).is_some_and(|p| p.enabled);
-    let mut fallbacks: Vec<String> = Vec::new();
-    if let Some(fb) = config.fallback_provider.as_ref() {
-        for name in fb.resolved_chain() {
-            if name.eq_ignore_ascii_case(primary_provider_key) || !enabled(&name) {
-                continue;
-            }
-            if !fallbacks.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
-                fallbacks.push(name);
-            }
-        }
-    }
-    if fallbacks.is_empty() {
-        let mut names: Vec<String> = config
-            .providers
-            .iter()
-            .filter(|(n, p)| p.enabled && !n.eq_ignore_ascii_case(primary_provider_key))
-            .map(|(n, _)| n.clone())
-            .collect();
-        names.sort();
-        fallbacks = names;
-    }
-
-    let mut keys = Vec::with_capacity(fallbacks.len() + 1);
-    keys.push(primary_provider_key.to_string());
-    keys.extend(fallbacks);
-    keys
-}
-
 /// The chain-minimum compaction budget: the smallest [`derive_token_budget`]
 /// `usable` across the primary and every provider failover can migrate into.
 ///
@@ -307,8 +254,27 @@ fn resolve_chain_provider_keys(config: &Config, primary_provider_key: &str) -> V
 /// keeps the budget safe for whichever model the request ends up on — without
 /// the per-turn `AiProvider`-boundary invasion a fully dynamic budget would
 /// require. Returns the winning (smallest) provider/model for the startup log.
-fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> ChainMinBudget {
-    let keys = resolve_chain_provider_keys(config, primary_provider_key);
+///
+/// `fallbacks` is the chain's own answer to "where can a request migrate"
+/// ([`super::chain_fallback_names`]) — not a config-level re-derivation of it,
+/// which used to count every enabled provider (and ignore the legacy
+/// `[general] fallback_providers`) and so shrink the budget for routes the
+/// walk could never take. Each provider contributes its declared `models`;
+/// the preset ladder rungs the walk also appends are deliberately not
+/// counted (a Kimi preset's `moonshot-v1-8k` rung would pin every Kimi
+/// install to the 16k floor) — a migration onto one is caught by the reactive
+/// rescue, and a run pinned to one by [`ContextBudgetRefiner`].
+fn derive_chain_min_budget(
+    config: &Config,
+    primary_provider_key: &str,
+    fallbacks: &[String],
+) -> ChainMinBudget {
+    let mut keys = vec![primary_provider_key.to_string()];
+    for name in fallbacks {
+        if !keys.iter().any(|k| k.eq_ignore_ascii_case(name)) {
+            keys.push(name.clone());
+        }
+    }
     let mut best: Option<ChainMinBudget> = None;
     for key in &keys {
         let provider = config.providers.get(key);
@@ -347,18 +313,30 @@ fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> Chain
     })
 }
 
+/// Build the optional per-run context-budget config from `[context_budget]`.
+///
+/// Returns `None` only under an explicit `enabled = false` (or a config the
+/// validation below rejects) — the orchestrator then leaves
+/// `HarnessDeps.context_budget`/`context_compactor` as `None` (no mid-run
+/// compaction). A missing section is on: the gate is
+/// [`Config::effective_context_budget`]. When `Some`,
+/// `AgentHarnessRunner::run` constructs a *fresh* `ContextBudget` per run (its
+/// circuit-breaker / split state must not be shared across concurrent
+/// sessions).
+///
+/// `token_budget` and the two thresholds are user-tunable; the remaining
+/// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
+/// every knob needs a toml surface).
 pub fn build_context_budget_config(
     config: &Config,
     primary_provider_key: &str,
+    fallbacks: &[String],
 ) -> Option<ContextBudgetConfig> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
+    let cb = config.effective_context_budget()?;
     // Resolve the chain-minimum model once: its window sizes the budget (unless
     // overridden) AND its identity keys the per-model threshold override below,
     // so the trigger fractions always match the model the budget is sized for.
-    let derived = derive_chain_min_budget(config, primary_provider_key);
+    let derived = derive_chain_min_budget(config, primary_provider_key, fallbacks);
     // An explicit `token_budget` is an operator override — honored verbatim
     // (back-compat). Otherwise use the model-aware budget sized for the
     // *smallest* window on the resolved failover chain, so an in-request model
@@ -397,8 +375,8 @@ pub fn build_context_budget_config(
                     chain_min_usable = derived.budget.usable,
                     "context budget: a narrower fallback sibling caps the compaction budget well \
                      below the primary's window — the primary will compact early. Reorder/trim \
-                     [fallback_provider].chain or set an explicit [context_budget] token_budget \
-                     to override."
+                     [fallback_provider].chain, set an explicit [context_budget] token_budget, \
+                     or turn context management off with [context_budget] enabled = false."
                 );
             }
             derived.budget.usable
@@ -525,17 +503,15 @@ pub struct ContextBudgetRefiner {
 }
 
 /// Capture the refinement inputs from `[context_budget]`. Returns `None`
-/// under exactly the same gate as [`build_context_budget_config`] (section
-/// absent or disabled), so the two handles always come and go together.
+/// under the same gate as [`build_context_budget_config`]
+/// ([`Config::effective_context_budget`]: explicitly disabled), so the two
+/// handles come and go together.
 #[must_use]
 pub fn build_context_budget_refiner(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<ContextBudgetRefiner> {
-    let cb = config.context_budget.as_ref()?;
-    if !cb.enabled {
-        return None;
-    }
+    let cb = config.effective_context_budget()?;
     Some(ContextBudgetRefiner {
         explicit_token_budget: cb.token_budget,
         global_warning: cb.warning_threshold,
@@ -669,10 +645,58 @@ mod tests {
         }
     }
 
+    /// Default on: a config that never wrote `[context_budget]` builds the
+    /// same budget as one that wrote `enabled = true` and nothing else.
     #[test]
-    fn context_budget_none_when_section_missing() {
-        let cfg = Config::default();
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+    fn context_budget_some_when_section_missing() {
+        let missing = build_context_budget_config(&Config::default(), "primary", &[])
+            .expect("a missing section is on");
+        let explicit = build_context_budget_config(
+            &cfg_with_context_budget(Some(ContextBudgetToml {
+                enabled: true,
+                ..ContextBudgetToml::default()
+            })),
+            "primary",
+            &[],
+        )
+        .expect("enabled → Some");
+        assert_cfg_eq(&missing, &explicit);
+    }
+
+    /// What a default-on run actually gets when `token_budget` is unset, for a
+    /// 1M-window model, a 200k-window model and a model the catalog does not
+    /// know: the chain-minimum `window − output reserve`, never a flat 200k.
+    #[test]
+    fn default_on_budget_follows_the_model_window() {
+        let budget_for = |model: &str| {
+            let mut providers = std::collections::HashMap::new();
+            providers.insert("p".to_string(), ProviderConfig::test_config(model));
+            let cfg = Config {
+                providers,
+                ..Config::default()
+            };
+            build_context_budget_config(&cfg, "p", &[])
+                .expect("a missing section is on")
+                .token_budget
+        };
+        let usable = |model: &str, window: u32| {
+            let caps = capabilities_for(model).expect("catalog model");
+            assert_eq!(caps.context_window, window, "{model} is the {window} case");
+            u64::from(caps.context_window) - u64::from(caps.max_output_tokens)
+        };
+        assert_eq!(
+            budget_for("claude-sonnet-4-6"),
+            usable("claude-sonnet-4-6", 1_000_000)
+        );
+        assert_eq!(
+            budget_for("claude-opus-4-1-20250805"),
+            usable("claude-opus-4-1-20250805", 200_000)
+        );
+        assert!(capabilities_for("totally-unknown-model").is_none());
+        assert_eq!(
+            budget_for("totally-unknown-model"),
+            DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE
+        );
     }
 
     #[test]
@@ -682,7 +706,7 @@ mod tests {
             token_budget: Some(128_000),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
     }
 
     #[test]
@@ -693,7 +717,7 @@ mod tests {
             enabled: true,
             ..ContextBudgetToml::default()
         }));
-        let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "primary", &[]).expect("enabled → Some");
         let usable = DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE;
         assert_eq!(bc.token_budget, usable);
         // Critical keeps the flat default; warning is window-aware. The default
@@ -732,7 +756,7 @@ mod tests {
                 ..ContextBudgetToml::default()
             },
         );
-        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "custom", &[]).expect("enabled → Some");
         assert_eq!(bc.summarizer_input_budget, 16_000);
     }
 
@@ -752,7 +776,7 @@ mod tests {
                 ..ContextBudgetToml::default()
             },
         );
-        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "custom", &[]).expect("enabled → Some");
         assert_eq!(bc.summarizer_input_budget, 48_000);
     }
 
@@ -772,7 +796,7 @@ mod tests {
                 ..ContextBudgetToml::default()
             },
         );
-        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "custom", &[]).expect("enabled → Some");
         assert_eq!(bc.summarizer_input_budget, 4_096);
     }
 
@@ -793,7 +817,8 @@ mod tests {
                 ..ContextBudgetToml::default()
             },
         );
-        let bc = build_context_budget_config(&cfg, "custom-no-preset").expect("enabled → Some");
+        let bc =
+            build_context_budget_config(&cfg, "custom-no-preset", &[]).expect("enabled → Some");
         assert_eq!(bc.summarizer_input_budget, 25_000);
     }
 
@@ -806,7 +831,7 @@ mod tests {
             critical_threshold: Some(0.9),
             ..ContextBudgetToml::default()
         }));
-        let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "primary", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 64_000);
         assert_eq!(bc.warning_threshold, 0.6);
         assert_eq!(bc.critical_threshold, 0.9);
@@ -823,7 +848,7 @@ mod tests {
             critical_threshold: Some(0.7),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
     }
 
     #[test]
@@ -833,7 +858,7 @@ mod tests {
             token_budget: Some(0),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
     }
 
     #[test]
@@ -843,7 +868,7 @@ mod tests {
             warning_threshold: Some(1.5),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
     }
 
     // ── model-aware budget derivation ────────────────────────────────────
@@ -909,7 +934,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("kimi", ProviderConfig::test_config("kimi-k2"), cb);
-        let bc = build_context_budget_config(&cfg, "kimi").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "kimi", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 262_144 - 32_768);
     }
 
@@ -923,7 +948,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("c", pc, cb);
-        let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "c", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 936_000);
     }
 
@@ -939,7 +964,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("c", pc, cb);
-        let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "c", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 50_000);
     }
 
@@ -959,7 +984,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
-        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "moonshot", &[]).expect("enabled → Some");
         assert_eq!(bc.warning_threshold, 0.60);
         assert_eq!(bc.critical_threshold, 0.78);
         // Budget itself still derives from the model window (override is thresholds-only).
@@ -982,7 +1007,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
-        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "moonshot", &[]).expect("enabled → Some");
         assert_eq!(
             bc.warning_threshold, 0.60,
             "override wins for the set field"
@@ -1007,7 +1032,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
-        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "moonshot", &[]).expect("enabled → Some");
         // No matching override → the *global default*, which for warning is now
         // window-aware. kimi-k2's usable window is narrow enough that the auto
         // warning sits below 0.70; critical still uses the flat default.
@@ -1035,7 +1060,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
-        let bc = build_context_budget_config(&cfg, "moonshot").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "moonshot", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 50_000);
         assert_eq!(bc.warning_threshold, 0.55);
     }
@@ -1055,7 +1080,7 @@ mod tests {
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
         assert!(
-            build_context_budget_config(&cfg, "moonshot").is_none(),
+            build_context_budget_config(&cfg, "moonshot", &[]).is_none(),
             "inverted per-model thresholds disable the budget (P7 defensive)"
         );
     }
@@ -1156,10 +1181,10 @@ mod tests {
         claude.context_window = Some(1_000_000);
         claude.max_tokens = Some(64_000);
         let claude_cfg = cfg_with_primary("claude", claude, cb());
-        let claude_bc = build_context_budget_config(&claude_cfg, "claude").expect("some");
+        let claude_bc = build_context_budget_config(&claude_cfg, "claude", &[]).expect("some");
 
         let kimi_cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb());
-        let kimi_bc = build_context_budget_config(&kimi_cfg, "moonshot").expect("some");
+        let kimi_bc = build_context_budget_config(&kimi_cfg, "moonshot", &[]).expect("some");
 
         assert_eq!(
             claude_bc.warning_threshold, DEFAULT_WARNING_THRESHOLD,
@@ -1203,33 +1228,33 @@ mod tests {
     }
 
     #[test]
-    fn chain_min_budget_picks_smallest_window_in_explicit_chain() {
+    fn chain_min_budget_picks_smallest_window_on_the_chain() {
         // A 1M primary that can migrate (rate-limit) to a 256k kimi must budget
         // for kimi's window, not its own — else the migrated turn overflows.
-        let fb = FallbackProviderToml {
-            chain: vec!["small".to_string()],
-            provider: None,
-            max_retries: None,
-        };
-        let cfg = cfg_chain_budget(
-            ("big", big_primary()),
-            Some(fb),
-            vec![("small", ProviderConfig::test_config("kimi-k2"))],
-        );
-        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
-        assert_eq!(bc.token_budget, 262_144 - 32_768);
-    }
-
-    #[test]
-    fn chain_min_budget_auto_derive_spans_all_enabled_providers() {
-        // No explicit chain → failover auto-derives from every enabled
-        // provider, so the budget must span them and pick the smallest window.
         let cfg = cfg_chain_budget(
             ("big", big_primary()),
             None,
             vec![("small", ProviderConfig::test_config("kimi-k2"))],
         );
-        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "big", &["small".to_string()])
+            .expect("enabled → Some");
+        assert_eq!(bc.token_budget, 262_144 - 32_768);
+    }
+
+    #[test]
+    fn a_provider_the_chain_cannot_reach_does_not_size_the_budget() {
+        // `tiny` is configured and enabled, but the chain the walk uses does
+        // not contain it: it must not drag the budget to the 16k floor.
+        let cfg = cfg_chain_budget(
+            ("big", big_primary()),
+            None,
+            vec![
+                ("small", ProviderConfig::test_config("kimi-k2")),
+                ("tiny", ProviderConfig::test_config("step-1-8k")),
+            ],
+        );
+        let bc = build_context_budget_config(&cfg, "big", &["small".to_string()])
+            .expect("enabled → Some");
         assert_eq!(bc.token_budget, 262_144 - 32_768);
     }
 
@@ -1238,23 +1263,7 @@ mod tests {
         // Only the primary exists → min-over-chain == primary budget (the
         // build-time-by-primary back-compat path is preserved).
         let cfg = cfg_chain_budget(("big", big_primary()), None, vec![]);
-        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
-        assert_eq!(bc.token_budget, 1_000_000 - 64_000);
-    }
-
-    #[test]
-    fn chain_min_budget_ignores_disabled_fallback() {
-        // A disabled sibling can never be migrated into, so it must not drag
-        // the budget down to its (smaller) window.
-        let mut disabled = ProviderConfig::test_config("kimi-k2");
-        disabled.enabled = false;
-        let fb = FallbackProviderToml {
-            chain: vec!["small".to_string()],
-            provider: None,
-            max_retries: None,
-        };
-        let cfg = cfg_chain_budget(("big", big_primary()), Some(fb), vec![("small", disabled)]);
-        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "big", &[]).expect("enabled → Some");
         assert_eq!(bc.token_budget, 1_000_000 - 64_000);
     }
 
@@ -1305,15 +1314,19 @@ mod tests {
         assert_eq!(a.max_splits, b.max_splits, "max_splits");
     }
 
+    /// The refiner comes and goes with the config: on when the section is
+    /// missing, off only under an explicit `enabled = false`.
     #[test]
-    fn refiner_none_when_section_missing_or_disabled() {
+    fn refiner_follows_the_same_gate_as_the_config() {
         let cfg = Config::default();
-        assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+        assert!(build_context_budget_refiner(&cfg, "primary").is_some());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_some());
         let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
             enabled: false,
             ..ContextBudgetToml::default()
         }));
         assert!(build_context_budget_refiner(&cfg, "primary").is_none());
+        assert!(build_context_budget_config(&cfg, "primary", &[]).is_none());
     }
 
     #[test]
@@ -1326,7 +1339,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("moonshot", ProviderConfig::test_config("kimi-k2"), cb);
-        let base = build_context_budget_config(&cfg, "moonshot").expect("some");
+        let base = build_context_budget_config(&cfg, "moonshot", &[]).expect("some");
         let refiner = build_context_budget_refiner(&cfg, "moonshot").expect("some");
         let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
         assert_cfg_eq(&refined, &base);
@@ -1343,7 +1356,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("claude", big_primary(), cb);
-        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("some");
         assert_eq!(base.token_budget, 936_000);
         let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
         let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
@@ -1376,7 +1389,7 @@ mod tests {
             Some(fb),
             vec![("small", ProviderConfig::test_config("kimi-k2"))],
         );
-        let base = build_context_budget_config(&cfg, "big").expect("some");
+        let base = build_context_budget_config(&cfg, "big", &["small".to_string()]).expect("some");
         assert_eq!(base.token_budget, 262_144 - 32_768, "chain-min is kimi");
         let refiner = build_context_budget_refiner(&cfg, "big").expect("some");
         // Run served by the 1M primary model; the runner passes the
@@ -1396,7 +1409,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("claude", big_primary(), cb);
-        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("some");
         let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
         let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
         assert_eq!(refined.token_budget, 500_000);
@@ -1416,7 +1429,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("claude", big_primary(), cb);
-        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("some");
         // "kimi" does not match claude-sonnet → base keeps the flat defaults.
         assert_eq!(base.critical_threshold, DEFAULT_CRITICAL_THRESHOLD);
         let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
@@ -1435,7 +1448,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("claude", big_primary(), cb);
-        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("some");
         let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
         let refined =
             refiner.refine_for_serving_model(&base, "totally-unknown-model", "claude", None);
@@ -1454,7 +1467,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("local", pc, cb);
-        let base = build_context_budget_config(&cfg, "local").expect("some");
+        let base = build_context_budget_config(&cfg, "local", &[]).expect("some");
         let refiner = build_context_budget_refiner(&cfg, "local").expect("some");
         let refined =
             refiner.refine_for_serving_model(&base, "my-custom-model", "local", Some(64_000));
@@ -1477,7 +1490,7 @@ mod tests {
             ..ContextBudgetToml::default()
         };
         let cfg = cfg_with_primary("claude", big_primary(), cb);
-        let base = build_context_budget_config(&cfg, "claude").expect("some");
+        let base = build_context_budget_config(&cfg, "claude", &[]).expect("some");
         let refiner = build_context_budget_refiner(&cfg, "claude").expect("some");
         let refined = refiner.refine_for_serving_model(&base, "kimi-k2", "moonshot", None);
         assert_cfg_eq(&refined, &base);

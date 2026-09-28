@@ -263,8 +263,7 @@ impl BrowserSnapshotTool {
                 // through the one pipeline — same bound, same redaction,
                 // same offload — rather than the JSON arm growing a second
                 // copy of it (判据 §1).
-                let (body, text, truncated) = match present_body(&presented, format, max_chars)
-                {
+                let (body, text, truncated) = match present_body(&presented, format, max_chars) {
                     Ok(parts) => parts,
                     Err(message) => {
                         return BrowserSnapshotOutput {
@@ -300,9 +299,7 @@ impl BrowserSnapshotTool {
                 // and a truncated one does not parse at all, so none of them
                 // are usable.
                 let ref_count = match format {
-                    SnapshotFormat::Text => {
-                        text.matches(crate::browser::types::REF_TOKEN).count()
-                    }
+                    SnapshotFormat::Text => text.matches(crate::browser::types::REF_TOKEN).count(),
                     SnapshotFormat::Json if truncated => 0,
                     SnapshotFormat::Json => snap.ref_count,
                 };
@@ -349,11 +346,7 @@ impl BrowserSnapshotTool {
                     page_url: snap.page_url.clone(),
                     page_title: snap.page_title.clone(),
                     message: Some(render_snapshot_message(
-                        profile,
-                        snap,
-                        ref_count,
-                        truncated,
-                        format,
+                        profile, snap, ref_count, truncated, format,
                     )),
                 }
             }
@@ -848,8 +841,7 @@ mod tests {
     /// the offload is fed the FULL text (FL §3.12 ⑮ — a cut the model cannot
     /// recover from is data loss, not a budget).
     #[tokio::test]
-    async fn a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded()
-     {
+    async fn a_presented_truncated_snapshot_is_emitted_verbatim_and_the_full_text_is_offloaded() {
         let _store = crate::tools::result_store::install_test_tool_result_store();
         let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
         let tool = BrowserSnapshotTool::new(manager);
@@ -892,9 +884,9 @@ mod tests {
         assert!(snapshot.contains("# Omitted high-value controls:"));
         // The offload ran and was fed the FULL text, so the dropped tail is
         // recoverable through the blob the footer names.
-        let footer_at = snapshot.find("[Full output persisted: ").unwrap_or_else(|| {
-            panic!("the truncated arm must run the offload: {snapshot}")
-        });
+        let footer_at = snapshot
+            .find("[Full output persisted: ")
+            .unwrap_or_else(|| panic!("the truncated arm must run the offload: {snapshot}"));
         let path = crate::tools::result_store::extract_persisted_path(&snapshot[footer_at..])
             .expect("the footer names a blob");
         let blob = std::fs::read_to_string(path).expect("the blob exists on disk");
@@ -1038,6 +1030,50 @@ mod tests {
             !blob.contains("sk-ant-api03"),
             "the persisted copy is read back into context, so it must be redacted"
         );
+        // Page content carries the page's fence on disk too — and that is what
+        // tells the footer to keep the page's own lines out of it.
+        assert!(
+            crate::security::content_sanitizer::split_external_fence(&blob).is_some(),
+            "the blob must be one well-formed fence"
+        );
+        assert!(
+            !footer.contains("First sections:"),
+            "untrusted section titles must not be echoed outside the fence: {footer}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Under a dispatch that cannot call `ctx_search`, the offload footer does
+    /// not name it: a handle the model cannot use is not a handle.
+    ///
+    /// Mutation-checked: footing with `RecoveryTools::ALL` regardless turns
+    /// this red.
+    #[tokio::test]
+    async fn offload_names_only_the_retrieval_tools_the_dispatch_can_call() {
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&base).unwrap();
+        let store = ToolResultStore::with_dir_for_tests(base.clone());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let tree: String = (0..4_000)
+            .map(|i| format!("- generic \"filler {i}\" [ref=e{i}]\n"))
+            .collect();
+        let only_read = crate::tools::result_processing::RecoveryTools {
+            ctx_search: false,
+            file_read: true,
+        };
+        let footer = crate::tools::result_processing::with_recovery_tools(only_read, async {
+            super::super::offload_content_to(
+                &store,
+                "call-2",
+                &manager,
+                BrowserSnapshotTool::NAME,
+                &tree,
+            )
+        })
+        .await
+        .expect("an over-budget tree must be offloaded");
+        assert!(!footer.contains("ctx_search"), "{footer}");
+        assert!(footer.contains("file_read"), "{footer}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

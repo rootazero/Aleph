@@ -261,7 +261,7 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
     if work.heartbeats.is_none() {
         lines.push(
             "            Heartbeat tasks were NOT counted: no heartbeat service is \
-             running on that server. Run `aleph doctor` — `core/capability-wiring` \
+             running on that server. Run `al doctor` — `core/capability-wiring` \
              names the cause."
                 .to_string(),
         );
@@ -270,7 +270,7 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
         lines.push(
             "            Team tasks were NOT counted: either the team stores are not \
              open on that server or a scan failed — the server log says which. If a \
-             store did not open, `aleph doctor` (`core/capability-wiring`) names the cause."
+             store did not open, `al doctor` (`core/capability-wiring`) names the cause."
                 .to_string(),
         );
     }
@@ -428,7 +428,7 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
                 "Heartbeat tasks were NOT checked: either no heartbeat service is running \
                  on that server or its sweep failed — the server log says which — so any \
                  heartbeat task they own that it did not reach is still armed. If the \
-                 service is missing, `aleph doctor` (`core/capability-wiring`) names the \
+                 service is missing, `al doctor` (`core/capability-wiring`) names the \
                  cause."
                     .to_string(),
             );
@@ -438,7 +438,7 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
                 "Team tasks were NOT checked: either the team stores are not open on that \
                  server or a scan failed part-way — the server log says which — so a team \
                  task they own can still be dispatched. If a store did not open, \
-                 `aleph doctor` (`core/capability-wiring`) names the cause."
+                 `al doctor` (`core/capability-wiring`) names the cause."
                     .to_string(),
             );
         }

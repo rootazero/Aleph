@@ -110,23 +110,6 @@ impl EventEmitter for RedactingEmitter {
                 content: self.mask(&content),
                 is_complete,
             },
-            StreamEvent::ReasoningBlock {
-                run_id,
-                seq,
-                step_type,
-                label,
-                content,
-                confidence,
-                is_final,
-            } => StreamEvent::ReasoningBlock {
-                run_id,
-                seq,
-                step_type,
-                label,
-                content: self.mask(&content),
-                confidence,
-                is_final,
-            },
             StreamEvent::ToolStart {
                 run_id,
                 seq,

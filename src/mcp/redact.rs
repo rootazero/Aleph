@@ -20,7 +20,10 @@ use crate::pii::PiiEngine;
 /// silently degrade to identity passthrough.
 const CONSERVATIVE_PATTERNS: &[(&str, &str)] = &[
     // Authorization headers and basic-auth in URLs and JSON.
-    ("authorization: bearer ", "authorization: bearer [REDACTED] "),
+    (
+        "authorization: bearer ",
+        "authorization: bearer [REDACTED] ",
+    ),
     ("authorization: basic ", "authorization: basic [REDACTED] "),
     // Common credential query-string params. Match on `key=value` so we
     // catch `?api_key=…` and `?token=…` but not arbitrary prose that
@@ -37,7 +40,10 @@ fn conservative_redact(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut remaining = text;
     for (needle, replacement) in CONSERVATIVE_PATTERNS {
-        while let Some(idx) = remaining.to_ascii_lowercase().find(&needle.to_ascii_lowercase()) {
+        while let Some(idx) = remaining
+            .to_ascii_lowercase()
+            .find(&needle.to_ascii_lowercase())
+        {
             out.push_str(&remaining[..idx]);
             out.push_str(replacement);
             // Consume the value following the needle (up to the next
@@ -135,8 +141,14 @@ mod tests {
         // passes through untouched — that is by design, not a leak.
         let input = "the API_KEY=zzz is leaked";
         let out = conservative_redact(input);
-        assert!(!out.contains("zzz"), "the credential value must be redacted, got: {out}");
-        assert!(out.contains("[REDACTED]"), "the needle must be replaced, got: {out}");
+        assert!(
+            !out.contains("zzz"),
+            "the credential value must be redacted, got: {out}"
+        );
+        assert!(
+            out.contains("[REDACTED]"),
+            "the needle must be replaced, got: {out}"
+        );
         // Round-trip casing: the original was `API_KEY` (uppercase);
         // the redacted form is `api_key=` (lowercase, the needle's
         // canonical casing). The case-insensitive substring match for

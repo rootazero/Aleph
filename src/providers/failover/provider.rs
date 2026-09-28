@@ -2016,6 +2016,22 @@ impl AiProvider for FailoverProvider {
             .serving_provider_hint()
             .map(|c| Cow::Owned(c.into_owned()))
     }
+
+    /// Estimators take the live primary's policy; a failover to another target
+    /// is re-projected for that target at its own wire.
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.primary.current().reasoning_replay(model)
+    }
+
+    /// The live primary's answer, read once per run by the preflight
+    /// pipeline; a failover onto a target that does not clear keeps the local
+    /// passes off for the rest of that run (a documented gap).
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.primary.current().clears_tool_results_server_side()
+    }
 }
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 alephcore::utils::instance_lock::AcquireOutcome::HeldByLive { pid, lock_path } => {
                     eprintln!(
                         "Another Aleph instance is already running (PID {pid}). \
-                         Stop it first: kill {pid} or `aleph stop`. Lock file: {}",
+                         Stop it first: kill {pid} or `aleph-server stop`. Lock file: {}",
                         lock_path.display(),
                     );
                     std::process::exit(64);
@@ -142,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Another Aleph instance holds the lock, but its holder record \
                          names PID {pid}, which is not running — the record is stale \
                          (usually a daemon whose PID was not rewritten after forking). \
-                         Find the holder in your process list and stop it (`aleph stop`). \
+                         Find the holder in your process list and stop it (`aleph-server stop`). \
                          Do not remove {} while it is held.",
                         lock_path.display(),
                     );
@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!(
                         "Another Aleph instance holds the lock, but its holder record ({}) \
                          is missing or unreadable, so its PID is unknown. Find the holder \
-                         in your process list and stop it (`aleph stop`). \
+                         in your process list and stop it (`aleph-server stop`). \
                          Do not remove {} while it is held.",
                         holder_path.display(),
                         lock_path.display(),

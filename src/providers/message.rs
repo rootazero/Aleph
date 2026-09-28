@@ -6,6 +6,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::providers::reasoning_replay::ReasoningReplay;
+
+const fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// Unified message type — the single data model for all provider interactions.
 ///
 /// Modeled after pi-mono's `Message = UserMessage | AssistantMessage | ToolResultMessage`.
@@ -61,17 +67,23 @@ pub enum ContentBlock {
     },
     /// Structured JSON (preserves tool output structure)
     Json { value: Value },
-    /// Thinking/reasoning trace.
+    /// Thinking/reasoning trace, carried as facts only.
     ///
-    /// `signature` is the opaque verifier returned by Anthropic-compatible APIs
-    /// alongside the thinking content. It is `None` for providers that do not
-    /// emit a signature (Gemini, `OpenAI`). Anthropic requires a signed thinking
-    /// block to be replayed verbatim on subsequent turns whenever the same
-    /// assistant message also contains `tool_use` blocks.
+    /// `signature` is the opaque verifier some APIs mint with the reasoning
+    /// (an Anthropic signed block, or the NDJSON encrypted-item lines of `OpenAI`
+    /// Responses); `None` for unsigned reasoning. `earlier_turn` says the block
+    /// belongs to a user turn before the current one. Whether a block is sent,
+    /// and how, is decided per target by
+    /// [`ReasoningReplay`](crate::providers::reasoning_replay::ReasoningReplay)
+    /// — not by whoever builds the message list.
     Thinking {
         thinking: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
+        /// `false` when unknown: an unknown block is treated as current-turn,
+        /// which is what every block was before the fact existed.
+        #[serde(default, skip_serializing_if = "is_false")]
+        earlier_turn: bool,
     },
     /// Tool call (only in Assistant messages)
     ToolCall {
@@ -183,40 +195,6 @@ impl UnifiedMessage {
         }
     }
 
-    /// Build an Assistant message from a `ProviderResponse`
-    #[must_use]
-    pub fn from_provider_response(resp: &super::adapter::ProviderResponse) -> Self {
-        let mut content = Vec::new();
-        if let Some(ref thinking) = resp.thinking {
-            content.push(ContentBlock::Thinking {
-                // rust-doctor-disable-next-line excessive-clone
-                thinking: thinking.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                signature: resp.thinking_signature.clone(),
-            });
-        }
-        if let Some(ref text) = resp.text {
-            content.push(ContentBlock::Text {
-                // rust-doctor-disable-next-line excessive-clone
-                text: text.clone(),
-                cache_control: None,
-            });
-        }
-        for tc in &resp.tool_calls {
-            content.push(ContentBlock::ToolCall {
-                // rust-doctor-disable-next-line excessive-clone
-                id: tc.id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                name: tc.name.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                arguments: tc.arguments.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                thought_signature: tc.thought_signature.clone(),
-            });
-        }
-        Self::Assistant { content }
-    }
-
     /// Get mutable access to content blocks (for PII filtering)
     pub const fn content_blocks_mut(&mut self) -> &mut Vec<ContentBlock> {
         match self {
@@ -243,33 +221,48 @@ impl UnifiedMessage {
         for msg in messages {
             for block in msg.content_blocks() {
                 match block {
-                    ContentBlock::Text { text, .. } => parts.push(text.as_str().into()),
-                    ContentBlock::Json { value } => parts.push(value.to_string().into()),
                     ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
-                    _ => {}
+                    other => parts.extend(other.as_model_text()),
                 }
             }
         }
         parts.join("\n")
     }
 
-    /// Extract all text content from a message as a single concatenated string.
+    /// Every text-bearing block joined with spaces — **reasoning included** —
+    /// with tool calls as `name arguments` and images omitted.
     ///
-    /// Covers Text blocks and Json (serialized). Used for token estimation.
+    /// For what a transcript or summary shows (no reasoning) use
+    /// [`Self::transcript_text`]; for one block's model-facing text use
+    /// [`ContentBlock::as_model_text`].
     #[must_use]
     pub fn text_content(&self) -> String {
-        let mut parts = Vec::new();
+        let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
         for block in self.content_blocks() {
             match block {
-                ContentBlock::Text { text, .. } => parts.push(text.as_str().to_owned()),
-                ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().to_owned()),
-                ContentBlock::Json { value } => parts.push(value.to_string()),
+                ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
                 ContentBlock::ToolCall {
                     name, arguments, ..
-                } => {
-                    parts.push(format!("{name} {arguments}"));
-                }
-                ContentBlock::Image { .. } => {}
+                } => parts.push(format!("{name} {arguments}").into()),
+                other => parts.extend(other.as_model_text()),
+            }
+        }
+        parts.join(" ")
+    }
+
+    /// The message as a transcript renders it: every block except reasoning
+    /// and images — text via [`ContentBlock::as_model_text`], tool calls as
+    /// `name arguments`. What summarizers read and what their input budgets
+    /// are sized on, so a summary never carries reasoning no target was sent.
+    #[must_use]
+    pub fn transcript_text(&self) -> String {
+        let mut parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+        for block in self.content_blocks() {
+            match block {
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => parts.push(format!("{name} {arguments}").into()),
+                other => parts.extend(other.as_model_text()),
             }
         }
         parts.join(" ")
@@ -304,11 +297,7 @@ impl UnifiedMessage {
             } => {
                 let text = content
                     .iter()
-                    .map(|b| match b {
-                        ContentBlock::Text { text, .. } => text.as_str().to_owned(),
-                        ContentBlock::Json { value } => value.to_string(),
-                        _ => String::new(),
-                    })
+                    .map(|b| b.as_model_text().unwrap_or_default().into_owned())
                     .collect::<Vec<_>>()
                     .join(" ");
                 Some((tool_name.as_str(), text))
@@ -358,24 +347,53 @@ impl ContentBlock {
             _ => None,
         }
     }
+
+    /// The text a model is shown for this block: `Text` verbatim, `Json` via
+    /// [`value_as_model_text`]. `None` for reasoning, tool calls and images.
+    ///
+    /// The one answer to "is this tool result a string or a structure" — every
+    /// reader of tool-result text goes through it.
+    #[must_use]
+    pub fn as_model_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Self::Text { text, .. } => Some(std::borrow::Cow::Borrowed(text)),
+            Self::Json { value } => Some(value_as_model_text(value)),
+            _ => None,
+        }
+    }
+}
+
+/// A JSON value as model-facing text: a string is the text itself; anything
+/// else is its compact JSON encoding.
+///
+/// Tool output is stored as a `Value`, and most of it is a `Value::String`.
+/// Encoding that string again (`value.to_string()`) put a quoted, escaped copy
+/// on the wire — `"line1\nline2"` instead of two lines.
+#[must_use]
+pub fn value_as_model_text(value: &Value) -> std::borrow::Cow<'_, str> {
+    match value {
+        Value::String(text) => std::borrow::Cow::Borrowed(text),
+        other => std::borrow::Cow::Owned(other.to_string()),
+    }
 }
 
 // === Message pre-processing ===
 
-/// Pre-process messages before sending to any provider.
+/// The pre-send choke point: what one target actually receives.
 ///
-/// 1. Normalizes the tool-call/tool-result pairing invariant (see
-///    [`normalize_tool_pairs`]) — the wire-level safety net that every provider
-///    call passes through.
-/// 2. Normalizes cross-model content (no-op for now, reserved for thinking signatures)
+/// 1. Applies the target's [`ReasoningReplay`] policy to the reasoning facts
+///    (the same pure projection the context estimators count).
+/// 2. Normalizes the tool-call/tool-result pairing invariant (see
+///    [`normalize_tool_pairs`]).
+///
+/// Called by `HttpProvider::execute` after failover has picked the target.
 #[must_use]
 pub fn transform_messages(
     messages: &[UnifiedMessage],
-    _target_provider: Option<&str>,
+    replay: &ReasoningReplay,
 ) -> Vec<UnifiedMessage> {
-    let mut result = messages.to_vec();
+    let mut result = replay.project(messages);
     normalize_tool_pairs(&mut result);
-    // normalize_cross_model is a no-op for now
     result
 }
 
@@ -584,42 +602,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_provider_response() {
-        use super::super::adapter::{NativeToolCall, ProviderResponse};
-        let resp = ProviderResponse {
-            text: Some("I'll search for that.".into()),
-            tool_calls: vec![NativeToolCall {
-                thought_signature: None,
-                id: "call_1".into(),
-                name: "search".into(),
-                arguments: json!({"query": "rust"}),
-            }],
-            thinking: Some("Let me think...".into()),
-            thinking_signature: Some("sig_abc123".into()),
-            ..Default::default()
-        };
-        let msg = UnifiedMessage::from_provider_response(&resp);
-        match &msg {
-            UnifiedMessage::Assistant { content } => {
-                assert_eq!(content.len(), 3); // thinking + text + tool_call
-                match &content[0] {
-                    ContentBlock::Thinking {
-                        thinking,
-                        signature,
-                    } => {
-                        assert_eq!(thinking, "Let me think...");
-                        assert_eq!(signature.as_deref(), Some("sig_abc123"));
-                    }
-                    _ => panic!("expected Thinking block"),
-                }
-                assert!(matches!(&content[1], ContentBlock::Text { .. }));
-                assert!(matches!(&content[2], ContentBlock::ToolCall { .. }));
-            }
-            _ => panic!("expected Assistant"),
-        }
-    }
-
-    #[test]
     fn test_extract_all_text() {
         let messages = vec![
             UnifiedMessage::user("hello"),
@@ -663,7 +645,7 @@ mod tests {
             },
             UnifiedMessage::tool_result("c1", "search", "found", false),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3); // no synthetic results added
     }
 
@@ -681,7 +663,7 @@ mod tests {
             },
             // Missing ToolResult for c1!
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3); // synthetic ToolResult added
         match &result[2] {
             UnifiedMessage::ToolResult {
@@ -715,7 +697,7 @@ mod tests {
             // No result for c1, then the user keeps talking.
             UnifiedMessage::user("never mind, do something else"),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 3);
         // result[1] must be the synthetic result, directly after the call.
         match &result[1] {
@@ -737,7 +719,7 @@ mod tests {
             UnifiedMessage::tool_result("gone", "search", "stale result", false),
             UnifiedMessage::user("continue"),
         ];
-        let result = transform_messages(&messages, None);
+        let result = transform_messages(&messages, &ReasoningReplay::default());
         assert_eq!(result.len(), 2, "orphan ToolResult must be removed");
         assert!(result
             .iter()
@@ -834,28 +816,72 @@ mod tests {
     }
 
     #[test]
-    fn test_from_provider_response_copies_thought_signature() {
-        use super::super::adapter::{NativeToolCall, ProviderResponse};
-        let resp = ProviderResponse {
-            tool_calls: vec![NativeToolCall {
-                id: "c1".into(),
-                name: "search".into(),
-                arguments: json!({}),
-                thought_signature: Some("sig_fpr".into()),
-            }],
-            ..Default::default()
+    fn as_model_text_unwraps_strings_and_compacts_structures() {
+        let text = ContentBlock::Text {
+            text: "plain".into(),
+            cache_control: None,
         };
-        let msg = UnifiedMessage::from_provider_response(&resp);
-        match &msg {
-            UnifiedMessage::Assistant { content } => match &content[0] {
-                ContentBlock::ToolCall {
-                    thought_signature, ..
-                } => {
-                    assert_eq!(thought_signature.as_deref(), Some("sig_fpr"));
-                }
-                other => panic!("expected ToolCall, got {other:?}"),
+        assert_eq!(text.as_model_text().as_deref(), Some("plain"));
+        let string = ContentBlock::Json {
+            value: json!("line1\nline2"),
+        };
+        assert_eq!(string.as_model_text().as_deref(), Some("line1\nline2"));
+        let object = ContentBlock::Json {
+            value: json!({"a": 1}),
+        };
+        assert_eq!(object.as_model_text().as_deref(), Some("{\"a\":1}"));
+        for none in [
+            ContentBlock::Thinking {
+                thinking: "t".into(),
+                signature: None,
+                earlier_turn: false,
             },
-            _ => panic!("expected Assistant"),
+            ContentBlock::ToolCall {
+                id: "c".into(),
+                name: "n".into(),
+                arguments: json!({}),
+                thought_signature: None,
+            },
+            ContentBlock::Image {
+                data: "d".into(),
+                mime_type: "image/png".into(),
+            },
+        ] {
+            assert!(none.as_model_text().is_none(), "{none:?}");
         }
+    }
+
+    /// Every message-level reader of a tool result sees the tool's text, once.
+    #[test]
+    fn a_string_tool_result_is_read_as_its_text_everywhere() {
+        let msg = UnifiedMessage::tool_result_json("c", "read", json!("line1\nline2"), false);
+        assert_eq!(
+            msg.tool_result_info(),
+            Some(("read", "line1\nline2".to_string()))
+        );
+        assert_eq!(msg.text_content(), "line1\nline2");
+        assert_eq!(msg.transcript_text(), "line1\nline2");
+        assert_eq!(UnifiedMessage::extract_all_text(&[msg]), "line1\nline2");
+    }
+
+    /// `text_content` keeps reasoning (the leak scanner needs it);
+    /// `transcript_text` — what summaries read — does not.
+    #[test]
+    fn transcript_text_leaves_reasoning_out_while_text_content_keeps_it() {
+        let msg = UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "plan".into(),
+                    signature: None,
+                    earlier_turn: false,
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                    cache_control: None,
+                },
+            ],
+        };
+        assert_eq!(msg.text_content(), "plan answer");
+        assert_eq!(msg.transcript_text(), "answer");
     }
 }

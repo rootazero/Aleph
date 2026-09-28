@@ -207,7 +207,7 @@ impl Transcript {
         }
     }
 
-    /// A `Reasoning` / `ReasoningBlock` delta.
+    /// A `Reasoning` delta.
     pub(super) fn append_thinking(&mut self, s: &str, now_ms: Option<u64>) -> Vec<Change> {
         if s.is_empty() {
             return Vec::new();

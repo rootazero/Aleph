@@ -155,7 +155,7 @@ const SNIPPET_MAX_CHARS: usize = 600;
 /// `full_content` is the one parameter that can make a single `search` carry
 /// more than a `web_fetch`, because it returns N bodies rather than one. The
 /// per-body bound keeps the comparison to "a few pages", and the overall
-/// budget is capped again by [`SearchTool::max_result_tokens`].
+/// budget is capped again by `SearchTool`'s `AlephTool::MAX_RESULT_TOKENS`.
 const FULL_CONTENT_MAX_CHARS: usize = 20_000;
 
 /// A single search result
@@ -492,13 +492,6 @@ impl AlephTool for SearchTool {
         // Delegate to the internal implementation, converting ToolError to AlephError
         self.call_impl(args).await.map_err(Into::into)
     }
-
-    /// Above the global default, below `web_fetch`'s page budget per result:
-    /// with `full_content` set this call carries N page bodies where a fetch
-    /// carries one, so the ceiling is on the call, not on the page.
-    fn max_result_tokens(&self) -> Option<usize> {
-        Some(8_000)
-    }
 }
 
 #[cfg(test)]
@@ -698,7 +691,9 @@ mod tests {
     /// `queries` array is only a mistake when `query` is empty as well.
     #[test]
     fn neither_query_nor_queries_is_rejected() {
-        let err = resolve_queries(&SearchArgs::default()).unwrap_err().to_string();
+        let err = resolve_queries(&SearchArgs::default())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("query"), "{err}");
         assert!(err.contains("queries"), "{err}");
 
@@ -792,7 +787,11 @@ mod tests {
         let wire = serde_json::to_value(&output).unwrap();
         assert!(wire.get("queries").is_none(), "{wire}");
         assert!(
-            wire["results"].as_array().unwrap().iter().all(|r| r.get("query_index").is_none()),
+            wire["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.get("query_index").is_none()),
             "{wire}"
         );
     }
@@ -830,7 +829,10 @@ mod tests {
         assert_eq!(by_url["https://stub.test/alpha"], Some(0));
         assert_eq!(by_url["https://stub.test/beta"], Some(1));
         assert!(
-            output.notes.iter().any(|n| n.contains("more than one query")),
+            output
+                .notes
+                .iter()
+                .any(|n| n.contains("more than one query")),
             "{:?}",
             output.notes
         );

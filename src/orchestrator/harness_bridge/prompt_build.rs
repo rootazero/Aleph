@@ -27,7 +27,11 @@ impl AgentHarnessRunner {
     /// No reference agent (hermes / openclaw / Pi / opensquilla) coordinates the
     /// memory and history budgets — they inject memory at a fixed size
     /// regardless of conversation pressure.
-    pub(crate) async fn memory_injection_headroom(&self, session_id: &SessionId) -> Option<u32> {
+    pub(crate) async fn memory_injection_headroom(
+        &self,
+        session_id: &SessionId,
+        provider: &dyn AiProvider,
+    ) -> Option<u32> {
         let cfg = self.context_budget_config.as_ref()?;
         // Best-effort: a read failure must never block a turn — fall back to the
         // full configured budget (None) just like a missing context budget.
@@ -37,11 +41,13 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let history_tokens: usize = messages
-            .iter()
+        // The run's own provider — what this turn's wire will carry.
+        let replay = provider.reasoning_replay(None);
+        let history_tokens: usize = replay
+            .projected(&messages)
             .map(|m| {
                 crate::context::budget::pressure::estimate_message_tokens_aware(
-                    m,
+                    &m,
                     cfg.token_estimate_ratio,
                 )
             })
@@ -68,7 +74,11 @@ impl AgentHarnessRunner {
     /// never re-keys the conversation prefix. Gated on `[context_budget]` exactly
     /// like [`memory_injection_headroom`]; the no-config path touches no session
     /// state. Fail-soft: a read error yields `None` and the turn proceeds.
-    async fn context_pressure_reminder(&self, session_id: &SessionId) -> Option<String> {
+    async fn context_pressure_reminder(
+        &self,
+        session_id: &SessionId,
+        provider: &dyn AiProvider,
+    ) -> Option<String> {
         let cfg = self.context_budget_config.as_ref()?;
         if cfg.token_budget == 0 {
             return None;
@@ -89,11 +99,13 @@ impl AgentHarnessRunner {
             .await
             .ok()?;
         let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
-        let history_tokens: usize = messages
-            .iter()
+        // The run's own provider — what this turn's wire will carry.
+        let replay = provider.reasoning_replay(None);
+        let history_tokens: usize = replay
+            .projected(&messages)
             .map(|m| {
                 crate::context::budget::pressure::estimate_message_tokens_aware(
-                    m,
+                    &m,
                     cfg.token_estimate_ratio,
                 )
             })
@@ -292,8 +304,28 @@ impl AgentHarnessRunner {
         let prompt_build_start = Instant::now();
 
         // Phase 1 — fetch the eligible-skill snapshot once; reused below.
+        // Narrowed HERE, before `has_skills` and `eligible_skills` read it,
+        // to the plugins this session may see (face ② of
+        // `extension::visibility`): a project-scoped plugin's skills must not
+        // reach a session in another project. Non-plugin skills pass through.
+        // No extension manager (cold tests, simulated boot) ⇒ no plugin skill
+        // is shown, which is the fail-closed answer — the manager is the only
+        // authority on where a plugin came from.
+        let visibility = crate::extension::visibility::VisibilityCtx::for_session();
         let skill_snapshot = match self.skill_system.as_ref() {
-            Some(sys) => Some(sys.current_snapshot().await),
+            Some(sys) => {
+                let mut snap = sys.current_snapshot().await;
+                snap.eligible_manifests =
+                    crate::extension::visibility::retain_visible_plugin_skills(
+                        std::mem::take(&mut snap.eligible_manifests),
+                        &visibility,
+                        |id| {
+                            crate::extension::try_extension_manager()
+                                .and_then(|m| m.plugin_scope_key(id))
+                        },
+                    );
+                Some(snap)
+            }
             None => None,
         };
 
@@ -373,7 +405,7 @@ impl AgentHarnessRunner {
                 // `[context_budget]` is configured → full configured budget.
                 // The session key excludes this session's own end-of-session
                 // resume snapshot from the "previous session" recall source.
-                let headroom = self.memory_injection_headroom(session_id).await;
+                let headroom = self.memory_injection_headroom(session_id, provider).await;
                 match mcp
                     .build_memory_user_message(
                         agent_id,
@@ -539,9 +571,11 @@ impl AgentHarnessRunner {
             for a in self.agent_registry.list_subagents() {
                 by_id.insert(a.id.clone(), a);
             }
-            // Plugin sub-agents last, insert-if-absent (lowest precedence).
-            for a in crate::agents::plugin_subagents().iter() {
-                by_id.entry(a.id.clone()).or_insert_with(|| a.clone());
+            // Plugin sub-agents last, insert-if-absent (lowest precedence),
+            // and only those this session may see — `visibility` was derived
+            // above for the skill snapshot; same value, same run.
+            for a in crate::agents::visible_plugin_subagents(&visibility) {
+                by_id.entry(a.id.clone()).or_insert(a);
             }
             (!by_id.is_empty()).then(|| {
                 by_id
@@ -593,19 +627,7 @@ impl AgentHarnessRunner {
         // and its `native_tools_enabled` opt-out were removed 2026-07-26: both
         // writers forced the flag on, and the `{reasoning, action}` text
         // envelope the layer's listings fed was deleted 2026-05-10.)
-        // Model-aware system-prompt budget (feature 1.2): when a context budget
-        // is configured, size the prompt char cap off the same chain-minimum
-        // window the history side uses (feature 2.2), so large-window models
-        // stop being capped at the fixed 80k default. No `[context_budget]`
-        // configured → legacy fixed default (byte-identical).
-        let token_budget = prompt_token_budget.map_or_else(
-            crate::thinker::prompt_budget::TokenBudget::default,
-            crate::thinker::prompt_budget::TokenBudget::from_context_window,
-        );
-        let token_budget = match prompt_estimate_factor {
-            Some(factor) => token_budget.with_estimate_factor(factor),
-            None => token_budget,
-        };
+        let token_budget = system_prompt_budget(prompt_token_budget, prompt_estimate_factor);
         // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
         // `SkillInstructionsLayer` against the active tool names. The cached
         // prompt is assembled with an empty `tools` slice (native tool_use
@@ -680,7 +702,7 @@ impl AgentHarnessRunner {
         // the same transient tail as the countdowns — a per-turn-varying figure
         // that must not enter the cached system prompt — so the model can wrap up
         // or checkpoint before the in-loop sensor compacts older turns away.
-        let pressure_text = self.context_pressure_reminder(session_id).await;
+        let pressure_text = self.context_pressure_reminder(session_id, provider).await;
         let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()
@@ -1089,6 +1111,29 @@ pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
 /// silently treated as a non-existent agent.
 fn is_safe_agent_path_component(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains('/') && !s.contains('\\')
+}
+
+/// The system-prompt budget for one run (feature 1.2).
+///
+/// With context management on — the default — `prompt_token_budget` is the
+/// run's refined context budget, and the prompt is sized off the same window
+/// the history side uses: a char cap that grows with the window and a token
+/// hard gate (`max_total_tokens`), which truncates an oversized dynamic suffix
+/// (memory / notes / soul) head-and-tail. Context management switched off
+/// (`[context_budget] enabled = false`) → `None` → the legacy fixed char cap
+/// and no token gate.
+pub(super) fn system_prompt_budget(
+    prompt_token_budget: Option<u64>,
+    prompt_estimate_factor: Option<f64>,
+) -> crate::thinker::prompt_budget::TokenBudget {
+    let token_budget = prompt_token_budget.map_or_else(
+        crate::thinker::prompt_budget::TokenBudget::default,
+        crate::thinker::prompt_budget::TokenBudget::from_context_window,
+    );
+    match prompt_estimate_factor {
+        Some(factor) => token_budget.with_estimate_factor(factor),
+        None => token_budget,
+    }
 }
 
 #[cfg(test)]

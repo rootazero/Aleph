@@ -554,9 +554,13 @@ pub(super) async fn build_steering_rescue_request(
         next_depth.to_string(),
     );
     // Strip slash-command residue: the rescue is a plain loop continuation and
-    // must never re-enter the fast path or re-apply a skill's tool scope.
+    // must never re-enter the fast path, re-apply a command's tool
+    // restriction or a skill's pre-grant (and its typed marker), or deliver a
+    // command's body (and model pin) a second time.
     metadata.remove(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY);
     super::slash_skill_scope::strip(&mut metadata);
+    let model_override =
+        super::slash_command_body::strip(&mut metadata, request.model_override.clone());
     // Strip the busy-input policy: if another run grabbed the freed slot
     // first (it reads the same log, so it covers the orphaned burst), an
     // inherited `Interrupt` would cancel that legitimate sibling. Absent key
@@ -575,7 +579,7 @@ pub(super) async fn build_steering_rescue_request(
         sandbox_override: request.sandbox_override.clone(),
         workspace_override: request.workspace_override.clone(),
         max_iterations_override: request.max_iterations_override,
-        model_override: request.model_override.clone(),
+        model_override,
     })
 }
 
@@ -871,6 +875,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }];
         assert!(carries_more_than_text(&with_file));
     }
@@ -1168,6 +1174,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }];
         assert!(has_steering_content(&req));
     }

@@ -271,7 +271,7 @@ response_mapping:
 **Error**: `Failed to extract content from response`
 
 **Solution**:
-1. Enable debug logging: `RUST_LOG=debug aleph chat ...`
+1. Enable debug logging: `RUST_LOG=debug al chat ...`
 2. Examine actual response structure in logs
 3. Update `response_mapping.content` JSONPath
 4. Add `content_alternatives` for fallbacks

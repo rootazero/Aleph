@@ -45,8 +45,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use aleph_protocol::canvas::{
-    AiFrameStatus, CanvasDoc, CanvasOp, FracIndex, Shape, ShapeCommon, StrokeKind,
-    MAX_ASSET_BYTES,
+    AiFrameStatus, CanvasDoc, CanvasOp, FracIndex, Shape, ShapeCommon, StrokeKind, MAX_ASSET_BYTES,
 };
 
 use crate::canvas::{selection, CanvasError, CanvasStore};

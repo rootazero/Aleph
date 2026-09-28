@@ -9,23 +9,27 @@
 //! and rewrites the in-flight history entry from full text to the
 //! returned marker.
 //!
-//! Spill order is **LIFO**: the most recently recorded non-persisted
-//! result is the first candidate. Older results in the same turn have
-//! either been processed already or were small enough to stay verbatim,
-//! so dropping them adds little value while costing more recall.
+//! Only the result **just recorded** is ever spilled. It is the one entry the
+//! caller can still rewrite before it is emitted; every earlier result of the
+//! turn is already in the transcript, so "spilling" one of those writes a blob
+//! and saves nothing — and booking its tokens as reclaimed would let the turn
+//! run on as though it were back under budget when it is not. A turn whose
+//! newest result cannot be spilled stays over budget, and says so.
 
 use std::collections::HashMap;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::{Arc, Mutex};
 
-/// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
-/// converted to ~50 000 tokens at the standard ~4 chars/token ratio.
+/// Default per-turn budget: eight results at the per-result default
+/// (`result_processing::DEFAULT_RESULT_BUDGET_TOKENS`). Past it the newest
+/// result is spilled and indexed like an over-budget single result, so the
+/// model still reaches it through `ctx_search`.
 ///
 /// This is the **ceiling**, not the value: [`budget_for_window`] clamps down
 /// from it on small windows. See that function for why the bare constant is
 /// wrong on a 32k model.
-pub const DEFAULT_MAX_TURN_TOKENS: usize = 50_000;
+pub const DEFAULT_MAX_TURN_TOKENS: usize = 32_000;
 
 /// Fraction of the model's usable window one tool result may occupy (Layer 2).
 const RESULT_WINDOW_FRACTION: f64 = 0.15;
@@ -45,18 +49,18 @@ const MIN_TURN_TOKENS: usize = 4_000;
 /// whose usable context window is `token_budget` tokens.
 ///
 /// **This is a small-window clamp-down, not "bigger models get more."** Both
-/// values clamp *up* to today's constants ([`DEFAULT_MAX_TURN_TOKENS`] and
-/// `result_processing::DEFAULT_RESULT_BUDGET_TOKENS`), so every model with a
-/// window above ~53k / ~167k tokens gets byte-for-byte the same budgets it gets
-/// today. Nothing here loosens anything.
+/// values clamp *up* to the constants ([`DEFAULT_MAX_TURN_TOKENS`], and
+/// `result_processing::MAX_RESULT_BUDGET_TOKENS` — the per-result value is a
+/// ceiling over every per-result budget, the largest of which is the read
+/// window), so every model with a window above ~53k / ~107k tokens gets the
+/// unclamped budgets. Nothing here loosens anything.
 ///
 /// What it fixes is the other end. The two limits were fixed constants that
 /// never looked at the model, and hermes — whose `MAX_TURN_BUDGET_CHARS` the
-/// per-turn constant was copied from — has since made both window-relative. On
-/// a 32k local model the old numbers are absurd: one `bash` result at 8k tokens
-/// eats a quarter of the window and lands in the compaction-protected fresh
-/// tail, while the 50k per-turn cap is 156 % of the entire window and can
-/// therefore never fire. The combination overflows the context, and on the
+/// per-turn constant was first copied from — has since made both
+/// window-relative. On a 32k local model fixed numbers are absurd: one 8k-token
+/// read eats a quarter of the window and lands in the compaction-protected
+/// fresh tail, while a fixed per-turn cap above the window can never fire. The combination overflows the context, and on the
 /// OpenAI-compatible endpoints those small models live behind an overflow is
 /// fatal to the run rather than recoverable.
 ///
@@ -67,11 +71,23 @@ pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
     let window = token_budget as f64;
     let per_result = ((window * RESULT_WINDOW_FRACTION) as usize).clamp(
         MIN_RESULT_TOKENS,
-        crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+        crate::tools::result_processing::MAX_RESULT_BUDGET_TOKENS,
     );
     let per_turn =
         ((window * TURN_WINDOW_FRACTION) as usize).clamp(MIN_TURN_TOKENS, DEFAULT_MAX_TURN_TOKENS);
     (per_result, per_turn)
+}
+
+/// What a spilled result is expected to leave in context, at most, besides its
+/// footer: a tenth. The truncation a spill falls back to when it cannot write
+/// (`result_processing::spill_replacement`) cuts to this, so the credit
+/// [`TurnResultBudget::record`] books is a saving the spill makes either way.
+const SPILL_RESIDUE_DIVISOR: usize = 10;
+
+/// The residue a spill of a `tokens`-token result leaves when it truncates.
+#[must_use]
+pub(crate) const fn spill_residue_tokens(tokens: usize) -> usize {
+    tokens / SPILL_RESIDUE_DIVISOR
 }
 
 // =============================================================================
@@ -160,14 +176,14 @@ pub struct TurnResult {
     pub call_id: String,
     pub tool_name: String,
     pub tokens_in_context: usize,
+    /// What the model would see. [`TurnResultBudget::record`] reads "already
+    /// persisted" from it, as Layer 2 does: this call's own marker only
+    /// (`result_processing::carries_own_persisted_marker`), never any marker
+    /// line — a `file_read` of a file quoting one is content.
     pub in_context_text: String,
-    /// `true` if the result already arrived as a `[Full output persisted:
-    /// ...]` marker (Layer 2 already handled it). Such entries are not
-    /// spilled again by Layer 3.
-    pub already_persisted: bool,
 }
 
-/// Instruction for the caller to evict a recorded result.
+/// Instruction for the caller to evict the result it just recorded.
 #[derive(Debug, Clone)]
 pub struct SpillInstruction {
     pub call_id: String,
@@ -180,16 +196,28 @@ pub struct SpillInstruction {
 
 #[derive(Debug, Default)]
 struct TurnState {
-    /// Stack ordered oldest → newest. Spill scans from the back.
-    results: Vec<TurnResult>,
+    /// Tokens the turn's results occupy in context, after any spill.
     cumulative: usize,
 }
 
-/// LIFO turn-budget tracker. Cheap to `Clone` — wraps an `Arc<Mutex<_>>`.
-#[derive(Debug, Clone)]
+/// Per-turn budget tracker. Cheap to `Clone` — wraps an `Arc<Mutex<_>>`.
+#[derive(Clone)]
 pub struct TurnResultBudget {
     inner: Arc<Mutex<HashMap<TurnId, TurnState>>>,
     max_turn_tokens: usize,
+    /// The store the spill writes through (session-scoped), so the floor below
+    /// is measured on the marker that spill would actually write. `None`: the
+    /// process store's unscoped handle.
+    store: Option<std::sync::Arc<crate::tools::result_store::ToolResultStore>>,
+}
+
+impl std::fmt::Debug for TurnResultBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnResultBudget")
+            .field("max_turn_tokens", &self.max_turn_tokens)
+            .field("scoped_store", &self.store.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl TurnResultBudget {
@@ -198,7 +226,39 @@ impl TurnResultBudget {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             max_turn_tokens,
+            store: None,
         }
+    }
+
+    /// Measure the spill floor on `store` — the handle the spill writes
+    /// through — instead of the process store's unscoped one, whose marker is
+    /// shorter by the session directory.
+    #[must_use]
+    pub fn with_result_store(
+        mut self,
+        store: std::sync::Arc<crate::tools::result_store::ToolResultStore>,
+    ) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// The fewest tokens a result must exceed to be spilled: the floor the
+    /// offload itself applies (`result_processing::offload_floor_tokens`), on
+    /// the same store. `0` without any store — nothing can be written then,
+    /// and the spill cuts instead (`result_processing::spill_replacement`).
+    fn floor_tokens(&self, result: &TurnResult) -> usize {
+        let store = self
+            .store
+            .clone()
+            .or_else(crate::tools::result_store::global_tool_result_store);
+        store.map_or(0, |store| {
+            crate::tools::result_processing::offload_floor_tokens(
+                &store,
+                &result.call_id,
+                &result.tool_name,
+                result.tokens_in_context,
+            )
+        })
     }
 
     #[must_use]
@@ -214,43 +274,48 @@ impl TurnResultBudget {
         g.entry(id).or_default();
     }
 
-    /// Record a new result; return spill instructions if the cumulative
-    /// total exceeds the budget. Spill order is LIFO over non-persisted
-    /// entries; already-persisted entries are skipped.
+    /// Record a new result; when it takes the turn over budget, return the
+    /// instruction to spill **it** — never an earlier one (see the module doc).
+    /// A result carrying this call's own persist marker is not spilled again (a
+    /// second write would replace the blob it names); a marker line that is
+    /// merely part of the payload does not count. Neither is a result no larger
+    /// than the footer that would replace it — the offload's own floor, so the
+    /// two cannot disagree.
+    ///
+    /// Reads are NOT exempt. This is the only per-turn bound on the context a
+    /// turn adds, and on a small window a few read windows exceed it — a fatal
+    /// overflow — while a spilled read is persisted and indexed: a re-read,
+    /// not a loss.
+    ///
+    /// At most one instruction; the `Vec` is the caller's existing shape.
     #[must_use]
     pub fn record(&self, id: &TurnId, result: TurnResult) -> Vec<SpillInstruction> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
-        state.results.push(result);
-
-        let mut instructions = Vec::new();
-        while state.cumulative > self.max_turn_tokens {
-            let idx = state
-                .results
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, r)| !r.already_persisted)
-                .map(|(i, _)| i);
-            let Some(idx) = idx else {
-                break; // Nothing left to spill; remain over budget.
-            };
-            let r = &mut state.results[idx];
-            instructions.push(SpillInstruction {
-                call_id: r.call_id.clone(),
-                tool_name: r.tool_name.clone(),
-                original_text: std::mem::take(&mut r.in_context_text),
-            });
-            // Approximate: spilling the result is expected to reduce its
-            // in-context footprint to ~10 % of the original (the marker
-            // length). Credit 90 % back to the cumulative.
-            let credit = r.tokens_in_context.saturating_mul(9) / 10;
-            state.cumulative = state.cumulative.saturating_sub(credit);
-            r.tokens_in_context = r.tokens_in_context.saturating_sub(credit);
-            r.already_persisted = true;
+        if state.cumulative <= self.max_turn_tokens {
+            return Vec::new();
         }
-        instructions
+        let own_marker = crate::tools::result_processing::carries_own_persisted_marker(
+            &result.in_context_text,
+            &result.call_id,
+            &result.tool_name,
+        );
+        let floor = self.floor_tokens(&result);
+        if own_marker || result.tokens_in_context <= floor {
+            return Vec::new();
+        }
+        // What the spill leaves is at most the footer (under `floor`) or the
+        // truncated residue — credit the rest, a saving the spill makes either
+        // way, because the caller rewrites this result before it is emitted.
+        let left = floor.max(spill_residue_tokens(result.tokens_in_context));
+        let credit = result.tokens_in_context.saturating_sub(left);
+        state.cumulative = state.cumulative.saturating_sub(credit);
+        vec![SpillInstruction {
+            call_id: result.call_id,
+            tool_name: result.tool_name,
+            original_text: result.in_context_text,
+        }]
     }
 
     /// Clear tracking for the given turn. Safe to call on a missing
@@ -298,78 +363,121 @@ mod tests {
         TurnId::new(uuid::Uuid::from_bytes(buf))
     }
 
+    /// `result` as a Layer-2 marker of its own call: what `record` treats as
+    /// already persisted.
+    fn own_marker(result: TurnResult) -> TurnResult {
+        let name = crate::tools::result_store::blob_file_name(&result.call_id, &result.tool_name);
+        TurnResult {
+            in_context_text: format!(
+                "{}/tmp/results/{name} ({} tokens, {})]",
+                crate::tools::result_store::PERSISTED_REF_PREFIX,
+                result.tokens_in_context,
+                result.tool_name
+            ),
+            ..result
+        }
+    }
+
     fn result(id: &str, tokens: usize) -> TurnResult {
         TurnResult {
             call_id: id.into(),
             tool_name: "bash".into(),
             tokens_in_context: tokens,
             in_context_text: "x".repeat(tokens.saturating_mul(4)),
-            already_persisted: false,
         }
     }
 
+    // Token figures in these tests sit far above any marker's size: a result
+    // no larger than its marker is never spilled (see
+    // `a_result_smaller_than_its_marker_is_never_spilled`), and whether the
+    // process store — which sizes that marker — is installed depends on
+    // which tests ran first.
     #[test]
     fn begin_end_lifecycle_clears_state() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let spilled = b.record(&id, result("c1", 30));
+        let spilled = b.record(&id, result("c1", 3_000));
         assert!(spilled.is_empty());
-        assert_eq!(b.cumulative(&id), 30);
+        assert_eq!(b.cumulative(&id), 3_000);
         b.end_turn(&id);
         assert_eq!(b.cumulative(&id), 0);
     }
 
     #[test]
     fn under_budget_no_spill() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let s = b.record(&id, result("c1", 50));
+        let s = b.record(&id, result("c1", 5_000));
         assert!(s.is_empty());
-        assert_eq!(b.cumulative(&id), 50);
+        assert_eq!(b.cumulative(&id), 5_000);
     }
 
     #[test]
     fn over_budget_spills_newest_first() {
-        let b = TurnResultBudget::new(100);
+        let b = TurnResultBudget::new(10_000);
         let id = tid(1);
         b.begin_turn(id);
-        let _ = b.record(&id, result("c1", 40));
-        let _ = b.record(&id, result("c2", 40));
-        let instr = b.record(&id, result("c3", 40));
-        // Cumulative reaches 120; spilling newest (c3) credits 36
-        // tokens back, reducing to 84 — under budget. Exactly one spill.
+        let _ = b.record(&id, result("c1", 4_000));
+        let _ = b.record(&id, result("c2", 4_000));
+        let instr = b.record(&id, result("c3", 4_000));
+        // Cumulative reaches 12_000; spilling newest (c3) credits 3_600
+        // tokens back, reducing to 8_400 — under budget. Exactly one spill.
         assert_eq!(instr.len(), 1, "expected 1 spill, got: {:?}", instr);
         assert_eq!(instr[0].call_id, "c3");
     }
 
     #[test]
     fn already_persisted_entries_are_not_respilled() {
-        let b = TurnResultBudget::new(50);
+        let b = TurnResultBudget::new(5_000);
         let id = tid(1);
         b.begin_turn(id);
-        let mut already = result("c1", 100);
-        already.already_persisted = true;
+        let already = own_marker(result("c1", 10_000));
         let instr = b.record(&id, already);
         // Only entry is already persisted → no spill candidate.
         assert!(instr.is_empty());
         // Cumulative still tracks the entry's tokens.
-        assert_eq!(b.cumulative(&id), 100);
+        assert_eq!(b.cumulative(&id), 10_000);
     }
 
     #[test]
     fn multiple_spills_until_under_budget() {
-        let b = TurnResultBudget::new(40);
+        let b = TurnResultBudget::new(4_000);
         let id = tid(1);
         b.begin_turn(id);
-        let _ = b.record(&id, result("c1", 30));
-        let _ = b.record(&id, result("c2", 30));
-        // After c2: cumulative = 60 > 40 → spill c2 (credit 27) → 33 → under.
-        // After c3: cumulative = 33 + 30 = 63 > 40 → spill c3 (credit 27) → 36 → under.
-        let instr_c3 = b.record(&id, result("c3", 30));
+        let _ = b.record(&id, result("c1", 3_000));
+        let _ = b.record(&id, result("c2", 3_000));
+        // After c2: cumulative = 6_000 > 4_000 → spill c2 (credit 2_700) → 3_300 → under.
+        // After c3: cumulative = 3_300 + 3_000 = 6_300 > 4_000 → spill c3 (credit 2_700) → 3_600 → under.
+        let instr_c3 = b.record(&id, result("c3", 3_000));
         assert_eq!(instr_c3.len(), 1);
         assert_eq!(instr_c3[0].call_id, "c3");
+    }
+
+    /// T-G6: an earlier result of the turn is already in the transcript, so
+    /// evicting it writes a blob and saves nothing. When the result that tips
+    /// the turn over is itself unspillable (a Layer-2 marker), nothing is
+    /// spilled and no credit is booked — the turn honestly stays over.
+    #[test]
+    fn only_the_just_recorded_result_is_ever_spilled() {
+        let b = TurnResultBudget::new(10_000);
+        let id = tid(1);
+        b.begin_turn(id);
+        assert!(b.record(&id, result("c1", 9_000)).is_empty());
+        let marker = own_marker(result("c2", 4_000));
+
+        let instr = b.record(&id, marker);
+
+        assert!(
+            instr.is_empty(),
+            "c1 is already emitted; spilling it saves nothing: {instr:?}"
+        );
+        assert_eq!(
+            b.cumulative(&id),
+            13_000,
+            "no credit may be booked for a spill that did not happen"
+        );
     }
 
     #[test]
@@ -380,9 +488,167 @@ mod tests {
         assert_eq!(b.cumulative(&id), 0);
     }
 
+    /// B4-fix H2: on a small window a few read windows exceed the turn; the
+    /// turn budget is the only per-turn bound, so reads spill like any other
+    /// result once it is crossed (a spilled read is persisted and indexed).
+    ///
+    /// Mutation-checked: exempting the read family again turns this red.
+    #[test]
+    fn a_small_windows_reads_stay_bounded_by_the_turn() {
+        let (_, per_turn) = budget_for_window(16_000);
+        let budget = TurnResultBudget::new(per_turn);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let spilled: Vec<bool> = (0..5)
+            .map(|i| {
+                !budget
+                    .record(
+                        &id,
+                        TurnResult {
+                            call_id: format!("r{i}"),
+                            tool_name: "file_read".to_string(),
+                            tokens_in_context: 2_000,
+                            in_context_text: "x".repeat(10),
+                        },
+                    )
+                    .is_empty()
+            })
+            .collect();
+        assert_eq!(spilled, vec![false, false, true, true, true], "{per_turn}");
+    }
+
+    /// The turn budget's floor and the offload's are one measurement, on the
+    /// store the spill writes through: a result just under the scoped footer
+    /// floor is neither spilled nor credited, one just over it is spilled and
+    /// the offload takes it. Measured on the unscoped handle the floor was
+    /// shorter by the session directory, so a result between the two was
+    /// credited and never spilled.
+    ///
+    /// Mutation-checked: measuring the floor without the budget's store again
+    /// turns this red.
+    #[test]
+    fn the_spill_floor_is_the_offload_floor_on_the_same_store() {
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&base).unwrap();
+        let root = std::sync::Arc::new(
+            crate::tools::result_store::ToolResultStore::with_dir_for_tests(base),
+        );
+        let scoped = crate::tools::result_store::ToolResultStore::for_session(
+            &root,
+            format!("agent:main:{}", "long-session-key-".repeat(8)),
+        );
+        let floor = |tokens| {
+            crate::tools::result_processing::offload_floor_tokens(&scoped, "cf", "bash", tokens)
+        };
+        let recovery = crate::tools::result_processing::RecoveryTools::ALL;
+        let estimate = crate::context::budget::pressure::estimate_tokens_smart;
+        let text_of = |target: usize| {
+            let mut text = String::new();
+            while estimate(&text) < target {
+                text.push_str("word ");
+            }
+            text
+        };
+        for (target, spills) in [(floor(0) - 5, false), (floor(0) + 40, true)] {
+            let budget = TurnResultBudget::new(1).with_result_store(scoped.clone());
+            let id = TurnId::new(uuid::Uuid::new_v4());
+            let text = text_of(target);
+            let tokens = estimate(&text);
+            let result = TurnResult {
+                call_id: "cf".to_string(),
+                tool_name: "bash".to_string(),
+                tokens_in_context: tokens,
+                in_context_text: text.clone(),
+            };
+            assert_eq!(
+                budget.floor_tokens(&result),
+                floor(tokens),
+                "the budget's floor is the offload's, on the same scoped store"
+            );
+            let spilled = !budget.record(&id, result).is_empty();
+            assert_eq!(
+                spilled,
+                tokens > floor(tokens),
+                "{tokens} vs {}",
+                floor(tokens)
+            );
+            assert_eq!(spilled, spills, "{tokens}");
+            let left = crate::tools::result_processing::spill_replacement(
+                Some(&scoped),
+                "cf",
+                "bash",
+                &text,
+                recovery,
+            );
+            assert_eq!(
+                left.contains("[Full output persisted: "),
+                spilled,
+                "the offload takes exactly what the budget spills"
+            );
+        }
+    }
+
+    /// "Already persisted" is this call's own marker only. A `file_read` of a
+    /// file that quotes a marker line — another call's, or one naming a blob
+    /// this call would never write — is ordinary content, and spills like any
+    /// other; this call's own marker, even as a later line, is not re-spilled
+    /// (a second write would replace the blob it names).
+    ///
+    /// Mutation-checked: deciding on "any marker line"
+    /// (`extract_persisted_ref`) again turns the first half red.
+    #[test]
+    fn only_this_calls_own_marker_counts_as_already_persisted() {
+        let budget = TurnResultBudget::new(1_000);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let quoted = format!(
+            "{}/tmp/results/{} (900 tokens, bash)]\n{}",
+            crate::tools::result_store::PERSISTED_REF_PREFIX,
+            crate::tools::result_store::blob_file_name("some_other_call", "bash"),
+            "fn main() {}\n".repeat(2_000),
+        );
+        let read = TurnResult {
+            call_id: "r1".to_string(),
+            tool_name: "file_read".to_string(),
+            tokens_in_context: 5_000,
+            in_context_text: quoted,
+        };
+        assert_eq!(
+            budget.record(&id, read).len(),
+            1,
+            "a quoted marker is content"
+        );
+
+        let own = own_marker(result("c9", 5_000));
+        assert!(
+            budget.record(&id, own).is_empty(),
+            "own marker is not re-spilled"
+        );
+    }
+
+    /// A result no larger than its marker is never spilled: the marker would
+    /// cost at least as much and lose the text.
+    ///
+    /// Mutation-checked: dropping the marker floor turns this red.
+    #[test]
+    fn a_result_smaller_than_its_marker_is_never_spilled() {
+        crate::tools::result_store::install_test_tool_result_store();
+        let budget = TurnResultBudget::new(100);
+        let id = TurnId::new(uuid::Uuid::new_v4());
+        let result = |call: &str, tokens: usize| TurnResult {
+            call_id: call.to_string(),
+            tool_name: "file_edit".to_string(),
+            tokens_in_context: tokens,
+            in_context_text: "ok".to_string(),
+        };
+        assert!(budget.record(&id, result("big", 99)).is_empty());
+        assert!(
+            budget.record(&id, result("tiny", 5)).is_empty(),
+            "a 5-token result over the budget stays: its marker is larger"
+        );
+    }
+
     // ---- window-aware budgets (B14) ----
 
-    use crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS;
+    use crate::tools::result_processing::MAX_RESULT_BUDGET_TOKENS;
 
     #[test]
     fn large_window_is_byte_for_byte_todays_constants() {
@@ -390,12 +656,12 @@ mod tests {
         // it sees today, or this change is a behavior regression dressed up as a
         // fix.
         let (per_result, per_turn) = budget_for_window(200_000);
-        assert_eq!(per_result, DEFAULT_RESULT_BUDGET_TOKENS);
+        assert_eq!(per_result, MAX_RESULT_BUDGET_TOKENS);
         assert_eq!(per_turn, DEFAULT_MAX_TURN_TOKENS);
         // 1M window: still the same ceilings, not 150k/300k.
         assert_eq!(
             budget_for_window(1_000_000),
-            (DEFAULT_RESULT_BUDGET_TOKENS, DEFAULT_MAX_TURN_TOKENS)
+            (MAX_RESULT_BUDGET_TOKENS, DEFAULT_MAX_TURN_TOKENS)
         );
     }
 
@@ -410,8 +676,8 @@ mod tests {
             "per-turn cap {per_turn} must fit inside the {window}-token window"
         );
         assert!(
-            per_result < DEFAULT_RESULT_BUDGET_TOKENS,
-            "per-result must clamp below the 8k constant on a small window, got {per_result}"
+            per_result < MAX_RESULT_BUDGET_TOKENS,
+            "per-result must clamp below the read window on a small window, got {per_result}"
         );
         // 30 % / 15 % of 16k.
         assert_eq!((per_result, per_turn), (2_400, 4_800));

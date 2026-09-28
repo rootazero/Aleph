@@ -68,7 +68,7 @@ impl HealthCheck for DataDirCheck {
                 format!("{display} does not exist; SQLite stores, vault, and the instance lock cannot be created."),
             )
             .with_fix_hint(
-                "Run `aleph doctor --fix`, or create it manually with `mkdir -p` on that path."
+                "Run `aleph-server doctor --fix`, or create it manually with `mkdir -p` on that path."
                     .to_string(),
             )
             .repairable();

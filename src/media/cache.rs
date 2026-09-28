@@ -366,6 +366,8 @@ impl MediaCache {
                     url: None,
                     path: None,
                     data: Some(bytes),
+                    is_voice_note: false,
+                    is_video_note: false,
                 }
             } else if is_local_media_path(&item.url) {
                 // Local file path. A `media_send` path is model-supplied and
@@ -397,6 +399,8 @@ impl MediaCache {
                     url: None,
                     path: Some(safe),
                     data: None,
+                    is_voice_note: false,
+                    is_video_note: false,
                 }
             } else {
                 // HTTP/HTTPS URL
@@ -416,6 +420,8 @@ impl MediaCache {
                     url: Some(item.url.clone()),
                     path: None,
                     data: None,
+                    is_voice_note: false,
+                    is_video_note: false,
                 }
             };
 
@@ -433,6 +439,8 @@ impl MediaCache {
             url: Some(item.url.clone()),
             path: Some(cached.local_path.to_string_lossy().to_string()),
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         })
     }
 
@@ -579,6 +587,8 @@ impl MediaCache {
             url: Some(item.url.clone()),
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }
     }
 }
@@ -954,6 +964,8 @@ mod tests {
             url: None,
             path: None,
             data: None,
+            is_voice_note: false,
+            is_video_note: false,
         }
     }
 

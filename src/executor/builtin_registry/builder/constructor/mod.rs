@@ -1508,9 +1508,7 @@ async fn resolve_transcription(
 /// shares the `[search]` config), so an enabled section with a non-empty
 /// `default_provider` but no backends still names the default — the operator
 /// expects fetch routing from it either way.
-fn inert_fetch_backend_names(
-    fetch_cfg: &crate::config::types::FetchConfigInternal,
-) -> Vec<String> {
+fn inert_fetch_backend_names(fetch_cfg: &crate::config::types::FetchConfigInternal) -> Vec<String> {
     if !fetch_cfg.enabled {
         return Vec::new();
     }

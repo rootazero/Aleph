@@ -263,7 +263,7 @@ impl MarketplaceManager {
                 problems.push(MarketplaceProblem {
                     marketplace: marketplace_name.clone(),
                     reason: format!(
-                        "not synced yet — no local cache at {}. Run `aleph plugin marketplace \
+                        "not synced yet — no local cache at {}. Run `al plugin marketplace \
                          update {marketplace_name}` first.",
                         marketplace_dir.display()
                     ),
@@ -349,7 +349,7 @@ impl MarketplaceManager {
     ///
     /// Searches all marketplaces for `plugin_name`, optionally filtering to
     /// `marketplace_name`, then copies it into the directory resolved by
-    /// [`crate::extension::scope::scope_install_dir`].
+    /// [`crate::extension::visibility::scope_install_dir`].
     pub fn install_to_scope(
         &self,
         plugin_name: &str,
@@ -365,7 +365,7 @@ impl MarketplaceManager {
 
         match results.len() {
             0 => Err(format!(
-                "Plugin '{plugin_name}' not found. Try 'aleph plugin marketplace update' first."
+                "Plugin '{plugin_name}' not found. Try 'al plugin marketplace update' first."
             )),
             1 => {
                 let result = &results[0];
@@ -385,7 +385,8 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
-                let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+                let install_dir =
+                    crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
                 // boundary, mirroring the gateway install handler. Without
                 // this the marketplace path would skip the pre-planted
@@ -442,7 +443,7 @@ impl MarketplaceManager {
         project_dir: Option<&std::path::Path>,
         force: bool,
     ) -> Result<UpdateOutcome, String> {
-        let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+        let install_dir = crate::extension::visibility::scope_install_dir(scope, project_dir)?;
         let installed_path = install_dir.join(plugin_name);
         if !installed_path.exists() {
             return Err(format!(
@@ -457,7 +458,7 @@ impl MarketplaceManager {
 
         match results.len() {
             0 => Err(format!(
-                "Plugin '{plugin_name}' not found in any marketplace. Try 'aleph plugin marketplace update' first."
+                "Plugin '{plugin_name}' not found in any marketplace. Try 'al plugin marketplace update' first."
             )),
             1 => {
                 let result = &results[0];

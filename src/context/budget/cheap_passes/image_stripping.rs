@@ -15,6 +15,14 @@ use async_trait::async_trait;
 #[derive(Default)]
 pub struct HistoricalImageStrippingStage;
 
+/// [`HistoricalImageStrippingStage`] that leaves tool results alone: for a run
+/// whose provider clears old tool results server-side, a locally stripped
+/// screenshot result would be a second answer to the same problem (and a
+/// history edit the server's clearing is not). User-message images are still
+/// stripped — the server clears tool results only.
+#[derive(Default)]
+pub struct HistoricalUserImageStrippingStage;
+
 #[async_trait]
 impl crate::context::budget::preflight::PreflightStage for HistoricalImageStrippingStage {
     fn name(&self) -> &'static str {
@@ -27,28 +35,57 @@ impl crate::context::budget::preflight::PreflightStage for HistoricalImageStripp
         _pressure: &ContextPressure,
         fresh_tail_count: usize,
     ) -> usize {
-        // Locate the newest image-bearing message — that one stays intact.
-        let newest_image_idx = messages
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, m)| message_has_image(m))
-            .map(|(i, _)| i);
-        let Some(newest_image_idx) = newest_image_idx else {
-            return 0; // no images in history
-        };
-
-        // Strip from older messages only, AND never strip from the fresh tail.
-        let cut_end = messages.len().saturating_sub(fresh_tail_count);
-        let upper_bound = cut_end.min(newest_image_idx);
-
-        let mut total_freed = 0usize;
-        for msg in messages.iter_mut().take(upper_bound) {
-            let stripped = strip_images_in_place(msg);
-            total_freed += stripped * IMAGE_TOKENS_ESTIMATE;
-        }
-        total_freed
+        strip_history(messages, fresh_tail_count, true)
     }
+}
+
+#[async_trait]
+impl crate::context::budget::preflight::PreflightStage for HistoricalUserImageStrippingStage {
+    fn name(&self) -> &'static str {
+        "historical_image_stripping"
+    }
+
+    async fn prepare(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        _pressure: &ContextPressure,
+        fresh_tail_count: usize,
+    ) -> usize {
+        strip_history(messages, fresh_tail_count, false)
+    }
+}
+
+/// Strip images older than the newest image-bearing message and outside the
+/// fresh tail; `tool_results` decides whether tool-result messages are touched.
+fn strip_history(
+    messages: &mut [UnifiedMessage],
+    fresh_tail_count: usize,
+    tool_results: bool,
+) -> usize {
+    // Locate the newest image-bearing message — that one stays intact.
+    let newest_image_idx = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, m)| message_has_image(m))
+        .map(|(i, _)| i);
+    let Some(newest_image_idx) = newest_image_idx else {
+        return 0; // no images in history
+    };
+
+    // Strip from older messages only, AND never strip from the fresh tail.
+    let cut_end = messages.len().saturating_sub(fresh_tail_count);
+    let upper_bound = cut_end.min(newest_image_idx);
+
+    let mut total_freed = 0usize;
+    for msg in messages.iter_mut().take(upper_bound) {
+        if !tool_results && matches!(msg, UnifiedMessage::ToolResult { .. }) {
+            continue;
+        }
+        let stripped = strip_images_in_place(msg);
+        total_freed += stripped * IMAGE_TOKENS_ESTIMATE;
+    }
+    total_freed
 }
 
 fn message_has_image(msg: &UnifiedMessage) -> bool {

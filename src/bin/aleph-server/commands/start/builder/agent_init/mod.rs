@@ -189,6 +189,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // connects "probes registered at boot" to "the model never receives the
     // schema of a tool whose dependency is dead".
     let tool_health = Arc::new(alephcore::tool_metadata::ToolHealthCache::new());
+    // The unified dispatch registry, built HERE rather than inside
+    // `init_tool_catalog` so it exists before the first `ensure_loaded()`
+    // below: a plugin's `commands/*.md` become slash entries at its own
+    // mount (`extension/slash_effect.rs`), and a mount that runs before the
+    // catalog exists records that step as skipped. `init_tool_catalog` fills
+    // it in; nothing else about it changed.
+    let tool_catalog = Arc::new(alephcore::tool_metadata::ToolCatalog::with_health(
+        tool_health.clone(),
+    ));
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
     // embedding queue has a real producer/consumer instead of the manager
@@ -345,6 +354,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         .expect("first registration into a fresh registry cannot collide");
         std::sync::Arc::new(reg)
     };
+
+    // Every handle a plugin mount needs, installed before the first
+    // `ensure_loaded()` (below) so the first `load_all` mounts each plugin
+    // completely — MCP servers, memory extension, slash entries — instead of
+    // leaving those to a boot-time catch-up task. Order among the three does
+    // not matter; order against the load does (see `boot_order_tests`).
+    {
+        use alephcore::gateway::handlers::plugins::get_extension_manager;
+        if let Ok(ext_manager) = get_extension_manager() {
+            if let Some(h) = hub_mcp_handle.as_ref() {
+                ext_manager.set_mcp_handle(h.clone());
+            }
+            ext_manager.set_memory_registry(memory_ext_registry.clone());
+            ext_manager.set_tool_catalog(tool_catalog.clone());
+        }
+    }
 
     // Shared wake handle for the autonomous team dispatcher. `task_create`
     // notifies it; the dispatcher (constructed later, once GatewayContext
@@ -616,6 +641,62 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 if let Err(e) = ext_manager.ensure_loaded().await {
                     tracing::warn!("Failed to load extensions for plugin tools: {}", e);
                 }
+                // Activation gate (dsh `assertEntriesActivated`, evidence
+                // scan-dsh-cordis.md §5.1): every plugin has been mounted
+                // with every handle present (P1.8), so a plugin still
+                // `Pending` once its servers have answered is waiting on
+                // something that is not coming. `activation_settled` is the
+                // watchers' own completion — no timer. Spawned so a slow
+                // handshake never holds boot; the gate reads status and
+                // never writes it. Daemon posture: one line per plugin + the
+                // `extension/plugins-activated` doctor check; QA profiles set
+                // ALEPH_ACTIVATION_GATE=fatal.
+                let gate_manager = std::sync::Arc::clone(ext_manager);
+                tokio::spawn(async move {
+                    use alephcore::extension::activation_gate::{
+                        assess, classify_env_value, GatePosture,
+                    };
+                    gate_manager.activation_settled().await;
+                    let gate_registry = gate_manager.get_plugin_registry().await;
+                    let report = assess(&gate_registry);
+                    if report.is_clean() {
+                        tracing::info!("activation gate: every plugin reached a terminal status");
+                        return;
+                    }
+                    // `classify_env_value` returns `None` for BOTH "unset" and
+                    // "set to something we don't recognise" — the two must not
+                    // be silently conflated (a typo like `Fatel` must not look
+                    // identical to never having set the variable at all), so
+                    // the raw value is inspected here and a typo gets a warn!
+                    // naming it before the same `Log` default takes over.
+                    let raw_gate_env = std::env::var("ALEPH_ACTIVATION_GATE").ok();
+                    let posture = classify_env_value(raw_gate_env.as_deref()).unwrap_or_else(|| {
+                        if let Some(v) = raw_gate_env.as_deref() {
+                            tracing::warn!(
+                                value = %v,
+                                "ALEPH_ACTIVATION_GATE: unrecognised value (expected `log` or `fatal`), defaulting to log"
+                            );
+                        }
+                        GatePosture::Log
+                    });
+                    for line in report.render_lines() {
+                        match posture {
+                            GatePosture::Log => {
+                                tracing::warn!(gate = "extension/plugins-activated", "{line}")
+                            }
+                            GatePosture::Fatal => {
+                                tracing::error!(gate = "extension/plugins-activated", "{line}")
+                            }
+                        }
+                    }
+                    if posture == GatePosture::Fatal {
+                        tracing::error!(
+                            count = report.non_terminal.len(),
+                            "ALEPH_ACTIVATION_GATE=fatal: plugins did not activate; exiting"
+                        );
+                        std::process::exit(78);
+                    }
+                });
                 let registry = ext_manager.get_plugin_registry().await;
                 for plugin in registry.list_plugins() {
                     if !plugin.status.is_active() {
@@ -1966,11 +2047,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             });
     }
 
-    // Create unified dispatch registry (command discovery + resolution).
-    // AI-provider-independent — maps command names to metadata, registers the
-    // command/tool RPC handlers, spawns the memory producer scheduler, and
-    // threads the memory extension registry into the ExtensionManager. See
-    // `tool_catalog_init.rs`. `tool_reg_out` is `None` in simulated mode.
+    // Fill the unified dispatch registry (command discovery + resolution)
+    // built near the top of this function. AI-provider-independent — maps
+    // command names to metadata, registers the command/tool RPC handlers and
+    // spawns the memory producer scheduler. See `tool_catalog_init.rs`.
+    // `tool_reg_out` is `None` in simulated mode.
     tool_catalog_out = Some(
         init_tool_catalog(
             server,
@@ -1981,7 +2062,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db,
             &memory_ext_registry,
             daemon,
-            tool_health.clone(),
+            tool_catalog.clone(),
         )
         .await,
     );
@@ -2041,4 +2122,82 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         memory_backend: Some(memory_db.clone()),
         memory_ext_registry: memory_ext_registry.clone(),
     })
+}
+
+#[cfg(test)]
+mod boot_order_tests {
+    /// Non-comment lines of a source file with their real 1-based line
+    /// numbers. Enumerated BEFORE the comment filter so a red names the line
+    /// an editor can jump to, not an index into the filtered list.
+    fn code_lines(src: &str) -> impl Iterator<Item = (usize, &str)> {
+        src.lines()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l))
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+    }
+
+    /// The three runtime handles a plugin mount needs must be injected
+    /// before BOTH first-load sites in this file: the `ensure_loaded()` in
+    /// the real-execution branch (a boot with an AI provider), and the
+    /// `init_tool_catalog(` call whose body runs its own `ensure_loaded()` —
+    /// the first `load_all` of a Simulated-mode boot, where the
+    /// real-execution branch is skipped entirely. Textual, because the order
+    /// is a property of this one function body and a runtime test would have
+    /// to boot the server (twice) to observe it. Comment lines are stripped
+    /// so prose naming these calls does not count. Every violation is
+    /// reported at once so a misplaced setter names each site it lost to.
+    ///
+    /// This test's own needle literals cannot produce a false green: the
+    /// module is last in the file, so they sit after every real site, and
+    /// even if it were hoisted the self-match reads RED — the `load` line is
+    /// written before the needle array. The `not found` arm below is
+    /// therefore unreachable for these needles; it is not a weaker check to
+    /// be "fixed", the ordering check already covers a deleted setter.
+    #[test]
+    fn handles_are_installed_before_the_first_extension_load() {
+        // The second needle pins the CALL SITE of a load that lives in
+        // another file; if that load moves, the needle must move with it or
+        // the second axis goes vacuous while staying green. Same comment
+        // stripping as the main check: a commented-out call must not satisfy
+        // this either.
+        assert!(
+            code_lines(include_str!("tool_catalog_init.rs"))
+                .any(|(_, l)| l.contains("ensure_loaded()")),
+            "the `init_tool_catalog(` needle no longer stands for a load site — re-aim it at \
+             wherever the Simulated-mode first load moved"
+        );
+        let code: Vec<(usize, &str)> = code_lines(include_str!("mod.rs")).collect();
+        let first = |needle: &str| {
+            code.iter()
+                .find(|(_, l)| l.contains(needle))
+                .map(|(line, _)| *line)
+                .unwrap_or_else(|| panic!("`{needle}` not found in agent_init/mod.rs"))
+        };
+        let load = first("ensure_loaded()");
+        let catalog_init = first("init_tool_catalog(");
+        let mut violations = Vec::new();
+        for needle in [
+            "set_mcp_handle(",
+            "set_memory_registry(",
+            "set_tool_catalog(",
+        ] {
+            let at = first(needle);
+            if at >= load {
+                violations.push(format!(
+                    "`{needle}` (line {at}) must come before the first `ensure_loaded()` \
+                     (line {load}) — otherwise the first mount of a real-execution boot runs \
+                     without that handle and records a skip"
+                ));
+            }
+            if at >= catalog_init {
+                violations.push(format!(
+                    "`{needle}` (line {at}) must come before the `init_tool_catalog(` call \
+                     (line {catalog_init}) — its body runs the first `load_all` of a \
+                     Simulated-mode boot, so that mount would run without the handle and \
+                     record a skip"
+                ));
+            }
+        }
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
+    }
 }

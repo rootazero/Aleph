@@ -86,7 +86,10 @@ pub async fn handle_run(
             .with_projection_holes_check()
             // Same two handles, the other question: does the log contradict
             // itself. `aleph resume` names this check to the operator by id.
-            .with_session_log_check(),
+            .with_session_log_check()
+            // The doctor face of the boot activation gate: which mounted
+            // plugins never reached a terminal status.
+            .with_plugins_activated_check(),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,

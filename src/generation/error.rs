@@ -707,9 +707,7 @@ impl From<GenerationError> for AlephError {
                 let status_hint = status_code
                     .map(|c| format!(" (HTTP {c})"))
                     .unwrap_or_default();
-                Self::provider(format!(
-                    "{message}{provider_hint}{status_hint}"
-                ))
+                Self::provider(format!("{message}{provider_hint}{status_hint}"))
             }
             GenerationError::Cancelled => Self::cancelled(),
             GenerationError::InternalError { message } => Self::other(message),
@@ -866,32 +864,12 @@ mod tests {
         assert!(GenerationError::provider("test", Some(408), "test").is_retryable());
         assert!(GenerationError::download("test", None).is_retryable());
         // 5xx and 408 (transport-class) downloads remain retryable.
-        assert!(GenerationError::download_with_status(
-            "test",
-            None,
-            Some(503)
-        )
-        .is_retryable());
-        assert!(GenerationError::download_with_status(
-            "test",
-            None,
-            Some(408)
-        )
-        .is_retryable());
+        assert!(GenerationError::download_with_status("test", None, Some(503)).is_retryable());
+        assert!(GenerationError::download_with_status("test", None, Some(408)).is_retryable());
         // 404 (expired signed URL) and 403 (region-locked asset) are NOT
         // retryable — retrying them would burn the budget without progress.
-        assert!(!GenerationError::download_with_status(
-            "test",
-            None,
-            Some(404)
-        )
-        .is_retryable());
-        assert!(!GenerationError::download_with_status(
-            "test",
-            None,
-            Some(403)
-        )
-        .is_retryable());
+        assert!(!GenerationError::download_with_status("test", None, Some(404)).is_retryable());
+        assert!(!GenerationError::download_with_status("test", None, Some(403)).is_retryable());
 
         // Non-retryable errors
         assert!(!GenerationError::authentication("test", "test").is_retryable());
@@ -1035,13 +1013,14 @@ mod tests {
         // The provider gave us a Retry-After: 30 hint. The From boundary
         // must fold it into the AlephError suggestion so gateway/voice/outbound
         // can wait 30s instead of the Aleph-side 60s default.
-        let gen_err = GenerationError::rate_limit(
-            "Too many requests",
-            Some(Duration::from_secs(30)),
-        );
+        let gen_err =
+            GenerationError::rate_limit("Too many requests", Some(Duration::from_secs(30)));
         let aleph_err: AlephError = gen_err.into();
         match aleph_err {
-            AlephError::RateLimitError { message, suggestion } => {
+            AlephError::RateLimitError {
+                message,
+                suggestion,
+            } => {
                 assert_eq!(message, "Too many requests");
                 let s = suggestion.expect("suggestion must be preserved");
                 assert!(
@@ -1058,13 +1037,18 @@ mod tests {
         // Provider returned 503 from openai. The From boundary must include
         // the status code AND the provider name in the AlephError message
         // so downstream classifiers retain the diagnostic info.
-        let gen_err =
-            GenerationError::provider("upstream error", Some(503), "openai");
+        let gen_err = GenerationError::provider("upstream error", Some(503), "openai");
         let aleph_err: AlephError = gen_err.into();
         match aleph_err {
             AlephError::ProviderError { message, .. } => {
-                assert!(message.contains("openai"), "message missing provider, got: {message}");
-                assert!(message.contains("503"), "message missing status, got: {message}");
+                assert!(
+                    message.contains("openai"),
+                    "message missing provider, got: {message}"
+                );
+                assert!(
+                    message.contains("503"),
+                    "message missing status, got: {message}"
+                );
             }
             other => panic!("expected ProviderError, got {other:?}"),
         }

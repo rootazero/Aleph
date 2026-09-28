@@ -125,7 +125,7 @@ impl HealthCheck for LoopGraphCheck {
                         "graph lint returned no findings, but the follow-up node-list query \
                          failed (likely a transient IO / lock issue between the two calls): \
                          {e}. Treating the graph as unverified rather than sound; re-run \
-                         `aleph doctor` after the IO settles."
+                         doctor after the IO settles."
                     ),
                 )];
             }

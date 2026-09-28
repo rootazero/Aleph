@@ -65,7 +65,11 @@ pub fn project_for(store: &ProjectStore, id: &str, actor: Option<&str>) -> Optio
 /// own — [`is_active_principal`] below takes one by parameter for the same
 /// reason.
 #[must_use]
-pub(crate) fn manageable_given(project: &Project, actor: Option<&str>, actor_is_admin: bool) -> bool {
+pub(crate) fn manageable_given(
+    project: &Project,
+    actor: Option<&str>,
+    actor_is_admin: bool,
+) -> bool {
     let Some(caller) = actor else {
         return true;
     };
@@ -391,13 +395,22 @@ mod tests {
     #[test]
     fn only_the_owner_or_an_admin_may_reconfigure() {
         let (_store, project, _g) = store_with_room();
-        assert!(manageable_given(&project, Some("u-alice"), false), "the owner");
-        assert!(manageable_given(&project, Some("u-carol"), true), "an org admin");
+        assert!(
+            manageable_given(&project, Some("u-alice"), false),
+            "the owner"
+        );
+        assert!(
+            manageable_given(&project, Some("u-carol"), true),
+            "an org admin"
+        );
         assert!(
             !manageable_given(&project, Some("u-bob"), false),
             "a plain member may not reconfigure"
         );
-        assert!(manageable_given(&project, None, false), "unrestricted passes");
+        assert!(
+            manageable_given(&project, None, false),
+            "unrestricted passes"
+        );
     }
 
     #[test]
@@ -405,20 +418,46 @@ mod tests {
         use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
         let (_store, project, _g) = store_with_room();
         let users = SecurityStore::in_memory().unwrap();
-        users.create_user("u-alice", "u-alice", UserRole::Member).unwrap();
-        users.create_user("u-bob", "u-bob", UserRole::Member).unwrap();
-        users.create_user("u-carol", "u-carol", UserRole::Admin).unwrap();
-        users.create_user("u-dave", "u-dave", UserRole::Admin).unwrap();
+        users
+            .create_user("u-alice", "u-alice", UserRole::Member)
+            .unwrap();
+        users
+            .create_user("u-bob", "u-bob", UserRole::Member)
+            .unwrap();
+        users
+            .create_user("u-carol", "u-carol", UserRole::Admin)
+            .unwrap();
+        users
+            .create_user("u-dave", "u-dave", UserRole::Admin)
+            .unwrap();
         users
             .update_user("u-dave", None, None, Some(UserStatus::Deactivated))
             .unwrap();
 
-        assert!(manageable(&project, Some("u-alice"), Some(&users)), "the owner");
-        assert!(manageable(&project, Some("u-carol"), Some(&users)), "an active admin");
-        assert!(!manageable(&project, Some("u-bob"), Some(&users)), "a plain member");
-        assert!(!manageable(&project, Some("u-dave"), Some(&users)), "a deactivated admin");
-        assert!(!manageable(&project, Some("u-carol"), None), "no store: no admin escalation");
-        assert!(manageable(&project, None, Some(&users)), "unrestricted passes");
+        assert!(
+            manageable(&project, Some("u-alice"), Some(&users)),
+            "the owner"
+        );
+        assert!(
+            manageable(&project, Some("u-carol"), Some(&users)),
+            "an active admin"
+        );
+        assert!(
+            !manageable(&project, Some("u-bob"), Some(&users)),
+            "a plain member"
+        );
+        assert!(
+            !manageable(&project, Some("u-dave"), Some(&users)),
+            "a deactivated admin"
+        );
+        assert!(
+            !manageable(&project, Some("u-carol"), None),
+            "no store: no admin escalation"
+        );
+        assert!(
+            manageable(&project, None, Some(&users)),
+            "unrestricted passes"
+        );
     }
 
     /// criterion §8: a store that cannot answer is not an admin.

@@ -925,16 +925,6 @@ fn handle_agent_trace_tool_lifecycle_takes_precedence() {
         },
     });
 
-    state.handle_gateway_event(StreamEvent::ReasoningBlock {
-        run_id: "run-1".into(),
-        seq: 4,
-        step_type: aleph_protocol::ReasoningStepType::Observation,
-        label: "Tool Summary".into(),
-        content: "legacy summary".into(),
-        confidence: None,
-        is_final: false,
-    });
-
     state.handle_gateway_event(StreamEvent::AgentTrace {
         run_id: "run-1".into(),
         seq: 5,

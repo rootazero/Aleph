@@ -25,7 +25,7 @@ use conflict::ConflictResolver;
 #[allow(unused_imports)]
 pub use health::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 use query::ToolQuery;
-use registration::ToolRegistrar;
+use registration::{AllowedToolsMeaning, ToolRegistrar};
 use state::ToolState;
 pub use types::ResolvedCommand;
 use types::ToolStorage;
@@ -138,15 +138,45 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Register skills from `SkillInfo` list (Flat Namespace Mode)
+    /// Register SKILL rows (Flat Namespace Mode): each skill's `allowed-tools:`
+    /// pre-grants ([`AllowedToolsMeaning::PreGrants`]) — Claude Code names are
+    /// mapped, entries that grant nothing are dropped with a warn, and every
+    /// skill registers. See [`ToolRegistrar::register_skills`].
+    pub async fn register_skills(&self, skills: &[SkillInfo]) {
+        let refused = self
+            .registrar
+            .register_skills(
+                skills,
+                &self.conflict_resolver,
+                &|_| false,
+                AllowedToolsMeaning::PreGrants,
+            )
+            .await;
+        debug_assert!(refused.is_empty(), "a skill is never refused: {refused:?}");
+        self.health.invalidate_all();
+    }
+
+    /// Register plugin COMMAND rows: each command's `allowed-tools:` restricts
+    /// its turn ([`AllowedToolsMeaning::Restricts`]), and a command naming a
+    /// tool that does not exist is refused. `admit_unregistered` vouches for
+    /// names that have no catalog row yet (the command's own plugin's declared
+    /// MCP servers — see [`ToolRegistrar::register_skills`]).
     ///
-    /// Returns the ids of skills refused because their `allowed-tools:`
-    /// declaration named tools that do not exist. A refused skill gets no
-    /// slash command — see [`ToolRegistrar::register_skills`].
-    pub async fn register_skills(&self, skills: &[SkillInfo]) -> Vec<String> {
+    /// Returns the ids of the refused commands; a refused command gets no
+    /// slash command.
+    pub(crate) async fn register_plugin_commands(
+        &self,
+        commands: &[SkillInfo],
+        admit_unregistered: &(dyn Fn(&str) -> bool + Send + Sync),
+    ) -> Vec<String> {
         let rejected = self
             .registrar
-            .register_skills(skills, &self.conflict_resolver)
+            .register_skills(
+                commands,
+                &self.conflict_resolver,
+                admit_unregistered,
+                AllowedToolsMeaning::Restricts,
+            )
             .await;
         self.health.invalidate_all();
         rejected
@@ -201,6 +231,15 @@ impl ToolCatalog {
     /// Remove tools from a specific MCP server
     pub async fn remove_by_mcp_server(&self, server_name: &str) -> usize {
         let n = self.state.remove_by_mcp_server(server_name).await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
+    }
+
+    /// Remove the slash entries registered for the given skill ids.
+    pub async fn unregister_skills(&self, skill_ids: &[String]) -> usize {
+        let n = self.state.remove_skills(skill_ids).await;
         if n > 0 {
             self.health.invalidate_all();
         }

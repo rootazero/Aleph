@@ -669,16 +669,6 @@ impl EventEmitter for ReplyEmitter {
                 }
             }
 
-            StreamEvent::ReasoningBlock { content, .. } => {
-                if !content.is_empty() {
-                    let mut buf = self.reasoning_buffer.lock().await;
-                    if !buf.is_empty() {
-                        buf.push_str("\n\n");
-                    }
-                    buf.push_str(&content);
-                }
-            }
-
             // Store fallback info for non-Panel notification
             StreamEvent::ModelResolved { model_info, .. } => {
                 // Cache the resolved model name for the runtime-footer renderer.

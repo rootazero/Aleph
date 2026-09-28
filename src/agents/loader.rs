@@ -227,9 +227,11 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     }
     def.source = source;
 
-    // Body is intentionally unused — frontmatter carries the agent definition;
-    // the markdown body is reserved for future documentation / prompt embedding.
-    let _ = body;
+    // The markdown body is the agent's own prompt (Claude Code parity, user
+    // ruling 2026-09-20 U5). One mapping shared with plugin agents.
+    if let Some(prompt) = crate::agents::system_prompt::body_to_system_prompt(&fm.id, body) {
+        def = def.with_system_prompt(prompt);
+    }
 
     Ok(def)
 }
@@ -484,6 +486,33 @@ mod tests {
         );
         let def = parse_file(&path, AgentSource::User).unwrap();
         assert!(def.isolation.is_none());
+    }
+
+    #[test]
+    fn the_markdown_body_is_the_system_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "reviewer.md",
+            "---\nid: reviewer\ndescription: d\nwhen_to_use: w\n---\n\nYou review code.\n\n## Steps\n1. read\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You review code.\n\n## Steps\n1. read")
+        );
+    }
+
+    #[test]
+    fn an_empty_body_is_no_system_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "bare.md",
+            "---\nid: bare\ndescription: d\nwhen_to_use: w\n---\n  \n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert!(def.system_prompt.is_none());
     }
 
     #[test]

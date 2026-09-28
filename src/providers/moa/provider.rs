@@ -642,6 +642,20 @@ impl AiProvider for MoaProvider {
         self.aggregator.serving_provider_hint()
     }
 
+    /// The aggregator is the call that carries the conversation's reasoning;
+    /// advisors read a rendered view that drops reasoning outright.
+    fn reasoning_replay(
+        &self,
+        model: Option<&str>,
+    ) -> crate::providers::reasoning_replay::ReasoningReplay {
+        self.aggregator.reasoning_replay(model)
+    }
+
+    /// The aggregator's call carries the conversation and its tool results.
+    fn clears_tool_results_server_side(&self) -> bool {
+        self.aggregator.clears_tool_results_server_side()
+    }
+
     // `as_http_provider` stays the default `None` — forwarding the aggregator's
     // HttpProvider would let a caller stream AROUND the facade and the advisors
     // would never run. Streaming is served by `execute_streaming_dyn` above,
@@ -734,6 +748,43 @@ mod tests {
             sink: None,
             cache: Mutex::new(None),
         }
+    }
+
+    /// Answers the server-side clearing question with a fixed value.
+    struct Clearing(bool);
+    impl AiProvider for Clearing {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async { Ok(ProviderResponse::text_only("ok".to_string())) })
+        }
+        fn name(&self) -> &str {
+            "clearing"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+        fn clears_tool_results_server_side(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// The aggregator carries the conversation, so its answer is the facade's;
+    /// the advisors read a rendered view and have no say.
+    #[test]
+    fn server_side_clearing_is_the_aggregators_answer() {
+        let with = |advisor: bool, aggregator: bool| {
+            make_provider(
+                vec![(Arc::new(Clearing(advisor)) as Arc<dyn AiProvider>, "a:1")],
+                Arc::new(Clearing(aggregator)),
+                MoaFanout::PerIteration,
+                30,
+            )
+            .clears_tool_results_server_side()
+        };
+        assert!(with(false, true));
+        assert!(!with(true, false));
     }
 
     /// Captures every emitted `LoopTraceEvent` for wire-shape/lock assertions

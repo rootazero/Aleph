@@ -81,7 +81,10 @@ impl LedgerAction {
     /// adding a variant — the from_str / from_string round-trip would
     /// silently diverge otherwise (serde would still parse the new
     /// variant while `from_str` would return `Err`).
-    const _ALL_LEN_MATCHES: () = assert!(Self::ALL.len() == 8, "LedgerAction::ALL must list every variant");
+    const _ALL_LEN_MATCHES: () = assert!(
+        Self::ALL.len() == 8,
+        "LedgerAction::ALL must list every variant"
+    );
 }
 
 impl fmt::Display for LedgerAction {
@@ -125,7 +128,10 @@ impl LedgerOutcome {
     const ALL: &'static [Self] = &[Self::Ok, Self::Error, Self::Denied];
 
     /// Compile-time guard: ALL must list every variant. See `LedgerAction`.
-    const _ALL_LEN_MATCHES: () = assert!(Self::ALL.len() == 3, "LedgerOutcome::ALL must list every variant");
+    const _ALL_LEN_MATCHES: () = assert!(
+        Self::ALL.len() == 3,
+        "LedgerOutcome::ALL must list every variant"
+    );
 }
 
 impl fmt::Display for LedgerOutcome {

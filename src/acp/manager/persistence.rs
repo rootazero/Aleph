@@ -79,15 +79,11 @@ fn apply_event_to_store(
             let prior_created = store
                 .iter()
                 .find(|s| {
-                    s.harness_id == *harness_id
-                        && s.cwd == *cwd
-                        && s.session_name == *session_name
+                    s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name
                 })
                 .map(|s| s.created_at);
             store.retain(|s| {
-                !(s.harness_id == *harness_id
-                    && s.cwd == *cwd
-                    && s.session_name == *session_name)
+                !(s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name)
             });
             let now = chrono::Utc::now();
             store.push(crate::acp::session::PersistedAcpSession {
@@ -105,9 +101,7 @@ fn apply_event_to_store(
             session_name,
         } => {
             store.retain(|s| {
-                !(s.harness_id == *harness_id
-                    && s.cwd == *cwd
-                    && s.session_name == *session_name)
+                !(s.harness_id == *harness_id && s.cwd == *cwd && s.session_name == *session_name)
             });
         }
     }
@@ -172,9 +166,7 @@ pub async fn wire_persistence(
             //    the post-application state in the SAME critical section.
             //    No concurrent writer exists — this worker is the only writer.
             let snapshot = {
-                let mut store = worker_sessions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut store = worker_sessions.lock().unwrap_or_else(|e| e.into_inner());
                 apply_event_to_store(&mut store, &event);
                 store.clone()
             };
@@ -448,7 +440,9 @@ mod wire_persistence_tests {
             assert!(
                 entry.created_at <= after && entry.created_at >= before,
                 "created_at {} must lie within [{}, {}]",
-                entry.created_at, before, after,
+                entry.created_at,
+                before,
+                after,
             );
         })
         .await;

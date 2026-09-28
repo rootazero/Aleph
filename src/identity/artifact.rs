@@ -186,8 +186,8 @@ fn preimage(agent: &str, sha256: &[u8; 32]) -> Vec<u8> {
     // claims. Real-world ids are short; the panic surfaces the invariant
     // break instead of shipping a preimage that round-trips only on the
     // signing machine.
-    let agent_len = u32::try_from(agent.len())
-        .expect("agent id exceeds u32 length in signature preimage");
+    let agent_len =
+        u32::try_from(agent.len()).expect("agent id exceeds u32 length in signature preimage");
     let mut p = Vec::with_capacity(DOMAIN.len() + 4 + agent.len() + 32);
     p.extend_from_slice(DOMAIN);
     p.extend_from_slice(&agent_len.to_be_bytes());

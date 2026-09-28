@@ -76,13 +76,11 @@ impl MediaProvider for TextDocumentProvider {
                 // future caller invokes `MediaPipeline` directly we still
                 // refuse any path outside the media trust root. Same predicate
                 // `MediaCache::safe_local_media_path` enforces on the way out.
-                let path_str = path.to_str().ok_or_else(|| MediaError::Refused(
-                    "path is not valid UTF-8".into(),
-                ))?;
+                let path_str = path
+                    .to_str()
+                    .ok_or_else(|| MediaError::Refused("path is not valid UTF-8".into()))?;
                 if MediaCache::safe_local_media_path(path_str).await.is_none() {
-                    return Err(MediaError::Refused(
-                        "path outside media trust root".into(),
-                    ));
+                    return Err(MediaError::Refused("path outside media trust root".into()));
                 }
 
                 let meta =
@@ -122,19 +120,21 @@ impl MediaProvider for TextDocumentProvider {
                     {
                         options.custom_flags(libc::O_NOFOLLOW);
                     }
-                    let mut file = options.open(path).await.map_err(|e| {
-                        MediaError::ProviderError {
-                            provider: "text-document".into(),
-                            message: format!("Failed to read {}: {}", path.display(), e),
-                        }
-                    })?;
+                    let mut file =
+                        options
+                            .open(path)
+                            .await
+                            .map_err(|e| MediaError::ProviderError {
+                                provider: "text-document".into(),
+                                message: format!("Failed to read {}: {}", path.display(), e),
+                            })?;
                     let mut s = String::with_capacity(meta.len() as usize);
-                    file.read_to_string(&mut s).await.map_err(|e| {
-                        MediaError::ProviderError {
+                    file.read_to_string(&mut s)
+                        .await
+                        .map_err(|e| MediaError::ProviderError {
                             provider: "text-document".into(),
                             message: format!("Failed to read {}: {}", path.display(), e),
-                        }
-                    })?;
+                        })?;
                     s
                 };
                 Ok(MediaOutput::Text { text: content })

@@ -20,8 +20,8 @@ pub use fold::{
 
 mod summarize;
 pub use summarize::{
-    clip_one_line, display_name, humanize, summarize, CallSummary, ARGS_CLIP, DISPLAY_NAMES,
-    PREFERRED_ARG_KEYS,
+    clip_one_line, display_name, humanize, query_text, summarize, CallSummary, ARGS_CLIP,
+    DISPLAY_NAMES, PREFERRED_ARG_KEYS,
 };
 
 mod group;

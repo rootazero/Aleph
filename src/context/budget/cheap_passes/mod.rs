@@ -20,5 +20,5 @@ pub mod image_stripping;
 pub mod tool_result_pruning;
 
 pub use file_op_supersede::FileOpSupersedeStage;
-pub use image_stripping::HistoricalImageStrippingStage;
+pub use image_stripping::{HistoricalImageStrippingStage, HistoricalUserImageStrippingStage};
 pub use tool_result_pruning::ToolResultPruningStage;

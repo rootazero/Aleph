@@ -840,6 +840,55 @@ fn test_convert_s5_full_cycle() {
     assert_eq!(result[3].role, "assistant");
 }
 
+/// A signed thinking block belongs to the protocol that signed it; only
+/// unsigned reasoning (this family's own `reasoning_content`) may be written
+/// back. Guards the paths that skip the reasoning projection (`stream_raw`).
+#[test]
+fn signed_thinking_never_becomes_reasoning_content() {
+    use crate::providers::message::ContentBlock as CB;
+    let thinking = |text: &str, signature: Option<&str>| CB::Thinking {
+        thinking: text.to_string(),
+        signature: signature.map(str::to_string),
+        earlier_turn: false,
+    };
+    let call = CB::ToolCall {
+        thought_signature: None,
+        id: "call_1".to_string(),
+        name: "search".to_string(),
+        arguments: serde_json::json!({"q": "rust"}),
+    };
+    let text = CB::Text {
+        text: "done".to_string(),
+        cache_control: None,
+    };
+    let msgs = [
+        UnifiedMessage::Assistant {
+            content: vec![thinking("anthropic", Some("sig_abc")), call.clone()],
+        },
+        UnifiedMessage::Assistant {
+            content: vec![thinking("anthropic", Some("sig_abc")), text.clone()],
+        },
+        UnifiedMessage::Assistant {
+            content: vec![
+                thinking("foreign", Some("sig_abc")),
+                thinking("own", None),
+                call,
+            ],
+        },
+        UnifiedMessage::Assistant {
+            content: vec![thinking("own", None), text],
+        },
+    ];
+    let reasoning: Vec<Option<String>> = OpenAiProtocol::convert_messages(&msgs, None)
+        .into_iter()
+        .map(|m| m.reasoning_content)
+        .collect();
+    assert_eq!(
+        reasoning,
+        vec![None, None, Some("own".to_string()), Some("own".to_string())]
+    );
+}
+
 #[test]
 fn test_convert_s6_arguments_json_stringify() {
     use crate::providers::message::ContentBlock as CB;

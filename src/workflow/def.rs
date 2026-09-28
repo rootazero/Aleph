@@ -675,7 +675,11 @@ mod tests {
         }
     }
 
-    fn collect_step(id: &str, collect_from: &[&str], reduce: Option<CollectReduce>) -> WorkflowStepDef {
+    fn collect_step(
+        id: &str,
+        collect_from: &[&str],
+        reduce: Option<CollectReduce>,
+    ) -> WorkflowStepDef {
         WorkflowStepDef {
             id: id.into(),
             agent: String::new(),
@@ -1111,8 +1115,14 @@ mod tests {
     fn collect_step_wire_shape_is_flat_and_skips_when_unset() {
         let s = step("a", &[]);
         let plain = serde_json::to_string(&s).unwrap();
-        assert!(!plain.contains("collect_from"), "no collect_from on agent: {plain}");
-        assert!(!plain.contains(r#""reduce""#), "no reduce on agent: {plain}");
+        assert!(
+            !plain.contains("collect_from"),
+            "no collect_from on agent: {plain}"
+        );
+        assert!(
+            !plain.contains(r#""reduce""#),
+            "no reduce on agent: {plain}"
+        );
 
         let c = collect_step("synth", &["a", "b"], Some(CollectReduce::Concat));
         let json = serde_json::to_string(&c).unwrap();
@@ -1130,7 +1140,10 @@ mod tests {
         let s = collect_step("s", &["a"], None);
         assert!(s.reduce.is_none());
         let json = serde_json::to_string(&s).unwrap();
-        assert!(!json.contains("reduce"), "None reduce stays off the wire: {json}");
+        assert!(
+            !json.contains("reduce"),
+            "None reduce stays off the wire: {json}"
+        );
     }
 
     /// A happy-path workflow with one fan-out (a → b, c) and one collect
@@ -1236,7 +1249,10 @@ mod tests {
         ] {
             let s = collect_step("s", &["a"], Some(variant));
             let json = serde_json::to_string(&s).unwrap();
-            assert!(json.contains(expected), "{variant:?} serialises as {expected}: {json}");
+            assert!(
+                json.contains(expected),
+                "{variant:?} serialises as {expected}: {json}"
+            );
             let back: WorkflowStepDef = serde_json::from_str(&json).unwrap();
             assert_eq!(back.reduce, Some(variant));
         }

@@ -54,6 +54,23 @@ impl ToolState {
         removed
     }
 
+    /// Remove the skill-sourced entries whose `ToolSource::Skill { id, .. }` is
+    /// one of `skill_ids`. The inverse of `ToolRegistrar::register_skills`
+    /// for a plugin's `commands/*.md` entries; the plugin lifecycle calls it
+    /// from the `slash_command` effect's disposer with the exact ids it
+    /// registered. Returns how many were removed.
+    pub async fn remove_skills(&self, skill_ids: &[String]) -> usize {
+        let mut tools = self.tools.write().await;
+        let initial_count = tools.len();
+        tools.retain(|_, tool| match &tool.source {
+            super::super::types::ToolSource::Skill { id, .. } => !skill_ids.contains(id),
+            _ => true,
+        });
+        let removed = initial_count - tools.len();
+        debug!(removed, "Removed plugin skill entries");
+        removed
+    }
+
     /// Set the active flag on a single tool by canonical name.
     ///
     /// Returns true if a tool with that name was found and its `is_active`
