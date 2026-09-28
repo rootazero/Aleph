@@ -51,8 +51,14 @@ const fn link_preview_options(
 // ---------------------------------------------------------------------------
 
 /// Classification of Telegram API errors for retry logic.
+///
+/// `#[doc(hidden)]` — exposed alongside `classify_error` for tests; not
+/// part of Aleph's stable API. The variants are still crate-internal
+/// (only `classify_error` returns them) but the type's visibility has to
+/// match the function's.
 #[derive(Debug)]
-pub(crate) enum ErrorClass {
+#[doc(hidden)]
+pub enum ErrorClass {
     /// Timeout/reset — may have been sent, retry cautiously.
     PostConnect,
     /// Network-class error with finer granularity than just "PreConnect /
@@ -82,8 +88,11 @@ pub(crate) enum ErrorClass {
 /// log + doctor dashboard do show the distinction — DNS failure on the bot's
 /// host means "your resolver is broken", TLS handshake means "your proxy /
 /// cert is broken", connect timeout means "the route is congested".
+///
+/// `#[doc(hidden)]` — see `ErrorClass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NetworkKind {
+#[doc(hidden)]
+pub enum NetworkKind {
     Dns,
     Tls,
     Connect,
@@ -103,8 +112,11 @@ pub(crate) enum NetworkKind {
 ///   particular edit target is gone" signal, and the cooldown key must be the
 ///   message id, not the chat — otherwise editing a missing message would
 ///   park the whole conversation for hours.
+///
+/// `#[doc(hidden)]` — see `ErrorClass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ForbiddenKind {
+#[doc(hidden)]
+pub enum ForbiddenKind {
     BotBlocked,
     UserNotFound,
     ChatNotFound,
@@ -116,7 +128,12 @@ pub(crate) enum ForbiddenKind {
 /// Uses teloxide's typed enums (`ApiError`, `RequestError::RetryAfter`) and
 /// reqwest's `is_connect()` for precise classification instead of fragile
 /// string matching.
-pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
+///
+/// `#[doc(hidden)]` — exposed for `tests/telegram_delivery_e2e.rs` so the
+/// P0-C error taxonomy (Network/Forbidden vs Rejected) can be asserted
+/// directly without round-tripping through the network.
+#[doc(hidden)]
+pub fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
     match err {
         // Rate limit is a top-level RequestError variant (not inside ApiError)
         teloxide::RequestError::RetryAfter(seconds) => {
@@ -130,15 +147,9 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
                 // server says you can't") but they have DIFFERENT recovery
                 // semantics (see ForbiddenKind doc), so they need to be
                 // distinguishable in the operator's log / doctor.
-                ApiError::BotBlocked => {
-                    ErrorClass::Forbidden(ForbiddenKind::BotBlocked)
-                }
-                ApiError::ChatNotFound => {
-                    ErrorClass::Forbidden(ForbiddenKind::ChatNotFound)
-                }
-                ApiError::UserNotFound => {
-                    ErrorClass::Forbidden(ForbiddenKind::UserNotFound)
-                }
+                ApiError::BotBlocked => ErrorClass::Forbidden(ForbiddenKind::BotBlocked),
+                ApiError::ChatNotFound => ErrorClass::Forbidden(ForbiddenKind::ChatNotFound),
+                ApiError::UserNotFound => ErrorClass::Forbidden(ForbiddenKind::UserNotFound),
                 // Edit / delete targets that vanished mid-stream: NOT a chat-
                 // level permanent. Previously lumped into `Rejected` here, which
                 // parked the conversation for 4 hours over a missing edit
@@ -189,7 +200,10 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
                     ErrorClass::Network(NetworkKind::Dns)
                 } else if reqwest_err.to_string().to_lowercase().contains("tls")
                     || reqwest_err.to_string().to_lowercase().contains("handshake")
-                    || reqwest_err.to_string().to_lowercase().contains("certificate")
+                    || reqwest_err
+                        .to_string()
+                        .to_lowercase()
+                        .contains("certificate")
                 {
                     ErrorClass::Network(NetworkKind::Tls)
                 } else {
@@ -293,7 +307,14 @@ const fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
 /// Send an outbound message with chunking, retry, and attachment support.
 ///
 /// This is the extracted body of `Channel::send()`.
-pub(crate) async fn send_message(
+///
+/// `#[doc(hidden)]` — exposed for `tests/telegram_delivery_e2e.rs`, which
+/// drives this through a wiremock-backed `Bot::set_api_url` to exercise the
+/// error-taxonomy + media-group + voice-note paths without a real Telegram
+/// round-trip. The function is *not* part of Aleph's stable API; callers
+/// outside this crate should go through `Channel::send`.
+#[doc(hidden)]
+pub async fn send_message(
     bot: &Bot,
     config: &ResolvedConfig,
     message: &OutboundMessage,
@@ -595,9 +616,10 @@ pub(crate) async fn send_message(
                                 "Telegram forbidden ({:?}) — bailing without retry",
                                 kind_for_log
                             );
-                            cooldown.record_failure(conv_id, error_class_to_kind(
-                                &ErrorClass::Forbidden(kind_for_log),
-                            ));
+                            cooldown.record_failure(
+                                conv_id,
+                                error_class_to_kind(&ErrorClass::Forbidden(kind_for_log)),
+                            );
                             if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
                                 return Err(ChannelError::SendFailed(
                                     "Error suppressed by policy".to_string(),
@@ -746,7 +768,11 @@ pub(crate) async fn send_reaction(
 /// partial send (some succeeded, some failed) is signalled by the upstream
 /// cooldown — the caller treats any error as full failure and lets the
 /// cooldown backoff schedule the retry.
-pub(crate) async fn send_attachments(
+///
+/// `#[doc(hidden)]` — see `send_message` for the rationale. Exposed for
+/// `tests/telegram_delivery_e2e.rs`.
+#[doc(hidden)]
+pub async fn send_attachments(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<i32>,
@@ -870,7 +896,11 @@ fn attachment_to_input_file(
 }
 
 /// Send an attachment with optional forum-topic routing.
-pub(crate) async fn send_attachment(
+///
+/// `#[doc(hidden)]` — see `send_message` for the rationale. Exposed for
+/// `tests/telegram_delivery_e2e.rs`.
+#[doc(hidden)]
+pub async fn send_attachment(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<i32>,
@@ -913,13 +943,16 @@ pub(crate) async fn send_attachment(
         req.await
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
     } else if mime.starts_with("video/") {
+        // `Some(true)` triggers the round-bubble `sendVideoNote` dispatch;
+        // `Some(false)` and `None` both fall through to the generic
+        // `sendVideo` (the historical default). Other channels that ignore
+        // the hint leave it `None` and pay no cost.
         if attachment.is_video_note {
             // Video note (round bubble) — Telegram-specific surface; ignored
             // by other channels via the `is_video_note` flag.
             let req = with_thread!(bot.send_video_note(chat_id, input_file), thread_id);
-            req.await.map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to send video note: {e}"))
-            })?;
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video note: {e}")))?;
         } else {
             let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
             req.await
