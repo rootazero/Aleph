@@ -270,6 +270,33 @@ mod tests {
             "cluster.enroll",
         ];
         let registry = crate::gateway::handlers::HandlerRegistry::new();
+        // The allowlist itself needs both directions checked, or it rots
+        // into exactly the blind spot this test exists to close: (a) a name
+        // could be added here that `HandlerRegistry::new()` actually sees,
+        // silently skipping a check that would have passed anyway; (b) a
+        // name could be typo'd or a method could be deleted entirely, and
+        // "boot-only" would then be indistinguishable from "does not exist".
+        // `method_census::sweep_rpc_methods` is the oracle for (b): it scrapes
+        // every `.register(...)` call out of `src/**/*.rs`, which includes the
+        // `aleph-server` binary crate's boot-time registrations — the same
+        // fact this module's own census guards already trust it for.
+        let (swept, _unknown) = crate::gateway::method_census::tests::sweep_rpc_methods();
+        for name in BOOT_ONLY_RPCS {
+            assert!(
+                !registry.has_method(name),
+                "`{name}` is in BOOT_ONLY_RPCS but IS registered in \
+                 `HandlerRegistry::new()` — the exemption is no longer \
+                 needed; remove it so `has_method` checks this name like \
+                 every other row"
+            );
+            assert!(
+                swept.contains_key(*name),
+                "`{name}` is in BOOT_ONLY_RPCS but the production-source \
+                 sweep cannot find it registered anywhere — it is not \
+                 boot-only, it does not exist; remove it from `TOOL_FACES` \
+                 instead of exempting it here"
+            );
+        }
         for (tool, rpc) in TOOL_FACES {
             if !BOOT_ONLY_RPCS.contains(rpc) {
                 assert!(

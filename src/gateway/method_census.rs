@@ -34,7 +34,7 @@
 //!   literals ARE scraped; the same shape anywhere else fails the census.
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::method_admin;
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -501,7 +501,14 @@ mod tests {
     /// `src/**/*.rs`. Returns the swept methods (with the file that
     /// registers them) and any registration-shaped call the receiver rules
     /// could not classify.
-    fn sweep_rpc_methods() -> (BTreeMap<String, String>, Vec<String>) {
+    ///
+    /// `pub(crate)`, narrowest form that works: `method_authz.rs`'s own
+    /// `#[cfg(test)]` tests use this as the oracle for "is this RPC method
+    /// registered ANYWHERE in production source" (including the boot-time
+    /// registrations in the separate `aleph-server` binary crate under
+    /// `src/bin/`, which this sweep walks like any other file under `src/`)
+    /// — the same fact this module's own guards already trust it for.
+    pub(crate) fn sweep_rpc_methods() -> (BTreeMap<String, String>, Vec<String>) {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
