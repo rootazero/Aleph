@@ -462,7 +462,10 @@ impl ChannelApprovalBridge {
     /// Test helper: a bridge backed by an `event_bus` for asserting the
     /// `approval.*` mirror frames the W2 fix added.
     #[cfg(test)]
-    pub fn for_test_with_bus(registry: Arc<ChannelRegistry>, event_bus: Arc<GatewayEventBus>) -> Self {
+    pub fn for_test_with_bus(
+        registry: Arc<ChannelRegistry>,
+        event_bus: Arc<GatewayEventBus>,
+    ) -> Self {
         Self {
             registry,
             event_bus: Some(event_bus),
@@ -578,7 +581,9 @@ mod tests {
     }
 
     impl StubChannel {
-        fn new(capability: Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>) -> Self {
+        fn new(
+            capability: Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>,
+        ) -> Self {
             Self {
                 info: ChannelInfo {
                     id: ChannelId::new("stub"),
@@ -601,7 +606,9 @@ mod tests {
         fn state(&self) -> &ChannelState {
             &self.state
         }
-        fn approval_capability(&self) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
+        fn approval_capability(
+            &self,
+        ) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
             Some(self.capability.clone())
         }
         async fn start(&mut self) -> ChannelResult<()> {
@@ -742,11 +749,10 @@ mod tests {
 
         // ApprovalResolved is the next frame the bus sees; ordering is enforced
         // by the await_registered + publish ordering inside request_for_tool.
-        let resolved_frame =
-            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("ApprovalResolved must arrive within 2s")
-                .expect("event bus closed");
+        let resolved_frame = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("ApprovalResolved must arrive within 2s")
+            .expect("event bus closed");
         match resolved_frame {
             GatewayEventFrame::ApprovalResolved {
                 approval_id: id,
@@ -772,7 +778,7 @@ mod tests {
     #[tokio::test]
     async fn channel_path_does_not_publish_when_event_bus_unset() {
         let cap = Arc::new(StubCapability::new());
-        let registry = registry_with_stub(cap.clone()).await;
+        let _registry = registry_with_stub(cap.clone()).await;
         let event_bus = Arc::new(GatewayEventBus::new());
         let mut rx = event_bus.subscribe_typed();
         let bridge = ChannelApprovalBridge::for_test_always_approved(); // No event_bus.

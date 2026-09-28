@@ -53,14 +53,6 @@ impl StatusReactionController {
         }
     }
 
-    /// Read the current state — exposed for tests and the doctor, NOT for
-    /// callers that want to influence the reaction (they should emit the
-    /// right `StreamEvent` instead).
-    #[cfg(test)]
-    pub(crate) async fn current_state(&self) -> ReactionState {
-        *self.state.lock().await
-    }
-
     /// Handle a stream event and update the reaction accordingly.
     pub async fn handle_event(&self, event: &StreamEvent, message_id: i64) -> ChannelResult<()> {
         let (target_state, target_emoji) = self.derive_target(event);
@@ -103,7 +95,9 @@ impl StatusReactionController {
     /// can re-use the same derivation.
     fn derive_target(&self, event: &StreamEvent) -> (ReactionState, Option<String>) {
         match event {
-            StreamEvent::RunQueued { .. } => (ReactionState::Queued, self.config.processing.clone()),
+            StreamEvent::RunQueued { .. } => {
+                (ReactionState::Queued, self.config.processing.clone())
+            }
             StreamEvent::RunAccepted { .. } => {
                 (ReactionState::Thinking, self.config.processing.clone())
             }
@@ -130,9 +124,7 @@ impl StatusReactionController {
                 // Tool finished — back to Thinking (model resumes synthesis).
                 (ReactionState::Thinking, self.config.processing.clone())
             }
-            StreamEvent::RunComplete { .. } => {
-                (ReactionState::Done, self.config.complete.clone())
-            }
+            StreamEvent::RunComplete { .. } => (ReactionState::Done, self.config.complete.clone()),
             StreamEvent::RunError { .. } => (ReactionState::Error, Some("👎".to_string())),
             _ => (
                 // Unknown event — keep current state, don't change the
@@ -179,7 +171,8 @@ mod tests {
             processing: Some("👀".to_string()),
             tool_active: Some("🔧".to_string()),
             complete: Some("👍".to_string()),
-            thinking: None,};
+            thinking: None,
+        };
         let controller = StatusReactionController::new(delivery, config);
 
         controller

@@ -32,4 +32,9 @@ pub mod driver;
 mod job;
 
 pub use driver::WindowsSandboxDriver;
+// See the `#[allow(dead_code)]` rationale on `job::kill_on_this_process_exit`:
+// the re-export is wired into `utils::scratch::reap_on_exit`'s windows arm,
+// but `cargo clippy -p alephcore --` does not compile the integration test
+// binaries that call it, so the lib-only lint scope treats this as unused.
+#[allow(unused_imports)]
 pub(crate) use job::kill_on_this_process_exit;

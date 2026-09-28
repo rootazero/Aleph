@@ -872,16 +872,14 @@ mod tests {
         }
     }
 
-    fn owned_task(owner: &str) -> impl std::future::Future<Output = HeartbeatTask> + '_ {
-        async move {
-            let mut task = make_task();
-            crate::scope::with_scope(
-                Some(crate::scope::ScopeAttribution::personal(owner)),
-                async { task.stamp_current_scope() },
-            )
-            .await;
-            task
-        }
+    async fn owned_task(owner: &str) -> HeartbeatTask {
+        let mut task = make_task();
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal(owner)),
+            async { task.stamp_current_scope() },
+        )
+        .await;
+        task
     }
 
     /// `u-owner` (active Admin), `u-alice` (active Member), `u-walled`

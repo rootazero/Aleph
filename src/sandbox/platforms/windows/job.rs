@@ -147,6 +147,14 @@ impl Drop for SandboxJob {
 /// same job-object primitive [`SandboxJob`] is built on (R1's
 /// process-isolation exception).
 ///
+/// `#[allow(dead_code)]` — only the integration-test harnesses under
+/// `tests/*/harness.rs` call this through `scratch::reap_on_exit`, and those
+/// binaries are not compiled by the lib-level `cargo clippy -p alephcore`
+/// the workflow uses (line 351 of aleph-core-ci.yml). Under `--all-targets`
+/// the call sites light up and the lint clears; the lib-only path is a
+/// false positive that we suppress here so a pre-commit hook matching CI
+/// plus `--all-targets` stays green on every platform.
+///
 /// There is one job per process. It is created on first use with only
 /// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and its handle is never closed on
 /// purpose. The OS closes the last handle when this process ends, whether by
@@ -154,6 +162,7 @@ impl Drop for SandboxJob {
 /// every process assigned to it. That covers more than the unix arm's
 /// `atexit`, which an abort skips. Processes that `pid` spawned before it was
 /// assigned are not in the job and are not killed.
+#[allow(dead_code)]
 pub(crate) fn kill_on_this_process_exit(pid: u32) -> Result<(), String> {
     use std::sync::OnceLock;
     use windows_sys::Win32::System::Threading::{
