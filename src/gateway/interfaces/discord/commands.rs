@@ -377,8 +377,9 @@ pub enum CommandAction {
     /// prefix intercept handles approval clicks by routing them to the
     /// approval sink. The reconstructed `text` is in
     /// `ApprovalBridge::parse_callback` format so the sink can resolve
-    /// the click.
-    Forward(InboundMessage),
+    /// the click. Boxed to keep the enum small relative to `AckOnly`
+    /// (clippy::large_enum_variant).
+    Forward(Box<InboundMessage>),
     /// ACK the interaction without sending anything to the inbound
     /// router. Used when the registry returned `AckNoReply` or
     /// `Rejected` (the latter is a defensive fallback — the parser
@@ -474,14 +475,14 @@ pub fn dispatch_component_click(
     let id = match ComponentId::parse(custom_id) {
         Ok(id) => id,
         Err(_) => {
-            return CommandAction::Forward(legacy_inbound(
+            return CommandAction::Forward(Box::new(legacy_inbound(
                 custom_id,
                 sender_id,
                 sender_name,
                 interaction_id,
                 conversation_id,
                 is_group,
-            ));
+            )));
         }
     };
 
@@ -495,14 +496,14 @@ pub fn dispatch_component_click(
     let is_legacy_no_colon = matches!(&id.kind, ComponentKind::Unknown(k) if k == custom_id)
         && id.payload.is_empty();
     if is_legacy_no_colon {
-        return CommandAction::Forward(legacy_inbound(
+        return CommandAction::Forward(Box::new(legacy_inbound(
             custom_id,
             sender_id,
             sender_name,
             interaction_id,
             conversation_id,
             is_group,
-        ));
+        )));
     }
 
     match registry.dispatch(&id) {
@@ -526,26 +527,26 @@ pub fn dispatch_component_click(
                 }
                 _ => id.to_wire(),
             };
-            CommandAction::Forward(legacy_inbound(
+            CommandAction::Forward(Box::new(legacy_inbound(
                 &callback_data,
                 sender_id,
                 sender_name,
                 interaction_id,
                 conversation_id,
                 is_group,
-            ))
+            )))
         }
         Some(DispatchOutcome::AckNoReply) | Some(DispatchOutcome::Rejected(_)) => {
             CommandAction::AckOnly
         }
-        None => CommandAction::Forward(legacy_inbound(
+        None => CommandAction::Forward(Box::new(legacy_inbound(
             custom_id,
             sender_id,
             sender_name,
             interaction_id,
             conversation_id,
             is_group,
-        )),
+        ))),
     }
 }
 
@@ -672,5 +673,128 @@ mod tests {
         let id = ComponentId::parse("approve:chan:msg-1").unwrap();
         assert_eq!(id.kind, ComponentKind::ApprovalApprove);
         assert_eq!(id.payload, "chan:msg-1");
+    }
+
+    // ----- dispatch_component_click tests (R2 D1) -----
+    //
+    // The legacy `cb_<id>` fallback is the contract Review Focus #3
+    // called out. Without them the dispatcher would happily AckNo-clud-slow
+    // legacy bots' approval resolutions and there would be no test to
+    // catch it.
+
+    fn conv() -> ConversationId {
+        ConversationId::new("chan-1")
+    }
+
+    #[test]
+    fn dispatch_legacy_cb_id_forwards_raw_custom_id() {
+        // Old bot emits "cb_<message_id>" with no colon. The codec parses
+        // this as Unknown(<whole>) with empty payload; Review Focus #3
+        // requires the dispatcher NOT swallow it as AckNoReply.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "cb_msg-123",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                // The inbound router matches on the cb_ prefix; the
+                // raw custom_id must be in `text` for routing to work.
+                assert_eq!(msg.text, "cb_msg-123");
+                assert!(msg.id.0.starts_with(CB_MESSAGE_ID_PREFIX));
+                assert!(msg.is_group);
+            }
+            CommandAction::AckOnly => panic!("legacy cb_<id> must not AckOnly"),
+        }
+    }
+
+    #[test]
+    fn dispatch_approval_approve_reconstructs_callback_data() {
+        // D4 typed format: "approve:<id>" (no decision tier). The sink
+        // expects `approve:<id>:<decision>`; dispatcher appends :once.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "approve:msg-7",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "approve:msg-7:once");
+            }
+            CommandAction::AckOnly => panic!("approval approve must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_approval_deny_reconstructs_callback_data() {
+        // Same as approve but :deny tier.
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "deny:msg-7",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "approve:msg-7:deny");
+            }
+            CommandAction::AckOnly => panic!("approval deny must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_kind_without_callback_handler_forwards_raw() {
+        // Empty registry (no Callback). Unknown kinds fall through to
+        // Forward so the agent loop sees the click instead of a silent
+        // AckOnly — mirrors the legacy handle_component forwarding the raw
+        // custom_id.
+        let r = CommandRegistry::new();
+        let action = dispatch_component_click(
+            &r,
+            "mystery:x",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        match action {
+            CommandAction::Forward(msg) => {
+                assert_eq!(msg.text, "mystery:x");
+            }
+            CommandAction::AckOnly => panic!("empty-registry unknown must Forward"),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_kind_with_callback_handler_acks_only() {
+        // Registry with Callback registered → Unknown kinds defer to
+        // AckNoReply via the dispatcher (via with_defaults path which
+        // also registers Callback).
+        let r = CommandRegistry::with_defaults();
+        let action = dispatch_component_click(
+            &r,
+            "mystery:x",
+            "user-1",
+            Some("alice"),
+            42,
+            conv(),
+            true,
+        );
+        assert!(matches!(action, CommandAction::AckOnly));
     }
 }

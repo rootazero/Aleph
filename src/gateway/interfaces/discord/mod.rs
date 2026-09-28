@@ -44,7 +44,6 @@ use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
-    CB_MESSAGE_ID_PREFIX,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -134,6 +133,13 @@ pub struct DiscordChannel {
     /// wired the mark; the `Arc` is what lets the handler reach it
     /// without taking a second mutable borrow of the channel.
     reconnect: Arc<reconnect::ReconnectCoordinator>,
+    /// Component dispatch table (R2 D1): owned by the channel and shared
+    /// (via Arc) with the Handler so button clicks resolve to typed
+    /// DispatchOutcome instead of becoming raw inbound text. Constructed
+    /// with `with_defaults()` so the two approval kinds route to the
+    /// approval sink out of the box; tests can replace it with an empty
+    /// registry to exercise the legacy fallback path.
+    registry: Arc<commands::CommandRegistry>,
 }
 
 impl DiscordChannel {
@@ -156,6 +162,7 @@ impl DiscordChannel {
             test_mode: false,
             stt_source: None,
             reconnect: Arc::new(reconnect::ReconnectCoordinator::with_defaults()),
+            registry: Arc::new(commands::CommandRegistry::with_defaults()),
         }
     }
 
@@ -316,6 +323,11 @@ struct Handler {
     /// `seconds_since_last_event` is permanently `0`, and every channel
     /// trips the staleness watchdog the moment it goes idle.
     reconnect: Arc<reconnect::ReconnectCoordinator>,
+    /// Component dispatch table — Arc-shared from the parent
+    /// `DiscordChannel`. Lives alongside the reconnect coordinator so a
+    /// future refactor that consolidates the two Arc-shared fields can
+    /// find them together.
+    registry: Arc<commands::CommandRegistry>,
 }
 
 impl Handler {
@@ -365,23 +377,32 @@ impl Handler {
             ConversationId::new(format!("dm:{}", component.user.id))
         };
 
-        let inbound = InboundMessage {
-            id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", component.id)),
-            channel_id: ChannelId::new("discord"),
+        // R2 D1: delegate the click resolution to the dispatch table instead
+        // of forwarding the raw `custom_id` as inbound text. The pure
+        // helper lives in commands.rs so integration tests don't need
+        // to construct a serenity ComponentInteraction.
+        let action = commands::dispatch_component_click(
+            &self.registry,
+            &component.data.custom_id,
+            &component.user.id.to_string(),
+            Some(&component.user.name),
+            component.id.get(),
             conversation_id,
-            sender_id: UserId::new(component.user.id.to_string()),
-            sender_name: Some(component.user.name.clone()),
-            text: component.data.custom_id.clone(),
-            attachments: vec![],
-            timestamp: Utc::now(),
-            reply_to: None,
-            is_group: component.guild_id.is_some(),
-            raw: None,
-            metadata: vec![],
-        };
+            component.guild_id.is_some(),
+        );
 
-        if let Err(e) = self.inbound_tx.send(inbound) {
-            tracing::error!(error = ?e, "Failed to forward Discord button callback");
+        match action {
+            commands::CommandAction::Forward(inbound) => {
+                if let Err(e) = self.inbound_tx.send(*inbound) {
+                    tracing::error!(error = ?e, "Failed to forward Discord button callback");
+                }
+            }
+            commands::CommandAction::AckOnly => {
+                // Typed DispatchOutcome::AckNoReply (and the defensive
+                // Rejected fallback) — nothing useful to forward, but
+                // Discord expects a response within 3s. The ACK below
+                // still runs so the click spinner clears.
+            }
         }
 
         // ACK the interaction (deferred update) so Discord clears the click
@@ -854,6 +875,11 @@ impl Channel for DiscordChannel {
             // watchdog is permanently stale and every idle channel trips
             // the staleness sweep.
             reconnect: Arc::clone(&self.reconnect),
+            // R2 D1: share the parent's CommandRegistry so component
+            // clicks (button / select-menu) resolve to typed
+            // DispatchOutcome via `commands::dispatch_component_click`
+            // instead of being forwarded as raw inbound text.
+            registry: Arc::clone(&self.registry),
         };
 
         // Build client
