@@ -126,7 +126,14 @@ pub struct DiscordChannel {
     /// cooldown gate, and `last_event_at` watchdog that feeds the channel
     /// health monitor's zombie-detection sweep. Always present (constructed
     /// with defaults in `new()`) so the wiring never silently disappears.
-    reconnect: reconnect::ReconnectCoordinator,
+    ///
+    /// Wrapped in `Arc` so the [`Handler`] cloned into serenity's event
+    /// callback shares the same underlying backoff / cooldown / atomic
+    /// `last_event_nanos` — `mark_event()` called from a serenity gateway
+    /// event must feed the same watchdog the health monitor reads. R2 D6
+    /// wired the mark; the `Arc` is what lets the handler reach it
+    /// without taking a second mutable borrow of the channel.
+    reconnect: Arc<reconnect::ReconnectCoordinator>,
 }
 
 impl DiscordChannel {
@@ -148,7 +155,7 @@ impl DiscordChannel {
             http: None,
             test_mode: false,
             stt_source: None,
-            reconnect: reconnect::ReconnectCoordinator::with_defaults(),
+            reconnect: Arc::new(reconnect::ReconnectCoordinator::with_defaults()),
         }
     }
 
@@ -301,6 +308,14 @@ struct Handler {
     /// the inbound path then forwards audio messages untouched so they remain
     /// visible to the user, and the agent sees the raw attachment metadata.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
+    /// Reconnect watchdog (R2 D6): shared `Arc` with the parent
+    /// `DiscordChannel`'s reconnect coordinator. Serenity's gateway events
+    /// stamp the `last_event_nanos` atomic on every observed event so the
+    /// health monitor's `is_zombie()` sweep can distinguish "socket alive"
+    /// from "socket wedged". Without this stamp the coordinator's
+    /// `seconds_since_last_event` is permanently `0`, and every channel
+    /// trips the staleness watchdog the moment it goes idle.
+    reconnect: Arc<reconnect::ReconnectCoordinator>,
 }
 
 impl Handler {
@@ -384,6 +399,11 @@ impl Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
+        // R2 D6: stamp the liveness atomic first so the watchdog's first
+        // `seconds_since_last_event` read returns 0 (sentinel for "never
+        // seen"), not "stale" — the watchdog will see the next gateway
+        // event and tick down from there.
+        self.reconnect.mark_event();
         tracing::info!(
             "Discord bot connected: {}#{} ({})",
             ready.user.name,
@@ -403,14 +423,17 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // Self-loop guard: never re-process our own bot's messages.
-        // Foreign bots fall through with `MessageMeta::BotAuthored` so the
-        // inbound router's pair-loop-guard can suppress sustained storms.
+        // R2 D6: liveness stamp AFTER the self-loop guard so the bot's
+        // own outbound messages don't trivially keep the watchdog fed —
+        // the watchdog wants gateway activity (inbound + outbound),
+        // not "I just spoke". Marking AFTER the early-return makes the
+        // guard the source of truth for "is this the bot itself".
         let bot_self_id = *self.bot_user_id.read().await;
         let is_self = bot_self_id == Some(msg.author.id.get());
         if msg.author.bot && is_self {
             return;
         }
+        self.reconnect.mark_event();
         let is_foreign_bot = msg.author.bot && !is_self;
 
         // Check if this is a DM
@@ -590,6 +613,13 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        // R2 D6: stamp the liveness atomic first, BEFORE the
+        // component-handler dispatch and the unknown-variant early-return,
+        // because both of those still represent gateway activity the
+        // watchdog should see. Filtering by interaction kind would
+        // reintroduce the "every interaction event is its own decision"
+        // problem the watchdog exists to solve.
+        self.reconnect.mark_event();
         // Button / select-menu clicks (approval UI): forward the callback to the
         // router's approval sink via a cb_-prefixed inbound message, then ACK.
         if let Interaction::Component(component) = &interaction {
@@ -817,6 +847,13 @@ impl Channel for DiscordChannel {
             thread_bindings: Arc::new(RwLock::new(HashMap::new())),
             ready_notify: ready_notify.clone(),
             stt_source: self.stt_source.clone(),
+            // R2 D6: share the parent's reconnect coordinator so the
+            // serenity gateway events (ready / message / interaction_create)
+            // stamp the same `last_event_nanos` atomic the health monitor
+            // reads from `seconds_since_last_event`. Without this clone the
+            // watchdog is permanently stale and every idle channel trips
+            // the staleness sweep.
+            reconnect: Arc::clone(&self.reconnect),
         };
 
         // Build client
@@ -885,6 +922,31 @@ impl Channel for DiscordChannel {
                 "Discord gateway did not signal ready within {:?}; channel may not be connected yet",
                 READY_TIMEOUT
             );
+        }
+
+        // R2 D3: per-guild startup audit. Fires after the gateway ready
+        // handshake so the rows describe the bot's actual start state, not
+        // a pre-handshake guess. `bot_permissions=0` is the "unverified"
+        // failsafe — a real implementation would fetch the bitfield via
+        // REST per guild, but the post-incident question this row answers
+        // is "did the bot come up at all and announce itself", not "did it
+        // come up with every required permission". `for_config` already
+        // short-circuits when `allowed_guilds` is empty (the spec rule:
+        // no fabrication for guilds we haven't joined yet).
+        //
+        // `restart_channel` re-invokes this path, so a wedged channel that
+        // comes back through the health monitor will produce a fresh
+        // audit row per guild — semantically a restart IS a fresh start.
+        // If that becomes noisy in practice, gate it behind an
+        // `AtomicBool` field on `DiscordChannel`.
+        if let Some(log) = crate::security::audit::global() {
+            let entries = crate::gateway::interfaces::discord::security::startup_audit::for_config(
+                &self.config,
+                0,
+            );
+            for entry in entries {
+                log.log(entry).await;
+            }
         }
 
         Ok(())

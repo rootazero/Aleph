@@ -522,7 +522,7 @@ impl ExecApprovalManager {
         let cascade = pending
             .get(id)
             .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
-        // R1 audit hook (T1.1): every successful resolution now leaves an
+        // R1 audit hook (T1.1): every successful resolution leaves an
         // `AuthorityChange` row in the global audit log so the post-incident
         // question "who allowed what, when" no longer requires a
         // stdout-grep. We capture the command-shape and session id from
@@ -531,6 +531,12 @@ impl ExecApprovalManager {
         let audit_snapshot = pending
             .get(id)
             .map(|e| (e.record.command.clone(), e.record.session_key.clone()));
+        // R2 D2 wiring: clone the attribution BEFORE the cascade consumes
+        // it so the helper call below can carry `resolved_by` as the
+        // audit row's `actor_user`. The cascade path takes ownership to
+        // stamp each cascaded card; the audit path takes a fresh clone so
+        // the two reads stay independent.
+        let resolved_by_for_audit = resolved_by.clone();
         if let Some((session_key, grant_key)) = cascade {
             Self::cascade_to_identical_cards(
                 &mut pending,
@@ -543,19 +549,35 @@ impl ExecApprovalManager {
             );
         }
         if let Some((command, session_key)) = audit_snapshot {
-            if let Some(log) = crate::security::audit::global() {
-                let detail = format!(
-                    "exec.approval.resolved: {:?} cmd={} session={}",
-                    decision, command, session_key,
-                );
-                // `tokio::spawn` rather than awaiting inline so the lock
-                // is dropped first and the audit dispatch never blocks
-                // the resolve path under load.
+            // R2 D2: route through the discord-side helper so the audit
+            // row's `(event_type, severity, detail)` triple matches what
+            // the rest of the discord path produces. The helper is async;
+            // `tokio::spawn` keeps the sync resolve path off the audit
+            // dispatch's critical section (matching the inline pattern
+            // that lived here in R1).
+            //
+            // The `global().is_some()` guard mirrors the R1 inline: the
+            // helper is a no-op without an installed audit log, and
+            // `tokio::spawn` requires a runtime context — tests with no
+            // audit log installed are the common case and must not panic
+            // trying to spawn.
+            if crate::security::audit::global().is_some() {
+                let label = match decision {
+                    ApprovalDecisionType::AllowOnce => "allow_once",
+                    ApprovalDecisionType::AllowSession => "allow_session",
+                    ApprovalDecisionType::AllowAlways => "allow_always",
+                    ApprovalDecisionType::Deny => "deny",
+                };
+                let actor = resolved_by_for_audit;
+                let session = Some(session_key);
+                let cmd = command;
                 tokio::spawn(async move {
-                    log.log(crate::security::audit::AuditEntry::authority_change(
-                        None,
-                        detail,
-                    ))
+                    crate::gateway::interfaces::discord::security::audit_hooks::record_approval_resolved(
+                        actor,
+                        session,
+                        label,
+                        &cmd,
+                    )
                     .await;
                 });
             }
