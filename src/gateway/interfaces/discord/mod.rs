@@ -33,6 +33,8 @@ pub mod permissions;
 pub mod reconnect;
 pub mod resolver;
 pub mod security;
+pub mod session_key;
+pub mod group_policy;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
