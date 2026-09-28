@@ -872,9 +872,10 @@ mod tests {
     /// `<cwd>/~/<x>`. The denylist used to read the entry's leading `~` as a
     /// template and protect `$HOME/<x>/secrets.vault` instead — a file that is
     /// not Aleph's — so the real vault was the unprotected one. Nothing is
-    /// created under the working directory: this arm proves the entry no
-    /// longer names `$HOME/<x>`, and `path_utils`'s
-    /// `a_code_built_entry_is_never_re_expanded` proves it names `<cwd>/~/<x>`.
+    /// created under the working directory, so this proves one thing only:
+    /// on this face the vault entry no longer names `$HOME/<x>`. That it
+    /// names where the store opens is `path_utils`'s
+    /// `a_code_built_entry_is_never_re_expanded`, through the same lookup.
     #[tokio::test]
     async fn the_rpc_face_does_not_re_expand_a_code_built_vault_entry() {
         let home = TempDir::new().unwrap();

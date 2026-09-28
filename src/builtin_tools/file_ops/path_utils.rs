@@ -1917,9 +1917,12 @@ deny_read_globs = ["**/.env", "**/*.pem"]
     /// `$HOME/<x>` instead — a file that is not Aleph's — while the real vault,
     /// the auth DBs and the human-gate files were not refused.
     ///
-    /// No file is created under the working directory: the real locations
-    /// are derived from the vault entry itself (absolute, ending in
-    /// `~/<x>/secrets.vault`), and are judged by the production pair.
+    /// No file is created under the working directory. Where the stores
+    /// open is derived independently of the entry under test —
+    /// `std::path::absolute(get_config_dir())`, the same relative path the
+    /// stores are handed, resolved against the working directory — and the
+    /// vault entry must name exactly that; every real location is then judged
+    /// by the production pair.
     #[test]
     fn a_code_built_entry_is_never_re_expanded() {
         use crate::runtimes::post_install::HomeEnvGuards;
@@ -1948,26 +1951,23 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             let _env = HomeEnvGuards::acquire_and_set(&spelled, &home_path);
             let token_target = token().map(|t| t.join(&tag));
             let denied = get_denied_paths();
+            // Where the stores open: the relative config dir they are handed,
+            // resolved against the working directory. Read right beside
+            // `get_denied_paths()`, and never from the entry under test.
+            let real_home =
+                std::path::absolute(crate::utils::paths::get_config_dir().unwrap()).unwrap();
             let vault_entry = denied
                 .iter()
                 .map(DeniedPath::as_str)
                 .find(|d| Path::new(d).ends_with(Path::new(&spelled).join("secrets.vault")))
                 .expect("the vault entry names the configured home")
                 .to_string();
-            let vault_entry = Path::new(&vault_entry);
-            if !vault_entry.is_absolute() {
+            if Path::new(&vault_entry) != real_home.join("secrets.vault") {
                 wrong.push(format!(
-                    "{spelled}: the vault entry {} is relative, so the memo matches it against \
-                     whatever the working directory is when it compiles",
-                    vault_entry.display()
+                    "{spelled}: the vault entry is {vault_entry}, but the store opens {}",
+                    real_home.join("secrets.vault").display()
                 ));
             }
-            // Where the stores open: relative to the process's working directory.
-            let real_home = if vault_entry.is_absolute() {
-                vault_entry.parent().unwrap().to_path_buf()
-            } else {
-                std::env::current_dir().unwrap().join(&spelled)
-            };
             for leaf in [
                 "secrets.vault",
                 "data/x.db",
@@ -1995,6 +1995,44 @@ deny_read_globs = ["**/.env", "**/*.pem"]
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Under an ordinary absolute home, no code-built location names a `~`
+    /// or `%VAR%` component.
+    ///
+    /// `DeniedPath::literal` is `pub` and never expands, and a relative
+    /// `ALEPH_HOME` legitimately reaches it with a leading `~`, so it cannot
+    /// refuse one at runtime. A `~/…` credential constant routed through it
+    /// instead of `template` would protect `<cwd>/~/…` and leave the real
+    /// `~/…` readable. Today's twelve are also named, one by one, in
+    /// `file_ops::tests::test_check_path_denies_protected`; a NEW constant
+    /// is named by no lookup test, and this is where that mistake shows.
+    #[test]
+    fn no_code_built_location_names_a_home_or_env_token() {
+        use crate::runtimes::post_install::HomeEnvGuards;
+        let home = tempdir().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let aleph = home_path.join("aleph-home");
+        let _env = HomeEnvGuards::acquire_and_set(&aleph, &home_path);
+        let denied = get_denied_paths();
+        let tokenised: Vec<&str> = denied
+            .iter()
+            .filter(|e| e.kind == DeniedKind::Location)
+            .filter(|e| {
+                let path = Path::new(e.as_str());
+                !path.is_absolute()
+                    || path.components().any(|c| {
+                        let name = c.as_os_str().to_string_lossy();
+                        name == "~" || names_an_unexpanded_token(&name)
+                    })
+            })
+            .map(DeniedPath::as_str)
+            .collect();
+        assert!(
+            tokenised.is_empty(),
+            "a location carries a `~` / `%VAR%` component under an absolute home — a \
+             template constant was built with `DeniedPath::literal`: {tokenised:?}"
+        );
     }
 
     /// A literal and a pattern whose texts coincide keep separate compiles.
