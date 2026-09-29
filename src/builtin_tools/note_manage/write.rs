@@ -8,11 +8,11 @@ use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{sanitize_title, KnowledgeNote};
+use crate::memory::notes::{KnowledgeNote, sanitize_title};
 
+use super::NoteManageTool;
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult};
 use super::helpers::{merge_relations, related_keywords, scan_note_for_threats};
-use super::NoteManageTool;
 
 impl NoteManageTool {
     pub(super) async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
@@ -25,10 +25,9 @@ impl NoteManageTool {
             .filename
             .as_deref()
             .ok_or_else(|| AlephError::tool("filename is required for create"))?;
-        let _title = args
-            .title
-            .as_deref()
-            .ok_or_else(|| AlephError::tool("title is required for create"))?;
+        if args.title.is_none() {
+            return Err(AlephError::tool("title is required for create"));
+        }
 
         // Hard security floor (§5.1): reject injection / exfiltration /
         // persistence payloads before they land in trusted long-term memory.
@@ -51,12 +50,7 @@ impl NoteManageTool {
         }
 
         let safe_filename = sanitize_title(filename)?;
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{safe_filename}.md"));
+        let file_path = self.note_file_path(agent_id, category, &safe_filename);
         if file_path.exists() {
             return Err(AlephError::tool(format!(
                 "Note '{filename}' in '{category}' already exists. Use 'update' action instead."
@@ -129,12 +123,7 @@ impl NoteManageTool {
                         if let Ok(Some(e)) =
                             self.indexer.store().get_note_index(&path, agent_id).await
                         {
-                            rel.push(NoteListEntry {
-                                path: e.path,
-                                category: e.category,
-                                filename: e.filename,
-                                tags: e.tags,
-                            });
+                            rel.push(e.into());
                         }
                     }
                 }
@@ -153,12 +142,7 @@ impl NoteManageTool {
                             if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
                                 continue;
                             }
-                            rel.push(NoteListEntry {
-                                path: e.path,
-                                category: e.category,
-                                filename: e.filename,
-                                tags: e.tags,
-                            });
+                            rel.push(e.into());
                         }
                     }
                     Err(e) => {
@@ -215,12 +199,7 @@ impl NoteManageTool {
         scan_note_for_threats(content)?;
 
         let safe_filename = sanitize_title(filename)?;
-        let file_path = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category)
-            .join(format!("{safe_filename}.md"));
+        let file_path = self.note_file_path(agent_id, category, &safe_filename);
 
         if !file_path.exists() {
             return Err(AlephError::tool(format!(

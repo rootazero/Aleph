@@ -45,6 +45,19 @@ pub struct BrowserEvaluateOutput {
     pub message: Option<String>,
 }
 
+impl BrowserEvaluateOutput {
+    /// A failure carrying a message but no result — one constructor so the
+    /// size-cap, secret-block, gate-deny, backend-lookup and dispatch-fail
+    /// arms cannot spell the literal five times.
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            result: None,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Executes JavaScript in the browser and returns the result.
 #[derive(Clone)]
 pub struct BrowserEvaluateTool {
@@ -82,16 +95,12 @@ impl AlephTool for BrowserEvaluateTool {
         // not logged as "user approved a 50 MB script". The cap is named in the
         // message so the model can split the work into smaller evals.
         if args.script.chars().count() > MAX_EVAL_SCRIPT_CHARS {
-            return Ok(BrowserEvaluateOutput {
-                success: false,
-                result: None,
-                message: Some(format!(
-                    "browser_evaluate script is {} chars; the cap is {MAX_EVAL_SCRIPT_CHARS} \
-                     chars. Split the script into smaller evals or use `browser_snapshot` / \
-                     targeted actions for bulk DOM work.",
-                    args.script.chars().count()
-                )),
-            });
+            return Ok(BrowserEvaluateOutput::failed(format!(
+                "browser_evaluate script is {} chars; the cap is {MAX_EVAL_SCRIPT_CHARS} \
+                 chars. Split the script into smaller evals or use `browser_snapshot` / \
+                 targeted actions for bulk DOM work.",
+                args.script.chars().count()
+            )));
         }
         // Input-side secret scan runs BEFORE the approval check: deterministic
         // policy beats interactive approval (and is cheaper) — the ordering
@@ -99,11 +108,7 @@ impl AlephTool for BrowserEvaluateTool {
         // last one without the scan, and arbitrary JS is the most direct way to
         // post a credential from the model's context to an attacker origin.
         if let Some(message) = super::check_input_secret_block(&self.manager, &args.script) {
-            return Ok(BrowserEvaluateOutput {
-                success: false,
-                result: None,
-                message: Some(message),
-            });
+            return Ok(BrowserEvaluateOutput::failed(message));
         }
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
@@ -113,11 +118,7 @@ impl AlephTool for BrowserEvaluateTool {
         )
         .await
         {
-            return Ok(BrowserEvaluateOutput {
-                success: false,
-                result: None,
-                message: Some(message),
-            });
+            return Ok(BrowserEvaluateOutput::failed(message));
         }
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
@@ -137,20 +138,15 @@ impl AlephTool for BrowserEvaluateTool {
                         )),
                     })
                 }
-                Err(e) => Ok(BrowserEvaluateOutput {
-                    success: false,
-                    result: None,
-                    message: Some(format!(
-                        "Evaluate failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    )),
-                }),
+                Err(e) => Ok(BrowserEvaluateOutput::failed(format!(
+                    "Evaluate failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
             },
-            Err(e) => Ok(BrowserEvaluateOutput {
-                success: false,
-                result: None,
-                message: Some(super::backend_error_text(&self.manager, &e)),
-            }),
+            Err(e) => Ok(BrowserEvaluateOutput::failed(super::backend_error_text(
+                &self.manager,
+                &e,
+            ))),
         }
     }
 }

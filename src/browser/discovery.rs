@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::profile::BrowserType;
 use super::BrowserError;
+use super::profile::BrowserType;
 
 /// Well-known binary names for PATH lookup (cross-platform).
 const CHROMIUM_NAMES: &[&str] = &[
@@ -213,8 +213,6 @@ fn platform_paths_impl() -> Vec<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn platform_paths_impl() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
     // Collect base directories: ProgramFiles, ProgramFiles(x86), LOCALAPPDATA
     let base_dirs: Vec<PathBuf> = [
         std::env::var("ProgramFiles").ok(),
@@ -226,31 +224,25 @@ fn platform_paths_impl() -> Vec<PathBuf> {
     .map(PathBuf::from)
     .collect();
 
-    for base in &base_dirs {
-        // Google Chrome
-        paths.push(
-            base.join("Google")
-                .join("Chrome")
-                .join("Application")
-                .join("chrome.exe"),
-        );
-        // Microsoft Edge
-        paths.push(
-            base.join("Microsoft")
-                .join("Edge")
-                .join("Application")
-                .join("msedge.exe"),
-        );
-        // Brave
-        paths.push(
-            base.join("BraveSoftware")
-                .join("Brave-Browser")
-                .join("Application")
-                .join("brave.exe"),
-        );
-    }
-
-    paths
+    base_dirs
+        .iter()
+        .flat_map(|base| {
+            [
+                base.join("Google")
+                    .join("Chrome")
+                    .join("Application")
+                    .join("chrome.exe"),
+                base.join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe"),
+                base.join("BraveSoftware")
+                    .join("Brave-Browser")
+                    .join("Application")
+                    .join("brave.exe"),
+            ]
+        })
+        .collect()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

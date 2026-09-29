@@ -49,8 +49,7 @@ impl SessionSetTopicTool {
 #[async_trait]
 impl AlephTool for SessionSetTopicTool {
     const NAME: &'static str = "session_rename";
-    const DESCRIPTION: &'static str =
-        "Rename the current session's topic/title. Use when the user \
+    const DESCRIPTION: &'static str = "Rename the current session's topic/title. Use when the user \
          asks to change, rename, or set the conversation title or topic.";
 
     type Args = SessionSetTopicArgs;
@@ -72,15 +71,9 @@ impl AlephTool for SessionSetTopicTool {
             ));
         }
 
-        // Truncate to 100 chars (P7: boundary validation)
-        let topic = if topic.len() > 100 {
-            &topic[..topic
-                .char_indices()
-                .nth(100)
-                .map_or(topic.len(), |(i, _)| i)]
-        } else {
-            topic
-        };
+        // Truncate to 100 chars (P7: boundary validation; `truncate_chars`
+        // returns the char-boundary-safe prefix, never splits a codepoint).
+        let topic = crate::utils::text_format::truncate_chars(topic, 100);
 
         let legacy_key = LegacySessionKey::from_key_string(session_key_str).ok_or_else(|| {
             crate::error::AlephError::tool(format!(

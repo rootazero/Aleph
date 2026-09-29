@@ -29,6 +29,15 @@ use std::sync::Arc;
 
 use crate::cli::SecretAction;
 
+/// Lift an anyhow error from `with_policy` into the bin's `Box<dyn Error>`
+/// return type. `format!("{e:#}")` keeps anyhow's chained context — a flat
+/// `e.to_string()` would lose the cause chain `anyhow` built up in the
+/// `with_policy` closure. Used at every `LockOrIpc` / `LockOnly` site, all of
+/// which would otherwise carry the same `.map_err` adapter.
+fn boxed<E: std::fmt::Display>(e: E) -> Box<dyn Error> {
+    format!("{e:#}").into()
+}
+
 /// Build a `SharedTokenManager` and load the existing token from DB.
 /// Returns an error if no token exists (server must be started at least once).
 fn open_token_manager() -> Result<SharedTokenManager, Box<dyn Error>> {
@@ -183,7 +192,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 },
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            .map_err(boxed)?;
             println!("Secret vault ready ({} entries)", summaries.len());
             Ok(())
         }
@@ -204,7 +213,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 },
                 body,
             )
-            .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            .map_err(boxed)?;
             println!("Stored secret '{}'", summary.key);
             Ok(())
         }
@@ -218,7 +227,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 |_lock| list_locked().map_err(|e| anyhow::anyhow!("{e}")),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            .map_err(boxed)?;
 
             if summaries.is_empty() {
                 println!("No secrets found");
@@ -243,7 +252,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 move |_lock| delete_locked(&name_local).map_err(|e| anyhow::anyhow!("{e}")),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            .map_err(boxed)?;
             println!("Deleted secret '{name}'");
             Ok(())
         }
@@ -256,14 +265,13 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 move |_lock| verify_locked(&name_local).map_err(|e| anyhow::anyhow!("{e}")),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            .map_err(boxed)?;
             println!("Secret '{name}' is available ({len} bytes, value redacted)");
             Ok(())
         }
         SecretAction::Providers => {
             // NoLock: doesn't touch the vault.
-            run_no_lock(|| Ok::<(), anyhow::Error>(()))
-                .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
+            run_no_lock(|| Ok::<(), anyhow::Error>(())).map_err(boxed)?;
             handle_secret_providers()
         }
     }

@@ -147,11 +147,7 @@ impl DesktopTool {
         };
         match session_lock::acquire_for_session(&session_id) {
             Ok(guard) => Ok(Some(guard)),
-            Err(msg) => Err(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some(msg),
-            }),
+            Err(msg) => Err(DesktopOutput::failed(msg)),
         }
     }
 
@@ -238,11 +234,9 @@ impl DesktopTool {
             if let Some(screen) = platform.screen() {
                 held_inputs::release_all_sessions(screen).await;
             }
-            return Err(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some("Computer use aborted by user (Escape pressed)".into()),
-            });
+            return Err(DesktopOutput::failed(
+                "Computer use aborted by user (Escape pressed)",
+            ));
         }
 
         Ok(())
@@ -251,11 +245,9 @@ impl DesktopTool {
     /// Execute a batch of desktop actions sequentially.
     async fn execute_batch(&self, args: &DesktopArgs) -> Result<DesktopOutput> {
         if args.actions.is_empty() {
-            return Ok(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some("batch requires non-empty 'actions' array".into()),
-            });
+            return Ok(DesktopOutput::failed(
+                "batch requires non-empty 'actions' array",
+            ));
         }
 
         let mut results = Vec::new();
@@ -421,11 +413,9 @@ impl DesktopTool {
             }
             ApprovalDecision::Deny { ref reason } => {
                 policy.record(&request, &decision).await;
-                Some(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Action denied by approval policy: {reason}")),
-                })
+                Some(DesktopOutput::failed(format!(
+                    "Action denied by approval policy: {reason}"
+                )))
             }
             ApprovalDecision::Ask { ref prompt } => {
                 // Don't record yet — record() should be called after user responds
@@ -463,11 +453,7 @@ impl DesktopTool {
         ) {
             if let Some(bid) = args.bundle_id.as_deref() {
                 if let Some(reason) = safety::blocked_app_reason(bid, bid) {
-                    return Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(reason),
-                    });
+                    return Some(DesktopOutput::failed(reason));
                 }
             }
             return None; // launch of a non-blocked app needs no frontmost check
@@ -497,32 +483,20 @@ impl DesktopTool {
             Ok(native::Rail::Global) | Err(_) => apps.iter().find(|a| a.is_active)?,
         };
 
-        safety::blocked_app_reason(&target.name, &target.bundle_id).map(|reason| DesktopOutput {
-            success: false,
-            data: None,
-            message: Some(reason),
-        })
+        safety::blocked_app_reason(&target.name, &target.bundle_id).map(DesktopOutput::failed)
     }
 
     fn no_capability_output(&self) -> DesktopOutput {
-        DesktopOutput {
-            success: false,
-            data: None,
-            message: Some(
-                "Desktop platform capability is not configured for this server build.".to_string(),
-            ),
-        }
+        DesktopOutput::failed(
+            "Desktop platform capability is not configured for this server build.",
+        )
     }
 
     fn unsupported_action_output(&self, args: &DesktopArgs) -> DesktopOutput {
-        DesktopOutput {
-            success: false,
-            data: None,
-            message: Some(format!(
-                "Desktop action '{}' is not supported on this platform.",
-                args.action
-            )),
-        }
+        DesktopOutput::failed(format!(
+            "Desktop action '{}' is not supported on this platform.",
+            args.action
+        ))
     }
 }
 
@@ -656,11 +630,7 @@ fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
             .and_then(|k| safety::check_key_combo(k).err()),
         _ => None,
     };
-    reason.map(|message| DesktopOutput {
-        success: false,
-        data: None,
-        message: Some(message),
-    })
+    reason.map(DesktopOutput::failed)
 }
 
 /// Honor UI-TARS loop-control verbs (`finished`, `call_user`).
@@ -812,11 +782,9 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                     args.action = "batch".to_string();
                 }
                 Err(e) => {
-                    return Ok(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(format!("action script parse error: {e}")),
-                    });
+                    return Ok(DesktopOutput::failed(format!(
+                        "action script parse error: {e}"
+                    )));
                 }
             }
         }
@@ -827,17 +795,12 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                 "clipboard_read" | "clipboard_write" | "paste"
             )
         {
-            return Ok(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some(
-                    "Clipboard actions (clipboard_read / clipboard_write / paste) are \
-                     disabled by configuration (UnifiedToolsConfig.clipboard.enabled = \
-                     false). Set [unified_tools.native.clipboard] enabled = true (or omit \
-                     the section) to allow them."
-                        .to_string(),
-                ),
-            });
+            return Ok(DesktopOutput::failed(
+                "Clipboard actions (clipboard_read / clipboard_write / paste) are \
+                 disabled by configuration (UnifiedToolsConfig.clipboard.enabled = \
+                 false). Set [unified_tools.native.clipboard] enabled = true (or omit \
+                 the section) to allow them.",
+            ));
         }
 
         // 1. Unconditional safety hard-block (sits below the approval policy).
@@ -991,7 +954,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 mod escape_scope_tests {
     use super::DesktopTool;
     use crate::routing::session_key::SessionKey;
-    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+    use crate::tools::turn_context::{TURN_CONTEXT, TurnContext};
 
     fn turn(run_id: &str) -> TurnContext {
         TurnContext {

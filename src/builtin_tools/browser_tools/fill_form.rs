@@ -39,6 +39,19 @@ pub struct BrowserFillFormOutput {
     pub message: Option<String>,
 }
 
+impl BrowserFillFormOutput {
+    /// A failure with no fields filled — one constructor so the empty-fields,
+    /// no-`ref_id`, secret-block, gate-deny, backend-lookup, ref-precheck and
+    /// dispatch-fail arms cannot spell the literal in seven places.
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            filled_count: 0,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Fills multiple form fields at once.
 #[derive(Clone)]
 pub struct BrowserFillFormTool {
@@ -65,8 +78,7 @@ impl BrowserFillFormTool {
 #[async_trait]
 impl AlephTool for BrowserFillFormTool {
     const NAME: &'static str = "browser_fill_form";
-    const DESCRIPTION: &'static str =
-        "Fill multiple form fields at once; address each field by the ref_id a \
+    const DESCRIPTION: &'static str = "Fill multiple form fields at once; address each field by the ref_id a \
          browser_snapshot reported for it";
     type Args = BrowserFillFormArgs;
     type Output = BrowserFillFormOutput;
@@ -84,25 +96,18 @@ impl AlephTool for BrowserFillFormTool {
         // `success: true, filled_count: 0` — a no-op reported as a completed
         // fill. `browser_upload` refuses its empty `paths` for this reason.
         if args.fields.is_empty() {
-            return Ok(BrowserFillFormOutput {
-                success: false,
-                filled_count: 0,
-                message: Some("browser_fill_form requires at least one field in `fields`".into()),
-            });
+            return Ok(BrowserFillFormOutput::failed(
+                "browser_fill_form requires at least one field in `fields`",
+            ));
         }
 
         let mut targets = Vec::with_capacity(args.fields.len());
         for field in &args.fields {
             let Some(ref ref_id) = field.ref_id else {
-                return Ok(BrowserFillFormOutput {
-                    success: false,
-                    filled_count: 0,
-                    message: Some(
-                        "each field requires 'ref_id': call browser_snapshot and pass the \
-                         ref_id it reports for each input."
-                            .into(),
-                    ),
-                });
+                return Ok(BrowserFillFormOutput::failed(
+                    "each field requires 'ref_id': call browser_snapshot and pass the \
+                     ref_id it reports for each input.",
+                ));
             };
             targets.push((
                 ActionTarget::Ref {
@@ -118,11 +123,7 @@ impl AlephTool for BrowserFillFormTool {
         // refuses the whole fill.
         for field in &args.fields {
             if let Some(message) = super::check_input_secret_block(&self.manager, &field.value) {
-                return Ok(BrowserFillFormOutput {
-                    success: false,
-                    filled_count: 0,
-                    message: Some(message),
-                });
+                return Ok(BrowserFillFormOutput::failed(message));
             }
         }
 
@@ -143,22 +144,17 @@ impl AlephTool for BrowserFillFormTool {
         )
         .await
         {
-            return Ok(BrowserFillFormOutput {
-                success: false,
-                filled_count: 0,
-                message: Some(message),
-            });
+            return Ok(BrowserFillFormOutput::failed(message));
         }
 
         let (backend, tab_id) =
             match super::make_backend_and_tab(&self.manager, &args.profile).await {
                 Ok(pair) => pair,
                 Err(e) => {
-                    return Ok(BrowserFillFormOutput {
-                        success: false,
-                        filled_count: 0,
-                        message: Some(super::backend_error_text(&self.manager, &e)),
-                    });
+                    return Ok(BrowserFillFormOutput::failed(super::backend_error_text(
+                        &self.manager,
+                        &e,
+                    )));
                 }
             };
 
@@ -171,11 +167,10 @@ impl AlephTool for BrowserFillFormTool {
                     super::precheck_ref(&self.manager, &backend, &args.profile, &tab_id, ref_id)
                         .await
                 {
-                    return Ok(BrowserFillFormOutput {
-                        success: false,
-                        filled_count: 0,
-                        message: Some(super::backend_error_text(&self.manager, &e)),
-                    });
+                    return Ok(BrowserFillFormOutput::failed(super::backend_error_text(
+                        &self.manager,
+                        &e,
+                    )));
                 }
             }
         }
@@ -189,14 +184,10 @@ impl AlephTool for BrowserFillFormTool {
                     filled, args.profile
                 )),
             }),
-            Err(e) => Ok(BrowserFillFormOutput {
-                success: false,
-                filled_count: 0,
-                message: Some(format!(
-                    "Fill form failed: {}",
-                    super::backend_error_text(&self.manager, &e)
-                )),
-            }),
+            Err(e) => Ok(BrowserFillFormOutput::failed(format!(
+                "Fill form failed: {}",
+                super::backend_error_text(&self.manager, &e)
+            ))),
         }
     }
 }

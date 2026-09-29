@@ -210,3 +210,14 @@ pub struct NoteManageResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchAdvisory>,
 }
+
+impl From<crate::memory::notes::store::NoteIndexEntry> for NoteListEntry {
+    fn from(e: crate::memory::notes::store::NoteIndexEntry) -> Self {
+        Self {
+            path: e.path,
+            category: e.category,
+            filename: e.filename,
+            tags: e.tags,
+        }
+    }
+}

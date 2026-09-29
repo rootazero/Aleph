@@ -161,6 +161,28 @@ pub struct FileInfo {
     pub mtime: Option<std::time::SystemTime>,
 }
 
+impl FileInfo {
+    /// Build the path-derived fields (`name`, `path`, `extension`) from
+    /// `path`. The caller fills the metadata-derived fields (`is_dir`,
+    /// `size`, `lines`, `mtime`) from its own `Metadata` lookup — what was
+    /// previously five duplicated lines of `to_string_lossy()`/`file_name()`
+    /// derivations at every `list` / `search` / `stats` call site.
+    pub(crate) fn with_path(path: &std::path::Path) -> Self {
+        Self {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_string_lossy().into_owned(),
+            is_dir: false,
+            size: 0,
+            extension: path.extension().map(|e| e.to_string_lossy().into_owned()),
+            lines: None,
+            mtime: None,
+        }
+    }
+}
+
 /// Aggregate counts produced by the `stats` operation.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatsSummary {

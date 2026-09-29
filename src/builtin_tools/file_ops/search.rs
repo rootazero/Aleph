@@ -70,18 +70,10 @@ pub async fn execute_search(
                 if let Ok(metadata) = tokio::fs::metadata(&path).await {
                     matched += 1;
                     if files.len() < cap {
-                        files.push(FileInfo {
-                            name: path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default(),
-                            path: path.to_string_lossy().to_string(),
-                            is_dir: metadata.is_dir(),
-                            size: metadata.len(),
-                            extension: path.extension().map(|e| e.to_string_lossy().to_string()),
-                            lines: None,
-                            mtime: None,
-                        });
+                        let mut info = FileInfo::with_path(&path);
+                        info.is_dir = metadata.is_dir();
+                        info.size = metadata.len();
+                        files.push(info);
                     }
                 } else {
                     // Stat failure is treated as "matched but not added to

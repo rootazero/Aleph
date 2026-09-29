@@ -14,7 +14,7 @@ use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
 use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
-    GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
+    GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use crate::tools::AlephTool;
 
@@ -102,96 +102,58 @@ impl ImageGenerateTool {
         &self,
         args: ImageGenerateArgs,
     ) -> std::result::Result<ImageGenerateOutput, ToolError> {
-        use crate::builtin_tools::{notify_tool_result, notify_tool_start};
-
         let start = Instant::now();
-
-        // Notify tool start
-        // Use char_indices for safe UTF-8 truncation (avoids panic on multi-byte chars)
-        let prompt_display = if args.prompt.chars().count() > 30 {
-            let end_byte = args
-                .prompt
-                .char_indices()
-                .nth(30)
-                .map_or(args.prompt.len(), |(i, _)| i);
-            format!("{}...", &args.prompt[..end_byte])
-        } else {
-            args.prompt.clone()
-        };
-        notify_tool_start(Self::NAME, &format!("生成图像: {prompt_display}"));
 
         info!(prompt = %args.prompt, provider = ?args.provider, "Starting image generation");
 
-        // Find provider (using scoped block to ensure lock is dropped before await)
+        // Find provider — lock must be dropped before any .await call.
         let (provider_name, provider) = {
-            // Acquire read lock on registry
             let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(name) = &args.provider {
                 let provider = registry.get(name).ok_or_else(|| {
-                    let error_msg = format!("Provider '{name}' not found");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    ToolError::InvalidArgs(error_msg)
+                    ToolError::InvalidArgs(format!("Provider '{name}' not found"))
                 })?;
 
-                // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
-                    let error_msg = format!("Provider '{name}' does not support image generation");
-                    notify_tool_result(Self::NAME, &error_msg, false);
-                    return Err(ToolError::InvalidArgs(error_msg));
+                    return Err(ToolError::InvalidArgs(format!(
+                        "Provider '{name}' does not support image generation"
+                    )));
                 }
 
                 (name.clone(), provider)
             } else {
-                // Find first provider that supports image generation
                 registry
                     .first_for_type(GenerationType::Image)
                     .ok_or_else(|| {
-                        let error_msg = "No image generation provider available".to_string();
-                        notify_tool_result(Self::NAME, &error_msg, false);
-                        ToolError::InvalidArgs(error_msg)
+                        ToolError::InvalidArgs("No image generation provider available".to_string())
                     })?
             }
-            // Lock is dropped here at end of block
         };
 
         debug!(provider = %provider_name, "Using provider for image generation");
 
-        // Build generation parameters
-        let mut params = GenerationParams::new();
-        if let Some(width) = args.width {
-            params.width = Some(width);
-        }
-        if let Some(height) = args.height {
-            params.height = Some(height);
-        }
-        if let Some(quality) = args.quality {
-            params.quality = Some(quality);
-        }
-        if let Some(style) = args.style {
-            params.style = Some(style);
-        }
+        // All four fields are already `Option<_>` on both sides, so direct
+        // assignment is identical to the previous if-let chain.
+        let params = GenerationParams {
+            width: args.width,
+            height: args.height,
+            quality: args.quality,
+            style: args.style,
+            ..GenerationParams::default()
+        };
 
-        // Create generation request
         let request = GenerationRequest::image(&args.prompt).with_params(params);
 
-        // Execute generation
         let output: crate::generation::GenerationOutput =
-            provider.generate(request).await.map_err(|e| {
-                let error_msg = format!("Image generation failed: {e}");
-                notify_tool_result(Self::NAME, &error_msg, false);
-                ToolError::from(e)
-            })?;
+            provider.generate(request).await.map_err(ToolError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Determine location and type from the generation data
         let (image_location, location_type) = match &output.data {
-            crate::generation::GenerationData::Url(url) => (url.clone(), "url".to_string()),
-            crate::generation::GenerationData::LocalPath(path) => {
-                (path.clone(), "file".to_string())
-            }
-            crate::generation::GenerationData::Bytes(bytes) => {
+            GenerationData::Url(url) => (url.clone(), "url".to_string()),
+            GenerationData::LocalPath(path) => (path.clone(), "file".to_string()),
+            GenerationData::Bytes(bytes) => {
                 // Convert bytes to base64 data URL
                 use base64::Engine;
                 let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -200,8 +162,10 @@ impl ImageGenerateTool {
                     .content_type
                     .as_deref()
                     .unwrap_or("image/png");
-                let data_url = format!("data:{content_type};base64,{base64_data}");
-                (data_url, "data_url".to_string())
+                (
+                    format!("data:{content_type};base64,{base64_data}"),
+                    "data_url".to_string(),
+                )
             }
         };
 
@@ -211,10 +175,6 @@ impl ImageGenerateTool {
             location_type = %location_type,
             "Image generation completed"
         );
-
-        // Notify success
-        let result_summary = format!("图像生成完成 ({duration_ms} ms, provider: {provider_name})");
-        notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = if location_type == "data_url" {
             format!("🎨 图像已生成 ({:.1}s)", duration_ms as f64 / 1000.0)

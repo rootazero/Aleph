@@ -148,8 +148,7 @@ impl BrowserNetworkArgs {
                     .ok_or("mock_add requires a non-empty url_contains — an empty needle would intercept EVERY request")?;
                 let kind = match self.kind.unwrap_or(MockKind::Mock) {
                     MockKind::Abort => {
-                        if self.status.is_some() || self.headers.is_some() || self.body.is_some()
-                        {
+                        if self.status.is_some() || self.headers.is_some() || self.body.is_some() {
                             return Err("an abort rule carries no response material — drop status/headers/body".to_string());
                         }
                         RouteKind::Abort
@@ -259,8 +258,7 @@ impl BrowserNetworkTool {
 #[async_trait]
 impl AlephTool for BrowserNetworkTool {
     const NAME: &'static str = "browser_network";
-    const DESCRIPTION: &'static str =
-        "Read the current page's network request log (action=log, default), or manage mock routes \
+    const DESCRIPTION: &'static str = "Read the current page's network request log (action=log, default), or manage mock routes \
          intercepting its requests: mock_add (url_contains; kind=mock|abort; scope=tab|profile), \
          mock_list, mock_remove (rule_id), mock_clear (scope required). Mock routes need a \
          driver=\"cdp\" profile.";
@@ -279,12 +277,13 @@ impl AlephTool for BrowserNetworkTool {
                 Some(("mock_add", display_target.as_str()))
             }
             NetworkRequest::MockRemove { rule_id } => Some(("mock_remove", rule_id.as_str())),
-            NetworkRequest::MockClear { scope } => {
-                Some(("mock_clear", match scope {
+            NetworkRequest::MockClear { scope } => Some((
+                "mock_clear",
+                match scope {
                     MockScope::Tab => "tab",
                     MockScope::Profile => "profile",
-                }))
-            }
+                },
+            )),
             NetworkRequest::Log | NetworkRequest::MockList { .. } => None,
         };
         if let Some((action, target)) = gated {
@@ -306,7 +305,7 @@ impl AlephTool for BrowserNetworkTool {
                     return Ok(BrowserNetworkOutput::failed(super::backend_error_text(
                         &self.manager,
                         &e,
-                    )))
+                    )));
                 }
             };
         match request {
@@ -368,23 +367,21 @@ impl AlephTool for BrowserNetworkTool {
                     super::backend_error_text(&self.manager, &e)
                 ))),
             },
-            NetworkRequest::MockRemove { rule_id } => {
-                match backend.route_remove(&rule_id).await {
-                    Ok(info) => Ok(BrowserNetworkOutput {
-                        success: true,
-                        requests: String::new(),
-                        message: Some(format!(
-                            "mock route {} removed (served {} hit(s))",
-                            info.id, info.hits
-                        )),
-                        rules: Some(vec![info]),
-                    }),
-                    Err(e) => Ok(BrowserNetworkOutput::failed(format!(
-                        "mock_remove failed: {}",
-                        super::backend_error_text(&self.manager, &e)
-                    ))),
-                }
-            }
+            NetworkRequest::MockRemove { rule_id } => match backend.route_remove(&rule_id).await {
+                Ok(info) => Ok(BrowserNetworkOutput {
+                    success: true,
+                    requests: String::new(),
+                    message: Some(format!(
+                        "mock route {} removed (served {} hit(s))",
+                        info.id, info.hits
+                    )),
+                    rules: Some(vec![info]),
+                }),
+                Err(e) => Ok(BrowserNetworkOutput::failed(format!(
+                    "mock_remove failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                ))),
+            },
             NetworkRequest::MockClear { scope } => {
                 let label = match scope {
                     MockScope::Tab => "tab",
@@ -413,9 +410,9 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     fn tool() -> BrowserNetworkTool {
-        BrowserNetworkTool::new(Arc::new(ProfileManager::new(
-            BrowserSystemConfig::default(),
-        )))
+        BrowserNetworkTool::new(Arc::new(
+            ProfileManager::new(BrowserSystemConfig::default()),
+        ))
     }
 
     fn mock_add_args() -> BrowserNetworkArgs {
@@ -502,10 +499,7 @@ mod tests {
         let result = tool.call(args).await.unwrap();
         assert!(!result.success);
         assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|m| m.contains("256")),
+            result.message.as_deref().is_some_and(|m| m.contains("256")),
             "got: {:?}",
             result.message
         );
