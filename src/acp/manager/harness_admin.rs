@@ -373,11 +373,7 @@ impl AcpAdapterManager {
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                 harness_id: key.harness_id,
                 cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: if key.name.is_empty() {
-                    None
-                } else {
-                    Some(key.name)
-                },
+                session_name: key.session_name_opt().map(str::to_owned),
             })
             .await;
         }
@@ -480,11 +476,7 @@ impl AcpAdapterManager {
             out.push(SessionSnapshot {
                 harness_id: key.harness_id.clone(),
                 cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: if key.name.is_empty() {
-                    None
-                } else {
-                    Some(key.name.clone())
-                },
+                session_name: key.session_name_opt().map(str::to_owned),
                 acp_session_id: sid,
                 alive,
                 state,
