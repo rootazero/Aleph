@@ -120,18 +120,6 @@ impl CanvasStore {
         };
         let id = format!("cv-{}", uuid::Uuid::new_v4().simple());
         let now = now_ms();
-        let doc = CanvasDoc {
-            id: id.clone(),
-            title,
-            owner_user_id,
-            project_id,
-            revision: 1,
-            shapes: Vec::new(),
-            decks: Vec::new(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            timeline: None,
-        };
         let mut guard = self.locks.lock(&id, self.doc_path(&id)).await?;
         // Existence guard: a residual `<root>/<id>/doc.json` (manual restore,
         // operator copy-paste, leftover from a previous install) used to be
@@ -144,7 +132,18 @@ impl CanvasStore {
                 "canvas id collision: {id} already exists"
             )));
         }
-        guard.insert(doc);
+        guard.insert(CanvasDoc {
+            id,
+            title,
+            owner_user_id,
+            project_id,
+            revision: 1,
+            shapes: Vec::new(),
+            decks: Vec::new(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            timeline: None,
+        });
         let committed = guard.commit().await?;
         Ok(committed.clone())
     }
