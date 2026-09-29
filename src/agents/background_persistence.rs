@@ -485,11 +485,12 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
             }
             if !run.partial_result.is_empty() {
                 out.push_str("  result:\n");
-                for line in run.partial_result.lines() {
-                    out.push_str("    ");
-                    out.push_str(line);
-                    out.push('\n');
-                }
+                let indented: String = run
+                    .partial_result
+                    .lines()
+                    .map(|line| format!("    {line}\n"))
+                    .collect();
+                out.push_str(&indented);
             }
         }
     };
