@@ -579,11 +579,17 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    /// Parse a synthetic argv or panic with the clap diagnostic. Every CLI
+    /// parsing test wants the same shape — `try_parse_from(...).unwrap()` —
+    /// and the small wrapper keeps the call sites focused on what they
+    /// actually assert (the command / action shape), not on clap plumbing.
+    fn parse(args: &[&str]) -> Args {
+        Args::try_parse_from(args).expect("parses")
+    }
+
     #[test]
     fn test_cli_parses_plugins_list() {
-        let args = Args::try_parse_from(["aleph", "plugins", "list"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
+        let args = parse(&["aleph", "plugins", "list"]);
         match args.command {
             Some(Command::Plugins { action }) => {
                 assert!(matches!(action, PluginsAction::List));
@@ -594,14 +600,12 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_install() {
-        let args = Args::try_parse_from([
+        let args = parse(&[
             "aleph",
             "plugins",
             "install",
             "https://github.com/example/plugin.git",
         ]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
         match args.command {
             Some(Command::Plugins { action }) => {
                 if let PluginsAction::Install { url } = action {
@@ -616,9 +620,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_uninstall() {
-        let args = Args::try_parse_from(["aleph", "plugins", "uninstall", "my-plugin"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
+        let args = parse(&["aleph", "plugins", "uninstall", "my-plugin"]);
         match args.command {
             Some(Command::Plugins { action }) => {
                 if let PluginsAction::Uninstall { name } = action {
@@ -633,9 +635,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_enable() {
-        let args = Args::try_parse_from(["aleph", "plugins", "enable", "my-plugin"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
+        let args = parse(&["aleph", "plugins", "enable", "my-plugin"]);
         match args.command {
             Some(Command::Plugins { action }) => {
                 if let PluginsAction::Enable { name } = action {
@@ -650,9 +650,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plugins_disable() {
-        let args = Args::try_parse_from(["aleph", "plugins", "disable", "my-plugin"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
+        let args = parse(&["aleph", "plugins", "disable", "my-plugin"]);
         match args.command {
             Some(Command::Plugins { action }) => {
                 if let PluginsAction::Disable { name } = action {
@@ -667,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_hooks_list() {
-        let args = Args::try_parse_from(["aleph", "hooks", "list"]).unwrap();
+        let args = parse(&["aleph", "hooks", "list"]);
         match args.command {
             Some(Command::Hooks { action }) => assert!(matches!(action, HooksAction::List)),
             _ => panic!("Expected Hooks command with List action"),
@@ -676,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_hooks_test() {
-        let args = Args::try_parse_from(["aleph", "hooks", "test", "a1b2c3d4"]).unwrap();
+        let args = parse(&["aleph", "hooks", "test", "a1b2c3d4"]);
         match args.command {
             Some(Command::Hooks { action }) => {
                 if let HooksAction::Test { fingerprint } = action {
@@ -691,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_hooks_revoke_all() {
-        let args = Args::try_parse_from(["aleph", "hooks", "revoke", "all"]).unwrap();
+        let args = parse(&["aleph", "hooks", "revoke", "all"]);
         match args.command {
             Some(Command::Hooks { action }) => {
                 if let HooksAction::Revoke { fingerprint } = action {
@@ -706,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_hooks_doctor() {
-        let args = Args::try_parse_from(["aleph", "hooks", "doctor"]).unwrap();
+        let args = parse(&["aleph", "hooks", "doctor"]);
         match args.command {
             Some(Command::Hooks { action }) => assert!(matches!(action, HooksAction::Doctor)),
             _ => panic!("Expected Hooks command with Doctor action"),
@@ -715,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_secret_set() {
-        let args = Args::try_parse_from([
+        let args = parse(&[
             "aleph",
             "secret",
             "set",
@@ -723,8 +721,6 @@ mod tests {
             "--value",
             "sk-ant-test",
         ]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
         match args.command {
             Some(Command::Secret { action }) => {
                 if let SecretAction::Set { name, value } = action {
@@ -740,9 +736,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_secret_verify() {
-        let args = Args::try_parse_from(["aleph", "secret", "verify", "wallet.main"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
+        let args = parse(&["aleph", "secret", "verify", "wallet.main"]);
         match args.command {
             Some(Command::Secret { action }) => {
                 if let SecretAction::Verify { name } = action {
@@ -757,15 +751,14 @@ mod tests {
 
     #[test]
     fn test_cli_parses_node_subcommand() {
-        let args = Args::try_parse_from([
+        let args = parse(&[
             "aleph-server",
             "node",
             "--center",
             "ws://127.0.0.1:18790",
             "--name",
             "edge-1",
-        ])
-        .unwrap();
+        ]);
         match args.command {
             Some(Command::Node { center, name, .. }) => {
                 assert_eq!(center, "ws://127.0.0.1:18790");
@@ -777,9 +770,7 @@ mod tests {
 
     #[test]
     fn test_cli_node_name_defaults() {
-        let args =
-            Args::try_parse_from(["aleph-server", "node", "--center", "ws://127.0.0.1:18790"])
-                .unwrap();
+        let args = parse(&["aleph-server", "node", "--center", "ws://127.0.0.1:18790"]);
         match args.command {
             Some(Command::Node { name, .. }) => assert_eq!(name, "aleph-node"),
             _ => panic!("Expected Node command"),
@@ -788,7 +779,7 @@ mod tests {
 
     #[test]
     fn node_command_collects_repeated_tags() {
-        let cli = Args::try_parse_from([
+        let cli = parse(&[
             "aleph-server",
             "node",
             "--center",
@@ -799,8 +790,7 @@ mod tests {
             "gpu",
             "--tag",
             "region=us",
-        ])
-        .expect("parses");
+        ]);
         match cli.command {
             Some(Command::Node { tags, .. }) => {
                 assert_eq!(tags, vec!["gpu".to_string(), "region=us".to_string()]);
@@ -811,8 +801,7 @@ mod tests {
 
     #[test]
     fn node_command_defaults_to_no_tags() {
-        let cli =
-            Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"]).expect("parses");
+        let cli = parse(&["aleph-server", "node", "--center", "ws://c"]);
         match cli.command {
             Some(Command::Node { tags, .. }) => assert!(tags.is_empty()),
             _ => panic!("Expected Node command"),
@@ -821,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_update_check_flag() {
-        let args = Args::try_parse_from(["aleph-server", "update", "--check"]).unwrap();
+        let args = parse(&["aleph-server", "update", "--check"]);
         match args.command {
             Some(Command::Update { check }) => assert!(check),
             _ => panic!("Expected Update command"),
@@ -830,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_cli_update_defaults_to_install() {
-        let args = Args::try_parse_from(["aleph-server", "update"]).unwrap();
+        let args = parse(&["aleph-server", "update"]);
         match args.command {
             Some(Command::Update { check }) => assert!(!check),
             _ => panic!("Expected Update command"),
@@ -839,7 +828,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_bootstrap_runtime_default() {
-        let args = Args::try_parse_from(["aleph", "bootstrap-runtime"]).unwrap();
+        let args = parse(&["aleph", "bootstrap-runtime"]);
         match args.command {
             Some(Command::BootstrapRuntime(a)) => {
                 assert!(a.only.is_empty());
@@ -855,7 +844,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_bootstrap_runtime_all_flags() {
-        let args = Args::try_parse_from([
+        let args = parse(&[
             "aleph",
             "bootstrap-runtime",
             "--only",
@@ -868,8 +857,7 @@ mod tests {
             "--best-effort",
             "--json",
             "--quiet",
-        ])
-        .unwrap();
+        ]);
         match args.command {
             Some(Command::BootstrapRuntime(a)) => {
                 assert_eq!(a.only, vec!["uv", "playwright-cli"]);

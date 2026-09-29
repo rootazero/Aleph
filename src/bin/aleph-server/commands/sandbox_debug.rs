@@ -169,20 +169,8 @@ pub async fn handle_sandbox_debug(
                 elapsed.as_millis()
             );
             println!("truncated: {}", out.truncated);
-            if !out.stdout.is_empty() {
-                println!("--- stdout ---");
-                print!("{}", String::from_utf8_lossy(&out.stdout));
-                if !out.stdout.ends_with(b"\n") {
-                    println!();
-                }
-            }
-            if !out.stderr.is_empty() {
-                println!("--- stderr ---");
-                print!("{}", String::from_utf8_lossy(&out.stderr));
-                if !out.stderr.ends_with(b"\n") {
-                    println!();
-                }
-            }
+            print_stream("stdout", &out.stdout);
+            print_stream("stderr", &out.stderr);
             // A signal-killed child has `exit_code == None`; mapping that to 0
             // would report success for a SIGKILL/SIGSEGV. Use the POSIX
             // `128 + signal` convention so scripted callers see the failure.
@@ -196,6 +184,22 @@ pub async fn handle_sandbox_debug(
             eprintln!("\n=== Error ===\n{e}");
             std::process::exit(2);
         }
+    }
+}
+
+/// Print one captured child stream under a `--- label ---` header. Skips
+/// empty streams so an unused stdout or stderr does not produce a stray
+/// `--- stderr ---` line. Appends a single `\n` if the bytes do not already
+/// end in one, so the next `println!` does not run into the stream's last
+/// partial line.
+fn print_stream(label: &str, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+    println!("--- {label} ---");
+    print!("{}", String::from_utf8_lossy(data));
+    if !data.ends_with(b"\n") {
+        println!();
     }
 }
 
