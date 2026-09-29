@@ -118,6 +118,27 @@ impl OperatorApprovalRequester {
         }
     }
 
+    /// Resolve `approval_id` with a `Deny("unavailable")` and return the
+    /// matching `ApprovalResponse`. Shared by the `Ok(0)` (no operator
+    /// surface) and `Err(_)` (publish failed) arms — both deny with the same
+    /// reason so the caller cannot tell which leg of the bus failure tripped
+    /// the gate, and a caller who could legitimately distinguish them can
+    /// still log the cause at the call site (the warn! lives there).
+    fn deny_unavailable(&self, approval_id: &str) -> ApprovalResponse {
+        self.manager.resolve(
+            approval_id,
+            ApprovalDecisionType::Deny,
+            Some("unavailable".to_string()),
+        );
+        ApprovalResponse {
+            outcome: ApprovalOutcome::Denied,
+            deny_reason: Some(
+                "approval notification could not be delivered to the operator surface"
+                    .to_string(),
+            ),
+        }
+    }
+
     /// Re-announce a still-parked approval on `schedule`, forever.
     ///
     /// Never returns: it is a `select!` arm whose only job is to lose the race
@@ -265,39 +286,17 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 conversation_id,
                 tool_call_id,
             }) {
+            Ok(n) if n > 0 => {}
             Ok(0) => {
                 tracing::warn!(
                     id = %approval_id,
                     "ApprovalRequested reached no subscribers (Ok(0)); denying so caller is not stranded"
                 );
-                self.manager.resolve(
-                    &approval_id,
-                    ApprovalDecisionType::Deny,
-                    Some("unavailable".to_string()),
-                );
-                return ApprovalResponse {
-                    outcome: ApprovalOutcome::Denied,
-                    deny_reason: Some(
-                        "approval notification could not be delivered to the operator surface"
-                            .to_string(),
-                    ),
-                };
+                return self.deny_unavailable(&approval_id);
             }
-            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
-                self.manager.resolve(
-                    &approval_id,
-                    ApprovalDecisionType::Deny,
-                    Some("unavailable".to_string()),
-                );
-                return ApprovalResponse {
-                    outcome: ApprovalOutcome::Denied,
-                    deny_reason: Some(
-                        "approval notification could not be delivered to the operator surface"
-                            .to_string(),
-                    ),
-                };
+                return self.deny_unavailable(&approval_id);
             }
         }
 
