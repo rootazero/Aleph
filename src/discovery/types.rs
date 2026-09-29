@@ -11,6 +11,8 @@ pub enum DiscoverySource {
     AlephGlobal,
     /// Claude Code global (~/.claude/)
     ClaudeGlobal,
+    /// Shared agents global (~/.agents/) — the cross-tool convention root.
+    AgentsGlobal,
     /// Project-level (./.claude/ in project directory)
     Project,
     /// Claude Code's installed-plugin cache — the derived label for
@@ -28,6 +30,9 @@ pub enum GlobalRoot {
     Aleph,
     /// `~/.claude` (`DiscoverySource::ClaudeGlobal`).
     Claude,
+    /// `~/.agents` (`DiscoverySource::AgentsGlobal`) — the shared cross-tool
+    /// root, read with the same compatibility semantics as the Claude root.
+    Agents,
     /// `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>` — Claude
     /// Code's own installed-plugin cache, read-only, discovered from
     /// `installed_plugins.json` (`DiscoverySource::ClaudeCache`).
@@ -50,6 +55,7 @@ impl DiscoveryScope {
         match self {
             Self::Global(GlobalRoot::Aleph) => DiscoverySource::AlephGlobal,
             Self::Global(GlobalRoot::Claude) => DiscoverySource::ClaudeGlobal,
+            Self::Global(GlobalRoot::Agents) => DiscoverySource::AgentsGlobal,
             Self::Global(GlobalRoot::ClaudeCache) => DiscoverySource::ClaudeCache,
             Self::Project { .. } => DiscoverySource::Project,
         }

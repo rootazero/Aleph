@@ -47,7 +47,9 @@ pub struct SkillStatusEntry {
     pub description: String,
     pub emoji: Option<String>,
     pub source: SkillSource,
-    /// Human-readable source label for UI display (e.g. "Bundled", "Global", "Plugin")
+    /// Human-readable source label for UI display: "Official", "Aleph",
+    /// "Claude", "Agents", "Workspace", or "Plugin: <id>" — the Panel
+    /// groups by this string verbatim.
     pub source_label: String,
     pub homepage: Option<String>,
     pub eligible: bool,
@@ -124,10 +126,20 @@ impl SkillStatusEntry {
             })
             .collect();
 
+        // Display labels follow the operator's mental model — where the skill
+        // LIVES, not the override-priority enum name: Official (shipped with
+        // the binary), Aleph (~/.aleph), Claude / Agents (the compat roots),
+        // Workspace, Plugin. The Panel groups by this string verbatim.
         let source_label = match manifest.source() {
-            SkillSource::Bundled => "Bundled".to_string(),
-            SkillSource::Global => "Global".to_string(),
+            SkillSource::Bundled => "Official".to_string(),
+            SkillSource::Global => "Aleph".to_string(),
             SkillSource::Workspace => "Workspace".to_string(),
+            SkillSource::Compat(crate::domain::skill::CompatRoot::Claude) => {
+                "Claude".to_string()
+            }
+            SkillSource::Compat(crate::domain::skill::CompatRoot::Agents) => {
+                "Agents".to_string()
+            }
             SkillSource::Plugin(id) => format!("Plugin: {}", id.as_str()),
         };
 

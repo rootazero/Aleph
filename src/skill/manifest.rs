@@ -325,14 +325,16 @@ fn scan_companion_files(
 ///
 /// `Bundled` skills ship with the Aleph binary — they are `Trusted` by
 /// construction (they were reviewed at build time). Everything else
-/// (plugin, workspace, global) is `Community`: arbitrary third-party
-/// content the daemon should never auto-promote.
+/// (plugin, workspace, global, and the `.claude`/`.agents` compat roots) is
+/// `Community`: arbitrary third-party content the daemon should never
+/// auto-promote.
 fn trust_for_source(source: &SkillSource) -> TrustLevel {
     match source {
         SkillSource::Bundled => TrustLevel::Trusted,
-        SkillSource::Plugin(_) | SkillSource::Workspace | SkillSource::Global => {
-            TrustLevel::Community
-        }
+        SkillSource::Plugin(_)
+        | SkillSource::Workspace
+        | SkillSource::Global
+        | SkillSource::Compat(_) => TrustLevel::Community,
     }
 }
 

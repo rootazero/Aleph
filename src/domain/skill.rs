@@ -138,6 +138,23 @@ pub enum SkillSource {
     Workspace,
     /// Provided by a plugin.
     Plugin(PluginId),
+    /// A compatibility root shared with another agent tool (`~/.claude` or
+    /// `~/.agents`, user- or project-level). Same override priority as
+    /// [`SkillSource::Bundled`] — the distinction exists so the model and the
+    /// Panel can see WHERE a compat skill came from instead of the old lie
+    /// that every non-Aleph skill was "bundled".
+    Compat(CompatRoot),
+}
+
+/// Which compatibility root a [`SkillSource::Compat`] skill came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatRoot {
+    /// `.claude/skills` (user- or project-level) — Claude Code compatibility.
+    Claude,
+    /// `.agents/skills` (user- or project-level) — the shared cross-tool
+    /// convention.
+    Agents,
 }
 
 impl SkillSource {
@@ -170,16 +187,21 @@ impl SkillSource {
             Self::Global => "user".to_string(),
             Self::Workspace => "workspace".to_string(),
             Self::Plugin(id) => format!("plugin:{}", id.as_str()),
+            Self::Compat(CompatRoot::Claude) => "claude".to_string(),
+            Self::Compat(CompatRoot::Agents) => "agents".to_string(),
         }
     }
 
     /// Priority for override resolution. Higher value wins.
     ///
-    /// Bundled=1 < Global=2 < Plugin=3 < Workspace=4
+    /// Bundled=1, Compat=1 < Global=2 < Plugin=3 < Workspace=4.
+    /// Compat ties with Bundled on purpose (both are lowest-trust external
+    /// words); a same-id Compat-vs-Compat clash is decided by scan order
+    /// (`.agents` before `.claude`), not here.
     #[must_use]
     pub const fn priority(&self) -> u8 {
         match self {
-            Self::Bundled => 1,
+            Self::Bundled | Self::Compat(_) => 1,
             Self::Global => 2,
             Self::Plugin(_) => 3,
             Self::Workspace => 4,

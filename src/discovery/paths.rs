@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const ALEPH_HOME_DIR: &str = ".aleph";
 pub(crate) const CLAUDE_HOME_DIR: &str = ".claude";
+pub(crate) const AGENTS_HOME_DIR: &str = ".agents";
 pub(crate) const AGENTS_DIR: &str = "agents";
 pub(crate) const PLUGINS_DIR: &str = "plugins";
 pub(crate) const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
@@ -36,6 +37,15 @@ pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
 /// Get the Claude Code home directory (~/.claude/).
 pub(crate) fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
+}
+
+/// Get the shared agents home directory (~/.agents/): the cross-tool
+/// convention for skills/commands shared by every agent on the machine.
+/// Resolved through the same cross-platform home ladder as every other
+/// user-level root (HOME → USERPROFILE → HOMEDRIVE+HOMEPATH), so the
+/// macOS/Linux/Windows match is inherited, not re-derived.
+pub(crate) fn agents_home_dir() -> DiscoveryResult<PathBuf> {
+    Ok(home_dir()?.join(AGENTS_HOME_DIR))
 }
 
 /// Get the Aleph agents directory (~/.aleph/agents/)

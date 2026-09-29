@@ -141,7 +141,10 @@ async fn registered_skill(mode: &Value, skills: &SkillSystem) -> Option<String> 
     let manifest = skills.get_skill(&SkillId::from(skill_id)).await?;
     let same_owner = match manifest.source() {
         SkillSource::Plugin(plugin) => owner == Some(plugin.as_str()),
-        SkillSource::Bundled | SkillSource::Global | SkillSource::Workspace => owner.is_none(),
+        SkillSource::Bundled
+        | SkillSource::Global
+        | SkillSource::Workspace
+        | SkillSource::Compat(_) => owner.is_none(),
     };
     same_owner.then(|| skill_id.to_string())
 }
@@ -229,9 +232,12 @@ fn operator_owned(skill_dir: &std::path::Path) -> Result<(), &'static str> {
 fn operator_root(skill_dir: &std::path::Path) -> Result<(), &'static str> {
     use crate::utils::paths::equivalent;
     let root = skill_dir.parent().ok_or("root-level")?;
-    let (aleph, claude) =
+    let (aleph, agents, claude) =
         crate::utils::paths::user_skills_roots().map_err(|_| "unplaceable (no user root)")?;
-    if equivalent(root, &aleph) || claude.as_deref().is_some_and(|c| equivalent(root, c)) {
+    if equivalent(root, &aleph)
+        || agents.as_deref().is_some_and(|a| equivalent(root, a))
+        || claude.as_deref().is_some_and(|c| equivalent(root, c))
+    {
         return Ok(());
     }
     match crate::utils::paths::plugin_skill_dirs()
