@@ -87,20 +87,33 @@ impl ChannelPairingTool {
     }
 
     /// Resolve the target channel ID.
-    /// If provided, use it directly. Otherwise, find the first telegram channel.
+    /// If provided, use it directly. Otherwise, find the first telegram channel,
+    /// falling back to the first iMessage channel — iMessage installs don't run
+    /// Telegram and would otherwise have no implicit target for this tool (R8:
+    /// every channel operation that has an implementation must be reachable
+    /// through an `AlephTool` without bypass).
     async fn resolve_channel_id(&self, requested: Option<String>) -> Result<ChannelId> {
         if let Some(id) = requested {
             return Ok(ChannelId::new(id));
         }
 
-        // Find first telegram channel
+        // Prefer Telegram when both are present — it has more pairing-specific
+        // semantics (DMs, codes, expiry) that the user is more likely to want.
         let telegram_channels = self.channel_registry.list_by_type("telegram").await;
         if let Some(ch) = telegram_channels.first() {
             return Ok(ch.id.clone());
         }
 
+        // iMessage fallback (BlueBubbles uses QR-pairing via PairingData::QrCode;
+        // the Generate/List actions still apply).
+        let imessage_channels = self.channel_registry.list_by_type("imessage").await;
+        if let Some(ch) = imessage_channels.first() {
+            return Ok(ch.id.clone());
+        }
+
         Err(crate::error::AlephError::tool(
-            "No Telegram channel found. Please specify a channel_id or configure a Telegram channel.",
+            "No Telegram or iMessage channel found. Please specify a channel_id \
+             or configure a channel that supports pairing.",
         ))
     }
 }
