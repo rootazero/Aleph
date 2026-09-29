@@ -292,7 +292,10 @@ impl WhatsAppChannel {
             read_receipts: true,
             rich_text: true,
             polls: false,
-            group_icons: false,
+            // WhatsApp group icon update: wacore 0.5
+            // `SetProfilePictureSpec::set_group(jid, bytes)` dispatched
+            // via `Client::execute`. Wired in `set_group_icon` below.
+            group_icons: true,
             max_message_length: 65536,
             max_attachment_size: 100 * 1024 * 1024,
             stream_protocol: Default::default(),
@@ -573,6 +576,34 @@ impl Channel for WhatsAppChannel {
             .await
             .map_err(|e| ChannelError::Internal(format!("send_reaction: {e}")))
     }
+
+    async fn set_group_icon(
+        &self,
+        conversation_id: &crate::gateway::channel::ConversationId,
+        icon_data_url: &str,
+    ) -> ChannelResult<()> {
+        // Pre-decode the data URL (RFC 2397) so we can fail with a clean
+        // ChannelError::Internal before touching the runtime. The shared
+        // decoder (src/gateway/data_url.rs) is the same one BlueBubbles'
+        // set_chat_icon uses — single source of truth for the contract.
+        let (_mime, bytes) = crate::gateway::data_url::decode(icon_data_url)
+            .map_err(|e| ChannelError::Internal(format!("set_group_icon: {e}")))?;
+        if self.test_mode {
+            // test_mode stands in for an unconnected adapter; mirror the
+            // other methods' behavior (no-op) rather than surfacing a
+            // transport-level success.
+            return Ok(());
+        }
+
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+        runtime
+            .set_group_picture(conversation_id.as_str(), bytes)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("set_group_picture: {e}")))
+    }
 }
 
 /// Pre-`start()` and `test_mode` stand-in for the real sender. Returning
@@ -810,5 +841,70 @@ mod tests {
             error: "x".to_string(),
         };
         assert_eq!(channel.status(), ChannelStatus::Error);
+    }
+
+    #[test]
+    fn capabilities_advertise_group_icons() {
+        // Pin the flip so a future edit cannot silently turn off
+        // group_icons and orphan the WhatsApp set_group_icon impl.
+        let caps = WhatsAppChannel::capabilities();
+        assert!(
+            caps.group_icons,
+            "WhatsApp has wacore SetProfilePictureSpec::set_group — wire must reflect it"
+        );
+    }
+
+    /// The fake records every (group_jid, byte_len) tuple so a test can
+    /// assert the channel routed the data URL through decode + send
+    /// without reaching for a real WhatsApp connection. Pin both the
+    /// jid and the decoded byte length here so a future edit cannot
+    /// silently swap to 0-byte or stub-send the bytes.
+    #[tokio::test]
+    async fn set_group_icon_routes_through_fake_runtime() {
+        use crate::gateway::channel::ConversationId;
+        let config = WhatsAppConfig::default();
+        let (channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+        // `for_test_with_fake` already wires `fake` as the runtime;
+        // no manual reassignment.
+
+        // 8-byte base64 payload: iVBORw0KGgo == the 8-byte PNG signature
+        // (0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A). The fake records
+        // byte_len — we want the decoded length, not the base64 length.
+        let data_url = "data:image/png;base64,iVBORw0KGgo=";
+        let cid = ConversationId::new("1234567890@g.us");
+
+        channel
+            .set_group_icon(&cid, data_url)
+            .await
+            .expect("set_group_icon should succeed via fake");
+
+        let recorded = fake.sent_group_pictures().await;
+        assert_eq!(recorded.len(), 1, "fake should record exactly one call");
+        assert_eq!(recorded[0].0, "1234567890@g.us");
+        assert_eq!(recorded[0].1, 8, "decoded bytes should be the 8-byte PNG signature");
+    }
+
+    /// Non-base64 data: URLs (RFC 2397 violations) are rejected at the
+    /// channel layer before reaching the runtime. The fake must therefore
+    /// see zero calls — the channel's surface is the contract, the fake
+    /// is just bookkeeping.
+    #[tokio::test]
+    async fn set_group_icon_rejects_non_base64_data_url() {
+        use crate::gateway::channel::ConversationId;
+        let config = WhatsAppConfig::default();
+        let (channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+
+        let cid = ConversationId::new("1234567890@g.us");
+        let err = channel
+            .set_group_icon(&cid, "data:image/png,Hello%20World")
+            .await
+            .expect_err("non-base64 must be rejected");
+        // The error names the data URL contract, not a generic failure.
+        assert!(
+            err.to_string().contains("only base64"),
+            "expected RFC 2397 violation, got: {err}"
+        );
+        let recorded = fake.sent_group_pictures().await;
+        assert!(recorded.is_empty(), "fake must not be called on validation failure");
     }
 }

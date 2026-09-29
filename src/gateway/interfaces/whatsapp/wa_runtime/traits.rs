@@ -110,6 +110,22 @@ pub trait WaRuntime: Send + Sync {
         emoji: &str,
     ) -> Result<(), WaRuntimeError>;
 
+    /// Set the profile picture of a group conversation. `group_jid` is the
+    /// WhatsApp JID (e.g. `1234567890@g.us`); `image_data` is the raw
+    /// image bytes the runtime ships to the WhatsApp servers. The caller
+    /// (the channel layer) is responsible for RFC 2397 data: URL decoding
+    /// — this trait accepts bytes only so the runtime doesn't have to
+    /// depend on `base64`.
+    ///
+    /// Production: backed by wacore's `SetProfilePictureSpec::set_group`,
+    /// dispatched via `Client::execute`. The fake stores the (jid, bytes)
+    /// pair for assertions.
+    async fn set_group_picture(
+        &self,
+        group_jid: &str,
+        image_data: Vec<u8>,
+    ) -> Result<(), WaRuntimeError>;
+
     /// Take ownership of the inbound event receiver. Returns `None` on
     /// a second call — the channel layer consumes it once and runs its
     /// event loop to completion. Tests use this seam to assert the

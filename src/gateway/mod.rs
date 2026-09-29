@@ -29,6 +29,7 @@ pub mod admin_api;
 pub mod announce_delivery;
 pub mod btw;
 pub mod credential_planner;
+pub mod data_url;
 pub mod event_bus;
 pub mod event_emitter;
 pub mod events;
