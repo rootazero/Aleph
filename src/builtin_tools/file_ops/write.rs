@@ -94,7 +94,12 @@ impl FileWriteTool {
 
     /// A tool that refuses exactly `denied_paths` (a test's own list, so a
     /// `~/…`-shaped entry can live in a tempdir instead of the real home).
-    #[cfg(test)]
+    //
+    // Only the case-variant credential-leaf test consumes this constructor,
+    // and that test is gated to case-insensitive filesystems (macOS /
+    // Windows). On Linux's case-sensitive ext4 the test is not built, and
+    // without this gate the constructor is dead code there.
+    #[cfg(all(test, any(target_os = "macos", windows)))]
     pub(crate) fn with_denied_paths(denied_paths: Vec<String>) -> Self {
         Self {
             denied_paths,
