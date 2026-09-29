@@ -59,21 +59,109 @@ use crate::sync_primitives::Mutex as StdMutex;
 /// tests that don't have a resolved caller.
 pub(crate) fn audit_reconnect_event(
     actor_user: Option<&str>,
-    action: &str,
+    action: &'static str,
     channel_id: &str,
     retry_after: Option<Duration>,
+) {
+    // One entry-point per reconnect verb — each one inlines its `format!`
+    // directly into `AuditEntry::authority_change(...)` so the audit-census
+    // extractor (which scans for the first `"` after `::authority_change(`
+    // and refuses any `;` between the call and its string literal) reads
+    // the verb literal verbatim. Putting the dispatch in one body with a
+    // `match action { "x" => format!(...) }` would put the verb string
+    // literal in a match arm and the extractor would pick that up instead
+    // of the format string, so the per-verb split is required.
+    match action {
+        "reconnect_proceed" => audit_reconnect_proceed(actor_user, channel_id),
+        "reconnect_cooldown" => {
+            if let Some(d) = retry_after {
+                audit_reconnect_cooldown(actor_user, channel_id, d);
+            }
+        }
+        "reconnect_backoff" => {
+            if let Some(d) = retry_after {
+                audit_reconnect_backoff(actor_user, channel_id, d);
+            }
+        }
+        "zombie_detected" => audit_reconnect_zombie_detected(actor_user, channel_id),
+        _ => {}
+    }
+}
+
+pub(crate) fn audit_reconnect_proceed(actor_user: Option<&str>, channel_id: &str) {
+    let Some(log) = crate::security::audit::global() else {
+        return;
+    };
+    let actor = actor_user.map(str::to_string);
+    let channel = channel_id.to_string();
+    tokio::spawn(async move {
+        let _ = log
+            .log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!("discord.reconnect.proceed: channel={channel}"),
+            ))
+            .await;
+    });
+}
+
+pub(crate) fn audit_reconnect_cooldown(
+    actor_user: Option<&str>,
+    channel_id: &str,
+    retry_after: Duration,
 ) {
     let Some(log) = crate::security::audit::global() else {
         return;
     };
     let actor = actor_user.map(str::to_string);
-    let mut detail = format!("discord.reconnect.{action}: channel={channel_id}");
-    if let Some(d) = retry_after {
-        detail.push_str(&format!(" retry_after_ms={}", d.as_millis()));
-    }
+    let channel = channel_id.to_string();
+    let retry_after_ms = retry_after.as_millis() as u64;
     tokio::spawn(async move {
         let _ = log
-            .log(crate::security::audit::AuditEntry::authority_change(actor, detail))
+            .log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!(
+                    "discord.reconnect.cooldown: channel={channel} retry_after_ms={retry_after_ms}"
+                ),
+            ))
+            .await;
+    });
+}
+
+pub(crate) fn audit_reconnect_backoff(
+    actor_user: Option<&str>,
+    channel_id: &str,
+    retry_after: Duration,
+) {
+    let Some(log) = crate::security::audit::global() else {
+        return;
+    };
+    let actor = actor_user.map(str::to_string);
+    let channel = channel_id.to_string();
+    let retry_after_ms = retry_after.as_millis() as u64;
+    tokio::spawn(async move {
+        let _ = log
+            .log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!(
+                    "discord.reconnect.backoff: channel={channel} retry_after_ms={retry_after_ms}"
+                ),
+            ))
+            .await;
+    });
+}
+
+pub(crate) fn audit_reconnect_zombie_detected(actor_user: Option<&str>, channel_id: &str) {
+    let Some(log) = crate::security::audit::global() else {
+        return;
+    };
+    let actor = actor_user.map(str::to_string);
+    let channel = channel_id.to_string();
+    tokio::spawn(async move {
+        let _ = log
+            .log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!("discord.reconnect.zombie_detected: channel={channel}"),
+            ))
             .await;
     });
 }

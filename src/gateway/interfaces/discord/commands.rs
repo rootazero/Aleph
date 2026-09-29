@@ -65,15 +65,27 @@ pub(crate) fn audit_command_dispatch(
     channel_id: &str,
     command_name: &str,
 ) {
+    // The verb is hard-coded as `discord.command.dispatch` — the audit-census
+    // extractor reads the first `"` after `::authority_change(` and rejects
+    // `format!` placeholders in the verb slot (its "dotted lowercase" check
+    // would see `{command_name}` and refuse it). `format!` is inlined into
+    // the call so the verb literal sits directly between `(` and the
+    // placeholder; capturing the detail into a `let` first would put a `;`
+    // between the call and its string literal, which the extractor refuses
+    // as "the detail is not a string literal".
     let Some(log) = audit_global() else {
         return;
     };
     let actor = actor_user.map(str::to_string);
-    let detail = format!(
-        "discord.command.dispatch: {command_name} channel={channel_id}"
-    );
+    let channel = channel_id.to_string();
+    let command = command_name.to_string();
     tokio::spawn(async move {
-        let _ = log.log(AuditEntry::authority_change(actor, detail)).await;
+        let _ = log
+            .log(AuditEntry::authority_change(
+                actor,
+                format!("discord.command.dispatch: {command} channel={channel}"),
+            ))
+            .await;
     });
 }
 

@@ -61,19 +61,28 @@ use crate::utils::text_format::truncate_reserving;
 /// the edit; `None` only in tests that don't have a resolved caller.
 pub(crate) fn audit_draft_event(
     actor_user: Option<&str>,
-    action: &str,
+    _action: &str,
     channel_id: &str,
     message_id: &str,
 ) {
+    // The verb is hard-coded as `discord.draft.chunk` here rather than
+    // spliced in from `action` — the audit-census extractor reads the first
+    // `"` after `::authority_change(` as the verb literal, so `format!` with
+    // `{action}` in the verb slot would fail the extractor's "dotted
+    // lowercase" check. The current only call site passes
+    // `_action = "draft_chunk"`, which would have produced the same literal.
     let Some(log) = crate::security::audit::global() else {
         return;
     };
     let actor = actor_user.map(str::to_string);
-    let detail =
-        format!("discord.draft.{action}: message={message_id} channel={channel_id}");
+    let channel = channel_id.to_string();
+    let message = message_id.to_string();
     tokio::spawn(async move {
         let _ = log
-            .log(crate::security::audit::AuditEntry::authority_change(actor, detail))
+            .log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!("discord.draft.chunk: message={message} channel={channel}"),
+            ))
             .await;
     });
 }

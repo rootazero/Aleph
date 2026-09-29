@@ -55,9 +55,16 @@ pub async fn record_approval_requested(
     session_id: Option<String>,
     command_shape: &str,
 ) {
-    let detail = format!("discord.command.approval.requested: {command_shape}");
+    // `format!` is inlined into the call so the audit-census extractor (which
+    // scans for the first `"` after `::authority_change(`) reads the verb
+    // literal directly; splitting it into a `let detail` first would put a
+    // `;` between the call and its string literal, which the extractor
+    // refuses as "the detail is not a string literal".
     if let Some(log) = crate::security::audit::global() {
-        let mut entry = AuditEntry::authority_change(actor_user, detail);
+        let mut entry = AuditEntry::authority_change(
+            actor_user,
+            format!("discord.command.approval.requested: {command_shape}"),
+        );
         entry.session_id = session_id;
         log.log(entry).await;
     }
@@ -79,9 +86,13 @@ pub async fn record_approval_resolved(
     decision_label: &str,
     command_shape: &str,
 ) {
-    let detail = format!("discord.command.approval.resolved: {decision_label} {command_shape}");
+    // Inlined `format!` so the audit-census extractor reads the verb literal;
+    // see `record_approval_requested` for the reason.
     if let Some(log) = crate::security::audit::global() {
-        let mut entry = AuditEntry::authority_change(actor_user, detail);
+        let mut entry = AuditEntry::authority_change(
+            actor_user,
+            format!("discord.command.approval.resolved: {decision_label} {command_shape}"),
+        );
         entry.session_id = session_id;
         log.log(entry).await;
     }
