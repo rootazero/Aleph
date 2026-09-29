@@ -245,6 +245,20 @@ impl MeteringProvider {
             }
             crate::pricing::CostStatus::Unknown => crate::spend::Delta::Unpriced,
         };
+        // Zero-token + priced-zero: nothing billable happened. Without this
+        // gate `Delta::Usd(0.0)` / `Delta::Partial(0.0)` still create a row
+        // and an entry in `by_period`, so the principal shows up in
+        // `principals_in` for the period — 'billed as zero' on the
+        // read face. `Delta::Unpriced` is the explicit 'we don't know the
+        // price' signal and still records (so the spend I-1 path keeps
+        // its information density even on free-but-unknown calls).
+        let zero_priced = matches!(
+            delta,
+            crate::spend::Delta::Usd(0.0) | crate::spend::Delta::Partial(0.0)
+        ) && breakdown.total() == 0;
+        if zero_priced {
+            return Ok(());
+        }
         ledger.record(principal, period_start_ms, delta)
     }
 }
@@ -930,6 +944,111 @@ mod tests {
             1,
             "execute_streaming_dyn() must record identically to process() — this is the \
              streaming metering gap this file shipped once before"
+        );
+    }
+
+    /// A zero-token + priced-zero call must NOT touch the ledger. Before the
+    /// gate `Delta::Usd(0.0)` still created a row and indexed it in
+    /// `by_period`, so the principal showed up in `principals_in` for the
+    /// period (CLAUDE.md E.8: 'Unknown must read as "I don't know",
+    /// never as "not billed"'). `Delta::Unpriced` (price unknown) still
+    /// records — that is the explicit "we don't know the price" signal.
+    #[tokio::test]
+    async fn zero_token_zero_dollar_call_does_not_record_into_the_ledger() {
+        let ledger = std::sync::Arc::new(crate::spend::InMemorySpendLedger::default())
+            as std::sync::Arc<dyn crate::spend::SpendLedger>;
+        let policy = crate::config::types::policies::SpendPolicy::default();
+        let principal = crate::spend::Principal::User("u-zero-token-test".to_string());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let period_start_ms =
+            crate::spend::period::period_start_ms(now_ms, policy.period);
+
+        // All token components zero + a provider/model whose price table
+        // entry produces CostStatus::Complete. pricing.rs picks "fake" as a
+        // token placeholder; pick any in-table model so the estimate status
+        // is Complete, not Unknown — only then does the bug surface.
+        let usage = TokenUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        };
+        // Use a known in-table provider/model. Anthropic claude-3-5-haiku is
+        // one of the cheapest and most reliably in-table entries; pick
+        // whatever is cheapest so cache_creation=0 also prices to zero.
+        MeteringProvider::record_spend_with(
+            &usage,
+            "anthropic",
+            "claude-3-5-haiku-20241022",
+            &principal,
+            &policy,
+            &*ledger,
+        )
+        .expect("record_spend_with");
+
+        let spent = ledger.spent_for(&principal, period_start_ms).unwrap();
+        assert_eq!(
+            spent.usd, 0.0,
+            "zero-token priced-zero call must not deposit any USD"
+        );
+        assert_eq!(
+            spent.unpriced_calls, 0,
+            "zero-token priced-zero call must not bump unpriced_calls"
+        );
+        assert_eq!(
+            spent.partial_calls, 0,
+            "zero-token priced-zero call must not bump partial_calls"
+        );
+        let principals = ledger.principals_in(period_start_ms).unwrap();
+        assert!(
+            principals.is_empty(),
+            "zero-token priced-zero call must not appear in principals_in; \
+             a zero-row creates an entry in by_period that this principal \
+             would be visible through (CLAUDE.md E.8)"
+        );
+    }
+
+    /// `Delta::Unpriced` (status Unknown) MUST still record even when the
+    /// call has zero tokens: that's the explicit "we don't know the price"
+    /// signal, not a "nothing happened" signal. Pinned so a future tweak
+    /// doesn't widen the gate.
+    #[tokio::test]
+    async fn zero_token_unknown_price_still_records_as_unpriced() {
+        let ledger = std::sync::Arc::new(crate::spend::InMemorySpendLedger::default())
+            as std::sync::Arc<dyn crate::spend::SpendLedger>;
+        let policy = crate::config::types::policies::SpendPolicy::default();
+        let principal = crate::spend::Principal::User("u-zero-unpriced-test".to_string());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let period_start_ms =
+            crate::spend::period::period_start_ms(now_ms, policy.period);
+
+        let usage = TokenUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        };
+        // Provider/model that is NOT in the table: produces CostStatus::Unknown
+        // → Delta::Unpriced. Even with zero tokens, the gate must not fire.
+        MeteringProvider::record_spend_with(
+            &usage,
+            "no-such-provider",
+            "no-such-model",
+            &principal,
+            &policy,
+            &*ledger,
+        )
+        .expect("record_spend_with");
+
+        let spent = ledger.spent_for(&principal, period_start_ms).unwrap();
+        assert_eq!(
+            spent.unpriced_calls, 1,
+            "Delta::Unpriced must record even on zero-token calls — that's the \
+             'we don't know the price' signal, not a no-op"
         );
     }
 
