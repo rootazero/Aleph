@@ -938,6 +938,40 @@ pub trait Channel: Send + Sync {
         ))
     }
 
+    /// Create a poll in the given conversation. Default: `UnsupportedFeature`.
+    ///
+    /// iMessage-native (BlueBubbles exposes `createPoll` against a chat_guid).
+    /// R8 (tools = everything) requires that a chat op with an implementation
+    /// be reachable through an `AlephTool`; the `CreatePoll` variant of
+    /// `ChannelMessageAction` dispatches here. Channels without poll support
+    /// inherit this default and surface `ChannelError::UnsupportedFeature`,
+    /// not a panic.
+    async fn create_poll(
+        &self,
+        _conversation_id: &ConversationId,
+        _question: &str,
+        _options: &[String],
+        _allow_multiple: bool,
+    ) -> ChannelResult<MessageId> {
+        Err(ChannelError::UnsupportedFeature(
+            "polls not supported on this channel".into(),
+        ))
+    }
+
+    /// Set the icon of a group conversation. Default: `UnsupportedFeature`.
+    ///
+    /// iMessage-native (BlueBubbles `setChatIcon` with image data).
+    /// Same R8 rationale as `create_poll`.
+    async fn set_group_icon(
+        &self,
+        _conversation_id: &ConversationId,
+        _icon_data_url: &str,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "group icon not supported on this channel".into(),
+        ))
+    }
+
     /// Edit a previously sent message
     async fn edit(
         &self,

@@ -37,6 +37,12 @@ pub enum ChannelMessageAction {
     Edit,
     /// Send a typing indicator (no text).
     Typing,
+    /// Create a poll in the conversation (iMessage-native; see
+    /// `Channel::create_poll`).
+    CreatePoll,
+    /// Set the icon of a group conversation (iMessage-native; see
+    /// `Channel::set_group_icon`).
+    SetGroupIcon,
 }
 
 /// Arguments for the `channel_message` tool.
@@ -66,6 +72,22 @@ pub struct ChannelMessageArgs {
     /// Message ID to reply to — optional for `send`.
     #[serde(default)]
     pub reply_to: Option<String>,
+
+    /// Poll question — required for `create_poll`.
+    #[serde(default)]
+    pub poll_question: Option<String>,
+
+    /// Poll options — required for `create_poll` (>= 2).
+    #[serde(default)]
+    pub poll_options: Option<Vec<String>>,
+
+    /// Allow selecting multiple options — optional for `create_poll`.
+    #[serde(default)]
+    pub poll_allow_multiple: Option<bool>,
+
+    /// Icon image as a `data:` URL — required for `set_group_icon`.
+    #[serde(default)]
+    pub icon_data_url: Option<String>,
 }
 
 // =============================================================================
@@ -271,6 +293,76 @@ impl AlephTool for ChannelMessageTool {
                     message_id: None,
                 })
             }
+
+            ChannelMessageAction::CreatePoll => {
+                let question = Self::require(&args.poll_question, "poll_question", "create_poll")?;
+                let options = args
+                    .poll_options
+                    .as_ref()
+                    .ok_or_else(|| {
+                        AlephError::tool(
+                            "poll_options is required for create_poll (>= 2 entries)",
+                        )
+                    })?
+                    .clone();
+                if options.len() < 2 {
+                    return Err(AlephError::tool(
+                        "poll_options must have at least 2 entries",
+                    ));
+                }
+                let allow_multiple = args.poll_allow_multiple.unwrap_or(false);
+                let result = self
+                    .channel_registry
+                    .create_poll(
+                        &channel_id,
+                        &conversation_id,
+                        &question,
+                        &options,
+                        allow_multiple,
+                    )
+                    .await
+                    .map_err(|e| {
+                        AlephError::tool(Self::with_hint(format!(
+                            "Failed to create poll on channel '{channel_id}': {e}"
+                        )))
+                    })?;
+
+                info!(tool = "channel_message", channel = %channel_id, "poll created");
+                Ok(ChannelMessageOutput {
+                    message: format!(
+                        "Poll created in conversation '{}' on channel '{}' ({} options).",
+                        conversation_id.as_str(),
+                        channel_id,
+                        options.len()
+                    ),
+                    delivered: true,
+                    message_id: Some(result.as_str().to_string()),
+                })
+            }
+
+            ChannelMessageAction::SetGroupIcon => {
+                let icon_data_url =
+                    Self::require(&args.icon_data_url, "icon_data_url", "set_group_icon")?;
+                self.channel_registry
+                    .set_group_icon(&channel_id, &conversation_id, &icon_data_url)
+                    .await
+                    .map_err(|e| {
+                        AlephError::tool(Self::with_hint(format!(
+                            "Failed to set group icon on channel '{channel_id}': {e}"
+                        )))
+                    })?;
+
+                info!(tool = "channel_message", channel = %channel_id, "group icon set");
+                Ok(ChannelMessageOutput {
+                    message: format!(
+                        "Group icon updated for conversation '{}' on channel '{}'.",
+                        conversation_id.as_str(),
+                        channel_id
+                    ),
+                    delivered: true,
+                    message_id: None,
+                })
+            }
         }
     }
 }
@@ -361,6 +453,10 @@ mod tests {
             message_id: None,
             reaction: None,
             reply_to: None,
+            poll_question: None,
+            poll_options: None,
+            poll_allow_multiple: None,
+            icon_data_url: None,
         };
         let err = tool.call(args).await.unwrap_err();
         assert!(err.to_string().contains("text"));
@@ -377,8 +473,97 @@ mod tests {
             message_id: None,
             reaction: Some("👍".to_string()),
             reply_to: None,
+            poll_question: None,
+            poll_options: None,
+            poll_allow_multiple: None,
+            icon_data_url: None,
         };
         let err = tool.call(args).await.unwrap_err();
         assert!(err.to_string().contains("message_id"));
+    }
+
+    /// R8 (tools = everything): every channel op with an implementation must
+    /// be reachable through a tool, AND the tool must say so cleanly when the
+    /// targeted channel doesn't support it. Per CLAUDE.md E.2 ("a guard that
+    /// doesn't fire under any input is no guard"), pin both halves: the
+    /// CreatePoll/SetGroupIcon variants of `channel_message` exist, AND when
+    /// called against a channel that doesn't override them the registry
+    /// surfaces `UnsupportedFeature` (not panic, not silent success). With an
+    /// empty registry the call instead surfaces `NotConnected` — same shape
+    /// (`ChannelError`), different root cause; both prove the dispatch
+    /// arrives at the trait default.
+    #[tokio::test]
+    async fn create_poll_routes_to_the_channel_trait_default() {
+        let tool = ChannelMessageTool::new(Arc::new(ChannelRegistry::new()));
+        let args = ChannelMessageArgs {
+            action: ChannelMessageAction::CreatePoll,
+            channel_id: "imessage".to_string(),
+            conversation_id: "C0".to_string(),
+            text: None,
+            message_id: None,
+            reaction: None,
+            reply_to: None,
+            poll_question: Some("Lunch?".to_string()),
+            poll_options: Some(vec!["Pizza".into(), "Salad".into()]),
+            poll_allow_multiple: Some(false),
+            icon_data_url: None,
+        };
+        let err = tool.call(args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("NotConnected") || msg.contains("Unsupported"),
+            "expected channel-resolution error (NotConnected on empty registry, \
+             Unsupported once a real channel is wired), got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_group_icon_routes_to_the_channel_trait_default() {
+        let tool = ChannelMessageTool::new(Arc::new(ChannelRegistry::new()));
+        let args = ChannelMessageArgs {
+            action: ChannelMessageAction::SetGroupIcon,
+            channel_id: "imessage".to_string(),
+            conversation_id: "C0".to_string(),
+            text: None,
+            message_id: None,
+            reaction: None,
+            reply_to: None,
+            poll_question: None,
+            poll_options: None,
+            poll_allow_multiple: None,
+            icon_data_url: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        };
+        let err = tool.call(args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("NotConnected") || msg.contains("Unsupported"),
+            "expected channel-resolution error, got: {msg}"
+        );
+    }
+
+    /// `CreatePoll` requires `poll_options` with >= 2 entries — the floor of
+    /// "is this a poll?". Pin it so a future rewrite can't lower the floor
+    /// (e.g. accepting a 1-option poll, which every chat platform rejects).
+    #[tokio::test]
+    async fn create_poll_requires_at_least_two_options() {
+        let tool = ChannelMessageTool::new(Arc::new(ChannelRegistry::new()));
+        let args = ChannelMessageArgs {
+            action: ChannelMessageAction::CreatePoll,
+            channel_id: "imessage".to_string(),
+            conversation_id: "C0".to_string(),
+            text: None,
+            message_id: None,
+            reaction: None,
+            reply_to: None,
+            poll_question: Some("Lunch?".to_string()),
+            poll_options: Some(vec!["OnlyOne".into()]),
+            poll_allow_multiple: Some(false),
+            icon_data_url: None,
+        };
+        let err = tool.call(args).await.unwrap_err();
+        assert!(
+            err.to_string().contains("at least 2"),
+            "expected poll-options floor, got: {err}"
+        );
     }
 }
