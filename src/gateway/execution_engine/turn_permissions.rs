@@ -168,11 +168,11 @@ impl TurnToolPolicy {
 /// adapter's own declaration list, not a guess: builtin and plugin tools are
 /// exactly the tools that list covers.
 pub(super) fn builtin_tool_facts(name: &str) -> crate::config::types::policies::ToolFacts<'_> {
-    crate::config::types::policies::ToolFacts {
-        name,
-        idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
-        requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
-    }
+    // Slash fast path: no registry at hand, so `for_tool(name, None)` is
+    // exactly `is_idempotent_builtin_name` ∨ `is_confirmation_gated`, which is
+    // what this used to spell by hand. Going through `for_tool` keeps the
+    // single-constructor invariant the `exec_tier` D8 census guards.
+    crate::config::types::policies::ToolFacts::for_tool(name, None)
 }
 
 /// Fold a `/<skill>` turn's pre-granted names into the merged explicit
