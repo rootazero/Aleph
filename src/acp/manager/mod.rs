@@ -12,7 +12,7 @@
 mod harness_admin;
 mod lifecycle;
 mod persistence;
-mod session_key;
+pub(crate) mod session_key;
 
 #[cfg(test)]
 mod tests;
