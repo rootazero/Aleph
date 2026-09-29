@@ -145,7 +145,6 @@ fn extract_between(text: &str, open: char, close: char) -> Option<String> {
     let name = &text[after_open..after_open + end_rel];
     (!name.is_empty()).then(|| name.to_string())
 }
-}
 
 #[cfg(test)]
 mod tests {

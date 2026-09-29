@@ -280,7 +280,6 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 conversation_id,
                 tool_call_id,
             }) {
-            Ok(n) if n > 0 => {}
             Ok(0) => {
                 tracing::warn!(
                     id = %approval_id,
@@ -288,6 +287,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 );
                 return self.deny_unavailable(&approval_id);
             }
+            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
                 return self.deny_unavailable(&approval_id);
