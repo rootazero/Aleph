@@ -346,7 +346,7 @@ fn test_build_full_html_document() {
 /// Skipped if Chrome is not available.
 /// Marked `ignore` because Chrome startup is flaky under parallel test load.
 #[tokio::test]
-#[ignore]
+#[ignore = "Chrome startup is flaky under parallel test load; needs Chrome installed"]
 async fn test_browser_engine_markdown_pdf() {
     if !super::browser_engine::is_browser_engine_available(None) {
         eprintln!("Skipping browser engine test — Chrome not available");

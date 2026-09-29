@@ -327,7 +327,7 @@ fn system_message_lands_after_owed_tool_results() {
 /// `cargo test -p alephcore --lib harness::tests::prompt::perf_dispatch_overhead_documented -- --ignored --nocapture`
 /// to print timings.
 #[test]
-#[ignore]
+#[ignore = "non-asserting perf baseline; run with --ignored --nocapture"]
 fn perf_dispatch_overhead_documented() {
     use std::time::Instant;
     let events: Vec<SessionEventRecord> = (0..1000).map(|i| user_msg(&format!("m{i}"))).collect();

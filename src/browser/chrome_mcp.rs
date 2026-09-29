@@ -908,7 +908,7 @@ mod integration_tests {
     /// still runs it, and without the guard it would read whatever
     /// `ALEPH_HOME` another test in the binary left behind.
     #[tokio::test]
-    #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
+    #[ignore = "requires Chrome + npx chrome-devtools-mcp installed"]
     async fn test_chrome_mcp_list_tools() {
         let home = tempfile::tempdir().expect("tempdir");
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
@@ -932,7 +932,7 @@ mod integration_tests {
     /// Needs its own `$ALEPH_HOME` (R72) — see
     /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires Chrome + npx chrome-devtools-mcp installed"]
     async fn test_chrome_mcp_list_tabs_raw() {
         let home = tempfile::tempdir().expect("tempdir");
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
@@ -964,7 +964,7 @@ mod integration_tests {
     /// Needs its own `$ALEPH_HOME` (R72) — see
     /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires Chrome + npx chrome-devtools-mcp installed"]
     async fn test_chrome_mcp_list_tabs() {
         let home = tempfile::tempdir().expect("tempdir");
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
@@ -991,7 +991,7 @@ mod integration_tests {
     /// Needs its own `$ALEPH_HOME` (R72) — see
     /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires Chrome + npx chrome-devtools-mcp installed"]
     async fn test_chrome_mcp_snapshot() {
         let home = tempfile::tempdir().expect("tempdir");
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());

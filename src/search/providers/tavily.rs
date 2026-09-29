@@ -242,7 +242,7 @@ mod tests {
 
     // Integration test (requires real API key)
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires TAVILY_API_KEY; live API integration test"]
     async fn test_tavily_search_real_api() {
         let api_key = std::env::var("TAVILY_API_KEY").expect("TAVILY_API_KEY not set");
         let provider = TavilyProvider::new(api_key).unwrap();
