@@ -275,7 +275,6 @@ impl CanvasStore {
             warn!(canvas = %id, error = %e,
                 "canvas: orphan asset sweep after apply failed");
         }
-        drop(guard);
         Ok(new_revision)
     }
 

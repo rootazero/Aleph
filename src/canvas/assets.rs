@@ -175,7 +175,6 @@ impl CanvasStore {
                 Err(e) => warn!(canvas = %id, asset = %asset_id, error = %e,
                     "canvas: could not reopen asset to renew its grace window"),
             }
-            drop(guard);
             return Ok(asset_id);
         }
         tokio::fs::create_dir_all(&dir)
@@ -184,7 +183,6 @@ impl CanvasStore {
         crate::utils::atomic_write::atomic_write_bytes(&path, bytes)
             .await
             .map_err(|e| CanvasError::Internal(format!("failed to write asset: {e}")))?;
-        drop(guard);
         Ok(asset_id)
     }
 
