@@ -271,6 +271,9 @@ pub fn classify(err: &BrowserError) -> BrowserFailureCategory {
         BrowserError::PlaywrightCliError(_) => C::Unknown,
         BrowserError::PlaywrightCliNotInstalled => C::Unknown,
         BrowserError::NoSession(_) => C::Unknown,
+        // A stop/status against a recording that is not running is a
+        // setup-state fact, in the same family as `NoSession`.
+        BrowserError::NoActiveRecording(_) => C::Unknown,
         BrowserError::AlreadyOnEngine { .. } => C::Unknown,
         BrowserError::Io(_) => C::Transport,
         BrowserError::ProfileNotFound(_) => C::Unknown,
